@@ -386,6 +386,7 @@ library
       Pages.Telemetry
       Pkg.AI
       Pkg.AssetManifestFingerprint
+      Pkg.Components.Facets
       Pkg.Components.LogQueryBox
       Pkg.Components.ServiceMap
       Pkg.Components.Table
@@ -1030,6 +1031,7 @@ test-suite test-dev
       Pages.Telemetry
       Pkg.AI
       Pkg.AssetManifestFingerprint
+      Pkg.Components.Facets
       Pkg.Components.LogQueryBox
       Pkg.Components.ServiceMap
       Pkg.Components.Table

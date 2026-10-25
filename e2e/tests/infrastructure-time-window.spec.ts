@@ -26,6 +26,68 @@ const views = [
   ["kubernetes", "kubernetesContainer", { resource: "pods", namespace, cluster }, "Search pods"],
   ["host-map", "hostMapContainer", { provider, group: "region", fill: "memory" }, ""],
 ] as const;
+
+for (const width of [390, 1440]) {
+  test(`shared host controls preserve filters, columns and grouped exports at ${width}px`, async ({ page }) => {
+    test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/p/${DEMO_PROJECT}/infrastructure/hosts?${new URLSearchParams({ provider, since: "1H" })}`);
+    const container = page.locator('#hostsContainer');
+    await expect(container.locator('tr[role="button"]')).toHaveCount(2);
+    await expect(container.getByRole('button', { name: 'Customize', exact: true })).toBeInViewport();
+    await expect(container.getByRole('button', { name: 'Export', exact: true })).toBeInViewport();
+    await container.getByRole('button', { name: 'Customize', exact: true }).click();
+    await container.locator('[data-column-toggle="CPU"]').uncheck();
+    await container.getByRole('button', { name: 'Customize', exact: true }).click();
+    await container.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('region');
+    await expect(page).toHaveURL(/group=region/);
+    expect(new URL(page.url()).searchParams.get('provider')).toBe(provider);
+    expect(new URL(page.url()).searchParams.get('since')).toBe('1H');
+    expect(new URL(page.url()).searchParams.has('deferred')).toBe(false);
+    await expect(container.locator('[data-table-group]')).toHaveCount(1);
+    await expect(container.locator('td[data-column-key="CPU"]').first()).toBeHidden();
+    const search = container.getByRole('searchbox', { name: 'Search hosts', exact: true });
+    await search.fill('no-such-host');
+    await expect(container.locator('[data-table-group]')).toBeHidden();
+    await search.fill('');
+    await expect(container.locator('[data-table-group]')).toBeVisible();
+    const download = page.waitForEvent('download');
+    await container.getByRole('button', { name: 'Export', exact: true }).click();
+    const stream = await (await download).createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream!) chunks.push(Buffer.from(chunk));
+    const csv = Buffer.concat(chunks).toString();
+    expect(csv.split('\n')).toHaveLength(3);
+    expect(csv).not.toContain('"CPU"');
+    expect(csv).toContain('infra-preset-host-30');
+    expect(csv).toContain('infra-preset-host-600');
+    await page.reload();
+    await expect(container.locator('tr[role="button"]')).toHaveCount(2);
+    await expect(container.locator('td[data-column-key="CPU"]').first()).toBeHidden();
+    await container.getByRole('button', { name: 'Customize', exact: true }).click();
+    await container.getByRole('button', { name: 'Reset columns', exact: true }).click();
+    await expect(container.locator('td[data-column-key="CPU"]').first()).toBeVisible();
+  });
+}
+
+test('shared Kubernetes tabs preserve scoped filters and column choices', async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+  await page.goto(`/p/${DEMO_PROJECT}/infrastructure/kubernetes?${new URLSearchParams({ resource: 'pods', namespace, cluster, since: '1H' })}`);
+  const container = page.locator('#kubernetesContainer');
+  await expect(container.locator('tr[role="button"]')).toHaveCount(2);
+  await container.getByRole('button', { name: 'Customize', exact: true }).click();
+  await container.locator('[data-column-toggle="Memory"]').uncheck();
+  await container.getByRole('button', { name: 'Customize', exact: true }).click();
+  await container.getByRole('tab', { name: 'Nodes', exact: true }).click();
+  await expect(page).toHaveURL(/resource=nodes/);
+  const params = new URL(page.url()).searchParams;
+  expect(params.get('namespace')).toBe(namespace);
+  expect(params.get('cluster')).toBe(cluster);
+  expect(params.get('since')).toBe('1H');
+  await expect(container.locator('tr[role="button"]')).toHaveCount(2);
+  await expect(container.locator('td[data-column-key="Memory"]').first()).toBeHidden();
+});
+
 for (const [route, container, filters, searchName] of views) {
   test(`${route} time presets refresh scoped inventory`, async ({ page }) => {
     test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");

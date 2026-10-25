@@ -16,7 +16,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Containers qualified as Containers
 import Pages.Infrastructure qualified as Infrastructure
-import Pkg.Components.Table (Table (..))
+import Pkg.Components.Table (Features (customizeColumns, exportName, resultSummary), Table (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Icons qualified as Icons
 import Pkg.TestUtils
@@ -320,12 +320,12 @@ spec = sequential $ aroundAll withTfChartResources do
       cached <- Cache.lookup tr.trATCtx.infrastructureCache cacheKey :: IO (Maybe (V.Vector ContainerRow))
       V.length <$> cached `shouldBe` Just 8
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
-      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "data-live-mode=\"refresh-only\"", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins", "bg-bgAlternate sticky", "bg-fillWarning-strong", "hidden max-md:inline-flex", "data-header-actions", "/infrastructure/containers/detail?since=5M"]
+      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "data-live-mode=\"refresh-only\"", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Common Filters", "facet-count", "Last 5 mins", "bg-bgAlternate sticky", "bg-fillWarning-strong", "hidden max-md:inline-flex", "data-header-actions", "/infrastructure/containers/detail?since=5M"]
       T.isInfixOf "group/summary" html `shouldBe` False
       T.isInfixOf "Usage over time" html `shouldBe` False
       T.isInfixOf "min-height:" html `shouldBe` False
       T.isInfixOf "data-widget=" html `shouldBe` False
-      T.count "data-component=\"facet-section\" open>" html `shouldBe` 1
+      T.count "data-component=\"facet-section\" open>" html `shouldBe` 6
       -- The screenshot regression: "Not ready" wrapped onto two lines in the narrow status
       -- column, crossing the badge border. The label is one indivisible status.
       html `shouldContainAll` ["Not ready", "class=\"badge badge-sm badge-error whitespace-nowrap\""]
@@ -371,6 +371,26 @@ spec = sequential $ aroundAll withTfChartResources do
                            , "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range."
                            ]
 
+    it "tableControls_customizeAndExportCanBeEnabledIndependently" \tr -> do
+      (_, Containers.ContainersPage (PageCtx _ body)) <- testServant tr $ containersPage noContainerFilters
+      table <- deferredBody body
+      let render features = LT.toStrict $ Lucid.renderText $ Lucid.toHtml table{features}
+          customizeOnly = render table.features{resultSummary = Nothing, exportName = Nothing, customizeColumns = True}
+          exportOnly = render table.features{resultSummary = Nothing, exportName = Just "containers", customizeColumns = False}
+      customizeOnly `shouldContainAll` ["Customize", "Reset columns", "data-column-key=", "data-column-toggle="]
+      customizeOnly `shouldNotSatisfy` T.isInfixOf ">Export</button>"
+      exportOnly `shouldContainAll` ["Export", "containers.csv"]
+      exportOnly `shouldNotSatisfy` T.isInfixOf "Customize"
+
+    it "hostGrouping_sharedTableKeepsSingletonGroupsAndRealRows" \tr -> do
+      (_, Infrastructure.HostsPage (PageCtx _ body)) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing (Just "integration") Nothing Nothing (Just "1H") (Just "1")
+      table <- deferredBody body
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml table
+      V.length table.rows `shouldBe` 3
+      html `shouldContainAll` ["data-table-group=\"Docker\"", "data-table-group=\"Kubernetes\"", "data-table-group=\"OpenTelemetry\"", "data-hx-trigger=\"change\"", "since=1H", "name=\"group\"", "data-column-key=\"CPU\""]
+      T.count "role=\"button\"" html `shouldBe` 3
+      T.count "<table" html `shouldBe` 1
+
     it "infrastructureViews_projectTheSameTelemetryIntoHostsImagesKubernetesAndMap" \tr -> do
       (_, hosts@(Infrastructure.HostsPage (PageCtx hostsBW _))) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       V.null hostsBW.serviceOptions `shouldBe` True
@@ -399,7 +419,7 @@ spec = sequential $ aroundAll withTfChartResources do
       (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       let hostMapHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostMap
       hostMapHtml
-        `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "onchange=\"this.form.requestSubmit()\"", "name=\"os\""]
+        `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "onchange=\"this.form.requestSubmit()\"", "data-component=\"facet-rail\"", "Provider", "Region", "OS"]
       hostMapHtml `shouldNotSatisfy` T.isInfixOf ">Apply</button>"
 
       (_, hostDetail) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") Nothing Nothing Nothing

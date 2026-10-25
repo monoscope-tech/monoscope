@@ -23,7 +23,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, timeRefreshListener_, withDeferredBody)
-import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs, withColHeaderExtra)
+import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, countedFilter, facetActions, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude
@@ -145,13 +145,10 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
       rows = sortOn (Down . (.cpuCores)) $ V.toList $ applyFilters filters allRows
       -- Facet values come from the unfiltered result, so choosing a namespace never empties
       -- the node or image menus — the way a facet bar is expected to behave.
-      menu label param selected fromRow = singleSelectFilter label param selected $ facetValues fromRow allRows
+      menu label param selected fromRow = countedFilter label param selected (maybeToList . fromRow) allRows
     pure
       Table
-        { -- bulkActionsInHeader is what puts the header action group — and with it the whole
-          -- filter dropdown — into a column header. Leaving it unset renders no facet menus
-          -- at all, however many are configured.
-          config = def{elemID = "containersForm", containerId = Just "containersContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
+        { config = def{elemID = "containersForm", containerId = Just "containersContainer", addPadding = True, renderAsTable = True}
         , columns = containerColumns
         , rows = V.fromList $ map (ContainerVM pid window) rows
         , features =
@@ -160,7 +157,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
               , search = Just ClientSide
               , searchPlaceholder = Just "Search containers"
               , rowAttrs = Just $ drawerRowAttrs_ . detailUrl
-              , tableHeaderActions =
+              , facets =
                   Just
                     $ facetActions
                       (infraUrl pid "/infrastructure/containers" [] window)
@@ -173,8 +170,8 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       , menu "Node" "node" filters.node (.nodeName)
                       , menu "Image" "image" filters.image (.image)
                       ]
-              , showFilterRail = True
               , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers reporting in the final " <> freshnessLabel window <> " of this range"
+              , customizeColumns = True
               , exportName = Just "containers"
               , zeroState =
                   Just

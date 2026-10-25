@@ -5,6 +5,11 @@ module Pkg.Components.Table (
   Column (..),
   Config (..),
   Features (..),
+  Grouping (..),
+  TableTabs (..),
+  groupingControl_,
+  facetsConfig,
+  countedFilter,
   defaultFeaturesAreInert,
   SearchMode (..),
   BulkAction (..),
@@ -21,8 +26,6 @@ module Pkg.Components.Table (
   TableHeaderActions (..),
   FilterMenu (..),
   FilterOption (..),
-  facetValues,
-  singleSelectFilter,
   multiSelectFilter,
   facetActions,
   -- Sorting types and utilities
@@ -37,8 +40,10 @@ module Pkg.Components.Table (
 ) where
 
 import Data.Default (Default (..))
+import Data.Foldable.WithIndex (iforM_)
 import Data.List (lookup)
 import Data.List.NonEmpty qualified as NE
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Vector qualified as V
@@ -48,9 +53,11 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.BodyWrapper (PageCtx)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), detailsClosedBelowAttr_, emptyState_, facetOption_, facetRail_, facetSection_, filterInputAttr_, keyboardActivateAttr_, searchInput_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, searchInput_)
+import Pkg.Components.Facets (FacetChoice (..), FacetContent (..), FacetNode (..), FacetOverflow (..), facetChoice_)
+import Pkg.Components.Facets qualified as Facets
 import Relude
-import Utils (TabStrip (..), deleteParam, faSprite_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, toUriStr)
+import Utils (TabStrip (..), deleteParam, faSprite_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr)
 
 
 -- Core Types
@@ -121,9 +128,12 @@ data Features a = Features
   , zeroState :: Maybe ZeroState
   , header :: Maybe (Html ())
   , treeConfig :: Maybe (TreeConfig a)
-  , showFilterRail :: Bool
+  , facets :: Maybe TableHeaderActions
   , resultSummary :: Maybe Text
   , exportName :: Maybe Text
+  , customizeColumns :: Bool
+  , grouping :: Maybe Grouping
+  , tabs :: Maybe TableTabs
   }
   -- Every field's default is the generic one (Nothing / [] / False). The
   -- hand-written instance was 21 lines that had to be edited in lockstep with the
@@ -135,8 +145,9 @@ data Features a = Features
 
 
 -- $setup
--- >>> :set -XTypeApplications
+-- >>> :set -XTypeApplications -XOverloadedRecordDot -XOverloadedStrings
 -- >>> import Data.Default (def)
+-- >>> import Data.Vector qualified as V
 
 
 -- | The derived 'Default' for 'Features' must stay inert: no row link, no bulk
@@ -147,13 +158,16 @@ data Features a = Features
 -- True
 defaultFeaturesAreInert :: Bool
 defaultFeaturesAreInert =
-  and
+  and @[]
     [ isNothing d.rowLink
     , isNothing d.search
     , isNothing d.pagination
     , isNothing d.rowGroup
     , null d.bulkActions
-    , not d.showFilterRail
+    , isNothing d.facets
+    , not d.customizeColumns
+    , isNothing d.grouping
+    , isNothing d.tabs
     ]
   where
     d = def @(Features ())
@@ -180,6 +194,20 @@ data Config = Config
   , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
   , noSurface :: Bool -- When True, removes surface-raised class from grid wrapper (for embedded tables)
   , noDividers :: Bool -- When True, removes divide-y separators between rows
+  }
+
+
+data Grouping = Grouping
+  { current :: Text
+  , options :: [(Text, Text)] -- (value, label)
+  , baseUrl :: Text
+  , targetId :: Text
+  }
+
+
+data TableTabs = TableTabs
+  { label :: Text
+  , options :: [(Text, Text, Bool)] -- (label, url, active)
   }
 
 
@@ -280,38 +308,30 @@ data FilterOption = FilterOption
   { label :: Text
   , value :: Text
   , isActive :: Bool
+  , count :: Maybe Int
   }
   deriving stock (Eq, Show)
 
 
--- | Sorted distinct values from the unfiltered result, so choosing one facet does
--- not empty the menus of the others.
---
--- >>> facetValues snd (V.fromList [("a", Just "b"), ("c", Just "a"), ("d", Nothing)])
--- ["a","b"]
-facetValues :: (a -> Maybe Text) -> V.Vector a -> [Text]
-facetValues getter = sortNub . filter (not . T.null) . mapMaybe getter . V.toList
-
-
--- | A facet menu over @values@, marking those in @selected@ active. Single-select is the
--- same menu with at most one selection, so both go through here rather than each call site
--- assembling 'FilterMenu'/'FilterOption' by hand.
-filterMenu :: Bool -> Text -> Text -> [Text] -> [Text] -> FilterMenu
-filterMenu multiSelect label paramName selected values =
+multiSelectFilter :: Text -> Text -> [Text] -> [Text] -> FilterMenu
+multiSelectFilter label paramName selected values =
   FilterMenu
     { label
     , paramName
-    , options = [FilterOption value value (value `elem` selected) | value <- values]
-    , multiSelect
+    , options = [FilterOption value value (value `elem` selected) Nothing | value <- values]
+    , multiSelect = True
     }
 
 
-singleSelectFilter :: Text -> Text -> Maybe Text -> [Text] -> FilterMenu
-singleSelectFilter label paramName selected = filterMenu False label paramName (maybeToList selected)
-
-
-multiSelectFilter :: Text -> Text -> [Text] -> [Text] -> FilterMenu
-multiSelectFilter = filterMenu True
+-- | Count each inventory row once per value, before applying any filters.
+--
+-- >>> map (\o -> (o.value, o.count)) (countedFilter "Runtime" "runtime" Nothing id (V.fromList [["a", "a"], ["a", "b"], [""]])).options
+-- [("a",Just 2),("b",Just 1)]
+countedFilter :: Text -> Text -> Maybe Text -> (a -> [Text]) -> V.Vector a -> FilterMenu
+countedFilter label paramName selected valuesOf rows = FilterMenu label paramName options False
+  where
+    counts = Map.fromListWith (+) [(value, 1) | row <- V.toList rows, value <- ordNub (valuesOf row), not (T.null value)]
+    options = [FilterOption value value (Just value == selected) (Just count) | (value, count) <- Map.toAscList counts]
 
 
 -- | Header actions for a filter-only inventory table. The active-filter chips are read back
@@ -465,7 +485,8 @@ renderTable tbl =
   let isEmpty = V.null tbl.rows && isJust tbl.features.zeroState
       tableMain = do
         sequence_ tbl.features.header
-        when (isJust tbl.features.resultSummary || isJust tbl.features.exportName) $ renderResultToolbar tbl
+        forM_ tbl.features.tabs $ \tabs -> navTabStrip_ ViewTabs tabs.label "tabs-sm mx-3 w-fit" [(toHtml label, url, active) | (label, url, active) <- tabs.options]
+        when (isJust tbl.features.resultSummary || isJust tbl.features.exportName || tbl.features.customizeColumns || isJust tbl.features.grouping || isJust tbl.features.facets) $ renderResultToolbar tbl
         -- Scrolls horizontally rather than clipping. `overflow-hidden` silently cut off whatever
         -- did not fit: Containers, Kubernetes and Images each need 1460-1820px and get ~1250
         -- with the facet rail open, so 200-570px of columns were unreachable — no scrollbar, no
@@ -485,13 +506,13 @@ renderTable tbl =
                 whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
                 div_ [id_ "rowsContainer", class_ divCls] do
                   renderRows tbl
-      tableContent = div_ [class_ $ tbl.config.containerClasses <> bool " pb-24" "" isEmpty, id_ $ tbl.config.elemID <> "_page"] do
+      tableContent = div_ ([class_ $ tbl.config.containerClasses <> bool " pb-24" "" isEmpty, id_ $ tbl.config.elemID <> "_page"] <> [data_ "table-columns" tbl.config.elemID | tbl.features.customizeColumns]) do
         unless isEmpty $ whenJust tbl.features.search $ renderSearch tbl.config.elemID (fromMaybe "Search" tbl.features.searchPlaceholder)
-        if tbl.features.showFilterRail
-          then div_ [class_ "flex items-start gap-4 max-lg:flex-col"] do
-            whenJust tbl.features.tableHeaderActions renderFilterRail
-            div_ [class_ "min-w-0 flex-1 space-y-3"] tableMain
-          else tableMain
+        case tbl.features.facets of
+          Just facets -> div_ [class_ "flex items-start gap-4 max-lg:flex-col"] do
+            Facets.sidebar_ $ facetsConfig facets
+            div_ [class_ "min-w-0 w-full flex-1 space-y-3"] tableMain
+          Nothing -> tableMain
         -- Pagination footer outside the raised surface
         whenJust tbl.features.pagination renderPaginationFooter
         when (isJust tbl.features.treeConfig) treeScript
@@ -527,7 +548,7 @@ renderRows tbl
                     thAttrs = [class_ $ " " <> tbl.config.thClasses <> " " <> fromMaybe "" c.align <> bool "" " cursor-pointer hover:bg-fillWeak" (isJust sortable)]
                     sortAttrs = foldMap (\(field, cfg) -> swapTarget_ cfg.targetId (toggleSortUrl cfg field)) sortable
                     sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
-                th_ (c.attrs <> thAttrs <> sortAttrs <> [data_ "column-index" $ show idx]) do
+                th_ (c.attrs <> thAttrs <> sortAttrs <> [data_ "column-key" c.name]) do
                   span_ [class_ $ "flex items-center gap-2 min-w-0" <> bool "" " flex-wrap" (tbl.config.bulkActionsInHeader == Just idx)] do
                     span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
                     sequence_ c.headerExtra
@@ -550,14 +571,26 @@ renderRows tbl
 -- so htmx-swapped pages stay markup-identical to page 1.
 renderBody :: [Attribute] -> Table a -> Html ()
 renderBody extra tbl
+  | tbl.config.renderAsTable
+  , Just groupOf <- tbl.features.rowGroup
+  , isJust tbl.features.grouping =
+      iforM_ (groups groupOf) $ \idx ((_, row) :| siblings) ->
+        tbody_ ([class_ "stagger-fade not-has-[.itemsListItem:not(.hidden)]:hidden"] <> if idx == 0 then extra else []) do
+          forM_ (groupOf row) $ \label ->
+            tr_ [data_ "table-group" label] $ td_ [colspan_ $ show columnCount, class_ "px-4 py-3 text-sm font-medium text-textStrong"] do
+              toHtml label
+              span_ [class_ "ms-2 text-xs font-normal text-textWeak tabular-nums"] $ toHtml $ show (1 + length siblings) <> " items"
+          mapM_ (renderTableRow tbl) (row : map snd siblings)
   | tbl.config.renderAsTable = tbody_ (extra <> [class_ "stagger-fade"]) $ maybe (V.mapM_ (renderTableRow tbl) tbl.rows) groupedRows tbl.features.rowGroup
   | otherwise = div_ [class_ "stagger-fade"] $ V.mapM_ (renderListRow tbl) tbl.rows
   where
+    columnCount = length tbl.columns + bool 0 1 (isJust tbl.features.rowId)
+    groups groupOf = sortWith (fst . head) $ NE.groupAllWith (\(idx, row) -> maybeToRight idx $ groupOf row) $ zip [0 :: Int ..] (V.toList tbl.rows)
     groupedRows groupOf =
-      forM_ (sortWith (fst . head) $ NE.groupAllWith (\(idx, row) -> maybeToRight idx $ groupOf row) $ zip [0 :: Int ..] (V.toList tbl.rows)) \((_, row) :| siblings) ->
+      forM_ (groups groupOf) $ \((_, row) :| siblings) ->
         case (groupOf row, siblings) of
           (Just label, _ : _) -> tr_ [class_ "not-has-[.itemsListItem:not(.hidden)]:hidden"]
-            $ td_ [colspan_ $ show $ length tbl.columns + bool 0 1 (isJust tbl.features.rowId)]
+            $ td_ [colspan_ $ show columnCount]
             $ details_ [class_ "group/disclosure", [__|on input from closest <[id$='_page']/> if event.target.type is "search" set my.open to true end|]] do
               summary_ [class_ "cursor-pointer px-4 py-3 text-sm font-medium text-textStrong focus-visible:outline-offset-[-2px]"] do
                 toHtml label
@@ -565,7 +598,7 @@ renderBody extra tbl
               table_ [class_ tbl.config.tableClasses] do
                 thead_ [class_ "sr-only"] $ tr_ do
                   when (isJust tbl.features.rowId) $ th_ [scope_ "col"] "Select issue"
-                  forM_ tbl.columns $ \c -> th_ [scope_ "col"] $ toHtml c.name
+                  forM_ tbl.columns $ \c -> th_ [scope_ "col", data_ "column-key" c.name] $ toHtml c.name
                 tbody_ $ mapM_ (renderTableRow tbl) (row : map snd siblings)
           _ -> renderTableRow tbl row
 
@@ -608,7 +641,7 @@ renderTableRow tbl row =
         $ input_
         $ [term "aria-label" $ "Select " <> maybe "Item" ($ row) tbl.features.rowLabel, class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
         <> [checked_ | maybe False ($ row) tbl.features.selectRow]
-    forM_ (zip [0 :: Int ..] tbl.columns) \(idx, c) -> td_ (c.attrs <> (class_ <$> maybeToList c.align) <> [data_ "column-index" $ show idx]) $ c.render row
+    forM_ tbl.columns $ \c -> td_ (c.attrs <> (class_ <$> maybeToList c.align) <> [data_ "column-key" c.name]) $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
@@ -638,32 +671,38 @@ renderHeaderTableActions :: TableHeaderActions -> Html ()
 renderHeaderTableActions actions = span_ [class_ "inline-flex flex-wrap items-center gap-2 ml-2"] do
   unless (null actions.sortOptions) $ renderSortDropdown actions
   unless (null actions.filterMenus) $ renderFilterDropdown actions
-  -- Each active filter as a removable chip, Sentry-search style: "Type: runtime_exception ×".
-  forM_ actions.filterMenus \menu -> forM_ (filter (.isActive) menu.options) \opt ->
-    button_ ([type_ "button", class_ "inline-flex items-center gap-1 rounded-md border border-strokeWeak bg-fillWeak px-2 py-0.5 text-xs text-textStrong hover:bg-fillWeaker max-md:whitespace-normal", Aria.label_ $ "Remove filter " <> menu.label <> ": " <> opt.label] <> swapTarget_ actions.targetId (deleteParamValue menu.paramName opt.value actions.baseUrl)) do
-      span_ [class_ "text-textWeak"] $ toHtml $ menu.label <> ":"
-      toHtml opt.label
-      faSprite_ "xmark" "regular" "w-2.5 h-2.5 text-textWeak"
+  renderFilterChips actions
+
+
+renderFilterChips :: TableHeaderActions -> Html ()
+renderFilterChips actions = forM_ actions.filterMenus \menu -> forM_ (filter (.isActive) menu.options) \opt ->
+  button_ ([type_ "button", class_ "inline-flex items-center gap-1 rounded-md border border-strokeWeak bg-fillWeak px-2 py-0.5 text-xs text-textStrong hover:bg-fillWeaker max-md:whitespace-normal", Aria.label_ $ "Remove filter " <> menu.label <> ": " <> opt.label] <> swapTarget_ actions.targetId (deleteParamValue menu.paramName opt.value actions.baseUrl)) do
+    span_ [class_ "text-textWeak"] $ toHtml $ menu.label <> ":"
+    toHtml opt.label
+    faSprite_ "xmark" "regular" "w-2.5 h-2.5 text-textWeak"
 
 
 clearFiltersUrl :: TableHeaderActions -> Text
 clearFiltersUrl actions = foldl' (\url menu -> deleteParam menu.paramName url) actions.baseUrl actions.filterMenus
 
 
-renderFilterRail :: TableHeaderActions -> Html ()
-renderFilterRail actions =
-  details_ [open_ "", class_ "w-60 shrink-0 max-lg:w-full", detailsClosedBelowAttr_ 1024] do
-    summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded px-2 py-2 text-xs font-semibold text-textStrong hover:bg-fillWeak [&::-webkit-details-marker]:hidden"] "Filters"
-    facetRail_ Nothing "p-2" "Search filters" (Just clearAll) $ forM_ (zip [0 :: Int ..] actions.filterMenus) \(index, menu) ->
-      facetSection_ (index == 0 || any (.isActive) menu.options) "" [] (toHtml menu.label)
-        $ div_ [class_ "max-h-48 overflow-y-auto"]
-        $ forM_ menu.options (renderFilterOption actions menu)
+-- | Adapt URL filters to the same sidebar data Explorer supplies.
+facetsConfig :: TableHeaderActions -> Facets.Config
+facetsConfig actions = Facets.Config Nothing "" (Just $ swapTarget_ actions.targetId $ clearFiltersUrl actions) (Just [common]) Facets.Collapsible
   where
-    clearAll =
-      button_
-        ([type_ "button", class_ "flex items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak"] <> swapTarget_ actions.targetId (clearFiltersUrl actions))
-        $ "Clear all"
-        >> faSprite_ "xmark" "regular" "h-3 w-3"
+    common =
+      FacetNode "Common Filters" Nothing True [] Nothing
+        $ FacetChildren
+          [ FacetNode
+              { label = menu.label
+              , path = Just menu.paramName
+              , expanded = (index < 5 && not (null menu.options)) || any (.isActive) menu.options
+              , attrs = []
+              , actions = Nothing
+              , content = FacetValues (map (filterChoice actions menu) $ sortOn (not . (.isActive)) menu.options) ExpandValues
+              }
+          | (index, menu) <- zip [0 :: Int ..] actions.filterMenus
+          ]
 
 
 renderSortDropdown :: TableHeaderActions -> Html ()
@@ -706,29 +745,26 @@ renderFilterMenuItem actions menu = div_ [class_ "relative"] do
     ]
     do
       div_ [class_ "px-3 py-2 text-sm font-semibold text-textStrong border-b border-strokeWeak"] $ toHtml menu.label
-      div_ [class_ "p-1"] $ forM_ menu.options (renderFilterOption actions menu)
+      div_ [class_ "p-1"] $ forM_ menu.options (facetChoice_ . filterChoice actions menu)
 
 
-renderFilterOption :: TableHeaderActions -> FilterMenu -> FilterOption -> Html ()
-renderFilterOption actions menu opt = facetOption_ "" [] optionBody pass
+filterChoice :: TableHeaderActions -> FilterMenu -> FilterOption -> FacetChoice
+filterChoice actions menu opt = FacetChoice{label = opt.label, inputAttrs, marker = Nothing, count = prettyPrintCount <$> opt.count}
   where
     paramVal = menu.paramName <> "=" <> toUriStr opt.value
     -- For multi-select: toggle this value; for single-select: replace all with this value
     url
-      | menu.multiSelect && opt.isActive = deleteParamValue menu.paramName opt.value actions.baseUrl
+      | opt.isActive = deleteParamValue menu.paramName opt.value actions.baseUrl
       | menu.multiSelect = withQuery actions.baseUrl paramVal
       | otherwise = withQuery (deleteParam menu.paramName actions.baseUrl) paramVal
-    optionBody = do
-      input_
-        $ [ type_ $ bool "radio" "checkbox" menu.multiSelect
-          , class_ $ bool "radio radio-xs" "checkbox checkbox-xs" menu.multiSelect
-          , value_ opt.value
-          , name_ $ "filter_" <> menu.paramName -- group radios by param name
-          , hxTrigger_ "change"
-          ]
+    inputAttrs =
+      [ Aria.label_ opt.label
+      , value_ opt.value
+      , name_ $ "filter_" <> menu.paramName
+      , hxTrigger_ "change"
+      ]
         <> swapTarget_ actions.targetId url
         <> [checked_ | opt.isActive]
-      span_ [class_ "truncate text-sm"] $ toHtml opt.label
 
 
 -- | Remove a specific param=value pair from a URL (for multi-select filter toggle)
@@ -772,23 +808,35 @@ renderSortMenu sortCfg = do
 renderResultToolbar :: Table a -> Html ()
 renderResultToolbar tbl = div_ [class_ "flex min-h-9 flex-wrap items-center justify-between gap-2"] do
   whenJust tbl.features.resultSummary $ \summary -> span_ [class_ "text-sm text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml summary
-  whenJust tbl.features.exportName $ \name -> div_ [class_ "flex items-center gap-2"] do
-    button_
-      [ type_ "button"
-      , class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"
-      , onclick_ $ "window.exportTableCsv('#" <> tbl.config.elemID <> "_grid table','" <> name <> ".csv')"
-      ]
-      do
-        faSprite_ "download" "solid" "h-3 w-3"
-        "Export"
-    button_ ([type_ "button", class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"] <> popoverTrigger_ (tbl.config.elemID <> "-columns")) do
-      faSprite_ "table-columns" "regular" "h-3 w-3"
-      "Customize"
-    div_ (popoverPanel_ (tbl.config.elemID <> "-columns") <> [class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"]) do
-      span_ [class_ "block px-2 pb-1 text-xs font-semibold text-textStrong"] "Visible columns"
-      forM_ (zip [0 :: Int ..] tbl.columns) \(idx, column) -> label_ [class_ "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-fillWeak"] do
-        input_ [type_ "checkbox", checked_, class_ "checkbox checkbox-xs", onchange_ $ "document.querySelectorAll('#" <> tbl.config.elemID <> "_grid [data-column-index=\"" <> show idx <> "\"]').forEach((element)=>element.classList.toggle('hidden',!this.checked))"]
-        toHtml column.name
+  forM_ tbl.features.facets $ \facets -> div_ [class_ "flex flex-wrap gap-2"] $ renderFilterChips facets
+  div_ [class_ "ml-auto flex flex-wrap items-center gap-2"] do
+    forM_ tbl.features.grouping groupingControl_
+    forM_ tbl.features.exportName $ \name ->
+      button_
+        [ type_ "button"
+        , class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"
+        , onclick_ $ "window.exportTableCsv('#" <> tbl.config.elemID <> "_grid table','" <> name <> ".csv')"
+        ]
+        $ faSprite_ "download" "solid" "h-3 w-3"
+        >> "Export"
+    when tbl.features.customizeColumns do
+      button_ ([type_ "button", class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"] <> popoverTrigger_ (tbl.config.elemID <> "-columns")) do
+        faSprite_ "table-columns" "regular" "h-3 w-3"
+        "Customize"
+      div_ (popoverPanel_ (tbl.config.elemID <> "-columns") <> [data_ "column-picker" "", class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"]) do
+        span_ [class_ "block px-2 pb-1 text-xs font-semibold text-textStrong"] "Visible columns"
+        forM_ tbl.columns $ \column -> label_ [class_ "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-fillWeak"] do
+          input_ [type_ "checkbox", checked_, class_ "checkbox checkbox-xs", data_ "column-toggle" column.name, onchange_ "window.setTableColumn(this)"]
+          toHtml column.name
+        button_ [type_ "button", class_ "btn btn-xs btn-ghost mt-1 w-full font-normal", onclick_ "window.resetTableColumns(this)"] "Reset columns"
+
+
+groupingControl_ :: Grouping -> Html ()
+groupingControl_ cfg = label_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs text-textWeak"] do
+  "Group by"
+  select_ ([name_ "group", class_ "select select-xs w-auto cursor-pointer border-strokeWeak bg-bgBase max-md:min-h-11 max-md:text-base", hxTrigger_ "change"] <> swapTarget_ cfg.targetId (deleteParam "deferred" $ deleteParam "group" cfg.baseUrl))
+    $ forM_ cfg.options
+    $ \(value, label) -> option_ ([value_ value] <> [selected_ "" | value == cfg.current]) $ toHtml label
 
 
 renderPaginationFooter :: Pagination -> Html ()

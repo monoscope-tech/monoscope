@@ -32,14 +32,14 @@ import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), 
 import Pages.Containers (deferUrl, infraSnapshot, infraUrl, infrastructureBW, matchesAny, matchesFilter, mkWindow, pctText)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
-import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs)
+import Pkg.Components.Facets qualified as Facets
+import Pkg.Components.Table (Config (..), Features (..), Grouping (..), SearchMode (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, groupingControl_, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
-import Relude.Extra.Tuple (dup)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (TabStrip (..), drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, navTabStrip_, showFFloat')
+import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, showFFloat')
 
 
 -- | Group by an optional key, dropping rows without one. Per-key lists come out in reverse
@@ -142,16 +142,16 @@ hostGroupOption = \case
 -- | Bucket every host falls into. @GroupNone@ collapses to a single bucket, which the table
 -- skips entirely and the map renders as one section.
 groupHosts :: HostGroup -> V.Vector HostRow -> [(Text, [HostRow])]
-groupHosts grouping = groupRows \host ->
-  Just case grouping of
-    GroupNone -> "All hosts"
-    GroupProvider -> fromMaybe "Unknown provider" host.provider
-    GroupRegion -> fromMaybe "Unknown region" host.region
-    GroupOS -> fromMaybe "Unknown OS" host.osType
-    GroupIntegration -> maybe "OpenTelemetry" integrationLabel $ listToMaybe $ drop 1 host.integrations
+groupHosts grouping = groupRows (Just . hostGroupLabel grouping)
 
 
-data HostListRow = HostGroupRow Text Int | HostItem HostRow
+hostGroupLabel :: HostGroup -> HostRow -> Text
+hostGroupLabel grouping host = case grouping of
+  GroupNone -> "All hosts"
+  GroupProvider -> fromMaybe "Unknown provider" host.provider
+  GroupRegion -> fromMaybe "Unknown region" host.region
+  GroupOS -> fromMaybe "Unknown OS" host.osType
+  GroupIntegration -> maybe "OpenTelemetry" integrationLabel $ listToMaybe $ drop 1 host.integrations
 
 
 hostsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostsGet)
@@ -167,11 +167,11 @@ hostsGetH pid providerM regionM osM integrationM groupM fromParam toParam sinceP
   addRespHeaders $ HostsPage $ PageCtx (infrastructureBW pid "Hosts" window bw) body
 
 
-newtype HostsGet = HostsPage (PageCtx (Deferred (Table HostListRow)))
-  deriving (ToHtml) via (PageCtx (RefreshingDeferred (Table HostListRow)))
+newtype HostsGet = HostsPage (PageCtx (Deferred (Table HostRow)))
+  deriving (ToHtml) via (PageCtx (RefreshingDeferred (Table HostRow)))
 
 
-hostsTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> HostFilters -> HostGroup -> V.Vector HostRow -> V.Vector HostRow -> Table HostListRow
+hostsTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> HostFilters -> HostGroup -> V.Vector HostRow -> V.Vector HostRow -> Table HostRow
 hostsTable pid window url filters grouping hosts allHosts =
   Table
     { config =
@@ -180,29 +180,30 @@ hostsTable pid window url filters grouping hosts allHosts =
           , containerId = Just "hostsContainer"
           , addPadding = True
           , renderAsTable = True
-          , bulkActionsInHeader = Just 0
           , containerClasses = "w-full mx-auto space-y-2 group/columns"
           }
     , columns = hostColumns
-    , rows = hostEntries grouping hosts
+    , rows = V.fromList $ sortOn (\h -> (hostGroupLabel grouping h, h.name)) $ V.toList hosts
     , features =
         def
           { search = Just ClientSide
           , searchPlaceholder = Just "Search hosts"
-          , rowAttrs = Just $ \case HostGroupRow _ _ -> []; HostItem host -> drawerRowAttrs_ $ hostDetailUrl pid window host.name
-          , header = Just $ timeRefreshListener_ "hostsContainer" url >> hostGroupControl
-          , showFilterRail = True
+          , rowAttrs = Just $ drawerRowAttrs_ . hostDetailUrl pid window . (.name)
+          , rowGroup = if grouping == GroupNone then Nothing else Just $ Just . hostGroupLabel grouping
+          , grouping = Just $ Grouping (hostGroupParam grouping) (map hostGroupOption [minBound ..]) url "hostsContainer"
+          , header = Just $ timeRefreshListener_ "hostsContainer" url
           , resultSummary = Just $ "Showing " <> show (V.length hosts) <> " of " <> show (V.length allHosts) <> " hosts"
+          , customizeColumns = True
           , exportName = Just "hosts"
-          , tableHeaderActions =
+          , facets =
               Just
                 $ facetActions
                   (infraUrl pid "/infrastructure/hosts" [("group", hostGroupParam grouping) | grouping /= GroupNone] window)
                   "hostsContainer"
-                  [ singleSelectFilter "Provider" "provider" filters.provider $ facetValues (.provider) allHosts
-                  , singleSelectFilter "Region" "region" filters.region $ facetValues (.region) allHosts
-                  , singleSelectFilter "OS" "os" filters.osType $ facetValues (.osType) allHosts
-                  , singleSelectFilter "Integration" "integration" filters.integration $ map integrationLabel $ ordNub $ concatMap (.integrations) $ V.toList allHosts
+                  [ countedFilter "Provider" "provider" filters.provider (maybeToList . (.provider)) allHosts
+                  , countedFilter "Region" "region" filters.region (maybeToList . (.region)) allHosts
+                  , countedFilter "OS" "os" filters.osType (maybeToList . (.osType)) allHosts
+                  , countedFilter "Integration" "integration" filters.integration (map integrationLabel . (.integrations)) allHosts
                   ]
           , zeroState =
               Just
@@ -215,17 +216,6 @@ hostsTable pid window url filters grouping hosts allHosts =
           }
     }
   where
-    hostEntries GroupNone = V.map HostItem
-    hostEntries g = V.fromList . concatMap (\(label, hs) -> HostGroupRow label (length hs) : map HostItem (sortOn (.name) hs)) . groupHosts g
-    hostGroupControl =
-      form_ [method_ "get", action_ $ "/p/" <> pid.toText <> "/infrastructure/hosts", class_ "ml-auto mr-3 flex w-fit items-center gap-2 whitespace-nowrap"] do
-        TimePicker.timeHiddenInputs_ window.fromQuery window.toQuery window.sinceQuery
-        forM_ [(field, value) | (field, Just value) <- [("provider", filters.provider), ("region", filters.region), ("os", filters.osType), ("integration", filters.integration)]] \(field, value) ->
-          input_ [type_ "hidden", name_ field, value_ value]
-        label_ [Lucid.for_ "hosts-group", class_ "shrink-0 text-xs text-textWeak"] "Group by"
-        select_ [id_ "hosts-group", name_ "group", class_ "select select-xs w-auto cursor-pointer border-strokeWeak bg-bgBase", onchange_ "this.form.requestSubmit()"]
-          $ forM_ (map hostGroupOption [minBound ..]) \(value, label) ->
-            option_ ([value_ value] <> [selected_ "" | value == hostGroupParam grouping]) $ toHtml label
     -- Configuration only earns its width when some host reports a provider or region; it is
     -- decided over the unfiltered inventory so a facet never toggles a column.
     hostColumns =
@@ -235,29 +225,26 @@ hostsTable pid window url filters grouping hosts allHosts =
            , col "CPU" (metricCell (.cpuPct)) & withAttrs [class_ "w-32"]
            , col "Memory" (metricCell (.memoryPct)) & withAttrs [class_ "w-32"]
            , col "Storage" (metricCell (.storagePct)) & withAttrs [class_ "host-col-storage w-32 max-lg:hidden"]
-           , col "Load (1m)" (itemOnly $ plainCell . fmap (showFFloat' 2) . (.load1)) & withAttrs [class_ "host-col-load w-24 text-right max-xl:hidden"]
+           , col "Load (1m)" (plainCell . fmap (showFFloat' 2) . (.load1)) & withAttrs [class_ "host-col-load w-24 text-right max-xl:hidden"]
            , col "Uptime" uptimeCell & withAttrs [class_ "w-24 max-xl:hidden"]
            , col "Containers" containersCell & withAttrs [class_ "w-24 text-right"]
            , col "Integrations" integrationsCell & withAttrs [class_ "w-56 max-md:hidden"]
            ]
       where
         -- The row itself opens the drawer; a button in the name would be a second tab stop for the same action.
-        nameCell = \case
-          HostGroupRow label count -> div_ [class_ "flex items-center gap-2 py-1 font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "badge badge-xs badge-ghost"] (toHtml $ show count)
-          HostItem host -> div_ [class_ "flex min-w-0 items-center gap-2 font-medium text-textStrong"] do
-            faSprite_ "server" "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
-            span_ [class_ "truncate"] $ toHtml host.name
-        configCell = itemOnly \host -> div_ [class_ "flex flex-wrap gap-1"] do
+        nameCell host = div_ [class_ "flex min-w-0 items-center gap-2 font-medium text-textStrong"] do
+          faSprite_ "server" "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
+          span_ [class_ "truncate"] $ toHtml host.name
+        configCell host = div_ [class_ "flex flex-wrap gap-1"] do
           whenJust host.provider $ metadataChip "cloud" . T.toTitle
           whenJust host.region $ metadataChip "location-dot"
-        systemCell = itemOnly \host -> span_ [class_ "text-xs text-textWeak"] $ toHtml $ T.intercalate " · " $ catMaybes [host.osType, host.architecture]
-        metricCell getter = itemOnly $ utilizationCell . getter
-        uptimeCell = itemOnly $ plainCell . fmap formatUptime . (.uptime)
-        containersCell = itemOnly $ span_ [class_ "tabular-nums text-textStrong"] . toHtml . show . (.containers)
-        integrationsCell = itemOnly \host -> div_ [class_ "flex flex-nowrap gap-1"] $ forM_ host.integrations \integration -> span_ [class_ "inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] do
+        systemCell host = span_ [class_ "text-xs text-textWeak"] $ toHtml $ T.intercalate " · " $ catMaybes [host.osType, host.architecture]
+        metricCell getter = utilizationCell . getter
+        uptimeCell = plainCell . fmap formatUptime . (.uptime)
+        containersCell = span_ [class_ "tabular-nums text-textStrong"] . toHtml . show . (.containers)
+        integrationsCell host = div_ [class_ "flex flex-nowrap gap-1"] $ forM_ host.integrations \integration -> span_ [class_ "inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] do
           faSprite_ (case integration of OpenTelemetryIntegration -> "arrows-turn-right"; KubernetesIntegration -> "cube"; DockerIntegration -> "layer-group") "regular" "h-3 w-3"
           toHtml $ integrationLabel integration
-        itemOnly render = \case HostGroupRow _ _ -> mempty; HostItem host -> render host
         metadataChip icon value = span_ [class_ "inline-flex items-center gap-1 rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] $ faSprite_ icon "regular" "h-3 w-3" >> toHtml value
 
 
@@ -411,7 +398,7 @@ newtype ImagesGet = ImagesPage (PageCtx (Deferred (Table ImageRow)))
 imagesTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> Maybe Text -> Maybe Text -> V.Vector ImageRow -> V.Vector ImageRow -> Table ImageRow
 imagesTable pid window url runtimeM registryM images allImages =
   Table
-    { config = def{elemID = "imagesForm", containerId = Just "imagesContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
+    { config = def{elemID = "imagesForm", containerId = Just "imagesContainer", addPadding = True, renderAsTable = True}
     , columns =
         [ col "Image" (\image -> div_ [class_ "flex items-center gap-2 min-w-0"] $ faSprite_ "layer-group" "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "truncate font-medium text-textStrong"] (toHtml image.image)) & withAttrs [class_ "min-w-72 w-full"]
         , col "Running" (\image -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show image.running) & withAttrs [class_ "w-24 text-right"]
@@ -429,17 +416,17 @@ imagesTable pid window url runtimeM registryM images allImages =
           , search = Just ClientSide
           , searchPlaceholder = Just "Search images"
           , rowAttrs = Just \image -> drawerRowAttrs_ $ infraUrl pid "/infrastructure/images/detail" [("image", image.image)] window
-          , tableHeaderActions =
+          , facets =
               Just
                 $ facetActions
                   (infraUrl pid "/infrastructure/images" [] window)
                   "imagesContainer"
-                  [ singleSelectFilter "Runtime" "runtime" runtimeM $ sortNub $ map Containers.runtimeLabel $ concatMap (.runtimes) $ V.toList allImages
-                  , singleSelectFilter "Registry" "registry" registryM $ facetValues (Just . (.registry)) allImages
+                  [ countedFilter "Runtime" "runtime" runtimeM (map Containers.runtimeLabel . (.runtimes)) allImages
+                  , countedFilter "Registry" "registry" registryM (one . (.registry)) allImages
                   ]
           , zeroState = Just $ ZeroState "layer-group" "No container images reporting" "Images appear when container telemetry includes container.image.name." (ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Container setup guide")
-          , showFilterRail = True
           , resultSummary = Just $ "Showing " <> show (V.length images) <> " of " <> show (V.length allImages) <> " images"
+          , customizeColumns = True
           , exportName = Just "container-images"
           }
     }
@@ -581,7 +568,7 @@ newtype KubernetesGet = KubernetesPage (PageCtx (Deferred (Table KubeRow)))
 kubernetesTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> KubeResource -> Maybe Text -> Maybe Text -> Maybe Text -> V.Vector KubeRow -> V.Vector KubeRow -> Table KubeRow
 kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows =
   Table
-    { config = def{elemID = "kubernetesForm", containerId = Just "kubernetesContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
+    { config = def{elemID = "kubernetesForm", containerId = Just "kubernetesContainer", addPadding = True, renderAsTable = True}
     , columns =
         [ col (resourceLabel resource) (\row -> div_ [class_ "flex min-w-0 items-center gap-2"] $ faSprite_ (kubeIcon resource) "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "min-w-0 truncate font-medium text-textStrong", term "data-tippy-content" row.name] (toHtml $ bool id clusterLabel (resource == KubeClusters) row.name)) & withAttrs [class_ "min-w-56 w-full"]
         , col "Status" (statusBadge . (.status)) & withAttrs [class_ "w-28"]
@@ -601,18 +588,19 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
           { search = Just ClientSide
           , searchPlaceholder = Just $ "Search " <> display resource
           , rowAttrs = Just $ drawerRowAttrs_ . kubeDetailUrl
-          , header = Just $ timeRefreshListener_ "kubernetesContainer" url >> navTabStrip_ ViewTabs "Kubernetes resource" "tabs-sm mx-3 w-fit" [(toHtml $ resourceLabel r <> "s", infraUrl pid "/infrastructure/kubernetes" [("resource", display r)] window, r == resource) | r <- [minBound ..]]
-          , showFilterRail = True
+          , header = Just $ timeRefreshListener_ "kubernetesContainer" url
+          , tabs = Just $ TableTabs "Kubernetes resource" [(resourceLabel r <> "s", infraUrl pid "/infrastructure/kubernetes" ([("resource", display r)] <> mapMaybe sequenceA [("cluster", clusterM), ("namespace", namespaceM), ("status", statusM)]) window, r == resource) | r <- [minBound ..]]
           , resultSummary = Just $ "Showing " <> show (V.length rows) <> " resources"
+          , customizeColumns = True
           , exportName = Just $ "kubernetes-" <> display resource
-          , tableHeaderActions =
+          , facets =
               Just
                 $ facetActions
                   (infraUrl pid "/infrastructure/kubernetes" [("resource", display resource)] window)
                   "kubernetesContainer"
-                  [ singleSelectFilter "Cluster" "cluster" clusterM $ facetValues (.cluster) allRows
-                  , singleSelectFilter "Namespace" "namespace" namespaceM $ facetValues (.namespace) allRows
-                  , singleSelectFilter "Status" "status" statusM $ facetValues (Just . kubeStatusLabel . (.status)) allRows
+                  [ countedFilter "Cluster" "cluster" clusterM (maybeToList . (.cluster)) allRows
+                  , countedFilter "Namespace" "namespace" namespaceM (maybeToList . (.namespace)) allRows
+                  , countedFilter "Status" "status" statusM (one . kubeStatusLabel . (.status)) allRows
                   ]
           , zeroState = Just $ ZeroState "cube" "No Kubernetes resources reporting" "Enable kubeletstats and k8s_cluster receivers to populate pods, workloads, and nodes." (ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Kubernetes setup guide")
           }
@@ -717,28 +705,38 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
   form_ [method_ "get", action_ $ "/p/" <> page.pid.toText <> "/infrastructure/host-map", class_ "flex flex-wrap items-end gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3 max-sm:grid max-sm:grid-cols-2"] do
     TimePicker.timeHiddenInputs_ page.window.fromQuery page.window.toQuery page.window.sinceQuery
     mapSelect "fill" "Fill by" (display page.fill) [(display f, case f of FillCPU -> "CPU usage"; FillMemory -> "Memory usage"; FillStorage -> "Storage usage") | f <- [minBound ..]]
-    mapSelect "group" "Group by" (hostGroupParam page.grouping) (map hostGroupOption [minBound ..])
-    mapSelect "provider" "Provider" (fromMaybe "" page.filters.provider) $ ("", "All") : map dup (facetValues (.provider) page.allHosts)
-    mapSelect "region" "Region" (fromMaybe "" page.filters.region) $ ("", "All") : map dup (facetValues (.region) page.allHosts)
-    mapSelect "os" "Operating system" (fromMaybe "" page.filters.osType) $ ("", "All") : map dup (facetValues (.osType) page.allHosts)
+    groupingControl_ $ Grouping (hostGroupParam page.grouping) (map hostGroupOption [minBound ..]) mapUrl "hostMapContainer"
+    forM_ [(field, value) | (field, Just value) <- [("provider", page.filters.provider), ("region", page.filters.region), ("os", page.filters.osType)]] $ \(field, value) -> input_ [type_ "hidden", name_ field, value_ value]
     div_ [class_ "ml-auto flex flex-wrap items-center gap-3 text-xs text-textWeak max-sm:col-span-2 max-sm:ml-0", Aria.label_ "Utilization legend"] do
       legend "bg-fillSuccess-strong" "Below 60%"
       legend "bg-fillWarning-strong" "60–85%"
       legend "bg-fillError-strong" "Above 85%"
       legend "bg-fillNeutral-strong" "No data"
-  if null page.groups
-    then
-      div_ [class_ "m-auto"]
-        $ emptyState_
-          def{icon = Just "server", action = ESLink "https://monoscope.tech/docs/sdks/infrastructure/" "Set up host monitoring"}
-          "No hosts reporting"
-          "Enable host metrics or Kubernetes node telemetry to populate the map."
-    else div_ [class_ "flex flex-wrap items-start gap-4 p-4"] $ forM_ page.groups \(label, hosts) ->
-      let enlarged = length hosts <= 12
-       in section_ [class_ $ "rounded-lg border border-strokeWeak bg-bgRaised p-3 shadow-sm " <> bool "min-w-80 flex-1" "w-fit min-w-72" enlarged] do
-            h2_ [class_ "mb-3 flex items-center gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "badge badge-xs badge-ghost"] (toHtml $ show (length hosts) <> " hosts")
-            div_ [class_ $ "flex flex-wrap " <> bool "gap-1" "gap-2" enlarged] $ forM_ (sortOn (.name) hosts) $ hostHex enlarged
+  div_ [class_ "flex items-start gap-4 p-4 max-lg:flex-col"] do
+    Facets.sidebar_
+      . facetsConfig
+      $ facetActions
+        mapUrl
+        "hostMapContainer"
+        [ countedFilter "Provider" "provider" page.filters.provider (maybeToList . (.provider)) page.allHosts
+        , countedFilter "Region" "region" page.filters.region (maybeToList . (.region)) page.allHosts
+        , countedFilter "OS" "os" page.filters.osType (maybeToList . (.osType)) page.allHosts
+        ]
+    div_ [class_ "min-w-0 w-full flex-1"] do
+      if null page.groups
+        then
+          div_ [class_ "m-auto"]
+            $ emptyState_
+              def{icon = Just "server", action = ESLink "https://monoscope.tech/docs/sdks/infrastructure/" "Set up host monitoring"}
+              "No hosts reporting"
+              "Enable host metrics or Kubernetes node telemetry to populate the map."
+        else div_ [class_ "flex flex-wrap items-start gap-4"] $ forM_ page.groups \(label, hosts) ->
+          let enlarged = length hosts <= 12
+           in section_ [class_ $ "rounded-lg border border-strokeWeak bg-bgRaised p-3 shadow-sm " <> bool "min-w-80 flex-1" "w-fit min-w-72" enlarged] do
+                h2_ [class_ "mb-3 flex items-center gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "badge badge-xs badge-ghost"] (toHtml $ show (length hosts) <> " hosts")
+                div_ [class_ $ "flex flex-wrap " <> bool "gap-1" "gap-2" enlarged] $ forM_ (sortOn (.name) hosts) $ hostHex enlarged
   where
+    mapUrl = infraUrl page.pid "/infrastructure/host-map" ([("fill", display page.fill), ("group", hostGroupParam page.grouping)] <> mapMaybe sequenceA [("provider", page.filters.provider), ("region", page.filters.region), ("os", page.filters.osType)]) page.window
     legend colour label = span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ $ "h-3 w-3 " <> colour, style_ hexClipPath] mempty >> toHtml label
     mapSelect :: Text -> Text -> Text -> [(Text, Text)] -> Html ()
     mapSelect field label current options = label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
