@@ -945,3 +945,15 @@ The regression checks a TERM-resistant child, subsequent read/bash calls, and an
 Impact evaluations now accept `bounded-patch` or `checkout-harness`, matching source evaluations. Omitting the selector still runs the ordered pair. Haskell carries the selection as `NonEmpty ReviewMode` through the effect and launcher. SDK integration checks provider tool payloads and VM allocations for each selected mode. Evidence, schema, citations, receipts and failure records still use the common evaluator.
 
 Use a new protocol for agent-to-agent comparisons. Both stopped development probes remain closed, with their failures and costs retained. Mode selection does not establish a quality gain.
+
+### Paired agent-only guidance probe — 2026-10-25
+
+All six frozen trials completed across three known development PRs. Each pair used `gpt-5.6-luna/high` with the same worker, guest, dependencies and Haskell policy. Only the Pi prompt override versus append differed. Each custom run preceded its native pair. This sample does not establish overall accuracy or causal cost savings.
+
+![Paired agent-only development probe](https://github.com/user-attachments/assets/eb6e2937-d72c-429a-86a5-9b427f041878)
+
+Both conditions reproduced the geometry bug. Native guidance also reproduced duplicate subtitle component registration. Both reported unmeasured browser layout cost. Independent fault injection confirmed output-limit and timeout failures with a synthetic Git analyzer. [Node 24’s 1 MiB output limit](https://github.com/nodejs/node/blob/v24.22.1/lib/child_process.js#L90) contradicts the reported premise of unbounded buffering. No released analyzer or live production evidence was available.
+
+The probe matched 111 calls to usage receipts and estimated $0.30413937. The recorded cohort now covers 65 runs and 792 pairs, estimating $1.98068666. Provider invoices remain unreconciled and infrastructure remains unpriced. Customers received no charges. Study containers and temporary credential files are removed.
+
+Next, verify native screenshot reading and assumptions about transitive library defaults. Full trial records and adjudication remain in `scripts/local/impact-quality-native-20261025/pi-guidance-agent-study/`.
