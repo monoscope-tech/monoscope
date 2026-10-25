@@ -10,7 +10,7 @@ module BackgroundJobs.ReportUsageSpec (spec) where
 -- thing and re-submit chunks that already succeeded.
 
 import BackgroundJobs qualified
-import Control.Lens ((%~), (^.))
+import Control.Lens (_1, (%~), (^.))
 import Data.Cache qualified as Cache
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
@@ -547,7 +547,7 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       Right (acks, poison) <-
         runTestBg frozenTime tr
           $ OtlpServer.processList [("capped-ack", encodeMessage $ logs key), ("unknown-ack", encodeMessage $ logs "no-such-key"), ("mixed-ack", encodeMessage mixed)] (HM.singleton "ce-type" "org.opentelemetry.otlp.logs.v1")
-      (acks, map (\(ack, _, _) -> ack) poison) `shouldBe` (["capped-ack"], ["unknown-ack", "mixed-ack"])
+      (acks, map (^. _1) poison) `shouldBe` (["capped-ack"], ["unknown-ack", "mixed-ack"])
 
       Right body <- OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just key) (encodeMessage $ createOtelLogAtTime key ["rejected"] frozenTime)
       Right (res :: LS.ExportLogsServiceResponse) <- pure $ decodeMessage body

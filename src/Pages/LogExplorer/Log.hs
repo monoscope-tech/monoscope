@@ -1133,8 +1133,8 @@ lookupAlert = maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMo
 -- | One-decimal percent formatter; positive rates never round down to zero.
 --
 -- >>> import "monoscope" Pages.LogExplorer.Log qualified as LL
--- >>> map LL.fmtPct1 [0, 0.03, 0.06, 5.24, 100, -1.25]
--- ["0.0%","<0.1%","0.1%","5.2%","100.0%","-1.2%"]
+-- >>> map LL.fmtPct1 [0, 0.03, 0.05, 0.06, 5.24, 100, -1.25]
+-- ["0.0%","<0.1%","<0.1%","0.1%","5.2%","100.0%","-1.2%"]
 fmtPct1 :: Double -> Text
 fmtPct1 x = bool shown "<0.1%" (x > 0 && shown == "0.0%")
   where

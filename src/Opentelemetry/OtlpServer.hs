@@ -462,11 +462,9 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         !checked = [(ackId, raw, req, invalidReason req) | (ackId, raw, Right req) <- decodedMsgs]
         !invalidPoison = [(ackId, raw, err) | (ackId, raw, _, Just err) <- checked]
         !converted = [(ackId, raw, req, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, req, Nothing) <- checked]
-        -- A payload naming an API key that did not resolve goes to the DLQ, never an ack: acking
-        -- commits the offset and destroys data whose project never resolved (a cached negative
-        -- entry, a key racing its own creation) — the 2026-07-27 loss (~200k rows / 10 tenants /
-        -- 9 min, no failure signal). One unresolved key poisons the whole payload, so a mixed one
-        -- survives too. Rows left out on purpose (the free-tier cap) come from resolved keys.
+        -- An unresolved API key poisons the whole payload (2026-07-27: acking one lost ~200k rows);
+        -- capped data comes from resolved keys and is acked. at-project-ids always get a cache
+        -- ('fetchIngestCaches'), so keys are the only thing that can fail to resolve.
         !dropPoison =
           [ (ackId, raw, "unresolved project: payload names an API key that did not resolve")
           | (ackId, raw, req, _) <- converted
