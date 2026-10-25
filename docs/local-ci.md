@@ -100,11 +100,11 @@ Two deliberate differences from your normal `make test`:
 - **Build directories are container-private.** `dist-newstyle`, all three
   `node_modules` directories, npm's download cache, and Playwright's browser download are named
   volumes. Your host's macOS/arm64 artifacts would corrupt the Linux build.
-  Volumes are separate for each worktree and persist, so the second `make ci` there is
-  fast — but the **first one is a cold build** and takes as long as a cold CI
-  run. Start it and go do something else; every run after that is incremental.
-  `make ci-down` keeps them; `make ci-clean` deletes them and buys you the cold
-  build back.
+  The cabal store and the npm and Playwright caches are shared by every checkout;
+  `dist-newstyle` and `node_modules` stay per worktree. All persist, so a new
+  worktree's first `make ci` compiles the project but not its dependencies.
+  `make ci-down` keeps them; `make ci-clean` deletes them (the shared ones for
+  every checkout) and buys you the cold build back.
   Each `integration-tests` invocation recreates only the ephemeral Postgres,
   MinIO, and TimeFusion service containers, so deterministic fixture IDs and
   telemetry rows never leak into the next run. The build-cache volumes remain.

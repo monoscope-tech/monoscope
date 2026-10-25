@@ -602,14 +602,19 @@ cmd_gc() {
 
 COMPOSE_FILE=ci/compose.yml
 COMPOSE_PROJECT="monoscope-ci-$(printf '%s' "$ROOT" | sha256 | cut -c1-12)"
-compose() { docker compose -f "$COMPOSE_FILE" --project-name "$COMPOSE_PROJECT" "$@"; }
+SHARED_VOLUMES=(monoscope-ci_cabal monoscope-ci_npm monoscope-ci_playwright)
+compose() {
+  local v; for v in "${SHARED_VOLUMES[@]}"; do docker volume create "$v" >/dev/null; done
+  docker compose -f "$COMPOSE_FILE" --project-name "$COMPOSE_PROJECT" "$@"
+}
 
 # Wait for a host check started in the background and replay its output.
 collect_host() { [ -n "$1" ] || return 0; local r=0; wait "$1" || r=$?; cat "$2"; rm -f "$2"; return "$r"; }
 
 cmd_local() {
-  # Serialize local runs to avoid oversubscribing the host. Each worktree has its
-  # own volumes so a checkout on another branch cannot replace this one's HIE files.
+  # Serialize local runs: they oversubscribe the host, and every checkout shares
+  # the cabal store (`shell` takes no lock, so a hand build there can race a run).
+  # Each worktree keeps its own dist so another branch cannot replace its HIE files.
   if [ "${CI_LOCAL_LOCKED:-}" != true ]; then
     python3 -c '
 import fcntl, os, sys
@@ -740,7 +745,7 @@ cmd_shell() {
 # Volumes survive `down` on purpose: they hold the cabal store and dist-newstyle,
 # and losing them means the next `make ci` is a cold build. `clean` is the nuke.
 cmd_down() { compose down --remove-orphans; }
-cmd_clean() { compose down -v --remove-orphans; }
+cmd_clean() { compose down -v --remove-orphans && docker volume rm "${SHARED_VOLUMES[@]}"; }
 
 # ---------------------------------------------------------------- deploy image
 
