@@ -978,10 +978,23 @@ Haskell's `run_regression` description now asks for the configured entry point a
 
 All three application dependency caches passed offline preparation and six base/head build checks. Rill's selected core build/typecheck passes; its full website build needs Hugo, which the guest lacks. The workflow-only case needed no application dependencies. Chroxy's manifest change statistics disagree with the pinned diff. All 24 true-positive reference locations are valid; two false-positive reference ranges are invalid. Those cases and references were retained.
 
-The registry still reports Pi coding-agent / Pi AI 1.4.0 and Gondolin 0.14.0 as latest. The research reuses [ReviewBench](https://github.com/review-bench/ReviewBench) at `4f04392d6bf4`, including its pinned Pi 0.75.5 grader runtime, without adding an application dependency. One calibration stopped on cache-write usage; the corrected research meter passed eight unbilled transport checks and a distinct three-control calibration. Native Pi AI 1.4.0 already handles cache-write accounting. The recorded cohort now has 916 calls, 915 normal usage receipts, and one recovered token record, estimating $3.51580945. The recovery includes $0.04158 calculated from retained counts and requested-model rates; response identity/status remain unknown. Provider invoices are unreconciled, infrastructure is unpriced, and customers received no charges.
+The registry still reports Pi coding-agent / Pi AI 1.4.0 and Gondolin 0.14.0 as latest. The research reuses [ReviewBench](https://github.com/review-bench/ReviewBench) at `4f04392d6bf4`, including its pinned Pi 0.75.5 grader runtime, without adding an application dependency. One calibration stopped on cache-write usage; the corrected research meter passed eight unbilled transport checks and a distinct three-control calibration. Native Pi AI 1.4.0 already handles cache-write accounting. At that point, the recorded cohort had 916 calls, 915 normal usage receipts, and one recovered token record, estimating $3.51580945. The recovery includes $0.04158 calculated from retained counts and requested-model rates; response identity/status remain unknown. Provider invoices are unreconciled, infrastructure is unpriced, and customers received no charges.
 
 The [per-call cost CSV](assets/impact-review-models-20261025-costs.csv) records all 124 provider requests from this comparison and its two calibrations, totaling $1.53512279. Input counts exclude cache reads/writes, which have separate columns. Rates are USD per million tokens; estimates are nanodollars. The recovered request is marked with unknown response identity/status. Raw protocols, failures, receipts, source audits, scores, and PNG input remain in the internal, gitignored `scripts/local/impact-quality-fresh-20261025/` archive. The CSV supports accounting checks, not model-quality claims. Recompute its total from the repository root:
 
 ```sh
 python3 -c 'import csv; print(sum(int(r["estimated_nanousd"]) for r in csv.DictReader(open("docs/plans/assets/impact-review-models-20261025-costs.csv"))) / 1e9)'
 ```
+
+### Semantic grading controls — 2026-10-25
+
+The unchanged grader passed four known controls after 13 offline runtime checks established their behavior. The [source history](assets/semantic-review-controls-20261025.gitexport) and [replay data/results](assets/semantic-review-controls-20261025.json) include both revisions, exact grader inputs, runtime driver, observed output, and per-call accounting. Reimporting the source history and replaying the driver reproduced all runtime evidence exactly in the pinned Python container, with networking disabled.
+
+| Claim under test | Runtime counterexample | Grader label |
+| --- | --- | --- |
+| A skipped-base probe proves a guard regression | The public CLI blocks correctly on both revisions; the probe supplies the wrong private-helper input | False positive |
+| An argv-reading helper breaks piped CLI input | The configured CLI translates stdin into the helper's argument | False positive |
+| An unchanged development manifest forces an old release version | The release command produces the requested 0.6.0 archive and metadata | False positive |
+| The counter no longer accepts arrays | The same public CLI returns the length on base and raises a type error on head | Reference true-positive match |
+
+One frozen grading attempt used seven matched call/usage pairs, estimating $0.13443950. Expected labels stayed outside the grader's mounts. These small, constructed cases validate explicit counterexamples; they do not establish general accuracy or resolve the disputed real-PR findings. No original trial, reference label, rubric, or model default changed. The source export imports with `git fast-import`; the replay data records the runtime driver and `/base` and `/head` mounts needed for its pinned container.
