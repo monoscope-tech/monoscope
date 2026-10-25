@@ -128,10 +128,14 @@ services:
     # would start Postgres and MinIO even for frontend-only signoff.
 
 volumes:
-  cabal:
-  npm:
-  dist:
+  # Shared by every checkout, so a new worktree or signoff clone starts warm
+  # instead of adding another ~12GB set; ci.sh creates them. Every checkout mounts
+  # at /build, so dist is incremental across branches; the weeder check repairs
+  # the .hie files another branch's build leaves behind.
+  cabal: {external: true, name: monoscope-ci_cabal}
+  npm: {external: true, name: monoscope-ci_npm}
+  dist: {external: true, name: monoscope-ci_dist}
+  playwright: {external: true, name: monoscope-ci_playwright}
   node:
   wc-node:
   e2e-node:
-  playwright:
