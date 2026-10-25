@@ -469,14 +469,18 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         -- that commits the offset and destroys the data with no DLQ entry — the
         -- 2026-07-27 loss (~200k rows / 10 tenants / 9 min, zero failure signal
         -- anywhere in the pipeline). Route it to the DLQ so the bytes survive.
+        -- Zero rows is a deliberate drop only when every key it names resolved and every project
+        -- it names is over the free-tier cap; one unresolved key makes it lost data again.
+        deliberateDrop req =
+          let keys = V.toList (extractKeys req)
+              pids = mapMaybe (`HM.lookup` keyToIdMap) keys
+           in length pids == length keys && all (maybe False overFreeTierQuota . (`HM.lookup` projectCachesMap)) (pids <> extractIds req)
         !dropPoison =
           [ (ackId, raw, "unresolved project: payload carried telemetry but converted to zero rows")
           | (ackId, raw, req, recs) <- converted
           , V.null recs
-          , let pids = mapMaybe (`HM.lookup` keyToIdMap) (V.toList (extractKeys req)) <> extractIds req
           , not (V.null (extractKeys req)) || not (null (extractIds req))
-          , -- Zero rows because every project it names is over the free-tier cap is a deliberate drop: ack it.
-          null pids || not (all (maybe False overFreeTierQuota . (`HM.lookup` projectCachesMap)) pids)
+          , not (deliberateDrop req)
           ]
         !dropAckIds = HS.fromList [ackId | (ackId, _, _) <- dropPoison]
         !writeReady = [(ackId, raw, recs) | (ackId, raw, _, recs) <- converted, not (HS.member ackId dropAckIds)]

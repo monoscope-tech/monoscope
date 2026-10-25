@@ -10,7 +10,7 @@ module BackgroundJobs.ReportUsageSpec (spec) where
 -- thing and re-submit chunks that already succeeded.
 
 import BackgroundJobs qualified
-import Control.Lens ((^.))
+import Control.Lens ((%~), (^.))
 import Data.Cache qualified as Cache
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
@@ -541,8 +541,13 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       -- Capped data is dropped and acked, not dead-lettered as an unresolved project: that
       -- misclassification looped ~10k capped messages/hour through the DLQ tiers (2026-10-22).
       -- An unresolved key still is: those bytes are a customer's data with nowhere to land yet.
-      Right (acks, poison) <- runTestBg frozenTime tr $ OtlpServer.processList [("capped-ack", encodeMessage $ createOtelLogAtTime key ["capped"] frozenTime), ("unknown-ack", encodeMessage $ createOtelLogAtTime "no-such-key" ["lost?"] frozenTime)] (HM.singleton "ce-type" "org.opentelemetry.otlp.logs.v1")
-      (acks, map (\(ack, _, _) -> ack) poison) `shouldBe` (["capped-ack"], ["unknown-ack"])
+      -- So is a payload mixing the capped key with an unresolved one.
+      let logs k = createOtelLogAtTime k ["capped?"] frozenTime
+          mixed = logs key & LSF.resourceLogs %~ (<> (logs "no-such-key" ^. LSF.resourceLogs))
+      Right (acks, poison) <-
+        runTestBg frozenTime tr
+          $ OtlpServer.processList [("capped-ack", encodeMessage $ logs key), ("unknown-ack", encodeMessage $ logs "no-such-key"), ("mixed-ack", encodeMessage mixed)] (HM.singleton "ce-type" "org.opentelemetry.otlp.logs.v1")
+      (acks, map (\(ack, _, _) -> ack) poison) `shouldBe` (["capped-ack"], ["unknown-ack", "mixed-ack"])
 
       Right body <- OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just key) (encodeMessage $ createOtelLogAtTime key ["rejected"] frozenTime)
       Right (res :: LS.ExportLogsServiceResponse) <- pure $ decodeMessage body
