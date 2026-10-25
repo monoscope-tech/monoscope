@@ -1159,9 +1159,11 @@ newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
 
 stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (RespHeaders (Html ()))
 stripeCheckoutInitH pid form = do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
+      lapsedSubId = mfilter (not . T.null) project.subId <* guard (Projects.isFreeTier project.paymentPlan && Projects.projectProvider project == Projects.StripeProvider)
+  debts <- maybe (pure []) (fmap (filter \i -> i.status == "open" && i.amountRemaining > 0) . BackgroundJobs.getStripeInvoices envCfg.stripeSecretKey) lapsedSubId
   -- Keyed to the buyer, not the project: people run several projects, and each one
   -- used to mint its own Stripe customer and hand out its own 30-day trial.
   billing <- Projects.userBilling sess.user.id
@@ -1169,6 +1171,7 @@ stripeCheckoutInitH pid form = do
     =<< Settings.createStripeCheckoutSession
       (not billing.hasSubscribedBefore)
       billing.stripeCustomerId
+      debts
       envCfg.stripeSecretKey
       envCfg.hostUrl
       pid

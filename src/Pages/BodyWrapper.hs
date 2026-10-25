@@ -481,7 +481,10 @@ bodyWrapper bcfg child = do
                 $ div_ [id_ "billing-downgrade-banner", role_ "alert", class_ "flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-strokeWarning-strong bg-fillWarning-weak px-4 py-2 text-xs text-textStrong"] do
                   span_ "Your paid subscription is no longer active. This project has been downgraded to Free."
                   a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", class_ "font-medium text-textBrand underline underline-offset-2"] "Review billing or change plan"
-                  a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", hxGet_ $ "/p/" <> project.id.toText <> "/manage_subscription", term "hx-preload" "false", class_ "font-medium text-textBrand underline underline-offset-2"] "Update payment method"
+                  -- A cancelled Stripe sub can't be revived from the portal; checkout starts a new one and collects what's owed.
+                  if Projects.projectProvider project == Projects.StripeProvider
+                    then a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", class_ "font-medium text-textBrand underline underline-offset-2"] "Reactivate subscription"
+                    else a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", hxGet_ $ "/p/" <> project.id.toText <> "/manage_subscription", term "hx-preload" "false", class_ "font-medium text-textBrand underline underline-offset-2"] "Update payment method"
             -- Keep fixed fullscreen panels and drawers below the project notices.
             section_ [class_ "relative flex flex-row flex-1 min-h-0 overflow-hidden", style_ "contain: layout"] do
               when (isJust bcfg.currProject)

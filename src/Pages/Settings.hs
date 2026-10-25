@@ -106,11 +106,12 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..))
 import Network.HTTP.Types (urlEncode)
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formCheckbox_, formField_, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formCheckbox_, formField_, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, grantsTrial, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -1185,6 +1186,7 @@ data BillingData = BillingData
   , paymentPlan :: Text
   , enableFreetier :: Bool
   , basicAuthEnabled :: Bool
+  , trialEligible :: Bool
   , provider :: Projects.BillingProvider
   , dailyUsage :: [Projects.DailyUsage]
   -- ^ (day, total_requests, metrics, eventBytes, metricBytes); events = total_requests - metrics
@@ -1223,7 +1225,8 @@ instance ToHtml BillingGet where
 
 manageBillingGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders BillingGet)
 manageBillingGetH pid = do
-  (_, project, bw) <- mkPageCtx pid
+  (sess, project, bw) <- mkPageCtx pid
+  billing <- Projects.userBilling sess.user.id
   let dat = fromMaybe project.createdAt project.billingDay
       envCfg = bw.config
   currentTime <- Time.currentTime
@@ -1273,7 +1276,7 @@ manageBillingGetH pid = do
       lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
       provider = Projects.projectProvider project
-  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, aiInputTokens, aiOutputTokens, aiCostMicrousd, aiInputRate = envCfg.aiInputMicrousdPerMillionTokens, aiOutputRate = envCfg.aiOutputMicrousdPerMillionTokens, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, cycleEnd, currentInvoice, pastCycles}
+  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, aiInputTokens, aiOutputTokens, aiCostMicrousd, aiInputRate = envCfg.aiInputMicrousdPerMillionTokens, aiOutputRate = envCfg.aiOutputMicrousdPerMillionTokens, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, trialEligible = not billing.hasSubscribedBefore, provider, dailyUsage, cycleStart = utctDay cycleStart, cycleEnd, currentInvoice, pastCycles}
   where
     epochDay :: Int -> Day
     epochDay = utctDay . posixSecondsToUTCTime . fromIntegral
@@ -1381,7 +1384,7 @@ billingPage d = div_ [] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
       p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
     -- Free upgrades use Stripe; billing recovery keeps the existing provider.
-    paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled False (bool d.provider Projects.NoBillingProvider isFree)
+    paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled d.trialEligible False (bool d.provider Projects.NoBillingProvider isFree)
 
 
 usd :: Double -> Text
@@ -1556,8 +1559,11 @@ stripeSessionUrl apiKey endpoint params = do
 -- `customerM` is the buyer's existing Stripe customer, when they have one. Omitting
 -- it makes Stripe mint a fresh Customer per session, so one person upgrading a second
 -- project became a second unrelated customer on the same card.
-createStripeCheckoutSession :: W.HTTP :> es => Bool -> Maybe Text -> Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe Text)
-createStripeCheckoutSession trialEligible customerM apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
+--
+-- `debts` are open invoices of the project's lapsed subscription: each becomes a
+-- one-time line on the first payment, and 'handleStripeCheckout' marks them paid.
+createStripeCheckoutSession :: W.HTTP :> es => Bool -> Maybe Text -> [BJ.StripeInvoice] -> Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe Text)
+createStripeCheckoutSession trialEligible customerM debts apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
   let basePrice = case plan of
         "SystemsPricing" -> priceIdBYOS
         _ -> priceIdGraduated
@@ -1566,12 +1572,25 @@ createStripeCheckoutSession trialEligible customerM apiKey hostUrl pid plan pric
         , ("line_items[0][quantity]", "1")
         , ("line_items[1][price]", encodeUtf8 priceIdOverage)
         ]
-      trialParams = [("subscription_data[trial_period_days]", "30") | trialEligible && plan /= "SystemsPricing"]
+      trialParams = [("subscription_data[trial_period_days]", "30") | grantsTrial trialEligible plan]
       -- Stripe Managed Payments (MoR): Stripe becomes merchant of record and handles
       -- tax/address collection itself, so the automatic_tax + tax_id params are disallowed.
       managedPaymentsParams = [("managed_payments[enabled]", "true")]
+      debtParams =
+        concat
+          [ [ (item "[price_data][currency]", "usd")
+            , (item "[price_data][unit_amount]", show inv.amountRemaining)
+            , (item "[price_data][product_data][name]", encodeUtf8 $ "Outstanding balance" <> foldMap (", invoice " <>) inv.number)
+            , (item "[price_data][product_data][tax_code]", "txcd_10103001")
+            , (item "[quantity]", "1")
+            ]
+          | (i, inv) <- zip [2 :: Int ..] debts
+          , let item k = "line_items[" <> show i <> "]" <> k
+          ]
+          <> [("metadata[settles_invoices]", encodeUtf8 $ T.intercalate "," $ map (.invoiceId) debts) | not (null debts)]
       params =
         prices
+          <> debtParams
           <> trialParams
           <> managedPaymentsParams
           <> [("customer", encodeUtf8 c) | c <- maybeToList customerM]
@@ -1605,8 +1624,11 @@ lemonSqueezyOpts apiKey =
 cancelProjectSubscription :: (Log.Log :> es, W.HTTP :> es) => EnvConfig -> Projects.Project -> Eff es ()
 cancelProjectSubscription envConfig project = whenJust target \(opts, url) -> do
   res <- trySync $ W.deleteWith opts url
-  whenLeft_ res \e ->
-    Log.logAttention "Subscription cancellation failed; subscription may still be billing" (project.id.toText, project.subId, show @Text e)
+  whenLeft_ res \e -> case fromException e of
+    -- Stripe 404s a sub that has already ended (e.g. cancelled by dunning): nothing to stop.
+    Just (HttpExceptionRequest _ (StatusCodeException r _)) | r ^. Wreq.responseStatus . Wreq.statusCode == 404 ->
+      Log.logInfo "Subscription already ended; nothing to cancel" (project.id.toText, project.subId)
+    _ -> Log.logAttention "Subscription cancellation failed; subscription may still be billing" (project.id.toText, project.subId, show @Text e)
   where
     target = do
       subId <- mfilter (not . T.null) project.subId
@@ -1643,10 +1665,11 @@ stripeWebhookPostH sigHeaderM rawBody = do
             handlers =
               [ ("checkout.session.completed", handleStripeCheckout envConfig)
               , ("customer.subscription.deleted", handleStripeDowngrade envConfig "subscription.deleted" "was cancelled")
-              , ("customer.subscription.updated", handleStripeSubUpdated)
+              , ("customer.subscription.updated", handleStripeSubUpdated envConfig)
               , ("customer.subscription.paused", handleStripeDowngrade envConfig "subscription.paused" "was paused")
               , ("customer.subscription.resumed", handleStripeSubResumed envConfig)
               , ("invoice.payment_failed", handleStripePaymentFailed envConfig)
+              , ("invoice.paid", handleStripeInvoicePaid envConfig)
               ]
         case (,) <$> (eventType >>= flip lookup handlers) <*> sessionObj of
           Just (handle, obj) -> handle obj
@@ -1670,13 +1693,18 @@ handleStripeCheckout envConfig obj = do
   let pidM = jsonField "client_reference_id" obj :: Maybe Text
       subIdM = jsonField "subscription" obj :: Maybe Text
       customerIdM = jsonField "customer" obj :: Maybe Text
-      planFromMetadata = (jsonField "metadata" obj :: Maybe AE.Value) >>= jsonField "plan" :: Maybe Text
+      metadata = jsonField "metadata" obj :: Maybe AE.Value
+      planFromMetadata = metadata >>= jsonField "plan" :: Maybe Text
+      settledInvoices = maybe [] (T.splitOn ",") (metadata >>= jsonField "settles_invoices")
   case (pidM >>= Projects.projectIdFromText, subIdM, customerIdM) of
     (Just pid, Just subId, Just customerId) -> do
       let plan = fromMaybe "GraduatedPricing" planFromMetadata
       projectM <- Projects.projectById pid
-      -- Idempotency: skip if this subscription is already set on the project
-      if maybe False (\p -> p.subId == Just subId) projectM
+      -- Idempotency: skip if this subscription is already set on the project. Settling runs
+      -- on both paths, so a retry after a crash past the sub_id write still settles; it runs
+      -- after that write so the invoice.paid it triggers no longer matches the project.
+      res <-
+        if maybe False (\p -> p.subId == Just subId) projectM
         then pure "already processed"
         else do
           -- Cancel whatever subscription the project held before this checkout — a
@@ -1697,6 +1725,10 @@ handleStripeCheckout envConfig obj = do
           whenJust projectM \project ->
             Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planUpgradedEmail plan)
           pure "checkout processed"
+      forM_ settledInvoices \invId ->
+        whenLeftM_ (trySync $ W.postWith (stripeOpts envConfig.stripeSecretKey) ("https://api.stripe.com/v1/invoices/" <> toString invId <> "/pay") ([("paid_out_of_band", "true")] :: [(ByteString, ByteString)])) \e ->
+          Log.logAttention "Stripe checkout collected an old invoice but marking it paid failed; it may be collected twice" (pid.toText, invId, show @Text e)
+      pure res
     _ -> do
       Log.logAttention "Stripe checkout missing project/sub/customer" (pidM, subIdM, customerIdM)
       pure "missing fields"
@@ -1719,15 +1751,39 @@ handleStripeDowngrade envConfig event reason obj =
       pure "missing sub id"
 
 
-handleStripeSubUpdated :: AE.Value -> ATBaseCtx (Html ())
-handleStripeSubUpdated obj = do
+-- | Also mirrors the sub's status onto the plan: dunning that ends at @unpaid@ (or a pause)
+-- downgrades, and paying the invoice by any route returns the same sub to @active@, which
+-- upgrades. Guarded on the current plan so repeat updates don't re-notify.
+handleStripeSubUpdated :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
+handleStripeSubUpdated envConfig obj = do
   let subIdM = jsonField "id" obj :: Maybe Text
       newItemIdM = (jsonField "items" obj >>= jsonField "data" :: Maybe [AE.Value]) >>= listToMaybe >>= jsonField "id" :: Maybe Text
   case (subIdM, newItemIdM) of
     (Just subId, Just newItemId) ->
       void $ Projects.updateSubItemIdBySubId newItemId subId
     _ -> Log.logAttention "Stripe subscription.updated missing sub_id or item_id" (subIdM, newItemIdM)
+  whenJust subIdM \subId -> whenJustM (Projects.projectBySubId subId) \project ->
+    case (jsonField "status" obj :: Maybe Text, Projects.isFreeTier project.paymentPlan) of
+      (Just "unpaid", False) -> void $ handleStripeDowngrade envConfig "subscription.unpaid" "is unpaid" obj
+      (Just "paused", False) -> void $ handleStripeDowngrade envConfig "subscription.paused" "was paused" obj
+      (Just status, True) | status `elem` ["active", "trialing"] -> void $ handleStripeSubResumed envConfig obj
+      _ -> pass
   pure "subscription updated"
+
+
+-- | A cancelled sub can't be revived, so paying its leftover invoice outside our checkout
+-- (hosted link, email, portal) leaves the project on Free: point the payer at checkout.
+-- An @unpaid@ sub's revival arrives as customer.subscription.updated instead.
+handleStripeInvoicePaid :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
+handleStripeInvoicePaid envConfig obj = do
+  let subIdM = (jsonField "parent" obj >>= jsonField "subscription_details" >>= jsonField "subscription") <|> jsonField "subscription" obj :: Maybe Text
+  whenJust subIdM \subId -> whenJustM (Projects.projectBySubId subId) \project ->
+    when (Projects.isFreeTier project.paymentPlan) $ BJ.getStripeSubDetails envConfig.stripeSecretKey subId >>= \case
+      Just BJ.StripeSubDetails{status = "canceled"} -> do
+        Log.logInfo "Stripe invoice paid on a cancelled subscription; asking the payer to reactivate" (project.id.toText, subId)
+        Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.invoiceSettledEmail
+      _ -> pass
+  pure "invoice paid handled"
 
 
 -- Notification only — Stripe retries payments automatically over its dunning period.

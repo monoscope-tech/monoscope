@@ -2949,11 +2949,13 @@ data StripeSubDetails = StripeSubDetails
 -- | One Stripe invoice. `periodStart`/`periodEnd` (POSIX seconds) are the usage
 -- window the invoice bills for — contiguous with the subscription item's period,
 -- which is why they, and not our own month arithmetic, define a past cycle.
--- `total` is in cents; `hostedUrl` is absent on drafts.
+-- `total` and `amountRemaining` (still owed) are in cents; `hostedUrl` is absent on drafts.
 data StripeInvoice = StripeInvoice
-  { periodStart :: Int
+  { invoiceId :: Text
+  , periodStart :: Int
   , periodEnd :: Int
   , total :: Int
+  , amountRemaining :: Int
   , status :: Text
   , hostedUrl :: Maybe Text
   , number :: Maybe Text
@@ -2991,9 +2993,11 @@ getStripeInvoices apiKey subId = do
     resp <- rightToMaybe respE
     v <- AE.decode @AE.Value (resp ^. W.responseBody)
     pure
-      [ StripeInvoice{periodStart, periodEnd, total, status, hostedUrl, number}
+      [ StripeInvoice{invoiceId, periodStart, periodEnd, total, amountRemaining, status, hostedUrl, number}
       | inv <- v ^.. AL.key "data" . AL.values
-      , let total = maybe 0 fromInteger $ inv ^? AL.key "total" . AL._Integer
+      , let invoiceId = fromMaybe "" $ inv ^? AL.key "id" . AL._String
+            total = maybe 0 fromInteger $ inv ^? AL.key "total" . AL._Integer
+            amountRemaining = maybe 0 fromInteger $ inv ^? AL.key "amount_remaining" . AL._Integer
             status = fromMaybe "" $ inv ^? AL.key "status" . AL._String
             hostedUrl = inv ^? AL.key "hosted_invoice_url" . AL._String
             number = inv ^? AL.key "number" . AL._String
