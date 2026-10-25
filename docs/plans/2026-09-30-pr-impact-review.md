@@ -939,3 +939,9 @@ Cleanup removed the study containers and temporary credential files. The compari
 A scripted SDK regression reproduced workspace loss after a shell timeout. Gondolin 0.14 cancels the host wait without killing the guest command. Our bridge then destroyed the VM. Guest-side [GNU timeout](https://github.com/coreutils/coreutils/blob/master/src/timeout.c) now kills the command group while preserving the workspace. Whole-attempt cancellation still closes the VM. A host watchdog also closes it if termination stalls for five seconds.
 
 The regression checks a TERM-resistant child, subsequent read/bash calls, and an ordinary exit 137 without a false timeout report. It failed before the fix and passed afterward. These scripted checks use no paid inference and do not establish review quality. The registry still reports Pi 1.4.0 and Gondolin 0.14.0 as latest.
+
+### Selectable evaluation modes — 2026-10-25
+
+Impact evaluations now accept `bounded-patch` or `checkout-harness`, matching source evaluations. Omitting the selector still runs the ordered pair. Haskell carries the selection as `NonEmpty ReviewMode` through the effect and launcher. SDK integration checks provider tool payloads and VM allocations for each selected mode. Evidence, schema, citations, receipts and failure records still use the common evaluator.
+
+Use a new protocol for agent-to-agent comparisons. Both stopped development probes remain closed, with their failures and costs retained. Mode selection does not establish a quality gain.
