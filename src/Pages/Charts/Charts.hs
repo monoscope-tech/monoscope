@@ -183,7 +183,7 @@ runQueryAST authCtx dbSource respDataType pid source binDensity environment serv
 
   case querySQLM of
     Just querySQL
-      | Just message <- rawSqlScopeError environment service querySQL ->
+      | Just message <- rawSqlScopeError environment service (fillQueryTemplate mappngSQL querySQL) ->
           pure (emptyMetricsFor now fromD toD){error = Just message}
     Just querySQL -> do
       let tbl = sourceTable source
@@ -223,7 +223,7 @@ runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange prog
       (from, to) = bounds
       canonical =
         M.fromList [("query_ast_filters", rawAstFilters cacheCfg components)]
-          <> variablePresets cfg.binDensity cfg.pid.toText from to [] cfg.currentTime
+          <> variablePresets cfg.binDensity cfg.pid.toText from to [(key, Just value) | (key, value) <- M.toList mapping, "var-" `T.isPrefixOf` key || key == "table-search"] cfg.currentTime
           <> mapping
       sql = fillQueryTemplate canonical template
       fetch = liftIO $ fetchMetricsDataWithProgress progress decoder sql cfg.currentTime from to authCtx dbSource >>= either throwIO pure
@@ -755,7 +755,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
         maybe
           (first queryErrorText $ parseQueryDiagnosed source $ fillQueryTemplate mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM)
           Left
-          (raw >>= rawSqlScopeError environment service)
+          (raw >>= rawSqlScopeError environment service . fillQueryTemplate mapping)
       scope = mkScopedQuery pid (fromD, toD) environment service
       cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source Nothing){binDensity = density, targetsTimefusion = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource}
       run emit = case parsed of

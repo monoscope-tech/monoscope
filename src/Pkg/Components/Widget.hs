@@ -37,7 +37,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (copyButton_, headerRow_)
+import Pages.Components (copyButton_, headerRow_, searchInput_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..))
 import Pkg.Parser (ToQueryText (..), parseQueryToAST, replacePlaceholders)
@@ -311,6 +311,7 @@ data Widget = Widget
   , standalone :: Maybe Bool -- Not used in a grid stack
   , allowZoom :: Maybe Bool -- Allow zooming in the chart
   , columns :: Maybe [TableColumn] -- Table columns
+  , searchable :: Maybe Bool
   , onRowClick :: Maybe RowClickAction -- Action when table row is clicked
   -- Alert fields (populated from QueryMonitor at render time)
   , alertId :: Maybe Text -- Linked QueryMonitor ID
@@ -1190,17 +1191,19 @@ renderTable widget = do
     $ div_
       [ class_ "h-full overflow-auto p-3"
       , hxGet_ $ widgetFetchUrl eagerWidget
-      , hxTrigger_ $ bool "intersect once, update-query from:window, table-sort" "update-query from:window, table-sort" (isJust widget.html)
+      , hxTrigger_ $ bool "intersect once, update-query from:window, table-sort" "update-query from:window, table-sort" (isJust widget.html) <> memptyIfFalse (widget.searchable == Just True) ", input delay:250ms, search"
       , hxTarget_ $ "#" <> tableId
       , hxSelect_ $ "#" <> tableId
       , hxSwap_ "outerHTML"
       , term "hx-sync" "this:replace"
-      , term "hx-vals" "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...JSON.parse(this.closest('[data-constants]')?.dataset.constants || '{}'), 'table-sort': this.dataset.tableSort || ''}"
+      , term "hx-vals" "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...JSON.parse(this.closest('[data-constants]')?.dataset.constants || '{}'), 'table-sort': this.dataset.tableSort || '', 'table-search': this.querySelector('input[type=search]')?.value || ''}"
       , data_ "table-fetch" ""
       ]
-    $ case widget.html of
-      Just html -> toHtmlRaw html
-      Nothing -> div_ [class_ "flex h-full min-h-32 items-center justify-center", id_ tableId] $ loadingIndicator_ LdSM LdSpinner
+    $ do
+      when (widget.searchable == Just True) $ searchInput_ "" ("Search " <> fromMaybe "rows" widget.title) []
+      case widget.html of
+        Just html -> toHtmlRaw html
+        Nothing -> div_ [class_ "flex h-full min-h-32 items-center justify-center", id_ tableId] $ loadingIndicator_ LdSM LdSpinner
 
 
 -- | Render stat widget content with HTMX lazy loading support
@@ -1635,6 +1638,7 @@ renderTableWithDataAndParams widget dataRows params = do
           ( [class_ $ "hover" <> memptyIfFalse (isJust widget.onRowClick) " cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"]
               <> [term "aria-current" "true" | isCurrent]
               <> rowNavAttrs rowValue
+              <> memptyIfFalse (isJust widget.onRowClick) [tabindex_ "0", Aria.label_ $ "Filter by " <> rowValue, term "_" " on keydown[key=='Enter' or key==' '] halt the event then call me.click() end "]
           )
           $ ifor_ columns \idx col ->
             unless (or col.hidden)
