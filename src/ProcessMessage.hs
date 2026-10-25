@@ -69,6 +69,7 @@ import Data.HashSet qualified as HashSet
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.List qualified as L
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
@@ -161,7 +162,8 @@ overFreeTierQuota cache = any ((cache.row.dailyUsage >=) . Sampling.hardCap) cac
 
 -- | Keep a capped project's share of the batch ("Pkg.Sampling") and record what it saw; records
 -- of uncapped or unknown projects pass through. Records sharing a key share a verdict: a key
--- with any error in the batch is judged at the error rate, so a trace stays whole. A sampled
+-- with any error in the batch is judged at the error rate, so a trace stays whole within a
+-- batch (one split across batches can be judged at two rates). A sampled
 -- record is stamped with its weight (1/p), so what it stands for can be counted back up.
 sampleCapped
   :: (DB es, IOE :> es, Log :> es, Time :> es)
@@ -192,7 +194,8 @@ sampleCapped projectOf isError keyOf stamp caches records
           total = fold counts
       -- Counters only steer pacing: losing a batch's worth must not fail the ingest.
       whenLeftM_ (tryAny $ Projects.recordSampling now (HM.toList counts))
-        $ Log.logAttention "Free-tier sampling counters not recorded; pacing may drift" . show @Text
+        $ Log.logAttention "Free-tier sampling counters not recorded; pacing may drift"
+        . show @Text
       Metrics.count Metrics.freeTierSampledOut (getSum $ total.seen - total.kept) []
       pure $ V.mapMaybe fst judged
   where
@@ -207,7 +210,7 @@ sampleSpans =
     (.project_id)
     Telemetry.isErrorRecord
     (\r -> fromMaybe r.id (Telemetry.traceIdOf r))
-    (\w r -> r & field @"attributes" .~ (AesonText <$> jsonToMap (AE.Object (AEKM.fromMapText $ maybeToMonoid $ unAesonTextMaybe r.attributes) `lodashMerge` nestedJsonFromDotNotation [("monoscope.sample_weight", AE.toJSON w)])))
+    (\w r -> r & field @"attributes" .~ Just (AesonText $ Map.insertWith (flip lodashMerge) "monoscope" (AE.object ["sample_weight" AE..= w]) (maybeToMonoid $ unAesonTextMaybe r.attributes)))
 
 
 -- | 'sampleCapped' for metrics: a series is kept or dropped whole, so no kept series has holes.

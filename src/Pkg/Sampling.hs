@@ -3,7 +3,8 @@
 --
 -- Pacing is ad-budget pacing: each pool keeps with probability (budget left) / (traffic
 -- still expected today). Decisions hash a stable key (trace id, record id, metric series),
--- so every record sharing a key gets the same answer and a kept trace stays whole.
+-- so every record sharing a key gets the same answer and a kept trace stays whole. Pacing is
+-- approximate: pods read counters a batch apart, and 'hardCap' bounds the overshoot.
 module Pkg.Sampling (Tally (..), hardCap, rates, pace, keeps) where
 
 import Data.Default (Default)
@@ -51,6 +52,8 @@ hardCap budget = budget + budget `div` 5
 -- (0.0,1.0)
 -- >>> rates noon 10000 12000 (Tally 0 0 0 0, Tally 0 0 0 0) -- the meter alone reached it
 -- (0.0,0.0)
+-- >>> rates noon 10000 0 (Tally 0 16000 0 0, Tally 2000 9000 0 0) -- error reserve spent
+-- (0.5,0.0)
 rates :: UTCTime -> Int -> Int -> (Tally, Tally) -> (Double, Double)
 rates now budget metered (events, errors)
   | max metered (events.keptToday + errors.keptToday) >= hardCap budget = (0, 0)
@@ -93,4 +96,4 @@ pace now budget t
 -- >>> let n = length (filter (keeps 0.25 . show) [1 .. 10000 :: Int]) in n > 2300 && n < 2700
 -- True
 keeps :: Double -> Text -> Bool
-keeps p key = fromIntegral (xxHash (encodeUtf8 key)) < p * 4294967296
+keeps p key = fromIntegral (xxHash (encodeUtf8 key)) < p * (fromIntegral (maxBound :: Word32) + 1)

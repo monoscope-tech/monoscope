@@ -464,13 +464,16 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         !invalidPoison = [(ackId, raw, err) | (ackId, raw, _, Just err) <- checked]
         !converted = [(ackId, raw, req, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, req, Nothing) <- checked]
         -- DLQ, never ack, a payload naming an unresolved project, or one converting to zero rows
-        -- unless every project it names is capped (2026-07-27: an ack lost ~200k rows).
+        -- unless every project it names is capped (2026-07-27: an ack lost ~200k rows). A mixed
+        -- payload goes whole, resolved rows included, so the unresolved part survives.
         !dropPoison =
           [ (ackId, raw, "unresolved project: payload carried telemetry but did not resolve or convert")
           | (ackId, raw, req, recs) <- converted
-          , let accounted pids = all (`HM.member` projectCachesMap) pids && (not (V.null recs) || all capped pids)
+          , let resolved = (<> extractIds req) <$> traverse (`HM.lookup` keyToIdMap) (V.toList (extractKeys req))
+                -- 'all capped []' holds, so a payload naming nothing is accounted for either way.
+                accounted pids = all (`HM.member` projectCachesMap) pids && (not (V.null recs) || all capped pids)
                 capped p = any overFreeTierQuota (HM.lookup p projectCachesMap)
-          , not $ maybe False (accounted . (<> extractIds req)) (traverse (`HM.lookup` keyToIdMap) (V.toList (extractKeys req)))
+          , maybe True (not . accounted) resolved
           ]
         !dropAckIds = HS.fromList [ackId | (ackId, _, _) <- dropPoison]
         !writeReady = [(ackId, raw, recs) | (ackId, raw, _, recs) <- converted, not (HS.member ackId dropAckIds)]
@@ -481,7 +484,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
     forM_ (decodePoison <> invalidPoison) \(_, raw, err) -> recordProtoError label (toString err) raw
     unless (null dropPoison)
       $ Log.logAttention
-        "processList: payload did not resolve or converted to zero rows — routing to DLQ instead of acking"
+        "processList: unresolved or zero-row payload — routing to DLQ instead of acking"
         (AE.object ["label" AE..= label, "dropped_messages" AE..= length dropPoison, "ack_ids" AE..= [a | (a, _, _) <- dropPoison]])
 
     if allEmpty

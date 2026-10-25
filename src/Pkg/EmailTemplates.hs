@@ -1275,7 +1275,7 @@ paymentFailedEmail projectName =
     ( do
         h1_ "Payment Failed"
         richP_ ["We couldn't charge the card for your ", projectName, " project. Your plan is unchanged while we retry over the next few days."]
-        p_ $ toHtml $ "Please update your payment method. If every retry fails, the project moves to the Free plan and ingestion is sampled to " <> freeTierCap <> " events per day."
+        p_ $ toHtml $ "Please update your payment method. If every retry fails, the project moves to the Free plan and ingestion is budgeted at " <> freeTierCap <> " events per day."
     )
     "Update Payment Method"
 
