@@ -473,7 +473,10 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
           [ (ackId, raw, "unresolved project: payload carried telemetry but converted to zero rows")
           | (ackId, raw, req, recs) <- converted
           , V.null recs
+          , let pids = mapMaybe (`HM.lookup` keyToIdMap) (V.toList (extractKeys req)) <> extractIds req
           , not (V.null (extractKeys req)) || not (null (extractIds req))
+          , -- Zero rows because every project it names is over the free-tier cap is a deliberate drop: ack it.
+          null pids || not (all (maybe False overFreeTierQuota . (`HM.lookup` projectCachesMap)) pids)
           ]
         !dropAckIds = HS.fromList [ackId | (ackId, _, _) <- dropPoison]
         !writeReady = [(ackId, raw, recs) | (ackId, raw, _, recs) <- converted, not (HS.member ackId dropAckIds)]
