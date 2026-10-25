@@ -161,7 +161,7 @@ data Failure = InvalidCase | SourceUnavailable | OutputUnavailable | EvaluationU
 
 
 data Evaluation :: Effect where
-  Evaluate :: FilePath -> FilePath -> Evaluation m (Either Failure (Report Case Impact.ReviewDraft))
+  Evaluate :: NonEmpty ReviewMode -> FilePath -> FilePath -> Evaluation m (Either Failure (Report Case Impact.ReviewDraft))
   EvaluateSource :: NonEmpty ReviewMode -> FilePath -> FilePath -> Evaluation m (Either Failure (Report SourceCase SourceDraft))
 
 
@@ -173,7 +173,7 @@ makeEffect ''Evaluation
 
 runEvaluationReal :: (Agent.CodeReview :> es, IOE :> es) => Eff (Evaluation ': es) a -> Eff es a
 runEvaluationReal = interpret $ \_ -> \case
-  Evaluate inputPath outputPath -> runStudy ImpactStudy (BoundedPatch :| [CheckoutHarness]) inputPath outputPath
+  Evaluate modes inputPath outputPath -> runStudy ImpactStudy modes inputPath outputPath
   EvaluateSource modes inputPath outputPath -> runStudy SourceStudy modes inputPath outputPath
   where
     runStudy :: forall input draft es. (AE.FromJSON draft, AE.FromJSON input, AE.ToJSON draft, AE.ToJSON input, Agent.CodeReview :> es, IOE :> es) => Study input draft -> NonEmpty ReviewMode -> FilePath -> FilePath -> Eff es (Either Failure (Report input draft))
@@ -291,12 +291,12 @@ runEvaluationReal = interpret $ \_ -> \case
 
 runEvaluationTest :: Either Failure (Report Case Impact.ReviewDraft) -> Either Failure (Report SourceCase SourceDraft) -> Eff (Evaluation ': es) a -> Eff es a
 runEvaluationTest impact source = interpret $ \_ -> \case
-  Evaluate _ _ -> pure impact
+  Evaluate{} -> pure impact
   EvaluateSource{} -> pure source
 
 
-mainEvaluation :: FilePath -> FilePath -> IO ()
-mainEvaluation input output = mainStudy (BoundedPatch :| [CheckoutHarness]) $ fmap (all finished . (.runs)) <$> evaluate input output
+mainEvaluation :: NonEmpty ReviewMode -> FilePath -> FilePath -> IO ()
+mainEvaluation modes input output = mainStudy modes $ fmap (all finished . (.runs)) <$> evaluate modes input output
 
 
 mainSourceEvaluation :: NonEmpty ReviewMode -> FilePath -> FilePath -> IO ()

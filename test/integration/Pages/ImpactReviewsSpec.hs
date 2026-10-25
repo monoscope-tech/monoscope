@@ -1104,14 +1104,15 @@ spec = around withTestResources $ describe "Production impact reviews" do
     withSdkProvider directory "evaluation-fixture" next \models requests -> do
       let request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = toText repository, base, head = headRevision, gitToken = "", prompt = "Review telemetry-1.", provider = "evaluation-fixture", model = "fixture", thinkingLevel = Agent.Off}
       writeFileLBS caseFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base, "head" AE..= headRevision, "provider" AE..= request.provider, "model" AE..= request.model, "evidenceKind" AE..= ("synthetic" :: Text), "evidence" AE..= V.fromList [AE.object ["key" AE..= ("telemetry-1" :: Text), "kind" AE..= ("telemetry" :: Text), "description" AE..= ("synthetic-evaluation-evidence" :: Text)], AE.object ["key" AE..= ("monitor-1" :: Text), "kind" AE..= ("monitor" :: Text)]], "rubric" AE..= (["private-grading-not-model"] :: [Text])]
-      let evaluateAt output =
+      let both = Agent.BoundedPatch :| [Agent.CheckoutHarness]
+          evaluateAt modes output =
             runEff
               $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, directory </> "evaluation-worker.log", "--cli", cli, "--temp", sdkTemp]
               $ Evaluation.runEvaluationReal
-              $ Evaluation.evaluate caseFile output
-          evaluateCase name = do
+              $ Evaluation.evaluate modes caseFile output
+          evaluateCase modes name = do
             let output = directory </> name <> ".json"
-            completed <- Timeout.timeout (90 * 1000000) $ evaluateAt output
+            completed <- Timeout.timeout (90 * 1000000) $ evaluateAt modes output
             report <- maybe (fail "Evaluation exceeded its test deadline") (either (fail . show) pure) completed
             readJSON output `shouldReturn` AE.toJSON report
             report.contract `shouldBe` "native-impact-evaluation/v1"
@@ -1121,12 +1122,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
             listDirectory sdkTemp `shouldReturn` []
             pure report.runs
           completedDraft row = case row.outcome of Evaluation.Completed elapsed value -> (elapsed `shouldSatisfy` (> 0)) $> AE.toJSON value; _ -> expectationFailure (toString $ "Evaluation did not complete: " <> jsonText (AE.toJSON row)) $> AE.Null
-      rows <- evaluateCase "accepted"
+      rows <- evaluateCase both "accepted"
       map (AE.toJSON . (.mode)) rows `shouldBe` [AE.String "bounded_patch", AE.String "checkout_harness"]
       traverse completedDraft rows `shouldReturn` [accepted, accepted]
       savedOutput <- readFileBS $ directory </> "accepted.json"
       beforeDuplicate <- length <$> requests
-      duplicate <- evaluateAt $ directory </> "accepted.json"
+      duplicate <- evaluateAt both $ directory </> "accepted.json"
       leftToMaybe duplicate `shouldBe` Just Evaluation.OutputUnavailable
       readFileBS (directory </> "accepted.json") `shouldReturn` savedOutput
       length <$> requests `shouldReturn` beforeDuplicate
@@ -1154,9 +1155,20 @@ spec = around withTestResources $ describe "Production impact reviews" do
       for_ recorded \body -> do
         jsonText body `shouldSatisfy` T.isInfixOf "synthetic-evaluation-evidence"
         jsonText body `shouldNotSatisfy` T.isInfixOf "private-grading-not-model"
+      for_ [Agent.BoundedPatch, Agent.CheckoutHarness] \mode -> do
+        beforeSingle <- length <$> requests
+        selected <- evaluateCase (mode :| []) $ "only-" <> show mode
+        map (.mode) selected `shouldBe` [mode]
+        traverse completedDraft selected `shouldReturn` [accepted]
+        for_ selected \row -> length row.allocations `shouldBe` if mode == Agent.BoundedPatch then 0 else 1
+        observed <- drop beforeSingle <$> requests
+        observed `shouldSatisfy` (not . null)
+        for_ (filter (not . summarizing) observed) \body -> do
+          tools <- parse (AE.withObject "Selected evaluation tools" (\object -> object AE..:? "tools" AE..!= [])) body :: IO [AE.Value]
+          null tools `shouldBe` (mode == Agent.BoundedPatch)
       for_ ([("json", "not-json", "JSON"), ("schema", jsonText $ draft 1 [], "schema"), ("citation", jsonText $ draft 2 ["telemetry-1"], "changed line"), ("evidence", jsonText $ draft 1 ["invented"], "unavailable evidence"), ("context", jsonText $ draft 1 ["monitor-1"], "production context")] :: [(FilePath, Text, Text)]) \(name, rejected, message) -> do
         writeIORef baseline rejected
-        rejectedRows <- evaluateCase name
+        rejectedRows <- evaluateCase both name
         case rejectedRows of
           [rejectedRow, recovered] -> do
             case rejectedRow.outcome of Evaluation.Failed _ _ -> pass; _ -> expectationFailure "Invalid baseline was accepted"
@@ -1164,7 +1176,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             completedDraft recovered `shouldReturn` accepted
           _ -> expectationFailure "Evaluation discarded the comparison"
       writeIORef unavailable True
-      failedRows <- evaluateCase "provider-failed"
+      failedRows <- evaluateCase both "provider-failed"
       length failedRows `shouldBe` 1
       for_ failedRows \row -> case row.outcome of
         Evaluation.Failed _ _ -> do
