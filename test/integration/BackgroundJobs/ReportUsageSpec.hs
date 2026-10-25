@@ -10,12 +10,12 @@ module BackgroundJobs.ReportUsageSpec (spec) where
 -- thing and re-submit chunks that already succeeded.
 
 import BackgroundJobs qualified
-import Control.Lens (_1, (%~), (^.))
+import Control.Lens (_1, (%~), (.~), (^.))
 import Data.Cache qualified as Cache
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Pool (withResource)
-import Data.ProtoLens (decodeMessage, encodeMessage)
+import Data.ProtoLens (decodeMessage, defMessage, encodeMessage)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Database.PostgreSQL.Simple qualified as PGS
@@ -26,6 +26,10 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
+import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualified as TSF
+import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
+import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Relude
 import System.Config qualified as Config
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldNotSatisfy, shouldReturn, shouldSatisfy, shouldThrow)
@@ -163,6 +167,18 @@ seedUsageAt tr pid at = do
   apiKey <- createTestAPIKey tr pid "report-usage-key"
   for_ ([1 .. 3] :: [Int]) \i -> ingestLog tr apiKey ("usage line " <> show i) at
   logCount tr pid >>= (`shouldSatisfy` (> 0))
+
+
+-- | Turn the free tier on for @pid@ (Free plan) and seed yesterday's non-error traffic from
+-- this hour on, which paces today's keep rate; returns the config and a fresh API key.
+cappedExpecting :: TestResources -> Projects.ProjectId -> Int -> IO (TestResources, Text)
+cappedExpecting tr0 pid seenAhead = do
+  let tr = tr0{trATCtx = tr0.trATCtx{Config.config = tr0.trATCtx.config{Config.enableFreetier = True}}}
+  setBilling tr pid "Free" Nothing Nothing frozenTime
+  key <- createTestAPIKey tr pid "free-tier-sampling-key"
+  withResource tr.trPool \conn ->
+    void $ PGS.execute conn [sql| INSERT INTO projects.ingest_sampling (project_id, hour, is_error, seen) VALUES (?, date_trunc('hour', ?::timestamptz, 'UTC') - interval '1 day', false, ?) |] (pid, frozenTime, seenAhead)
+  pure (tr, key)
 
 
 logCount :: TestResources -> Projects.ProjectId -> IO Int
@@ -535,7 +551,7 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
             conn
             [sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, window_start, window_end)
                   VALUES (?, ?, 0, now() - interval '1 minute', now()) |]
-            (pid, Sampling.ceiling Projects.freeTierDailyMaxEvents)
+            (pid, Sampling.hardCap Projects.freeTierDailyMaxEvents)
       Cache.purge tr.trATCtx.projectCache
       ingestLog tr key "over the cap" frozenTime
       logCount tr pid `shouldReturn` 1
@@ -563,12 +579,8 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
     -- Past its budget a capped project keeps a share paced across the day, not everything until
     -- the cap and nothing after; each kept record says how many it stands for.
     it "freeTierSampling_overBudget_keepsAPacedShareWithWeights" \(tr0, pid) -> do
-      let tr = tr0{trATCtx = tr0.trATCtx{Config.config = tr0.trATCtx.config{Config.enableFreetier = True}}}
-      setBilling tr pid "Free" Nothing Nothing frozenTime
-      key <- createTestAPIKey tr pid "free-tier-sampling-key"
       -- Yesterday from this hour on brought twice the 8,000-event (non-error) budget: keep half.
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn [sql| INSERT INTO projects.ingest_sampling (project_id, hour, seen) VALUES (?, date_trunc('hour', ?::timestamptz, 'UTC') - interval '1 day', 16000) |] (pid, frozenTime)
+      (tr, key) <- cappedExpecting tr0 pid 16000
       runTestBg frozenTime tr $ OtlpServer.processLogsRequest Nothing (createOtelLogAtTime key [show i | i <- [1 .. 400 :: Int]] frozenTime)
       kept <- logCount tr pid
       kept `shouldSatisfy` \k -> k > 160 && k < 240
@@ -577,6 +589,28 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
           >>= (`shouldBe` [(400 :: Int, kept)])
         PGS.query conn [sql| SELECT DISTINCT (attributes->'monoscope'->>'sample_weight')::float8 FROM otel_logs_and_spans WHERE project_id = ?::text |] (PGS.Only pid)
           >>= (`shouldBe` [PGS.Only (2 :: Double)])
+
+    -- Errors draw on their own reserve while ordinary traffic is thinned, and a trace with an
+    -- error in it is kept whole, not just its error span.
+    it "freeTierSampling_errorTracesKeptWhole_restThinned" \(tr0, pid) -> do
+      (tr, key) <- cappedExpecting tr0 pid 80000 -- non-errors kept at 0.1, errors (no history) at 1
+      let hex n i = T.justifyRight n '0' (show i)
+          spanAt t s err = mkSpanRequest (hex 32 t) (hex 16 (t * 10 + s)) Nothing "op" [] ((defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR) <$ guard err) [] (mkResource key []) frozenTime
+          spans = [spanAt t s (s == 1) | t <- [1 .. 20 :: Int], s <- [1 .. 3]] <> [spanAt t 1 False | t <- [101 .. 300]]
+      runTestBg frozenTime tr $ OtlpServer.processTraceRequest Nothing (defMessage & TSF.resourceSpans .~ concatMap (^. TSF.resourceSpans) spans)
+      perTrace :: [(Text, Int)] <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT context___trace_id, COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ?::text GROUP BY 1 |] (PGS.Only pid)
+      let (errorTraces, okTraces) = L.partition ((`elem` map (hex 32) [1 .. 20 :: Int]) . fst) perTrace
+      map snd errorTraces `shouldBe` replicate 20 3
+      length okTraces `shouldSatisfy` \k -> k > 5 && k < 45
+
+    -- A metric series is kept or dropped whole, so a kept series has no holes.
+    it "freeTierSampling_metricSeriesKeptWhole" \(tr0, pid) -> do
+      (tr, key) <- cappedExpecting tr0 pid 16000
+      let points = [createGaugeMetricAtTime key [] [] ("m" <> show i) 1 t | i <- [1 .. 200 :: Int], t <- [frozenTime, addUTCTime 60 frozenTime]]
+      runTestBg frozenTime tr $ OtlpServer.processMetricsRequest Nothing (defMessage & MSF.resourceMetrics .~ concatMap (^. MSF.resourceMetrics) points)
+      perSeries :: [(Text, Int)] <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT metric_name, COUNT(*)::INT FROM otel_metrics WHERE project_id = ? GROUP BY 1 |] (PGS.Only pid)
+      L.nub (map snd perSeries) `shouldBe` [2]
+      length perSeries `shouldSatisfy` \k -> k > 60 && k < 140
 
     -- Hourly and daily ticks both enqueue ReportUsage at 00:00; the loser of the lease must not
     -- record the window again (and bill it twice).

@@ -729,7 +729,7 @@ freeTierUsageBanner pid = \case
 -- [FreeTierOk,FreeTierSampled 4 100,FreeTierSampled 5 100,FreeTierExceeded 120 100]
 freeTierUsageStatus :: Int -> (Int, Int) -> FreeTierStatus
 freeTierUsageStatus limit (seen, kept)
-  | kept >= Sampling.ceiling limit = FreeTierExceeded kept limit
+  | kept >= Sampling.hardCap limit = FreeTierExceeded kept limit
   | seen > kept = FreeTierSampled ((seen + kept - 1) `div` max 1 kept) limit
   | otherwise = FreeTierOk
 

@@ -48,7 +48,7 @@ module ProcessMessage (
 )
 where
 
-import Control.Lens ((%~), (^?))
+import Control.Lens ((.~), (^?))
 import Control.Monad.ST (ST, runST)
 import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
@@ -69,7 +69,6 @@ import Data.HashSet qualified as HashSet
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.List qualified as L
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
@@ -103,6 +102,7 @@ import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
 import System.Types (DB)
 import Text.RE.TDFA (RE, re, reRegex)
 import Text.Regex.TDFA qualified as TDFA
+import UnliftIO.Exception (tryAny)
 import Utils (b64ToJson, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
@@ -153,17 +153,18 @@ processMessages msgs attrs =
     pure $ writeRes $> (rAckIds, poison)
 
 
--- | A capped project past the hard ceiling of its daily budget ('Sampling.ceiling'): sampling
--- keeps nothing more today, and the OTLP edge rejects its exports outright.
+-- | A capped project at the hard cap of its daily budget ('Sampling.hardCap') by the hourly
+-- meter: the OTLP edge rejects its exports outright. Sampling also checks its own counters.
 overFreeTierQuota :: Projects.ProjectCache -> Bool
-overFreeTierQuota cache = any ((cache.row.dailyUsage >=) . Sampling.ceiling) cache.dailyLimit
+overFreeTierQuota cache = any ((cache.row.dailyUsage >=) . Sampling.hardCap) cache.dailyLimit
 
 
 -- | Keep a capped project's share of the batch ("Pkg.Sampling") and record what it saw; records
--- of uncapped or unknown projects pass through. A sampled record is stamped with its weight
--- (1/p), so what it stands for can be counted back up.
+-- of uncapped or unknown projects pass through. Records sharing a key share a verdict: a key
+-- with any error in the batch is judged at the error rate, so a trace stays whole. A sampled
+-- record is stamped with its weight (1/p), so what it stands for can be counted back up.
 sampleCapped
-  :: (DB es, IOE :> es, Time :> es)
+  :: (DB es, IOE :> es, Log :> es, Time :> es)
   => (r -> Text)
   -> (r -> Bool)
   -> (r -> Text)
@@ -177,19 +178,21 @@ sampleCapped projectOf isError keyOf stamp caches records
       now <- currentTime
       tallies <- Projects.samplingTallies now (V.fromList $ HM.keys capped)
       -- Keyed by the id's text, which records carry, so uncapped records cost one lookup.
-      let rateOf = HM.fromList [(pid.toText, (pid, bool (Sampling.rates now budget (HM.findWithDefault def pid tallies)) (0, 0) (overFreeTierQuota cache))) | (pid, (cache, budget)) <- HM.toList capped]
+      let rateOf = HM.fromList [(pid.toText, (pid, Sampling.rates now budget cache.row.dailyUsage (tally pid False, tally pid True))) | (pid, (cache, budget)) <- HM.toList capped]
+          tally pid err = HM.findWithDefault def (pid, err) tallies
+          errorKeys = HashSet.fromList [keyOf r | r <- V.toList records, HM.member (projectOf r) rateOf, isError r]
           judge r = case HM.lookup (projectOf r) rateOf of
             Nothing -> (Just r, Nothing)
             Just (pid, (pEvents, pErrors)) ->
-              let err = isError r
-                  p = bool pEvents (max pEvents pErrors) err
+              let p = bool pEvents (max pEvents pErrors) (HashSet.member (keyOf r) errorKeys)
                   keep = Sampling.keeps p (keyOf r)
-               in (bool r (stamp (1 / p) r) (p < 1) <$ guard keep, Just (pid, Projects.SampleCounts 1 (count keep) (count err) (count (keep && err))))
+               in (bool r (stamp (1 / p) r) (p < 1) <$ guard keep, Just ((pid, isError r), Projects.SampleCounts 1 (Sum (fromEnum keep))))
           judged = V.map judge records
           counts = HM.fromListWith (<>) (mapMaybe snd $ V.toList judged)
-          count = Sum . fromEnum
-      Projects.recordSampling now (HM.toList counts)
-      let total = fold counts
+          total = fold counts
+      -- Counters only steer pacing: losing a batch's worth must not fail the ingest.
+      whenLeftM_ (tryAny $ Projects.recordSampling now (HM.toList counts))
+        $ Log.logAttention "Free-tier sampling counters not recorded; pacing may drift" . show @Text
       Metrics.count Metrics.freeTierSampledOut (getSum $ total.seen - total.kept) []
       pure $ V.mapMaybe fst judged
   where
@@ -198,18 +201,18 @@ sampleCapped projectOf isError keyOf stamp caches records
 
 -- | 'sampleCapped' for spans and logs: a trace is kept or dropped whole, and a kept record
 -- carries @monoscope.sample_weight@.
-sampleSpans :: (DB es, IOE :> es, Time :> es) => HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es (V.Vector Telemetry.OtelLogsAndSpans)
+sampleSpans :: (DB es, IOE :> es, Log :> es, Time :> es) => HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es (V.Vector Telemetry.OtelLogsAndSpans)
 sampleSpans =
   sampleCapped
     (.project_id)
     Telemetry.isErrorRecord
     (\r -> fromMaybe r.id (Telemetry.traceIdOf r))
-    (\w -> field @"attributes" %~ Just . AesonText . Map.alter (Just . AE.Object . AEKM.insert "sample_weight" (AE.toJSON w) . \case Just (AE.Object o) -> o; _ -> mempty) "monoscope" . maybe mempty (\(AesonText m) -> m))
+    (\w r -> r & field @"attributes" .~ (AesonText <$> jsonToMap (AE.Object (AEKM.fromMapText $ maybeToMonoid $ unAesonTextMaybe r.attributes) `lodashMerge` nestedJsonFromDotNotation [("monoscope.sample_weight", AE.toJSON w)])))
 
 
 -- | 'sampleCapped' for metrics: a series is kept or dropped whole, so no kept series has holes.
 -- Points carry no weight; a series stands for itself.
-sampleMetrics :: (DB es, IOE :> es, Time :> es) => HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.MetricRecord -> Eff es (V.Vector Telemetry.MetricRecord)
+sampleMetrics :: (DB es, IOE :> es, Log :> es, Time :> es) => HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.MetricRecord -> Eff es (V.Vector Telemetry.MetricRecord)
 sampleMetrics = sampleCapped (UUID.toText . (.projectId)) (const False) Telemetry.metricSeriesId (\_ r -> r)
 
 

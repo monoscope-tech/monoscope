@@ -155,7 +155,7 @@ import Data.Default
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.HashMap.Strict qualified as HM
-import Data.List (unzip5)
+import Data.List (unzip4)
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
@@ -483,55 +483,45 @@ dailyUsageOfDay :: DB es => ProjectId -> UTCTime -> Eff es Int
 dailyUsageOfDay pid t = fromMaybe 0 <$> EHasql.interpOne (dailyUsageOfDaySql pid t)
 
 
--- | A capped project's 'Sampling.Tally' for its non-error events and for its errors, for the
--- UTC hour containing @now@.
-data SamplingTallies = SamplingTallies
-  { projectId :: ProjectId
-  , keptEvents, aheadEvents, lastHourEvents, thisHourEvents :: Int
-  , keptErrors, aheadErrors, lastHourErrors, thisHourErrors :: Int
-  }
+-- | One pool of a capped project ('Sampling.Tally' plus its key), for the UTC hour containing @now@.
+data SamplingTally = SamplingTally {projectId :: ProjectId, isError :: Bool, keptToday, seenYesterdayAhead, seenLastHour, seenThisHour :: Int}
   deriving stock (Generic)
   deriving anyclass (HI.DecodeRow)
 
 
-samplingTallies :: DB es => UTCTime -> V.Vector ProjectId -> Eff es (HM.HashMap ProjectId (Sampling.Tally, Sampling.Tally))
+samplingTallies :: DB es => UTCTime -> V.Vector ProjectId -> Eff es (HM.HashMap (ProjectId, Bool) Sampling.Tally)
 samplingTallies now pids =
   HM.fromList
-    . map (\(t :: SamplingTallies) -> (t.projectId, (Sampling.Tally t.keptEvents t.aheadEvents t.lastHourEvents t.thisHourEvents, Sampling.Tally t.keptErrors t.aheadErrors t.lastHourErrors t.thisHourErrors)))
+    . map (\(t :: SamplingTally) -> ((t.projectId, t.isError), Sampling.Tally t.keptToday t.seenYesterdayAhead t.seenLastHour t.seenThisHour))
     <$> EHasql.interp
       [HI.sql| WITH b AS (SELECT date_trunc('hour', #{now}::timestamptz, 'UTC') AS h, date_trunc('day', #{now}::timestamptz, 'UTC') AS d)
-               SELECT s.project_id,
-                 COALESCE(SUM(s.kept - s.kept_errors) FILTER (WHERE s.hour >= b.d), 0)::bigint,
-                 COALESCE(SUM(s.seen - s.seen_errors) FILTER (WHERE s.hour >= b.h - interval '1 day' AND s.hour < b.d), 0)::bigint,
-                 COALESCE(SUM(s.seen - s.seen_errors) FILTER (WHERE s.hour = b.h - interval '1 hour'), 0)::bigint,
-                 COALESCE(SUM(s.seen - s.seen_errors) FILTER (WHERE s.hour = b.h), 0)::bigint,
-                 COALESCE(SUM(s.kept_errors) FILTER (WHERE s.hour >= b.d), 0)::bigint,
-                 COALESCE(SUM(s.seen_errors) FILTER (WHERE s.hour >= b.h - interval '1 day' AND s.hour < b.d), 0)::bigint,
-                 COALESCE(SUM(s.seen_errors) FILTER (WHERE s.hour = b.h - interval '1 hour'), 0)::bigint,
-                 COALESCE(SUM(s.seen_errors) FILTER (WHERE s.hour = b.h), 0)::bigint
+               SELECT s.project_id, s.is_error,
+                 COALESCE(SUM(s.kept) FILTER (WHERE s.hour >= b.d), 0)::bigint,
+                 COALESCE(SUM(s.seen) FILTER (WHERE s.hour >= b.h - interval '1 day' AND s.hour < b.d), 0)::bigint,
+                 COALESCE(SUM(s.seen) FILTER (WHERE s.hour = b.h - interval '1 hour'), 0)::bigint,
+                 COALESCE(SUM(s.seen) FILTER (WHERE s.hour = b.h), 0)::bigint
                FROM projects.ingest_sampling s, b
                WHERE s.project_id = ANY(#{pids}) AND s.hour >= b.d - interval '1 day'
-               GROUP BY s.project_id |]
+               GROUP BY s.project_id, s.is_error |]
 
 
--- | One batch's sampling outcome for a project; errors are counted in both totals too.
-data SampleCounts = SampleCounts {seen, kept, seenErrors, keptErrors :: Sum Int}
+-- | One batch's sampling outcome for one pool of a project.
+data SampleCounts = SampleCounts {seen, kept :: Sum Int}
   deriving stock (Generic)
   deriving (Monoid, Semigroup) via Generically SampleCounts
 
 
--- | Add one batch's counts per project to the hour containing @now@.
-recordSampling :: DB es => UTCTime -> [(ProjectId, SampleCounts)] -> Eff es ()
+-- | Add one batch's counts per (project, is_error) pool to the hour containing @now@.
+recordSampling :: DB es => UTCTime -> [((ProjectId, Bool), SampleCounts)] -> Eff es ()
 recordSampling _ [] = pass
 recordSampling now counts =
   EHasql.interpExecute_
-    [HI.sql| INSERT INTO projects.ingest_sampling AS s (project_id, hour, seen, kept, seen_errors, kept_errors)
-             SELECT p, date_trunc('hour', #{now}::timestamptz, 'UTC'), a, k, ae, ke
-             FROM unnest(#{V.fromList pids}::uuid[], #{V.fromList seen}::bigint[], #{V.fromList kept}::bigint[], #{V.fromList seenErr}::bigint[], #{V.fromList keptErr}::bigint[]) u(p, a, k, ae, ke)
-             ON CONFLICT (project_id, hour) DO UPDATE SET seen = s.seen + EXCLUDED.seen, kept = s.kept + EXCLUDED.kept,
-               seen_errors = s.seen_errors + EXCLUDED.seen_errors, kept_errors = s.kept_errors + EXCLUDED.kept_errors |]
+    [HI.sql| INSERT INTO projects.ingest_sampling AS s (project_id, hour, is_error, seen, kept)
+             SELECT p, date_trunc('hour', #{now}::timestamptz, 'UTC'), e, a, k
+             FROM unnest(#{V.fromList pids}::uuid[], #{V.fromList errs}::bool[], #{V.fromList seen}::bigint[], #{V.fromList kept}::bigint[]) u(p, e, a, k)
+             ON CONFLICT (project_id, hour, is_error) DO UPDATE SET seen = s.seen + EXCLUDED.seen, kept = s.kept + EXCLUDED.kept |]
   where
-    (pids, seen, kept, seenErr, keptErr) = unzip5 [(pid, getSum c.seen, getSum c.kept, getSum c.seenErrors, getSum c.keptErrors) | (pid, c) <- counts]
+    (pids, errs, seen, kept) = unzip4 [(pid, err, getSum c.seen, getSum c.kept) | ((pid, err), c) <- counts]
 
 
 -- | (seen, kept) today for one project: what its sampling looks like to the people reading it.

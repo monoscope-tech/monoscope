@@ -4,13 +4,13 @@
 -- Pacing is ad-budget pacing: each pool keeps with probability (budget left) / (traffic
 -- still expected today). Decisions hash a stable key (trace id, record id, metric series),
 -- so every record sharing a key gets the same answer and a kept trace stays whole.
-module Pkg.Sampling (Tally (..), ceiling, rates, pace, keeps) where
+module Pkg.Sampling (Tally (..), hardCap, rates, pace, keeps) where
 
 import Data.Default (Default)
 import Data.Digest.XXHash (xxHash)
 import Data.Fixed (mod')
 import Data.Time (UTCTime (..))
-import Relude hiding (ceiling)
+import Relude
 
 
 -- | One pool's counters for a capped project, read from @projects.ingest_sampling@.
@@ -33,23 +33,27 @@ data Tally = Tally
 
 -- | Hard stop: past this many kept events in a day nothing more is kept, whatever the forecast.
 --
--- >>> ceiling 10000
+-- >>> hardCap 10000
 -- 12000
-ceiling :: Int -> Int
-ceiling budget = budget + budget `div` 5
+hardCap :: Int -> Int
+hardCap budget = budget + budget `div` 5
 
 
--- | Keep probabilities (events, errors) for a project with a daily @budget@ from its two pools'
--- tallies. A fifth of the budget is reserved for errors, so a noisy success path can't crowd
--- them out; past the ceiling nothing is kept.
+-- | Keep probabilities (events, errors) for a project with a daily @budget@, from the hourly
+-- usage meter and its two pools' tallies. A fifth of the budget is reserved for errors, so a
+-- noisy success path can't crowd them out; at the hard cap by either count nothing is kept.
 --
--- >>> rates noon 10000 (Tally 0 16000 0 0, Tally 0 0 0 0)
+-- >>> rates noon 10000 0 (Tally 0 16000 0 0, Tally 0 0 0 0)
 -- (0.5,1.0)
--- >>> rates noon 10000 (Tally 10000 0 0 0, Tally 2000 0 0 0)
+-- >>> rates noon 10000 0 (Tally 10000 0 0 0, Tally 2000 0 0 0)
 -- (0.0,0.0)
-rates :: UTCTime -> Int -> (Tally, Tally) -> (Double, Double)
-rates now budget (events, errors)
-  | events.keptToday + errors.keptToday >= ceiling budget = (0, 0)
+-- >>> rates noon 10000 0 (Tally 10000 0 0 0, Tally 1999 0 0 0) -- one short of the cap
+-- (0.0,1.0)
+-- >>> rates noon 10000 12000 (Tally 0 0 0 0, Tally 0 0 0 0) -- the meter alone reached it
+-- (0.0,0.0)
+rates :: UTCTime -> Int -> Int -> (Tally, Tally) -> (Double, Double)
+rates now budget metered (events, errors)
+  | max metered (events.keptToday + errors.keptToday) >= hardCap budget = (0, 0)
   | otherwise = (pace now (budget - reserve) events, pace now reserve errors)
   where
     reserve = budget `div` 5
