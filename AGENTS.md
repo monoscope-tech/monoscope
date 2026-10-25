@@ -219,6 +219,15 @@ each burning ~85 minutes of wall clock before reporting an e2e expectation that 
 local run would have shown in minutes. Never treat "push it and see what CI says"
 as a way to test a change.
 
+**Sign-off must stay fast, every time — treat a slower sign-off as a regression.**
+Every check reuses warm caches: the cabal store, npm and Playwright caches are
+docker volumes shared by all checkouts (`ci/compose.yml`). Never key a
+content-addressed cache per checkout — that leaked ~400GB of volumes and made every
+new worktree or sign-off clone rebuild its dependencies. `dist-newstyle` is still per
+checkout, so a new clone's first sign-off compiles the project (~5–8 min); sharing it
+broke weeder (live functions reported dead after another branch built into it), so
+fix that before sharing it again.
+
 **`make ship` is the whole deploy from here** — checks, image, push, CapRover —
 so the slow half stops being a queue you wait on:
 
