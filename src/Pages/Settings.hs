@@ -60,7 +60,7 @@ module Pages.Settings (
   billingUrl,
 ) where
 
-import Control.Lens ((.~), (^.))
+import Control.Lens ((.~), (?~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteArray qualified as BA
@@ -110,14 +110,14 @@ import Network.HTTP.Types (urlEncode)
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formCheckbox_, formField_, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formCheckbox_, formField_, grantsTrial, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
-import Servant (FromHttpApiData (..), err400, errBody)
+import Servant (FromHttpApiData (..), err400, err503, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
@@ -1185,6 +1185,7 @@ data BillingData = BillingData
   , paymentPlan :: Text
   , enableFreetier :: Bool
   , basicAuthEnabled :: Bool
+  , trialEligible :: Bool
   , provider :: Projects.BillingProvider
   , dailyUsage :: [Projects.DailyUsage]
   -- ^ (day, total_requests, metrics, eventBytes, metricBytes); events = total_requests - metrics
@@ -1223,7 +1224,8 @@ instance ToHtml BillingGet where
 
 manageBillingGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders BillingGet)
 manageBillingGetH pid = do
-  (_, project, bw) <- mkPageCtx pid
+  (sess, project, bw) <- mkPageCtx pid
+  billing <- Projects.userBilling sess.user.id
   let dat = fromMaybe project.createdAt project.billingDay
       envCfg = bw.config
   currentTime <- Time.currentTime
@@ -1273,7 +1275,7 @@ manageBillingGetH pid = do
       lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
       provider = Projects.projectProvider project
-  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, aiInputTokens, aiOutputTokens, aiCostMicrousd, aiInputRate = envCfg.aiInputMicrousdPerMillionTokens, aiOutputRate = envCfg.aiOutputMicrousdPerMillionTokens, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, cycleEnd, currentInvoice, pastCycles}
+  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, aiInputTokens, aiOutputTokens, aiCostMicrousd, aiInputRate = envCfg.aiInputMicrousdPerMillionTokens, aiOutputRate = envCfg.aiOutputMicrousdPerMillionTokens, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, trialEligible = not billing.hasSubscribedBefore, provider, dailyUsage, cycleStart = utctDay cycleStart, cycleEnd, currentInvoice, pastCycles}
   where
     epochDay :: Int -> Day
     epochDay = utctDay . posixSecondsToUTCTime . fromIntegral
@@ -1306,7 +1308,11 @@ stripeBillingPeriods envCfg project
             Log.logAttention "Billing page: Stripe period unavailable, falling back to local cycle" (project.id.toText, subId)
             pure Nothing
           Just (start, end) -> do
-            invoices <- BJ.getStripeInvoices envCfg.stripeSecretKey subId
+            invoices <-
+              BJ.getStripeInvoices envCfg.stripeSecretKey BJ.RecentInvoices subId
+                >>= either
+                  (\err -> Log.logAttention "Billing page: Stripe invoice lookup failed" (project.id.toText, err) $> [])
+                  pure
             pure $ Just StripePeriods{periodStart = posixSecondsToUTCTime (fromIntegral start), periodEnd = posixSecondsToUTCTime (fromIntegral end), invoices}
 
 
@@ -1381,7 +1387,7 @@ billingPage d = div_ [] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
       p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
     -- Free upgrades use Stripe; billing recovery keeps the existing provider.
-    paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled False (bool d.provider Projects.NoBillingProvider isFree)
+    paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled d.trialEligible False (bool d.provider Projects.NoBillingProvider isFree)
 
 
 usd :: Double -> Text
@@ -1556,8 +1562,11 @@ stripeSessionUrl apiKey endpoint params = do
 -- `customerM` is the buyer's existing Stripe customer, when they have one. Omitting
 -- it makes Stripe mint a fresh Customer per session, so one person upgrading a second
 -- project became a second unrelated customer on the same card.
-createStripeCheckoutSession :: W.HTTP :> es => Bool -> Maybe Text -> Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe Text)
-createStripeCheckoutSession trialEligible customerM apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
+--
+-- `debts` are open invoices of the project's lapsed subscription: each becomes a
+-- one-time line on the first payment, and 'handleStripeCheckout' marks them paid.
+createStripeCheckoutSession :: W.HTTP :> es => Bool -> Maybe Text -> [BJ.StripeInvoice] -> Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe Text)
+createStripeCheckoutSession trialEligible customerM debts apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
   let basePrice = case plan of
         "SystemsPricing" -> priceIdBYOS
         _ -> priceIdGraduated
@@ -1566,12 +1575,25 @@ createStripeCheckoutSession trialEligible customerM apiKey hostUrl pid plan pric
         , ("line_items[0][quantity]", "1")
         , ("line_items[1][price]", encodeUtf8 priceIdOverage)
         ]
-      trialParams = [("subscription_data[trial_period_days]", "30") | trialEligible && plan /= "SystemsPricing"]
+      trialParams = [("subscription_data[trial_period_days]", "30") | grantsTrial trialEligible plan]
       -- Stripe Managed Payments (MoR): Stripe becomes merchant of record and handles
       -- tax/address collection itself, so the automatic_tax + tax_id params are disallowed.
       managedPaymentsParams = [("managed_payments[enabled]", "true")]
+      debtParams =
+        concat
+          [ [ (item "[price_data][currency]", encodeUtf8 inv.currency)
+            , (item "[price_data][unit_amount]", show inv.amountRemaining)
+            , (item "[price_data][product_data][name]", encodeUtf8 $ "Outstanding balance" <> foldMap (", invoice " <>) inv.number)
+            , (item "[price_data][product_data][tax_code]", "txcd_10103001")
+            , (item "[quantity]", "1")
+            ]
+          | (i, inv) <- zip [2 :: Int ..] debts
+          , let item k = "line_items[" <> show i <> "]" <> k
+          ]
+          <> [("metadata[settles_invoices]", encodeUtf8 $ T.intercalate "," $ map (.invoiceId) debts) | not (null debts)]
       params =
         prices
+          <> debtParams
           <> trialParams
           <> managedPaymentsParams
           <> [("customer", encodeUtf8 c) | c <- maybeToList customerM]
@@ -1604,9 +1626,12 @@ lemonSqueezyOpts apiKey =
 -- not block the deletion the user asked for, so failures are logged, not thrown.
 cancelProjectSubscription :: (Log.Log :> es, W.HTTP :> es) => EnvConfig -> Projects.Project -> Eff es ()
 cancelProjectSubscription envConfig project = whenJust target \(opts, url) -> do
-  res <- trySync $ W.deleteWith opts url
-  whenLeft_ res \e ->
-    Log.logAttention "Subscription cancellation failed; subscription may still be billing" (project.id.toText, project.subId, show @Text e)
+  res <- trySync $ W.deleteWith (opts & Wreq.checkResponse ?~ \_ _ -> pass) url
+  case (^. Wreq.responseStatus . Wreq.statusCode) <$> res of
+    -- A sub that already ended (e.g. cancelled by dunning) 404s: nothing left to stop.
+    Right 404 -> Log.logInfo "Subscription already ended; nothing to cancel" (project.id.toText, project.subId)
+    Right code | code < 300 -> pass
+    failure -> Log.logAttention "Subscription cancellation failed; subscription may still be billing" (project.id.toText, project.subId, either (toText . displayException) (("HTTP " <>) . show @Text) failure)
   where
     target = do
       subId <- mfilter (not . T.null) project.subId
@@ -1642,11 +1667,11 @@ stripeWebhookPostH sigHeaderM rawBody = do
             sessionObj = jsonField "data" event >>= jsonField "object" :: Maybe AE.Value
             handlers =
               [ ("checkout.session.completed", handleStripeCheckout envConfig)
+              , ("checkout.session.async_payment_succeeded", handleStripeCheckout envConfig)
               , ("customer.subscription.deleted", handleStripeDowngrade envConfig "subscription.deleted" "was cancelled")
-              , ("customer.subscription.updated", handleStripeSubUpdated)
-              , ("customer.subscription.paused", handleStripeDowngrade envConfig "subscription.paused" "was paused")
-              , ("customer.subscription.resumed", handleStripeSubResumed envConfig)
+              , ("customer.subscription.updated", handleStripeSubUpdated envConfig)
               , ("invoice.payment_failed", handleStripePaymentFailed envConfig)
+              , ("invoice.paid", handleStripeInvoicePaid envConfig)
               ]
         case (,) <$> (eventType >>= flip lookup handlers) <*> sessionObj of
           Just (handle, obj) -> handle obj
@@ -1670,33 +1695,50 @@ handleStripeCheckout envConfig obj = do
   let pidM = jsonField "client_reference_id" obj :: Maybe Text
       subIdM = jsonField "subscription" obj :: Maybe Text
       customerIdM = jsonField "customer" obj :: Maybe Text
-      planFromMetadata = (jsonField "metadata" obj :: Maybe AE.Value) >>= jsonField "plan" :: Maybe Text
+      metadata = jsonField "metadata" obj :: Maybe AE.Value
+      planFromMetadata = metadata >>= jsonField "plan" :: Maybe Text
+      settledInvoices = maybe [] (T.splitOn ",") (metadata >>= jsonField "settles_invoices")
   case (pidM >>= Projects.projectIdFromText, subIdM, customerIdM) of
+    _ | not (null settledInvoices) && jsonField @Text "payment_status" obj /= Just "paid" -> pure "awaiting payment"
     (Just pid, Just subId, Just customerId) -> do
       let plan = fromMaybe "GraduatedPricing" planFromMetadata
       projectM <- Projects.projectById pid
-      -- Idempotency: skip if this subscription is already set on the project
-      if maybe False (\p -> p.subId == Just subId) projectM
-        then pure "already processed"
-        else do
-          -- Cancel whatever subscription the project held before this checkout — a
-          -- LemonSqueezy one (auto-migration) or an older Stripe one. The idempotency
-          -- guard above means project.subId is never the sub we just created, and the
-          -- row is about to be overwritten with the new sub, so anything left running
-          -- here bills the customer twice with nothing left pointing at it.
-          whenJust projectM $ cancelProjectSubscription envConfig
-          subDetails <- BJ.getStripeSubDetails envConfig.stripeSecretKey subId
-          when (isNothing subDetails) $ Log.logAttention "Stripe sub fetch failed after checkout" (pid.toText, subId)
-          let subItemId = maybe "" (.subItemId) subDetails
-          void $ Projects.updateStripeProjectBilling pid (Projects.PlanName plan) (Projects.SubId subId) (Projects.SubItemId subItemId) (Projects.CustomerId customerId)
-          void $ ProjectMembers.activateAllMembers pid
-          case subDetails of
-            Just BJ.StripeSubDetails{trialEnd = Just epoch} -> BJ.scheduleTrialReminders pid epoch
-            Just BJ.StripeSubDetails{status = "trialing"} -> Log.logAttention "Stripe sub trialing but trial_end missing; no reminders scheduled" (pid.toText, subId)
-            _ -> pass
-          whenJust projectM \project ->
-            Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planUpgradedEmail plan)
-          pure "checkout processed"
+      -- Idempotency: skip if this subscription is already set on the project. Settling runs
+      -- on both paths, so a retry after a crash past the sub_id write still settles; it runs
+      -- after that write so the invoice.paid it triggers no longer matches the project.
+      res <-
+        if maybe False (\p -> p.subId == Just subId) projectM
+          then pure "already processed"
+          else do
+            -- Cancel whatever subscription the project held before this checkout — a
+            -- LemonSqueezy one (auto-migration) or an older Stripe one. The idempotency
+            -- guard above means project.subId is never the sub we just created, and the
+            -- row is about to be overwritten with the new sub, so anything left running
+            -- here bills the customer twice with nothing left pointing at it.
+            whenJust projectM $ cancelProjectSubscription envConfig
+            subDetails <- BJ.getStripeSubDetails envConfig.stripeSecretKey subId
+            when (isNothing subDetails) $ Log.logAttention "Stripe sub fetch failed after checkout" (pid.toText, subId)
+            let subItemId = maybe "" (.subItemId) subDetails
+            void $ Projects.updateStripeProjectBilling pid (Projects.PlanName plan) (Projects.SubId subId) (Projects.SubItemId subItemId) (Projects.CustomerId customerId)
+            void $ ProjectMembers.activateAllMembers pid
+            case subDetails of
+              Just BJ.StripeSubDetails{trialEnd = Just epoch} -> BJ.scheduleTrialReminders pid epoch
+              Just BJ.StripeSubDetails{status = "trialing"} -> Log.logAttention "Stripe sub trialing but trial_end missing; no reminders scheduled" (pid.toText, subId)
+              _ -> pass
+            whenJust projectM \project ->
+              Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planUpgradedEmail plan)
+            pure "checkout processed"
+      forM_ settledInvoices \invId -> do
+        let url = "https://api.stripe.com/v1/invoices/" <> toString invId
+            opts = stripeOpts envConfig.stripeSecretKey
+        settled <- trySync do
+          invoice <- W.getWith opts url
+          let status = AE.decode @AE.Value (invoice ^. Wreq.responseBody) >>= jsonField @Text "status"
+          unless (status == Just "paid") $ void $ W.postWith opts (url <> "/pay") ([("paid_out_of_band", "true")] :: [(ByteString, ByteString)])
+        whenLeft_ settled \_ -> do
+          Log.logAttention "Stripe checkout invoice settlement failed; requesting webhook retry" (pid.toText, invId)
+          throwError err503{errBody = "Invoice settlement failed. Please retry."}
+      pure res
     _ -> do
       Log.logAttention "Stripe checkout missing project/sub/customer" (pidM, subIdM, customerIdM)
       pure "missing fields"
@@ -1719,19 +1761,47 @@ handleStripeDowngrade envConfig event reason obj =
       pure "missing sub id"
 
 
-handleStripeSubUpdated :: AE.Value -> ATBaseCtx (Html ())
-handleStripeSubUpdated obj = do
-  let subIdM = jsonField "id" obj :: Maybe Text
-      newItemIdM = (jsonField "items" obj >>= jsonField "data" :: Maybe [AE.Value]) >>= listToMaybe >>= jsonField "id" :: Maybe Text
-  case (subIdM, newItemIdM) of
-    (Just subId, Just newItemId) ->
-      void $ Projects.updateSubItemIdBySubId newItemId subId
-    _ -> Log.logAttention "Stripe subscription.updated missing sub_id or item_id" (subIdM, newItemIdM)
+-- | Keeps the item id current and mirrors the sub's status onto the plan: dunning that ends at
+-- @unpaid@ (or a pause) downgrades, and paying the invoice by any route returns the same sub to
+-- @active@, which restores the plan its price maps to. Guarded on the current plan so repeat
+-- updates don't re-notify.
+handleStripeSubUpdated :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
+handleStripeSubUpdated envConfig obj = do
+  let item0 = (jsonField "items" obj >>= jsonField "data" :: Maybe [AE.Value]) >>= listToMaybe
+      itemIdM = item0 >>= jsonField "id" :: Maybe Text
+  case (jsonField "id" obj :: Maybe Text, itemIdM) of
+    (Just subId, Just itemId) -> do
+      void $ Projects.updateSubItemIdBySubId itemId subId
+      whenJustM (Projects.projectBySubId subId) \project -> case (jsonField "status" obj :: Maybe Text, Projects.isFreeTier project.paymentPlan) of
+        (Just "unpaid", False) -> void $ handleStripeDowngrade envConfig "subscription.unpaid" "is unpaid" obj
+        (Just "paused", False) -> void $ handleStripeDowngrade envConfig "subscription.paused" "was paused" obj
+        (Just status, True) | status `elem` ["active", "trialing"] -> do
+          let plan = bool "GraduatedPricing" "SystemsPricing" ((item0 >>= jsonField "price" >>= jsonField "id") == Just envConfig.stripePriceIdByos)
+          void $ Projects.setPlanBySubId (Projects.PlanName plan) (Projects.SubItemId itemId) (Projects.SubId subId)
+          Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planUpgradedEmail plan)
+        _ -> pass
+    ids -> Log.logAttention "Stripe subscription.updated missing sub_id or item_id" ids
   pure "subscription updated"
 
 
+-- | A cancelled sub can't be revived, so paying its leftover invoice outside our checkout
+-- (hosted link, email, portal) leaves the project on Free: point the payer at checkout.
+-- An @unpaid@ sub's revival arrives as customer.subscription.updated instead.
+handleStripeInvoicePaid :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
+handleStripeInvoicePaid envConfig obj = do
+  let subIdM = (jsonField "parent" obj >>= jsonField "subscription_details" >>= jsonField "subscription") <|> jsonField "subscription" obj :: Maybe Text
+  whenJust subIdM \subId -> whenJustM (Projects.projectBySubId subId) \project ->
+    when (Projects.isFreeTier project.paymentPlan) $ BJ.getStripeSubDetails envConfig.stripeSecretKey subId >>= \case
+      Just BJ.StripeSubDetails{status = "canceled"} -> do
+        Log.logInfo "Stripe invoice paid on a cancelled subscription; asking the payer to reactivate" (project.id.toText, subId)
+        Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.invoiceSettledEmail
+      Just _ -> pass
+      Nothing -> Log.logAttention "Stripe invoice.paid: sub fetch failed; a lapsed payer may not be told to reactivate" (project.id.toText, subId)
+  pure "invoice paid handled"
+
+
 -- Notification only — Stripe retries payments automatically over its dunning period.
--- Downgrade happens via customer.subscription.deleted when Stripe gives up.
+-- Downgrade happens when Stripe gives up: subscription.deleted, or .updated to unpaid.
 handleStripePaymentFailed :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
 handleStripePaymentFailed envConfig obj = do
   let attemptCount = jsonField "attempt_count" obj :: Maybe Int
@@ -1741,31 +1811,3 @@ handleStripePaymentFailed envConfig obj = do
       Log.logAttention "Stripe invoice.payment_failed" (project.id, attemptCount, nextAttempt)
       Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.paymentFailedEmail
   pure "payment failed handled"
-
-
--- Look up the sub's price via the Stripe API, reverse-map to our plan name, and re-upgrade.
--- (Pause preserved the IDs, so resume never needs a re-checkout.)
-handleStripeSubResumed :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
-handleStripeSubResumed envConfig obj =
-  case jsonField "id" obj :: Maybe Text of
-    Just subId -> do
-      subDetailsM <- BJ.getStripeSubDetails envConfig.stripeSecretKey subId
-      case subDetailsM of
-        -- the price id reverse-maps to our internal plan name
-        Just BJ.StripeSubDetails{subItemId = itemId, priceId} -> do
-          let plan
-                | priceId == envConfig.stripePriceIdByos = "SystemsPricing"
-                | otherwise = "GraduatedPricing"
-          rows <- Projects.setPlanBySubId (Projects.PlanName plan) (Projects.SubItemId itemId) (Projects.SubId subId)
-          when (rows == 0) $ Log.logAttention "Stripe subscription.resumed: no project for sub_id" (subId, plan)
-          when (rows > 1) $ Log.logAttention "Stripe subscription.resumed touched multiple rows" (subId, rows)
-          when (rows > 0)
-            $ whenJustM (Projects.projectBySubId subId) \project ->
-              Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planUpgradedEmail plan)
-          pure "subscription resumed"
-        Nothing -> do
-          Log.logAttention "Stripe subscription.resumed: could not fetch sub items" subId
-          pure "missing items"
-    Nothing -> do
-      Log.logAttention "Stripe subscription.resumed: missing sub id" ()
-      pure "missing sub id"

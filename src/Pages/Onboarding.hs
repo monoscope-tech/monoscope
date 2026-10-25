@@ -74,9 +74,10 @@ onboardingGetH pid stepM = do
           discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands&state=" <> pid.toText <> "__onboarding&redirect_uri=" <> appCtx.env.discordRedirectUri
       pure $ NotifChannelStep pid slackUrl discordUrl phone (maybe mempty (.notify_emails) everyoneTeamM) hasSlack hasDiscord
     Integration -> IntegrationStep pid . maybe "<API_KEY>" (.keyPrefix) . listToMaybe <$> ProjectApiKeys.projectApiKeysByProjectId pid
-    Pricing ->
+    Pricing -> do
+      billing <- Projects.userBilling sess.user.id
       let checkout u = u <> "&checkout[custom][project_id]=" <> pid.toText
-       in pure $ PricingStep pid (checkout appCtx.config.lemonSqueezyUrl) (checkout appCtx.config.lemonSqueezyCriticalUrl) project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
+      pure $ PricingStep pid (checkout appCtx.config.lemonSqueezyUrl) (checkout appCtx.config.lemonSqueezyCriticalUrl) project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled (not billing.hasSubscribedBefore)
     Info -> pure $ InfoStep pid sess.user.firstName sess.user.lastName (q "companyName") (q "companySize") (q "foundUsFrom")
   addRespHeaders $ OnboardingGet $ PageCtx bw{currProject = Nothing, hideNavbar = True} stepData
 
@@ -142,6 +143,7 @@ data OnboardingStepData
       , paymentPlan :: Text
       , enableFreetier :: Bool
       , basicAuthEnabled :: Bool
+      , trialEligible :: Bool
       }
   | CompleteStep
       { stepPid :: Projects.ProjectId
@@ -162,7 +164,7 @@ instance ToHtml OnboardingGet where
         SurveyStep{..} -> onboardingConfigBody stepPid location functionality
         NotifChannelStep{..} -> notifChannelsWithUrls slackUrl discordUrl stepPid phoneNumber emails hasDiscord hasSlack
         IntegrationStep{..} -> integrationsPage stepPid apiKey
-        PricingStep{..} -> pricingPage stepPid lemonUrl criticalUrl paymentPlan enableFreetier basicAuthEnabled
+        PricingStep{..} -> pricingPage stepPid lemonUrl criticalUrl paymentPlan enableFreetier basicAuthEnabled trialEligible
         InfoStep{..} -> onboardingInfoBody stepPid firstName lastName companyName companySize foundUsFrom
   toHtmlRaw = toHtml
 
@@ -272,12 +274,12 @@ onboardingCompleteBody pid = do
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
-pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
-pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled =
+pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Html ()
+pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled trialEligible =
   div_ [class_ "w-full max-w-[1100px] mx-auto mt-[70px] mb-10 px-4 md:px-0"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       div_ [class_ "w-full md:w-1/2"] $ stepIndicator 5 "Please pick a plan" $ stepUrl pid Integration
-      paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled True Projects.NoBillingProvider
+      paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled trialEligible True Projects.NoBillingProvider
       div_ [class_ "flex flex-col gap-2 w-full pb-20"] do
         span_ [class_ "text-textStrong text-2xl mt-20"] "FAQ"
         div_ [class_ "join join-vertical w-full mt-4"] do

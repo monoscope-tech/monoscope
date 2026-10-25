@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, facetRail_, facetSection_, facetOption_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, paymentPlanPicker) where
+module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, facetRail_, facetSection_, facetOption_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -291,8 +291,8 @@ localTimeFmt_ dfFmt ts =
     (toHtml $ formatTime defaultTimeLocale "%b %d, %H:%M:%S UTC" ts)
 
 
-paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Projects.BillingProvider -> Html ()
-paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled isOnboarding provider = do
+paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Bool -> Projects.BillingProvider -> Html ()
+paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled trialEligible isOnboarding provider = do
   let useStripe = provider /= Projects.LemonSqueezyProvider
   div_ ([class_ "flex flex-col gap-8 w-full"] <> [hxVals_ "{\"isOnboarding\": true}" | isOnboarding]) do
     unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
@@ -307,8 +307,8 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
           then openSourcePricing pid (isCurrent "Open Source") >> enterprisePricing
           else do
             when freePricingEnabled $ freePricing pid (isCurrent "Free")
-            popularPricing pid lemonUrl (isCurrent "Bring nothing") freePricingEnabled useStripe
-            systemsPricing pid criticalUrl (isCurrent "Bring your own storage") useStripe
+            popularPricing pid lemonUrl (isCurrent "Bring nothing") freePricingEnabled trialEligible useStripe
+            systemsPricing pid criticalUrl (isCurrent "Bring your own storage") trialEligible useStripe
     unless useStripe do
       script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
       script_
@@ -381,11 +381,18 @@ pricingButton_ isCurrent normalCls attrs label =
     $ bool label "Current plan" isCurrent
 
 
+-- | Whether a Stripe checkout for @plan@ comes with the 30-day trial: first-time buyers only,
+-- and never on Bring-your-own-storage.
+grantsTrial :: Bool -> Text -> Bool
+grantsTrial trialEligible plan = trialEligible && plan /= "SystemsPricing"
+
+
 -- | Plan CTA: inert when already the current plan, else a Stripe checkout POST or a LemonSqueezy popup.
-pricingCta_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
-pricingCta_ pid plan normalCls lemonUrl isCurrent useStripe =
+pricingCta_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Html ()
+pricingCta_ pid plan normalCls lemonUrl isCurrent trialEligible useStripe =
   div_ [[__|on click halt|]]
-    $ pricingButton_ isCurrent normalCls (type_ "button" : attrs) "Start 30 day free trial"
+    $ pricingButton_ isCurrent normalCls (type_ "button" : attrs)
+    $ bool "Subscribe" "Start 30 day free trial" (not useStripe || grantsTrial trialEligible plan)
   where
     attrs :: [Attribute]
     attrs
@@ -415,8 +422,8 @@ freePricing pid isCurrent =
         "What's included:"
 
 
-popularPricing :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Html ()
-popularPricing pid lemonUrl isCurrent freeTierEnabled useStripe =
+popularPricing :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Bool -> Html ()
+popularPricing pid lemonUrl isCurrent freeTierEnabled trialEligible useStripe =
   div_ [class_ "relative"]
     $ div_ (pricingPostAttrs pid "GraduatedPricing" "outline-strokeWeak shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]" [hxVals_ "js:{orderIdM: document.querySelector('#popularPricing').value}"]) do
       div_ [class_ "pricing-gradient-slate-wide"] pass
@@ -426,13 +433,13 @@ popularPricing pid lemonUrl isCurrent freeTierEnabled useStripe =
           "Bring nothing"
           "This plan can be adjusted"
           (priceDisplay_ [term "hx-live:text" "(v => v <= 2e7 ? 29 : 29 + (v - 2e7) / 1e6)(+q('#price_range').value)"] "29" "/per month")
-          (pricingCta_ pid "GraduatedPricing" "btn-primary" lemonUrl isCurrent useStripe)
+          (pricingCta_ pid "GraduatedPricing" "btn-primary" lemonUrl isCurrent trialEligible useStripe)
           ["Fully managed cloud service", "Predictable usage-based pricing", "Intelligent incident alerts", "Query your data in english", "30 days data retention included"]
           (span_ [] $ when freeTierEnabled $ "Everything in " >> span_ [class_ "text-textBrand"] "free" >> " plus...")
 
 
-systemsPricing :: Projects.ProjectId -> Text -> Bool -> Bool -> Html ()
-systemsPricing pid critical isCurrent useStripe =
+systemsPricing :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Html ()
+systemsPricing pid critical isCurrent trialEligible useStripe =
   pricingBadge_ (span_ [class_ "text-sm font-medium leading-tight"] "🌟" >> span_ [class_ "leading-tight text-sm"] "MOST POPULAR")
     $ div_ (pricingPostAttrs pid "SystemsPricing" "outline-strokeBrand-strong" [hxVals_ "js:{orderIdM: document.querySelector('#systemsPricing').value}"])
     $ div_ [class_ "flex flex-col gap-2"] do
@@ -442,7 +449,7 @@ systemsPricing pid critical isCurrent useStripe =
         "Bring your own storage"
         "Business plan"
         (priceDisplay_ [term "hx-live:text" "(v => v <= 1e8 ? 199 : 199 + (v - 1e8) / 1e6)(+q('#price_range').value)"] "199" "/per month")
-        (pricingCta_ pid "SystemsPricing" "bg-fillStrong text-textInverse-strong" critical isCurrent useStripe)
+        (pricingCta_ pid "SystemsPricing" "bg-fillStrong text-textInverse-strong" critical isCurrent trialEligible useStripe)
         ["Own and control all your data", "Save all your data to any S3-compatible bucket", "Unlimited data retention period", "Query years of data via monoscope", "No extra cost for data retention"]
         (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "bring nothing" >> " plus...")
 

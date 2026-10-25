@@ -19,7 +19,7 @@ test("customer notices keep fullscreen panels and sidebar flyouts aligned", asyn
       await page.goto(`/p/${pid}/log_explorer?fullscreen=trace&showTrace=test-trace`);
       const admin = page.locator("#super-admin-banner"), billing = page.locator("#billing-downgrade-banner");
       await expect(admin).toContainText("You are a super admin in a customer's project");
-      await expect(billing.getByRole("link", { name: "Update payment method" })).toBeVisible();
+      await expect(billing.getByRole("link", { name: "Reactivate subscription" })).toBeVisible();
       await expect(page.locator("#apiLogsPage")).toHaveAttribute("data-fullscreen", "trace");
       const noticeBottom = (await billing.boundingBox())!;
       const panel = await page.locator("#trace_expanded_view").boundingBox();

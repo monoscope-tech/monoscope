@@ -33,6 +33,7 @@ module Pkg.EmailTemplates (
   freeTierUsageEmail,
   planUpgradedEmail,
   planDowngradedEmail,
+  invoiceSettledEmail,
   paymentFailedEmail,
   trialEndingEmail,
 
@@ -1247,6 +1248,21 @@ planDowngradedEmail reason projectName =
         p_ $ toHtml $ "On the Free plan, ingestion is capped at " <> freeTierCap <> " events per day (resetting at 00:00 UTC); anything beyond that is dropped. Additional team members will be deactivated. You can re-subscribe at any time to restore full access."
     )
     "Upgrade Plan"
+
+
+-- | A cancelled subscription's leftover invoice was paid outside checkout: the money is in, but
+-- nothing reactivated, since a cancelled subscription can't be revived.
+invoiceSettledEmail :: Text -> Text -> (Text, Html ())
+invoiceSettledEmail projectName =
+  ctaEmail
+    ("[···] Payment received - " <> projectName)
+    True
+    ( do
+        h1_ "Payment Received"
+        richP_ ["Thanks, your outstanding invoice for ", projectName, " is paid. The subscription it belonged to had already ended, so the project is still on the Free plan."]
+        p_ "Reactivate from the billing page to restore full access."
+    )
+    "Reactivate Subscription"
 
 
 -- | Provider dunning is still retrying, so nothing has changed yet; the downgrade only follows
