@@ -53,12 +53,13 @@ data FacetContent
 
 
 facetNode_ :: FacetNode -> Html ()
-facetNode_ node =
-  details_ ([class_ $ "facet-section block border-t border-strokeWeak [&[open]>summary_.facet-chevron]:rotate-0 " <> case node.content of { FacetValues{} -> ""; _ -> "facet-section-group" }, data_ "component" "facet-section"] <> node.attrs <> [open_ "" | node.expanded]) do
+facetNode_ node = do
+  let grouped = case node.content of FacetValues{} -> False; FacetChildren{} -> True; FacetLoading -> True
+  details_ ([class_ $ "facet-section block border-t border-strokeWeak [&[open]>summary_.facet-chevron]:rotate-0 " <> bool "" "facet-section-group" grouped, data_ "component" "facet-section"] <> node.attrs <> [open_ "" | node.expanded]) do
     summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded px-2 py-2 text-textStrong hover:bg-fillWeak [&::-webkit-details-marker]:hidden"] do
       faSprite_ "chevron-down" "regular" "facet-chevron h-2.5 w-2.5 shrink-0 -rotate-90 transition-transform"
       div_ [class_ "flex min-w-0 flex-1 items-center justify-between gap-2"] do
-        span_ ([class_ $ "truncate text-sm " <> case node.content of { FacetValues{} -> "font-normal"; _ -> "font-medium" }] <> [term "data-tippy-content" p | p <- maybeToList node.path]) $ toHtml node.label
+        span_ ([class_ $ "truncate text-sm " <> bool "font-normal" "font-medium" grouped] <> [term "data-tippy-content" p | p <- maybeToList node.path]) $ toHtml node.label
         forM_ node.actions $ \actions -> div_ [class_ "inline-block", [__|on click halt the event's bubbling|]] actions
     case node.content of
       FacetChildren children -> div_ [class_ "facets-container"] $ mapM_ facetNode_ children
