@@ -190,14 +190,16 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
     const bash = createBashToolDefinition(cwd, {
       operations: {
         async exec(command, cwd, options) {
-          const signals = [signal, options.signal, options.timeout ? AbortSignal.timeout(options.timeout * 1000) : undefined].filter(Boolean);
+          const timeout = z.number().positive().optional().parse(options.timeout);
+          const signals = [signal, options.signal, timeout === undefined ? undefined : AbortSignal.timeout(Math.ceil(timeout * 1000) + 5000)].filter(Boolean);
           const commandSignal = AbortSignal.any(signals);
           try {
-            const proc = vm.exec(agentCommand(['/bin/bash', '-lc', command]), { cwd, signal: commandSignal, stdout: 'pipe', stderr: 'pipe' });
+            const argv = ['/bin/bash', '-lc', command];
+            // Kill the guest process group at its deadline; reserve VM teardown for cancellation or a stalled kill.
+            const proc = vm.exec(agentCommand(timeout === undefined ? argv : ['/usr/bin/timeout', '--verbose', '--signal=KILL', String(timeout), ...argv]), { cwd, signal: commandSignal, stdout: 'pipe', stderr: 'pipe' });
             for await (const chunk of proc.output()) options.onData(chunk.data);
             return { exitCode: (await proc).exitCode };
           } catch (error) {
-            // Gondolin aborts the host wait; closing also terminates any guest process.
             if (commandSignal.aborted) await close();
             throw error;
           }
