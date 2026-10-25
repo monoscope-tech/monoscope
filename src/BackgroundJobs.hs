@@ -1459,7 +1459,7 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryStep "free-tier
   ctx <- ask @Config.AuthContext
   whenJustM (Projects.projectById pid) \project -> whenJust (Projects.freeTierDailyLimit ctx.config.enableFreetier project.paymentPlan) \limit -> do
     (seen, kept) <- Projects.samplingToday pid now
-    let notice = case freeTierUsageStatus seen kept limit of
+    let notice = case freeTierUsageStatus limit (seen, kept) of
           FreeTierExceeded{} -> Just Projects.NoticeExceeded
           FreeTierSampled{} -> Just Projects.NoticeSampling
           FreeTierOk -> Nothing

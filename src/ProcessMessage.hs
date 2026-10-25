@@ -59,16 +59,17 @@ import Data.Aeson.Types qualified as AE
 import Data.ByteString qualified as BS
 import Data.Cache qualified as Cache
 import Data.Char (digitToInt, isAlpha, isAlphaNum, isDigit, isHexDigit)
+import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Sleep (Sleep)
 import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Product.Fields (field)
 import Data.HashMap.Strict qualified as HM
-import Data.Map.Strict qualified as Map
 import Data.HashSet qualified as HashSet
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.List qualified as L
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
@@ -163,7 +164,7 @@ overFreeTierQuota cache = any ((cache.row.dailyUsage >=) . Sampling.ceiling) cac
 -- (1/p), so what it stands for can be counted back up.
 sampleCapped
   :: (DB es, IOE :> es, Time :> es)
-  => (r -> Maybe Projects.ProjectId)
+  => (r -> Text)
   -> (r -> Bool)
   -> (r -> Text)
   -> (Double -> r -> r)
@@ -171,16 +172,13 @@ sampleCapped
   -> V.Vector r
   -> Eff es (V.Vector r)
 sampleCapped projectOf isError keyOf stamp caches records
-  | HM.null budgets = pure records
+  | HM.null capped = pure records
   | otherwise = do
       now <- currentTime
-      tallies <- Projects.samplingTallies now (V.fromList $ HM.keys budgets)
-      let rates pid (cache, budget) = case HM.lookupDefault (Sampling.Tally 0 0 0 0, Sampling.Tally 0 0 0 0) pid tallies of
-            (ev, er)
-              | overFreeTierQuota cache || ev.keptToday + er.keptToday >= Sampling.ceiling budget -> (0, 0)
-              | otherwise -> let reserve = round (Sampling.errorReserve * fromIntegral budget) in (Sampling.pace now (budget - reserve) ev, Sampling.pace now reserve er)
-          rateOf = HM.mapWithKey rates budgets
-          judge r = case projectOf r >>= \pid -> (pid,) <$> HM.lookup pid rateOf of
+      tallies <- Projects.samplingTallies now (V.fromList $ HM.keys capped)
+      -- Keyed by the id's text, which records carry, so uncapped records cost one lookup.
+      let rateOf = HM.fromList [(pid.toText, (pid, bool (Sampling.rates now budget (HM.findWithDefault def pid tallies)) (0, 0) (overFreeTierQuota cache))) | (pid, (cache, budget)) <- HM.toList capped]
+          judge r = case HM.lookup (projectOf r) rateOf of
             Nothing -> (Just r, Nothing)
             Just (pid, (pEvents, pErrors)) ->
               let err = isError r
@@ -191,11 +189,11 @@ sampleCapped projectOf isError keyOf stamp caches records
           counts = HM.fromListWith (<>) (mapMaybe snd $ V.toList judged)
           count = Sum . fromEnum
       Projects.recordSampling now (HM.toList counts)
-      Metrics.count Metrics.freeTierSampledOut (getSum $ foldMap (\c -> c.seen - c.kept) counts) []
+      let total = fold counts
+      Metrics.count Metrics.freeTierSampledOut (getSum $ total.seen - total.kept) []
       pure $ V.mapMaybe fst judged
   where
-    budgets = HM.filterWithKey (\pid _ -> HashSet.member pid present) $ HM.mapMaybe (\c -> (c,) <$> c.dailyLimit) caches
-    present = HashSet.fromList $ mapMaybe projectOf $ V.toList records
+    capped = HM.mapMaybe (\c -> (c,) <$> c.dailyLimit) caches
 
 
 -- | 'sampleCapped' for spans and logs: a trace is kept or dropped whole, and a kept record
@@ -203,16 +201,16 @@ sampleCapped projectOf isError keyOf stamp caches records
 sampleSpans :: (DB es, IOE :> es, Time :> es) => HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es (V.Vector Telemetry.OtelLogsAndSpans)
 sampleSpans =
   sampleCapped
-    (Projects.projectIdFromText . (.project_id))
+    (.project_id)
     Telemetry.isErrorRecord
     (\r -> fromMaybe r.id (Telemetry.traceIdOf r))
     (\w -> field @"attributes" %~ Just . AesonText . Map.alter (Just . AE.Object . AEKM.insert "sample_weight" (AE.toJSON w) . \case Just (AE.Object o) -> o; _ -> mempty) "monoscope" . maybe mempty (\(AesonText m) -> m))
 
 
--- | 'sampleCapped' for metrics: a series (name, resource, attributes) is kept or dropped whole,
--- so no kept series has holes. Points carry no weight; a series stands for itself.
+-- | 'sampleCapped' for metrics: a series is kept or dropped whole, so no kept series has holes.
+-- Points carry no weight; a series stands for itself.
 sampleMetrics :: (DB es, IOE :> es, Time :> es) => HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.MetricRecord -> Eff es (V.Vector Telemetry.MetricRecord)
-sampleMetrics = sampleCapped (Just . UUIDId . (.projectId)) (const False) (\r -> decodeUtf8 $ AE.encode (r.metricName, r.resource, r.attributes)) (\_ r -> r)
+sampleMetrics = sampleCapped (UUID.toText . (.projectId)) (const False) Telemetry.metricSeriesId (\_ r -> r)
 
 
 -- | Project cache lookup, memoized in the shared cache. A capped entry expires after 5 minutes

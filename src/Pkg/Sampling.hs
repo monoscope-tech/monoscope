@@ -4,8 +4,9 @@
 -- Pacing is ad-budget pacing: each pool keeps with probability (budget left) / (traffic
 -- still expected today). Decisions hash a stable key (trace id, record id, metric series),
 -- so every record sharing a key gets the same answer and a kept trace stays whole.
-module Pkg.Sampling (Tally (..), errorReserve, ceiling, pace, keeps) where
+module Pkg.Sampling (Tally (..), ceiling, rates, pace, keeps) where
 
+import Data.Default (Default)
 import Data.Digest.XXHash (xxHash)
 import Data.Fixed (mod')
 import Data.Time (UTCTime (..))
@@ -21,12 +22,13 @@ data Tally = Tally
   , seenLastHour :: Int
   , seenThisHour :: Int
   }
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default)
 
 
--- | Share of the daily budget held back for errors, so a noisy success path can't crowd them out.
-errorReserve :: Double
-errorReserve = 0.2
+-- $setup
+-- >>> import Data.Time (fromGregorian)
+-- >>> let noon = UTCTime (fromGregorian 2026 10 25) 43200
 
 
 -- | Hard stop: past this many kept events in a day nothing more is kept, whatever the forecast.
@@ -37,19 +39,33 @@ ceiling :: Int -> Int
 ceiling budget = budget + budget `div` 5
 
 
+-- | Keep probabilities (events, errors) for a project with a daily @budget@ from its two pools'
+-- tallies. A fifth of the budget is reserved for errors, so a noisy success path can't crowd
+-- them out; past the ceiling nothing is kept.
+--
+-- >>> rates noon 10000 (Tally 0 16000 0 0, Tally 0 0 0 0)
+-- (0.5,1.0)
+-- >>> rates noon 10000 (Tally 10000 0 0 0, Tally 2000 0 0 0)
+-- (0.0,0.0)
+rates :: UTCTime -> Int -> (Tally, Tally) -> (Double, Double)
+rates now budget (events, errors)
+  | events.keptToday + errors.keptToday >= ceiling budget = (0, 0)
+  | otherwise = (pace now (budget - reserve) events, pace now reserve errors)
+  where
+    reserve = budget `div` 5
+
+
 -- | Keep probability for one pool: budget left over traffic still expected before 00:00 UTC.
 -- The forecast is yesterday's traffic from this hour on, falling back to the recent hourly
 -- rate; with no history at all, everything is kept until counters exist.
 --
--- >>> import Data.Time (fromGregorian)
--- >>> let t = UTCTime (fromGregorian 2026 10 25) 43200 -- noon
--- >>> pace t 8000 (Tally 0 0 0 0)
+-- >>> pace noon 8000 (Tally 0 0 0 0)
 -- 1.0
--- >>> pace t 8000 (Tally 4000 40000 0 0) -- half the budget left, 10x that still coming
+-- >>> pace noon 8000 (Tally 4000 40000 0 0) -- half the budget left, 10x that still coming
 -- 0.1
--- >>> pace t 8000 (Tally 4000 0 3600 0) -- no yesterday: 3600/h for the 12h left
+-- >>> pace noon 8000 (Tally 4000 0 3600 0) -- no yesterday: 3600/h for the 12h left
 -- 9.259259259259259e-2
--- >>> pace t 8000 (Tally 8000 40000 0 0) -- spent
+-- >>> pace noon 8000 (Tally 8000 40000 0 0) -- spent
 -- 0.0
 pace :: UTCTime -> Int -> Tally -> Double
 pace now budget t
@@ -58,11 +74,11 @@ pace now budget t
   | otherwise = min 1 (fromIntegral left / forecast)
   where
     left = budget - t.keptToday
-    secondsLeft = realToFrac (86400 - utctDayTime now) :: Double
+    secondOfDay = realToFrac (utctDayTime now) :: Double
     perSecond
       | t.seenLastHour > 0 = fromIntegral t.seenLastHour / 3600
-      | otherwise = fromIntegral t.seenThisHour / max 60 ((realToFrac (utctDayTime now) :: Double) `mod'` 3600)
-    forecast = if t.seenYesterdayAhead > 0 then fromIntegral t.seenYesterdayAhead else perSecond * secondsLeft
+      | otherwise = fromIntegral t.seenThisHour / max 60 (secondOfDay `mod'` 3600)
+    forecast = if t.seenYesterdayAhead > 0 then fromIntegral t.seenYesterdayAhead else perSecond * (86400 - secondOfDay)
 
 
 -- | Consistent keep decision: the key's hash, scaled to [0,1), against the probability.

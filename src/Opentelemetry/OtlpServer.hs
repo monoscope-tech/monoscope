@@ -979,8 +979,8 @@ severityMap = base <> Map.mapMaybe (`Map.lookup` base) aliases
 
 -- | Gate a project's converted records on its cache: an unknown project yields nothing, so
 -- 'processBatchPipeline' can tell it from a project whose rows sampling later leaves out.
-withinQuota :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> [a] -> [a]
-withinQuota projectCaches pid records = bool [] records (HM.member pid projectCaches)
+forKnownProject :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> [a] -> [a]
+forKnownProject projectCaches pid records = bool [] records (HM.member pid projectCaches)
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
@@ -990,7 +990,7 @@ convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
       projectId =
         (snd <$> find ((== projectKey) . fst) pids)
           <|> (Projects.projectIdFromText =<< (V.!? 0) (getLogAttributeValue "at-project-id" (V.singleton resourceLogs)))
-   in maybe [] (\pid -> withinQuota projectCaches pid $ convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs) projectId
+   in maybe [] (\pid -> forKnownProject projectCaches pid $ convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs) projectId
 
 
 filterEmptyEvents :: OtelLogsAndSpans -> Bool
@@ -1080,7 +1080,7 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
               -- single project). Picking V.head of a multi-project batch silently
               -- mis-attributes spans to the wrong project (cross-tenant leak).
               <|> (case V.toList pids of [(_, sole)] -> Just sole; _ -> Nothing)
-       in maybe [] (\pid -> withinQuota projectCaches pid $ convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs) projectId
+       in maybe [] (\pid -> forKnownProject projectCaches pid $ convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs) projectId
 
 
 -- | Convert ScopeSpans to OtelLogsAndSpansF
@@ -1264,7 +1264,7 @@ metricRequestHasOverflow req =
 -- | Convert ResourceMetrics to MetricRecords
 convertResourceMetricsToMetricRecords :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourceMetrics =
-  withinQuota
+  forKnownProject
     projectCaches
     pid
     [ record

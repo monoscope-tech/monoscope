@@ -299,7 +299,7 @@ freeTierBatchesDropped = mkCounter "monoscope.ingest.free_tier.batches_dropped" 
 {-# NOINLINE freeTierBatchesDropped #-}
 
 
--- | Records a capped project's free-tier sampling left out ("Pkg.Sampling").
+-- | Records dropped by free-tier sampling ("Pkg.Sampling").
 freeTierSampledOut :: Counter Int64
 freeTierSampledOut = mkCounter "monoscope.ingest.free_tier.sampled_out" Nothing
 {-# NOINLINE freeTierSampledOut #-}

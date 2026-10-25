@@ -153,10 +153,9 @@ import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as EHasql
+import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.HashMap.Strict qualified as HM
 import Data.List (unzip5)
-import GHC.Generics (Generically (..))
-import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
@@ -174,6 +173,7 @@ import Effectful
 import Effectful.Error.Static qualified as EffError
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time, currentTime)
+import GHC.Generics (Generically (..))
 import Hasql.Interpolate qualified as HI
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx

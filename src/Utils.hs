@@ -725,10 +725,10 @@ freeTierUsageBanner pid = \case
 -- | From today's (seen, kept) under a daily @limit@: sampling once anything was left out, and
 -- exceeded at the hard ceiling, where nothing more is kept.
 --
--- >>> [freeTierUsageStatus seen kept 100 | (seen, kept) <- [(50, 50), (400, 100), (401, 100), (900, 120)]]
+-- >>> map (freeTierUsageStatus 100) [(50, 50), (400, 100), (401, 100), (900, 120)]
 -- [FreeTierOk,FreeTierSampled 4 100,FreeTierSampled 5 100,FreeTierExceeded 120 100]
-freeTierUsageStatus :: Int -> Int -> Int -> FreeTierStatus
-freeTierUsageStatus seen kept limit
+freeTierUsageStatus :: Int -> (Int, Int) -> FreeTierStatus
+freeTierUsageStatus limit (seen, kept)
   | kept >= Sampling.ceiling limit = FreeTierExceeded kept limit
   | seen > kept = FreeTierSampled ((seen + kept - 1) `div` max 1 kept) limit
   | otherwise = FreeTierOk

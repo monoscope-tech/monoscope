@@ -1322,4 +1322,4 @@ checkFreeTierStatus pid paymentPlan = do
   enabled <- EffReader.asks @AuthContext (.config.enableFreetier)
   case Projects.freeTierDailyLimit enabled paymentPlan of
     Nothing -> pure NotFreeTier
-    Just limit -> (\(seen, kept) -> freeTierUsageStatus seen kept limit) <$> (Projects.samplingToday pid =<< Time.currentTime)
+    Just limit -> freeTierUsageStatus limit <$> (Projects.samplingToday pid =<< Time.currentTime)
