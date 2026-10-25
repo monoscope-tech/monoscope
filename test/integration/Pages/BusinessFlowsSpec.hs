@@ -531,6 +531,7 @@ stripeBillingTests = do
       Just b -> do
         decodeUtf8 @Text b `shouldSatisfy` T.isInfixOf "trial_period_days"
         decodeUtf8 @Text b `shouldNotSatisfy` T.isInfixOf "customer="
+        decodeUtf8 @Text b `shouldSatisfy` T.isInfixOf "allow_promotion_codes=true"
 
     -- Once that buyer has any billing history, a further checkout reuses their
     -- customer and withholds the trial — this is what a second project now hits.
