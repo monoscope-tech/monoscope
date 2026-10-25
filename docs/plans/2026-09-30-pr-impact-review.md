@@ -933,3 +933,9 @@ The probes used 130 matching provider call/usage pairs and estimated $0.38796052
 Cleanup removed the study containers and temporary credential files. The comparisons used explicit synthetic evidence. Live telemetry and memory callbacks were unavailable. Both stopped protocols remain under `scripts/local/impact-quality-native-20261025/`. Next, the Haskell evaluator needs explicit mode selection for an agent-to-agent comparison.
 
 [Pi 1.4.0](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/system-prompt.ts) supplies native tool guidance. [Aider](https://aider.chat/docs/repomap.html) ranks repository symbols within a token budget. [SWE-agent](https://github.com/SWE-agent/SWE-agent/blob/main/docs/background/aci.md) describes bounded file views and clear edit failures. This patch reuses Pi. Further retrieval changes require measurement.
+
+### Shell timeout recovery — 2026-10-25
+
+A scripted SDK regression reproduced workspace loss after a shell timeout. Gondolin 0.14 cancels the host wait without killing the guest command. Our bridge then destroyed the VM. Guest-side [GNU timeout](https://github.com/coreutils/coreutils/blob/master/src/timeout.c) now kills the command group while preserving the workspace. Whole-attempt cancellation still closes the VM. A host watchdog also closes it if termination stalls for five seconds.
+
+The regression checks a TERM-resistant child, subsequent read/bash calls, and an ordinary exit 137 without a false timeout report. It failed before the fix and passed afterward. These scripted checks use no paid inference and do not establish review quality. The registry still reports Pi 1.4.0 and Gondolin 0.14.0 as latest.

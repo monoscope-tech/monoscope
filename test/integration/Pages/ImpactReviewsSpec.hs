@@ -992,6 +992,22 @@ spec = around withTestResources $ describe "Production impact reviews" do
               parse (field "sourceBefore") row >>= (\original -> parse (field "sourceAfter") row `shouldReturn` (original :: Text))
               parse (field "resourceCostStatus") row `shouldReturn` ("unpriced" :: Text)
         listDirectory sdkTemp `shouldReturn` []
+      (timeoutResult, _, _, _, _, timeoutReplies) <-
+        run
+          7
+          [ tool "bash" $ AE.object ["command" AE..= ("trap '' TERM; printf retained > timeout-retained.txt; sleep 60 & echo $! > timeout-child.pid; wait" :: Text), "timeout" AE..= (1 :: Int)]
+          , readPath "/workspace/timeout-retained.txt"
+          , bash "set -eu; test \"$(cat timeout-retained.txt)\" = retained; child=$(cat timeout-child.pid); if kill -0 \"$child\" 2>/dev/null; then test \"$(awk '{print $3}' /proc/\"$child\"/stat)\" = Z; fi; echo timeout-kept-workspace-and-killed-child"
+          , tool "bash" $ AE.object ["command" AE..= ("exit 137" :: Text), "timeout" AE..= (1 :: Int)]
+          , tool "submit_review" accepted
+          ]
+      isRight timeoutResult `shouldBe` True
+      reply "tool-1" timeoutReplies `shouldReturn` "retained"
+      reply "tool-2" timeoutReplies >>= (`shouldSatisfy` T.isInfixOf "timeout-kept-workspace-and-killed-child")
+      reply "tool-0" timeoutReplies >>= (`shouldSatisfy` T.isInfixOf "timeout: sending signal KILL")
+      reply "tool-3" timeoutReplies >>= (`shouldSatisfy` T.isInfixOf "Command exited with code 137")
+      reply "tool-3" timeoutReplies >>= (`shouldNotSatisfy` T.isInfixOf "timeout: sending signal")
+      doesFileExist (repository </> "timeout-retained.txt") `shouldReturn` False
       observed <- requests
       for_ observed \body -> do
         tools <- parse (field "tools") body :: IO [AE.Value]
