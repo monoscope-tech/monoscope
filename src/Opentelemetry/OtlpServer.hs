@@ -268,7 +268,8 @@ ingestOtelRecords appCtx target caches records = do
   stamped <- stampOrPassthrough appCtx records
   -- Mint before route normalization: records without a span ID hash their raw attributes,
   -- so retry IDs stay independent of the current endpoint-template cache.
-  minted <- sampleSpans caches $ stampHashesAtIngest caches $ Telemetry.mintOtelLogIds stamped
+  -- Sample before hashing: hashes for rows sampling drops are wasted work.
+  minted <- stampHashesAtIngest caches <$> sampleSpans caches (Telemetry.mintOtelLogIds stamped)
   -- Live Tail, before the durable write: the whole point is that a browser sees the log
   -- sooner than a query could return it. Runs after minting so the streamed row carries the
   -- same id the stored row will, and so "open the full record" resolves once the write lands.
