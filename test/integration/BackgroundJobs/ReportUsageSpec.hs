@@ -21,6 +21,7 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
+import Pkg.Sampling qualified as Sampling
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -534,7 +535,7 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
             conn
             [sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, window_start, window_end)
                   VALUES (?, ?, 0, now() - interval '1 minute', now()) |]
-            (pid, Projects.freeTierDailyMaxEvents)
+            (pid, Sampling.ceiling Projects.freeTierDailyMaxEvents)
       Cache.purge tr.trATCtx.projectCache
       ingestLog tr key "over the cap" frozenTime
       logCount tr pid `shouldReturn` 1
@@ -558,6 +559,24 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       res ^. LSF.partialSuccess . LSF.rejectedLogRecords `shouldBe` 1
       res ^. LSF.partialSuccess . LSF.errorMessage `shouldSatisfy` T.isInfixOf "00:00 UTC"
       logCount tr pid `shouldReturn` 1
+
+    -- Past its budget a capped project keeps a share paced across the day, not everything until
+    -- the cap and nothing after; each kept record says how many it stands for.
+    it "freeTierSampling_overBudget_keepsAPacedShareWithWeights" \(tr0, pid) -> do
+      let tr = tr0{trATCtx = tr0.trATCtx{Config.config = tr0.trATCtx.config{Config.enableFreetier = True}}}
+      setBilling tr pid "Free" Nothing Nothing frozenTime
+      key <- createTestAPIKey tr pid "free-tier-sampling-key"
+      -- Yesterday from this hour on brought twice the 8,000-event (non-error) budget: keep half.
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn [sql| INSERT INTO projects.ingest_sampling (project_id, hour, seen) VALUES (?, date_trunc('hour', ?::timestamptz, 'UTC') - interval '1 day', 16000) |] (pid, frozenTime)
+      runTestBg frozenTime tr $ OtlpServer.processLogsRequest Nothing (createOtelLogAtTime key [show i | i <- [1 .. 400 :: Int]] frozenTime)
+      kept <- logCount tr pid
+      kept `shouldSatisfy` \k -> k > 160 && k < 240
+      withResource tr.trPool \conn -> do
+        PGS.query conn [sql| SELECT SUM(seen)::INT, SUM(kept)::INT FROM projects.ingest_sampling WHERE project_id = ? AND hour >= date_trunc('day', ?::timestamptz, 'UTC') |] (pid, frozenTime)
+          >>= (`shouldBe` [(400 :: Int, kept)])
+        PGS.query conn [sql| SELECT DISTINCT (attributes->'monoscope'->>'sample_weight')::float8 FROM otel_logs_and_spans WHERE project_id = ?::text |] (PGS.Only pid)
+          >>= (`shouldBe` [PGS.Only (2 :: Double)])
 
     -- Hourly and daily ticks both enqueue ReportUsage at 00:00; the loser of the lease must not
     -- record the window again (and bill it twice).
@@ -583,5 +602,5 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       dailyUsage tr pid >>= (`shouldBe` [(3, 0, 0)])
 
     it "claims each usage notice level once per day" \(tr, pid) -> do
-      claims <- runTestBg frozenTime tr $ traverse (Projects.claimFreeTierNotice pid) [Projects.NoticeWarning, Projects.NoticeWarning, Projects.NoticeExceeded, Projects.NoticeExceeded, Projects.NoticeWarning]
+      claims <- runTestBg frozenTime tr $ traverse (Projects.claimFreeTierNotice pid) [Projects.NoticeSampling, Projects.NoticeSampling, Projects.NoticeExceeded, Projects.NoticeExceeded, Projects.NoticeSampling]
       claims `shouldBe` [True, False, True, False, False]

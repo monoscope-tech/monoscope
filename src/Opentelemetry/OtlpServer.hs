@@ -80,7 +80,7 @@ import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics qualified as Metrics
 import Pkg.TraceSessionCache qualified as TSC
-import ProcessMessage (fetchIngestCaches, overFreeTierQuota, stampHashesAtIngest, urlPathFromRawUrl)
+import ProcessMessage (fetchIngestCaches, overFreeTierQuota, sampleMetrics, sampleSpans, stampHashesAtIngest, urlPathFromRawUrl)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
@@ -268,7 +268,7 @@ ingestOtelRecords appCtx target caches records = do
   stamped <- stampOrPassthrough appCtx records
   -- Mint before route normalization: records without a span ID hash their raw attributes,
   -- so retry IDs stay independent of the current endpoint-template cache.
-  let minted = stampHashesAtIngest caches $ Telemetry.mintOtelLogIds stamped
+  minted <- sampleSpans caches $ stampHashesAtIngest caches $ Telemetry.mintOtelLogIds stamped
   -- Live Tail, before the durable write: the whole point is that a browser sees the log
   -- sooner than a query could return it. Runs after minting so the streamed row carries the
   -- same id the stored row will, and so "open the full record" resolves once the write lands.
@@ -410,10 +410,11 @@ processList msgs !attrs =
                     !pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" rms
                  in maybe V.empty (\pid -> V.fromList $ convertResourceMetricsToMetricRecords ft caches pid rms) (pidM <|> pid2M)
             )
-            ( \_caches perMsg ->
+            ( \caches perMsg ->
                 checkpoint "processList:metrics:bulkInsert"
                   $ Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target
-                  $ Telemetry.mintMetricIds (concatRecs perMsg)
+                  . Telemetry.mintMetricIds
+                  =<< sampleMetrics caches (concatRecs perMsg)
             )
         _ -> do
           Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs])
@@ -976,12 +977,10 @@ severityMap = base <> Map.mapMaybe (`Map.lookup` base) aliases
     aliases = Map.fromList [("WARNING", "WARN" :: Text), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")]
 
 
--- | Gate a project's converted records on its cache: unknown project or a
--- free-tier project past its daily event+metric budget yields nothing.
+-- | Gate a project's converted records on its cache: an unknown project yields nothing, so
+-- 'processBatchPipeline' can tell it from a project whose rows sampling later leaves out.
 withinQuota :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> [a] -> [a]
-withinQuota projectCaches pid records = case HM.lookup pid projectCaches of
-  Just cache | not (overFreeTierQuota cache) -> records
-  _ -> []
+withinQuota projectCaches pid records = bool [] records (HM.member pid projectCaches)
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
@@ -1528,8 +1527,8 @@ processMetricsRequest metadataApiKey req = do
         (AE.object ["metric_count" AE..= length metricRecords])
 
       unless (null metricRecords) do
-        let records = Telemetry.mintMetricIds $ V.fromList metricRecords
-            target = Telemetry.writeTargetFor appCtx.env Nothing
+        records <- Telemetry.mintMetricIds <$> sampleMetrics projectCaches (V.fromList metricRecords)
+        let target = Telemetry.writeTargetFor appCtx.env Nothing
         Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= throwOnWriteFailure
         Log.logTrace
           "Metrics: Successfully inserted metrics into database"

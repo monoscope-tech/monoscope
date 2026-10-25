@@ -52,6 +52,10 @@ module Models.Projects.Projects (
   updateSubItemIdBySubId,
   projectCacheById,
   dailyUsageOfDay,
+  samplingTallies,
+  recordSampling,
+  SampleCounts (..),
+  samplingToday,
   freeTierDailyMaxEvents,
   freeTierDailyLimit,
   claimFreeTierNotice,
@@ -149,6 +153,9 @@ import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as EHasql
+import Data.HashMap.Strict qualified as HM
+import Data.List (unzip5)
+import GHC.Generics (Generically (..))
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema)
@@ -173,6 +180,7 @@ import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Pkg.DeriveUtils (DB, SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
 import Pkg.Parser.Stats (Section)
+import Pkg.Sampling qualified as Sampling
 import Relude
 import Servant (FromHttpApiData (..), Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
 import System.Envy (Var)
@@ -475,6 +483,66 @@ dailyUsageOfDay :: DB es => ProjectId -> UTCTime -> Eff es Int
 dailyUsageOfDay pid t = fromMaybe 0 <$> EHasql.interpOne (dailyUsageOfDaySql pid t)
 
 
+-- | A capped project's 'Sampling.Tally' for its non-error events and for its errors, for the
+-- UTC hour containing @now@.
+data SamplingTallies = SamplingTallies
+  { projectId :: ProjectId
+  , keptEvents, aheadEvents, lastHourEvents, thisHourEvents :: Int
+  , keptErrors, aheadErrors, lastHourErrors, thisHourErrors :: Int
+  }
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
+samplingTallies :: DB es => UTCTime -> V.Vector ProjectId -> Eff es (HM.HashMap ProjectId (Sampling.Tally, Sampling.Tally))
+samplingTallies now pids =
+  HM.fromList
+    . map (\(t :: SamplingTallies) -> (t.projectId, (Sampling.Tally t.keptEvents t.aheadEvents t.lastHourEvents t.thisHourEvents, Sampling.Tally t.keptErrors t.aheadErrors t.lastHourErrors t.thisHourErrors)))
+    <$> EHasql.interp
+      [HI.sql| WITH b AS (SELECT date_trunc('hour', #{now}::timestamptz, 'UTC') AS h, date_trunc('day', #{now}::timestamptz, 'UTC') AS d)
+               SELECT s.project_id,
+                 COALESCE(SUM(s.kept - s.kept_errors) FILTER (WHERE s.hour >= b.d), 0)::bigint,
+                 COALESCE(SUM(s.seen - s.seen_errors) FILTER (WHERE s.hour >= b.h - interval '1 day' AND s.hour < b.d), 0)::bigint,
+                 COALESCE(SUM(s.seen - s.seen_errors) FILTER (WHERE s.hour = b.h - interval '1 hour'), 0)::bigint,
+                 COALESCE(SUM(s.seen - s.seen_errors) FILTER (WHERE s.hour = b.h), 0)::bigint,
+                 COALESCE(SUM(s.kept_errors) FILTER (WHERE s.hour >= b.d), 0)::bigint,
+                 COALESCE(SUM(s.seen_errors) FILTER (WHERE s.hour >= b.h - interval '1 day' AND s.hour < b.d), 0)::bigint,
+                 COALESCE(SUM(s.seen_errors) FILTER (WHERE s.hour = b.h - interval '1 hour'), 0)::bigint,
+                 COALESCE(SUM(s.seen_errors) FILTER (WHERE s.hour = b.h), 0)::bigint
+               FROM projects.ingest_sampling s, b
+               WHERE s.project_id = ANY(#{pids}) AND s.hour >= b.d - interval '1 day'
+               GROUP BY s.project_id |]
+
+
+-- | One batch's sampling outcome for a project; errors are counted in both totals too.
+data SampleCounts = SampleCounts {seen, kept, seenErrors, keptErrors :: Sum Int}
+  deriving stock (Generic)
+  deriving (Monoid, Semigroup) via Generically SampleCounts
+
+
+-- | Add one batch's counts per project to the hour containing @now@.
+recordSampling :: DB es => UTCTime -> [(ProjectId, SampleCounts)] -> Eff es ()
+recordSampling _ [] = pass
+recordSampling now counts =
+  EHasql.interpExecute_
+    [HI.sql| INSERT INTO projects.ingest_sampling AS s (project_id, hour, seen, kept, seen_errors, kept_errors)
+             SELECT p, date_trunc('hour', #{now}::timestamptz, 'UTC'), a, k, ae, ke
+             FROM unnest(#{V.fromList pids}::uuid[], #{V.fromList seen}::bigint[], #{V.fromList kept}::bigint[], #{V.fromList seenErr}::bigint[], #{V.fromList keptErr}::bigint[]) u(p, a, k, ae, ke)
+             ON CONFLICT (project_id, hour) DO UPDATE SET seen = s.seen + EXCLUDED.seen, kept = s.kept + EXCLUDED.kept,
+               seen_errors = s.seen_errors + EXCLUDED.seen_errors, kept_errors = s.kept_errors + EXCLUDED.kept_errors |]
+  where
+    (pids, seen, kept, seenErr, keptErr) = unzip5 [(pid, getSum c.seen, getSum c.kept, getSum c.seenErrors, getSum c.keptErrors) | (pid, c) <- counts]
+
+
+-- | (seen, kept) today for one project: what its sampling looks like to the people reading it.
+samplingToday :: DB es => ProjectId -> UTCTime -> Eff es (Int, Int)
+samplingToday pid now =
+  fromMaybe (0, 0)
+    <$> EHasql.interpOne
+      [HI.sql| SELECT COALESCE(SUM(seen), 0)::bigint, COALESCE(SUM(kept), 0)::bigint FROM projects.ingest_sampling
+               WHERE project_id = #{pid} AND hour >= date_trunc('day', #{now}::timestamptz, 'UTC') |]
+
+
 freeTierDailyMaxEvents :: Int
 freeTierDailyMaxEvents = 10000
 
@@ -488,8 +556,9 @@ freeTierDailyLimit :: Bool -> Text -> Maybe Int
 freeTierDailyLimit enabled plan = freeTierDailyMaxEvents <$ guard (enabled && not (isPaidPlan (parsePlan plan)))
 
 
--- | A free-tier usage email; exceeding supersedes an earlier warning the same day.
-data FreeTierNotice = NoticeWarning | NoticeExceeded
+-- | A free-tier usage email: sampling started today, or the hard ceiling was reached (which
+-- supersedes the sampling notice the same day).
+data FreeTierNotice = NoticeSampling | NoticeExceeded
   deriving stock (Eq, Show)
 
 
@@ -500,7 +569,7 @@ claimFreeTierNotice pid notice = do
   today <- utctDay <$> currentTime
   -- Spelled out (not 'fromEnum') so reordering the constructors can't change what stored rows mean.
   let level :: Int = case notice of
-        NoticeWarning -> 1
+        NoticeSampling -> 1
         NoticeExceeded -> 2
   (== 1)
     <$> EHasql.interpExecute

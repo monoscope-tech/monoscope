@@ -1406,6 +1406,8 @@ runHourlyJob scheduledTime hour = do
   QueryCache.cleanupExpiredCache >>= logDeleted "Cleaned up expired query cache entries"
   Hasql.interpExecute [HI.sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |] >>= logDeleted "Cleaned up expired device auth codes"
   Hasql.interpExecute [HI.sql| DELETE FROM otel_metrics_meta WHERE last_seen_at < now() - interval '3 months' |] >>= logDeleted "Cleaned up stale metrics metadata"
+  -- Pacing reads today and yesterday only.
+  Hasql.interpExecute [HI.sql| DELETE FROM projects.ingest_sampling WHERE hour < now() - interval '3 days' |] >>= logDeleted "Cleaned up old free-tier sampling counters"
 
   enqueueJobs ctx [Jobs.CompressReplaySessions, Jobs.DashboardsAutoProvision scheduledTime]
 
@@ -1450,28 +1452,28 @@ autoProvisionDashboards scheduledTime = do
                 Log.logInfo "Auto-provisioned dashboard from detected metrics" (AE.object ["project_id" AE..= pid, "template" AE..= file])
 
 
--- | For each active capped project, send a system log + email at 80% and 100% of today's cap,
--- at most once per level per UTC day ('Projects.claimFreeTierNotice').
+-- | For each active capped project, send a system log + email when sampling starts and when the
+-- hard ceiling is reached, at most once per level per UTC day ('Projects.claimFreeTierNotice').
 checkFreeTierUsageNotifications :: [Projects.ProjectId] -> UTCTime -> ATBackgroundCtx ()
 checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryStep "free-tier-check" do
   ctx <- ask @Config.AuthContext
   whenJustM (Projects.projectById pid) \project -> whenJust (Projects.freeTierDailyLimit ctx.config.enableFreetier project.paymentPlan) \limit -> do
-    count <- Projects.dailyUsageOfDay pid now
-    let notice = case freeTierUsageStatus count limit of
+    (seen, kept) <- Projects.samplingToday pid now
+    let notice = case freeTierUsageStatus seen kept limit of
           FreeTierExceeded{} -> Just Projects.NoticeExceeded
-          FreeTierWarning{} -> Just Projects.NoticeWarning
+          FreeTierSampled{} -> Just Projects.NoticeSampling
           FreeTierOk -> Nothing
           NotFreeTier -> Nothing
     whenJust notice \n -> whenM (Projects.claimFreeTierNotice pid n) do
       (sev, eventName, bodyMsg) :: (SeverityLevel, Text, Text) <- case n of
         Projects.NoticeExceeded ->
-          (SLError, "system.free_tier.exceeded", "Daily event limit reached — new events are dropped until 00:00 UTC.")
-            <$ Log.logAttention "Free tier cap reached; ingestion is being dropped" ("project_id", pid.toText, "used", count, "limit", limit)
-        Projects.NoticeWarning -> pure (SLWarn, "system.free_tier.warning", "Approaching daily event limit (" <> show count <> " of " <> show limit <> " events used).")
-      let attrs = Map.fromList [("used", AE.toJSON count), ("limit", AE.toJSON limit), ("payment_plan", AE.String project.paymentPlan)]
+          (SLError, "system.free_tier.exceeded", "Daily event ceiling reached — new events are dropped until 00:00 UTC.")
+            <$ Log.logAttention "Free tier ceiling reached; ingestion is being dropped" ("project_id", pid.toText, "kept", kept, "limit", limit)
+        Projects.NoticeSampling -> pure (SLWarn, "system.free_tier.sampling", "Events are now sampled to fit the daily budget (" <> show kept <> " of " <> show seen <> " kept so far today).")
+      let attrs = Map.fromList [("seen", AE.toJSON seen), ("kept", AE.toJSON kept), ("limit", AE.toJSON limit), ("payment_plan", AE.String project.paymentPlan)]
       insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
       users <- Projects.usersByProjectId pid
-      let mail = ET.freeTierUsageEmail project.title (projectUrl ctx pid <> "/manage_billing") count limit n
+      let mail = ET.freeTierUsageEmail project.title (projectUrl ctx pid <> "/manage_billing") seen kept limit n
       forM_ users \user -> renderAndSend (CI.original user.email) mail
 
 
