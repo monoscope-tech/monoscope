@@ -10,8 +10,9 @@ module BackgroundJobs.ReportUsageSpec (spec) where
 -- thing and re-submit chunks that already succeeded.
 
 import BackgroundJobs qualified
-import Control.Lens ((^.))
+import Control.Lens (_1, (%~), (^.))
 import Data.Cache qualified as Cache
+import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Pool (withResource)
 import Data.ProtoLens (decodeMessage, encodeMessage)
@@ -537,6 +538,20 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       Cache.purge tr.trATCtx.projectCache
       ingestLog tr key "over the cap" frozenTime
       logCount tr pid `shouldReturn` 1
+      -- Capped data is dropped and acked, not dead-lettered as an unresolved project: that
+      -- misclassification looped ~10k capped messages/hour through the DLQ tiers (2026-10-22).
+      -- An unresolved key still is: those bytes are a customer's data with nowhere to land yet.
+      -- So is a payload mixing the capped key with an unresolved one, and zero rows from a
+      -- project that is not capped.
+      uncappedKey <- createTestProject tr "uncapped" >>= \p -> createTestAPIKey tr p "uncapped-key"
+      let logs k = createOtelLogAtTime k ["capped?"] frozenTime
+          mixed = logs key & LSF.resourceLogs %~ (<> (logs "no-such-key" ^. LSF.resourceLogs))
+      Right (acks, poison) <-
+        runTestBg frozenTime tr
+          $ OtlpServer.processList
+            [("capped-ack", encodeMessage $ logs key), ("unknown-ack", encodeMessage $ logs "no-such-key"), ("mixed-ack", encodeMessage mixed), ("empty-ack", encodeMessage $ createOtelLogAtTime uncappedKey [] frozenTime)]
+            (HM.singleton "ce-type" "org.opentelemetry.otlp.logs.v1")
+      (acks, map (^. _1) poison) `shouldBe` (["capped-ack"], ["unknown-ack", "mixed-ack", "empty-ack"])
 
       Right body <- OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just key) (encodeMessage $ createOtelLogAtTime key ["rejected"] frozenTime)
       Right (res :: LS.ExportLogsServiceResponse) <- pure $ decodeMessage body
