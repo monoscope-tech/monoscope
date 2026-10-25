@@ -61,6 +61,7 @@ module Models.Telemetry.Telemetry (
   metricExemplars,
   bulkInsertOtelMetrics,
   mintMetricIds,
+  metricSeriesId,
   bulkInsertOtelLogsAndSpansTF,
   insertAndHandOff,
   redactJSON,

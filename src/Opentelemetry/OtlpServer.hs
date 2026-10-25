@@ -80,7 +80,7 @@ import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics qualified as Metrics
 import Pkg.TraceSessionCache qualified as TSC
-import ProcessMessage (fetchIngestCaches, overFreeTierQuota, stampHashesAtIngest, urlPathFromRawUrl)
+import ProcessMessage (fetchIngestCaches, overFreeTierQuota, sampleMetrics, sampleSpans, stampHashesAtIngest, urlPathFromRawUrl)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
@@ -268,7 +268,7 @@ ingestOtelRecords appCtx target caches records = do
   stamped <- stampOrPassthrough appCtx records
   -- Mint before route normalization: records without a span ID hash their raw attributes,
   -- so retry IDs stay independent of the current endpoint-template cache.
-  let minted = stampHashesAtIngest caches $ Telemetry.mintOtelLogIds stamped
+  minted <- sampleSpans caches $ stampHashesAtIngest caches $ Telemetry.mintOtelLogIds stamped
   -- Live Tail, before the durable write: the whole point is that a browser sees the log
   -- sooner than a query could return it. Runs after minting so the streamed row carries the
   -- same id the stored row will, and so "open the full record" resolves once the write lands.
@@ -410,10 +410,11 @@ processList msgs !attrs =
                     !pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" rms
                  in maybe V.empty (\pid -> V.fromList $ convertResourceMetricsToMetricRecords ft caches pid rms) (pidM <|> pid2M)
             )
-            ( \_caches perMsg ->
+            ( \caches perMsg ->
                 checkpoint "processList:metrics:bulkInsert"
                   $ Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target
-                  $ Telemetry.mintMetricIds (concatRecs perMsg)
+                  . Telemetry.mintMetricIds
+                  =<< sampleMetrics caches (concatRecs perMsg)
             )
         _ -> do
           Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs])
@@ -463,13 +464,16 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         !invalidPoison = [(ackId, raw, err) | (ackId, raw, _, Just err) <- checked]
         !converted = [(ackId, raw, req, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, req, Nothing) <- checked]
         -- DLQ, never ack, a payload naming an unresolved project, or one converting to zero rows
-        -- unless every project it names is capped (2026-07-27: an ack lost ~200k rows).
+        -- unless every project it names is capped (2026-07-27: an ack lost ~200k rows). A mixed
+        -- payload goes whole, resolved rows included, so the unresolved part survives.
         !dropPoison =
           [ (ackId, raw, "unresolved project: payload carried telemetry but did not resolve or convert")
           | (ackId, raw, req, recs) <- converted
-          , let accounted pids = all (`HM.member` projectCachesMap) pids && (not (V.null recs) || all capped pids)
+          , let resolved = (<> extractIds req) <$> traverse (`HM.lookup` keyToIdMap) (V.toList (extractKeys req))
+                -- 'all capped []' holds, so a payload naming nothing is accounted for either way.
+                accounted pids = all (`HM.member` projectCachesMap) pids && (not (V.null recs) || all capped pids)
                 capped p = any overFreeTierQuota (HM.lookup p projectCachesMap)
-          , not $ maybe False (accounted . (<> extractIds req)) (traverse (`HM.lookup` keyToIdMap) (V.toList (extractKeys req)))
+          , maybe True (not . accounted) resolved
           ]
         !dropAckIds = HS.fromList [ackId | (ackId, _, _) <- dropPoison]
         !writeReady = [(ackId, raw, recs) | (ackId, raw, _, recs) <- converted, not (HS.member ackId dropAckIds)]
@@ -480,7 +484,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
     forM_ (decodePoison <> invalidPoison) \(_, raw, err) -> recordProtoError label (toString err) raw
     unless (null dropPoison)
       $ Log.logAttention
-        "processList: payload did not resolve or converted to zero rows — routing to DLQ instead of acking"
+        "processList: unresolved or zero-row payload — routing to DLQ instead of acking"
         (AE.object ["label" AE..= label, "dropped_messages" AE..= length dropPoison, "ack_ids" AE..= [a | (a, _, _) <- dropPoison]])
 
     if allEmpty
@@ -976,12 +980,10 @@ severityMap = base <> Map.mapMaybe (`Map.lookup` base) aliases
     aliases = Map.fromList [("WARNING", "WARN" :: Text), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")]
 
 
--- | Gate a project's converted records on its cache: unknown project or a
--- free-tier project past its daily event+metric budget yields nothing.
-withinQuota :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> [a] -> [a]
-withinQuota projectCaches pid records = case HM.lookup pid projectCaches of
-  Just cache | not (overFreeTierQuota cache) -> records
-  _ -> []
+-- | Gate a project's converted records on its cache: an unknown project yields nothing, so
+-- 'processBatchPipeline' can tell it from a project whose rows sampling later leaves out.
+forKnownProject :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> [a] -> [a]
+forKnownProject projectCaches pid records = bool [] records (HM.member pid projectCaches)
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
@@ -991,7 +993,7 @@ convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
       projectId =
         (snd <$> find ((== projectKey) . fst) pids)
           <|> (Projects.projectIdFromText =<< (V.!? 0) (getLogAttributeValue "at-project-id" (V.singleton resourceLogs)))
-   in maybe [] (\pid -> withinQuota projectCaches pid $ convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs) projectId
+   in maybe [] (\pid -> forKnownProject projectCaches pid $ convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs) projectId
 
 
 filterEmptyEvents :: OtelLogsAndSpans -> Bool
@@ -1081,7 +1083,7 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
               -- single project). Picking V.head of a multi-project batch silently
               -- mis-attributes spans to the wrong project (cross-tenant leak).
               <|> (case V.toList pids of [(_, sole)] -> Just sole; _ -> Nothing)
-       in maybe [] (\pid -> withinQuota projectCaches pid $ convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs) projectId
+       in maybe [] (\pid -> forKnownProject projectCaches pid $ convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs) projectId
 
 
 -- | Convert ScopeSpans to OtelLogsAndSpansF
@@ -1265,7 +1267,7 @@ metricRequestHasOverflow req =
 -- | Convert ResourceMetrics to MetricRecords
 convertResourceMetricsToMetricRecords :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourceMetrics =
-  withinQuota
+  forKnownProject
     projectCaches
     pid
     [ record
@@ -1528,8 +1530,8 @@ processMetricsRequest metadataApiKey req = do
         (AE.object ["metric_count" AE..= length metricRecords])
 
       unless (null metricRecords) do
-        let records = Telemetry.mintMetricIds $ V.fromList metricRecords
-            target = Telemetry.writeTargetFor appCtx.env Nothing
+        records <- Telemetry.mintMetricIds <$> sampleMetrics projectCaches (V.fromList metricRecords)
+        let target = Telemetry.writeTargetFor appCtx.env Nothing
         Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= throwOnWriteFailure
         Log.logTrace
           "Metrics: Successfully inserted metrics into database"

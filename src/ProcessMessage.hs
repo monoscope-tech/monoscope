@@ -41,12 +41,14 @@ module ProcessMessage (
   hostFromRawUrl,
   urlPathFromRawUrl,
   overFreeTierQuota,
+  sampleSpans,
+  sampleMetrics,
   fetchProjectCache,
   fetchIngestCaches,
 )
 where
 
-import Control.Lens ((^?))
+import Control.Lens ((.~), (^?))
 import Control.Monad.ST (ST, runST)
 import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
@@ -57,14 +59,17 @@ import Data.Aeson.Types qualified as AE
 import Data.ByteString qualified as BS
 import Data.Cache qualified as Cache
 import Data.Char (digitToInt, isAlpha, isAlphaNum, isDigit, isHexDigit)
+import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Sleep (Sleep)
 import Data.Effectful.UUID qualified as UUID
+import Data.Generics.Product.Fields (field)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HashSet
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.List qualified as L
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
@@ -76,7 +81,7 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Eff
-import Effectful.Time (Time)
+import Effectful.Time (Time, currentTime)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogQueries qualified as LogQueries
@@ -86,6 +91,7 @@ import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..),
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Pkg.Metrics qualified as Metrics
+import Pkg.Sampling qualified as Sampling
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Relude hiding (ask)
@@ -97,6 +103,7 @@ import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
 import System.Types (DB)
 import Text.RE.TDFA (RE, re, reRegex)
 import Text.Regex.TDFA qualified as TDFA
+import UnliftIO.Exception (tryAny)
 import Utils (b64ToJson, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
@@ -129,8 +136,7 @@ processMessages msgs attrs =
           paired <- forM rMsgs \(ackId, raw, msg) -> runMaybeT do
             let pid = UUIDId msg.projectId
                 !msgSize = fromIntegral (BS.length raw)
-            cache <- hoistMaybe $ HM.lookup pid projectCaches
-            guard $ not (overFreeTierQuota cache)
+            guard $ HM.member pid projectCaches
             let (spanId, trId) = requestEventIds msg
             pure $! (ackId, raw, convertRequestMessageToSpan msg msgSize (spanId, trId))
 
@@ -140,26 +146,87 @@ processMessages msgs attrs =
       Nothing -> pure (Right ())
       Just (projectCaches, paired) ->
         Metrics.timed Metrics.ingestWriteHist []
-          $ Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env Nothing) appCtx.extractionWorker projectCaches (stampHashesAtIngest projectCaches $ V.map (\(_, _, s) -> s) paired)
+          . Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env Nothing) appCtx.extractionWorker projectCaches
+          =<< sampleSpans projectCaches (stampHashesAtIngest projectCaches $ V.map (\(_, _, s) -> s) paired)
 
     -- On success the whole batch landed on every store (no per-row poison); the
     -- only DLQ entries are the decode failures collected upstream in `poison`.
     pure $ writeRes $> (rAckIds, poison)
 
 
--- | A capped project past its daily event+metric budget: its telemetry is not ingested.
+-- | A capped project at the hard cap of its daily budget ('Sampling.hardCap') by the hourly
+-- meter: the OTLP edge rejects its exports outright. Sampling also checks its own counters.
 overFreeTierQuota :: Projects.ProjectCache -> Bool
-overFreeTierQuota cache = any (cache.row.dailyUsage >=) cache.dailyLimit
+overFreeTierQuota cache = any ((cache.row.dailyUsage >=) . Sampling.hardCap) cache.dailyLimit
+
+
+-- | Keep a capped project's share of the batch ("Pkg.Sampling") and record what it saw; records
+-- of uncapped or unknown projects pass through. Records sharing a key share a verdict: a key
+-- with any error in the batch is judged at the error rate, so a trace stays whole within a
+-- batch (one split across batches can be judged at two rates). A sampled
+-- record is stamped with its weight (1/p), so what it stands for can be counted back up.
+sampleCapped
+  :: (DB es, IOE :> es, Log :> es, Time :> es)
+  => (r -> Text)
+  -> (r -> Bool)
+  -> (r -> Text)
+  -> (Double -> r -> r)
+  -> HM.HashMap Projects.ProjectId Projects.ProjectCache
+  -> V.Vector r
+  -> Eff es (V.Vector r)
+sampleCapped projectOf isError keyOf stamp caches records
+  | HM.null capped = pure records
+  | otherwise = do
+      now <- currentTime
+      tallies <- Projects.samplingTallies now (V.fromList $ HM.keys capped)
+      -- Keyed by the id's text, which records carry, so uncapped records cost one lookup.
+      let rateOf = HM.fromList [(pid.toText, (pid, Sampling.rates now budget cache.row.dailyUsage (tally pid False, tally pid True))) | (pid, (cache, budget)) <- HM.toList capped]
+          tally pid err = HM.findWithDefault def (pid, err) tallies
+          errorKeys = HashSet.fromList [keyOf r | r <- V.toList records, HM.member (projectOf r) rateOf, isError r]
+          judge r = case HM.lookup (projectOf r) rateOf of
+            Nothing -> (Just r, Nothing)
+            Just (pid, (pEvents, pErrors)) ->
+              let p = bool pEvents (max pEvents pErrors) (HashSet.member (keyOf r) errorKeys)
+                  keep = Sampling.keeps p (keyOf r)
+               in (bool r (stamp (1 / p) r) (p < 1) <$ guard keep, Just ((pid, isError r), Projects.SampleCounts 1 (Sum (fromEnum keep))))
+          judged = V.map judge records
+          counts = HM.fromListWith (<>) (mapMaybe snd $ V.toList judged)
+          total = fold counts
+      -- Counters only steer pacing: losing a batch's worth must not fail the ingest.
+      whenLeftM_ (tryAny $ Projects.recordSampling now (HM.toList counts))
+        $ Log.logAttention "Free-tier sampling counters not recorded; pacing may drift"
+        . show @Text
+      Metrics.count Metrics.freeTierSampledOut (getSum $ total.seen - total.kept) []
+      pure $ V.mapMaybe fst judged
+  where
+    capped = HM.mapMaybe (\c -> (c,) <$> c.dailyLimit) caches
+
+
+-- | 'sampleCapped' for spans and logs: a trace is kept or dropped whole, and a kept record
+-- carries @monoscope.sample_weight@.
+sampleSpans :: (DB es, IOE :> es, Log :> es, Time :> es) => HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es (V.Vector Telemetry.OtelLogsAndSpans)
+sampleSpans =
+  sampleCapped
+    (.project_id)
+    Telemetry.isErrorRecord
+    (\r -> fromMaybe r.id (Telemetry.traceIdOf r))
+    (\w r -> r & field @"attributes" .~ Just (AesonText $ Map.insertWith (flip lodashMerge) "monoscope" (AE.object ["sample_weight" AE..= w]) (maybeToMonoid $ unAesonTextMaybe r.attributes)))
+
+
+-- | 'sampleCapped' for metrics: a series is kept or dropped whole, so no kept series has holes.
+-- Points carry no weight; a series stands for itself.
+sampleMetrics :: (DB es, IOE :> es, Log :> es, Time :> es) => HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.MetricRecord -> Eff es (V.Vector Telemetry.MetricRecord)
+sampleMetrics = sampleCapped (UUID.toText . (.projectId)) (const False) Telemetry.metricSeriesId (\_ r -> r)
 
 
 -- | Project cache lookup, memoized in the shared cache. A capped entry expires after 5 minutes
--- rather than 30, so a customer who upgrades is uncapped promptly on every pod.
+-- rather than 30, so a customer who upgrades stops being sampled promptly on every pod.
 fetchProjectCache :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Eff es Projects.ProjectCache
 fetchProjectCache pid = do
   appCtx <- Eff.ask @AuthContext
   whenNothingM (liftIO $ Cache.lookup appCtx.projectCache pid) do
     c <- Projects.projectCacheById appCtx.config.enableFreetier pid
-    c <$ liftIO (bool (Cache.insert appCtx.projectCache) (Cache.insert' appCtx.projectCache (Just $ TimeSpec 300 0)) (overFreeTierQuota c) pid c)
+    c <$ liftIO (bool (Cache.insert appCtx.projectCache) (Cache.insert' appCtx.projectCache (Just $ TimeSpec 300 0)) (isJust c.dailyLimit) pid c)
 
 
 -- | The caches an ingest batch converts against. Every ingest path drops a capped project's

@@ -1170,8 +1170,8 @@ monitorRecoveryEmail projectName monitorTitle =
     "View Monitor"
 
 
-freeTierUsageEmail :: Text -> Text -> Int -> Int -> Projects.FreeTierNotice -> (Text, Html ())
-freeTierUsageEmail projectName billingUrl used limit notice =
+freeTierUsageEmail :: Text -> Text -> Int -> Int -> Int -> Projects.FreeTierNotice -> (Text, Html ())
+freeTierUsageEmail projectName billingUrl seen kept limit notice =
   ctaEmail
     ("[···] " <> subject <> " - " <> projectName)
     True
@@ -1179,17 +1179,17 @@ freeTierUsageEmail projectName billingUrl used limit notice =
         h1_ $ toHtml $ T.toTitle subject
         richP_ ["Your ", projectName, sentence]
         emailStatRow
-          [ ("Events Today", formatWithCommas (fromIntegral used), Just colour)
-          , ("Daily Limit", formatWithCommas (fromIntegral limit), Nothing)
-          , ("Usage", show ((used * 100) `div` max 1 limit) <> "%", Just colour)
+          [ ("Events Today", formatWithCommas (fromIntegral seen), Nothing)
+          , ("Kept", formatWithCommas (fromIntegral kept), Just colour)
+          , ("Daily Budget", formatWithCommas (fromIntegral limit), Nothing)
           ]
     )
     "Upgrade Plan"
     billingUrl
   where
     (subject, sentence, colour) :: (Text, Text, Text) = case notice of
-      Projects.NoticeWarning -> ("Approaching daily event limit", " project is approaching its daily free tier limit.", "#bf8700")
-      Projects.NoticeExceeded -> ("Daily event limit reached", " project has hit its daily free tier limit. New events are dropped until the limit resets at 00:00 UTC.", "#cf222e")
+      Projects.NoticeSampling -> ("Events are being sampled", " project is sending more than its free tier budget, so today's events are sampled to spread that budget across the day. Errors are kept first, and a kept trace is kept whole.", "#bf8700")
+      Projects.NoticeExceeded -> ("Daily event ceiling reached", " project has hit its daily free tier ceiling. New events are dropped until it resets at 00:00 UTC.", "#cf222e")
 
 
 -- | Paragraph alternating plain and bold runs: @richP_ ["Your ", project, " is ready."]@.
@@ -1245,7 +1245,7 @@ planDowngradedEmail reason projectName =
     ( do
         h1_ "Plan Downgraded to Free"
         richP_ ["Your ", projectName, " project has been downgraded to the Free plan because your subscription " <> reason <> "."]
-        p_ $ toHtml $ "On the Free plan, ingestion is capped at " <> freeTierCap <> " events per day (resetting at 00:00 UTC); anything beyond that is dropped. Additional team members will be deactivated. You can re-subscribe at any time to restore full access."
+        p_ $ toHtml $ "On the Free plan, ingestion is budgeted at " <> freeTierCap <> " events per day (resetting at 00:00 UTC); beyond that, events are sampled to fit. Additional team members will be deactivated. You can re-subscribe at any time to restore full access."
     )
     "Upgrade Plan"
 
@@ -1275,7 +1275,7 @@ paymentFailedEmail projectName =
     ( do
         h1_ "Payment Failed"
         richP_ ["We couldn't charge the card for your ", projectName, " project. Your plan is unchanged while we retry over the next few days."]
-        p_ $ toHtml $ "Please update your payment method. If every retry fails, the project moves to the Free plan and ingestion is capped at " <> freeTierCap <> " events per day."
+        p_ $ toHtml $ "Please update your payment method. If every retry fails, the project moves to the Free plan and ingestion is budgeted at " <> freeTierCap <> " events per day."
     )
     "Update Payment Method"
 

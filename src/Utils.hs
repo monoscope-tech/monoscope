@@ -136,6 +136,7 @@ import Network.HTTP.Types.URI qualified as URI
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showFFloat, showHex)
 import Pkg.Icons qualified as Icons
+import Pkg.Sampling qualified as Sampling
 import Relude hiding (notElem)
 import Relude.Extra.Tuple (toSnd)
 import Servant hiding ((:>))
@@ -701,17 +702,18 @@ encodeText :: AE.ToJSON a => a -> Text
 encodeText = decodeUtf8 . AE.encode
 
 
-data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierWarning Int Int | FreeTierExceeded Int Int
+-- | @FreeTierSampled oneIn limit@: today's events are being kept about one in @oneIn@.
+data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierSampled Int Int | FreeTierExceeded Int Int
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default)
 
 
 freeTierUsageBanner :: Text -> FreeTierStatus -> Html ()
 freeTierUsageBanner pid = \case
-  FreeTierWarning used limit ->
+  FreeTierSampled oneIn limit ->
     div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillWarning-weak text-textWarning rounded-lg justify-center"] do
-      strong_ $ "You\x2019ve used " <> toHtml (formatWithCommas $ fromIntegral used) <> " of " <> toHtml (formatWithCommas $ fromIntegral limit) <> " daily events."
-      a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Compare plans \x2192"
+      strong_ $ "Free tier: today\x2019s events are sampled, about 1 in " <> toHtml (formatWithCommas $ fromIntegral oneIn) <> " kept, to stay within " <> toHtml (formatWithCommas $ fromIntegral limit) <> " a day."
+      a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Upgrade to keep every event \x2192"
   FreeTierExceeded{} ->
     div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillError-weak text-textError rounded-lg justify-center"] do
       strong_ "Daily cap reached \x2014 new events are dropped until 00:00 UTC."
@@ -720,14 +722,15 @@ freeTierUsageBanner pid = \case
   FreeTierOk -> pass
 
 
--- | Warn at 80% of the cap, stop at 100%.
+-- | From today's (seen, kept) under a daily @limit@: sampling once anything was left out, and
+-- exceeded at the hard ceiling, where nothing more is kept.
 --
--- >>> map (`freeTierUsageStatus` 100) [79, 80, 100]
--- [FreeTierOk,FreeTierWarning 80 100,FreeTierExceeded 100 100]
-freeTierUsageStatus :: Int -> Int -> FreeTierStatus
-freeTierUsageStatus used limit
-  | used >= limit = FreeTierExceeded used limit
-  | used >= (limit * 80) `div` 100 = FreeTierWarning used limit
+-- >>> map (freeTierUsageStatus 100) [(50, 50), (400, 100), (401, 100), (900, 120)]
+-- [FreeTierOk,FreeTierSampled 4 100,FreeTierSampled 5 100,FreeTierExceeded 120 100]
+freeTierUsageStatus :: Int -> (Int, Int) -> FreeTierStatus
+freeTierUsageStatus limit (seen, kept)
+  | kept >= Sampling.hardCap limit = FreeTierExceeded kept limit
+  | seen > kept = FreeTierSampled ((seen + kept - 1) `div` max 1 kept) limit
   | otherwise = FreeTierOk
 
 
