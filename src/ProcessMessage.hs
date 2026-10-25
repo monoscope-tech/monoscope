@@ -147,7 +147,8 @@ processMessages msgs attrs =
       Just (projectCaches, paired) ->
         Metrics.timed Metrics.ingestWriteHist []
           . Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env Nothing) appCtx.extractionWorker projectCaches
-          =<< sampleSpans projectCaches (stampHashesAtIngest projectCaches $ V.map (\(_, _, s) -> s) paired)
+          . stampHashesAtIngest projectCaches
+          =<< sampleSpans projectCaches (V.map (\(_, _, s) -> s) paired)
 
     -- On success the whole batch landed on every store (no per-row poison); the
     -- only DLQ entries are the decode failures collected upstream in `poison`.
@@ -214,7 +215,8 @@ sampleSpans =
 
 
 -- | 'sampleCapped' for metrics: a series is kept or dropped whole, so no kept series has holes.
--- Points carry no weight; a series stands for itself.
+-- Points carry no weight; a series stands for itself. Metrics share the events pool with
+-- non-error logs and spans.
 sampleMetrics :: (DB es, IOE :> es, Log :> es, Time :> es) => HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.MetricRecord -> Eff es (V.Vector Telemetry.MetricRecord)
 sampleMetrics = sampleCapped (UUID.toText . (.projectId)) (const False) Telemetry.metricSeriesId (\_ r -> r)
 

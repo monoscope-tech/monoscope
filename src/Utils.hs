@@ -722,16 +722,18 @@ freeTierUsageBanner pid = \case
   FreeTierOk -> pass
 
 
--- | From today's (seen, kept) under a daily @limit@: sampling once anything was left out, and
+-- | From today's (seen, kept) under a daily @limit@: sampled once about half or more is left out, and
 -- exceeded at the hard ceiling, where nothing more is kept.
 --
--- >>> map (freeTierUsageStatus 100) [(50, 50), (400, 100), (401, 100), (900, 120)]
--- [FreeTierOk,FreeTierSampled 4 100,FreeTierSampled 5 100,FreeTierExceeded 120 100]
+-- >>> map (freeTierUsageStatus 100) [(50, 50), (101, 100), (149, 100), (400, 100), (900, 120)]
+-- [FreeTierOk,FreeTierOk,FreeTierOk,FreeTierSampled 4 100,FreeTierExceeded 120 100]
 freeTierUsageStatus :: Int -> (Int, Int) -> FreeTierStatus
 freeTierUsageStatus limit (seen, kept)
   | kept >= Sampling.hardCap limit = FreeTierExceeded kept limit
-  | seen > kept = FreeTierSampled ((seen + kept - 1) `div` max 1 kept) limit
+  | oneIn >= 2 = FreeTierSampled oneIn limit
   | otherwise = FreeTierOk
+  where
+    oneIn = round (fromIntegral seen / fromIntegral (max 1 kept) :: Double)
 
 
 serviceColors :: V.Vector Text
