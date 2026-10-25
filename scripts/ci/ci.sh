@@ -380,6 +380,7 @@ run_body() { # <check>
       prepare_browser
       scripts/e2e.sh
       ;;
+    # Provisioned SDK guests run through the Haskell suite; its inputs include the worker.
     integration-tests) run_integration ;;
     *) die "no body for check '$1'" ;;
   esac
@@ -611,16 +612,14 @@ cmd_local() {
   # Serialize local runs to avoid oversubscribing the host. Each worktree has its
   # own volumes so a checkout on another branch cannot replace this one's HIE files.
   if [ "${CI_LOCAL_LOCKED:-}" != true ]; then
-    python3 -c '
-import fcntl, os, sys
-with open(sys.argv[1], "w") as lock:
-    try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print("ci: waiting for another local CI run", file=sys.stderr)
-        fcntl.flock(lock, fcntl.LOCK_EX)
-    os.set_inheritable(lock.fileno(), True)
-    os.execvpe(sys.argv[2], [sys.argv[2], "local", *sys.argv[3:]], {**os.environ, "CI_LOCAL_LOCKED": "true"})
-' "${TMPDIR:-/tmp}/monoscope-ci-$(id -u).lock" "$0" "$@"
+    (
+      if command -v flock >/dev/null 2>&1; then
+        flock -n 9 || { echo "ci: waiting for another local CI run" >&2; flock 9; }
+      else
+        lockf -st0 9 || { echo "ci: waiting for another local CI run" >&2; lockf 9; }
+      fi
+      CI_LOCAL_LOCKED=true exec "$0" local "$@"
+    ) 9>"${TMPDIR:-/tmp}/monoscope-ci-$(id -u).lock"
     return
   fi
   # The dependency image has no HLint; the host tool is also how CI runs it.
@@ -889,17 +888,11 @@ cmd_deploy_status() { # what the app is running right now
   [ -n "${CAPROVER_PASSWORD:-}" ] || { note "CAPROVER_PASSWORD unset — deploy works without it, status needs it"; return 0; }
   token=$(curl -sS -X POST "$CAPROVER_URL/api/v2/login" -H 'Content-Type: application/json' \
     -H 'x-namespace: captain' -d "{\"password\":\"$CAPROVER_PASSWORD\"}" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("token",""))')
+    | node -p 'JSON.parse(require("node:fs").readFileSync(0,"utf8")).data?.token ?? ""')
   [ -n "$token" ] || { note "could not log in to $CAPROVER_URL for status"; return 0; }
   curl -sS "$CAPROVER_URL/api/v2/user/apps/appDefinitions" \
     -H 'x-namespace: captain' -H "x-captain-auth: $token" \
-    | python3 -c "
-import json,sys
-for a in json.load(sys.stdin).get('data',{}).get('appDefinitions',[]):
-    if a['appName']==sys.argv[1]:
-        v={x['version']:x for x in a.get('versions',[])}.get(a.get('deployedVersion'),{})
-        print('deployed: version', a.get('deployedVersion'), '|', v.get('deployedImageName','?'))
-" "$CAPROVER_APP"
+    | node -e 'const apps = JSON.parse(require("node:fs").readFileSync(0,"utf8")).data?.appDefinitions ?? []; for (const app of apps) if (app.appName === process.argv[1]) { const version = new Map((app.versions ?? []).map(v => [v.version,v])).get(app.deployedVersion) ?? {}; console.log("deployed: version",app.deployedVersion,"|",version.deployedImageName ?? "?"); }' "$CAPROVER_APP"
 }
 
 # Has this commit already been deployed from someone's machine? The gate asks so

@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
+module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixMediaH, issueFixPackageH) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
@@ -17,33 +17,46 @@ import Commonmark.Tag qualified as MarkdownTag
 import Commonmark.TokParsers (symbol)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
 import Data.Default (def)
+import Data.Effectful.AgentArtifacts qualified as Artifacts
+import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as W
+import Data.Foldable1 qualified as F1
 import Data.List (lookup)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
+import Data.Scientific (FPFormat (Fixed), formatScientific)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Yaml qualified as Yaml
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff, IOE, (:>))
-import Effectful.Error.Static (throwError)
+import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static qualified
 import Hasql.Interpolate qualified as HI
 import Lucid hiding (for_)
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxDelete_, hxGet_, hxInclude_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
+import Models.Projects.AgentUsage qualified as Usage
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Models.Projects.IssueFixes qualified as IssueFixes
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RepositorySync qualified as RepositorySync
+import Network.HTTP.Types qualified as H
+import Network.HTTP.Types.Header qualified as Header
 import Network.HTTP.Types.URI (urlEncode)
+import Network.Wai qualified as Wai
+import Numeric (showFFloat)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), colorChip_, disclosure_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, options_)
@@ -51,16 +64,104 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as ImpactReview
 import Relude
-import Servant (err403, err404, getResponse)
+import Servant (Header, Headers, ServerError (errHeaders), addHeader, err403, err404, err503, getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
+import System.Types (ATAuthCtx, DB, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Parsec qualified as Parsec
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, nonEmptyT, renderMarkdown)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
+
+
+issueFixForViewer :: (DB es, Error ServerError :> es) => Projects.ProjectId -> IssueFixes.FixId -> Projects.Session -> Eff es (Agent.FixResult, Agent.Explanation)
+issueFixForViewer pid fid session = do
+  let missing = err404{errHeaders = [(Header.hCacheControl, "private, no-store")]}
+  when (session.persistentSession.id == demoGuestSessionId) $ throwError missing
+  maybe (throwError missing) pure =<< IssueFixes.mediaForUser pid fid session.user.id
+
+
+issueFixGetH :: Projects.ProjectId -> IssueFixes.FixId -> ATAuthCtx (Headers '[Header "Cache-Control" Text] (Html ()))
+issueFixGetH pid fid = do
+  session <- Projects.getSession
+  (result, explanation) <- issueFixForViewer pid fid session
+  (_, _, bw) <- mkPageCtx pid
+  totals <- Usage.usageTotals Usage.Fixes pid
+  void $ issueFixForViewer pid fid session
+  let base = "/p/" <> pid.toText <> "/issue-fixes/" <> fid.toText <> "/media/"
+  pure $ addHeader @"Cache-Control" ("private, no-store" :: Text) $ bodyWrapper bw{pageTitle = "Issue fix"} $ div_ [class_ "h-full overflow-y-auto"] $ section_ [class_ "mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-8"] do
+    a_ [href_ ("/p/" <> pid.toText <> "/repositories?tab=fixes"), class_ "text-sm text-textBrand hover:underline"] "All issue fixes"
+    header_ [class_ "space-y-2"] do
+      h1_ [class_ "text-xl font-semibold text-textStrong break-words"] $ toHtml result.summary
+      p_ [class_ "text-sm text-textWeak"] do
+        toHtml @Text "Verified candidate "
+        code_ $ toHtml $ T.take 12 $ IssueFixes.revisionText result.head
+      p_ [class_ "text-sm text-textWeak"] $ toHtml @Text $ "Inferred cause: " <> result.rootCause
+    video_ [term "controls" "", term "preload" "metadata", term "playsinline" "", term "aria-label" "Bug reproduction and verified fix", term "poster" (base <> "before"), width_ (show explanation.width), height_ (show explanation.height), class_ "aspect-video h-auto w-full rounded-lg border border-strokeWeak"] do
+      source_ [src_ (base <> "video"), type_ "video/mp4"]
+      track_ [src_ (base <> "captions"), term "kind" "captions", term "srclang" "en", label_ "English captions", term "default" ""]
+      p_ $ a_ [href_ (base <> "video"), term "download" "explanation.mp4"] "Download the explanation video"
+    p_ [class_ "text-sm text-textWeak"] "The video uses retained verification evidence. The cause is an agent inference."
+    figure_ [class_ "space-y-2"] do
+      img_ [src_ (base <> "diagram"), alt_ "Diagram of the reproduced failure, inferred cause, change, and passing regression", class_ "w-full rounded-lg border border-strokeWeak"]
+      figcaption_ [class_ "text-sm text-textWeak"] $ a_ [href_ (base <> "captions"), class_ "text-textBrand hover:underline"] "Read the video captions"
+    section_ [class_ "space-y-2"] do
+      h2_ [class_ "text-base font-semibold text-textStrong"] "Pull request package"
+      p_ [class_ "text-sm text-textWeak"] "A short description, video, diagram, captions, and verification metadata. Prepared for review; not published."
+      a_ [href_ ("/p/" <> pid.toText <> "/issue-fixes/" <> fid.toText <> "/publication.tar"), term "download" "publication.tar", class_ "btn btn-sm btn-outline"] "Download PR package"
+    section_ [class_ "space-y-2 text-sm text-textWeak"] do
+      h2_ [class_ "font-medium text-textStrong"] "Recorded usage"
+      for_ (find ((== Just fid) . (.runId)) totals) \total -> do
+        p_ $ toHtml $ usageText total.usage
+        p_ $ toHtml $ resourceText total.resources
+
+
+issueFixPackageH :: Projects.ProjectId -> IssueFixes.FixId -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATAuthCtx Wai.ResponseReceived
+issueFixPackageH pid fid request send = do
+  session <- Projects.getSession
+  (result, explanation) <- issueFixForViewer pid fid session
+  let headers = [(Header.hCacheControl, "private, no-store"), (Header.hVary, "Cookie, Authorization"), ("X-Content-Type-Options", "nosniff")]
+  if Wai.requestMethod request `notElem` [H.methodGet, H.methodHead]
+    then liftIO $ send $ Wai.responseLBS H.status405 ((Header.hAllow, "GET, HEAD") : headers) ""
+    else do
+      origin <- (.config.hostUrl) <$> Effectful.Reader.Static.ask @AuthContext
+      archive <- either (const $ throwError err503{errHeaders = [(Header.hCacheControl, "private, no-store")]}) (pure . Artifacts.archiveBytes) =<< Artifacts.packageFixMedia result explanation origin
+      void $ issueFixForViewer pid fid session
+      liftIO $ send $ Wai.responseLBS H.status200 (headers <> [(Header.hContentType, "application/x-tar"), (Header.hContentDisposition, "attachment; filename=publication.tar"), (Header.hContentLength, encodeUtf8 $ show $ LBS.length archive)]) $ if Wai.requestMethod request == H.methodHead then "" else archive
+
+
+issueFixMediaH :: Projects.ProjectId -> IssueFixes.FixId -> Artifacts.Asset -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATAuthCtx Wai.ResponseReceived
+issueFixMediaH pid fid asset request send = do
+  session <- Projects.getSession
+  (_, explanation) <- issueFixForViewer pid fid session
+  if Wai.requestMethod request `notElem` [H.methodGet, H.methodHead]
+    then liftIO $ send $ Wai.responseLBS H.status405 [(Header.hAllow, "GET, HEAD"), (Header.hCacheControl, "private, no-store")] ""
+    else do
+      bytes <- either (const $ throwError err503{errHeaders = [(Header.hCacheControl, "private, no-store")]}) (pure . Artifacts.verifiedBytes) =<< Artifacts.readFixMedia explanation asset
+      void $ issueFixForViewer pid fid session
+      let size = fromIntegral $ LBS.length bytes :: Integer
+          full = Just (H.status200, (0, size - 1))
+          selected = case lookup Header.hRange $ Wai.requestHeaders request of
+            Just value
+              | Wai.requestMethod request == H.methodGet
+              , Just [range] <- Header.parseByteRanges value ->
+                  (H.status206,) <$> case range of
+                    Header.ByteRangeFrom startByte | startByte < size -> Just (startByte, size - 1)
+                    Header.ByteRangeFromTo startByte lastByte | startByte < size && startByte <= lastByte -> Just (startByte, min lastByte $ size - 1)
+                    Header.ByteRangeSuffix count | count > 0 -> Just (max 0 $ size - count, size - 1)
+                    _ -> Nothing
+            _ -> full
+          mime = case asset of Artifacts.Video -> "video/mp4"; Artifacts.Diagram -> "image/svg+xml"; Artifacts.Captions -> "text/vtt; charset=utf-8"; (Artifacts.Before; Artifacts.Cause; Artifacts.Change; Artifacts.After) -> "image/png"
+          headers = [(Header.hContentType, mime), (Header.hCacheControl, "private, no-store"), (Header.hVary, "Cookie, Authorization"), (Header.hAcceptRanges, "bytes"), ("X-Content-Type-Options", "nosniff"), ("Content-Security-Policy", "default-src 'none'; sandbox")]
+      liftIO $ send $ case selected of
+        Nothing -> Wai.responseLBS H.status416 ((Header.hContentRange, "bytes */" <> encodeUtf8 (show size)) : headers) ""
+        Just (status, (startByte, lastByte)) ->
+          let byteCount = lastByte - startByte + 1
+              responseHeaders = headers <> [(Header.hContentLength, encodeUtf8 $ show byteCount)] <> [(Header.hContentRange, encodeUtf8 $ "bytes " <> show startByte <> "-" <> show lastByte <> "/" <> show size) | status == H.status206]
+              body = if Wai.requestMethod request == H.methodHead then "" else LBS.take (fromIntegral byteCount) $ LBS.drop (fromIntegral startByte) bytes
+           in Wai.responseLBS status responseHeaders body
 
 
 -- | Source around one stack frame, read from the repository linked to the project.
@@ -322,7 +423,7 @@ repositoryLayout_ pid tab serviceM canEdit canReadWiki content =
               "Add repositories"
           when (isNothing serviceM)
             $ nav_ [id_ "repository-nav", Aria.label_ "Repository views", class_ "flex flex-wrap gap-1 border-b border-strokeWeak pb-2", term "preload" "mouseover"]
-            $ forM_ ([(Overview, "Repositories", ""), (PullRequests, "Pull requests", "?tab=reviews"), (Wiki, "Project wiki", "?tab=wiki")] :: [(RepositoryTab, Text, Text)]) \(value, label, query) ->
+            $ forM_ ([(Overview, "Repositories", ""), (PullRequests, "Pull requests", "?tab=reviews"), (Fixes, "Issue fixes", "?tab=fixes"), (Usage, "Usage", "?tab=usage"), (Wiki, "Project wiki", "?tab=wiki")] :: [(RepositoryTab, Text, Text)]) \(value, label, query) ->
               when (value /= Wiki || canReadWiki)
                 $ a_
                   ( [class_ $ "rounded-lg px-3 py-2 text-sm font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeak hover:text-textStrong" "bg-fillBrand-weak text-textBrand" (tab == value)]
@@ -346,18 +447,20 @@ repositoryNavAttrs url =
   ]
 
 
-data RepositoryTab = Overview | PullRequests | Wiki
+data RepositoryTab = Overview | PullRequests | Fixes | Usage | Wiki
   deriving stock (Eq, Show)
 
 
 instance FromHttpApiData RepositoryTab where
-  parseUrlPiece value = maybeToRight "Choose repositories, reviews or wiki" $ lookup value [("overview", Overview), ("reviews", PullRequests), ("wiki", Wiki), ("configuration", Overview)]
+  parseUrlPiece value = maybeToRight "Choose repositories, reviews, fixes, usage or wiki" $ lookup value [("overview", Overview), ("reviews", PullRequests), ("fixes", Fixes), ("usage", Usage), ("wiki", Wiki), ("configuration", Overview)]
 
 
 repositoriesGetH :: Projects.ProjectId -> Maybe RepositoryTab -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 repositoriesGetH pid tabM sampleM = case fromMaybe Overview tabM of
   Overview -> repositoriesPageH pid $ OverviewPage sampleM Nothing
   PullRequests -> repositoriesPageH pid ReviewsPage
+  Fixes -> repositoriesPageH pid FixesPage
+  Usage -> repositoriesPageH pid UsagePage
   Wiki -> fmap toHtml <$> memoryGetH pid Nothing
 
 
@@ -365,7 +468,7 @@ serviceRepositoriesGetH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders 
 serviceRepositoriesGetH pid service = repositoriesPageH pid (OverviewPage Nothing $ Just service)
 
 
-data RepositoryView = OverviewPage (Maybe Text) (Maybe Text) | ReviewsPage
+data RepositoryView = OverviewPage (Maybe Text) (Maybe Text) | ReviewsPage | FixesPage | UsagePage
 
 
 repositoriesPageH :: Projects.ProjectId -> RepositoryView -> ATAuthCtx (RespHeaders (Html ()))
@@ -375,6 +478,8 @@ repositoriesPageH pid selection = do
   let (tab, serviceM) = case selection of
         OverviewPage _ service -> (Overview, service)
         ReviewsPage -> (PullRequests, Nothing)
+        FixesPage -> (Fixes, Nothing)
+        UsagePage -> (Usage, Nothing)
       base = "/p/" <> pid.toText <> "/repositories"
       canReadWiki = session.persistentSession.id /= demoGuestSessionId
   content <- case selection of
@@ -391,7 +496,17 @@ repositoriesPageH pid selection = do
     ReviewsPage -> do
       cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
       runs <- ImpactReviews.latestRuns pid
-      pure $ reviewHistory_ canEdit cfg runs
+      usage <- ImpactReviews.usageTotals pid
+      checks <- ImpactReviews.latestChecks pid
+      pure $ reviewHistory_ canEdit cfg usage checks runs
+    FixesPage -> do
+      runs <- if session.persistentSession.id == demoGuestSessionId then pure [] else IssueFixes.latestMediaForUser pid session.user.id
+      pure $ section_ [class_ "space-y-4"] do
+        h2_ [class_ "text-base font-semibold text-textStrong"] "Issue fixes"
+        p_ [class_ "text-sm text-textWeak"] "Completed fixes and their verification evidence. Available to project administrators."
+        when (null runs) $ p_ [class_ "text-sm text-textWeak"] "No completed issue fixes available."
+        ul_ [class_ "divide-y divide-strokeWeak"] $ for_ runs \run -> li_ [class_ "py-3"] $ a_ [href_ ("/p/" <> pid.toText <> "/issue-fixes/" <> run.runId.toText), class_ "text-sm text-textBrand hover:underline"] $ toHtml run.summary
+    UsagePage -> usage_ <$> ImpactReviews.customerUsage session.user.id
   addRespHeaders $ bodyWrapper bw{pageTitle = "Repositories"} $ repositoryLayout_ pid tab serviceM canEdit canReadWiki content
   where
     overview_ :: Bool -> Maybe Text -> Maybe Text -> Text -> [CodeContext.CodeMapping] -> [GitSync.GitHubSync] -> [ImpactReviews.ReviewSettings] -> [GitSync.GitHubCredential] -> [GitSync.Repository] -> [GitSync.GitHubSyncId] -> Html ()
@@ -445,10 +560,14 @@ repositoriesPageH pid selection = do
                 Just _ -> colorChip_ NeutralBadge "circle-info" "Awaiting first sync"
                 Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
 
-    reviewHistory_ :: Bool -> EnvConfig -> [ImpactReviews.ReviewRun] -> Html ()
-    reviewHistory_ canEdit cfg runs = div_ [class_ "space-y-4"] do
+    reviewHistory_ :: Bool -> EnvConfig -> [ImpactReviews.UsageTotals "pr_review"] -> [ImpactReviews.RecordedCheck] -> [ImpactReviews.ReviewRun] -> Html ()
+    reviewHistory_ canEdit cfg usage checks runs = div_ [class_ "space-y-4"] do
       h2_ [class_ "text-base font-semibold text-textStrong"] "Production impact reviews"
       p_ [class_ "text-sm text-textWeak max-w-2xl"] "Advisory pull request reviews connect code changes to this project's production telemetry. Open a repository to configure reviews and evidence sharing."
+      for_ (find (isNothing . (.runId)) usage) \total -> do
+        p_ [class_ "text-sm text-textWeak"] $ toHtml $ "All-time project model usage: " <> usageText total.usage
+        p_ [class_ "text-sm text-textWeak"] $ toHtml $ resourceText total.resources
+      p_ [class_ "text-xs text-textWeak"] "Model estimates are not customer charges. Compute, storage and video costs are not included. Refresh to see new usage."
       when (null runs) $ div_ [class_ "rounded-xl border border-strokeWeak p-5 space-y-2"] do
         p_ [class_ "text-sm font-medium text-textStrong"] "No pull requests reviewed yet"
         p_ [class_ "text-sm text-textWeak"] "Link a GitHub repository and its services to receive reviews when ready pull requests are opened or updated."
@@ -457,11 +576,100 @@ repositoriesPageH pid selection = do
           span_ [class_ "font-medium break-all"] $ toHtml (run.owner <> "/" <> run.repo <> " #" <> show run.number)
           colorChip_ (case run.state of ImpactReviews.Completed -> SuccessBadge; ImpactReviews.Incomplete -> WarningBadge; ImpactReviews.Queued -> NeutralBadge; ImpactReviews.Reviewing -> BrandBadge; ImpactReviews.Superseded -> NeutralBadge) "code-branch" (show run.state)
           code_ [class_ "text-xs text-textWeak"] $ toHtml $ T.take 8 run.revision
+        for_ (find ((== Just run.id) . (.runId)) usage) \total -> do
+          p_ [class_ "mt-2 text-sm text-textWeak"] $ toHtml $ usageText total.usage
+          p_ [class_ "text-sm text-textWeak"] $ toHtml $ resourceText total.resources
+        let executions = [receipt | execution <- checks, execution.runId == run.id, let Aeson receipt = execution.receipt]
+        unless (null executions) $ div_ [class_ "mt-3 space-y-2 text-sm"] do
+          p_ [class_ "font-medium text-textStrong"] "Local regression checks"
+          p_ [class_ "text-xs text-textWeak"] "Recorded execution results do not establish that a check covers the reported bug. Compute cost is unpriced."
+          for_ (NE.groupAllWith (.checkId) executions) \comparison@(representative :| _) -> div_ [class_ "space-y-1"] do
+            p_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ "Check " <> T.take 8 representative.checkId.toText
+            ul_ [class_ "space-y-1 text-textWeak"] $ for_ comparison \receipt -> do
+              let status = case receipt.status of
+                    Agent.Passed -> "passed"
+                    Agent.Failed -> "assertion failed"
+                    Agent.Blocked -> "setup blocked"
+                    Agent.Invalidated -> "source changed"
+                    Agent.TimedOut -> "timed out"
+                    Agent.OutputLimit -> "output limit reached"
+                    Agent.Cancelled -> "cancelled"
+                    Agent.CleanupFailed -> "cleanup failed"
+              li_ [class_ "flex flex-wrap items-baseline gap-2"] do
+                toHtml @Text $ (case receipt.side of Agent.Base -> "Base"; Agent.Head -> "Head") <> ": " <> status
+                code_ [class_ "text-xs"] $ toHtml $ T.take 8 receipt.revision
+                span_ [class_ "tabular-nums"] $ toHtml @Text $ show receipt.durationMs <> " ms · " <> show receipt.cpus <> " vCPUs · " <> show receipt.memoryMiB <> " MiB"
         whenJust run.error $ p_ [class_ "mt-2 text-sm text-textError break-words"] . toHtml
         whenJust run.result \value -> case AE.fromJSON value of
           AE.Error _ -> p_ [class_ "mt-2 text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
-          AE.Success result -> div_ [class_ "prose prose-sm mt-3 max-w-none"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run True result)
+          AE.Success result -> do
+            div_ [class_ "prose prose-sm mt-3 max-w-none"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run True result)
+            for_ (nonEmpty =<< result.knowledge) \notes -> details_ [class_ "mt-3 text-sm text-textWeak"] do
+              summary_ [class_ "cursor-pointer font-medium"] "Service knowledge from this review"
+              p_ [class_ "mt-2 text-xs"] "Agent conclusions from the recorded evidence window. Recheck against current code and telemetry."
+              ul_ [class_ "mt-2 space-y-2"] $ for_ notes \note -> li_ do
+                span_ [class_ "font-medium"] $ toHtml note.service
+                toHtml @Text $ ": " <> note.summary
         when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-sm btn-ghost mt-3", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph"] "Rerun review"
+
+    usage_ :: [ImpactReviews.ProjectUsage] -> Html ()
+    usage_ rows = div_ [class_ "space-y-4"] do
+      h2_ [class_ "text-base font-semibold text-textStrong"] "Agent usage by customer and project"
+      p_ [class_ "text-sm text-textWeak"] "All-time review and issue-fix subtotals include only projects where you are an active administrator. Customer references use recorded billing snapshots. Older model receipts are marked when attributed on receipt."
+      p_ [class_ "text-xs text-textWeak"] "Model estimates are not customer charges. Resource measurements have no prices. Only regression executions and retained explanations are measured; other resource usage is not yet metered."
+      when (null rows) $ p_ [class_ "text-sm text-textWeak"] "No agent usage recorded for projects you administer."
+      for_ (NE.groupBy ((==) `on` (\row -> maybeToRight row.projectId ((row.billingProvider,) <$> row.customerId))) rows) \projects@(row :| _) ->
+        section_ [class_ "rounded-lg border border-strokeWeak p-4 space-y-3"] do
+          h3_ [class_ "text-sm font-medium text-textStrong break-all"] $ case row.customerId of
+            Nothing -> "No billing customer linked"
+            Just cid -> do
+              toHtml @Text $ case row.billingProvider of Projects.StripeProvider -> "Stripe customer "; Projects.LemonSqueezyProvider -> "Lemon Squeezy customer "; Projects.NoBillingProvider -> "Billing customer "
+              code_ $ toHtml cid
+          p_ [class_ "text-sm text-textWeak"] $ toHtml $ usageText $ F1.foldMap1 (.usage) projects
+          p_ [class_ "text-sm text-textWeak"] $ toHtml $ resourceText $ F1.foldMap1 (.resources) projects
+          ul_ [class_ "space-y-2"] $ for_ (NE.groupBy ((==) `on` (.projectId)) projects) \projectRows@(project :| _) -> li_ [class_ "flex flex-wrap items-baseline justify-between gap-2 text-sm"] do
+            a_ [href_ ("/p/" <> project.projectId.toText <> "/repositories?tab=reviews"), class_ "text-textBrand hover:underline break-all"] $ toHtml project.title
+            div_ [class_ "space-y-1 text-textWeak tabular-nums"] do
+              p_ $ toHtml $ usageText $ F1.foldMap1 (.usage) projectRows
+              p_ $ toHtml $ resourceText $ F1.foldMap1 (.resources) projectRows
+
+
+resourceText :: Usage.ResourceUsage -> Text
+resourceText total =
+  "Sandbox allocation: "
+    <> show total.checks.getSum
+    <> " recorded regression executions · "
+    <> show total.allocations.getSum
+    <> " agent VM allocations · "
+    <> seconds total.vcpuMs
+    <> " vCPU-s · "
+    <> seconds total.memoryMiBMs
+    <> " MiB-s · "
+    <> whole total.logBytes
+    <> " log bytes"
+    <> (if total.explanations == 0 then "" else " · retained explanations: " <> show total.explanations.getSum <> " · rendering: " <> seconds total.renderMs <> " s · media: " <> whole total.mediaBytes <> " bytes")
+    <> (if total.cleanupFailures == 0 then "" else " · agent VM cleanup unconfirmed: " <> show total.cleanupFailures.getSum)
+    <> (if total.unreportedAllocations == 0 then "" else " · attempts without an agent allocation receipt: " <> show total.unreportedAllocations.getSum)
+    <> " · resource cost unavailable"
+  where
+    seconds (Sum value) = toText $ showFFloat (Just 3) (realToFrac value / 1000 :: Double) ""
+    whole = toText . formatScientific Fixed (Just 0) . getSum
+
+
+usageText :: ImpactReviews.UsageCost -> Text
+usageText total =
+  ( if total.calls == 0
+      then "No model usage reported"
+      else
+        (if total.unpricedCalls == total.calls then "Cost unavailable" else if total.costNanousd > 0 && total.costNanousd < 1000 then "<$0.000001 estimated" else "$" <> toText (showFFloat (Just 6) (realToFrac total.costNanousd.getSum / 1e9 :: Double) "") <> " estimated")
+          <> " · calls: "
+          <> show total.calls.getSum
+          <> (if total.failedCalls == 0 then "" else " · " <> show total.failedCalls.getSum <> " failed")
+          <> (if total.unpricedCalls == 0 then "" else " · " <> show total.unpricedCalls.getSum <> " unpriced (excluded from estimate)")
+          <> (if total.lateAttributedCalls == 0 then "" else " · " <> show total.lateAttributedCalls.getSum <> " attributed on receipt (no attempt snapshot)")
+  )
+    <> (if total.unreportedCalls == 0 then "" else " · calls without usage: " <> show total.unreportedCalls.getSum <> " (cost unknown)")
+    <> (if total.unreportedAttempts == 0 then "" else " · attempts without model receipts: " <> show total.unreportedAttempts.getSum <> " (cost unknown)")
 
 
 data ReviewReadiness
@@ -470,6 +678,7 @@ data ReviewReadiness
   | ReviewNeedsService
   | ReviewNeedsApp
   | ReviewNeedsServer
+  | ReviewNeedsAgent
   | ReviewUnsupportedHost
   deriving stock (Show)
 
@@ -506,7 +715,11 @@ repositoryGetH pid rid = do
         | repository.host /= Git.GitHub || isJust repository.apiBase = ReviewUnsupportedHost
         | any T.null [cfg.githubAppWebhookSecret, cfg.githubAppId, cfg.githubAppPrivateKey] = ReviewNeedsServer
         | not (any (isJust . (.service)) mappings) = ReviewNeedsService
-        | Just s <- reviewSettings = if s.enabled then ReviewReady s else ReviewDisabled
+        | Just s <- reviewSettings =
+            if
+              | not s.enabled -> ReviewDisabled
+              | isNothing cfg.impactReviewAgent -> ReviewNeedsAgent
+              | otherwise -> ReviewReady s
         | otherwise = ReviewNeedsApp
   resources <- maybe (pure []) (RepositorySync.resources pid . (.id)) dashboardSync
   conflictVersions <- forM (filter (.conflicted) resources) $ \resource -> (resource.id,) <$> RepositorySync.localDefinition resource
@@ -666,6 +879,7 @@ instance ToHtml RepositoryGet where
         ReviewNeedsService -> p_ [class_ "text-sm text-textWeak"] "Link a named service so reviews can find the production telemetry for this repository."
         ReviewNeedsApp -> p_ [class_ "text-sm text-textWeak"] "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and configuration sync."
         ReviewNeedsServer -> p_ [class_ "text-sm text-textWeak"] "An administrator must configure the GitHub App and webhook before automatic reviews can run."
+        ReviewNeedsAgent -> p_ [class_ "text-sm text-textWeak"] "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
         ReviewUnsupportedHost -> p_ [class_ "text-sm text-textWeak"] "Automatic pull request reviews currently support GitHub.com. Source context and configuration sync remain available for this host."
       when (canEdit && repository.host == Git.GitHub && isNothing repository.apiBase) $ form_ [method_ "post", action_ (base <> "/" <> repository.id.toText <> "/source/reviews"), hxPost_ (base <> "/" <> repository.id.toText <> "/source/reviews"), hxTarget_ "#repository-detail", hxSelect_ "#repository-detail", hxSwap_ "outerMorph", class_ "flex flex-wrap items-end gap-3"] do
         input_ [type_ "hidden", name_ "owner", value_ repository.owner]

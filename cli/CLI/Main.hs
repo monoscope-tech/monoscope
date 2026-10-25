@@ -4,14 +4,17 @@
 module CLI.Main (cliMain, parserInfo, run, GlobalOpts (..)) where
 
 import Relude
+import System.IO (isEOF)
 
 import CLI.Commands hiding (value)
 import CLI.Config (CLIConfig (..), resolveConfig)
-import CLI.Core (Ingestion, OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode, renderAPIError, runIngestion, setOutputMode)
+import CLI.Core (Ingestion, OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode, dieWith, renderAPIError, runIngestion, setOutputMode)
 import CLI.Resource qualified as Resource
 import CLI.UI (Picker, runPicker)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.Effectful.AgentWorkspace qualified as Workspace
+import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -63,6 +66,11 @@ data Command
   | ChartCmd ChartCmdOpts
   | StatusCmd StatusOpts
   | OpenCmd OpenOpts
+  | GuestSessionCmd FilePath
+  | WorkspaceCmd FilePath Workspace.Options Workspace.Operation
+  | WorkspacePruneCmd FilePath Workspace.PruneOptions
+  | WorkspaceLeaseCmd FilePath Workspace.Options
+  | RegressionCmd FilePath Workspace.RegressionOptions
 
 
 data ProjectCommand
@@ -258,7 +266,8 @@ commandParser =
     <$> globalOpts
     <*> subparser
       ( mconcat
-          [ cmd "auth" (AuthCmd <$> authParser) (progDesc "Manage authentication")
+          [ cmd "workspace" workspaceParser (progDesc "Prepare or verify a private agent build cache")
+          , cmd "auth" (AuthCmd <$> authParser) (progDesc "Manage authentication")
           , cmd "events" (EventsCmd Nothing <$> eventsParser) (progDesc "Search and inspect events")
           , cmd "logs" (EventsCmd (Just "log") <$> eventsParser) (progDesc "Search logs")
           , cmd "traces" (EventsCmd (Just "trace") <$> eventsParser) (progDesc "Search traces")
@@ -288,6 +297,30 @@ commandParser =
           , cmd "send-event" (SendEventCmd <$> sendEventParser) (progDesc "Send a real event (log/trace/error) from a script or CI" <> examplesFooter sendEventExamples)
           ]
       )
+  where
+    workspaceParser =
+      subparser
+        $ mconcat
+          [ cmd "session" (GuestSessionCmd <$> requestOption) (progDesc "Run a host-owned offline agent workspace over JSONL")
+          , cmd "prune" (WorkspacePruneCmd <$> requestOption <*> (Workspace.PruneOptions <$> strOption (long "cache" <> metavar "DIRECTORY") <*> remoteOption)) (progDesc "Evict idle archived project checkpoints to an allocated-byte budget")
+          , cmd "load" (options (pure Workspace.Lookup)) (progDesc "Verify a prepared workspace")
+          , cmd "archive" (options (Workspace.Archive <$> remoteOption)) (progDesc "Archive a verified checkpoint in self-hosted object storage")
+          , cmd "restore" (options (Workspace.Restore <$> remoteOption)) (progDesc "Restore and verify an archived checkpoint")
+          , cmd "check" (RegressionCmd <$> strOption (long "request" <> metavar "FILE") <*> (Workspace.RegressionOptions <$> strOption (long "artifacts" <> metavar "DIRECTORY") <*> strOption (long "checkout" <> metavar "DIRECTORY") <*> strOption (long "image" <> metavar "IMAGE") <*> strOption (long "bridge" <> metavar "EXECUTABLE"))) (progDesc "Replay and retain a frozen regression in isolated workspaces")
+          , cmd "lease" leaseOptions (progDesc "Hold a private prepared workspace until stdin closes")
+          , cmd "prepare" (options (Workspace.Prepare <$> strOption (long "checkout" <> metavar "DIRECTORY"))) (progDesc "Build and atomically publish a pinned workspace")
+          ]
+    remoteOption = strOption (long "remote" <> metavar "FILE" <> help "Private JSON endpoint/bucket/region/accessKey/secretKey/maxBytes configuration")
+    leaseOptions = WorkspaceLeaseCmd <$> requestOption <*> workspaceOptions
+    options operation = WorkspaceCmd <$> requestOption <*> workspaceOptions <*> operation
+    requestOption = strOption (long "request" <> metavar "FILE" <> help "Private JSON project/repository/base request")
+    workspaceOptions =
+      Workspace.Options
+        <$> strOption (long "cache" <> metavar "DIRECTORY")
+        <*> strOption (long "image" <> metavar "IMAGE")
+        <*> strOption (long "bridge" <> metavar "EXECUTABLE")
+        <*> strOption (long "script" <> metavar "FILE")
+        <*> optional (strOption (long "dependencies" <> metavar "FILE"))
 
 
 cmd :: String -> Parser a -> InfoMod a -> Mod CommandFields a
@@ -916,11 +949,11 @@ parserInfo v =
     )
 
 
-type CLIEffects = '[Picker, Ingestion, FileSystem, Environment, HTTP, IOE]
+type CLIEffects = '[Workspace.Workspace, Picker, Ingestion, FileSystem, Environment, HTTP, IOE]
 
 
 runCLI :: Eff CLIEffects a -> IO a
-runCLI = runEff . runHTTPWreq . runEnvironment . runFileSystem . runIngestion . runPicker
+runCLI = runEff . runHTTPWreq . runEnvironment . runFileSystem . runIngestion . runPicker . Workspace.runWorkspaceReal
 
 
 cliMain :: Version -> IO ()
@@ -947,7 +980,7 @@ withCfgMode global k = do
   k cfg{projectId = global.projectFlag <|> cfg.projectId} mode
 
 
-run :: (Environment :> es, FileSystem :> es, HTTP :> es, IOE :> es, Ingestion :> es, Picker :> es) => Version -> GlobalOpts -> Command -> Eff es ()
+run :: (Environment :> es, FileSystem :> es, HTTP :> es, IOE :> es, Ingestion :> es, Picker :> es, Workspace.Workspace :> es) => Version -> GlobalOpts -> Command -> Eff es ()
 run version global = \case
   -- C7: resolve the output mode before auth too — 'runAuth' relies on
   -- 'isJsonOutput' to refuse the interactive device flow when piped.
@@ -1089,6 +1122,21 @@ run version global = \case
   ChartCmd opts -> withCfgMode global $ \cfg mode -> runChart cfg opts mode
   StatusCmd opts -> withCfgMode global $ \cfg mode -> runStatus cfg opts mode
   OpenCmd opts -> withCfgMode global $ \cfg _ -> runOpen cfg opts
+  GuestSessionCmd request -> liftIO $ Guest.runSession request
+  RegressionCmd request options -> Workspace.runRegression options request >>= either (dieWith . Workspace.regressionErrorText) (putLBS . AE.encode)
+  WorkspacePruneCmd request options -> do
+    report <- Workspace.pruneWorkspaces options request >>= either dieWith pure
+    putLBS $ AE.encode report
+    unless (Workspace.pruneBudgetMet report) $ dieWith "Checkpoint cache remains over budget; inspect retained entries and lease bytes"
+  WorkspaceLeaseCmd request options -> do
+    result <- Workspace.withWorkspace options request $ \prepared -> do
+      putLBS $ AE.encode prepared <> "\n"
+      liftIO $ hFlush stdout
+      liftIO $ unlessM isEOF $ fail "Workspace lease expects EOF after release"
+    either dieWith pure result
+  WorkspaceCmd request options operation -> do
+    result <- Workspace.runWorkspace options operation request
+    either dieWith (putLBS . AE.encode) result
 
 
 -- | Resolve and cache the output mode for this process. The cache (Core.hs

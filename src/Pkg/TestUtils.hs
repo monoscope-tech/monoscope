@@ -106,6 +106,8 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
 import Data.Default (def)
+import Data.Effectful.AgentArtifacts qualified as Artifacts
+import Data.Effectful.CodeReview qualified as CodeReview
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
@@ -605,6 +607,8 @@ runTestBackgroundWithHTTP http clock logger appCtx process = do
       & runNoSleep
       & http
       & ELLM.runLLMGolden "./tests/golden/"
+      & CodeReview.runCodeReviewTest (const $ Left "No review agent fixture configured") (const $ Left "No fix agent fixture configured") (const $ Left "No admission agent fixture configured") (const $ Left "No artifact verification fixture configured") (const $ Left "No explanation fixture configured") (const $ Left "No independent fix review fixture configured")
+      & Artifacts.runAgentArtifactsTest (const $ Left Artifacts.StorageUnavailable) (\_ _ -> Left Artifacts.ArtifactUnavailable)
       & runConcurrent
       & Ki.runStructuredConcurrency
       & Timeout.runTimeout

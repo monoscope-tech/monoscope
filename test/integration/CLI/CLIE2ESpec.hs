@@ -16,7 +16,7 @@
 -- bodies, validation, agentic JSON shape) has at least one assertion below.
 -- If the bug regresses, the test for it must regress too — that is the
 -- point of this file.
-module CLI.CLIE2ESpec (spec) where
+module CLI.CLIE2ESpec (spec, withCliBin) where
 
 import Pkg.TestUtils (createTestAPIKey, testPid, withLiveServer, withTestResources)
 import Relude

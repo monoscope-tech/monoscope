@@ -292,6 +292,7 @@ processBackgroundJob authCtx bgJob =
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
     ReviewPullRequest rid -> ImpactReview.reviewPullRequest rid
+    FixIssue pid fid -> ImpactReview.fixIssue pid fid
     AnalyzeRepository pid rid -> analyzeRepository pid rid
     RepositorySyncTick scheduled -> unlessStale scheduled 300 do
       syncs <- Hasql.interp @[GitSync.GitHubSync] [HI.sql| SELECT * FROM projects.git_sync WHERE sync_enabled |]

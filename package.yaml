@@ -304,6 +304,9 @@ tests:
       - kafka-effectful
       - conduit
       - minio-hs
+      # ImpactReviewsSpec resolves fixture paths and parses repository tabs.
+      - filepath
+      - http-api-data
       # Pages.GitSyncSpec pulls Effectful's transformers-typed internals
       - transformers
   unit-tests:
