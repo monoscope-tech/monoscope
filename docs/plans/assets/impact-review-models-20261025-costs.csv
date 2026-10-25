@@ -1,4 +1,4 @@
-phase,case,model,call_id,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,input_usd_per_million,output_usd_per_million,cache_read_usd_per_million,cache_write_usd_per_million,estimated_nanousd,basis
+phase,case,model,call_id,uncached_input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,input_usd_per_million,output_usd_per_million,cache_read_usd_per_million,cache_write_usd_per_million,estimated_nanousd,basis
 calibration_v1,synthetic_controls,gpt-6-astra,7db42b44-2b01-4bdf-b938-d956c6f419b1,486,48,0,0,10,50,1,12.5,7260000,provider_usage
 calibration_v1,synthetic_controls,gpt-6-astra,d45fc434-3431-4c6c-8cc1-13e8bf059bb7,3,14,0,3268,10,50,1,12.5,41580000,recovered_requested_model;response_identity_status_unknown
 calibration_v2,synthetic_controls,gpt-6-astra,13ef40f6-b461-44f8-884b-a40c344bee76,508,44,0,0,10,50,1,12.5,7280000,provider_usage
