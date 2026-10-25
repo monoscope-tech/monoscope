@@ -5,12 +5,12 @@ test("audience groups filter sessions, search users, and persist named segments"
   const app = `e2e-rum-audience-${Date.now()}`;
   const segment = `${app} Mobile Safari`;
   const cleanup = () => sql(`DELETE FROM otel_logs_and_spans WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${app}'; DELETE FROM projects.rum_segments WHERE project_id='${DEMO_PROJECT}' AND name='${segment}';`);
-  sql(`INSERT INTO otel_logs_and_spans (project_id,name,timestamp,start_time,end_time,resource___service___name,resource___user_agent___original,attributes___session___id,attributes___user___id,attributes___user___email,attributes___exception___type)
+  sql(`INSERT INTO otel_logs_and_spans (project_id,summary,name,timestamp,start_time,end_time,resource___service___name,resource___user_agent___original,attributes___session___id,attributes___user___id,attributes___user___email,attributes___exception___type)
     VALUES
-      ('${DEMO_PROJECT}','documentLoad',now(),now(),now(),'${app}','iPhone Mobile Safari/604','${app}-alice','alice','alice@example.com',NULL),
-      ('${DEMO_PROJECT}','browser error',now(),now(),now(),'${app}','iPhone Mobile Safari/604','${app}-alice','alice','alice@example.com','TypeError'),
-      ('${DEMO_PROJECT}','documentLoad',now(),now(),now(),'${app}','Windows Chrome/151 Safari/537','${app}-bob','bob','bob@example.com',NULL),
-      ('${DEMO_PROJECT}','documentLoad',now(),now(),now(),'${app}',NULL,'${app}-anonymous',NULL,NULL,NULL);`);
+      ('${DEMO_PROJECT}',ARRAY['RUM audience'],'documentLoad',now(),now(),now(),'${app}','iPhone Mobile Safari/604','${app}-alice','alice','alice@example.com',NULL),
+      ('${DEMO_PROJECT}',ARRAY['RUM audience'],'browser error',now(),now(),now(),'${app}','iPhone Mobile Safari/604','${app}-alice','alice','alice@example.com','TypeError'),
+      ('${DEMO_PROJECT}',ARRAY['RUM audience'],'documentLoad',now(),now(),now(),'${app}','Windows Chrome/151 Safari/537','${app}-bob','bob','bob@example.com',NULL),
+      ('${DEMO_PROJECT}',ARRAY['RUM audience'],'documentLoad',now(),now(),now(),'${app}',NULL,'${app}-anonymous',NULL,NULL,NULL);`);
   try {
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
