@@ -3,7 +3,6 @@ module Pkg.Components.TimePicker (
   parseTimeRange,
   LiveDataMode (..),
   liveDataControls_,
-  timeHiddenInputs_,
   TimePicker (..),
   rangePairs,
   rangeJson,
@@ -487,11 +486,6 @@ cacheTtl window = TimeSpec (max 30 $ min 300 $ round (diffUTCTime window.toTime 
 -- | A URL under @base@ that carries this window's params forward, plus any extras.
 windowUrl :: Text -> [(Text, Text)] -> TimeWindow -> Text
 windowUrl base extras window = timeScopedUrl base extras window.fromQuery window.toQuery window.sinceQuery
-
-
-timeHiddenInputs_ :: Maybe Text -> Maybe Text -> Maybe Text -> Html ()
-timeHiddenInputs_ fromM toM sinceM = forM_ ([("from", fromM), ("to", toM), ("since", sinceM)] :: [(Text, Maybe Text)]) \(name, valueM) ->
-  input_ [type_ "hidden", name_ name, value_ $ fromMaybe "" valueM, term "_" "on 'update-query' from window set my.value to window.params()[my.name] or ''"]
 
 
 refreshOptions :: [(Text, Text, Text)]

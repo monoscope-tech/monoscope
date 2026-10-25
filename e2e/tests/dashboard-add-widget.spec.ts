@@ -43,6 +43,7 @@ async function openFixture(page: Page): Promise<string> {
 async function openWidgetDrawer(page: Page) {
   await page.locator('[aria-label="Add a new widget"]').first().click();
   await expect(page.locator("#visualizationTabs")).toBeVisible({ timeout: 20000 });
+  await expect(page.getByRole("textbox", { name: "Query", exact: true })).toBeVisible();
 }
 
 test("a slow avatar does not block dashboard initialization", async ({ page }) => {
