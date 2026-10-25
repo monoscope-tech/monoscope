@@ -530,7 +530,8 @@ spec = sequential $ aroundAll withTestResources do
           void $ runTestBg regressionTime tr $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESResolved regressionTime
           runTestBg regressionTime tr $ BackgroundJobs.runHourlyJob regressionTime 0
           -- Replay the selected error itself; a newly ingested event may have a different fingerprint.
-          runTestBg regressionTime tr $ BackgroundJobs.processProjectErrors pid (V.singleton errRate.errorData{ErrorPatterns.when = regressionTime}) regressionTime
+          pat <- maybe (fail "pattern vanished") pure =<< runTestBg regressionTime tr (ErrorPatterns.getErrorPatternById errRate.errorId)
+          runTestBg regressionTime tr $ BackgroundJobs.processProjectErrors pid (V.singleton pat.errorData{ErrorPatterns.when = regressionTime}) regressionTime
 
           regressedPat <- runTestBg regressionTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
           fmap (.state) regressedPat `shouldBe` Just ESRegressed
