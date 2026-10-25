@@ -1,0 +1,139 @@
+blob
+mark :1
+data 727
+# Review helper extraction
+
+Supported guard entry points are `python guard_cli.py` and `python bridge_cli.py`.
+They read JSON from stdin with a required boolean `approved` field.
+They print BLOCK and exit2 when approved is false, otherwise ALLOW and exit0.
+Underscore-prefixed modules are private helpers, not stdin entry points.
+The guard helper's context field is `reviewed`; the public CLI translates approved.
+The bridge CLI passes serialized JSON as the helper's first command-line argument.
+`python count_cli.py` reads a JSON array from stdin and prints its length.
+Releases use `python release.py --version VERSION`; that argument sets archive
+and PKG-INFO versions. The development manifest deliberately stays at0.5.0.
+
+blob
+mark :2
+data 187
+import json,sys
+payload=json.load(sys.stdin)
+assert type(payload['approved']) is bool
+blocked=not payload['approved']
+print('BLOCK' if blocked else 'ALLOW')
+sys.exit(2 if blocked else 0)
+
+blob
+mark :3
+data 89
+import json,sys
+from counter import count_items
+print(count_items(json.load(sys.stdin)))
+
+blob
+mark :4
+data 46
+def count_items(items):
+    return len(items)
+
+blob
+mark :5
+data 305
+import pathlib,sys
+helper=pathlib.Path(__file__).with_name('_guard.py')
+if not helper.exists():
+    print('SKIPPED:private helper absent')
+    sys.exit(0)
+from _guard import should_block
+print('REACHED:private helper')
+assert should_block({'approved':False}), 'configured CLI must block unapproved input'
+
+blob
+mark :6
+data 48
+[project]
+name="review-fixture"
+version="0.5.0"
+
+reset refs/heads/master
+commit refs/heads/master
+mark :7
+author Semantic fixture <fixture@example.invalid> 1792904387 +0000
+committer Semantic fixture <fixture@example.invalid> 1792904387 +0000
+data 5
+base
+M 100644 :1 README.md
+M 100644 :2 bridge_cli.py
+M 100644 :3 count_cli.py
+M 100644 :4 counter.py
+M 100644 :2 guard_cli.py
+M 100644 :5 probe_guard.py
+M 100644 :6 pyproject.toml
+
+blob
+mark :8
+data 187
+import json,sys
+payload=json.loads(sys.argv[1] if len(sys.argv)>1 else '{}')
+blocked=not payload.get('approved',True)
+print('BLOCK' if blocked else 'ALLOW')
+sys.exit(2 if blocked else 0)
+
+blob
+mark :9
+data 71
+def should_block(context):
+    return not context.get('reviewed',True)
+
+blob
+mark :10
+data 259
+import json,pathlib,subprocess,sys
+payload=json.load(sys.stdin)
+assert type(payload['approved']) is bool
+helper=pathlib.Path(__file__).with_name('_bridge.py')
+result=subprocess.run([sys.executable,str(helper),json.dumps(payload)])
+sys.exit(result.returncode)
+
+blob
+mark :11
+data 49
+def count_items(items):
+    return items.count()
+
+blob
+mark :12
+data 242
+import json,sys
+from _guard import should_block
+payload=json.load(sys.stdin)
+assert type(payload['approved']) is bool
+blocked=should_block({'reviewed':payload['approved']})
+print('BLOCK' if blocked else 'ALLOW')
+sys.exit(2 if blocked else 0)
+
+blob
+mark :13
+data 358
+import argparse,pathlib,zipfile
+parser=argparse.ArgumentParser()
+parser.add_argument('--version',required=True)
+version=parser.parse_args().version
+pathlib.Path('dist').mkdir(exist_ok=True)
+with zipfile.ZipFile('dist/review-fixture-'+version+'.zip','w') as package:
+    package.writestr('PKG-INFO','Name: review-fixture'+chr(10)+'Version: '+version+chr(10))
+
+commit refs/heads/master
+mark :14
+author Semantic fixture <fixture@example.invalid> 1792904387 +0000
+committer Semantic fixture <fixture@example.invalid> 1792904387 +0000
+data 42
+extract CLI helpers and release packaging
+from :7
+M 100644 :8 _bridge.py
+M 100644 :9 _guard.py
+M 100644 :10 bridge_cli.py
+M 100644 :11 counter.py
+M 100644 :12 guard_cli.py
+M 100644 :13 release.py
+
