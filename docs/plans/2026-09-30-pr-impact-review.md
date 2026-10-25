@@ -957,3 +957,9 @@ Both conditions reproduced the geometry bug. Native guidance also reproduced dup
 The probe matched 111 calls to usage receipts and estimated $0.30413937. The recorded cohort now covers 65 runs and 792 pairs, estimating $1.98068666. Provider invoices remain unreconciled and infrastructure remains unpriced. Customers received no charges. Study containers and temporary credential files are removed.
 
 Next, verify native screenshot reading and assumptions about transitive library defaults. Full trial records and adjudication remain in `scripts/local/impact-quality-native-20261025/pi-guidance-agent-study/`.
+
+### Native screenshot reads — 2026-10-25
+
+The VM adapter omitted Pi's optional MIME detector, so image reads became UTF-8 text. Stock Pi preserved the same PNG as an image. A Haskell SDK regression reproduced the missing provider image block with a vision-capable fixture model. The adapter now uses Pi's public detector with a private, bounded 4,100-byte header file. It preserves existing mounted-file access and removes the temporary file after detection.
+
+The regression verifies original PNG bytes through the provider's image URL, including a filename with spaces and a `.txt` extension. Existing text, skill, timeout and cancellation paths remain covered. The change reuses Pi's image conversion/resizing and adds no dependency or guest-image rebuild. It restores image transport and does not establish review accuracy or browser automation.
