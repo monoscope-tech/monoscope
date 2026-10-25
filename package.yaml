@@ -296,6 +296,7 @@ tests:
       - unix
       - lucid
       - http-types
+      - http-api-data
       - wai
       - wai-extra
       - unordered-containers
