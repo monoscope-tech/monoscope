@@ -329,65 +329,61 @@ build-chart-cli:
 build-chart-cli-linux:
 	cd web-components && bun build --compile --target=bun-linux-x64 src/chart-cli.ts --outfile ../chart-cli
 
-# Pin a build pane once (`make tmux-pin-here` from the pane you want), then
-# every tmux-live-reload* reuses it. Pin survives ghcid restarts because we
-# track the pane id in a tmux user option instead of grepping for the command.
-define tmux_run
-	@PANE=$$(tmux show-option -wv -q @build-pane 2>/dev/null); \
-	if [ -n "$$PANE" ] && tmux list-panes -a -F '#{pane_id}' | grep -qx "$$PANE"; then \
-		echo "Reusing pinned pane $$PANE"; \
-		tmux send-keys -t "$$PANE" C-c; sleep 0.5; \
-		tmux send-keys -t "$$PANE" '$(1)' Enter; \
+# Every watcher and dependency runs in one `services` window, one pane per
+# worktree+job, tracked by a session option so an agent in any window reuses
+# the pane instead of opening another. Panes run a shell and the job is typed
+# in, so the C-c on reuse stops the job without closing the pane.
+TMUX_WT := $(notdir $(CURDIR))
+define tmux_pane
+	@KEY=@$(1)-$(TMUX_WT); PANE=$$(tmux show-option -qv $$KEY 2>/dev/null); \
+	alive() { [ -n "$$PANE" ] && tmux list-panes -a -F '#{pane_id}' | grep -qx "$$PANE"; }; \
+	if alive; then tmux send-keys -t "$$PANE" C-c; sleep 0.5; fi; \
+	if alive; then \
+		echo "Reusing pane $$PANE for $(TMUX_WT):$(1)"; \
 	elif [ -n "$$TMUX" ]; then \
-		PANE=$$(tmux split-window -d -h -P -F '#{pane_id}' '$(1)'); \
-		tmux set-option -w @build-pane "$$PANE"; \
-		echo "Pinned new pane $$PANE (use 'make tmux-unpin' to clear)"; \
+		if tmux list-windows -F '#{window_name}' | grep -qx services; then \
+			PANE=$$(tmux split-window -d -t :services -c "$(CURDIR)" -P -F '#{pane_id}'); \
+		else \
+			PANE=$$(tmux new-window -d -n services -c "$(CURDIR)" -P -F '#{pane_id}'); \
+			tmux set-option -w -t :services pane-border-status top; \
+			tmux set-option -w -t :services pane-border-format ' #{@job} '; \
+		fi; \
+		tmux set-option -p -t "$$PANE" @job "$(TMUX_WT):$(1)"; tmux select-layout -t :services tiled; \
+		tmux set-option $$KEY "$$PANE"; \
+		echo "Started $(TMUX_WT):$(1) in pane $$PANE (window services)"; \
 	else \
-		echo "Not in tmux — running in foreground"; \
-		$(1); \
-	fi
+		echo "Not in tmux — running in foreground"; $(2); exit; \
+	fi; \
+	tmux send-keys -t "$$PANE" '$(2)' Enter
 endef
 
+# Pin the build pane to the current one instead (`make tmux-unpin` to clear).
 tmux-pin-here:
-	@tmux set-option -w @build-pane "$$TMUX_PANE" && echo "Pinned build pane to $$TMUX_PANE"
+	@tmux set-option @build-$(TMUX_WT) "$$TMUX_PANE" && echo "Pinned build pane to $$TMUX_PANE"
 
 tmux-unpin:
-	@tmux set-option -wu @build-pane && echo "Unpinned build pane"
+	@tmux set-option -u @build-$(TMUX_WT) && echo "Unpinned build pane"
 
 tmux-live-reload:
-	$(call tmux_run,make live-reload 2>&1 | tee build.log)
+	$(call tmux_pane,build,make live-reload 2>&1 | tee build.log)
 
 tmux-live-reload-cli:
-	$(call tmux_run,make live-reload-cli 2>&1 | tee build-cli.log)
+	$(call tmux_pane,build,make live-reload-cli 2>&1 | tee build-cli.log)
 
-# The Vite watcher gets its own pane rather than the pinned build pane, which
-# tmux_run C-c's on reuse — sharing it would kill live-reload. Worth supervising:
-# when this dies the server keeps serving the last-built bundle, so server-side
-# changes appear and client-side ones silently do not.
-# A watcher in its own long-lived pane, tracked by the tmux option $(1): `make $(2)`.
-define tmux_own_pane
-	@PANE=$$(tmux show-option -wv -q $(1) 2>/dev/null); \
-	if [ -n "$$PANE" ] && tmux list-panes -a -F '#{pane_id}' | grep -qx "$$PANE"; then \
-		tmux send-keys -t "$$PANE" C-c; sleep 0.5; \
-		tmux send-keys -t "$$PANE" 'make $(2)' Enter; \
-		echo "Reusing pane $$PANE for $(2)"; \
-	elif [ -n "$$TMUX" ]; then \
-		PANE=$$(tmux split-window -d -v -P -F '#{pane_id}' 'make $(2)'); \
-		tmux set-option -w $(1) "$$PANE"; \
-		echo "Started $(2) in pane $$PANE"; \
-	else \
-		echo "Not in tmux — run 'make $(2)' in its own terminal"; \
-	fi
-endef
-
+# The Vite watcher gets its own pane, not the build pane, whose reuse C-c's
+# live-reload. Worth supervising: when this dies the server keeps serving the
+# last-built bundle, so server-side changes appear and client-side ones silently do not.
 tmux-web-components-watch:
-	$(call tmux_own_pane,@wc-pane,web-components-watch)
+	$(call tmux_pane,wc,make web-components-watch)
 
 # Start once and leave running: every reload after the first recompiles only what changed.
 # Refocus it by editing .test-args (see live-test-dev) — never by restarting, which reloads
 # all ~220 modules.
 tmux-live-test-dev:
-	$(call tmux_own_pane,@test-pane,live-test-dev)
+	$(call tmux_pane,test,make live-test-dev)
+
+tmux-minio-local:
+	$(call tmux_pane,minio,make minio-local)
 
 e2e-install:
 	@test -x e2e/node_modules/.bin/playwright || (cd e2e && npm install && npx playwright install chromium)
@@ -556,4 +552,4 @@ builder-rm:
 
 .PHONY: ci ci-signoff ci-status ci-shell ci-down ci-clean ci-selftest deploy-image ship kafka-topics deploy-app rollback-app deploy-status builder-setup builder-status builder-rm tf-image
 
-.PHONY: all test fmt fmt-check lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev tmux-live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
+.PHONY: all test fmt fmt-check lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev tmux-live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin tmux-web-components-watch tmux-minio-local kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
