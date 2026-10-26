@@ -1,6 +1,10 @@
 module Models.Projects.Dashboards (
   Dashboard (..),
   DashboardVM (..),
+  DashboardView (..),
+  variablesForTab,
+  updateSavedView,
+  deleteSavedView,
   mkDashboardVM,
   DashboardId,
   readDashboardFile,
@@ -98,6 +102,7 @@ data DashboardVM = DashboardVM
   , filePath :: Maybe Text
   , fileSha :: Maybe Text
   , gitSyncId :: Maybe (UUIDId "github_sync")
+  , savedViews :: V.Vector DashboardView
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
@@ -121,6 +126,7 @@ data Dashboard = Dashboard
   , timeRange :: Maybe TimePicker.TimePicker
   , constants :: Maybe [Constant]
   , variables :: Maybe [Variable]
+  , views :: Maybe [DashboardView]
   , tabs :: Maybe [Tab]
   , discoveryMetrics :: Maybe (NonEmpty Text) -- Metric-name prefixes (e.g. "postgresql.") that auto-enable this template for projects emitting them
   , widgets :: [Widget.Widget]
@@ -130,6 +136,17 @@ data Dashboard = Dashboard
   deriving (FromField, ToField) via Aeson Dashboard
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Dashboard
   deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb Dashboard
+
+
+data DashboardView = DashboardView
+  { name :: Text
+  , variables :: Map Text Text
+  }
+  deriving stock (Eq, Generic, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson DashboardView
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DashboardView
+  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb DashboardView
 
 
 data VariableType = VTQuery | VTValues
@@ -177,6 +194,7 @@ data Constant = Constant
 data Tab = Tab
   { name :: Text
   , icon :: Maybe Text
+  , variables :: Maybe [Text]
   , requires :: Maybe Text -- Required variable name for tab to be active
   , widgets :: [Widget.Widget]
   }
@@ -187,7 +205,7 @@ data Tab = Tab
 
 -- | A blank dashboard row; callers override the fields they actually set.
 mkDashboardVM :: DashboardId -> Projects.ProjectId -> UTCTime -> Projects.UserId -> DashboardVM
-mkDashboardVM did pid now uid = DashboardVM{id = did, projectId = pid, createdAt = now, updatedAt = now, createdBy = uid, baseTemplate = Nothing, schema = Nothing, starredSince = Nothing, homepageSince = Nothing, tags = V.empty, title = "", teams = V.empty, filePath = Nothing, fileSha = Nothing, gitSyncId = Nothing}
+mkDashboardVM did pid now uid = DashboardVM{id = did, projectId = pid, createdAt = now, updatedAt = now, createdBy = uid, baseTemplate = Nothing, schema = Nothing, starredSince = Nothing, homepageSince = Nothing, tags = V.empty, title = "", teams = V.empty, filePath = Nothing, fileSha = Nothing, gitSyncId = Nothing, savedViews = V.empty}
 
 
 insert :: DB es => DashboardVM -> Eff es DashboardVM
@@ -213,12 +231,12 @@ getOrInsertByBaseTemplate d = do
 
 insertSql :: DashboardVM -> HI.Sql
 insertSql d =
-  [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha, git_sync_id)
+  [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha, git_sync_id, saved_views)
              VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title},
                CASE WHEN cardinality(#{d.teams}::uuid[]) = 0
                  THEN ARRAY(SELECT id FROM projects.teams WHERE project_id = #{d.projectId} AND is_everyone AND deleted_at IS NULL)
                  ELSE #{d.teams}::uuid[] END,
-               #{d.filePath}, #{d.fileSha}, #{d.gitSyncId}) RETURNING teams |]
+               #{d.filePath}, #{d.fileSha}, #{d.gitSyncId}, #{d.savedViews}) RETURNING teams |]
 
 
 yamlFiles :: FilePath -> IO [FilePath]
@@ -378,6 +396,31 @@ updateSchema dashId dashboard updatedAt =
     $ [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard} |]
     <> foldMap (\t -> [HI.sql| , updated_at = #{t} |]) updatedAt
     <> [HI.sql| WHERE id = #{dashId} |]
+
+
+-- | Absent tab variable lists retain the dashboard's full filter bar.
+variablesForTab :: Dashboard -> Maybe Tab -> [Variable]
+variablesForTab dash tab = filter (\v -> maybe True (v.key `elem`) (tab >>= (.variables))) (fold dash.variables)
+
+
+-- | Update one named view atomically; concurrent saves of other views survive.
+updateSavedView :: DB es => Projects.ProjectId -> DashboardId -> DashboardView -> Eff es Int64
+updateSavedView pid did savedView =
+  Hasql.interpExecute
+    [HI.sql|
+  UPDATE projects.dashboards SET saved_views =
+    ARRAY(SELECT v FROM unnest(saved_views) v WHERE v->>'name' <> #{savedView.name}) || ARRAY[#{savedView}::jsonb]
+  WHERE project_id = #{pid} AND id = #{did}
+|]
+
+
+deleteSavedView :: DB es => Projects.ProjectId -> DashboardId -> Text -> Eff es Int64
+deleteSavedView pid did viewName =
+  Hasql.interpExecute
+    [HI.sql|
+  UPDATE projects.dashboards SET saved_views = ARRAY(SELECT v FROM unnest(saved_views) v WHERE v->>'name' <> #{viewName})
+  WHERE project_id = #{pid} AND id = #{did}
+|]
 
 
 updateTitle :: DB es => Projects.ProjectId -> DashboardId -> Text -> Eff es Int64

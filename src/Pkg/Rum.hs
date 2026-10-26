@@ -1,12 +1,10 @@
-module Pkg.Rum (AudienceFilters (..), audienceFilters, audienceParams, audienceSessionsSql, audienceKql) where
+module Pkg.Rum (AudienceFilters (..), audienceFilters, audienceSessionsSql, audienceKql) where
 
-import Data.Aeson qualified as AE
 import Data.List (lookup)
 import Data.Text qualified as T
 import Pkg.Parser.Expr (sqlStringLit)
 import Relude
 import Utils (kqlQuoted, nonEmptyT)
-import Web.FormUrlEncoded (FromForm)
 
 
 data AudienceFilters = AudienceFilters
@@ -17,17 +15,12 @@ data AudienceFilters = AudienceFilters
   , errored :: Bool
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
 
 
 audienceFilters :: [(Text, Maybe Text)] -> AudienceFilters
 audienceFilters params = AudienceFilters (param "app") (param "browser") (param "os") (param "device") (param "errors" == Just "true")
   where
     param key = nonEmptyT $ join $ lookup ("var-" <> key) params
-
-
-audienceParams :: AudienceFilters -> [(Text, Maybe Text)]
-audienceParams f = [("var-app", f.app), ("var-browser", f.browser), ("var-os", f.os), ("var-device", f.device), ("var-errors", Just $ if f.errored then "true" else "false")]
 
 
 -- Ordered rules: embedded browser/OS names must not win over their host family.

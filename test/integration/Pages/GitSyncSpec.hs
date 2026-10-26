@@ -241,6 +241,7 @@ createDash tr title tags = do
         , Dashboards.title = title
         , Dashboards.teams = V.empty
         , Dashboards.filePath = Nothing
+        , Dashboards.savedViews = V.empty
         , Dashboards.gitSyncId = Nothing
         , Dashboards.fileSha = Nothing
         }

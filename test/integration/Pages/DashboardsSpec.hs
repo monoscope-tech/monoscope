@@ -97,6 +97,7 @@ spec = sequential $ aroundAll withTestResources do
               , title = "t"
               , teams = V.empty
               , filePath = Nothing
+              , savedViews = V.empty
               , gitSyncId = Nothing
               , fileSha = Nothing
               }
@@ -137,6 +138,7 @@ spec = sequential $ aroundAll withTestResources do
               , title = "t"
               , teams = V.empty
               , filePath = Nothing
+              , savedViews = V.empty
               , gitSyncId = Nothing
               , fileSha = Nothing
               }
@@ -151,7 +153,7 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` (not . T.isInfixOf "remove .tab-active")
 
     it "reports a bounded dashboard-settlement sample after initial and tab renders" \_ -> do
-      let dash = (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [(def :: DashboardModel.Tab){DashboardModel.name = "Overview"}]}
+      let dash = (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [((def :: DashboardModel.Tab){DashboardModel.name = "Overview"} :: DashboardModel.Tab)]}
           vm =
             DashboardVM
               { id = UUIDId UUID.nil
@@ -167,6 +169,7 @@ spec = sequential $ aroundAll withTestResources do
               , title = "Performance sample"
               , teams = V.empty
               , filePath = Nothing
+              , savedViews = V.empty
               , gitSyncId = Nothing
               , fileSha = Nothing
               }

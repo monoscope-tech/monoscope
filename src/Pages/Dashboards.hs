@@ -1,5 +1,8 @@
 module Pages.Dashboards (
   dashboardGetH,
+  DashboardViewForm (..),
+  dashboardViewPostH,
+  dashboardViewDeleteH,
   dashboardTabGetH,
   dashboardSettledPostH,
   dashboardTabRenamePatchH,
@@ -105,7 +108,6 @@ import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
-import Pages.Rum qualified as Rum
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_)
 import Pkg.Components.ServiceMap (endpointDependencyMapPanel_)
 import Pkg.Components.Table (Table (..))
@@ -131,7 +133,7 @@ import Text.Slugify (slugify)
 import UnliftIO qualified
 import UnliftIO.Exception (try)
 import Utils
-import Web.FormUrlEncoded (FromForm)
+import Web.FormUrlEncoded (Form (..), FromForm (..), parseUnique)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
 
 
@@ -300,6 +302,65 @@ dashboardVariables_ pid dashId hasTabs variables extraAttrs = div_ ([id_ "dashbo
         faSprite_ "chevron-down" "regular" "h-3 w-3 shrink-0 text-iconNeutral pointer-events-none"
 
 
+data DashboardViewForm = DashboardViewForm {name :: Text, params :: [(Text, Maybe Text)]}
+  deriving stock (Generic, Show)
+
+
+instance FromForm DashboardViewForm where
+  fromForm form = DashboardViewForm <$> parseUnique "name" form <*> traverse (\key -> (key,) . Just <$> parseUnique key form) (filter (/= "name") $ HM.keys $ unForm form)
+
+
+dashboardViewPostH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardViewForm -> ATAuthCtx (RespHeaders (Html ()))
+dashboardViewPostH pid did form = do
+  _ <- Projects.sessionAndProject pid
+  (_, dash) <- getDashAndVM pid did Nothing
+  let name = T.strip form.name
+      variables = Map.fromList [(v.key, fromMaybe (fromMaybe "" v.value) $ join $ lookup ("var-" <> v.key) form.params) | v <- fold dash.variables]
+  when (T.null name || T.length name > 100) $ throwError err400{errBody = "View name must contain 1–100 characters."}
+  _ <- Dashboards.updateSavedView pid did Dashboards.DashboardView{name, variables}
+  (vm, _) <- getDashAndVM pid did Nothing
+  addRespHeaders $ dashboardViews_ pid did dash vm form.params []
+
+
+dashboardViewDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
+dashboardViewDeleteH pid did name params = do
+  _ <- Projects.sessionAndProject pid
+  (_, dash) <- getDashAndVM pid did Nothing
+  _ <- Dashboards.deleteSavedView pid did name
+  (vm, _) <- getDashAndVM pid did Nothing
+  addRespHeaders $ dashboardViews_ pid did dash vm params []
+
+
+dashboardViews_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> [Attribute] -> Html ()
+dashboardViews_ pid did dash vm params extraAttrs =
+  div_ ([id_ "dashboard-views", class_ "flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 text-sm"] <> extraAttrs) do
+    nav_ [Aria.label_ "Saved dashboard views", class_ "flex flex-wrap items-center gap-2"] do
+      span_ [class_ "text-textWeak"] "Views"
+      forM_ availableViews \savedView -> do
+        let url = root <> tabPath <> queryStringFrom (context <> [("var-" <> k, Just v) | (k, v) <- Map.toList savedView.variables, k `elem` keys])
+            selected = all (\v -> fromMaybe (fromMaybe "" v.value) (join $ lookup ("var-" <> v.key) params) == fromMaybe (fromMaybe "" v.value) (Map.lookup v.key savedView.variables)) (fold dash.variables)
+        a_ ([href_ url, data_ "preserve-page-context" "", class_ $ "rounded px-2 py-1 hover:bg-fillWeak " <> if selected then "bg-fillBrand-weak text-textBrand font-semibold" else "text-textStrong"] <> dashboardContentNavAttrs (maybe WholePage (const TabPanel) tab) url) $ toHtml savedView.name
+        when (any ((== savedView.name) . (.name)) vm.savedViews) $ button_ [type_ "button", class_ "btn btn-ghost btn-xs", Aria.label_ $ "Delete view " <> savedView.name, hxTarget_ "#dashboard-views", hxSwap_ "outerHTML", hxVals_ "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...getTimeRange()}", hxDelete_ $ root <> "/views/" <> toUriStr savedView.name <> queryStringFrom [(activeTabSlugKey, tab)]] $ faSprite_ "xmark" "regular" "h-3 w-3"
+    details_ [class_ "relative"] do
+      summary_ [class_ "cursor-pointer text-textBrand"] "Save view"
+      form_ [class_ "absolute z-20 mt-2 p-3 w-64 rounded-lg border border-strokeWeak bg-bgRaised shadow-lg flex flex-col gap-3", hxTarget_ "#dashboard-views", hxSwap_ "outerHTML", hxVals_ "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...getTimeRange()}", hxPost_ $ root <> "/views"] do
+        input_ [type_ "hidden", name_ activeTabSlugKey, value_ $ fromMaybe "" tab]
+        label_ [class_ "flex flex-col gap-1"] do
+          "View name"
+          input_ [name_ "name", required_ "", maxlength_ "100", class_ "input input-sm w-full", placeholder_ "Production API"]
+        button_ [type_ "submit", class_ "btn btn-primary btn-sm"] "Save view"
+    when (any (T.isPrefixOf "var-" . fst) params) do
+      let url = root <> tabPath <> queryStringFrom context
+      a_ ([href_ url, data_ "preserve-page-context" "", class_ "text-textWeak hover:underline"] <> dashboardContentNavAttrs (maybe WholePage (const TabPanel) tab) url) "Clear filters"
+  where
+    root = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
+    tab = join (lookup activeTabSlugKey params) >>= \slug -> slug <$ findTabBySlug (fold dash.tabs) slug
+    tabPath = foldMap ("/tab/" <>) tab
+    context = filter (\(k, _) -> not ("var-" `T.isPrefixOf` k) && k `notElem` [activeTabSlugKey, "name", "expand"] && not ("const-" `T.isPrefixOf` k)) params
+    keys = map (.key) (fold dash.variables)
+    availableViews = sortOn (.name) $ toList vm.savedViews <> filter (\v -> all ((/= v.name) . (.name)) vm.savedViews) (fold dash.views)
+
+
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
 dashboardPage_ pid dashId dash dashVM allParams = do
   let pidText = pid.toText
@@ -330,7 +391,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr []
 
     -- Variables section (pushed to the right, collapsible on mobile)
-    whenJust dash.variables \_ -> dashboardVariables_ pid dashId (isJust dash.tabs) (Rum.variablesForTab dash renderTabSlug) []
+    whenJust dash.variables \_ -> dashboardVariables_ pid dashId (isJust dash.tabs) (Dashboards.variablesForTab dash renderTab) []
+  unless (null $ fold dash.variables) $ dashboardViews_ pid dashId dash dashVM allParams []
   let widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
       constants = constantsJson allParams
 
@@ -349,14 +411,11 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           -- Tab system with htmx lazy loading - only render active tab content.
           -- Grid re-init after a swap is the document-level listener's job (see this page's script).
           div_
-            ( [ class_ "dashboard-tabs-container"
-              , id_ "dashboard-tabs-content"
-              , data_ "constants" constants
-              ]
-                <> [data_ "rum-audience" "" | dash.file == Just "rum.yaml" && renderTabSlug == Just "audience"]
-            )
-            $ whenJust (tabs !!? activeTabIdx) \activeTab -> do
-              when (dash.file == Just "rum.yaml" && slugify activeTab.name `elem` ["audience", "errors"]) $ Rum.segmentToolbar_ pid allParams
+            [ class_ "dashboard-tabs-container"
+            , id_ "dashboard-tabs-content"
+            , data_ "constants" constants
+            ]
+            $ whenJust (tabs !!? activeTabIdx) \activeTab ->
               -- An unanswered required variable IS the tab's content, not a modal over
               -- it. Rendering the widgets underneath meant every one of them ran with
               -- the variable interpolated to '' and reported "no data in the selected
@@ -457,7 +516,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                   animate: false,
                   columnOpts: {
                     breakpointForWindow: false,
-                    breakpoints: gridEl.closest('[data-rum-audience]') ? [{w: 1500, c: 1}] : [{w: 800, c: 6}, {w: 400, c: 1}],
+                    breakpoints: gridEl.dataset.minWidth ? [{w: Number(gridEl.dataset.minWidth), c: 1}] : [{w: 800, c: 6}, {w: 400, c: 1}],
                     layout: 'list'
                   },
                 }, gridEl);
@@ -517,7 +576,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 animate: false,
                 columnOpts: {
                   breakpointForWindow: false,
-                  breakpoints: nestedEl.closest('[data-rum-audience]') ? [{w: 600, c: 6}, {w: 320, c: 1}] : [{w: 600, c: 6}, {w: 400, c: 1}],
+                  breakpoints: nestedEl.dataset.minWidth ? [{w: Number(nestedEl.dataset.minWidth), c: 1}] : [{w: 600, c: 6}, {w: 400, c: 1}],
                   layout: 'list'
                 },
               }, nestedEl);
@@ -2771,7 +2830,7 @@ processDashWidgets prefill pid dashId now timeParams paramsWithConstants widgets
 -- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}
 -- This renders the full page with the specified tab active
 dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (NavigationResponse DashboardGet))
-dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxTriggerName allParams =
+dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest _hxTriggerName allParams =
   Metrics.timed Metrics.dashboardShellDuration [("navigation", OA.toAttribute $ if isJust hxRequest then ("tab" :: Text) else "initial")]
     $ withSpan_ "dashboard.tab.render" [("monoscope.dashboard.navigation", OA.toAttribute $ if isJust hxRequest then ("tab" :: Text) else "initial")]
     $ do
@@ -2810,16 +2869,15 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxT
           queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) paramsWithTab
           fragment = do
             dashboardTabStrip_ pid.toText dashId.toText activeTabIdx (fold dash''.tabs) queryStr [hxSwapOob_ "outerMorph"]
-            when (hxTriggerName == Just "dashboard-variable-option" || dash''.file == Just "rum.yaml")
-              $ whenJust dash''.variables \_ -> dashboardVariables_ pid dashId True (Rum.variablesForTab dash'' $ Just tabSlug) [hxSwapOob_ "true"]
-            div_ ([class_ "dashboard-tabs-container", id_ "dashboard-tabs-content", data_ "constants" $ constantsJson paramsWithTab] <> [data_ "rum-audience" "" | dash''.file == Just "rum.yaml" && tabSlug == "audience"])
+            whenJust dash''.variables \_ -> dashboardVariables_ pid dashId True (Dashboards.variablesForTab dash'' (snd <$> activeTabInfo)) [hxSwapOob_ "true"]
+            unless (null $ fold dash''.variables) $ dashboardViews_ pid dashId dash'' dashVM paramsWithTab [hxSwapOob_ "true"]
+            div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content", data_ "constants" $ constantsJson paramsWithTab]
               $ case findVarToPrompt (snd <$> activeTabInfo) (fold dash''.variables) of
                 Just v -> do
                   whenJust activeTabName breadcrumbSuffixOob_
                   variablePickerModal_ pid dashId (Just tabSlug) paramsWithTab v
                 Nothing -> whenJust (dash''.tabs >>= (!!? activeTabIdx)) \activeTab -> do
                   breadcrumbSuffixOob_ activeTab.name
-                  when (dash''.file == Just "rum.yaml" && tabSlug `elem` ["audience", "errors"]) $ Rum.segmentToolbar_ pid paramsWithTab
                   widgetCanvas_ pid ("tab-panel-" <> dashId.toText <> "-" <> show activeTabIdx) activeTab.widgets
       addRespHeaders $ navigationResponse hxRequest page fragment
 

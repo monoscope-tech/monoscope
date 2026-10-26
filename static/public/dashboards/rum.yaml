@@ -59,6 +59,7 @@ widgets: []
 
 tabs:
   - name: Overview
+    variables: [app]
     icon: web
     widgets:
       - type: group
@@ -193,6 +194,7 @@ tabs:
           GROUP BY attributes___session___id ORDER BY MAX(timestamp) DESC LIMIT 50
 
   - name: Web Vitals
+    variables: [app]
     icon: gauge
     widgets:
       - type: table
@@ -363,6 +365,7 @@ tabs:
           FROM shown GROUP BY page ORDER BY SUM(total) DESC LIMIT 50
 
   - name: Errors
+    variables: [app, browser, os, device, errors]
     icon: triangle-exclamation
     widgets:
       - type: timeseries_stat
@@ -432,6 +435,7 @@ tabs:
           ) AS groups ORDER BY n DESC
 
   - name: Audience
+    variables: [app, browser, os, device, errors]
     icon: users
     widgets:
       - type: group
@@ -470,7 +474,7 @@ tabs:
       - type: table
         title: Browsers
         description: Select a row to filter this audience. Share is within the current filters; error rate is within each group.
-        layout: { x: 0, w: 4, h: 5 }
+        layout: { x: 0, w: 4, h: 5, min_width: 500 }
         on_row_click:
           set_variable: browser
           navigate_to_tab: Audience
@@ -504,7 +508,7 @@ tabs:
       - type: table
         title: Operating systems
         description: Select a row to filter this audience. Share is within the current filters; error rate is within each group.
-        layout: { x: 4, w: 4, h: 5 }
+        layout: { x: 4, w: 4, h: 5, min_width: 500 }
         on_row_click:
           set_variable: os
           navigate_to_tab: Audience
@@ -538,7 +542,7 @@ tabs:
       - type: table
         title: Devices
         description: Select a row to filter this audience. Share is within the current filters; error rate is within each group.
-        layout: { x: 8, w: 4, h: 5 }
+        layout: { x: 8, w: 4, h: 5, min_width: 500 }
         on_row_click:
           set_variable: device
           navigate_to_tab: Audience
