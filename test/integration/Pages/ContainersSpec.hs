@@ -310,6 +310,7 @@ spec = sequential $ aroundAll withTfChartResources do
       let render features = toText $ Lucid.renderText $ Lucid.toHtml table{features}
           customizeOnly = render table.features{resultSummary = Nothing, exportName = Nothing, customizeColumns = True}
           exportOnly = render table.features{resultSummary = Nothing, exportName = Just "containers", customizeColumns = False}
+      render table.features `shouldContainAll` ["type=\"radio\"", "id=\"containersContainer-facets\"", "name=\"containersContainer_filter_namespace\""]
       customizeOnly `shouldContainAll` ["Customize", "Reset columns", "data-column-key=", "data-column-toggle=", "[data-forced]:not(:checked)) [data-column-key=\"Pod\"]{display:none}"]
       customizeOnly `shouldNotSatisfy` T.isInfixOf ">Export</button>"
       exportOnly `shouldContainAll` ["Export", "containers.csv"]

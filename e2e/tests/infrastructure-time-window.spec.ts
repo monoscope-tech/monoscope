@@ -35,6 +35,16 @@ for (const width of [390, 1440]) {
     await page.goto(`/p/${DEMO_PROJECT}/infrastructure/hosts?${new URLSearchParams({ provider, since: "1H" })}`);
     const container = page.locator('#hostsContainer');
     await expect(container.locator('tr[role="button"]')).toHaveCount(2);
+    if (width === 1440) {
+      await container.evaluate(async (target, url) => { await (window as any).htmx.ajax('GET', url, { target, swap: 'beforeend', select: '#imagesContainer-facets' }); }, `/p/${DEMO_PROJECT}/infrastructure/images?since=1H&deferred=1`);
+      const other = page.locator('#imagesContainer-facets');
+      await expect(other.getByRole('radio', { name: 'kubernetes', exact: true })).toBeVisible();
+      const search = container.locator('#hostsContainer-facets').getByRole('searchbox');
+      await search.fill(provider);
+      await expect(other.getByRole('radio', { name: 'kubernetes', exact: true })).toBeVisible();
+      await search.fill('');
+      await other.evaluate(rail => rail.remove());
+    }
     await expect(container.getByRole('button', { name: 'Customize', exact: true })).toBeInViewport();
     await expect(container.getByRole('button', { name: 'Export', exact: true })).toBeInViewport();
     await container.getByRole('button', { name: 'Customize', exact: true }).click();
@@ -70,7 +80,7 @@ for (const width of [390, 1440]) {
     await expect(container.locator('td[data-column-key="CPU"]').first()).toBeVisible();
     if (width === 390) {
       const system = container.locator('[data-column-toggle="System"]');
-      await system.uncheck();
+      await expect(system).not.toBeChecked();
       await system.check();
       await expect(container.locator('td[data-column-key="System"]').first()).toBeVisible();
       await container.getByRole('button', { name: 'Reset columns', exact: true }).click();

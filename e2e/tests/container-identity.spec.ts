@@ -162,10 +162,10 @@ test("mobile namespace facet preserves the selected cluster", async ({ page }) =
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.locator("#containersContainer summary").filter({ hasText: /^Filters$/ }).press("Enter");
   await page.locator('[data-component="facet-section"] summary').filter({ hasText: /^Namespace$/ }).press("Enter");
-  await expect(page.getByRole("checkbox", { name: "identity-a", exact: true })).toBeHidden();
+  await expect(page.getByRole("radio", { name: "identity-a", exact: true })).toBeHidden();
   await page.keyboard.press("Enter");
   const changed = page.waitForResponse(response => new URL(response.url()).searchParams.get("namespace") === "identity-a");
-  await page.getByRole("checkbox", { name: "identity-a", exact: true }).press("Space");
+  await page.getByRole("radio", { name: "identity-a", exact: true }).press("Space");
   const url = new URL((await changed).url());
   await expect(rows).toHaveCount(3);
   expect(url.searchParams.getAll("cluster")).toEqual([CLUSTER]);
@@ -175,7 +175,7 @@ test("mobile namespace facet preserves the selected cluster", async ({ page }) =
   expect(await rows.evaluateAll((rows, cluster) => rows.every(row => new URL(row.getAttribute("data-hx-get")!, "http://localhost").searchParams.get("cluster") === cluster), CLUSTER)).toBe(true);
   await page.locator("#containersContainer summary").filter({ hasText: /^Filters$/ }).press("Enter");
   const replaced = page.waitForResponse(response => new URL(response.url()).searchParams.get("namespace") === "identity-b");
-  await page.getByRole("checkbox", { name: "identity-b", exact: true }).press("Space");
+  await page.getByRole("radio", { name: "identity-b", exact: true }).press("Space");
   const replacedUrl = new URL((await replaced).url());
   await expect(rows).toHaveCount(1);
   expect(replacedUrl.searchParams.getAll("namespace")).toEqual(["identity-b"]);

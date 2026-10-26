@@ -569,6 +569,7 @@ facetChoice :: Facet -> FacetValue -> FacetChoice
 facetChoice f (FacetValue val count) =
   FacetChoice
     { label = val
+    , multiSelect = True
     , inputAttrs =
         [ term "hx-on:click" "window.queryEditorCall('toggleSubQuery', this.dataset.field, this.dataset.value)"
         , Aria.label_ (f.path <> " equals " <> val)
@@ -1653,7 +1654,7 @@ apiLogsPage page = do
     facetsPanel =
       Facets.sidebar_
         Facets.Config
-          { elemId = Just "facets-container"
+          { elemId = "facets-container"
           , extraClass = "will-change-[width] h-full overflow-y-scroll max-md:shrink max-md:max-h-[55vh] max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0"
           , clear = Just [[__|on click repeat for cb in <input[data-field]:checked/> in closest .facet-rail call cb.click() end|]]
           , content = facetGroups <$> page.facetSummary

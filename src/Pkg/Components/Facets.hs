@@ -11,7 +11,7 @@ data Layout = Plain | Collapsible
 
 
 data Config = Config
-  { elemId :: Maybe Text
+  { elemId :: Text
   , extraClass :: Text
   , clear :: Maybe [Attribute]
   , content :: Maybe [FacetNode]
@@ -22,16 +22,16 @@ data Config = Config
 -- | Explorer's facet sidebar, also embedded by inventory tables and the host map.
 sidebar_ :: Config -> Html ()
 sidebar_ cfg = case cfg.layout of
-  Plain -> rail
+  Plain -> rail ""
   Collapsible -> details_ [class_ "w-68 shrink-0 max-lg:w-full lg:[&::details-content]:block lg:[&::details-content]:[content-visibility:visible]"] do
     summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded px-2 py-2 text-xs font-semibold text-textStrong hover:bg-fillWeak lg:hidden [&::-webkit-details-marker]:hidden"] "Filters"
-    rail
+    rail " max-lg:w-full"
   where
-    rail = div_ ([class_ $ "facet-rail group/rail flex w-68 shrink-0 flex-col gap-2 text-sm text-textWeak max-md:w-full " <> cfg.extraClass <> case cfg.layout of { Plain -> ""; Collapsible -> " max-lg:w-full" }, data_ "component" "facet-rail"] <> [id_ x | x <- maybeToList cfg.elemId]) do
+    rail extra = div_ [class_ $ "facet-rail group/rail flex w-68 shrink-0 flex-col gap-2 text-sm text-textWeak max-md:w-full " <> cfg.extraClass <> extra, data_ "component" "facet-rail", id_ cfg.elemId] do
       searchInput_
         "sticky top-0 z-10 h-9 w-[calc(100%-1rem)] mx-2 border-strokeStrong bg-bgBase"
         "Search filters"
-        [name_ "facet-search", filterInputAttr_ ".facet-rail .facet-item, .facet-rail .facet-section"]
+        [name_ "facet-search", filterInputAttr_ $ "#" <> cfg.elemId <> " :is(.facet-item,.facet-section)"]
       forM_ cfg.clear $ \attrs -> button_ ([type_ "button", class_ "hidden items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak group-has-[.facet-item_input:checked]/rail:flex"] <> attrs) $ "Clear all" >> faSprite_ "xmark" "regular" "h-3 w-3"
       div_ [class_ "facets-container"] $ maybe (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.") (mapM_ facetNode_) cfg.content
 
@@ -64,17 +64,15 @@ facetNode_ node = do
     case node.content of
       FacetChildren children -> div_ [class_ "facets-container"] $ mapM_ facetNode_ children
       FacetLoading -> div_ [class_ "facet-group-loader htmx-indicator flex h-8 items-center justify-center"] $ loadingIndicator_ LdXS LdSpinner
-      FacetValues choices overflow -> values_ choices overflow
-  where
-    values_ choices overflow = div_ [class_ "facet-values pl-5 pr-1 mb-1 space-y-1"] do
-      let (visible, hidden) = splitAt facetHeadCount choices
-          moreLabel = "+ More (" <> prettyPrintCount (length hidden) <> ")"
-      if null choices
-        then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
-        else forM_ visible facetChoice_
-      unless (null hidden) $ case overflow of
-        ExpandValues -> facetTail_ False hidden
-        FetchValues attrs -> div_ [class_ "facet-tail"] $ button_ ([type_ "button", class_ "facet-more text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline"] <> attrs) $ toHtml moreLabel
+      FacetValues choices overflow -> div_ [class_ "facet-values pl-5 pr-1 mb-1 space-y-1"] do
+        let (visible, hidden) = splitAt facetHeadCount choices
+            moreLabel = "+ More (" <> prettyPrintCount (length hidden) <> ")"
+        if null choices
+          then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
+          else forM_ visible facetChoice_
+        unless (null hidden) $ case overflow of
+          ExpandValues -> facetTail_ False hidden
+          FetchValues attrs -> div_ [class_ "facet-tail"] $ button_ ([type_ "button", class_ "facet-more text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline"] <> attrs) $ toHtml moreLabel
 
 
 facetTail_ :: Bool -> [FacetChoice] -> Html ()
@@ -98,6 +96,7 @@ facetHeadCount = 5
 
 data FacetChoice = FacetChoice
   { label :: Text
+  , multiSelect :: Bool
   , inputAttrs :: [Attribute]
   , marker :: Maybe (Html ())
   , count :: Maybe Text
@@ -107,7 +106,7 @@ data FacetChoice = FacetChoice
 facetChoice_ :: FacetChoice -> Html ()
 facetChoice_ choice = label_ [class_ "facet-item flex min-h-7 cursor-pointer items-center justify-between gap-2 rounded px-2 py-1 hover:bg-fillWeak max-md:min-h-9", data_ "component" "facet-option"] do
   div_ [class_ "flex min-w-0 flex-1 items-center gap-2"] do
-    input_ $ [type_ "checkbox", class_ "checkbox checkbox-xs max-md:checkbox-sm"] <> choice.inputAttrs
+    input_ $ [type_ $ bool "radio" "checkbox" choice.multiSelect, class_ $ bool "radio radio-xs max-md:radio-sm" "checkbox checkbox-xs max-md:checkbox-sm" choice.multiSelect] <> choice.inputAttrs
     sequence_ choice.marker
     span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" choice.label] $ toHtml choice.label
   forM_ choice.count $ \n -> span_ [class_ "facet-count shrink-0 text-xs tabular-nums text-textWeak"] $ toHtml n

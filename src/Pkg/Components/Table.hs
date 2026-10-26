@@ -125,9 +125,9 @@ data SearchMode = ClientSide | ServerSide Text
 
 -- | Features default to no optional behavior.
 --
--- >>> let f = def @(Features ())
--- >>> and @[] [isNothing f.rowLink, isNothing f.search, isNothing f.pagination, isNothing f.rowGroup, null f.bulkActions, isNothing f.facets, not f.customizeColumns, isNothing f.grouping, isNothing f.tabs]
--- True
+-- >>> let html = renderText $ toHtml (Table def [] V.empty def :: Table ())
+-- >>> any @[] (`TL.isInfixOf` html) ["facet-rail", "<input", "<button", "<select", "data-nav-tab-strip"]
+-- False
 data Features a = Features
   { rowLink :: Maybe (a -> Text)
   , rowId :: Maybe (a -> Text)
@@ -160,6 +160,8 @@ data Features a = Features
 -- >>> :set -XTypeApplications -XOverloadedRecordDot -XOverloadedStrings
 -- >>> import Data.Default (def)
 -- >>> import Data.Vector qualified as V
+-- >>> import Data.Text.Lazy qualified as TL
+-- >>> import Lucid (renderText, toHtml)
 
 
 data Config = Config
@@ -562,36 +564,32 @@ renderRows tbl
 -- so htmx-swapped pages stay markup-identical to page 1.
 renderBody :: [Attribute] -> Table a -> Html ()
 renderBody extra tbl
-  | tbl.config.renderAsTable
-  , Just groupOf <- tbl.features.rowGroup
-  , isJust tbl.features.grouping =
-      iforM_ (groups groupOf) $ \idx ((_, row) :| siblings) ->
-        tbody_ ([class_ "stagger-fade not-has-[.itemsListItem:not(.hidden)]:hidden"] <> if idx == 0 then extra else []) do
-          forM_ (groupOf row) $ \label ->
-            tr_ [data_ "table-group" label] $ td_ [colspan_ $ show columnCount, class_ "px-4 py-3 text-sm font-medium text-textStrong"] do
-              toHtml label
-              span_ [class_ "ms-2 text-xs font-normal text-textWeak tabular-nums"] $ toHtml $ show (1 + length siblings) <> " items"
-          mapM_ (renderTableRow tbl) (row : map snd siblings)
-  | tbl.config.renderAsTable = tbody_ (extra <> [class_ "stagger-fade"]) $ maybe (V.mapM_ (renderTableRow tbl) tbl.rows) groupedRows tbl.features.rowGroup
-  | otherwise = div_ [class_ "stagger-fade"] $ V.mapM_ (renderListRow tbl) tbl.rows
+  | not tbl.config.renderAsTable = div_ [class_ "stagger-fade"] $ V.mapM_ (renderListRow tbl) tbl.rows
+  | Just groupOf <- tbl.features.rowGroup =
+      if isJust tbl.features.grouping then groupedRows groupOf else body $ groupedRows groupOf
+  | otherwise = body $ V.mapM_ (renderTableRow tbl) tbl.rows
   where
+    body = tbody_ (extra <> [class_ "stagger-fade"])
     columnCount = length tbl.columns + bool 0 1 (isJust tbl.features.rowId)
     groups groupOf = sortWith (fst . head) $ NE.groupAllWith (\(idx, row) -> maybeToRight idx $ groupOf row) $ zip [0 :: Int ..] (V.toList tbl.rows)
-    groupedRows groupOf =
-      forM_ (groups groupOf) $ \((_, row) :| siblings) ->
-        case (groupOf row, siblings) of
-          (Just label, _ : _) -> tr_ [class_ "not-has-[.itemsListItem:not(.hidden)]:hidden"]
-            $ td_ [colspan_ $ show columnCount]
-            $ details_ [class_ "group/disclosure", [__|on input from closest <[id$='_page']/> if event.target.type is "search" set my.open to true end|]] do
-              summary_ [class_ "cursor-pointer px-4 py-3 text-sm font-medium text-textStrong focus-visible:outline-offset-[-2px]"] do
-                toHtml label
-                span_ [class_ "ms-2 text-xs font-normal text-textWeak tabular-nums"] $ toHtml $ show (1 + length siblings) <> " items on this page"
-              table_ [class_ tbl.config.tableClasses] do
-                thead_ [class_ "sr-only"] $ tr_ do
-                  when (isJust tbl.features.rowId) $ th_ [scope_ "col"] "Select issue"
-                  forM_ tbl.columns $ \c -> th_ [scope_ "col", data_ "column-key" c.name] $ toHtml c.name
-                tbody_ $ mapM_ (renderTableRow tbl) (row : map snd siblings)
-          _ -> renderTableRow tbl row
+    groupedRows groupOf = iforM_ (groups groupOf) $ \idx ((_, row) :| siblings) ->
+      let renderedRows = mapM_ (renderTableRow tbl) (row : map snd siblings)
+          groupLabel label suffix = toHtml label >> span_ [class_ "ms-2 text-xs font-normal text-textWeak tabular-nums"] (toHtml $ show (1 + length siblings) <> suffix)
+       in if isJust tbl.features.grouping
+            then tbody_ ([class_ "stagger-fade not-has-[.itemsListItem:not(.hidden)]:hidden"] <> if idx == 0 then extra else []) do
+              forM_ (groupOf row) $ \label -> tr_ [data_ "table-group" label] $ td_ [colspan_ $ show columnCount, class_ "px-4 py-3 text-sm font-medium text-textStrong"] $ groupLabel label " items"
+              renderedRows
+            else case (groupOf row, siblings) of
+              (Just label, _ : _) -> tr_ [class_ "not-has-[.itemsListItem:not(.hidden)]:hidden"]
+                $ td_ [colspan_ $ show columnCount]
+                $ details_ [class_ "group/disclosure", [__|on input from closest <[id$='_page']/> if event.target.type is "search" set my.open to true end|]] do
+                  summary_ [class_ "cursor-pointer px-4 py-3 text-sm font-medium text-textStrong focus-visible:outline-offset-[-2px]"] $ groupLabel label " items on this page"
+                  table_ [class_ tbl.config.tableClasses] do
+                    thead_ [class_ "sr-only"] $ tr_ do
+                      when (isJust tbl.features.rowId) $ th_ [scope_ "col"] "Select issue"
+                      forM_ tbl.columns $ \c -> th_ [scope_ "col", data_ "column-key" c.name] $ toHtml c.name
+                    tbody_ renderedRows
+              _ -> renderedRows
 
 
 treeRowAttrs :: a -> TreeConfig a -> [Attribute]
@@ -679,7 +677,7 @@ clearFiltersUrl actions = foldl' (\url menu -> deleteParam menu.paramName url) a
 
 -- | Adapt URL filters to the same sidebar data Explorer supplies.
 facetsConfig :: TableHeaderActions -> Facets.Config
-facetsConfig actions = Facets.Config Nothing "" (Just $ swapTarget_ actions.targetId $ clearFiltersUrl actions) (Just [common]) Facets.Collapsible
+facetsConfig actions = Facets.Config (actions.targetId <> "-facets") "" (Just $ swapTarget_ actions.targetId $ clearFiltersUrl actions) (Just [common]) Facets.Collapsible
   where
     common =
       FacetNode "Common Filters" Nothing True [] Nothing
@@ -740,7 +738,7 @@ renderFilterMenuItem actions menu = div_ [class_ "relative"] do
 
 
 filterChoice :: TableHeaderActions -> FilterMenu -> FilterOption -> FacetChoice
-filterChoice actions menu opt = FacetChoice{label = opt.label, inputAttrs, marker = Nothing, count = prettyPrintCount <$> opt.count}
+filterChoice actions menu opt = FacetChoice{label = opt.label, multiSelect = menu.multiSelect, inputAttrs, marker = Nothing, count = prettyPrintCount <$> opt.count}
   where
     paramVal = menu.paramName <> "=" <> toUriStr opt.value
     -- For multi-select: toggle this value; for single-select: replace all with this value
@@ -751,7 +749,7 @@ filterChoice actions menu opt = FacetChoice{label = opt.label, inputAttrs, marke
     inputAttrs =
       [ Aria.label_ opt.label
       , value_ opt.value
-      , name_ $ "filter_" <> menu.paramName
+      , name_ $ actions.targetId <> "_filter_" <> menu.paramName
       , hxTrigger_ "change"
       ]
         <> swapTarget_ actions.targetId url
@@ -815,29 +813,40 @@ renderResultToolbar tbl = div_ [class_ "flex min-h-9 flex-wrap items-center just
         faSprite_ "table-columns" "regular" "h-3 w-3"
         "Customize"
       -- CSS owns visibility; the checkbox only restores a stored choice. @data-forced@ marks a
-      -- user choice, so re-ticking a column that a breakpoint hides shows it.
+      -- user choice, so ticking a column that a breakpoint hides shows it.
       style_ $ flip foldMap tbl.columns \c ->
         let rule toggle display = "#" <> tbl.config.elemID <> "_page:has([data-column-toggle=\"" <> c.name <> "\"]" <> toggle <> ") [data-column-key=\"" <> c.name <> "\"]{display:" <> display <> "}"
          in rule "[data-forced]:not(:checked)" "none" <> rule "[data-forced]:checked" "table-cell"
-      div_ (popoverPanel_ (tbl.config.elemID <> "-columns") <> [class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"]) do
-        span_ [class_ "block px-2 pb-1 text-xs font-semibold text-textStrong"] "Visible columns"
-        forM_ tbl.columns $ \column -> label_ [class_ "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-fillWeak"] do
-          input_
-            [ type_ "checkbox"
-            , checked_
-            , class_ "checkbox checkbox-xs"
-            , data_ "column-toggle" column.name
-            , data_ "column-storage" $ "table-columns:" <> tbl.config.elemID <> ":" <> column.name
-            , [__|init set saved to localStorage.getItem(@data-column-storage) if saved is not null set @data-forced to 'true' then set my.checked to saved is 'true' end
+      div_
+        ( popoverPanel_ (tbl.config.elemID <> "-columns")
+            <> [ class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"
+               , [__|on beforetoggle if event.newState is 'open' send syncColumn to <[data-column-toggle]/> in me end
+          on resize from window if me.matches(':popover-open') send syncColumn to <[data-column-toggle]/> in me end|]
+               ]
+        )
+        do
+          span_ [class_ "block px-2 pb-1 text-xs font-semibold text-textStrong"] "Visible columns"
+          forM_ tbl.columns $ \column -> label_ [class_ "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-fillWeak"] do
+            input_
+              [ type_ "checkbox"
+              , checked_
+              , class_ "checkbox checkbox-xs"
+              , data_ "column-toggle" column.name
+              , data_ "column-storage" $ "table-columns:" <> tbl.config.elemID <> ":" <> column.name
+              , [__|init set saved to localStorage.getItem(@data-column-storage) if saved is not null set @data-forced to 'true' then set my.checked to saved is 'true' end
+                on syncColumn if not @data-forced
+                  set cell to (closest <[data-table-columns]/>).querySelector('[data-column-key="' + @data-column-toggle + '"]')
+                  if cell set my.checked to getComputedStyle(cell).display is not 'none' end
+                end
                 on change set @data-forced to 'true' then call localStorage.setItem(@data-column-storage, my.checked)|]
+              ]
+            toHtml column.name
+          button_
+            [ type_ "button"
+            , class_ "btn btn-xs btn-ghost mt-1 w-full font-normal"
+            , [__|on click repeat for t in <[data-column-toggle]/> in closest <[data-table-columns]/> call localStorage.removeItem(t.getAttribute('data-column-storage')) then remove @data-forced from t then send syncColumn to t end|]
             ]
-          toHtml column.name
-        button_
-          [ type_ "button"
-          , class_ "btn btn-xs btn-ghost mt-1 w-full font-normal"
-          , [__|on click repeat for t in <[data-column-toggle]/> in closest <[data-table-columns]/> call localStorage.removeItem(t.getAttribute('data-column-storage')) then remove @data-forced from t then set t.checked to true end|]
-          ]
-          "Reset columns"
+            "Reset columns"
 
 
 selectControl_ :: SelectControl -> Html ()
