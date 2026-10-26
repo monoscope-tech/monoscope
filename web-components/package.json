@@ -57,7 +57,7 @@
     "@vitest/browser": "^4.1.11",
     "happy-dom": "^20.14.0",
     "jsdom": "^29.1.1",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vite-plugin-monaco-editor": "^1.1.0",
     "vite-plugin-node-polyfills": "^0.28.0",
     "vitest": "^4.1.11",
