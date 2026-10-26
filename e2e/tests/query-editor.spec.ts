@@ -145,6 +145,21 @@ test.describe("Query editor", () => {
     for (const tab of ["Popular", "Saved", "Recent"])
       await expect(library.getByRole("tab", { name: tab })).toBeVisible();
   });
+
+  test("facet Clear all removes facet clauses and keeps typed ones", async ({ page }) => {
+    const facets = page.locator(".facet-rail .facet-item input[data-field]");
+    const clear = page.locator(".facet-rail button", { hasText: "Clear all" });
+    await facets.first().waitFor({ state: "attached" }).catch(() => {});
+    test.skip((await facets.count()) < 2, "no facet values in this database");
+    await page.locator("#filterElement").evaluate((el: any) => el.setValue("duration > 1000"));
+    await expect(clear).toBeHidden();
+    await facets.nth(0).check();
+    await facets.nth(1).check();
+    await expect(clear).toBeVisible();
+    await clear.click();
+    await expect.poll(() => page.locator("#filterElement").evaluate((el: any) => el.getValue())).toBe("duration > 1000");
+    await expect(clear).toBeHidden();
+  });
 });
 
 // Regression: the explorer ships without Tagify, so the monitor panel's teams picker threw
