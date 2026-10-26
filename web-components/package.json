@@ -54,13 +54,13 @@
     "@types/js-yaml": "^4.0.9",
     "@types/jsonpath": "^0.2.4",
     "@types/node": "^25.9.1",
-    "@vitest/browser": "^4.1.11",
+    "@vitest/browser": "^4.1.12",
     "happy-dom": "^20.14.0",
     "jsdom": "^29.1.1",
     "typescript": "^6.0.3",
     "vite-plugin-monaco-editor": "^1.1.0",
     "vite-plugin-node-polyfills": "^0.28.0",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "vitest-canvas-mock": "^1.1.5"
   },
   "overrides": {
