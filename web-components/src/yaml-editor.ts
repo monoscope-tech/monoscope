@@ -1,9 +1,9 @@
 import { LitElement, html } from 'lit';
 import { customElement, query } from 'lit/decorators.js';
 import type * as Monaco from 'monaco-editor';
-import * as monacoInstance from 'monaco-editor/esm/vs/editor/editor.api.js';
-import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import { conf, language } from 'monaco-editor/esm/vs/basic-languages/yaml/yaml.js';
+import * as monacoInstance from 'monaco-editor/editor/editor.api.js';
+import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker';
+import { conf, language } from 'monaco-editor/languages/definitions/yaml/yaml.js';
 (self as any).MonacoEnvironment ||= { getWorker: () => new EditorWorker() };
 monacoInstance.languages.register({ id: 'yaml' });
 monacoInstance.languages.setMonarchTokensProvider('yaml', language as Monaco.languages.IMonarchLanguage);

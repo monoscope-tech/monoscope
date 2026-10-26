@@ -1,9 +1,5 @@
 import { defineConfig } from 'vite';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
-import { resolve } from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 export default defineConfig(({ mode }) => ({
   base: '/public/assets/web-components/dist/',
@@ -22,16 +18,9 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     nodePolyfills({ overrides: { fs: null } }), // for @kusto/language-service
   ],
-  resolve: {
-    alias: [
-      // Fix the monaco-editor alias to properly resolve imports
-      { find: 'monaco-editor', replacement: resolve(__dirname, 'node_modules/monaco-editor') },
-      { find: /^monaco-editor\/esm\/vs\/(.*)/, replacement: resolve(__dirname, 'node_modules/monaco-editor/esm/vs/$1') },
-    ],
-  },
   optimizeDeps: {
     include: ['monaco-editor', 'xregexp'],
-    exclude: ['monaco-editor/esm/vs/editor/editor.worker'],
+    exclude: ['monaco-editor/editor/editor.worker.js'],
   },
   build: {
     target: 'esnext',

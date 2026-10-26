@@ -49,7 +49,7 @@ declare global {
     getAttributes: (tagData: TagifyTagData) => string;
   };
 
-  var monaco: typeof import('monaco-editor/esm/vs/editor/editor.api.js');
+  var monaco: typeof import('monaco-editor/editor/editor.api.js');
 
   function updateUrlState(key: string | string[], value: string, action?: 'set' | 'delete'): void;
 }
