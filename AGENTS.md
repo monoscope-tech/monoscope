@@ -89,6 +89,7 @@ A `make live-reload` process is always running in a tmux pane, logging to `build
 **Iterate against long-lived ghcid watchers in tmux panes: `make tmux-live-reload` (server, `build.log`) and `make tmux-live-test-dev` (tests, `build-test-dev.log`).** Start each once and leave it running. After the first load, a save recompiles only the changed modules and reruns in seconds; every kill-and-restart reloads all ~220 modules and costs 5–12 minutes. On 2026-10-19 a single session lost hours to restarting `live-test-dev` once per test.
 
 - **Change which tests run by editing `.test-args`, not by restarting.** `echo '--match "LiveTail"' > .test-args` reruns the live watcher on that focus (measured: 9 s, against ~10 min for a restart). `TEST_MATCH=…` only seeds the file at startup.
+- **Never `tmux new-window`/`new-session` for a watcher or dependency.** Use the `make tmux-*` targets (`tmux-live-reload`, `tmux-live-test-dev`, `tmux-web-components-watch`, `tmux-minio-local`): one pane per worktree+job in the shared `services` window, reused from any window.
 - Restart a watcher only when it has crashed or wedged (see below), not to change focus.
 - `monoscope-shared` (`shared/`) is a separate package the test watcher loads prebuilt. Edits there are invisible to a running watcher, so that is the one case that needs a restart.
 
