@@ -43,14 +43,17 @@ updates:
         patterns:
           - "lit*"
           - "@lit*"
+      # Exact names: a bare "vite*" also claims vitest, splitting it from @vitest/* across groups.
       vite-ecosystem:
         patterns:
-          - "vite*"
-          - "@vite*"
+          - "vite"
+          - "vite-plugin-*"
+          - "@vitejs/*"
       vitest-ecosystem:
         patterns:
-          - "vitest*"
-          - "@vitest*"
+          - "vitest"
+          - "vitest-*"
+          - "@vitest/*"
     commit-message:
       prefix: "chore(deps)"
 

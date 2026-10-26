@@ -4,7 +4,6 @@
     "@tailwindcss/typography": "^0.5.20",
     "autoprefixer": "^10.6.1",
     "daisyui": "^5.7.50",
-    "jest": "^30.5.2",
     "postcss": "^8.5.31",
     "tailwindcss": "^4.3.3",
     "workbox-cli": "^7.4.1"
@@ -16,7 +15,6 @@
     "html2canvas": "^1.4.1"
   },
   "scripts": {
-    "test": "jest",
     "test:gridstack-parity": "playwright test test/browser/dashboard-grid-parity.spec.js --reporter=line"
   },
   "overrides": {
