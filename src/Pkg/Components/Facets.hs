@@ -2,7 +2,7 @@ module Pkg.Components.Facets (Config (..), Layout (..), FacetNode (..), FacetCon
 
 import Lucid
 import Lucid.Hyperscript (__)
-import Pages.Components (detailsClosedBelowAttr_, filterInputAttr_, searchInput_)
+import Pages.Components (filterInputAttr_, searchInput_)
 import Relude
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, prettyPrintCount)
 
@@ -23,16 +23,17 @@ data Config = Config
 sidebar_ :: Config -> Html ()
 sidebar_ cfg = case cfg.layout of
   Plain -> rail
-  Collapsible -> details_ [open_ "", class_ "w-68 shrink-0 max-lg:w-full", detailsClosedBelowAttr_ 1024] do
+  Collapsible -> details_ [class_ "w-68 shrink-0 max-lg:w-full lg:[&::details-content]:block lg:[&::details-content]:[content-visibility:visible]"] do
     summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded px-2 py-2 text-xs font-semibold text-textStrong hover:bg-fillWeak lg:hidden [&::-webkit-details-marker]:hidden"] "Filters"
     rail
   where
-    rail = div_ ([class_ $ "facet-rail flex w-68 shrink-0 flex-col gap-2 text-sm text-textWeak max-md:w-full " <> cfg.extraClass <> case cfg.layout of { Plain -> ""; Collapsible -> " max-lg:w-full" }, data_ "component" "facet-rail"] <> [id_ x | x <- maybeToList cfg.elemId]) do
+    rail = div_ ([class_ $ "facet-rail group/rail flex w-68 shrink-0 flex-col gap-2 text-sm text-textWeak max-md:w-full " <> cfg.extraClass <> case cfg.layout of { Plain -> ""; Collapsible -> " max-lg:w-full" }, data_ "component" "facet-rail"] <> [id_ x | x <- maybeToList cfg.elemId]) do
       searchInput_
         "sticky top-0 z-10 h-9 w-[calc(100%-1rem)] mx-2 border-strokeStrong bg-bgBase"
         "Search filters"
         [name_ "facet-search", filterInputAttr_ ".facet-rail .facet-item, .facet-rail .facet-section"]
-      forM_ cfg.clear $ \attrs -> button_ ([type_ "button", class_ "flex items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak"] <> attrs) $ "Clear all" >> faSprite_ "xmark" "regular" "h-3 w-3"
+      -- Shown only while a facet is ticked; Explorer and inventories each supply how to clear.
+      forM_ cfg.clear $ \attrs -> button_ ([type_ "button", class_ "hidden items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak group-has-[.facet-item_input:checked]/rail:flex"] <> attrs) $ "Clear all" >> faSprite_ "xmark" "regular" "h-3 w-3"
       div_ [class_ "facets-container"] $ maybe (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.") (mapM_ facetNode_) cfg.content
 
 

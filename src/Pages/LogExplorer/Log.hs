@@ -1655,7 +1655,7 @@ apiLogsPage page = do
         Facets.Config
           { elemId = Just "facets-container"
           , extraClass = "will-change-[width] h-full overflow-y-scroll max-md:shrink max-md:max-h-[55vh] max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0"
-          , clear = Nothing
+          , clear = Just [[__|on click repeat for cb in <input[data-field]:checked/> in closest .facet-rail call queryEditorCall('toggleSubQuery', cb.dataset.field, cb.dataset.value) end|]]
           , content = facetGroups <$> page.facetSummary
           , layout = Facets.Plain
           }

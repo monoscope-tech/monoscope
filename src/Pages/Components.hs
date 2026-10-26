@@ -1067,7 +1067,7 @@ curlCommand method url headers body = T.intercalate " \\\n  " $ ("curl -X " <> m
 -- server-generated ids, never from user input. Pair with @type_ "search"@ so Escape
 -- clears the box and refilters natively.
 filterInputAttr_ :: Text -> Attribute
-filterInputAttr_ sel = term "_" [text|on input or htmx:after:swap from document set v to my value.toLowerCase() then repeat for el in <${sel}/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end on keydown[key is 'Escape'] set my value to '' then send input to me|]
+filterInputAttr_ sel = term "_" [text|on input or htmx:after:swap from document set v to my value.toLowerCase() then if v is '' and event.type is not 'input' exit end then repeat for el in <${sel}/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end on keydown[key is 'Escape'] set my value to '' then send input to me|]
 
 
 -- | Toned icon + label chip.

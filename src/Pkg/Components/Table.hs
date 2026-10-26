@@ -815,11 +815,11 @@ renderResultToolbar tbl = div_ [class_ "flex min-h-9 flex-wrap items-center just
         faSprite_ "table-columns" "regular" "h-3 w-3"
         "Customize"
       -- CSS owns visibility; the checkbox only restores a stored choice. @data-forced@ marks a
-      -- user choice, so ticking a column that a breakpoint hides shows it.
+      -- user choice, so re-ticking a column that a breakpoint hides shows it.
       style_ $ flip foldMap tbl.columns \c ->
         let rule toggle display = "#" <> tbl.config.elemID <> "_page:has([data-column-toggle=\"" <> c.name <> "\"]" <> toggle <> ") [data-column-key=\"" <> c.name <> "\"]{display:" <> display <> "}"
          in rule "[data-forced]:not(:checked)" "none" <> rule "[data-forced]:checked" "table-cell"
-      div_ (popoverPanel_ (tbl.config.elemID <> "-columns") <> [class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg", [__|on beforetoggle if event.newState is 'open' send syncColumn to <[data-column-toggle]/> in me end|]]) do
+      div_ (popoverPanel_ (tbl.config.elemID <> "-columns") <> [class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"]) do
         span_ [class_ "block px-2 pb-1 text-xs font-semibold text-textStrong"] "Visible columns"
         forM_ tbl.columns $ \column -> label_ [class_ "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-fillWeak"] do
           input_
@@ -828,24 +828,14 @@ renderResultToolbar tbl = div_ [class_ "flex min-h-9 flex-wrap items-center just
             , class_ "checkbox checkbox-xs"
             , data_ "column-toggle" column.name
             , data_ "column-storage" $ "table-columns:" <> tbl.config.elemID <> ":" <> column.name
-            , [__|init send syncColumn to me end
-                on syncColumn
-                  set saved to localStorage.getItem(@data-column-storage)
-                  if saved is null
-                    remove @data-forced then set my.checked to true
-                    set cell to (closest <[data-table-columns]/>).querySelector('[data-column-key="' + @data-column-toggle + '"]')
-                    if cell set my.checked to getComputedStyle(cell).display is not 'none' end
-                  else
-                    set @data-forced to 'true' then set my.checked to saved is 'true'
-                  end
-                end
+            , [__|init set saved to localStorage.getItem(@data-column-storage) if saved is not null set @data-forced to 'true' then set my.checked to saved is 'true' end
                 on change set @data-forced to 'true' then call localStorage.setItem(@data-column-storage, my.checked)|]
             ]
           toHtml column.name
         button_
           [ type_ "button"
           , class_ "btn btn-xs btn-ghost mt-1 w-full font-normal"
-          , [__|on click repeat for t in <[data-column-toggle]/> in closest <[data-table-columns]/> call localStorage.removeItem(t.getAttribute('data-column-storage')) then send syncColumn to t end|]
+          , [__|on click repeat for t in <[data-column-toggle]/> in closest <[data-table-columns]/> call localStorage.removeItem(t.getAttribute('data-column-storage')) then remove @data-forced from t then set t.checked to true end|]
           ]
           "Reset columns"
 

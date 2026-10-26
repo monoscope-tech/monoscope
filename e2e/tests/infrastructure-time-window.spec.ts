@@ -70,15 +70,13 @@ for (const width of [390, 1440]) {
     await expect(container.locator('td[data-column-key="CPU"]').first()).toBeVisible();
     if (width === 390) {
       const system = container.locator('[data-column-toggle="System"]');
-      await expect(system).not.toBeChecked();
+      await system.uncheck();
       await system.check();
       await expect(container.locator('td[data-column-key="System"]').first()).toBeVisible();
       await container.getByRole('button', { name: 'Reset columns', exact: true }).click();
       await expect(container.locator('td[data-column-key="System"]').first()).toBeHidden();
       await page.setViewportSize({ width: 1440, height: 900 });
       await expect(container.locator('td[data-column-key="System"]').first()).toBeVisible();
-      await container.getByRole('button', { name: 'Customize', exact: true }).click();
-      await container.getByRole('button', { name: 'Customize', exact: true }).click();
       await expect(system).toBeChecked();
     }
   });
