@@ -391,9 +391,12 @@ window.exportTableCsv = (selector, filename) => {
   if (!table) return;
   const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
   const csv = Array.from(table.querySelectorAll('tr'))
+    .filter(row => !row.hasAttribute('data-table-group') &&
+      (!row.closest('thead') || row.parentElement === table.tHead) &&
+      !Array.from(row.cells).some(cell => cell.querySelector('table')))
     .filter((row) => getComputedStyle(row).display !== 'none')
     .map((row) =>
-      Array.from(row.querySelectorAll<HTMLElement>('th,td'))
+      Array.from(row.cells)
         .filter((cell) => getComputedStyle(cell).display !== 'none')
         .map((cell) => quote(cell.innerText.trim().replaceAll(/\s+/g, ' ')))
         .join(',')

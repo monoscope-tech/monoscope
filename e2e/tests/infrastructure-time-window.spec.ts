@@ -24,8 +24,92 @@ const views = [
   ["hosts", "hostsContainer", { provider, group: "region" }, "Search hosts"],
   ["images", "imagesContainer", { registry: "registry.example", runtime: "kubernetes" }, "Search images"],
   ["kubernetes", "kubernetesContainer", { resource: "pods", namespace, cluster }, "Search pods"],
+  ["containers", "containersContainer", { namespace, cluster }, "Search containers"],
   ["host-map", "hostMapContainer", { provider, group: "region", fill: "memory" }, ""],
 ] as const;
+
+for (const width of [390, 1440]) {
+  test(`shared host controls preserve filters, columns and grouped exports at ${width}px`, async ({ page }) => {
+    test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/p/${DEMO_PROJECT}/infrastructure/hosts?${new URLSearchParams({ provider, since: "1H" })}`);
+    const container = page.locator('#hostsContainer');
+    await expect(container.locator('tr[role="button"]')).toHaveCount(2);
+    if (width === 1440) {
+      await container.evaluate(async (target, url) => { await (window as any).htmx.ajax('GET', url, { target, swap: 'beforeend', select: '#imagesContainer-facets' }); }, `/p/${DEMO_PROJECT}/infrastructure/images?since=1H&deferred=1`);
+      const other = page.locator('#imagesContainer-facets');
+      await expect(other.getByRole('radio', { name: 'kubernetes', exact: true })).toBeVisible();
+      const search = container.locator('#hostsContainer-facets').getByRole('searchbox');
+      await search.fill(provider);
+      await expect(other.getByRole('radio', { name: 'kubernetes', exact: true })).toBeVisible();
+      await search.fill('');
+      await other.evaluate(rail => rail.remove());
+    }
+    await expect(container.getByRole('button', { name: 'Customize', exact: true })).toBeInViewport();
+    await expect(container.getByRole('button', { name: 'Export', exact: true })).toBeInViewport();
+    await container.getByRole('button', { name: 'Customize', exact: true }).click();
+    await container.locator('[data-column-toggle="CPU"]').uncheck();
+    await container.getByRole('button', { name: 'Customize', exact: true }).click();
+    await container.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('region');
+    await expect(page).toHaveURL(/group=region/);
+    expect(new URL(page.url()).searchParams.get('provider')).toBe(provider);
+    expect(new URL(page.url()).searchParams.get('since')).toBe('1H');
+    expect(new URL(page.url()).searchParams.has('deferred')).toBe(false);
+    await expect(container.locator('[data-table-group]')).toHaveCount(1);
+    await expect(container.locator('td[data-column-key="CPU"]').first()).toBeHidden();
+    const search = container.getByRole('searchbox', { name: 'Search hosts', exact: true });
+    await search.fill('no-such-host');
+    await expect(container.locator('[data-table-group]')).toBeHidden();
+    await search.fill('');
+    await expect(container.locator('[data-table-group]')).toBeVisible();
+    const download = page.waitForEvent('download');
+    await container.getByRole('button', { name: 'Export', exact: true }).click();
+    const stream = await (await download).createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream!) chunks.push(Buffer.from(chunk));
+    const csv = Buffer.concat(chunks).toString();
+    expect(csv.split('\n')).toHaveLength(3);
+    expect(csv).not.toContain('"CPU"');
+    expect(csv).toContain('infra-preset-host-30');
+    expect(csv).toContain('infra-preset-host-600');
+    await page.reload();
+    await expect(container.locator('tr[role="button"]')).toHaveCount(2);
+    await expect(container.locator('td[data-column-key="CPU"]').first()).toBeHidden();
+    await container.getByRole('button', { name: 'Customize', exact: true }).click();
+    await container.getByRole('button', { name: 'Reset columns', exact: true }).click();
+    await expect(container.locator('td[data-column-key="CPU"]').first()).toBeVisible();
+    if (width === 390) {
+      const system = container.locator('[data-column-toggle="System"]');
+      await expect(system).not.toBeChecked();
+      await system.check();
+      await expect(container.locator('td[data-column-key="System"]').first()).toBeVisible();
+      await container.getByRole('button', { name: 'Reset columns', exact: true }).click();
+      await expect(container.locator('td[data-column-key="System"]').first()).toBeHidden();
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await expect(container.locator('td[data-column-key="System"]').first()).toBeVisible();
+      await expect(system).toBeChecked();
+    }
+  });
+}
+
+test('shared Kubernetes tabs preserve scoped filters and column choices', async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+  await page.goto(`/p/${DEMO_PROJECT}/infrastructure/kubernetes?${new URLSearchParams({ resource: 'pods', namespace, cluster, since: '1H' })}`);
+  const container = page.locator('#kubernetesContainer');
+  await expect(container.locator('tr[role="button"]')).toHaveCount(2);
+  await container.getByRole('button', { name: 'Customize', exact: true }).click();
+  await container.locator('[data-column-toggle="Memory"]').uncheck();
+  await container.getByRole('button', { name: 'Customize', exact: true }).click();
+  await container.getByRole('tab', { name: 'Nodes', exact: true }).click();
+  await expect(page).toHaveURL(/resource=nodes/);
+  const params = new URL(page.url()).searchParams;
+  expect(params.get('namespace')).toBe(namespace);
+  expect(params.get('cluster')).toBe(cluster);
+  expect(params.get('since')).toBe('1H');
+  await expect(container.locator('tr[role="button"]')).toHaveCount(2);
+  await expect(container.locator('td[data-column-key="Memory"]').first()).toBeHidden();
+});
+
 for (const [route, container, filters, searchName] of views) {
   test(`${route} time presets refresh scoped inventory`, async ({ page }) => {
     test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
@@ -33,8 +117,9 @@ for (const [route, container, filters, searchName] of views) {
     const url = `/p/${DEMO_PROJECT}/infrastructure/${route}?${new URLSearchParams({ ...filters, from: "", to: "", since: "5m" })}`;
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await expect(page.locator("[data-deferred-shell]")).toHaveCount(0, { timeout: 5_000 });
-    const entries = page.locator(`#${container} ${route === "host-map" ? "button[data-hx-get]" : 'tr[role="button"]'}`);
+    const entries = page.locator(`#${container} ${route === "host-map" ? 'button[data-hx-get*="/infrastructure/hosts/detail"]' : 'tr[role="button"]'}`);
     await expect(entries).toHaveCount(1);
+    if (route === "containers") await expect(page.getByText(/containers reporting in the final 5m of this range/)).toBeVisible();
     await page.locator('[popovertarget="n-timepicker-popover"]').click();
     await page.locator("[data-mobile-live-toggle]").click();
     await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "0");
@@ -43,6 +128,7 @@ for (const [route, container, filters, searchName] of views) {
     await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
     await expect(page).toHaveURL(/since=1H/);
     await expect(entries).toHaveCount(2);
+    if (route === "containers") await expect(page.getByText(/containers reporting in the final 15m of this range/)).toBeVisible();
     const params = new URL((await refresh).url()).searchParams;
     expect(params.getAll("since")).toEqual(["1H"]);
     expect(params.getAll("from")).toEqual([""]);
@@ -86,6 +172,14 @@ for (const [route, container, filters, searchName] of views) {
     const restored = new URL((await entries.first().getAttribute("data-hx-get"))!, page.url()).searchParams;
     expect(restored.get("since")).toBe("1H");
     expect(restored.get("from") || restored.get("to")).toBeFalsy();
+    if (route === "containers") {
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(entries).toHaveCount(2);
+      await entries.filter({ hasText: "600" }).press("Enter");
+      const drawer = page.locator("#global-data-drawer-content");
+      await expect(drawer.getByText(/^Pod:\s*infra-preset-pod-600$/)).toBeVisible();
+      expect(new URL((await drawer.getByRole("link", { name: "View logs", exact: true }).getAttribute("href"))!, page.url()).searchParams.get("since")).toBe("1H");
+    }
   });
   test(`${route} time presets replace held initial inventory`, async ({ page }) => {
     test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
@@ -107,14 +201,14 @@ for (const [route, container, filters, searchName] of views) {
       await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
       release();
       await expect(page.locator("[data-deferred-shell]")).toHaveCount(0, { timeout: 5_000 });
-      const entries = page.locator(`#${container} ${route === "host-map" ? "button[data-hx-get]" : 'tr[role="button"]'}`);
+      const entries = page.locator(`#${container} ${route === "host-map" ? 'button[data-hx-get*="/infrastructure/hosts/detail"]' : 'tr[role="button"]'}`);
       await expect(entries).toHaveCount(2);
       expect(new URL((await entries.first().getAttribute("data-hx-get"))!, page.url()).searchParams.get("since")).toBe("1H");
     } finally { release(); }
   });
 }
 
-for (const [route, container, filters] of [...views, ["containers", "containersContainer", { namespace, cluster }]] as const) {
+for (const [route, container, filters] of views) {
   test(`${route} initial inventory does not wait for application script arrival`, async ({ page }) => {
     test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
     let release = () => {};
@@ -122,7 +216,7 @@ for (const [route, container, filters] of [...views, ["containers", "containersC
     await page.route(/\/public\/assets\/(?:js\/main\.|web-components\/dist\/js\/index\.).*\.js$/, async route => { await held; await route.continue(); });
     try {
       await page.goto(`/p/${DEMO_PROJECT}/infrastructure/${route}?${new URLSearchParams({ ...filters, from: "", to: "", since: "5M" })}&since=5m`, { waitUntil: "commit" });
-      const entries = page.locator(`#${container} ${route === "host-map" ? "button[data-hx-get]" : 'tr[role="button"]'}`);
+      const entries = page.locator(`#${container} ${route === "host-map" ? 'button[data-hx-get*="/infrastructure/hosts/detail"]' : 'tr[role="button"]'}`);
       await page.waitForFunction(() => Boolean((window as any).htmx));
       await expect.poll(() => page.evaluate(() => typeof (window as any).params)).toBe("undefined");
       // The shell may have loaded automatically before this test reaches it.

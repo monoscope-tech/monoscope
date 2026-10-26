@@ -18,13 +18,13 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('table CSV export', () => {
-  test('downloads escaped visible cells with the requested filename', async () => {
-    document.body.innerHTML = `
-      <table id="inventory">
-        <tr><th>Host</th><th>Note</th><th style="display:none">Secret</th></tr>
-        <tr><td>api-1</td><td>ready, "primary"</td><td style="display:none">token</td></tr>
-        <tr style="display:none"><td>hidden</td><td>row</td></tr>
-      </table>`;
+  test.each([false, true])('downloads escaped visible cells, grouped=%s', async (grouped) => {
+    const header = '<tr><th>Host</th><th>Note</th><th style="display:none">Secret</th></tr>';
+    const rows = `<tr ${grouped ? 'class="itemsListItem"' : ''}><td>api-1</td><td>ready, "primary"</td><td style="display:none">token</td></tr>
+      <tr ${grouped ? 'class="itemsListItem"' : ''} style="display:none"><td>hidden</td><td>row</td></tr>`;
+    document.body.innerHTML = `<table id="inventory"><thead>${header}</thead><tbody>${grouped
+      ? `<tr><td colspan="3"><details><summary>Europe: 2 hosts</summary><table><thead class="sr-only">${header}</thead><tbody>${rows}</tbody></table></details></td></tr>`
+      : rows}</tbody></table>`;
     document.querySelectorAll<HTMLElement>('th,td').forEach((cell) => (cell.innerText = cell.textContent ?? ''));
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
 

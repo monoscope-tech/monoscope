@@ -61,94 +61,7 @@ test("navbar refresh menu applies Off and interval options", async ({ page }) =>
   }
 });
 
-test("changing the container time preset refreshes inventory and drawer windows", async ({ page }) => {
-  test.setTimeout(90_000); // Includes a real 15s live tick, repeated presets and held initial arrival.
-  test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
-  const namespace = "e2e-container-preset";
-  const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource->'k8s'->'namespace'->>'name'='${namespace}';`;
-  sql(cleanup + [30, 600].map(age => `INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___k8s___container___name,resource___k8s___pod___name,resource___k8s___namespace___name,resource)
-    VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'preset-${age}','${new Date(Date.now() - age * 1000).toISOString()}','container.cpu.usage','GAUGE',1,'preset-${age}','preset-pod-${age}','${namespace}',
-      '${JSON.stringify({ k8s: { container: { name: `preset-${age}` }, pod: { name: `preset-pod-${age}` }, namespace: { name: namespace }, cluster: { uid: CLUSTER }, node: { name: "preset-node" } } })}');`).join(""));
-  try {
-    await page.setViewportSize({ width: 390, height: 900 });
-    await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?namespace=${namespace}&cluster=${CLUSTER}&since=5M`, { waitUntil: "domcontentloaded" });
-    const rows = page.locator('#containersContainer tr[role="button"]');
-    await expect(rows).toHaveCount(1);
-    await expect(page.getByText(/containers reporting in the final 5m of this range/)).toBeVisible();
-    const refresh = page.waitForRequest(request => new URL(request.url()).searchParams.get("deferred") === "1" && new URL(request.url()).searchParams.get("since") === "1H");
-    await page.locator('[popovertarget="n-timepicker-popover"]').click();
-    await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
-    const requested = new URL((await refresh).url()).searchParams;
-    expect(requested.getAll("since")).toEqual(["1H"]);
-    expect(requested.get("namespace")).toBe(namespace);
-    expect(requested.get("cluster")).toBe(CLUSTER);
-    await expect(page).toHaveURL(/since=1H/);
-    await expect(rows).toHaveCount(2);
-    await expect(page.getByText(/containers reporting in the final 15m of this range/)).toBeVisible();
-    expect(await rows.evaluateAll(rows => rows.every(row => {
-      const params = new URL(row.getAttribute("data-hx-get")!, location.origin).searchParams;
-      return params.get("since") === "1H" && params.get("namespace") === "e2e-container-preset" && params.get("cluster") === "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
-    }))).toBe(true);
-    const search = page.getByRole("searchbox", { name: "Search containers", exact: true });
-    await search.fill("preset-600");
-    await expect(page.locator('#containersContainer tr[role="button"]:visible')).toHaveCount(1);
-    for (const [preset, count] of [["5M", 1], ["1H", 2]] as const) {
-      await page.locator('[popovertarget="n-timepicker-popover"]').click();
-      await page.locator(`#n-timepicker-popover button[data-value="${preset}"]`).click();
-      await expect(rows).toHaveCount(count);
-      await expect(search).toHaveValue("preset-600");
-      await expect(page.locator('#containersContainer tr[role="button"]:visible')).toHaveCount(preset === "1H" ? 1 : 0);
-      expect(new URL((await rows.first().getAttribute("data-hx-get"))!, page.url()).searchParams.get("since")).toBe(preset);
-    }
-    await search.focus();
-    await page.evaluate(() => new Promise<void>(resolve => document.getElementById("containersContainer")!.addEventListener("htmx:afterSwap", () => resolve(), { once: true })));
-    await expect(search).toBeFocused();
-    await expect(search).toHaveValue("preset-600");
-    await expect(page.locator('#containersContainer tr[role="button"]:visible')).toHaveCount(1);
-    await search.fill("");
-    await page.locator('[popovertarget="n-timepicker-popover"]').click();
-    await page.getByRole("button", { name: "Previous time window", exact: true }).click();
-    await expect.poll(() => new URL(page.url()).searchParams.get("from")).toBeTruthy();
-    await expect(rows).toHaveCount(0);
-    await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
-    await expect(rows).toHaveCount(2);
-    const restored = new URL((await rows.first().getAttribute("data-hx-get"))!, page.url()).searchParams;
-    expect(restored.get("since")).toBe("1H");
-    expect(restored.get("from") || restored.get("to")).toBeFalsy();
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(rows).toHaveCount(2);
-    await rows.filter({ hasText: "preset-600" }).focus();
-    await page.keyboard.press("Enter");
-    const drawer = page.locator("#global-data-drawer-content");
-    await expect(drawer.getByText(/^Pod:\s*preset-pod-600$/)).toBeVisible();
-    expect(new URL((await drawer.getByRole("link", { name: "View logs", exact: true }).getAttribute("href"))!, page.url()).searchParams.get("since")).toBe("1H");
-    let release = () => {};
-    const held = new Promise<void>(resolve => { release = resolve; });
-    await page.route("**/infrastructure/containers?**", async route => {
-      const params = new URL(route.request().url()).searchParams;
-      if (params.get("deferred") === "1" && params.get("since") === "5M") await held;
-      await route.continue();
-    });
-    try {
-      const initial = page.waitForRequest(request => new URL(request.url()).searchParams.get("deferred") === "1");
-      await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?namespace=${namespace}&cluster=${CLUSTER}&since=5M`, { waitUntil: "domcontentloaded" });
-      await initial;
-      await page.locator('[popovertarget="n-timepicker-popover"]').click();
-      await page.locator("[data-mobile-live-toggle]").click();
-      await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "0");
-      await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
-      release();
-      await expect(rows).toHaveCount(2);
-      expect(new URL((await rows.first().getAttribute("data-hx-get"))!, page.url()).searchParams.get("since")).toBe("1H");
-    } finally {
-      release();
-    }
-  } finally {
-    sql(cleanup);
-  }
-});
-
-for (const width of [390, 1280]) {
+for (const width of [390, 1280, 1920]) {
   test(`duplicate containers expose their identity before opening a drawer at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
@@ -163,7 +76,7 @@ for (const width of [390, 1280]) {
         return value ? value.getClientRects().length > 0 : null;
       });
     }));
-    expect(visible).toEqual(Array(identities.length * 4).fill(width < 1024));
+    expect(visible).toEqual(Array(identities.length * 4).fill(width < 1536));
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 }
@@ -213,38 +126,30 @@ for (const width of [390, 1280]) {
     expect(data.error ?? null).toBeNull();
     expect(data.dataset.map((row: number[]) => row.slice(1))).toEqual([[2]]);
     await expect(drawer.locator("#container-detail-cpu canvas")).toBeVisible();
-  });
-}
-
-for (const theme of ["dark", "light"]) {
-  test(`a lone container metric observation has a visible point in ${theme} appearance`, async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?namespace=identity-b&from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
-    await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
-    if (await page.locator("body").getAttribute("data-theme") !== theme) await page.evaluate(() => (window as any).toggleDarkMode());
-    await page.locator(`tr[role="button"][data-hx-get*="container=${CONTAINER}"] td`).first().click();
-    await expect(page.locator("#global-data-drawer-content #container-detail-cpu canvas")).toBeVisible();
-    await expect(page.locator("#container-detail-cpu")).toHaveAttribute("aria-busy", "false");
-    const rendered = await page.evaluate(() => {
-      const chart = (window as any).echarts.getInstanceByDom(document.getElementById("container-detail-cpu"));
-      const data = chart.getModel().getSeriesByIndex(0)?.getData();
-      if (!data) return { values: [], symbols: 0 };
-      const dimension = data.mapDimension("y");
-      const values = Array.from({ length: data.count() }, (_, index) => data.get(dimension, index)).filter(Number.isFinite);
-      const symbols = Array.from({ length: data.count() }, (_, index) => data.getItemGraphicEl(index)).filter(element => element && !element.ignore && element.getBoundingRect().width > 0 && element.getBoundingRect().height > 0).length;
-      return { values, symbols };
-    });
-    expect(rendered.values).toEqual([2]);
-    expect(rendered.symbols).toBe(1);
-    const point = await page.evaluate(() => {
-      const element = document.getElementById("container-detail-cpu")!;
-      const chart = (window as any).echarts.getInstanceByDom(element);
-      const pixel = chart.convertToPixel({ seriesIndex: 0 }, chart.getOption().dataset[0].source[1]);
-      const bounds = element.getBoundingClientRect();
-      return { x: bounds.left + pixel[0], y: bounds.top + pixel[1] };
-    });
-    await page.mouse.move(point.x, point.y + 1);
-    await expect(page.getByText("2 cores", { exact: true })).toBeVisible();
+    for (const theme of width === 1280 ? ["dark", "light"] : []) {
+      if (await page.locator("body").getAttribute("data-theme") !== theme) await page.evaluate(() => (window as any).toggleDarkMode());
+      await expect(page.locator("#container-detail-cpu")).toHaveAttribute("aria-busy", "false");
+      const rendered = await page.evaluate(() => {
+        const chart = (window as any).echarts.getInstanceByDom(document.getElementById("container-detail-cpu"));
+        const data = chart.getModel().getSeriesByIndex(0)?.getData();
+        if (!data) return { values: [], symbols: 0 };
+        const dimension = data.mapDimension("y");
+        const values = Array.from({ length: data.count() }, (_, index) => data.get(dimension, index)).filter(Number.isFinite);
+        const symbols = Array.from({ length: data.count() }, (_, index) => data.getItemGraphicEl(index)).filter(element => element && !element.ignore && element.getBoundingRect().width > 0 && element.getBoundingRect().height > 0).length;
+        return { values, symbols };
+      });
+      expect(rendered.values).toEqual([2]);
+      expect(rendered.symbols).toBe(1);
+      const point = await page.evaluate(() => {
+        const element = document.getElementById("container-detail-cpu")!;
+        const chart = (window as any).echarts.getInstanceByDom(element);
+        const pixel = chart.convertToPixel({ seriesIndex: 0 }, chart.getOption().dataset[0].source[1]);
+        const bounds = element.getBoundingClientRect();
+        return { x: bounds.left + pixel[0], y: bounds.top + pixel[1] };
+      });
+      await page.mouse.move(point.x, point.y + 1);
+      await expect(page.getByText("2 cores", { exact: true })).toBeVisible();
+    }
   });
 }
 
@@ -255,13 +160,12 @@ test("mobile namespace facet preserves the selected cluster", async ({ page }) =
   const rows = page.locator(`tr[role="button"][data-hx-get*="container=${CONTAINER}"]`);
   await expect(rows).toHaveCount(4);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.locator("#containersContainer summary").filter({ hasText: /^Filters$/ }).focus();
-  await page.keyboard.press("Enter");
-  await page.locator('[data-component="facet-section"] summary').filter({ hasText: /^Namespace$/ }).focus();
+  await page.locator("#containersContainer summary").filter({ hasText: /^Filters$/ }).press("Enter");
+  await page.locator('[data-component="facet-section"] summary').filter({ hasText: /^Namespace$/ }).press("Enter");
+  await expect(page.getByRole("radio", { name: "identity-a", exact: true })).toBeHidden();
   await page.keyboard.press("Enter");
   const changed = page.waitForResponse(response => new URL(response.url()).searchParams.get("namespace") === "identity-a");
-  await page.getByRole("radio", { name: "identity-a", exact: true }).focus();
-  await page.keyboard.press("Space");
+  await page.getByRole("radio", { name: "identity-a", exact: true }).press("Space");
   const url = new URL((await changed).url());
   await expect(rows).toHaveCount(3);
   expect(url.searchParams.getAll("cluster")).toEqual([CLUSTER]);
@@ -269,24 +173,19 @@ test("mobile namespace facet preserves the selected cluster", async ({ page }) =
   expect(url.searchParams.get("from")).toBe("2024-12-31T23:00:00Z");
   expect(url.searchParams.get("to")).toBe("2025-01-01T00:00:00Z");
   expect(await rows.evaluateAll((rows, cluster) => rows.every(row => new URL(row.getAttribute("data-hx-get")!, "http://localhost").searchParams.get("cluster") === cluster), CLUSTER)).toBe(true);
-  await page.locator("#containersContainer summary").filter({ hasText: /^Filters$/ }).focus();
-  await page.keyboard.press("Enter");
+  await page.locator("#containersContainer summary").filter({ hasText: /^Filters$/ }).press("Enter");
   const replaced = page.waitForResponse(response => new URL(response.url()).searchParams.get("namespace") === "identity-b");
-  await page.getByRole("radio", { name: "identity-b", exact: true }).focus();
-  await page.keyboard.press("Space");
+  await page.getByRole("radio", { name: "identity-b", exact: true }).press("Space");
   const replacedUrl = new URL((await replaced).url());
   await expect(rows).toHaveCount(1);
   expect(replacedUrl.searchParams.getAll("namespace")).toEqual(["identity-b"]);
   expect(replacedUrl.searchParams.getAll("cluster")).toEqual([CLUSTER]);
-  await page.getByRole("button", { name: "Remove filter Namespace: identity-b", exact: true }).focus();
-  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Remove filter Namespace: identity-b", exact: true }).press("Enter");
   await expect(rows).toHaveCount(4);
   await expect(page.getByRole("button", { name: `Remove filter Cluster: ${CLUSTER}`, exact: true })).toBeVisible();
-  await page.locator("#containersContainer summary").filter({ hasText: /^Filters$/ }).focus();
-  await page.keyboard.press("Enter");
+  await page.locator("#containersContainer summary").filter({ hasText: /^Filters$/ }).press("Enter");
   const cleared = page.waitForResponse(response => new URL(response.url()).pathname.endsWith("/infrastructure/containers"));
-  await page.getByRole("button", { name: "Clear all", exact: true }).focus();
-  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Clear all", exact: true }).press("Enter");
   const clearUrl = new URL((await cleared).url());
   await expect(rows).toHaveCount(5);
   for (const key of ["runtime", "cluster", "namespace", "node", "image"]) expect(clearUrl.searchParams.has(key)).toBe(false);
@@ -301,6 +200,9 @@ test("mobile container search remains reachable and preserves drawer identity", 
   await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
   const rows = page.locator(`tr[role="button"][data-hx-get*="container=${CONTAINER}"]:visible`);
   await expect(rows).toHaveCount(4);
+  const cpu = rows.filter({ hasText: "Node / host: identity-node-b" }).locator("td").nth(4).locator("span");
+  await expect(cpu).toHaveText("4.000");
+  await expect(cpu).toBeInViewport({ ratio: 0.95 });
   const search = page.getByPlaceholder("Search containers", { exact: true });
   await expect(search).toBeVisible();
   expect(await search.evaluate(input => parseFloat(getComputedStyle(input).fontSize))).toBeGreaterThanOrEqual(16);
@@ -319,24 +221,10 @@ test("mobile container search remains reachable and preserves drawer identity", 
   expect(url.searchParams.get("from")).toBe("2024-12-31T23:00:00Z");
   expect(url.searchParams.get("to")).toBe("2025-01-01T00:00:00Z");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await rows.focus();
-  await page.keyboard.press("Enter");
+  await rows.press("Enter");
   const drawer = page.locator("#global-data-drawer-content");
   await expect(drawer.getByText(/^Node \/ host:\s*identity-node-b$/)).toBeVisible();
   await expect(drawer.getByText(/^Namespace:\s*identity-a$/)).toBeVisible();
-});
-
-
-test("mobile container CPU fits initially with an active cluster filter", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 900 });
-  await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?cluster=${CLUSTER}&from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
-  await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
-  const rows = page.locator(`tr[role="button"][data-hx-get*="container=${CONTAINER}"]`);
-  await expect(rows).toHaveCount(4);
-  const cpu = rows.filter({ hasText: "Node / host: identity-node-b" }).locator("td").nth(4).locator("span");
-  await expect(cpu).toHaveText("4.000");
-  await expect(cpu).toBeInViewport({ ratio: 0.95 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
 

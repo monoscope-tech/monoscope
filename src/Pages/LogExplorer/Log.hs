@@ -39,7 +39,6 @@ import Data.Aeson.Types qualified as AET
 import Data.Default (Default, def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Foldable.WithIndex (iforM_)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
@@ -75,10 +74,12 @@ import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, pageActions, pageTitle)
-import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
+import Pkg.Components.Facets (FacetChoice (..), FacetContent (..), FacetNode (..), FacetOverflow (..), facetHeadCount, facetNode_, facetTail_)
+import Pkg.Components.Facets qualified as Facets
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), VizSurface (..), VizType (..), enrichSchemaWithFacets, logQueryBox_, visTypes)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
@@ -99,7 +100,7 @@ import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
 import Text.Slugify (slugify)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
+import Utils (FieldAction (..), FieldMenuCtx (..), encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 
@@ -513,105 +514,72 @@ facetGroupPaths g = map (.path) $ Map.findWithDefault [] g facetsByGroup
 -- | Render facet data for Log Explorer sidebar in a compact format.
 -- The facet counts are scaled in the upstream summary based on the selected time range.
 renderFacets :: FacetSummary -> Html ()
-renderFacets facetSummary =
-  forM_ (universe :: [FacetGroup]) \facetGroup -> renderFacetGroup (facetGroup == FGCommon) facetGroup facetSummary
+renderFacets = mapM_ facetNode_ . facetGroups
 
 
--- | A group shell is cheap enough for the initial sidebar. Only Common Filters
--- includes its fields immediately; every closed group fetches and replaces
--- its shell with the server-rendered Lucid fragment on first open.
-renderFacetGroup :: Bool -> FacetGroup -> FacetSummary -> Html ()
-renderFacetGroup loaded facetGroup facetSummary =
-  facetSection_ loaded "facet-section-group" attrs (span_ [class_ "font-medium text-sm"] $ toHtml $ facetGroupLabel facetGroup) body
-  where
-    attrs =
-      if loaded
-        then []
-        else
-          [ hxGet_ url
-          , hxTrigger_ "toggle[target.open] once"
-          , hxTarget_ "this"
-          , hxSwap_ "outerHTML"
-          , hxIndicator_ "find .facet-group-loader"
-          ]
-    body
-      | loaded = div_ [class_ "facets-container"] $ renderFacetFields facetGroup facetSummary
-      | otherwise = div_ [class_ "facet-group-loader htmx-indicator flex h-8 items-center justify-center"] $ loadingIndicator_ LdXS LdSpinner
-    url = "/p/" <> facetSummary.projectId <> "/log_explorer/facets?group=" <> facetGroupParam facetGroup
+facetGroups :: FacetSummary -> [FacetNode]
+facetGroups summary = [facetGroupNode (g == FGCommon) g summary | g <- universe]
 
 
--- | Facet values shown before the "+ More" fold. 'renderFacetFields' takes this
--- many and 'renderFacetTail' drops exactly the same many — two different numbers
--- here would make the tail repeat or skip values.
-facetHeadCount :: Int
-facetHeadCount = 5
-
-
-renderFacetFields :: FacetGroup -> FacetSummary -> Html ()
-renderFacetFields facetGroup facetSummary = do
-  let (FacetData facetMap) = facetSummary.facetJson
-      facets = Map.findWithDefault [] facetGroup facetsByGroup
-  -- Checkbox↔query sync lives in web-components/src/main.ts (syncFacetCheckboxes),
-  -- wired to `update-query` + `htmx:after:swap` so swapped-in facets re-sync.
-  iforM_ facets \idx facet -> do
-    let values = HM.lookupDefault [] facet.path facetMap
-        open = facetGroup == FGCommon && idx < 5 && not (null values)
-        (visibleValues, hiddenValues) = splitAt facetHeadCount values
-        hiddenCount = length hiddenValues
-    facetSection_
-      open
-      ""
-      []
-      ( div_ [class_ "flex items-center justify-between gap-2"] do
-          span_ [class_ "truncate text-sm font-normal", term "data-tippy-content" facet.path] $ toHtml facet.label
-          -- Bubble-halt so the ⋮ popover (and its menu items) don't toggle the <details>.
-          div_ [class_ "inline-block", [__|on click halt the event's bubbling|]] do
-            button_ ([type_ "button", class_ "cursor-pointer rounded p-1 hover:bg-fillWeak", Aria.label_ "Facet options"] <> popoverTrigger_ (slugify facet.path))
-              $ faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
-            ul_ ([class_ "dropdown menu p-2 shadow-sm bg-bgRaised rounded-box w-96 border border-strokeWeak z-50", term "data-field-path" facet.path] <> fieldMenuPanel_ (slugify facet.path))
-              $ fieldContextMenuItems_ (StaticField facet.path Nothing) [FCopyField, FDivider, FGroupBy, FViewPatterns, FDivider, FAddColumn]
-      )
-      $ div_ [class_ "facet-values pl-5 pr-1 mb-1 space-y-1"] do
-        if null values
-          then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
-          else forM_ visibleValues (renderFacetValue facet)
-        when (hiddenCount > 0)
-          $ div_ [class_ "facet-tail"]
-          $ button_
-            [ type_ "button"
-            , class_ "facet-more text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline"
-            , hxGet_ $ "/p/" <> facetSummary.projectId <> "/log_explorer/facets?field=" <> toUriStr facet.path
-            , hxTarget_ "closest .facet-tail"
+facetGroupNode :: Bool -> FacetGroup -> FacetSummary -> FacetNode
+facetGroupNode loaded facetGroup summary =
+  FacetNode
+    { label = facetGroupLabel facetGroup
+    , path = Nothing
+    , expanded = loaded
+    , attrs =
+        if loaded
+          then []
+          else
+            [ hxGet_ $ "/p/" <> summary.projectId <> "/log_explorer/facets?group=" <> facetGroupParam facetGroup
+            , hxTrigger_ "toggle[target.open] once"
+            , hxTarget_ "this"
             , hxSwap_ "outerHTML"
+            , hxIndicator_ "find .facet-group-loader"
             ]
-          $ toHtml
-          $ "+ More ("
-          <> prettyPrintCount hiddenCount
-          <> ")"
+    , actions = Nothing
+    , content = if loaded then FacetChildren fields else FacetLoading
+    }
+  where
+    (FacetData valuesByPath) = summary.facetJson
+    fields =
+      [ FacetNode
+          { label = facet.label
+          , path = Just facet.path
+          , expanded = facetGroup == FGCommon && index < 5 && not (null values)
+          , attrs = []
+          , actions = Just do
+              button_ ([type_ "button", class_ "cursor-pointer rounded p-1 hover:bg-fillWeak", Aria.label_ "Facet options"] <> popoverTrigger_ (slugify facet.path)) $ faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
+              ul_ ([class_ "dropdown menu p-2 shadow-sm bg-bgRaised rounded-box w-96 border border-strokeWeak z-50", term "data-field-path" facet.path] <> fieldMenuPanel_ (slugify facet.path))
+                $ fieldContextMenuItems_ (StaticField facet.path Nothing) [FCopyField, FDivider, FGroupBy, FViewPatterns, FDivider, FAddColumn]
+          , content =
+              FacetValues (map (facetChoice facet) values)
+                $ FetchValues
+                  [ hxGet_ $ "/p/" <> summary.projectId <> "/log_explorer/facets?field=" <> toUriStr facet.path
+                  , hxTarget_ "closest .facet-tail"
+                  , hxSwap_ "outerHTML"
+                  ]
+          }
+      | (index, facet) <- zip [0 :: Int ..] $ Map.findWithDefault [] facetGroup facetsByGroup
+      , let values = HM.lookupDefault [] facet.path valuesByPath
+      ]
 
 
-renderFacetValue :: Facet -> FacetValue -> Html ()
-renderFacetValue f (FacetValue val count) =
-  facetOption_
-    "facet-item max-md:min-h-9"
-    []
-    ( do
-        input_
-          [ type_ "checkbox"
-          , class_ "checkbox checkbox-xs max-md:checkbox-sm"
-          , -- Via queryEditorCall, not the element directly: Monaco is loaded lazily, so on a fresh
-            -- page load <query-editor> is still un-upgraded and `.toggleSubQuery` doesn't exist yet.
-            term "hx-on:click" "window.queryEditorCall('toggleSubQuery', this.dataset.field, this.dataset.value)"
-          , Aria.label_ (f.path <> " equals " <> val)
-          , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
-          , term "data-field" f.path
-          , term "data-value" val
-          ]
-        let colorClass = f.color val
-        unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
-        span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] $ toHtml val
-    )
-    (span_ [class_ "facet-count shrink-0 text-xs tabular-nums text-textWeak"] $ toHtml $ prettyPrintCount count)
+facetChoice :: Facet -> FacetValue -> FacetChoice
+facetChoice f (FacetValue val count) =
+  FacetChoice
+    { label = val
+    , multiSelect = True
+    , inputAttrs =
+        [ term "hx-on:click" "window.queryEditorCall('toggleSubQuery', this.dataset.field, this.dataset.value)"
+        , Aria.label_ (f.path <> " equals " <> val)
+        , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
+        , term "data-field" f.path
+        , term "data-value" val
+        ]
+    , marker = if T.null (f.color val) then Nothing else Just $ span_ [class_ $ f.color val <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
+    , count = Just $ prettyPrintCount count
+    }
 
 
 -- | Descendants of a page of rows, for the trace tree: seed from each row's own
@@ -1022,7 +990,7 @@ logExplorerFacetsH pid fieldM groupM = do
       (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
       ( \summary -> case (fieldM, facetGroupM) of
           (Just field, _) -> renderFacetTail field summary
-          (_, Just facetGroup) -> renderFacetGroup True facetGroup summary
+          (_, Just facetGroup) -> facetNode_ $ facetGroupNode True facetGroup summary
           _ -> renderFacets summary
       )
       facetSummary
@@ -1032,12 +1000,7 @@ logExplorerFacetsH pid fieldM groupM = do
       whenJust (find ((== field) . (.path)) facetDefs) \facet -> do
         let (FacetData facetMap) = facetSummary.facetJson
             values = drop facetHeadCount $ HM.lookupDefault [] field facetMap
-            count = prettyPrintCount $ length values
-        details_ [class_ "facet-tail group", open_ ""] do
-          summary_ [class_ "list-none cursor-pointer text-textBrand text-xs px-1 py-0.5 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"] do
-            span_ [class_ "group-open:hidden"] $ toHtml $ "+ More (" <> count <> ")"
-            span_ [class_ "hidden group-open:inline"] $ toHtml $ "− Less (" <> count <> ")"
-          div_ [class_ "space-y-1"] $ forM_ values (renderFacetValue facet)
+        facetTail_ True $ map (facetChoice facet) values
 
 
 -- | Structured verdict for the query editor. It underlines @column@..@width@ and
@@ -1689,16 +1652,14 @@ apiLogsPage page = do
     -- No `contain:layout` here: it makes this a containing block for fixed/anchored
     -- descendants, which clips the facet action popover (top layer) to the sidebar.
     facetsPanel =
-      facetRail_
-        (Just "facets-container")
-        "w-68 will-change-[width] text-sm text-textWeak shrink-0 h-full overflow-y-scroll max-md:w-full max-md:shrink max-md:max-h-[55vh] max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0"
-        "Search filters"
-        Nothing
-        $ div_ [id_ "facets-list"]
-        $ maybe
-          (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
-          renderFacets
-          page.facetSummary
+      Facets.sidebar_
+        Facets.Config
+          { elemId = "facets-container"
+          , extraClass = "will-change-[width] h-full overflow-y-scroll max-md:shrink max-md:max-h-[55vh] max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0"
+          , clear = Just [[__|on click repeat for cb in <input[data-field]:checked/> in closest .facet-rail call cb.click() end|]]
+          , content = facetGroups <$> page.facetSummary
+          , layout = Facets.Plain
+          }
 
     logsListPanel = div_ [class_ "@container grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
       rowCountHeader

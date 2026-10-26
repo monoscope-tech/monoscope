@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, facetRail_, facetSection_, facetOption_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -75,55 +75,6 @@ searchInput_ :: Text -> Text -> [Attribute] -> Html ()
 searchInput_ extra ph attrs = label_ [class_ $ "input input-sm flex items-center gap-2 " <> extra] do
   faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
   input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent max-md:text-base", placeholder_ ph, Aria.label_ (T.dropWhileEnd (== '…') ph)] <> attrs
-
-
--- | Shared shell for searchable facet trees. The content decides how filters change
--- (query-editor operations in Explorer, URL parameters in inventories); search,
--- accessibility, and disclosure markers stay identical.
-facetRail_ :: Maybe Text -> Text -> Text -> Maybe (Html ()) -> Html () -> Html ()
-facetRail_ elemId extraClass searchLabel actions content =
-  div_ ([class_ $ "facet-rail flex flex-col gap-2 " <> extraClass, data_ "component" "facet-rail"] <> [id_ x | x <- maybeToList elemId]) do
-    searchInput_
-      "sticky top-0 z-10 h-9 w-[calc(100%-1rem)] mx-2 border-strokeStrong bg-bgBase"
-      searchLabel
-      [ name_ "facet-search"
-      , oninput_ "const q=this.value.toLowerCase();this.closest('[data-component=\"facet-rail\"]').querySelectorAll('[data-component=\"facet-option\"],[data-component=\"facet-section\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)))"
-      , onkeydown_ "if(event.key==='Escape'){this.value='';this.dispatchEvent(new Event('input',{bubbles:true}))}"
-      ]
-    whenJust actions id
-    content
-
-
--- | Native details/summary facet disclosure shared by Explorer's lazy hierarchy
--- and inventory filter menus. Extra attributes must not include @class@.
-facetSection_ :: Bool -> Text -> [Attribute] -> Html () -> Html () -> Html ()
-facetSection_ startOpen extraClass attrs title content =
-  details_
-    ( [ class_ $ "facet-section block border-t border-strokeWeak [&[open]>summary_.facet-chevron]:rotate-0 " <> extraClass
-      , data_ "component" "facet-section"
-      ]
-        <> attrs
-        <> [open_ "" | startOpen]
-    )
-    do
-      summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded px-2 py-2 text-xs font-semibold text-textStrong hover:bg-fillWeak [&::-webkit-details-marker]:hidden"] do
-        faSprite_ "chevron-down" "regular" "facet-chevron h-2.5 w-2.5 shrink-0 -rotate-90 transition-transform"
-        div_ [class_ "min-w-0 flex-1"] title
-      content
-
-
--- | Shared option row. Callers provide the control/label body and optional count.
-facetOption_ :: Text -> [Attribute] -> Html () -> Html () -> Html ()
-facetOption_ extraClass attrs body trailing =
-  label_
-    ( [ class_ $ "flex min-h-7 cursor-pointer items-center justify-between gap-2 rounded px-2 py-1 hover:bg-fillWeak " <> extraClass
-      , data_ "component" "facet-option"
-      ]
-        <> attrs
-    )
-    do
-      div_ [class_ "flex min-w-0 flex-1 items-center gap-2"] body
-      trailing
 
 
 -- | Header of an entity detail drawer: icon and title with inline @badges@, then the
@@ -1116,7 +1067,7 @@ curlCommand method url headers body = T.intercalate " \\\n  " $ ("curl -X " <> m
 -- server-generated ids, never from user input. Pair with @type_ "search"@ so Escape
 -- clears the box and refilters natively.
 filterInputAttr_ :: Text -> Attribute
-filterInputAttr_ sel = term "_" [text|on input or htmx:after:swap from document set v to my value.toLowerCase() then repeat for el in <${sel}/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end|]
+filterInputAttr_ sel = term "_" [text|on input set v to my value.toLowerCase() then repeat for el in <${sel}/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end on htmx:after:swap from document if my value is not '' send input to me end on keydown[key is 'Escape'] set my value to '' then send input to me|]
 
 
 -- | Toned icon + label chip.

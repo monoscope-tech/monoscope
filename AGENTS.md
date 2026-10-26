@@ -204,6 +204,13 @@ without having run them.
 
 ### Sign off locally before updating the pull request — never push and wait on CI
 
+**Run sign-off only at the end, after all requested work, reviews, and focused
+verification are complete. Sign-off is expensive: do not start or queue
+`make ci-signoff`, full CI, or deploy-image builds while implementation or UI
+iteration is still in progress. Use the existing watchers and focused tests
+during development. If more work is requested after sign-off starts, stop that
+run and finish the work before starting the final sign-off again.**
+
 **A push to `master` IS a deploy, and remote CI is far too slow to be a feedback
 loop: an image build alone runs ~85 minutes.** So `make ci-signoff` must be green
 *before* you push the branch. It runs the checks locally and publishes

@@ -197,7 +197,7 @@ test('one repository list owns service links and independent capabilities in bot
     expect(sql(`SELECT count(*) FROM projects.code_mappings WHERE project_id = '${pid}'`).toString().trim()).toBe('2');
     await page.getByRole('button', { name: 'Save review settings', exact: true }).press('Enter');
     await expect(page.locator('#repository-detail')).toHaveCount(1);
-    expect(sql(`SELECT enabled FROM projects.pr_review_settings WHERE project_id = '${pid}' AND owner = 'team-a'`).toString().trim()).toBe('t');
+    await expect.poll(() => sql(`SELECT enabled FROM projects.pr_review_settings WHERE project_id = '${pid}' AND owner = 'team-a'`).toString().trim()).toBe('t');
     await page.getByText('Move existing resources into this folder', { exact: true }).click();
     await page.getByRole('combobox', { name: /Cron/ }).selectOption(cron);
     await page.getByRole('combobox', { name: /Cron/ }).locator('..').locator('..').getByRole('button', { name: 'Move into folder', exact: true }).press('Enter');

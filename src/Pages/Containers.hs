@@ -22,8 +22,8 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, timeRefreshListener_, withDeferredBody)
-import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs, withColHeaderExtra)
+import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, withDeferredBody)
+import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude
@@ -145,22 +145,16 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
       rows = sortOn (Down . (.cpuCores)) $ V.toList $ applyFilters filters allRows
       -- Facet values come from the unfiltered result, so choosing a namespace never empties
       -- the node or image menus — the way a facet bar is expected to behave.
-      menu label param selected fromRow = singleSelectFilter label param selected $ facetValues fromRow allRows
+      menu label param selected fromRow = countedFilter label param selected (maybeToList . fromRow) allRows
+    let table = inventoryTable "containers" deferredUrl
     pure
-      Table
-        { -- bulkActionsInHeader is what puts the header action group — and with it the whole
-          -- filter dropdown — into a column header. Leaving it unset renders no facet menus
-          -- at all, however many are configured.
-          config = def{elemID = "containersForm", containerId = Just "containersContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
-        , columns = containerColumns
+      table
+        { columns = containerColumns
         , rows = V.fromList $ map (ContainerVM pid window) rows
         , features =
-            def
-              { header = Just $ timeRefreshListener_ "containersContainer" deferredUrl
-              , search = Just ClientSide
-              , searchPlaceholder = Just "Search containers"
-              , rowAttrs = Just $ drawerRowAttrs_ . detailUrl
-              , tableHeaderActions =
+            table.features
+              { rowAttrs = Just $ drawerRowAttrs_ . detailUrl
+              , facets =
                   Just
                     $ facetActions
                       (infraUrl pid "/infrastructure/containers" [] window)
@@ -173,9 +167,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       , menu "Node" "node" filters.node (.nodeName)
                       , menu "Image" "image" filters.image (.image)
                       ]
-              , showFilterRail = True
               , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers reporting in the final " <> freshnessLabel window <> " of this range"
-              , exportName = Just "containers"
               , zeroState =
                   Just
                     ZeroState
@@ -191,8 +183,8 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
     containerColumns :: [Column ContainerVM]
     containerColumns =
       [ col "Container" renderNameCol & withAttrs [class_ "w-80 max-w-80 overflow-hidden max-md:w-auto max-md:max-w-none"]
-      , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-lg:hidden"]
-      , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-lg:hidden"]
+      , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-2xl:hidden"]
+      , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-2xl:hidden"]
       , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-md:hidden"]
       , col "CPU (cores)" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
       , col "CPU limit used" (pctCell "CPU limit used" cpuPctOfLimit) & withAttrs [class_ "w-36 max-md:hidden"]
@@ -248,7 +240,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
            in span_ [class_ "min-w-0 flex-1 truncate", data_ "tippy-content" $ "Image: " <> image] $ toHtml image
         -- The badge is a flex box, so the ellipsis has to live on an inner block or the name clips at its start.
         whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-36 truncate", data_ "tippy-content" $ "Workload: " <> workload] $ span_ [class_ "min-w-0 truncate"] $ toHtml workload
-      div_ [class_ "hidden max-lg:flex flex-col gap-0.5 text-xs leading-normal text-textWeak"]
+      div_ [class_ "hidden max-2xl:flex flex-col gap-0.5 text-xs leading-normal text-textWeak"]
         $ forM_ ([("Pod", vm.row.podName), ("Namespace", vm.row.namespace), ("Cluster", vm.row.cluster), ("Node / host", vm.row.nodeName)] :: [(Text, Maybe Text)]) \(label, value) ->
           whenJust value \v -> span_ [class_ "whitespace-normal break-all"] $ toHtml $ label <> ": " <> v
 
