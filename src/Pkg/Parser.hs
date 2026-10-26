@@ -14,6 +14,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.Deriving (WrappedEnumSC (..))
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
+import Pkg.Rum qualified as Rum
 import PyF (fmt)
 import Relude
 import Relude.Extra.Foldable1 (minimumOn1)
@@ -964,6 +965,8 @@ variablePresets :: BinDensity -> Text -> Maybe UTCTime -> Maybe UTCTime -> [(Tex
 variablePresets density pid mf mt allParams currentTime =
   let fmtUTC = maybe "" formatUTC
       andPrefix = (" AND " <>)
+      audience = Rum.audienceFilters allParams
+      audienceSessions = Rum.audienceSessionsSql browserSql errorSql audience
       bound op t field' = field' <> " " <> op <> " '" <> formatUTC t <> "'"
       clause field = case catMaybes [bound ">=" <$> mf, bound "<=" <$> mt] of
         [] -> ""
@@ -979,6 +982,10 @@ variablePresets density pid mf mt allParams currentTime =
           , ("pageview_filter", pageViewSql)
           , ("error_filter", errorSql)
           , ("browser_kql", browserKql)
+          , ("audience_sessions", audienceSessions)
+          , ("audience_kql_literal", sqlStringLit $ Rum.audienceKql audience)
+          , ("table_search", sqlStringLit $ maybeToMonoid $ join $ Map.lookup "table-search" $ Map.fromList allParams)
+          , ("audience_filter", if any isJust [audience.browser, audience.os, audience.device] || audience.errored then "attributes___session___id IN (" <> audienceSessions <> "SELECT session FROM audience_sessions)" else "TRUE")
           ]
         <> (allParams <&> second maybeToMonoid)
 

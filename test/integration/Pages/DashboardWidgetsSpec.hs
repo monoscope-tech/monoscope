@@ -45,6 +45,7 @@ import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as Issues
 import Pages.LogExplorer.Log qualified as Log
+import Pages.Rum qualified as Rum
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (browserKql, parseQueryToAST)
 import Pkg.QueryCache qualified as QueryCache
@@ -68,6 +69,7 @@ import Utils qualified
 import Web.ApiHandlers qualified as Api
 import Web.ApiTypes qualified as ApiTypes
 import Web.Auth qualified as Auth
+import Web.FormUrlEncoded (urlDecodeAsForm)
 import Web.Routes qualified as Routes
 
 
@@ -1430,7 +1432,7 @@ spec = sequential $ aroundAll withTestResources do
     it "rumDashboard_everyWidgetRuns_andVitalsReadHistogramBuckets" \tr -> do
       projectId <- createTestProject tr "RUM dashboard template"
       apiKey <- createTestAPIKey tr projectId "rum-dashboard-key"
-      let browserSpan n name attrs ua = ingestSpanReq tr $ mkSpanRequest ("e" <> T.justifyRight 31 '0' (show @Text n)) ("e" <> T.justifyRight 15 '0' (show @Text n)) Nothing name [] Nothing (mkAttr "session.id" "dash-session" : attrs) (mkResource apiKey [mkAttr "service.name" "storefront", mkAttr "user_agent.original" ua]) frozenTime
+      let browserSpan n name attrs ua = ingestSpanReq tr $ mkSpanRequest ("e" <> T.justifyRight 31 '0' (show @Text n)) ("e" <> T.justifyRight 15 '0' (show @Text n)) Nothing name [] Nothing (mkAttr "session.id" ("dash-session-" <> show n) : attrs) (mkResource apiKey [mkAttr "service.name" "storefront", mkAttr "user_agent.original" ua]) frozenTime
       browserSpan (1 :: Int) "documentLoad" [mkAttr "url.full" "https://shop.example/cart"] "Mozilla/5.0 (X11; Linux x86_64) Chrome/151"
       browserSpan 2 "Pageview · /orders/123" [mkAttr "url.path" "/orders/123", mkAttr "exception.type" "TypeError"] "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148 Safari/604.1"
       -- Three DELTA exports merge to [3,9,3,1,0] over 16 observations; the 12th lands on the
@@ -1471,7 +1473,7 @@ spec = sequential $ aroundAll withTestResources do
       exportVital "lcp" [point (-5) (-10) [4, 0] & PMF.explicitBounds .~ [2500]]
       mixed <- run [vitals]
       vitalRow mixed "LCP" `shouldBe` Just ["LCP", "2344 ms", "rating;success-strong⇒Good", "0 – 2500", "20"]
-      sort [name | row <- V.toList $ table results "Browsers, systems and devices", row V.!? 0 == Just "Device", Just name <- [row V.!? 1]] `shouldBe` ["Desktop", "Mobile"]
+      sort [name | row <- V.toList $ table results "Devices", Just name <- [row V.!? 0]] `shouldBe` ["Desktop", "Mobile"]
       sort (V.toList $ V.mapMaybe (V.!? 0) $ table results "Top pages") `shouldBe` ["/cart", "/orders/:id"]
       -- Each page row's hidden Explorer query finds the events it counted, and the rendered
       -- link carries it with the dashboard's window while the column itself stays off screen.
@@ -1489,6 +1491,58 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldNotSatisfy` T.isInfixOf "Explorer query"
       map (\ps -> (lookup "since" ps, lookup "query" ps)) (linkParams ("/p/" <> projectId.toText <> "/log_explorer") html)
         `shouldBe` [(Just "7D", row V.!? 3) | row <- V.toList $ table results "Top pages"]
+
+    it "audience_countsEachSessionOnce_keepsUnknown_andFiltersCohorts" \tr -> do
+      pid <- createTestProject tr "RUM audience"
+      apiKey <- createTestAPIKey tr pid "audience-key"
+      let emit n session ua attrs = ingestSpanReq tr $ mkSpanRequest ("a" <> T.justifyRight 31 '0' (show @Text n)) ("a" <> T.justifyRight 15 '0' (show @Text n)) Nothing "documentLoad" [] Nothing (mkAttr "session.id" session : attrs) (mkResource apiKey $ mkAttr "service.name" "storefront" : [mkAttr "user_agent.original" agent | agent <- toList ua]) frozenTime
+      emit (1 :: Int) "safari" (Just "iPhone Mobile Safari/604") [mkAttr "user.id" "alice", mkAttr "user.email" "alice@example.com"]
+      emit 2 "safari" (Just "iPhone Mobile Safari/604") [mkAttr "user.id" "alice", mkAttr "exception.type" "TypeError"]
+      emit 3 "chrome" (Just "Windows Chrome/151 Safari/537") [mkAttr "user.id" "bob"]
+      emit 4 "unknown" Nothing []
+      emit 5 "" (Just "Windows Chrome/151") [mkAttr "exception.type" "TypeError"]
+      rum <- maybe (fail "missing rum.yaml") pure . find (\d -> d.file == Just "rum.yaml") =<< DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+      let from = toText $ iso8601Show $ addUTCTime (-3600) frozenTime
+          to = toText $ iso8601Show $ addUTCTime 3600 frozenTime
+          readTable params title = do
+            w <- maybe (fail $ "missing " <> toString title) pure $ find ((== Just title) . (.title)) (DashboardModel.allWidgets rum)
+            result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just pid) w.query w.sql Nothing (Just from) (Just to) Nothing Nothing params
+            result.error `shouldBe` Nothing
+            pure result.dataText
+      browsers <- readTable [] "Browsers"
+      sort (map (V.toList . V.take 5) $ V.toList browsers) `shouldBe` [["Chrome", "1", "33.3", "0", "0.0"], ["Safari", "1", "33.3", "1", "100.0"], ["Unknown", "1", "33.3", "0", "0.0"]]
+      filtered <- readTable [("var-browser", Just "Safari")] "Devices"
+      map (V.toList . V.take 5) (V.toList filtered) `shouldBe` [["Mobile", "1", "100.0", "1", "100.0"]]
+      users <- readTable [("var-errors", Just "true")] "Identified users"
+      map (V.toList . V.take 3) (V.toList users) `shouldBe` [["alice@example.com", "1", "1"]]
+      forM_ ([([("var-browser", Just "Safari")], 2), ([("var-os", Just "iOS"), ("var-device", Just "Mobile")], 2), ([("var-browser", Just "Unknown")], 1), ([("var-errors", Just "true")], 2)] :: [([(Text, Maybe Text)], Int)]) \(params, expected) -> do
+        headers <- runAuthHandler tr $ Dashboards.rumRedirectH pid ["sessions"] params
+        let location = case lookupResponseHeader @"Location" headers of Header url -> url; _ -> ""
+            query = lookup "query" =<< listToMaybe (linkParams ("/p/" <> pid.toText <> "/log_explorer") ("href=\"" <> location <> "\""))
+        (_, events) <- testServant tr $ Log.logExplorerDataH pid def{Log.query = query, Log.from = Just from, Log.to = Just to}
+        (events.error, events.queryResultCount) `shouldBe` (Nothing, expected)
+      readTable [("var-app", Just "missing-app")] "Browsers" `shouldReturn` V.empty
+      readTable [("environment", Just "prod")] "Browsers" `shouldReturn` V.empty
+      found <- readTable [("table-search", Just "ALICE")] "Identified users"
+      map (V.toList . V.take 3) (V.toList found) `shouldBe` [["alice@example.com", "1", "1"]]
+      readTable [("table-search", Just "missing-user")] "Identified users" `shouldReturn` V.empty
+
+    it "audienceSegments_persistFilters_keepTheWindow_andStayProjectScoped" \tr -> do
+      pid <- createTestProject tr "RUM segments"
+      otherPid <- createTestProject tr "Other RUM segments"
+      let params = [("var-app", Just "storefront"), ("var-browser", Just "Safari"), ("var-device", Just "Mobile"), ("since", Just "7D"), ("tab", Just "errors")]
+          root = "/p/" <> pid.toText <> "/rum"
+          render = toStrict . renderText
+      form <- either (fail . toString) pure $ urlDecodeAsForm @Rum.SegmentForm "name=Mobile+Safari&app=storefront&browser=Safari&device=Mobile&os=&errored=false"
+      (_, saved) <- testServant tr $ Rum.segmentsPostH pid params form
+      let links = linkParams root (render saved)
+      links `shouldSatisfy` any (\ps -> lookup "var-browser" ps == Just "Safari" && lookup "since" ps == Just "7D" && lookup "tab" ps == Just "errors")
+      (_, reloaded) <- testServant tr $ Rum.segmentsGetH pid []
+      render reloaded `shouldSatisfy` T.isInfixOf ">Mobile Safari</a>"
+      (_, other) <- testServant tr $ Rum.segmentsGetH otherPid []
+      render other `shouldNotSatisfy` T.isInfixOf ">Mobile Safari</a>"
+      (_, deleted) <- testServant tr $ Rum.segmentsDeleteH pid "Mobile Safari" []
+      render deleted `shouldNotSatisfy` T.isInfixOf ">Mobile Safari</a>"
 
     -- /rum and its older /rum/dashboard open the dashboard; /rum/sessions the Explorer. Links from
     -- emails and alerts carry a window, which both must keep.

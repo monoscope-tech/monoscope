@@ -16,6 +16,8 @@
 #
 # Narrow `inputs` only where it is provably sound. A too-wide set costs a rerun;
 # a too-narrow one ships an untested change.
+# Parallel integration, UI, and e2e lanes share dependency installs prepared by
+# the runner before launch; each check still declares its own source inputs.
 frontend	node	@fe @uisrc
 build	ghc	@hs @fe
 doctests	ghc	@hs @fe

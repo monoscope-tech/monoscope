@@ -332,9 +332,17 @@ CABAL_OPTS="--ghc-options=-O0 -j$CI_CORES +RTS -A64m -n2m -RTS"
 CABAL_FLAGS='-f-devtest'
 
 prepare_browser() {
+  [ "${CI_BROWSER_PREPARED:-}" != true ] || return 0
   (cd e2e && npm ci --prefer-offline --no-audit && \
     { [ -e /usr/local/share/monoscope-playwright-deps ] || npx playwright install-deps chromium; } && \
     npx playwright install chromium)
+  export CI_BROWSER_PREPARED=true
+}
+
+prepare_web_deps() {
+  [ "${CI_WEB_DEPS_PREPARED:-}" != true ] || return 0
+  (cd web-components && npm ci --prefer-offline --no-audit)
+  export CI_WEB_DEPS_PREPARED=true
 }
 
 run_body() { # <check>
@@ -384,7 +392,7 @@ run_body() { # <check>
       ;;
     release-tests) node --test scripts/ci/release-test.mjs ;;
     hlint)   hlint -j src/ shared/src cli ;;
-    ui-tests) (cd web-components && npm ci --prefer-offline --no-audit && npm test) ;;
+    ui-tests) prepare_web_deps; (cd web-components && npm test) ;;
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
     e2e)
@@ -410,7 +418,7 @@ run_integration() {
   # reached under CI_ALLOW_DEGRADED — cmd_run refuses this check otherwise.
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
-  (cd web-components && npm ci --prefer-offline --no-audit)
+  prepare_web_deps
   prepare_browser
   make build-chart-cli
   [ -n "${CI_INTEGRATION_BIN:-}" ] || cabal build integration-tests -j $CABAL_FLAGS "$CABAL_OPTS"
@@ -484,6 +492,11 @@ stop_early() { [ "$1" -ne 0 ] && [ "${CI_KEEP_GOING:-}" != true ]; }
 
 # Background lanes live in $BG_DIR as <check>.{pid,log,result}.
 start_background() { # <check>
+  # npm ci removes node_modules: finish installs before any parallel consumer.
+  case "$1" in
+    integration-tests) prepare_web_deps; prepare_browser ;;
+    e2e) prepare_browser ;;
+  esac
   CI_ATTEST_OUT="$BG_DIR/$1.result" "$0" run "$1" > "$BG_DIR/$1.log" 2>&1 &
   echo $! > "$BG_DIR/$1.pid"
 }
@@ -1012,6 +1025,21 @@ cmd_selftest() {
   collect_background failing || body_rc=$?
   assert "background failure propagates" 1 "$body_rc"
   assert "background diagnostics retained" yes "$([ -f "$BG_DIR/failing.log" ] && echo yes || echo no)"
+  rm -rf "$BG_DIR"
+  BG_DIR=$(mktemp -d -t ci-selftest-browser.XXXXXX)
+  printf '#!/bin/sh\necho install >> "%s/calls"\n' "$BG_DIR" > "$BG_DIR/npm"
+  printf '#!/bin/sh\nexit 0\n' > "$BG_DIR/npx"
+  chmod +x "$BG_DIR/npm" "$BG_DIR/npx"
+  (
+    export PATH="$BG_DIR:$PATH"
+    unset CI_BROWSER_PREPARED CI_WEB_DEPS_PREPARED
+    prepare_browser
+    prepare_web_deps
+    prepare_browser & browser_one=$!
+    prepare_web_deps & browser_two=$!
+    wait "$browser_one" "$browser_two"
+  )
+  assert "parallel lanes install each dependency tree once" 2 "$(wc -l < "$BG_DIR/calls" | tr -d ' ')"
   rm -rf "$BG_DIR"
   # kafka-topics.sh under macOS /bin/bash 3.2 with no SASL user: an empty array under
   # `set -u` killed it silently (2026-10-20). A stub rpk records what it was asked to do.

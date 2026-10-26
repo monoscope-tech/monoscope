@@ -342,7 +342,7 @@ logQueryBox_ config = do
               $ filter (not . hiddenHere) visTypes
         forM_ visible \v -> do
           let vizType = v.key
-          label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1 whitespace-nowrap"] do
+          label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak has-[:checked]:bg-fillBrand-weak! has-[:checked]:border-strokeBrand-strong! has-[:checked]:text-textBrand! flex gap-1 whitespace-nowrap"] do
             input_
               $ [ type_ "radio"
                 , name_ "visualization"

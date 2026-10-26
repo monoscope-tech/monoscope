@@ -105,6 +105,7 @@ import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
+import Pages.Rum qualified as Rum
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_)
 import Pkg.Components.ServiceMap (endpointDependencyMapPanel_)
 import Pkg.Components.Table (Table (..))
@@ -115,6 +116,7 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlu
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), applyScopedQuery, binDensityFor, browserKql, constantToKQLList, constantToSQLList, defSqlQueryCfg, fillQueryTemplate, fixedUTCTime, mkScopedQuery, parseQueryToComponents, variablePresetsKQL)
 import Pkg.Parser.Expr (sqlStringLit)
+import Pkg.Rum qualified
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
 import Servant (NoContent (..), ServerError, err302, err400, err404, errBody, errHeaders)
@@ -328,7 +330,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr []
 
     -- Variables section (pushed to the right, collapsible on mobile)
-    whenJust dash.variables \variables -> dashboardVariables_ pid dashId (isJust dash.tabs) variables []
+    whenJust dash.variables \_ -> dashboardVariables_ pid dashId (isJust dash.tabs) (Rum.variablesForTab dash renderTabSlug) []
   let widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
       constants = constantsJson allParams
 
@@ -347,11 +349,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           -- Tab system with htmx lazy loading - only render active tab content.
           -- Grid re-init after a swap is the document-level listener's job (see this page's script).
           div_
-            [ class_ "dashboard-tabs-container"
-            , id_ "dashboard-tabs-content"
-            , data_ "constants" constants
-            ]
-            $ whenJust (tabs !!? activeTabIdx) \activeTab ->
+            ( [ class_ "dashboard-tabs-container"
+              , id_ "dashboard-tabs-content"
+              , data_ "constants" constants
+              ]
+                <> [data_ "rum-audience" "" | dash.file == Just "rum.yaml" && renderTabSlug == Just "audience"]
+            )
+            $ whenJust (tabs !!? activeTabIdx) \activeTab -> do
+              when (dash.file == Just "rum.yaml" && slugify activeTab.name `elem` ["audience", "errors"]) $ Rum.segmentToolbar_ pid allParams
               -- An unanswered required variable IS the tab's content, not a modal over
               -- it. Rendering the widgets underneath meant every one of them ran with
               -- the variable interpolated to '' and reported "no data in the selected
@@ -452,7 +457,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                   animate: false,
                   columnOpts: {
                     breakpointForWindow: false,
-                    breakpoints: [{w: 800, c: 6}, {w: 400, c: 1}],
+                    breakpoints: gridEl.closest('[data-rum-audience]') ? [{w: 1500, c: 1}] : [{w: 800, c: 6}, {w: 400, c: 1}],
                     layout: 'list'
                   },
                 }, gridEl);
@@ -512,7 +517,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 animate: false,
                 columnOpts: {
                   breakpointForWindow: false,
-                  breakpoints: [{w: 600, c: 6}, {w: 400, c: 1}],
+                  breakpoints: nestedEl.closest('[data-rum-audience]') ? [{w: 600, c: 6}, {w: 320, c: 1}] : [{w: 600, c: 6}, {w: 400, c: 1}],
                   layout: 'list'
                 },
               }, nestedEl);
@@ -1255,7 +1260,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
       (dashVM, dash) <- getDashAndVM pid dashId fileM
 
       -- Deep links to a widget must open its tab, rather than the default tab.
-      case (join (lookup "expand" allParams) >>= \wid -> fst =<< findWidgetInDashboard wid dash) <|> (slugify . (.name) <$> (dash.tabs >>= viaNonEmpty head)) of
+      case (join (lookup "expand" allParams) >>= \wid -> fst =<< findWidgetInDashboard wid dash) <|> (join (lookup "tab" allParams) >>= \slug -> slug <$ findTabBySlug (fold dash.tabs) slug) <|> (slugify . (.name) <$> (dash.tabs >>= viaNonEmpty head)) of
         Just tabSlug -> do
           let redirectUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> tabSlug <> queryStringFrom allParams
           throwError $ err302{errHeaders = [("Location", encodeUtf8 redirectUrl)]}
@@ -2278,7 +2283,7 @@ rumRedirectH pid segments params = case (filter (not . T.null) segments, param "
   where
     param k = join $ lookup k params
     dashboard = entrypointRedirectGetH "rum.yaml" "Real User Monitoring" ["rum", "browser", "frontend", "web-vitals"] pid params
-    query = maybe browserKql (("attributes.session.id == " <>) . kqlQuoted) (param "session")
+    query = T.intercalate " and " $ filter (not . T.null) [maybe browserKql (("attributes.session.id == " <>) . kqlQuoted) (param "session"), Pkg.Rum.audienceKql $ Pkg.Rum.audienceFilters params]
     sessions = pure $ addHeader (timeScopedUrl ("/p/" <> pid.toText <> "/log_explorer") [("viz_type", "sessions"), ("query", query)] (param "from") (param "to") (param "since")) NoContent
 
 
@@ -2805,15 +2810,16 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxT
           queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) paramsWithTab
           fragment = do
             dashboardTabStrip_ pid.toText dashId.toText activeTabIdx (fold dash''.tabs) queryStr [hxSwapOob_ "outerMorph"]
-            when (hxTriggerName == Just "dashboard-variable-option")
-              $ whenJust dash''.variables \variables -> dashboardVariables_ pid dashId True variables [hxSwapOob_ "true"]
-            div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content", data_ "constants" $ constantsJson paramsWithTab]
+            when (hxTriggerName == Just "dashboard-variable-option" || dash''.file == Just "rum.yaml")
+              $ whenJust dash''.variables \_ -> dashboardVariables_ pid dashId True (Rum.variablesForTab dash'' $ Just tabSlug) [hxSwapOob_ "true"]
+            div_ ([class_ "dashboard-tabs-container", id_ "dashboard-tabs-content", data_ "constants" $ constantsJson paramsWithTab] <> [data_ "rum-audience" "" | dash''.file == Just "rum.yaml" && tabSlug == "audience"])
               $ case findVarToPrompt (snd <$> activeTabInfo) (fold dash''.variables) of
                 Just v -> do
                   whenJust activeTabName breadcrumbSuffixOob_
                   variablePickerModal_ pid dashId (Just tabSlug) paramsWithTab v
                 Nothing -> whenJust (dash''.tabs >>= (!!? activeTabIdx)) \activeTab -> do
                   breadcrumbSuffixOob_ activeTab.name
+                  when (dash''.file == Just "rum.yaml" && tabSlug `elem` ["audience", "errors"]) $ Rum.segmentToolbar_ pid paramsWithTab
                   widgetCanvas_ pid ("tab-panel-" <> dashId.toText <> "-" <> show activeTabIdx) activeTab.widgets
       addRespHeaders $ navigationResponse hxRequest page fragment
 

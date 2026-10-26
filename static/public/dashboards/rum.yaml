@@ -30,6 +30,31 @@ variables:
         LIMIT 100
     multi: false
 
+  - key: browser
+    title: Browser
+    type: values
+    multi: false
+    options: [[Chrome], [Edge], [Firefox], [Opera], [Safari], [Samsung Internet], [Other], [Unknown]]
+
+  - key: os
+    title: Operating system
+    type: values
+    multi: false
+    options: [[Windows], [iOS], [macOS], [Android], [ChromeOS], [Linux], [Other], [Unknown]]
+
+  - key: device
+    title: Device
+    type: values
+    multi: false
+    options: [[Desktop], [Mobile], [Tablet], [Other], [Unknown]]
+
+  - key: errors
+    title: Session health
+    type: values
+    multi: false
+    options: [["false", All sessions], ["true", Sessions with errors]]
+    value: "false"
+
 widgets: []
 
 tabs:
@@ -344,7 +369,8 @@ tabs:
         title: Browser error volume
         icon: triangle-exclamation
         query: *app
-        sql: *browser_error_series
+        sql: |
+          SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer, 'value', count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}} AND {{audience_filter}} GROUP BY time_bucket('{{rollup_interval}}', timestamp) ORDER BY time_bucket('{{rollup_interval}}', timestamp) DESC
         unit: errors
         summarize_by: sum
         series_intent: error
@@ -355,7 +381,7 @@ tabs:
         icon: users
         query: *app
         sql: |
-          SELECT COUNT(DISTINCT attributes___session___id)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}}
+          SELECT COUNT(DISTINCT attributes___session___id)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}} AND {{audience_filter}}
         unit: sessions
         layout: { w: 4, h: 3 }
 
@@ -364,7 +390,7 @@ tabs:
         icon: user
         query: *app
         sql: |
-          SELECT COUNT(DISTINCT COALESCE(attributes___user___id, attributes___user___email))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}}
+          SELECT COUNT(DISTINCT COALESCE(attributes___user___id, attributes___user___email))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}} AND {{audience_filter}}
         unit: users
         layout: { w: 4, h: 3 }
 
@@ -401,50 +427,177 @@ tabs:
               LEFT(regexp_replace(COALESCE(NULLIF(attributes___exception___message, ''), NULLIF(status_message, ''), name, 'No error message'), '[0-9a-fA-F-]{8,}|[0-9]+', '<n>', 'g'), 300) AS message,
               MIN(name) AS span_name, COUNT(*) AS n, COUNT(DISTINCT attributes___session___id)::text AS sessions, MAX(timestamp)::text AS last_seen
             FROM otel_logs_and_spans
-            WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}}
+            WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}} AND {{audience_filter}}
             GROUP BY 1, 2, 3 ORDER BY COUNT(*) DESC LIMIT 50
           ) AS groups ORDER BY n DESC
 
-  # User-agent families, coarse on purpose. Arm order matters: Edge and Opera embed "Chrome",
-  # Chrome embeds "Safari", iOS says "like Mac OS X", Android embeds "Linux".
   - name: Audience
     icon: users
     widgets:
+      - type: group
+        title: Audience in this window
+        description: Each session counts once. Unknown means no user agent was supplied; identified users exclude anonymous sessions.
+        layout: { w: 12, h: 3 }
+        children:
+          - type: stat
+            title: Audience sessions
+            query: *app
+            sql: "{{audience_sessions}} SELECT COUNT(*)::float FROM audience_sessions"
+            unit: sessions
+            layout: { w: 3, h: 2 }
+          - type: stat
+            title: Identified audience users
+            query: *app
+            sql: "{{audience_sessions}} SELECT COUNT(DISTINCT COALESCE('id:' || user_id, 'email:' || email))::float FROM audience_sessions"
+            unit: users
+            layout: { w: 3, h: 2 }
+          - type: stat
+            title: Sessions with errors
+            query: *app
+            sql: "{{audience_sessions}} SELECT COALESCE(SUM(errored), 0)::float FROM audience_sessions"
+            unit: sessions
+            series_intent: error
+            layout: { w: 3, h: 2 }
+          - type: stat
+            title: Session error rate
+            description: Sessions with at least one browser error divided by all sessions in the selected audience.
+            query: *app
+            sql: "{{audience_sessions}} SELECT (100.0 * SUM(errored) / NULLIF(COUNT(*), 0))::float FROM audience_sessions"
+            unit: '%'
+            series_intent: error
+            layout: { w: 3, h: 2 }
+
       - type: table
-        title: Browsers, systems and devices
-        description: Sessions per user-agent family; errored counts sessions with at least one browser error.
-        layout: { w: 12, h: 7 }
+        title: Browsers
+        description: Select a row to filter this audience. Share is within the current filters; error rate is within each group.
+        layout: { x: 0, w: 4, h: 5 }
+        on_row_click:
+          set_variable: browser
+          navigate_to_tab: Audience
         columns:
-          - field: dimension
-            title: Dimension
           - field: name
-            title: Name
+            title: Browser
           - field: sessions
             title: Sessions
             column_type: number
-            progress: column_percent
-          - field: errored
-            title: Errored
+          - field: share
+            title: Share
+            unit: '%'
+            column_type: number
+          - field: affected
+            title: Affected
             description: Sessions with at least one browser error.
+            column_type: number
+          - field: error_rate
+            title: Error rate
+            unit: '%'
             column_type: number
         query: *app
         sql: |
-          WITH sessions AS (
-            SELECT COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original) AS ua, attributes___session___id AS session,
-              MAX(CASE WHEN {{error_filter}} THEN 1 ELSE 0 END) AS errored
-            FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}}
-            GROUP BY 1, 2
-          ), families AS (
-            SELECT session, errored,
-              CASE WHEN ua LIKE '%Edg/%' OR ua LIKE '%Edge/%' THEN 'Edge' WHEN ua LIKE '%OPR/%' OR ua LIKE '%Opera%' THEN 'Opera' WHEN ua LIKE '%SamsungBrowser%' THEN 'Samsung Internet'
-                WHEN ua LIKE '%Firefox/%' THEN 'Firefox' WHEN ua LIKE '%Chrome/%' OR ua LIKE '%CriOS/%' THEN 'Chrome' WHEN ua LIKE '%Safari/%' THEN 'Safari' ELSE 'Other' END AS browser,
-              CASE WHEN ua LIKE '%Windows%' THEN 'Windows' WHEN ua LIKE '%iPhone%' OR ua LIKE '%iPad%' OR ua LIKE '%iPod%' THEN 'iOS' WHEN ua LIKE '%Mac OS X%' OR ua LIKE '%Macintosh%' THEN 'macOS'
-                WHEN ua LIKE '%Android%' THEN 'Android' WHEN ua LIKE '%CrOS%' THEN 'ChromeOS' WHEN ua LIKE '%Linux%' OR ua LIKE '%X11%' THEN 'Linux' ELSE 'Other' END AS os,
-              CASE WHEN ua LIKE '%iPad%' OR (ua LIKE '%Android%' AND ua NOT LIKE '%Mobile%') THEN 'Tablet' WHEN ua LIKE '%Mobile%' OR ua LIKE '%iPhone%' THEN 'Mobile' ELSE 'Desktop' END AS device
-            FROM sessions WHERE ua IS NOT NULL
-          ), counted AS (
-            SELECT 1 AS d, 'Browser' AS dimension, browser AS name, COUNT(DISTINCT session) AS n, SUM(errored) AS errored FROM families GROUP BY browser
-            UNION ALL SELECT 2, 'Operating system', os, COUNT(DISTINCT session), SUM(errored) FROM families GROUP BY os
-            UNION ALL SELECT 3, 'Device', device, COUNT(DISTINCT session), SUM(errored) FROM families GROUP BY device
-          )
-          SELECT dimension, name, n::text AS sessions, errored::text AS errored FROM counted ORDER BY d, n DESC
+          {{audience_sessions}}
+          SELECT browser AS name, COUNT(*)::text AS sessions,
+            ROUND(100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (), 0), 1)::text AS share,
+            SUM(errored)::text AS affected,
+            ROUND(100.0 * SUM(errored) / NULLIF(COUNT(*), 0), 1)::text AS error_rate
+          FROM audience_sessions GROUP BY browser ORDER BY COUNT(*) DESC, browser
+
+      - type: table
+        title: Operating systems
+        description: Select a row to filter this audience. Share is within the current filters; error rate is within each group.
+        layout: { x: 4, w: 4, h: 5 }
+        on_row_click:
+          set_variable: os
+          navigate_to_tab: Audience
+        columns:
+          - field: name
+            title: Operating system
+          - field: sessions
+            title: Sessions
+            column_type: number
+          - field: share
+            title: Share
+            unit: '%'
+            column_type: number
+          - field: affected
+            title: Affected
+            description: Sessions with at least one browser error.
+            column_type: number
+          - field: error_rate
+            title: Error rate
+            unit: '%'
+            column_type: number
+        query: *app
+        sql: |
+          {{audience_sessions}}
+          SELECT os AS name, COUNT(*)::text AS sessions,
+            ROUND(100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (), 0), 1)::text AS share,
+            SUM(errored)::text AS affected,
+            ROUND(100.0 * SUM(errored) / NULLIF(COUNT(*), 0), 1)::text AS error_rate
+          FROM audience_sessions GROUP BY os ORDER BY COUNT(*) DESC, os
+
+      - type: table
+        title: Devices
+        description: Select a row to filter this audience. Share is within the current filters; error rate is within each group.
+        layout: { x: 8, w: 4, h: 5 }
+        on_row_click:
+          set_variable: device
+          navigate_to_tab: Audience
+        columns:
+          - field: name
+            title: Device
+          - field: sessions
+            title: Sessions
+            column_type: number
+          - field: share
+            title: Share
+            unit: '%'
+            column_type: number
+          - field: affected
+            title: Affected
+            description: Sessions with at least one browser error.
+            column_type: number
+          - field: error_rate
+            title: Error rate
+            unit: '%'
+            column_type: number
+        query: *app
+        sql: |
+          {{audience_sessions}}
+          SELECT device AS name, COUNT(*)::text AS sessions,
+            ROUND(100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (), 0), 1)::text AS share,
+            SUM(errored)::text AS affected,
+            ROUND(100.0 * SUM(errored) / NULLIF(COUNT(*), 0), 1)::text AS error_rate
+          FROM audience_sessions GROUP BY device ORDER BY COUNT(*) DESC, device
+
+      - type: table
+        title: Identified users
+        description: Search all identified users in this audience by name, email or id. Shows up to 200 matches, most recently active first.
+        searchable: true
+        layout: { w: 12, h: 7 }
+        columns:
+          - field: user
+            title: User
+            link: /p/{{project_id}}/log_explorer?viz_type=sessions&query={{row.kql}}{{time_range}}
+          - field: sessions
+            title: Sessions
+            column_type: number
+          - field: affected
+            title: Affected sessions
+            column_type: number
+          - field: last_seen
+            title: Last seen
+          - field: kql
+            title: Session query
+            hidden: true
+        query: *app
+        sql: |
+          {{audience_sessions}}
+          SELECT COALESCE(MAX(email), MAX(full_name), MAX(user_id)) AS "user", COUNT(*)::text AS sessions,
+            SUM(errored)::text AS affected, MAX(last_seen)::text AS last_seen,
+            '{{browser_kql}}' || CASE WHEN {{audience_kql_literal}} = '' THEN '' ELSE ' and ' || {{audience_kql_literal}} END ||
+              CASE WHEN MAX(user_id) IS NOT NULL THEN ' and attributes.user.id == "' || replace(replace(MAX(user_id), '\', '\\'), '"', '\"') || '"'
+                ELSE ' and attributes.user.email == "' || replace(replace(MAX(email), '\', '\\'), '"', '\"') || '"' END AS kql
+          FROM audience_sessions WHERE user_id IS NOT NULL OR email IS NOT NULL
+          GROUP BY COALESCE('id:' || user_id, 'email:' || email)
+          HAVING {{table_search}} = '' OR strpos(lower(COALESCE(MAX(email), '') || ' ' || COALESCE(MAX(full_name), '') || ' ' || COALESCE(MAX(user_id), '')), lower({{table_search}})) > 0
+          ORDER BY 4 DESC LIMIT 200

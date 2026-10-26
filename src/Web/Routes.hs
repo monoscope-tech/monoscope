@@ -77,6 +77,7 @@ import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
+import Pages.Rum qualified as Rum
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share
@@ -473,6 +474,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , slackIdentityPost :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> ReqBody '[FormUrlEncoded] Slack.SlackLinkForm :> Post '[HTML] (RespHeaders (Html ()))
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
+  , rumSegmentsGet :: mode :- "p" :> ProjectId :> "rum" :> "segments" :> AllQueryParams :> Get '[HTML] (RespHeaders (Html ()))
+  , rumSegmentsPost :: mode :- "p" :> ProjectId :> "rum" :> "segments" :> AllQueryParams :> ReqBody '[FormUrlEncoded] Rum.SegmentForm :> Post '[HTML] (RespHeaders (Html ()))
+  , rumSegmentsDelete :: mode :- "p" :> ProjectId :> "rum" :> "segments" :> Capture "name" Text :> AllQueryParams :> Delete '[HTML] (RespHeaders (Html ()))
   , rumRedirect :: mode :- "p" :> ProjectId :> "rum" :> CaptureAll "view" Text :> AllQueryParams :> LocationRedirect NoContent
   , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders Dashboards.DashboardNew)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
@@ -977,6 +981,9 @@ cookieProtectedServer =
     , slackLinkProjectGet = Slack.linkProjectGetH
     , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
     , rumRedirect = Dashboards.rumRedirectH
+    , rumSegmentsGet = Rum.segmentsGetH
+    , rumSegmentsPost = Rum.segmentsPostH
+    , rumSegmentsDelete = Rum.segmentsDeleteH
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardNewGet = Dashboards.dashboardNewGetH
     , dashboardsGetList = Dashboards.dashboardsGetH

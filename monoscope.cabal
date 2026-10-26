@@ -269,6 +269,7 @@ extra-source-files:
     static/migrations/0252_project_memory_page_identity.sql
     static/migrations/0253_project_memory_legacy_writes.sql
     static/migrations/0254_ingest_sampling.sql
+    static/migrations/0254_rum_segments.sql
     test/fixtures/github-app-test.pem
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
@@ -380,6 +381,7 @@ library
       Pages.Projects
       Pages.Replay
       Pages.Reports
+      Pages.Rum
       Pages.ServiceMap
       Pages.Settings
       Pages.Share
@@ -413,6 +415,7 @@ library
       Pkg.Prometheus
       Pkg.QueryCache
       Pkg.Queue
+      Pkg.Rum
       Pkg.Sampling
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
@@ -895,6 +898,7 @@ test-suite integration-tests
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
     , hspec
+    , http-api-data
     , http-client
     , http-client-tls
     , http-types
@@ -1025,6 +1029,7 @@ test-suite test-dev
       Pages.Projects
       Pages.Replay
       Pages.Reports
+      Pages.Rum
       Pages.ServiceMap
       Pages.Settings
       Pages.Share
@@ -1058,6 +1063,7 @@ test-suite test-dev
       Pkg.Prometheus
       Pkg.QueryCache
       Pkg.Queue
+      Pkg.Rum
       Pkg.Sampling
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
