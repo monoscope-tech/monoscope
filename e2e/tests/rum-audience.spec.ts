@@ -45,7 +45,7 @@ test("audience groups filter sessions, search users, and persist named segments"
     await safari.focus();
     await safari.press("Enter");
     await expect(page).toHaveURL(/var-browser=Safari/);
-    await toolbar.getByText("Save segment", { exact: true }).click();
+    await toolbar.locator("summary").filter({ hasText: "Save segment" }).click();
     await toolbar.getByLabel("Segment name").fill(segment);
     await toolbar.getByRole("button", { name: "Save segment", exact: true }).click();
     await expect(toolbar.getByRole("link", { name: segment, exact: true })).toBeVisible();
