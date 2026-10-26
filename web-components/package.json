@@ -60,7 +60,7 @@
     "typescript": "^6.0.3",
     "vite-plugin-monaco-editor": "^1.1.0",
     "vite-plugin-node-polyfills": "^0.28.0",
-    "vitest": "^4.1.11",
+    "vitest": "^5.0.5",
     "vitest-canvas-mock": "^1.1.5"
   },
   "overrides": {
