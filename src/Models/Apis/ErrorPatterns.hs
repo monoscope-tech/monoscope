@@ -41,9 +41,11 @@ module Models.Apis.ErrorPatterns (
 )
 where
 
+import Control.Lens ((%~))
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Generics.Product.Fields (field)
 import Data.GeoIP2 qualified as GeoIP2
 import Data.HashMap.Strict qualified as HM
 import Data.IP (IP)
@@ -500,7 +502,6 @@ data ErrorPatternWithCurrentRate = ErrorPatternWithCurrentRate
   , baselineMean :: Maybe Double
   , baselineStddev :: Maybe Double
   , currentHourCount :: Int
-  , errorData :: ATError
   , stacktrace :: Text
   , hash :: Text
   , parentHash :: Maybe Text
@@ -520,7 +521,8 @@ getErrorPatternsWithCurrentRates pid now =
           e.id, e.project_id, e.error_type, LEFT(e.message, 2000), e.service, e.state,
           e.baseline_state, e.baseline_error_rate_mean, e.baseline_error_rate_stddev,
           COALESCE(counts.event_count, 0)::BIGINT AS current_hour_count,
-          e.error_data, LEFT(e.stacktrace, 8000), e.hash, e.parent_hash, e.is_framework, e.slack_thread_ts, e.discord_message_id
+          -- No error_data: one project's was 4.3 GB of JSON, and loading it hourly overflowed the heap.
+          LEFT(e.stacktrace, 8000), e.hash, e.parent_hash, e.is_framework, e.slack_thread_ts, e.discord_message_id
         FROM apis.error_patterns e
         LEFT JOIN apis.error_hourly_stats counts
           ON counts.error_id = e.id AND counts.project_id = e.project_id
@@ -642,7 +644,10 @@ batchUpsertErrorPatterns pid errors now =
     -- is not time-ordered) + sum count (avoids ON CONFLICT duplicate-row error).
     -- The bang keeps the running count forced: a hot hash otherwise accumulates one thunk per occurrence.
     (errs, counts) =
-      V.unzip $ V.fromList $ HM.elems $ HM.fromListWith (\(a, n) (b, !k) -> (bool b a (a.when >= b.when), n + k)) [(e.hash, (e, 1 :: Int)) | e <- V.toList errors]
+      V.unzip $ V.fromList $ HM.elems $ HM.fromListWith (\(a, n) (b, !k) -> (bool b a (a.when >= b.when), n + k)) [(e.hash, (bounded e, 1 :: Int)) | e <- V.toList errors]
+    -- error_data keeps one occurrence for display: a message embedding a whole SQL statement ran to
+    -- 21 MB a row. The hash is already taken, so trimming changes no grouping.
+    bounded e = e & field @"message" %~ T.take 4000 & field @"rootErrorMessage" %~ T.take 4000 & field @"stackTrace" %~ T.take 16000
     -- '' would persist and pass every Maybe check downstream, sending the issue
     -- page off to fetch "trace ''" — every trace-less row in the window.
     traceIds = V.map (mfilter (not . T.null) . (.traceId)) errs
