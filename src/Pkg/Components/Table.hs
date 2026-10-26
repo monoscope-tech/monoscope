@@ -1,5 +1,6 @@
 module Pkg.Components.Table (
   Table (..),
+  inventoryTable,
   TableRows (..),
   TableResponse (..),
   Column (..),
@@ -10,7 +11,6 @@ module Pkg.Components.Table (
   selectControl_,
   facetsConfig,
   countedFilter,
-  defaultFeaturesAreInert,
   SearchMode (..),
   BulkAction (..),
   TabFilter (..),
@@ -53,7 +53,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.BodyWrapper (PageCtx)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, searchInput_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, searchInput_, timeRefreshListener_)
 import Pkg.Components.Facets (FacetChoice (..), FacetContent (..), FacetNode (..), FacetOverflow (..), facetChoice_)
 import Pkg.Components.Facets qualified as Facets
 import Relude
@@ -84,6 +84,18 @@ data Table a = Table
   }
 
 
+inventoryTable :: Text -> Text -> Table a
+inventoryTable name url =
+  Table
+    { config = def{elemID = name <> "Form", containerId = Just target, addPadding = True, renderAsTable = True}
+    , columns = []
+    , rows = V.empty
+    , features = def{header = Just $ timeRefreshListener_ target url, search = Just ClientSide, searchPlaceholder = Just $ "Search " <> name, customizeColumns = True, exportName = Just name}
+    }
+  where
+    target = name <> "Container"
+
+
 -- TableRows for pagination - renders rows + pagination footer
 type role TableRows nominal
 data TableRows a = TableRows
@@ -111,6 +123,11 @@ data Pagination = Pagination
 data SearchMode = ClientSide | ServerSide Text
 
 
+-- | Features default to no optional behavior.
+--
+-- >>> let f = def @(Features ())
+-- >>> and @[] [isNothing f.rowLink, isNothing f.search, isNothing f.pagination, isNothing f.rowGroup, null f.bulkActions, isNothing f.facets, not f.customizeColumns, isNothing f.grouping, isNothing f.tabs]
+-- True
 data Features a = Features
   { rowLink :: Maybe (a -> Text)
   , rowId :: Maybe (a -> Text)
@@ -135,11 +152,6 @@ data Features a = Features
   , grouping :: Maybe SelectControl
   , tabs :: Maybe TableTabs
   }
-  -- Every field's default is the generic one (Nothing / [] / False). The
-  -- hand-written instance was 21 lines that had to be edited in lockstep with the
-  -- record; derived, a newly added field cannot be forgotten. The doctest on
-  -- 'defaultFeaturesAreInert' pins that the derived defaults match what the
-  -- hand-written instance produced — every table's behaviour depends on it.
   deriving stock (Generic)
   deriving anyclass (Default)
 
@@ -148,29 +160,6 @@ data Features a = Features
 -- >>> :set -XTypeApplications -XOverloadedRecordDot -XOverloadedStrings
 -- >>> import Data.Default (def)
 -- >>> import Data.Vector qualified as V
-
-
--- | The derived 'Default' for 'Features' must stay inert: no row link, no bulk
--- actions, no filter rail. This is what the hand-written instance guaranteed, and
--- what every @def{...}@ table construction in the codebase assumes.
---
--- >>> defaultFeaturesAreInert
--- True
-defaultFeaturesAreInert :: Bool
-defaultFeaturesAreInert =
-  and @[]
-    [ isNothing d.rowLink
-    , isNothing d.search
-    , isNothing d.pagination
-    , isNothing d.rowGroup
-    , null d.bulkActions
-    , isNothing d.facets
-    , not d.customizeColumns
-    , isNothing d.grouping
-    , isNothing d.tabs
-    ]
-  where
-    d = def @(Features ())
 
 
 data Config = Config

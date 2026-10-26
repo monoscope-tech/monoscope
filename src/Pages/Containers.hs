@@ -22,8 +22,8 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, timeRefreshListener_, withDeferredBody)
-import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, countedFilter, facetActions, withAttrs, withColHeaderExtra)
+import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, withDeferredBody)
+import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude
@@ -146,17 +146,14 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
       -- Facet values come from the unfiltered result, so choosing a namespace never empties
       -- the node or image menus — the way a facet bar is expected to behave.
       menu label param selected fromRow = countedFilter label param selected (maybeToList . fromRow) allRows
+    let table = inventoryTable "containers" deferredUrl
     pure
-      Table
-        { config = def{elemID = "containersForm", containerId = Just "containersContainer", addPadding = True, renderAsTable = True}
-        , columns = containerColumns
+      table
+        { columns = containerColumns
         , rows = V.fromList $ map (ContainerVM pid window) rows
         , features =
-            def
-              { header = Just $ timeRefreshListener_ "containersContainer" deferredUrl
-              , search = Just ClientSide
-              , searchPlaceholder = Just "Search containers"
-              , rowAttrs = Just $ drawerRowAttrs_ . detailUrl
+            table.features
+              { rowAttrs = Just $ drawerRowAttrs_ . detailUrl
               , facets =
                   Just
                     $ facetActions
@@ -171,8 +168,6 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       , menu "Image" "image" filters.image (.image)
                       ]
               , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers reporting in the final " <> freshnessLabel window <> " of this range"
-              , customizeColumns = True
-              , exportName = Just "containers"
               , zeroState =
                   Just
                     ZeroState

@@ -18,13 +18,13 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('table CSV export', () => {
-  test('downloads escaped visible cells with the requested filename', async () => {
-    document.body.innerHTML = `
-      <table id="inventory">
-        <tr><th>Host</th><th>Note</th><th style="display:none">Secret</th></tr>
-        <tr><td>api-1</td><td>ready, "primary"</td><td style="display:none">token</td></tr>
-        <tr style="display:none"><td>hidden</td><td>row</td></tr>
-      </table>`;
+  test.each([false, true])('downloads escaped visible cells, grouped=%s', async (grouped) => {
+    const header = '<tr><th>Host</th><th>Note</th><th style="display:none">Secret</th></tr>';
+    const rows = `<tr ${grouped ? 'class="itemsListItem"' : ''}><td>api-1</td><td>ready, "primary"</td><td style="display:none">token</td></tr>
+      <tr ${grouped ? 'class="itemsListItem"' : ''} style="display:none"><td>hidden</td><td>row</td></tr>`;
+    document.body.innerHTML = `<table id="inventory"><thead>${header}</thead><tbody>${grouped
+      ? `<tr><td colspan="3"><details><summary>Europe: 2 hosts</summary><table><thead class="sr-only">${header}</thead><tbody>${rows}</tbody></table></details></td></tr>`
+      : rows}</tbody></table>`;
     document.querySelectorAll<HTMLElement>('th,td').forEach((cell) => (cell.innerText = cell.textContent ?? ''));
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
 
@@ -43,21 +43,5 @@ describe('table CSV export', () => {
 
     expect(click).not.toHaveBeenCalled();
     expect(URL.createObjectURL).not.toHaveBeenCalled();
-  });
-
-  test('grouped exports contain one header and only visible data rows', async () => {
-    document.body.innerHTML = `<table id="inventory">
-      <thead><tr><th>Host</th><th>CPU</th></tr></thead>
-      <tbody><tr><td colspan="2"><details><summary>Europe: 2 hosts</summary><table>
-        <thead class="sr-only"><tr><th>Host</th><th>CPU</th></tr></thead>
-        <tbody><tr class="itemsListItem"><td>api-1</td><td>25%</td></tr>
-        <tr class="itemsListItem" style="display:none"><td>api-2</td><td>50%</td></tr></tbody>
-      </table></details></td></tr></tbody></table>`;
-    document.querySelectorAll<HTMLElement>('th,td').forEach(cell => cell.innerText = cell.textContent ?? '');
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
-
-    window.exportTableCsv('#inventory', 'hosts.csv');
-
-    expect(await exported.text()).toBe('"Host","CPU"\n"api-1","25%"');
   });
 });

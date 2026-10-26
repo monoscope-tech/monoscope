@@ -7,7 +7,6 @@ import Data.Cache qualified as Cache
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.Time (NominalDiffTime, addUTCTime)
 import Data.Vector qualified as V
 import Lucid qualified
@@ -99,59 +98,19 @@ ingestFixture tr key = do
       k8sOther = k8sResource "kube-system" "coredns-c6d9fc49c-bj5sw" "coredns"
       k8sStateful = mkAttr "k8s.statefulset.name" "postgres" : k8sPodResource "data" "postgres-0" "postgres"
 
-  -- 0.5 cores against a 2-core limit and 512 MiB against 1 GiB: both percentages land on
-  -- round numbers so a unit slip anywhere in the pipeline is obvious rather than plausible.
+  -- Mixed receiver families, absent limits, controller fallback, pod-only telemetry,
+  -- and a pod rollup that must lose to its reporting containers.
   forM_
-    ( [ ("container.cpu.usage", 0.5)
-      , ("container.memory.working_set", 536870912)
-      , ("k8s.container.cpu_limit", 2)
-      , ("k8s.container.cpu_request", 1)
-      , ("k8s.container.memory_limit", 1073741824)
-      , ("k8s.container.memory_request", 268435456)
-      , ("k8s.container.restarts", 3)
-      , ("k8s.container.ready", 1)
+    ( [ (k8sChecked, [("container.cpu.usage", 0.5), ("container.memory.working_set", 536870912), ("k8s.container.cpu_limit", 2), ("k8s.container.cpu_request", 1), ("k8s.container.memory_limit", 1073741824), ("k8s.container.memory_request", 268435456), ("k8s.container.restarts", 3), ("k8s.container.ready", 1)])
+      , (k8sOther, [("container.cpu.usage", 0.25), ("container.memory.working_set", 33554432), ("k8s.container.ready", 0)])
+      , (dockerResource "srv-captain--redpanda-0.1.tt13bkp5", [("container.cpu.utilization", 80), ("container.memory.usage.total", 3221225472), ("container.memory.usage.limit", 4294967296)])
+      , (k8sStateful, [("container.cpu.usage", 0.1), ("container.memory.usage", 16777216)])
+      , (mkAttr "k8s.deployment.name" "frontend" : k8sPodResource "shop" "frontend-544d9b6f4-2xk7z" "frontend", [("k8s.pod.cpu.usage", 0.75), ("k8s.pod.memory.working_set", 268435456)])
+      , (k8sChecked, [("k8s.pod.cpu.usage", 9.9), ("k8s.pod.memory.working_set", 9999999)])
       ]
-        :: [(Text, Double)]
+        :: [([PC.KeyValue], [(Text, Double)])]
     )
-    (emit k8sChecked)
-
-  -- A second namespace, and deliberately no CPU limit — the case Datadog documents as
-  -- "cannot infer the usage percentage", which must stay blank rather than become 0%.
-  forM_
-    ( [ ("container.cpu.usage", 0.25)
-      , ("container.memory.working_set", 33554432)
-      , ("k8s.container.ready", 0)
-      ]
-        :: [(Text, Double)]
-    )
-    (emit k8sOther)
-
-  -- Docker: 80 means 0.8 cores under Docker's own formula, and the memory limit arrives on a
-  -- different metric name from the Kubernetes one.
-  forM_
-    ( [ ("container.cpu.utilization", 80)
-      , ("container.memory.usage.total", 3221225472)
-      , ("container.memory.usage.limit", 4294967296)
-      ]
-        :: [(Text, Double)]
-    )
-    (emit $ dockerResource "srv-captain--redpanda-0.1.tt13bkp5")
-
-  -- A StatefulSet pod, and memory on kubeletstats' container.memory.usage rather than
-  -- working_set: neither the workload nor the memory reading survives without a fallback.
-  forM_ ([("container.cpu.usage", 0.1), ("container.memory.usage", 16777216)] :: [(Text, Double)]) (emit k8sStateful)
-
-  -- A pod whose collector runs kubeletstats without the container metric group: only
-  -- k8s.pod.* arrives, so the pod itself has to stand in for its containers.
-  forM_
-    ([("k8s.pod.cpu.usage", 0.75), ("k8s.pod.memory.working_set", 268435456)] :: [(Text, Double)])
-    (emit $ mkAttr "k8s.deployment.name" "frontend" : k8sPodResource "shop" "frontend-544d9b6f4-2xk7z" "frontend")
-
-  -- The same pod metrics for a pod that DOES report container metrics: the rollup must lose
-  -- to its containers rather than appear beside them.
-  forM_
-    ([("k8s.pod.cpu.usage", 9.9), ("k8s.pod.memory.working_set", 9999999)] :: [(Text, Double)])
-    (emit k8sChecked)
+    \(resource, metrics) -> mapM_ (emit resource) metrics
 
   -- A bare node. Four logical cores, each reporting idle and user; 0.25 busy on each of two
   -- of them is 0.5 cores of a 4-core box. Memory is per state and the limit is their sum.
@@ -208,11 +167,11 @@ spec = sequential $ aroundAll withTfChartResources do
       conf.pageTitle `shouldBe` "Infrastructure"
       conf.prePageTitle `shouldBe` Nothing
       V.length table.rows `shouldBe` 0
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = toText $ Lucid.renderText $ Lucid.toHtml page
       html `shouldContainAll` ["No containers reporting"]
 
       (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml hostMap)
+      toText (Lucid.renderText $ Lucid.toHtml hostMap)
         `shouldContainAll` ["No hosts reporting", "Set up host monitoring"]
 
     it "kubernetesAndDockerContainers_landInOneListWithNormalisedCpuAndMemory" \tr -> do
@@ -315,7 +274,7 @@ spec = sequential $ aroundAll withTfChartResources do
       let Containers.ContainersPage (PageCtx _ body) = page
       table <- deferredBody body
       V.length table.rows `shouldBe` 8
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = toText $ Lucid.renderText $ Lucid.toHtml page
           cacheKey = (testPid, Nothing, Nothing, Just "5M") :: ContainerSnapshotKey
       cached <- Cache.lookup tr.trATCtx.infrastructureCache cacheKey :: IO (Maybe (V.Vector ContainerRow))
       V.length <$> cached `shouldBe` Just 8
@@ -332,6 +291,29 @@ spec = sequential $ aroundAll withTfChartResources do
       -- The regular download symbol has 24px path coordinates in a 16px viewBox and renders
       -- as a clipped stroke. The table export uses the correctly framed Font Awesome symbol.
       html `shouldContainAll` ["M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32"]
+
+      html
+        `shouldContainAll` [ "w-80 max-w-80 overflow-hidden"
+                           , "w-72 max-w-72 overflow-hidden"
+                           , "min-w-0 flex-1 truncate"
+                           , "max-w-36 truncate"
+                           , "data-tip=\"Runtime: kubernetes\""
+                           , "data-tippy-content=\"Container: checkout\""
+                           , "data-tippy-content=\"Image: demo:2.2.0\""
+                           , "data-tippy-content=\"Workload: checkout\""
+                           , "data-tippy-content=\"CPU limit used: "
+                           , "data-tippy-content=\"Memory limit used: "
+                           , "data-tippy-content=\"Latest reported readiness: Ready\""
+                           , "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range."
+                           ]
+
+      let render features = toText $ Lucid.renderText $ Lucid.toHtml table{features}
+          customizeOnly = render table.features{resultSummary = Nothing, exportName = Nothing, customizeColumns = True}
+          exportOnly = render table.features{resultSummary = Nothing, exportName = Just "containers", customizeColumns = False}
+      customizeOnly `shouldContainAll` ["Customize", "Reset columns", "data-column-key=", "data-column-toggle=", "[data-forced]:not(:checked)) [data-column-key=\"Pod\"]{display:none}"]
+      customizeOnly `shouldNotSatisfy` T.isInfixOf ">Export</button>"
+      exportOnly `shouldContainAll` ["Export", "containers.csv"]
+      exportOnly `shouldNotSatisfy` T.isInfixOf "Customize"
 
       -- Each facet narrows independently, and an unknown value yields an empty list rather
       -- than silently falling back to "all".
@@ -352,51 +334,18 @@ spec = sequential $ aroundAll withTfChartResources do
       -- A bare node is its own runtime, so it is reachable and does not pollute the others.
       listWith (containersPage noContainerFilters{runtime = Just "host"}) >>= (`shouldMatchList` ["vps-bare-01", "vps-d6d7e318"])
 
-    -- Keep both identity columns readable when image and workload names are long.
-    it "longContainerMetadata_doesNotOverlapPodColumn" \tr -> do
-      (_, page) <- testServant tr $ containersPage noContainerFilters
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
-      html
-        `shouldContainAll` [ "w-80 max-w-80 overflow-hidden"
-                           , "w-72 max-w-72 overflow-hidden"
-                           , "min-w-0 flex-1 truncate"
-                           , "max-w-36 truncate"
-                           , "data-tip=\"Runtime: kubernetes\""
-                           , "data-tippy-content=\"Container: checkout\""
-                           , "data-tippy-content=\"Image: demo:2.2.0\""
-                           , "data-tippy-content=\"Workload: checkout\""
-                           , "data-tippy-content=\"CPU limit used: "
-                           , "data-tippy-content=\"Memory limit used: "
-                           , "data-tippy-content=\"Latest reported readiness: Ready\""
-                           , "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range."
-                           ]
-
-    it "tableControls_customizeAndExportCanBeEnabledIndependently" \tr -> do
-      (_, Containers.ContainersPage (PageCtx _ body)) <- testServant tr $ containersPage noContainerFilters
-      table <- deferredBody body
-      let render features = LT.toStrict $ Lucid.renderText $ Lucid.toHtml table{features}
-          customizeOnly = render table.features{resultSummary = Nothing, exportName = Nothing, customizeColumns = True}
-          exportOnly = render table.features{resultSummary = Nothing, exportName = Just "containers", customizeColumns = False}
-      customizeOnly `shouldContainAll` ["Customize", "Reset columns", "data-column-key=", "data-column-toggle=", "[data-forced]:not(:checked)) [data-column-key=\"Pod\"]{display:none}"]
-      customizeOnly `shouldNotSatisfy` T.isInfixOf ">Export</button>"
-      exportOnly `shouldContainAll` ["Export", "containers.csv"]
-      exportOnly `shouldNotSatisfy` T.isInfixOf "Customize"
-
-    it "hostGrouping_sharedTableKeepsSingletonGroupsAndRealRows" \tr -> do
-      (_, Infrastructure.HostsPage (PageCtx _ body)) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing (Just "integration") Nothing Nothing (Just "1H") (Just "1")
-      table <- deferredBody body
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml table
-      V.length table.rows `shouldBe` 3
-      html `shouldContainAll` ["data-table-group=\"Docker\"", "data-table-group=\"Kubernetes\"", "data-table-group=\"OpenTelemetry\"", "data-hx-trigger=\"change\"", "since=1H", "name=\"group\"", "data-column-key=\"CPU\""]
-      T.count "role=\"button\"" html `shouldBe` 3
-      T.count "<table" html `shouldBe` 1
-
     it "infrastructureViews_projectTheSameTelemetryIntoHostsImagesKubernetesAndMap" \tr -> do
-      (_, hosts@(Infrastructure.HostsPage (PageCtx hostsBW _))) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
+      (_, hosts@(Infrastructure.HostsPage (PageCtx hostsBW body))) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing (Just "integration") Nothing Nothing Nothing (Just "1")
       V.null hostsBW.serviceOptions `shouldBe` True
       hostsBW.pageTitle `shouldBe` "Infrastructure"
       hostsBW.prePageTitle `shouldBe` Nothing
-      let hostsHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hosts
+      let hostsHtml = toText $ Lucid.renderText $ Lucid.toHtml hosts
+      table <- deferredBody body
+      V.length table.rows `shouldBe` 3
+      let tableHtml = toText $ Lucid.renderText $ Lucid.toHtml table
+      hostsHtml `shouldContainAll` ["data-table-group=\"Docker\"", "data-table-group=\"Kubernetes\"", "data-table-group=\"OpenTelemetry\"", "data-hx-trigger=\"change\"", "name=\"group\"", "data-column-key=\"CPU\""]
+      T.count "role=\"button\"" tableHtml `shouldBe` 3
+      T.count "<table" tableHtml `shouldBe` 1
       hostsHtml `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "Last 5 mins", "Previous time window", "Pause live updates", "Refresh interval", "data-refresh-interval-menu", "aria-label=\"Turn off automatic refresh\"", "Export", "Showing 3 of 3 hosts", "ms-auto flex shrink-0 items-center justify-end gap-0 text-sm", "grid w-full grid-cols-[minmax(0,1fr)_auto]", "data-nav-tab-strip", "data-header-actions", "/infrastructure/hosts/detail?since=5M"]
       -- The in-cluster agent's system.* series (host.name = its own pod, node only in
       -- k8s.node.name) attributes to the node it measures — 0.5 busy cores of 2 is 25% —
@@ -407,23 +356,23 @@ spec = sequential $ aroundAll withTfChartResources do
       Icons.lookupIcon "regular" "cube" `shouldSatisfy` isJust
 
       (_, images) <- testServant tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "1")
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml images)
+      toText (Lucid.renderText $ Lucid.toHtml images)
         `shouldContainAll` ["Images", "ghcr.io/open-telemetry/demo", "docker.redpanda.com/redpandadata/redpanda", "SBOM unavailable", "/infrastructure/images/detail", "role=\"button\""]
 
       (_, kubernetes) <- testServant tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       -- A cluster known only by uid renders as a compact label, never 36 hex characters
       -- repeated down the column; the full uid stays in the tooltip for filtering fidelity.
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml kubernetes)
+      toText (Lucid.renderText $ Lucid.toHtml kubernetes)
         `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "CPU limit used", "Memory limit used", "whitespace-nowrap", "Showing ", " resources", "/infrastructure/kubernetes/detail", "cluster-9b1deb4d", "data-tippy-content=\"" <> clusterUid <> "\""]
 
       (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
-      let hostMapHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostMap
+      let hostMapHtml = toText $ Lucid.renderText $ Lucid.toHtml hostMap
       hostMapHtml
         `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "name=\"fill\"", "data-hx-trigger=\"change\"", "data-component=\"facet-rail\"", "Provider", "Region", "OS"]
       hostMapHtml `shouldNotSatisfy` T.isInfixOf ">Apply</button>"
 
       (_, hostDetail) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") Nothing Nothing Nothing
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml hostDetail)
+      toText (Lucid.renderText $ Lucid.toHtml hostDetail)
         `shouldContainAll` [ "Host summary"
                            , "CPU usage"
                            , "Memory usage"
@@ -438,11 +387,11 @@ spec = sequential $ aroundAll withTfChartResources do
                            ]
 
       (_, imageDetail) <- testServant tr $ Infrastructure.imageDetailGetH testPid (Just "ghcr.io/open-telemetry/demo") Nothing Nothing Nothing
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml imageDetail)
+      toText (Lucid.renderText $ Lucid.toHtml imageDetail)
         `shouldContainAll` ["Image summary", "Running containers", "Security coverage", "View containers"]
 
       (_, kubeDetail) <- testServant tr $ Infrastructure.kubernetesDetailGetH testPid (Just "pods") (Just "checkout-7fb5b4f859-nlcjs") (Just "otel-demo") (Just "default") Nothing Nothing Nothing
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml kubeDetail)
+      toText (Lucid.renderText $ Lucid.toHtml kubeDetail)
         `shouldContainAll` ["Pod summary", "CPU / limit", "View containers", "View logs", "View metrics"]
 
     it "hostCpuChart_normalizesAcrossLogicalCoresAndRepeatedSamples" \tr -> do
@@ -452,17 +401,20 @@ spec = sequential $ aroundAll withTfChartResources do
           forM_ ([("idle", 0.875), ("user", 0.125)] :: [(Text, Double)]) \(mode, value) ->
             ingestMetric tr key [mkAttr "host.name" "four-core-host"] [mkAttr "cpu.logical_number" core, mkAttr "cpu.mode" mode] "system.cpu.utilization" value (addUTCTime offset frozenTime)
       ingestMetric tr key [mkAttr "host.name" "host-without-idle"] [mkAttr "cpu.logical_number" "cpu0", mkAttr "cpu.mode" "user"] "system.cpu.utilization" 0.5 (addUTCTime (-60) frozenTime)
-      forM_ ([("four-core-host", Just 12.5), ("vps-d6d7e318", Just 25), ("host-without-idle", Nothing)] :: [(Text, Maybe Double)]) \(host, expected) -> do
+      forM_ ([("four-core-host", Just 12.5), ("vps-d6d7e318", Just 25), ("host-without-idle", Nothing), ("0ce201583b04", Nothing)] :: [(Text, Maybe Double)]) \(host, expected) -> do
         html <- shellHtml tr $ Infrastructure.hostDetailGetH testPid (Just host) Nothing Nothing (Just "2H")
         case expected of
           Just percentage -> chartPlotsOnly tr testPid "host-cpu" percentage html
           Nothing -> do
-            html `shouldContainAll` ["No host metrics in this time range", "Metrics coverage: 0 of 4"]
+            html `shouldContainAll` ["No host metrics in this time range", "Try last 1 hour", "Set up host metrics", "View logs", "Metrics coverage: 0 of 4"]
             html `shouldNotSatisfy` T.isInfixOf "host-cpu"
 
     it "infrastructureDrawer_drilldownsKeepTheSelectedTimeWindow" \tr -> do
       containerHtml <- shellHtml tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs") Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H")
       containerHtml `shouldContainAll` ["/log_explorer?since=24H&amp;query=", "/metrics?since=24H&amp;metric_prefix=k8s."]
+      containerHtml `shouldContainAll` ["Requests and limits", "vps-d6d7e318", "View logs", "resource.k8s.pod.name", "data-tippy-content=\"Pod: checkout-7fb5b4f859-nlcjs\"", "&quot;hide_value&quot;:true", "text-textWeak widget-subtitle", "\\&quot;bottom\\&quot;:0", "\\&quot;tooltip\\&quot;:{\\&quot;show\\&quot;:true}"]
+      gone <- shellHtml tr $ Containers.containerDetailGetH testPid (Just "ghost") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      gone `shouldContainAll` ["no longer reporting"]
       historicalContainer <- shellHtml tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs") Nothing Nothing Nothing Nothing (Just "2024-12-31T23:00:00Z") (Just "2025-01-01T00:00:00Z") Nothing
       historicalContainer `shouldContainAll` ["/log_explorer?from=2024-12-31T23%3A00%3A00Z&amp;to=2025-01-01T00%3A00%3A00Z&amp;query=", "/metrics?from=2024-12-31T23%3A00%3A00Z&amp;to=2025-01-01T00%3A00%3A00Z&amp;metric_prefix=k8s."]
       hostHtml <- shellHtml tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") Nothing Nothing (Just "24H")
@@ -501,36 +453,19 @@ spec = sequential $ aroundAll withTfChartResources do
       param "since" `shouldBe` Just "4H"
 
     it "firstRequest_rendersChromeAndASelfFetchingSkeleton_notRows" \tr -> do
-      -- Every infrastructure view is one multi-second metrics pivot. The request that paints
-      -- the page must not wait for it: it answers with nav, tabs and a skeleton that fetches
-      -- the body itself. Rows appearing here again would mean the deferral was undone and
-      -- navigating the section is back to seconds per click.
-      hostsShell <- shellHtml tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      hostsShell `shouldContainAll` ["Infrastructure", "Hosts", "id=\"hostsContainer\"", "hx-trigger=\"load, update-query from:window\"", "/infrastructure/hosts?", "deferred=1"]
-      hostsShell `shouldNotSatisfy` T.isInfixOf "vps-bare-01"
-
-      containersShell <- shellHtml tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      containersShell `shouldContainAll` ["id=\"containersContainer\"", "hx-trigger=\"load, update-query from:window\"", "deferred=1"]
-      containersShell `shouldNotSatisfy` T.isInfixOf "checkout-7fb5b4f859-nlcjs"
-
-      -- The filters the shell was asked for have to survive the round trip, or the rows that
-      -- arrive would not be the rows the visible filter chips claim.
-      filteredShell <- shellHtml tr $ Infrastructure.kubernetesGetH testPid (Just "pods") (Just "otel-demo") (Just "default") Nothing Nothing Nothing Nothing Nothing
-      filteredShell `shouldContainAll` ["resource=pods", "cluster=otel-demo", "namespace=default", "deferred=1", "hx-trigger=\"load, update-query from:window\""]
-
-      imagesShell <- shellHtml tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing
-      imagesShell `shouldContainAll` ["id=\"imagesContainer\"", "data-deferred-shell", "hx-trigger=\"load, update-query from:window\""]
-      mapShell <- shellHtml tr $ Infrastructure.hostMapGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      mapShell `shouldContainAll` ["id=\"hostMapContainer\"", "Loading host map", "hx-trigger=\"load, update-query from:window\""]
-      mapShell `shouldNotSatisfy` T.isInfixOf "data-visible-host-label"
-
-    it "hostDetail_withoutHostMetrics_collapsesChartsIntoRecoveryState" \tr -> do
-      -- The Docker host: containers report against it but no system.* series does.
-      -- (vps-d6d7e318 no longer qualifies — the in-cluster agent gives it host CPU.)
-      (_, hostWithoutMetrics) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "0ce201583b04") Nothing Nothing Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostWithoutMetrics
-      html `shouldContainAll` ["No host metrics in this time range", "Try last 1 hour", "Set up host metrics", "View logs", "Metrics coverage: 0 of 4"]
-      html `shouldNotSatisfy` T.isInfixOf "host-cpu"
+      forM_
+        ( [ (shellHtml tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, ["Infrastructure", "Hosts", "id=\"hostsContainer\"", "/infrastructure/hosts?", "deferred=1"], ["vps-bare-01"])
+          , (shellHtml tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, ["id=\"containersContainer\"", "deferred=1"], ["checkout-7fb5b4f859-nlcjs"])
+          , (shellHtml tr $ Infrastructure.kubernetesGetH testPid (Just "pods") (Just "otel-demo") (Just "default") Nothing Nothing Nothing Nothing Nothing, ["resource=pods", "cluster=otel-demo", "namespace=default", "deferred=1"], [])
+          , (shellHtml tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing, ["id=\"imagesContainer\"", "data-deferred-shell"], [])
+          , (shellHtml tr $ Infrastructure.hostMapGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, ["id=\"hostMapContainer\"", "Loading host map"], ["data-visible-host-label"])
+          ]
+            :: [(IO Text, [Text], [Text])]
+        )
+        \(render, expected, absent) -> do
+          html <- render
+          html `shouldContainAll` ("hx-trigger=\"load, update-query from:window\"" : expected)
+          forM_ absent $ \value -> html `shouldNotSatisfy` T.isInfixOf value
 
     it "containerDrawer_sameNamesRemainDistinctAndKeepTheirMetricScope" \tr -> do
       pid <- createTestProject tr "container-scoped-drawer"
@@ -569,19 +504,6 @@ spec = sequential $ aroundAll withTfChartResources do
     it "containerDetailGetH_nonMember_cannotRead" \tr -> do
       victim <- createTestProject tr "victim"
       assertNonMemberDenied tr victim $ Containers.containerDetailGetH victim (Just "checkout") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-
-    it "detailDrawer_showsRequestsAndLimitsAndPivots" \tr -> do
-      (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml html'
-      html `shouldContainAll` ["Requests and limits", "vps-d6d7e318", "View logs", "resource.k8s.pod.name", "data-tippy-content=\"Pod: checkout-7fb5b4f859-nlcjs\""]
-
-      -- The chart options ride as a JSON string inside data-chart-config, so their quotes are
-      -- JSON-escaped and then attribute-escaped; the bare form would mean a broken JSON.parse.
-      html `shouldContainAll` ["&quot;hide_value&quot;:true", "text-textWeak widget-subtitle", "\\&quot;bottom\\&quot;:0", "\\&quot;tooltip\\&quot;:{\\&quot;show\\&quot;:true}"]
-
-      -- A container that stopped reporting must say so, not render a blank panel.
-      (_, gone) <- testServant tr $ Containers.containerDetailGetH testPid (Just "ghost") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml gone) `shouldContainAll` ["no longer reporting"]
 
     -- The pivot reads the newest datapoint per series, so scanning the picker's whole window
     -- can only turn up older points it then discards -- while paying to sort every one. Over a

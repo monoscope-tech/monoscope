@@ -24,6 +24,7 @@ const views = [
   ["hosts", "hostsContainer", { provider, group: "region" }, "Search hosts"],
   ["images", "imagesContainer", { registry: "registry.example", runtime: "kubernetes" }, "Search images"],
   ["kubernetes", "kubernetesContainer", { resource: "pods", namespace, cluster }, "Search pods"],
+  ["containers", "containersContainer", { namespace, cluster }, "Search containers"],
   ["host-map", "hostMapContainer", { provider, group: "region", fill: "memory" }, ""],
 ] as const;
 
@@ -110,6 +111,7 @@ for (const [route, container, filters, searchName] of views) {
     await expect(page.locator("[data-deferred-shell]")).toHaveCount(0, { timeout: 5_000 });
     const entries = page.locator(`#${container} ${route === "host-map" ? 'button[data-hx-get*="/infrastructure/hosts/detail"]' : 'tr[role="button"]'}`);
     await expect(entries).toHaveCount(1);
+    if (route === "containers") await expect(page.getByText(/containers reporting in the final 5m of this range/)).toBeVisible();
     await page.locator('[popovertarget="n-timepicker-popover"]').click();
     await page.locator("[data-mobile-live-toggle]").click();
     await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "0");
@@ -118,6 +120,7 @@ for (const [route, container, filters, searchName] of views) {
     await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
     await expect(page).toHaveURL(/since=1H/);
     await expect(entries).toHaveCount(2);
+    if (route === "containers") await expect(page.getByText(/containers reporting in the final 15m of this range/)).toBeVisible();
     const params = new URL((await refresh).url()).searchParams;
     expect(params.getAll("since")).toEqual(["1H"]);
     expect(params.getAll("from")).toEqual([""]);
@@ -161,6 +164,14 @@ for (const [route, container, filters, searchName] of views) {
     const restored = new URL((await entries.first().getAttribute("data-hx-get"))!, page.url()).searchParams;
     expect(restored.get("since")).toBe("1H");
     expect(restored.get("from") || restored.get("to")).toBeFalsy();
+    if (route === "containers") {
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(entries).toHaveCount(2);
+      await entries.filter({ hasText: "600" }).press("Enter");
+      const drawer = page.locator("#global-data-drawer-content");
+      await expect(drawer.getByText(/^Pod:\s*infra-preset-pod-600$/)).toBeVisible();
+      expect(new URL((await drawer.getByRole("link", { name: "View logs", exact: true }).getAttribute("href"))!, page.url()).searchParams.get("since")).toBe("1H");
+    }
   });
   test(`${route} time presets replace held initial inventory`, async ({ page }) => {
     test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
@@ -189,7 +200,7 @@ for (const [route, container, filters, searchName] of views) {
   });
 }
 
-for (const [route, container, filters] of [...views, ["containers", "containersContainer", { namespace, cluster }]] as const) {
+for (const [route, container, filters] of views) {
   test(`${route} initial inventory does not wait for application script arrival`, async ({ page }) => {
     test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
     let release = () => {};

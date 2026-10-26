@@ -33,7 +33,7 @@ import Pages.Containers (deferUrl, infraSnapshot, infraUrl, infrastructureBW, ma
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Facets qualified as Facets
-import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), SelectControl (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, selectControl_, withAttrs)
+import Pkg.Components.Table (Features (..), SelectControl (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, inventoryTable, selectControl_, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (WrappedEnumSC (..))
@@ -139,12 +139,6 @@ hostGroupOption = \case
   GroupIntegration -> ("integration", "Integration")
 
 
--- | Bucket every host falls into. @GroupNone@ collapses to a single bucket, which the table
--- skips entirely and the map renders as one section.
-groupHosts :: HostGroup -> V.Vector HostRow -> [(Text, [HostRow])]
-groupHosts grouping = groupRows (Just . hostGroupLabel grouping)
-
-
 hostGroupLabel :: HostGroup -> HostRow -> Text
 hostGroupLabel grouping host = case grouping of
   GroupNone -> "All hosts"
@@ -173,28 +167,15 @@ newtype HostsGet = HostsPage (PageCtx (Deferred (Table HostRow)))
 
 hostsTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> HostFilters -> HostGroup -> V.Vector HostRow -> V.Vector HostRow -> Table HostRow
 hostsTable pid window url filters grouping hosts allHosts =
-  Table
-    { config =
-        def
-          { elemID = "hostsForm"
-          , containerId = Just "hostsContainer"
-          , addPadding = True
-          , renderAsTable = True
-          , containerClasses = "w-full mx-auto space-y-2 group/columns"
-          }
-    , columns = hostColumns
+  table
+    { columns = hostColumns
     , rows = V.fromList $ sortOn (\h -> (hostGroupLabel grouping h, h.name)) $ V.toList hosts
     , features =
-        def
-          { search = Just ClientSide
-          , searchPlaceholder = Just "Search hosts"
-          , rowAttrs = Just $ drawerRowAttrs_ . hostDetailUrl pid window . (.name)
+        table.features
+          { rowAttrs = Just $ drawerRowAttrs_ . hostDetailUrl pid window . (.name)
           , rowGroup = if grouping == GroupNone then Nothing else Just $ Just . hostGroupLabel grouping
           , grouping = Just $ SelectControl "group" "Group by" (hostGroupParam grouping) (map hostGroupOption [minBound ..]) url "hostsContainer"
-          , header = Just $ timeRefreshListener_ "hostsContainer" url
           , resultSummary = Just $ "Showing " <> show (V.length hosts) <> " of " <> show (V.length allHosts) <> " hosts"
-          , customizeColumns = True
-          , exportName = Just "hosts"
           , facets =
               Just
                 $ facetActions
@@ -216,6 +197,7 @@ hostsTable pid window url filters grouping hosts allHosts =
           }
     }
   where
+    table = inventoryTable "hosts" url
     -- Configuration only earns its width when some host reports a provider or region; it is
     -- decided over the unfiltered inventory so a facet never toggles a column.
     hostColumns =
@@ -397,9 +379,8 @@ newtype ImagesGet = ImagesPage (PageCtx (Deferred (Table ImageRow)))
 
 imagesTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> Maybe Text -> Maybe Text -> V.Vector ImageRow -> V.Vector ImageRow -> Table ImageRow
 imagesTable pid window url runtimeM registryM images allImages =
-  Table
-    { config = def{elemID = "imagesForm", containerId = Just "imagesContainer", addPadding = True, renderAsTable = True}
-    , columns =
+  table
+    { columns =
         [ col "Image" (\image -> div_ [class_ "flex items-center gap-2 min-w-0"] $ faSprite_ "layer-group" "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "truncate font-medium text-textStrong"] (toHtml image.image)) & withAttrs [class_ "min-w-72 w-full"]
         , col "Running" (\image -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show image.running) & withAttrs [class_ "w-24 text-right"]
         , col "Source" (\image -> span_ [class_ "whitespace-nowrap text-textWeak"] $ toHtml image.registry) & withAttrs [class_ "w-36"]
@@ -411,11 +392,8 @@ imagesTable pid window url runtimeM registryM images allImages =
         ]
     , rows = images
     , features =
-        def
-          { header = Just $ timeRefreshListener_ "imagesContainer" url
-          , search = Just ClientSide
-          , searchPlaceholder = Just "Search images"
-          , rowAttrs = Just \image -> drawerRowAttrs_ $ infraUrl pid "/infrastructure/images/detail" [("image", image.image)] window
+        table.features
+          { rowAttrs = Just \image -> drawerRowAttrs_ $ infraUrl pid "/infrastructure/images/detail" [("image", image.image)] window
           , facets =
               Just
                 $ facetActions
@@ -426,11 +404,11 @@ imagesTable pid window url runtimeM registryM images allImages =
                   ]
           , zeroState = Just $ ZeroState "layer-group" "No container images reporting" "Images appear when container telemetry includes container.image.name." (ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Container setup guide")
           , resultSummary = Just $ "Showing " <> show (V.length images) <> " of " <> show (V.length allImages) <> " images"
-          , customizeColumns = True
           , exportName = Just "container-images"
           }
     }
   where
+    table = inventoryTable "images" url
     -- Two tags and a "+N" pill wrap rather than clip: a long tag used to cut the pill to "(".
     renderTags image = div_ [class_ "flex max-w-72 flex-wrap gap-1"] do
       forM_ (take 2 image.tags) $ \tag -> span_ [class_ "badge badge-xs badge-ghost shrink-0"] $ toHtml tag
@@ -568,9 +546,8 @@ newtype KubernetesGet = KubernetesPage (PageCtx (Deferred (Table KubeRow)))
 
 kubernetesTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> KubeResource -> Maybe Text -> Maybe Text -> Maybe Text -> V.Vector KubeRow -> V.Vector KubeRow -> Table KubeRow
 kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows =
-  Table
-    { config = def{elemID = "kubernetesForm", containerId = Just "kubernetesContainer", addPadding = True, renderAsTable = True}
-    , columns =
+  table
+    { columns =
         [ col (resourceLabel resource) (\row -> div_ [class_ "flex min-w-0 items-center gap-2"] $ faSprite_ (kubeIcon resource) "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "min-w-0 truncate font-medium text-textStrong", term "data-tippy-content" row.name] (toHtml $ bool id clusterLabel (resource == KubeClusters) row.name)) & withAttrs [class_ "min-w-56 w-full"]
         , col "Status" (statusBadge . (.status)) & withAttrs [class_ "w-28"]
         , col "Cluster" (\row -> maybe Containers.emDash_ (\value -> span_ [class_ "block truncate whitespace-nowrap text-textStrong", term "data-tippy-content" value] $ toHtml $ clusterLabel value) row.cluster) & withAttrs [class_ "w-36 max-lg:hidden"]
@@ -585,14 +562,11 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
         ]
     , rows
     , features =
-        def
-          { search = Just ClientSide
-          , searchPlaceholder = Just $ "Search " <> display resource
+        table.features
+          { searchPlaceholder = Just $ "Search " <> display resource
           , rowAttrs = Just $ drawerRowAttrs_ . kubeDetailUrl
-          , header = Just $ timeRefreshListener_ "kubernetesContainer" url
           , tabs = Just $ TableTabs "Kubernetes resource" [(resourceLabel r <> "s", infraUrl pid "/infrastructure/kubernetes" ([("resource", display r)] <> mapMaybe sequenceA [("cluster", clusterM), ("namespace", namespaceM), ("status", statusM)]) window, r == resource) | r <- [minBound ..]]
           , resultSummary = Just $ "Showing " <> show (V.length rows) <> " resources"
-          , customizeColumns = True
           , exportName = Just $ "kubernetes-" <> display resource
           , facets =
               Just
@@ -607,6 +581,7 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
           }
     }
   where
+    table = inventoryTable "kubernetes" url
     kubeDetailUrl row = infraUrl pid "/infrastructure/kubernetes/detail" ([("resource", display resource), ("name", row.name)] <> mapMaybe sequenceA [("cluster", row.cluster), ("namespace", row.namespace)]) window
 
 
@@ -691,7 +666,7 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
       url = deferUrl pid "/infrastructure/host-map" [("fill", fillM), ("group", groupM), ("provider", providerM), ("region", regionM), ("os", osM)] window
   body <- withDeferredBody deferredM "hostMapContainer" url hostMapSkeleton_ do
     allHosts <- hostsFromRows <$> infraSnapshot pid window
-    let groups = groupHosts grouping $ applyHostFilters filters allHosts
+    let groups = groupRows (Just . hostGroupLabel grouping) $ applyHostFilters filters allHosts
     pure HostMapData{pid, window, fill = parseParam FillCPU display fillM, grouping, filters, allHosts, groups}
   addRespHeaders $ HostMapPage $ PageCtx (infrastructureBW pid "Host Map" window bw) body
   where
