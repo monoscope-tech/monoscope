@@ -1,4 +1,4 @@
-declare module 'monaco-editor/esm/vs/basic-languages/yaml/yaml.js' {
+declare module 'monaco-editor/languages/definitions/yaml/yaml.js' {
   export const conf: unknown;
   export const language: unknown;
 }
