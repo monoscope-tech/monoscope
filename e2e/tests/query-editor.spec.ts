@@ -149,7 +149,7 @@ test.describe("Query editor", () => {
   test("facet Clear all removes facet clauses and keeps typed ones", async ({ page }) => {
     const facets = page.locator(".facet-rail .facet-item input[data-field]");
     const clear = page.locator(".facet-rail button", { hasText: "Clear all" });
-    await facets.first().waitFor({ state: "attached" }).catch(() => {});
+    await facets.first().waitFor({ state: "attached", timeout: 10_000 }).catch(() => {});
     test.skip((await facets.count()) < 2, "no facet values in this database");
     await page.locator("#filterElement").evaluate((el: any) => el.setValue("duration > 1000"));
     await expect(clear).toBeHidden();
