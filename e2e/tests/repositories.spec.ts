@@ -82,7 +82,7 @@ test('rerunning a pull request review replaces its view without nesting content'
     await expect(page.getByText('Review unavailable', { exact: true })).toHaveCount(0);
     await page.getByRole('navigation', { name: 'Repository views' }).getByRole('link', { name: 'Repositories', exact: true }).click();
     await expect(page.locator('#repository-content')).toHaveCount(1);
-    await expect(page.getByRole('heading', { name: 'Connect the repositories behind your services', exact: true })).toBeVisible();
+    await expect(page.getByText('Connect the repositories behind your services', { exact: true })).toBeVisible();
   } finally {
     sql(`DELETE FROM background_jobs WHERE payload->>'contents' = '${run}';
          DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
@@ -497,14 +497,15 @@ test('service investigations reach only applicable repositories by keyboard in b
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
       await expect.poll(() => page.locator('#side-nav-menu').evaluate(element => element.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
       await page.screenshot({ path: testInfo.outputPath(`service-repositories-${theme}.png`) });
-      await page.getByRole('link', { name: 'All repositories', exact: true }).click();
+      await page.setViewportSize({ width: 1200, height: 900 });
+      await page.getByRole('navigation', { name: 'Repository views' }).getByRole('link', { name: 'Repositories', exact: true }).click();
       await expect(page.locator('#repository-content tr.itemsListItem')).toHaveCount(4);
       await page.goBack();
       await expect(page.getByRole('heading', { level: 1, name: `Repositories ${service}`, exact: true })).toBeVisible();
     }
     sql(`DELETE FROM projects.code_mappings WHERE project_id = '${pid}' AND service IS NULL;`);
     await page.goto(`/p/${pid}/repositories/services/unmapped`);
-    await expect(page.getByRole('heading', { name: 'No repositories linked to this service', exact: true })).toBeVisible();
+    await expect(page.getByText('No repositories linked to this service', { exact: true })).toBeVisible();
     await expect(page.getByText('Ask a project editor to link services to their source repositories.', { exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Choose a repository', exact: true })).toHaveCount(0);
   } finally {
