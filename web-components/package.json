@@ -54,7 +54,7 @@
     "@types/bun": "^1.4.4",
     "@types/js-yaml": "^4.0.9",
     "@types/jsonpath": "^0.2.4",
-    "@types/node": "^25.9.1",
+    "@types/node": "^26.6.5",
     "@vitest/browser": "^5.0.5",
     "happy-dom": "^21.0.4",
     "jsdom": "^29.1.1",
