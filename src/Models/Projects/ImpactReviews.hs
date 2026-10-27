@@ -68,6 +68,7 @@ data ReviewRun = ReviewRun
   , error :: Maybe Text
   , commentId :: Maybe Int64
   , latestRevision :: Text
+  , createdAt :: UTCTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, HI.DecodeRow)
@@ -179,7 +180,7 @@ selectRuns :: DB es => Maybe ProjectId -> Maybe ReviewId -> Eff es [ReviewRun]
 selectRuns pid rid =
   Hasql.interp
     [HI.sql|SELECT r.id, t.id, t.project_id, t.owner, t.repo, t.number::bigint, r.revision,
-    r.state, r.result, r.error, t.comment_id, t.latest_revision
+    r.state, r.result, r.error, t.comment_id, t.latest_revision, r.created_at
     FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
     WHERE (#{pid}::uuid IS NULL OR t.project_id = #{pid}) AND (#{rid}::uuid IS NULL OR r.id = #{rid})
     ORDER BY r.created_at DESC LIMIT 20|]

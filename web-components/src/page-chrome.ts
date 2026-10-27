@@ -44,13 +44,18 @@ onReady(function(){
           };
 
           // Event delegation for tooltips - single listener, no querySelectorAll per afterSettle
-          document.body.addEventListener('mouseover', function(e: Event) {
-            const element = (e.target as Element)?.closest?.('[data-tippy-content]') as (HTMLElement & { _tippy?: unknown }) | null;
+          function showTooltip(e: Event) {
+            const target = e.target as Element;
+            const element = (target?.closest?.('[data-tippy-content], [data-tippy-theme="trace-span"]') ?? (e.type === 'focusin' ? target?.querySelector?.('[data-tippy-theme="trace-span"]') : null)) as (HTMLElement & { _tippy?: unknown }) | null;
             if (!element || element._tippy) return;
             destroyTip();
 
             const content = element.getAttribute('data-tippy-content') || '';
             const isMultiline = content.length > 80 || content.includes('\n');
+            const isTraceSpan = element.dataset.tippyTheme === 'trace-span';
+            const tooltipContent = isTraceSpan
+              ? element.querySelector<HTMLTemplateElement>('template[data-trace-tooltip]')!.content.firstElementChild!.cloneNode(true) as HTMLElement
+              : content;
             if (typeof (window as any).tippy !== 'function') return;
             const instance = (window as any).tippy(element, {
               delay: [isTooltipWarm ? 0 : 100, 0],
@@ -63,14 +68,16 @@ onReady(function(){
               followCursor: false,
               flipOnUpdate: false,
               lazy: true,
-              maxWidth: isMultiline ? 720 : 350,
+              content: tooltipContent,
+              interactive: isTraceSpan,
+              triggerTarget: isTraceSpan ? element.closest('.waterfall-row') ?? element : element,
+              appendTo: document.body,
+              offset: isTraceSpan ? [0, 6] : [0, 10],
+              maxWidth: isTraceSpan ? 440 : isMultiline ? 720 : 350,
               // Preserve newlines / monospace alignment for SQL and other long text.
               onCreate(inst: any) {
-                if (isMultiline) {
-                  inst.popper.querySelector('.tippy-content')!.style.whiteSpace = 'pre-wrap';
-                  inst.popper.querySelector('.tippy-content')!.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
-                  inst.popper.querySelector('.tippy-content')!.style.fontSize = '12px';
-                  inst.popper.querySelector('.tippy-content')!.style.textAlign = 'left';
+                if (isMultiline && !isTraceSpan) {
+                  Object.assign(inst.popper.querySelector('.tippy-content')!.style, { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', textAlign: 'left' });
                 }
               },
               onShow() {
@@ -90,7 +97,10 @@ onReady(function(){
             });
             liveTip = instance;
             instance.show();
-          });
+          }
+          document.body.addEventListener('mouseover', showTooltip);
+          document.body.addEventListener('focusin', showTooltip);
+          document.body.addEventListener('keydown', (e) => { if (e.key === 'Escape') liveTip?.hide(); });
 
           // Clear tooltip warmth timeout on page unload and HTMX navigation to prevent memory leak
           window.addEventListener('beforeunload', () => { clearTimeout(tooltipWarmTimeout); destroyTip(); });

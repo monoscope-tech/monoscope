@@ -115,12 +115,12 @@ spec = around withTestResources do
         scheduledActionable `shouldContain` ["send_to_slack"]
 
     describe "Web conversation persistence" do
-      it "assistantPages_defaultToNavigation" \tr -> do
+      it "assistantPages_defaultToAssistant" \tr -> do
         let convId = UUIDId UUID.nil
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId
         let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
-        html `shouldSatisfy` T.isInfixOf "id=\"nav-view-menu\" class=\"sr-only\" checked"
+        html `shouldSatisfy` T.isInfixOf "id=\"nav-view-ai\" class=\"sr-only\" checked"
 
       it "issueConversation_linksBackToItsIssue" \tr -> do
         let issueId = UUIDId UUID.nil :: Issues.IssueId

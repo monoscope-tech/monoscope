@@ -281,6 +281,23 @@ describe('updateUrlState', () => {
 
 
 describe('links that preserve the time range', () => {
+  test.each([
+    '/p/proj/issues/00000000-0000-0000-0000-000000000001',
+    '/p/proj/issues/by_hash/error-hash',
+    '/p/proj/issues/00000000-0000-0000-0000-000000000001?from=2026-09-02T06:00:00Z&to=2026-09-02T10:00:00Z',
+  ])('opening %s keeps the incident range instead of inheriting the page range', (href) => {
+    window.history.replaceState({}, '', '/p/proj/issues?since=1H&environment=production');
+    const link = document.createElement('a');
+    link.dataset.preservePageContext = '';
+    link.href = href;
+    const incidentRange = new URL(link.href).searchParams;
+    document.body.append(link);
+    link.dispatchEvent(new Event('pointerover', { bubbles: true }));
+    const target = new URL(link.href).searchParams;
+    for (const key of ['since', 'from', 'to']) expect(target.get(key)).toBe(incidentRange.get(key));
+    expect(target.get('environment')).toBe('production');
+  });
+
   test('replaces stale range modes while retaining the query and an initial fallback', () => {
     const link = document.createElement('a');
     link.dataset.preservePageContext = '';

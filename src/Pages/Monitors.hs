@@ -363,7 +363,7 @@ notificationSettingsSection_ allTeams selectedTeamIds formId monitorM = do
       stopEnabled = maybe False (isJust . (.stopAfterCount)) monitorM
       stopVal = maybe "5" show $ monitorM >>= (.stopAfterCount)
   panel_ (Collapsible False) def{icon = Just "envelope"} "Notification Settings" do
-    formField_ FieldSm def{hint = Just "@everyone includes all project members and project notification channels."} "Teams" (formId <> "-teams") False
+    formField_ FieldSm def{hint = Just "All project members and notification channels."} "Teams" (formId <> "-teams") False
       $ Just
       $ tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams, Aria.describedby_ (formId <> "-teams-hint")]
     details_ [class_ "mt-4 border-t border-strokeWeak pt-3"] do
@@ -764,14 +764,15 @@ unifiedOverviewPage pid alert currTime teams = do
       div_ [class_ "max-md:hidden w-78 shrink-0"] $ alertSidebar_ display alert currTime
 
     -- Which tab is open is DOM state (radio), so no script is needed and it survives a morph.
-    div_ [role_ "tablist", class_ "w-full group/mt", id_ "monitor-tabs"] do
-      div_ [class_ "w-full flex border-b border-strokeWeak"] do
+    div_ [class_ "w-full group/mt", id_ "monitor-tabs"] do
+      fieldset_ [class_ "w-full min-w-0 flex border-b border-strokeWeak"] do
+        legend_ [class_ "sr-only"] "Monitor detail view"
         detailTab_ "monitor-tabs" "tab-exec-history" "shrink-0 font-medium text-textWeak" True "Execution History"
         detailTab_ "monitor-tabs" "tab-notif-channels" "shrink-0 font-medium text-textWeak" False "Notification Channels"
-      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-exec-history:checked]/mt:block"]
+      div_ [class_ "overflow-y-auto hidden group-has-[.tab-exec-history:checked]/mt:block"]
         $ div_ [class_ "mt-2 p-2 border border-strokeWeak rounded-lg overflow-x-auto flex flex-col max-h-[400px] max-md:max-h-[300px]"]
         $ termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block", term "windowTarget" "logList", term "projectId" pid.toText, term "initialFetchUrl" historyUrl] ("" :: Text)
-      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-notif-channels:checked]/mt:block"] $ alertNotificationsTab_ alert teams
+      div_ [class_ "overflow-y-auto hidden group-has-[.tab-notif-channels:checked]/mt:block"] $ alertNotificationsTab_ alert teams
   where
     display = maybe (MDStatus alert.currentStatus) (const MDDeactivated) alert.deactivatedAt
     historyUrl = "/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr ("kind==\"alert\" and parent_id==\"" <> alert.id.toText <> "\"")
@@ -826,46 +827,51 @@ alertSidebar_ display alert currTime = do
 
 
 alertNotificationsTab_ :: Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Html ()
-alertNotificationsTab_ alert teams = do
-  div_ [class_ "pt-6 pb-3"] do
-    div_ [class_ "mb-6"] do
-      h4_ [class_ "text-base font-medium text-textStrong mb-2 flex items-center"] $ faSprite_ "users" "regular" "h-4 w-4 mr-2" >> "Teams"
+alertNotificationsTab_ alert teams =
+  div_ [class_ "py-6 grid grid-cols-1 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] gap-6 items-start max-w-6xl"] do
+    section_ [Aria.labelledby_ "monitor-recipients-heading", class_ "min-w-0 space-y-3"] do
+      h3_ [id_ "monitor-recipients-heading", class_ "text-base font-medium text-textStrong flex items-center gap-2"] do
+        faSprite_ "users" "regular" "h-4 w-4"
+        "Recipients"
       if V.null teams
-        then do
-          div_ [class_ "text-sm text-textWeak"] "No teams configured for this monitor."
-          div_ [class_ "pt-2 flex items-center gap-1"] do
-            span_ [class_ "text-sm text-textWeak"] "Project level notification integrations will be used."
-            a_ [href_ $ "/p/" <> alert.projectId.toText <> "/settings/integrations", class_ "text-sm text-textBrand hover:underline"] "Configure integrations"
-        else div_ [class_ "flex flex-wrap gap-4 mb-4"] $ forM_ teams \team ->
-          div_ [class_ "flex flex-col border rounded-lg gap-4 border-strokeWeak p-6 relative w-96", id_ team.handle] do
-            unless team.is_everyone
-              $ button_
-                [ type_ "button"
-                , class_ "absolute top-3 cursor-pointer right-3 text-iconNeutral hover:text-iconBrand transition-colors"
-                , Aria.label_ $ "Remove " <> team.name <> " team"
-                , term "data-tippy-content" "Remove team"
-                , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> team.id.toText
-                , hxTarget_ $ "#" <> team.handle
-                , hxSwap_ "outerHTML"
-                ]
-              $ faSprite_ "trash" "regular" "h-3 w-3"
-            span_ [class_ "text-sm font-medium"] $ toHtml team.name
-            forM_ ([("envelope", "regular", team.notify_emails), ("slack", "solid", ("#" <>) <$> team.slack_channels), ("discord", "brand", ("#" <>) <$> team.discord_channels)] :: [(Text, Text, V.Vector Text)]) \(icon, style, entries) ->
-              forM_ entries \entry ->
-                div_ [class_ "flex items-center gap-2"]
-                  $ span_ [class_ "text-sm text-textWeak"]
-                  $ faSprite_ icon style "h-3 w-3 mr-2 text-iconNeutral"
-                  >> toHtml entry
-
-    div_ [class_ "pt-6 pb-3"] do
-      h4_ [class_ "font-medium text-textStrong mb-2"] "Notification Template"
-      div_ [class_ "rounded-lg py-2 space-y-2"] do
-        div_ [class_ "flex items-center gap-1"] do
-          span_ [class_ "text-sm font-medium text-textStrong"] "Subject: "
-          span_ [class_ "text-sm text-textWeak"] $ toHtml alert.alertConfig.subject
-        div_ [class_ "flex flex-col gap-1"] do
-          span_ [class_ "text-sm font-medium text-textStrong"] "Message"
-          p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml alert.alertConfig.message
+        then div_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4 space-y-2"] do
+          p_ [class_ "text-sm text-textWeak"] "No teams configured for this monitor. Project notification integrations will be used."
+          a_ [href_ $ "/p/" <> alert.projectId.toText <> "/settings/integrations", class_ "text-sm text-textBrand hover:underline"] "Configure integrations"
+        else forM_ teams \team ->
+          article_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4 space-y-4 min-w-0", id_ team.handle] do
+            div_ [class_ "space-y-1"] do
+              div_ [class_ "flex items-center justify-between gap-2"] do
+                h4_ [class_ "text-sm font-semibold text-textStrong min-w-0 break-words"] $ toHtml team.name
+                unless team.is_everyone
+                  $ button_
+                    [ type_ "button"
+                    , class_ "btn btn-xs btn-ghost min-h-6 min-w-6 shrink-0 text-textWeak"
+                    , Aria.label_ $ "Remove " <> team.name <> " team"
+                    , term "data-tippy-content" "Remove team"
+                    , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> team.id.toText
+                    , hxTarget_ $ "#" <> team.handle
+                    , hxSwap_ "outerHTML"
+                    ]
+                  $ faSprite_ "trash" "regular" "h-3 w-3"
+              when team.is_everyone $ p_ [class_ "text-xs leading-relaxed text-textWeak"] "All project members and notification channels."
+            let destinations = filter (not . V.null . snd) [("Email", team.notify_emails), ("Slack", ("#" <>) <$> team.slack_channels), ("Discord", ("#" <>) <$> team.discord_channels)] :: [(Text, V.Vector Text)]
+            when (null destinations) $ p_ [class_ "text-sm text-textWeak"] "No destinations configured for this team."
+            forM_ destinations \(provider, entries) -> div_ [class_ "space-y-1.5"] do
+              h5_ [class_ "text-xs font-medium text-textWeak"] $ toHtml $ provider <> " (" <> show (V.length entries) <> ")"
+              ul_ [class_ "space-y-1 text-sm text-textStrong break-normal [overflow-wrap:anywhere]"] $ forM_ entries $ li_ . toHtml
+    section_ [Aria.labelledby_ "monitor-message-heading", class_ "min-w-0 space-y-3"] do
+      h3_ [id_ "monitor-message-heading", class_ "text-base font-medium text-textStrong"] "Message preview"
+      div_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4 space-y-4"] do
+        div_ [class_ "space-y-1"] do
+          h4_ [class_ "text-xs font-medium text-textWeak"] "Subject"
+          p_ [class_ "text-base font-semibold text-textStrong break-normal [overflow-wrap:anywhere] max-w-[65ch]"]
+            $ toHtml
+            $ if T.null (T.strip alert.alertConfig.subject) then "No subject configured" else alert.alertConfig.subject
+        div_ [class_ "space-y-1"] do
+          h4_ [class_ "text-xs font-medium text-textWeak"] "Message"
+          p_ [class_ "text-sm leading-relaxed text-textStrong whitespace-pre-wrap break-normal [overflow-wrap:anywhere] max-w-[65ch]"]
+            $ toHtml
+            $ if T.null (T.strip alert.alertConfig.message) then "No message configured" else alert.alertConfig.message
 
 
 -- | Uptime checks: URLs Monoscope probes on a schedule. They share the scrape-target

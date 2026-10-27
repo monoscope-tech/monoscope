@@ -122,16 +122,16 @@ describe('session-replay progressive shard loading', () => {
 
   // 390px RUM workspace: the toolbar wrapped "Speed 1×"/"Skip idle" onto two lines and a
   // fixed 550px frame letterboxed a 1117x927 recording. Inline embeds fit the frame to the
-  // recording's aspect and collapse toolbar labels to 44px-wide icon targets.
+  // recording's aspect and collapse toolbar labels to compact icon targets.
   test.each([
     [390, true, 324],
-    [1440, false, window.innerHeight - 220], // viewport-clamped, not letterboxed
+    [1440, false, window.innerHeight - 228], // viewport-clamped, not letterboxed
   ])('at %ipx fullWidth compact=%s frame height %i', async (width, compact, frameH) => {
     const el = await mountPlayer({ fullWidth: 'true', getBoundingClientRect: () => ({ width }) });
     await el.updateComplete;
     const skip = el.querySelector('button[aria-label="Skip idle"]');
     expect(skip.textContent.includes('Skip idle')).toBe(!compact);
-    expect(skip.classList.contains('min-w-11')).toBe(compact);
+    expect(skip.classList.contains('min-w-9')).toBe(compact);
     expect(el.querySelector('#playerWrapper').style.height).toBe(`${frameH}px`);
   });
 
@@ -247,7 +247,7 @@ describe('session-replay progressive shard loading', () => {
     el.currentTime = 0;
     const playSpy = vi.spyOn(el, 'play').mockImplementation(() => {});
     // A later shard arrives (as prefetch would deliver it).
-    el.appendEvents([ev(50), ev(51)]);
+    await el.appendEvents([ev(50), ev(51)]);
 
     expect(el.finished).toBe(false); // no longer "ended" — more content exists
     expect(playSpy).toHaveBeenCalled(); // playback resumed rather than stopping at the boundary

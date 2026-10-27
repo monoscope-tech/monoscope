@@ -128,7 +128,7 @@ spec = sequential $ aroundAll withTestResources do
       (e.browser, e.os, e.device, e.userAgent) `shouldBe` (Just "Chrome", Just "Windows", Just "Desktop", Just ua)
       (e.geoCountry, e.geoCity, e.threadName, e.attachments) `shouldBe` (Just "US", Just "Santa Clara", Just "main", Just ["https://cdn.example.com/shot.png"])
       issue <- issueOf tr e.hash
-      issuePageText tr issue.id >>= (`shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Root cause", "The cart line has no price", "Plan a fix", "id=\"issue-tags\"", ">release</h4>", ">26.3.1</span>", "100%", "id=\"issue-attachments\"", "src=\"https://cdn.example.com/shot.png\""])
+      issuePageText tr issue.id >>= (`shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Likely cause", "The cart line has no price", "Plan a fix", "id=\"issue-tags\"", ">release</h4>", ">26.3.1</span>", "100%", "id=\"issue-attachments\"", "src=\"https://cdn.example.com/shot.png\""])
 
     it "1c. releases and distinct users are tracked, and resolve-in-next-release holds until a new release" \tr -> do
       apiKey <- createTestAPIKey tr pid "release-key"

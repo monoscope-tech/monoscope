@@ -114,20 +114,7 @@ buildTitlePrompt issue =
           |]
     case issue.issueType of
       Issues.ApiChange ->
-        withIssueData @Issues.APIChangeData issue "Generate a concise title for this API change." \d ->
-          if V.null d.newFields && V.null d.deletedFields && V.null d.modifiedFields
-            then
-              [fmtTrim|Generate a concise title for this newly discovered API endpoint.
-            Endpoint: {d.endpointMethod} {d.endpointPath}
-            Service: {Issues.serviceLabel issue.service}
-            This is a brand new endpoint that was just detected for the first time.|]
-            else
-              [fmtTrim|Generate a concise, descriptive title for this API change.
-            Endpoint: {d.endpointMethod} {d.endpointPath}
-            New fields: {V.length d.newFields}
-            Deleted fields: {V.length d.deletedFields}
-            Modified fields: {V.length d.modifiedFields}
-            Service: {Issues.serviceLabel issue.service}|]
+        withIssueData @Issues.APIChangeData issue "Generate a concise title for this schema observation." schemaObservationPrompt
       Issues.RuntimeException ->
         withIssueData @Issues.RuntimeExceptionData issue "Generate a concise title for this runtime exception." \d ->
           [fmtTrim|Generate a concise title for this runtime exception.
@@ -218,21 +205,7 @@ buildDescriptionPrompt issue =
           |]
     case issue.issueType of
       Issues.ApiChange ->
-        withIssueData @Issues.APIChangeData issue "Describe this API change and its implications." \d ->
-          if V.null d.newFields && V.null d.deletedFields && V.null d.modifiedFields
-            then
-              [fmtTrim|Describe this newly discovered API endpoint.
-            Endpoint: {d.endpointMethod} {d.endpointPath}
-            Service: {Issues.serviceLabel issue.service}
-            This endpoint was just detected for the first time. Summarize what it likely does based on its path and method.|]
-            else
-              [fmtTrim|Describe this API change and its impact.
-            Endpoint: {d.endpointMethod} {d.endpointPath}
-            New fields: {show $ V.toList d.newFields}
-            Deleted fields: {show $ V.toList d.deletedFields}
-            Modified fields: {show $ V.toList d.modifiedFields}
-            Total anomalies grouped: {V.length d.anomalyHashes}
-            Service: {Issues.serviceLabel issue.service}|]
+        withIssueData @Issues.APIChangeData issue "Describe this schema observation." schemaObservationPrompt
       Issues.RuntimeException ->
         withIssueData @Issues.RuntimeExceptionData issue "Analyze this runtime exception." \d ->
           [fmtTrim|Analyze this runtime exception and provide debugging guidance.
@@ -312,6 +285,13 @@ buildDescriptionPrompt issue =
             Feedback: {d.message}
             Page: {fromMaybe "unknown" d.pageUrl}
             An error occurred in the same trace: {related}|]
+
+
+schemaObservationPrompt :: Issues.APIChangeData -> Text
+schemaObservationPrompt observation =
+  "Describe the observed schema data below. Use its subject to distinguish an HTTP endpoint from a span. "
+    <> "Do not invent HTTP details for a span, infer consumer breakage from sample/format changes, or infer required fields. "
+    <> decodeUtf8 (AE.encode observation)
 
 
 -- | Classify issue as critical/safe and count breaking/incremental changes

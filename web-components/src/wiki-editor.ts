@@ -1,20 +1,39 @@
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, commandsCtx } from '@milkdown/kit/core';
-import { commonmark } from '@milkdown/kit/preset/commonmark';
-import { gfm } from '@milkdown/kit/preset/gfm';
-import { history } from '@milkdown/kit/plugin/history';
-import { listener, listenerCtx } from '@milkdown/kit/plugin/listener';
-import { clipboard } from '@milkdown/kit/plugin/clipboard';
-import { indent } from '@milkdown/kit/plugin/indent';
-import { trailing } from '@milkdown/kit/plugin/trailing';
-import { getMarkdown, replaceAll } from '@milkdown/kit/utils';
+import { CrepeBuilder } from '@milkdown/crepe/builder';
+import { blockEdit } from '@milkdown/crepe/feature/block-edit';
+import { codeMirror } from '@milkdown/crepe/feature/code-mirror';
+import { cursor } from '@milkdown/crepe/feature/cursor';
+import { linkTooltip } from '@milkdown/crepe/feature/link-tooltip';
+import { listItem } from '@milkdown/crepe/feature/list-item';
+import { placeholder } from '@milkdown/crepe/feature/placeholder';
+import { table } from '@milkdown/crepe/feature/table';
+import { toolbar } from '@milkdown/crepe/feature/toolbar';
+import { editorViewCtx, remarkStringifyOptionsCtx } from '@milkdown/kit/core';
+import { listenerCtx } from '@milkdown/kit/plugin/listener';
+import { replaceAll } from '@milkdown/kit/utils';
+import { languages } from '@codemirror/language-data';
+import type { Handle } from 'mdast-util-to-markdown';
 import '@milkdown/crepe/theme/common/prosemirror.css';
 import '@milkdown/crepe/theme/common/reset.css';
+import '@milkdown/crepe/theme/common/block-edit.css';
+import '@milkdown/crepe/theme/common/code-mirror.css';
+import '@milkdown/crepe/theme/common/cursor.css';
+import '@milkdown/crepe/theme/common/link-tooltip.css';
+import '@milkdown/crepe/theme/common/list-item.css';
+import '@milkdown/crepe/theme/common/placeholder.css';
+import '@milkdown/crepe/theme/common/table.css';
+import '@milkdown/crepe/theme/common/toolbar.css';
 import '@milkdown/crepe/theme/frame.css';
 import './wiki-editor.css';
 
+// remark escapes `[` in text, which would save `[[path]]` wikilinks as `\[\[path]]`.
+const wikilinkText: Handle = (node: { value: string }, _parent, state, info) => {
+  const parts = node.value.split(/(\[\[[^\]\n]+\]\])/);
+  return parts.map((part, i) => i % 2 ? part : state.safe(part, { ...info, before: i ? parts[i - 1].slice(-1) : info.before, after: i < parts.length - 1 ? parts[i + 1][0] : info.after })).join('');
+};
+
 class WikiEditor extends HTMLElement {
   private lifetime?: AbortController;
-  private editor?: Editor;
+  private crepe?: CrepeBuilder;
 
   connectedCallback() {
     const lifetime = this.lifetime = new AbortController();
@@ -27,31 +46,25 @@ class WikiEditor extends HTMLElement {
     const mode = this.querySelector<HTMLSelectElement>('[data-editor-mode]')!;
     const controls = this.querySelector<HTMLElement>('[data-editor-controls]')!;
     const status = this.querySelector<HTMLElement>('[data-editor-status]')!;
-    const editor = Editor.make().config(ctx => {
-      ctx.set(rootCtx, root);
-      ctx.set(defaultValueCtx, source.value);
-    }).use(commonmark).use(gfm).use(history).use(listener).use(clipboard).use(indent).use(trailing);
+    const crepe = new CrepeBuilder({ root, defaultValue: source.value })
+      .addFeature(cursor).addFeature(listItem).addFeature(linkTooltip).addFeature(toolbar).addFeature(blockEdit).addFeature(table)
+      .addFeature(placeholder, { text: 'Type / for blocks, or [[path]] to link another page' })
+      .addFeature(codeMirror, { languages });
+    crepe.editor.config(ctx => ctx.update(remarkStringifyOptionsCtx, options => ({ ...options, handlers: { ...options.handlers, text: wikilinkText } })));
+    const { editor } = crepe;
     try {
-      await editor.create();
-      if (lifetime.signal.aborted) { await editor.destroy(); return; }
-      this.editor = editor;
+      await crepe.create();
+      if (lifetime.signal.aborted) { await crepe.destroy(); return; }
+      this.crepe = crepe;
       // Adopt typing that happened while the widget was loading.
       editor.action(replaceAll(source.value));
       const document = () => editor.action(ctx => ctx.get(editorViewCtx).state.doc);
       let original = document();
       let originalMarkdown = source.value;
       const sync = () => {
-        if (this.dataset.mode === 'rich') source.value = document().eq(original) ? originalMarkdown : editor.action(getMarkdown());
+        if (this.dataset.mode === 'rich') source.value = document().eq(original) ? originalMarkdown : crepe.getMarkdown();
       };
       editor.action(ctx => ctx.get(listenerCtx).markdownUpdated(sync));
-      controls.addEventListener('click', event => {
-        const button = (event.target as Element).closest<HTMLButtonElement>('[data-editor-command]');
-        if (!button) return;
-        editor.action(ctx => {
-          ctx.get(commandsCtx).call(button.dataset.editorCommand!, button.dataset.editorParameter ? Number(button.dataset.editorParameter) : undefined);
-          ctx.get(editorViewCtx).focus();
-        });
-      }, { signal: lifetime.signal });
       source.form!.addEventListener('submit', sync, { capture: true, signal: lifetime.signal });
       mode.addEventListener('change', () => {
         sync();
@@ -79,18 +92,18 @@ class WikiEditor extends HTMLElement {
     } catch {
       if (!lifetime.signal.aborted) status.textContent = 'Rich-text editing could not load. You can still edit and save Markdown below.';
       lifetime.abort();
-      this.editor = undefined;
+      this.crepe = undefined;
       this.dataset.mode = 'source';
       source.required = true;
       root.hidden = controls.hidden = true;
-      await editor.destroy();
+      await crepe.destroy();
     }
   }
 
   disconnectedCallback() {
     this.lifetime?.abort();
-    void this.editor?.destroy();
-    this.editor = undefined;
+    void this.crepe?.destroy();
+    this.crepe = undefined;
     this.dataset.mode = 'source';
   }
 }
