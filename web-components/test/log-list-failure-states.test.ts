@@ -38,6 +38,7 @@ let events: ReturnType<typeof listen>;
 beforeEach(() => (events = listen()));
 afterEach(() => {
   events.stop();
+  document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
