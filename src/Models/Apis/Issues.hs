@@ -737,12 +737,12 @@ selectIssueByHash :: DB es => Projects.ProjectId -> Text -> IssueScope -> Eff es
 selectIssueByHash pid tgtHash scope =
   Hasql.interpOne
     $ selectFrom @Issue
-      <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash}|]
-      <> case scope of
-        AnyIssue -> [HI.sql| ORDER BY updated_at DESC, id DESC|]
-        OfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type ORDER BY created_at DESC|]
-        OpenOfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type AND acknowledged_at IS NULL AND archived_at IS NULL|]
-      <> [HI.sql| LIMIT 1 |]
+    <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash}|]
+    <> case scope of
+      AnyIssue -> [HI.sql| ORDER BY updated_at DESC, id DESC|]
+      OfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type ORDER BY created_at DESC|]
+      OpenOfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type AND acknowledged_at IS NULL AND archived_at IS NULL|]
+    <> [HI.sql| LIMIT 1 |]
 
 
 -- | Bump updated_at and occurrence count; @extra@ appends further SET clauses
@@ -899,7 +899,7 @@ selectIssues pid projection f = do
     PIssue ->
       Hasql.interp
         $ selectFrom @Issue
-          <> [HI.sql| WHERE project_id = #{pid} ^{cFilters} ORDER BY ^{orderBy "apis.issues."} LIMIT #{f.limit} OFFSET #{f.offset} |]
+        <> [HI.sql| WHERE project_id = #{pid} ^{cFilters} ORDER BY ^{orderBy "apis.issues."} LIMIT #{f.limit} OFFSET #{f.offset} |]
     PIssueL ->
       Hasql.interp
         [HI.sql|
@@ -1147,8 +1147,8 @@ ackCascade pid uid window iids
                    SET acknowledged_by = #{uid}, acknowledged_at = #{now},
                        acknowledged_until = #{ackUntil now window}, updated_at = #{now}
                    WHERE project_id = #{pid} |]
-          <> prefixNarrowing
-          <> [HI.sql| AND target_hash LIKE ANY(#{(<> "%") <$> targets}) RETURNING id |]
+        <> prefixNarrowing
+        <> [HI.sql| AND target_hash LIKE ANY(#{(<> "%") <$> targets}) RETURNING id |]
 
 
 -- | Clear acknowledgements whose window has closed, returning the affected ids so
@@ -2077,7 +2077,7 @@ sanitizeLogPatternTitle raw sampleM serviceM =
           $ words
           $ flipfoldl' (uncurry T.replace) raw
           $ [(m, " ") | m <- [";neutral⇒", ";badge-error⇒", ";badge-warning⇒", ";badge-info⇒", ";badge-success⇒"]]
-            <> [(p, "") | p <- ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]]
+          <> [(p, "") | p <- ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]]
       -- printable-ASCII ratio > 0.7, as integer arithmetic
       usable = not (T.null stripped) && 10 * T.length (T.filter (\c -> isPrint c && isAscii c) stripped) > 7 * T.length stripped
       fallback = fromMaybe "log event" $ ((\svc s -> svc <> ": " <> T.take 80 s) <$> serviceM <*> sampleM) <|> sampleM <|> serviceM

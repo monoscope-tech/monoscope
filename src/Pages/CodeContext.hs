@@ -82,7 +82,7 @@ codeContextH pid fileM lineM svcM revM = do
     (Just path, Just n) ->
       W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonEmptyT revM) path n)
         >>= addRespHeaders
-          . either reason_ snippet_
+        . either reason_ snippet_
     _ -> addRespHeaders $ note_ "This frame has no file and line to look up." Nothing
   where
     -- An unmapped frame is the one failure the reader can act on from here, so it is the one
@@ -476,23 +476,23 @@ repositoriesPageH pid selection = do
                 , Table.col
                     "Production impact reviews"
                     ( \repository -> case find (\s -> repository.host == Git.GitHub && isNothing repository.apiBase && s.owner == T.toLower repository.owner && s.repo == T.toLower repository.repo) settings of
-                          Just s | s.enabled && not (null $ servicesFor repository) -> colorChip_ SuccessBadge "circle-check" "Enabled"
-                          Just s | s.enabled -> colorChip_ WarningBadge "circle-info" "Link a service"
-                          Just _ -> colorChip_ NeutralBadge "circle-info" "Off"
-                          Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
+                        Just s | s.enabled && not (null $ servicesFor repository) -> colorChip_ SuccessBadge "circle-check" "Enabled"
+                        Just s | s.enabled -> colorChip_ WarningBadge "circle-info" "Link a service"
+                        Just _ -> colorChip_ NeutralBadge "circle-info" "Off"
+                        Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
                     )
                 , Table.col
                     "Configuration sync"
                     ( \repository -> case find (\s -> (s.host, s.apiBase, s.owner, s.repo) == repositoryKey repository) syncs of
-                          Just s | s.id `elem` conflicts -> colorChip_ WarningBadge "circle-exclamation" "Conflicts need input"
-                          Just s | s.exportPaused -> colorChip_ WarningBadge "circle-info" "Export paused"
-                          Just s | isJust s.lastExportHash -> colorChip_ WarningBadge "code-branch" "Changes pending"
-                          Just s | Just err <- s.lastError -> colorChip_ ErrorBadge "circle-exclamation" "Sync failed" >> p_ [class_ "text-xs text-textError break-words"] (toHtml err.message)
-                          Just s | not s.syncEnabled -> colorChip_ NeutralBadge "circle-info" "Paused"
-                          Just s | isJust s.announcedRevision -> colorChip_ WarningBadge "circle-info" "Changes pending"
-                          Just s | isJust s.lastRevision -> colorChip_ SuccessBadge "circle-check" "Synced"
-                          Just _ -> colorChip_ NeutralBadge "circle-info" "Awaiting first sync"
-                          Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
+                        Just s | s.id `elem` conflicts -> colorChip_ WarningBadge "circle-exclamation" "Conflicts need input"
+                        Just s | s.exportPaused -> colorChip_ WarningBadge "circle-info" "Export paused"
+                        Just s | isJust s.lastExportHash -> colorChip_ WarningBadge "code-branch" "Changes pending"
+                        Just s | Just err <- s.lastError -> colorChip_ ErrorBadge "circle-exclamation" "Sync failed" >> p_ [class_ "text-xs text-textError break-words"] (toHtml err.message)
+                        Just s | not s.syncEnabled -> colorChip_ NeutralBadge "circle-info" "Paused"
+                        Just s | isJust s.announcedRevision -> colorChip_ WarningBadge "circle-info" "Changes pending"
+                        Just s | isJust s.lastRevision -> colorChip_ SuccessBadge "circle-check" "Synced"
+                        Just _ -> colorChip_ NeutralBadge "circle-info" "Awaiting first sync"
+                        Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
                     )
                 , Table.col "" (const $ span_ [Aria.hidden_ "true", class_ "flex justify-end text-iconNeutral"] $ faSprite_ "chevron-right" "regular" "h-3.5 w-3.5")
                 ]
@@ -546,7 +546,7 @@ repositoriesPageH pid selection = do
                 def
                   { Table.search = Just Table.ClientSide
                   , Table.searchPlaceholder = Just "Search pull requests"
-                  , Table.rowAttrs = Just \run -> [class_ "cursor-pointer", term "_" $ "on click if not event.target.closest('a, button') call #review-" <> run.id.toText <> ".showModal() end"]
+                  , Table.rowAttrs = Just \run -> [class_ "cursor-pointer", data_ "review" ("review-" <> run.id.toText), [__|on click if not event.target.closest('a, button') call document.getElementById(@data-review).showModal() end|]]
                   , Table.zeroState =
                       Just
                         Table.ZeroState
@@ -977,8 +977,8 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
               ([value_ account.id.toText] <> [selected_ "selected" | Just account.id == ((.id) <$> credM)])
               $ toHtml
               $ account.account
-                <> " · "
-                <> fromMaybe (Git.hostLabel account.host) account.apiBase
+              <> " · "
+              <> fromMaybe (Git.hostLabel account.host) account.apiBase
         htmxIndicator_ "code-account-indicator" LdXS
     when canEdit $ case credM of
       Nothing | null accounts -> do
@@ -1405,7 +1405,7 @@ saveCodeMapping pid form = do
         hoistEither
           $ maybeToRight ("No file in " <> repoRef.repo <> "@" <> repoRef.ref <> " lines up with " <> sample <> ". Check the branch, or fill the paths in under Advanced.")
           $ (\(prefix, root, _) -> (prefix, root))
-            <$> CodeContext.deriveMapping (map (.path) entries) sample
+          <$> CodeContext.deriveMapping (map (.path) entries) sample
 
 
 codeMappingsDeleteH :: Projects.ProjectId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Html ()))

@@ -202,7 +202,7 @@ resizeDivider_ cssVar minPct maxPct resizeEvt extraCls =
           if no container exit end
           set delta to -2
           if event.key is 'ArrowRight' set delta to 2 end
-          set pct to Math.max($minT, Math.min($maxT, ((my.offsetLeft + 4) / container.clientWidth) * 100 + delta))
+          set pct to Math.max($minT, Math.min($maxT, (((my.offsetLeft + 4) / container.clientWidth) * 100) + delta))
           call container.style.setProperty($qVar, pct + '%')
           set @aria-valuenow to Math.round(pct)
           send $resizeEvt to window

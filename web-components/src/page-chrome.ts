@@ -77,11 +77,7 @@ onReady(function(){
               // Preserve newlines / monospace alignment for SQL and other long text.
               onCreate(inst: any) {
                 if (isMultiline && !isTraceSpan) {
-                  inst.popper.querySelector('.tippy-content')!.style.whiteSpace = 'pre-wrap';
-                  inst.popper.querySelector('.tippy-content')!.style.overflowWrap = 'anywhere';
-                  inst.popper.querySelector('.tippy-content')!.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
-                  inst.popper.querySelector('.tippy-content')!.style.fontSize = '12px';
-                  inst.popper.querySelector('.tippy-content')!.style.textAlign = 'left';
+                  Object.assign(inst.popper.querySelector('.tippy-content')!.style, { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', textAlign: 'left' });
                 }
               },
               onShow() {

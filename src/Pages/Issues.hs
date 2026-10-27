@@ -536,8 +536,8 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       replaySession <-
         enriching "replay_recording"
           $ join
-            <$> forM (UUID.fromText =<< sessionM) \sid ->
-              fmap (UUID.toText sid,) <$> Replay.sessionMetadata pid sid (one ("issue_id", issue.id.toText))
+          <$> forM (UUID.fromText =<< sessionM) \sid ->
+            fmap (UUID.toText sid,) <$> Replay.sessionMetadata pid sid (one ("issue_id", issue.id.toText))
       apiEvidence <- enriching "api_change_evidence" $ forM (apiChangeData issue) \d -> do
         changes <- ApiChanges.getAnomaliesVM pid d.anomalyHashes
         schemas <- SchemaCatalog.getByKeysBatch (V.singleton (pid, issue.targetHash))
@@ -886,7 +886,7 @@ issueFactRow_ now issue errM patternM =
         )
       | (lbl, at) <- [("Last seen", lastSeen), ("First seen", firstSeen)]
       ]
-      <> [(lbl, span_ [class_ "font-medium", term "data-tippy-content" value] $ toHtml value) | (lbl, value) <- facts]
+    <> [(lbl, span_ [class_ "font-medium", term "data-tippy-content" value] $ toHtml value) | (lbl, value) <- facts]
   where
     (firstSeen, lastSeen) = bimap zonedTimeToUTC zonedTimeToUTC $ fromMaybe (issue.createdAt, issue.updatedAt) $ ((\e -> (e.createdAt, e.updatedAt)) <$> errM) <|> ((\p -> (p.firstSeenAt, p.lastSeenAt)) <$> patternM)
     facts =
@@ -1327,9 +1327,9 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
     issueMarkdown =
       unlines
         $ ["## " <> issue.title, "", "- Type: " <> display issue.issueType, "- Severity: " <> display issue.severity]
-          <> ["- Service: " <> sv | Just sv <- [issue.service]]
-          <> ["- Environment: " <> e | Just e <- [issue.environment]]
-          <> foldMap (\errL -> let e = errL.base.errorData in ["- Release: " <> r | Just r <- [e.release]] <> ["", "```", e.errorType <> ": " <> e.message, errL.base.stacktrace, "```"]) errM
+        <> ["- Service: " <> sv | Just sv <- [issue.service]]
+        <> ["- Environment: " <> e | Just e <- [issue.environment]]
+        <> foldMap (\errL -> let e = errL.base.errorData in ["- Release: " <> r | Just r <- [e.release]] <> ["", "```", e.errorType <> ": " <> e.message, errL.base.stacktrace, "```"]) errM
     -- The type's own evidence, then trace, logs and replay when the issue has them.
     -- A section with nothing to show is left out rather than rendered as an empty state.
     sections = typeSections <> apiActivitySection <> traceSection <> logsSection <> eventsSection <> replaySection
@@ -1564,7 +1564,7 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
                     $ T.intercalate ", "
                     $ Relude.sort
                     $ (.toText)
-                      <$> HS.toList snapshot.structure.types
+                    <$> HS.toList snapshot.structure.types
                   when (formatChanged || not (HS.null snapshot.structure.formats)) $ div_ [class_ "text-xs text-textWeak break-words"] do
                     "Inferred format: "
                     span_ [class_ $ bool "text-textWeak" "text-textStrong font-medium" formatChanged]
@@ -1605,14 +1605,14 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
                             col_ [class_ "w-[32%]"]
                           thead_ $ tr_ $ forM_ (["Field", "Change", "Before", "After"] :: [Text]) $ th_ [scope_ "col", class_ "p-2 font-medium text-textWeak"] . toHtml
                           detectedBatches (first Just <$> snapshots) \change -> tr_ [class_ "border-t border-strokeWeak align-top"] do
-                              let typeChanged = maybe True ((/= change.after.structure.types) . (.structure.types)) change.before
-                                  formatChanged = maybe True ((/= change.after.structure.formats) . (.structure.formats)) change.before
-                              th_ [scope_ "row", class_ "p-2 font-mono text-xs font-normal break-normal [overflow-wrap:anywhere]"] $ toHtml change.path
-                              td_ [class_ "p-2 text-xs text-textWeak break-words"] $ toHtml $ case change.before of
-                                Just _ | not typeChanged && formatChanged -> "Format changed"
-                                _ -> show @Text $ kindOf change
-                              td_ [class_ "p-2"] $ snapshotCell typeChanged formatChanged change.before
-                              td_ [class_ "p-2"] $ snapshotCell typeChanged formatChanged (Just change.after)
+                            let typeChanged = maybe True ((/= change.after.structure.types) . (.structure.types)) change.before
+                                formatChanged = maybe True ((/= change.after.structure.formats) . (.structure.formats)) change.before
+                            th_ [scope_ "row", class_ "p-2 font-mono text-xs font-normal break-normal [overflow-wrap:anywhere]"] $ toHtml change.path
+                            td_ [class_ "p-2 text-xs text-textWeak break-words"] $ toHtml $ case change.before of
+                              Just _ | not typeChanged && formatChanged -> "Format changed"
+                              _ -> show @Text $ kindOf change
+                            td_ [class_ "p-2"] $ snapshotCell typeChanged formatChanged change.before
+                            td_ [class_ "p-2"] $ snapshotCell typeChanged formatChanged (Just change.after)
                           let legacyRows =
                                 [ ( viaNonEmpty
                                       minimum1
@@ -1628,14 +1628,14 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
                                 | (kind, path) <- legacyFields
                                 ]
                           detectedBatches legacyRows \(kind, path) -> tr_ [class_ "border-t border-strokeWeak align-top"] do
-                              th_ [scope_ "row", class_ "p-2 font-mono text-xs font-normal break-normal [overflow-wrap:anywhere]"] $ toHtml path
-                              td_ [class_ "p-2 text-xs text-textWeak break-words"] $ toHtml $ show @Text kind
-                              td_ [class_ "p-2 text-xs text-textWeak"] "Historical types and values were not captured for this change."
-                              td_ [class_ "p-2"] $ case apiSchema >>= ApiChanges.fieldSnapshot path of
-                                Nothing -> span_ [class_ "text-xs text-textWeak"] "No current samples available"
-                                Just current -> do
-                                  div_ [class_ "text-xs text-textWeak mb-1"] "Current observations"
-                                  snapshotCell False False (Just current)
+                            th_ [scope_ "row", class_ "p-2 font-mono text-xs font-normal break-normal [overflow-wrap:anywhere]"] $ toHtml path
+                            td_ [class_ "p-2 text-xs text-textWeak break-words"] $ toHtml $ show @Text kind
+                            td_ [class_ "p-2 text-xs text-textWeak"] "Historical types and values were not captured for this change."
+                            td_ [class_ "p-2"] $ case apiSchema >>= ApiChanges.fieldSnapshot path of
+                              Nothing -> span_ [class_ "text-xs text-textWeak"] "No current samples available"
+                              Just current -> do
+                                div_ [class_ "text-xs text-textWeak mb-1"] "Current observations"
+                                snapshotCell False False (Just current)
                       else
                         let (heading, message) = case schemaSubjectFor view of
                               Just (ApiChanges.SpanSchema _) -> ("Span schema observed", "Matching events below show the recorded spans.")
@@ -2103,38 +2103,38 @@ buildSystemPromptForIssue pid issue now = do
           , "- **Service**: " <> Issues.serviceLabel iss.service
           , "- **Recommended Action**: " <> iss.recommendedAction
           ]
-          <> catMaybes
-            [ alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
-            , errM <&> \err ->
-                unlines
-                  [ ""
-                  , "## Error Details"
-                  , "- **Error Type**: " <> err.errorType
-                  , "- **Message**: " <> err.message
-                  , "- **Stack Trace**:"
-                  , "```"
-                  , err.errorData.stackTrace
-                  , "```"
-                  , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
-                  , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
-                  , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
-                  ]
-            , trDataM <&> \tr ->
-                unlines
-                  [ ""
-                  , "## Trace Context"
-                  , "- **Trace ID**: " <> tr.traceId
-                  , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
-                  , "- **Span Count**: " <> show (V.length spans)
-                  ]
-            , guard (not $ V.null spans)
-                $> unlines
-                  [ ""
-                  , "## Span Breakdown"
-                  , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
-                      "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
-                  ]
-            ]
+        <> catMaybes
+          [ alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
+          , errM <&> \err ->
+              unlines
+                [ ""
+                , "## Error Details"
+                , "- **Error Type**: " <> err.errorType
+                , "- **Message**: " <> err.message
+                , "- **Stack Trace**:"
+                , "```"
+                , err.errorData.stackTrace
+                , "```"
+                , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
+                , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
+                , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
+                ]
+          , trDataM <&> \tr ->
+              unlines
+                [ ""
+                , "## Trace Context"
+                , "- **Trace ID**: " <> tr.traceId
+                , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
+                , "- **Span Count**: " <> show (V.length spans)
+                ]
+          , guard (not $ V.null spans)
+              $> unlines
+                [ ""
+                , "## Span Breakdown"
+                , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
+                    "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
+                ]
+          ]
     formatCompleteAlertContext alertData monitorM metricsData =
       unlines
         $ [ ""
@@ -2146,46 +2146,46 @@ buildSystemPromptForIssue pid issue now = do
           , "- **Current Value**: " <> show alertData.actualValue
           , "- **Triggered At**: " <> formatUTC alertData.triggeredAt
           ]
-          -- Every remaining section is read off the monitor row, so each empties out
-          -- under its own heading when the monitor has been deleted.
-          <> concat
-            [ ["", heading] <> foldMap body monitorM
-            | (heading, body) <-
-                [ ("### Execution Schedule", \m -> ["- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes", "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)", "- **Last Evaluated**: " <> maybe "never" formatUTC m.lastEvaluated])
-                ,
-                  ( "### Trigger Conditions"
-                  , \m ->
-                      ("- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan)
-                        : catMaybes
-                          [ m.warningThreshold <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
-                          , m.alertRecoveryThreshold <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art
-                          , m.warningRecoveryThreshold <&> \wrt -> "- **Warning Recovery**: Warning clears when value returns to " <> show wrt
-                          ]
-                  )
-                ,
-                  ( "### Current Status"
-                  , \m ->
-                      ("- **Status**: " <> show m.currentStatus <> " (last check: " <> show m.currentValue <> ")")
-                        : catMaybes
-                          [ m.alertLastTriggered <&> \t -> "- **Last Alert Triggered**: " <> formatUTC t
-                          , m.warningLastTriggered <&> \t -> "- **Last Warning Triggered**: " <> formatUTC t
-                          ]
-                  )
-                ,
-                  ( "### Notification Configuration"
-                  , \m ->
-                      [ "- **Alert Title**: " <> m.alertConfig.title
-                      , "- **Severity**: " <> m.alertConfig.severity
-                      , "- **Email Recipients**: " <> if m.alertConfig.emailAll then "All project members" else T.intercalate ", " (V.toList $ fmap CI.original m.alertConfig.emails)
-                      , if V.null m.alertConfig.slackChannels then "" else "- **Slack Channels**: " <> T.intercalate ", " (V.toList m.alertConfig.slackChannels)
-                      ]
-                  )
-                ]
-            ]
-          <> catMaybes
-            [ guard (metricsData.rowsCount > 0) $> formatQueryResults metricsData
-            , guard (metricsData.rowsCount == 0 && isNothing monitorM) $> "\n_Note: Monitor record was deleted. Only basic alert data available._"
-            ]
+        -- Every remaining section is read off the monitor row, so each empties out
+        -- under its own heading when the monitor has been deleted.
+        <> concat
+          [ ["", heading] <> foldMap body monitorM
+          | (heading, body) <-
+              [ ("### Execution Schedule", \m -> ["- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes", "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)", "- **Last Evaluated**: " <> maybe "never" formatUTC m.lastEvaluated])
+              ,
+                ( "### Trigger Conditions"
+                , \m ->
+                    ("- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan)
+                      : catMaybes
+                        [ m.warningThreshold <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
+                        , m.alertRecoveryThreshold <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art
+                        , m.warningRecoveryThreshold <&> \wrt -> "- **Warning Recovery**: Warning clears when value returns to " <> show wrt
+                        ]
+                )
+              ,
+                ( "### Current Status"
+                , \m ->
+                    ("- **Status**: " <> show m.currentStatus <> " (last check: " <> show m.currentValue <> ")")
+                      : catMaybes
+                        [ m.alertLastTriggered <&> \t -> "- **Last Alert Triggered**: " <> formatUTC t
+                        , m.warningLastTriggered <&> \t -> "- **Last Warning Triggered**: " <> formatUTC t
+                        ]
+                )
+              ,
+                ( "### Notification Configuration"
+                , \m ->
+                    [ "- **Alert Title**: " <> m.alertConfig.title
+                    , "- **Severity**: " <> m.alertConfig.severity
+                    , "- **Email Recipients**: " <> if m.alertConfig.emailAll then "All project members" else T.intercalate ", " (V.toList $ fmap CI.original m.alertConfig.emails)
+                    , if V.null m.alertConfig.slackChannels then "" else "- **Slack Channels**: " <> T.intercalate ", " (V.toList m.alertConfig.slackChannels)
+                    ]
+                )
+              ]
+          ]
+        <> catMaybes
+          [ guard (metricsData.rowsCount > 0) $> formatQueryResults metricsData
+          , guard (metricsData.rowsCount == 0 && isNothing monitorM) $> "\n_Note: Monitor record was deleted. Only basic alert data available._"
+          ]
     formatQueryResults md =
       let timestampIdx = V.elemIndex "timestamp" md.headers
           formatRow = V.imap \idx -> \case
@@ -2227,8 +2227,8 @@ buildSystemPromptForIssue pid issue now = do
           topFields = take 30 $ sortOn (Down . sum . map (.count) . snd) $ HM.toList facetMap
        in unlines
             $ "Available telemetry fields (top values by frequency):"
-              : map formatField topFields
-                <> ["... and " <> show (HM.size facetMap - 30) <> " more fields" | HM.size facetMap > 30]
+            : map formatField topFields
+              <> ["... and " <> show (HM.size facetMap - 30) <> " more fields" | HM.size facetMap > 30]
 
 
 -- | Render a single chat response (user question + AI answer)
@@ -2258,8 +2258,8 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
         forM_ toolCalls toolCallView_
         whenJust systemPromptM
           $ disclosure_ [class_ "mt-2 border-t border-strokeWeak pt-2" | not (null toolCalls)] "text-textWeak hover:text-textStrong" "System Prompt"
-            . div_ [class_ "mt-1 font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
-            . toHtml
+          . div_ [class_ "mt-1 font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
+          . toHtml
   where
     toolCallView_ :: AI.ToolCallInfo -> Html ()
     toolCallView_ tc =
@@ -2410,19 +2410,19 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
         (Just d, Just entry) ->
           row
             & Optics.field @"base"
-              %~ \base ->
-                base
-                  { Issues.service = entry.scope.service <|> base.service
-                  , Issues.issueData =
-                      Aeson
-                        $ AE.toJSON
-                          d
-                            { Issues.subject = Just $ ApiChanges.schemaSubject entry.template.keyKind entry.scope
-                            , Issues.endpointMethod = fromMaybe d.endpointMethod entry.scope.method
-                            , Issues.endpointPath = fromMaybe d.endpointPath entry.scope.urlPath
-                            , Issues.endpointHost = fromMaybe d.endpointHost entry.scope.host
-                            }
-                  }
+            %~ \base ->
+              base
+                { Issues.service = entry.scope.service <|> base.service
+                , Issues.issueData =
+                    Aeson
+                      $ AE.toJSON
+                        d
+                          { Issues.subject = Just $ ApiChanges.schemaSubject entry.template.keyKind entry.scope
+                          , Issues.endpointMethod = fromMaybe d.endpointMethod entry.scope.method
+                          , Issues.endpointPath = fromMaybe d.endpointPath entry.scope.urlPath
+                          , Issues.endpointHost = fromMaybe d.endpointHost entry.scope.host
+                          }
+                }
         _ -> row
   let listQuery types = "filter=" <> currentFilterTab <> "&sort=" <> currentSort <> "&period=" <> period <> foldMap ("&service=" <>) serviceFilters <> foldMap ("&type=" <>) types
       listUrl = (("/p/" <> pid.toText <> "/issues?") <>) . listQuery
@@ -3158,7 +3158,7 @@ linkPostH :: Projects.ProjectId -> Issues.IssueId -> LinkForm -> ATAuthCtx (Resp
 linkPostH pid issueId form =
   logTimelineEntry pid issueId "Enter an http(s) link to the external issue"
     $ guarded (\u -> any (`T.isPrefixOf` u) ["https://", "http://"]) (T.strip form.url)
-      <&> \url -> (Issues.IELinked, ["url" AE..= url, "title" AE..= mfilter (not . T.null) (T.strip <$> form.title)])
+    <&> \url -> (Issues.IELinked, ["url" AE..= url, "title" AE..= mfilter (not . T.null) (T.strip <$> form.title)])
 
 
 -- | Log a user's timeline entry on an existing issue, or toast @invalid@.

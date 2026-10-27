@@ -418,7 +418,7 @@ export class SessionReplay extends LitElement {
     this.trickPlayer = null;
     this.metaData = this.player.getMetaData();
     this.sessionStart = this.metaData.startTime;
-    this.ingestMarkers([...events].sort((a, b) => a.timestamp - b.timestamp));
+    this.ingestMarkers(events);
     this.updateScale();
     // Honor ?t=SECONDS from the URL exactly once per fresh load — so a shared
     // link lands on the right moment. Clamp to session bounds in case events
@@ -454,7 +454,8 @@ export class SessionReplay extends LitElement {
   // Append timeline markers for a batch of events (relative to sessionStart).
   // Append-only so it's reused verbatim for the initial shard and every shard
   // streamed in afterwards; new array identities let Lit re-render the scrubber.
-  private ingestMarkers(events: eventWithTime[]) {
+  private ingestMarkers(unsorted: eventWithTime[]) {
+    const events = [...unsorted].sort((a, b) => a.timestamp - b.timestamp);
     const errs: number[] = [];
     const warns: number[] = [];
     const navs: { offset: number; href: string }[] = [];
@@ -496,7 +497,7 @@ export class SessionReplay extends LitElement {
     // rrweb queues addEvent in a microtask; reading metadata sooner misses the shard's tail.
     await Promise.resolve();
     if (this.player !== player) return;
-    this.ingestMarkers([...events].sort((a, b) => a.timestamp - b.timestamp));
+    this.ingestMarkers(events);
     this.metaData = player.getMetaData();
     // Playback can hit the end of the *loaded-so-far* shards while later ones are
     // still streaming — that's not the real end of the session. Clear the finished
@@ -857,24 +858,24 @@ export class SessionReplay extends LitElement {
           <span class="shrink-0 text-textWeak" aria-hidden="true">${faSprite_('chevron-right', 'regular', 'w-3 h-3 group-open/console:rotate-90')}</span>
         </summary>
         <div class="px-3 pb-3 space-y-3 min-w-0">
-          <div class="rounded-lg bg-bgBase p-3 min-w-0">
-            <div class="flex items-center justify-between gap-2 mb-2">
-              <span class="text-2xs font-semibold text-textWeak">Message</span>
-              <button type="button" class="btn btn-xs btn-ghost h-6 min-h-6 px-1 text-textWeak" aria-label="Copy console message" title="Copy console message" @click=${() => this.copyConsoleText(event, 'message')}>
-                ${faSprite_('copy', 'regular', 'h-3 w-3')}<span role="status" aria-live="polite">${this.consoleCopyLabel(event.timestamp, 'message')}</span>
-              </button>
-            </div>
-            <pre class="m-0 text-xs leading-relaxed font-mono whitespace-pre-wrap break-normal [overflow-wrap:anywhere] ${textColor}">${payload.payload.join('\n')}</pre>
-          </div>
-          ${payload.trace.length > 0 ? html`<div class="rounded-lg bg-bgBase p-3 min-w-0">
-            <div class="flex items-center justify-between gap-2 mb-2">
-              <span class="text-2xs font-semibold text-textWeak">Stack trace</span>
-              <button type="button" class="btn btn-xs btn-ghost h-6 min-h-6 px-1 text-textWeak" aria-label="Copy stack trace" title="Copy stack trace" @click=${() => this.copyConsoleText(event, 'trace')}>
-                ${faSprite_('copy', 'regular', 'h-3 w-3')}<span role="status" aria-live="polite">${this.consoleCopyLabel(event.timestamp, 'trace')}</span>
-              </button>
-            </div>
-            <pre class="m-0 text-xs leading-relaxed font-mono whitespace-pre-wrap break-normal [overflow-wrap:anywhere] text-textStrong">${payload.trace.join('\n')}</pre>
-          </div>` : nothing}
+          ${(
+            [
+              ['message', 'Message', 'console message', textColor, payload.payload],
+              ['trace', 'Stack trace', 'stack trace', 'text-textStrong', payload.trace],
+            ] as const
+          )
+            .filter(([field, , , , lines]) => field === 'message' || lines.length > 0)
+            .map(
+              ([field, label, copyLabel, color, lines]) => html`<div class="rounded-lg bg-bgBase p-3 min-w-0">
+                <div class="flex items-center justify-between gap-2 mb-2">
+                  <span class="text-2xs font-semibold text-textWeak">${label}</span>
+                  <button type="button" class="btn btn-xs btn-ghost h-6 min-h-6 px-1 text-textWeak" aria-label="Copy ${copyLabel}" title="Copy ${copyLabel}" @click=${() => this.copyConsoleText(event, field)}>
+                    ${faSprite_('copy', 'regular', 'h-3 w-3')}<span role="status" aria-live="polite">${this.consoleCopyLabel(event.timestamp, field)}</span>
+                  </button>
+                </div>
+                <pre class="m-0 text-xs leading-relaxed font-mono whitespace-pre-wrap break-normal [overflow-wrap:anywhere] ${color}">${lines.join('\n')}</pre>
+              </div>`
+            )}
         </div>
       </details>
     `;

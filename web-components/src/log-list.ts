@@ -391,11 +391,8 @@ export class LogList extends LitElement {
     const source = (e as CustomEvent).detail?.source || 'default';
     if (source === 'expand-timerange') return;
     if (source === 'auto-refresh') {
-      if (!this.initialFetchUrl && !this.isAggregate && this.canPage) {
-        void this.fetchData(this.buildRecentFetchUrl(), false, true, false, false, 'auto-refresh');
-      } else {
-        void this.fetchData(this.buildJsonUrl(), true, false, false, false, 'auto-refresh');
-      }
+      const recent = !this.initialFetchUrl && !this.isAggregate && this.canPage;
+      void this.fetchData(recent ? this.buildRecentFetchUrl() : this.buildJsonUrl(), !recent, recent, false, false, 'auto-refresh');
       return;
     }
     this.debouncedRefetchLogs();
@@ -1826,6 +1823,7 @@ export class LogList extends LitElement {
     if ((window as any).chartVizTypes?.includes((window as any).currentVisualizationType)) return;
     // A tick during the initial or refresh load has no cursor yet and would re-run that whole load.
     const background = recentDelivery === 'auto-refresh';
+    const adoptCols = !background || this.logsColumns.length === 0;
     if (background && this.isLoading) return;
     if (isRecentFetch && (this.isFetchingRecent || this.isLoading)) return;
     if (isLoadMore && this.isLoadingMore) return;
@@ -1901,7 +1899,7 @@ export class LogList extends LitElement {
           this.seenIds.clear();
           this.loadedCount = 0;
           this.hasNewer = false;
-          if (meta.cols && (!background || this.logsColumns.length === 0)) this.logsColumns = meta.cols;
+          if (meta.cols && adoptCols) this.logsColumns = meta.cols;
           if (meta.colIdxMap) this.colIdxMap = meta.colIdxMap;
           if (meta.count !== undefined) this.totalCount = meta.count;
           this.updateVisibleItems();
@@ -1925,7 +1923,7 @@ export class LogList extends LitElement {
       // Only a new query / refresh redefines the column set. Load-more pages and
       // 5s live-stream ticks return the same server cols, so adopting them here
       // would silently undo a user's hideColumn / reorder on every tick.
-      if (isFullFetch && (!background || this.logsColumns.length === 0)) this.logsColumns = meta.cols;
+      if (isFullFetch && adoptCols) this.logsColumns = meta.cols;
       this.colIdxMap = meta.colIdxMap;
       // Cache one adjacency entry per trace for expand/collapse and direction flips.
       // Inclusive cursor pages repeat the boundary trace; keeping those duplicates
@@ -1943,16 +1941,9 @@ export class LogList extends LitElement {
       if (isRefresh) {
         const anchor = background ? this.captureScrollAnchor() : null;
         // Session children are fetched separately and are absent from the refreshed roots.
-        const children = new Map<string, EventLine[]>();
-        if (background && this.mode === 'sessions') {
-          for (const row of this.spanListTree) {
-            const parentId = row.parentIds[0];
-            if (parentId) {
-              const siblings = children.get(parentId);
-              if (siblings) siblings.push(row);
-              else children.set(parentId, [row]);
-            }
-          }
+        const sessionRefresh = background && this.mode === 'sessions';
+        const children = sessionRefresh ? Map.groupBy(this.spanListTree.filter((r) => r.parentIds[0]), (r) => r.parentIds[0]) : new Map<string, EventLine[]>();
+        if (sessionRefresh) {
           for (const row of tree) row.expanded = this.expandedTraces[row.id] ?? false;
         }
         this.spanListTree = dedupeById(tree.flatMap((row) => [row, ...(children.get(row.id) ?? [])]));
