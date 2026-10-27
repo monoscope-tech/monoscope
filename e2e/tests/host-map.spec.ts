@@ -23,7 +23,7 @@ async function openHostMap(page: import("@playwright/test").Page) {
 test.describe("Host map", () => {
   test.describe.configure({ mode: "serial" });
 
-  test("the desktop host inspector stays labelled and leaves the map interactive", async ({ page }) => {
+  test("the desktop host inspector is a labelled modal that returns focus on close", async ({ page }) => {
     await openHostMap(page);
     await expect(page.locator(`[data-visible-host-label="${HOST}"]`)).toBeVisible();
     const host = page.getByRole("button", { name: new RegExp(`${HOST}, CPU usage:`) });
@@ -31,7 +31,7 @@ test.describe("Host map", () => {
 
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog).not.toHaveAttribute("aria-modal", "true");
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
     await expect(dialog).toHaveAccessibleName(/vps-|host/i);
     const header = dialog.locator("header");
     await expect(header).toBeVisible();
@@ -39,9 +39,6 @@ test.describe("Host map", () => {
       panel.querySelector('[aria-label="Close drawer"]')!.getBoundingClientRect().right
       - panel.querySelector('header')!.getBoundingClientRect().right,
     )).toBeLessThanOrEqual(-12);
-    await expect
-      .poll(() => page.locator("#main-content").evaluate((element) => (element as HTMLElement).inert))
-      .toBe(false);
 
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
