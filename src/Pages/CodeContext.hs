@@ -577,7 +577,7 @@ repositoriesPageH pid selection = do
                 AE.Success result -> div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run True result)
             div_ [class_ "flex flex-wrap justify-end gap-2 border-t border-strokeWeak pt-4"] do
               form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Close"
-              when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [type_ "button", class_ "btn btn-sm btn-primary", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph"] "Rerun review"
+              when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [type_ "button", class_ "btn btn-sm btn-primary", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph", [__|on click call (closest <dialog/>).close()|]] "Rerun review"
           form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close review"] "Close"
   addRespHeaders $ bodyWrapper (repositoryBWConfig bw pid tab serviceM canEdit canReadWiki) $ repositoryLayout_ serviceM content
 

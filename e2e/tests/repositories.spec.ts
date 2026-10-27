@@ -489,7 +489,7 @@ test('service investigations reach only applicable repositories by keyboard in b
       await page.keyboard.press('Enter');
       await expect(page.getByRole('heading', { level: 1, name: `Repositories ${service}`, exact: true })).toBeVisible();
       const content = page.locator('#repository-content');
-      await expect(content.locator('article')).toHaveCount(2);
+      await expect(content.locator('tr.itemsListItem')).toHaveCount(2);
       await expect(content.getByRole('link', { name: 'acme/checkout', exact: true })).toHaveAttribute('href', `/p/${pid}/repositories/${repositories[0]}`);
       await expect(content.getByText('All services', { exact: true })).toBeVisible();
       await expect(page.getByRole('link', { name: 'Add repositories', exact: true })).toHaveCount(0);
@@ -498,7 +498,7 @@ test('service investigations reach only applicable repositories by keyboard in b
       await expect.poll(() => page.locator('#side-nav-menu').evaluate(element => element.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
       await page.screenshot({ path: testInfo.outputPath(`service-repositories-${theme}.png`) });
       await page.getByRole('link', { name: 'All repositories', exact: true }).click();
-      await expect(page.locator('#repository-content article')).toHaveCount(4);
+      await expect(page.locator('#repository-content tr.itemsListItem')).toHaveCount(4);
       await page.goBack();
       await expect(page.getByRole('heading', { level: 1, name: `Repositories ${service}`, exact: true })).toBeVisible();
     }
