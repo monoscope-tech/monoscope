@@ -16,12 +16,12 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
-import Data.List (lookup)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
-import Data.Text qualified as T
 import Data.ProtoLens (defMessage)
+import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -1024,7 +1024,7 @@ spec = sequential $ aroundAll withTestResources do
               , Endpoints.outgoing = True
               }
           filters hash = do
-            (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "true") Nothing [("var-host", Just "integrations.routelift.com"), ("var-endpointHash", Just hash)]
+            (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "dashboard-tabs-content") Nothing [("var-host", Just "integrations.routelift.com"), ("var-endpointHash", Just hash)]
             let Dashboards.DashboardGet _ _ _ _ params = tabDashboard response
                 values = Map.fromList params
             pure (Map.lookup "const-endpointFilter" values, Map.lookup "const-endpointFilter-kql" values)
@@ -1068,7 +1068,7 @@ spec = sequential $ aroundAll withTestResources do
             Nothing
             Nothing
             (Just "3D")
-            (Just "true")
+            (Just "dashboard-tabs-content")
             Nothing
             [ ("const-endpointFilter", Just "hashes @> ARRAY['']")
             , ("const-endpointFilter-kql", Just "hashes[*] in (\"\")")
@@ -1322,7 +1322,7 @@ spec = sequential $ aroundAll withTestResources do
           , Endpoints.host = "dellyman.com"
           , Endpoints.hash = "ba3431d5"
           }
-      let open params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "true") Nothing params)
+      let open params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "dashboard-tabs-content") Nothing params)
           partialHtml = \case
             NavigationPartial _ fragment -> pure $ toStrict $ renderText fragment
             NavigationFull _ -> expectationFailure "htmx picker navigation returned a full document" $> ""
@@ -1349,7 +1349,7 @@ spec = sequential $ aroundAll withTestResources do
             Nothing
             Nothing
             (Just "24H")
-            (Just "true")
+            (Just "dashboard-tabs-content")
             (Just "dashboard-variable-option")
             [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
       case response of
@@ -1377,23 +1377,33 @@ spec = sequential $ aroundAll withTestResources do
   -- themselves rather than blocking on the widget phase (measured 4.9s -> 1.2s).
   describe "Prefill on a full load, skeletons on a swap" do
     let openTab tr dashId hx = do
-          (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx Nothing [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")])
+          snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx Nothing [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")])
         eagerOnes = filter (\w -> w.eager == Just True || isJust w.html || isJust w.dataset)
 
     it "keeps the server-side prefill for a full page load" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Prefill Full"
       full <- openTab tr dashId Nothing
-      eagerOnes (renderedWidgets full) `shouldSatisfy` not . null
+      eagerOnes (renderedWidgets $ tabDashboard full) `shouldSatisfy` not . null
       T.count "id=\"log_details_container\"" (toStrict $ renderText $ toHtml full) `shouldBe` 1
 
     it "hands a swap the same widgets with nothing prefilled" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Prefill Swap"
-      swapped <- openTab tr dashId (Just "true")
-      let ws = renderedWidgets swapped
+      swapped <- openTab tr dashId (Just "dashboard-tabs-content")
+      let ws = renderedWidgets $ tabDashboard swapped
       ws `shouldSatisfy` not . null
       -- lazyWidget strips `eager` too: renderStatContent reads the flag as "data is here"
       -- and would otherwise spin forever.
       map (fromMaybe "<untitled>" . (.title)) (eagerOnes ws) `shouldBe` []
+
+    it "dashboardTab_sidebarNavigationFromSessions_keepsMainContent" \tr -> do
+      dashId <- newDashboard tr "rum.yaml" "RUM sidebar navigation"
+      (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "main-content") Nothing []
+      case response of
+        NavigationFull page -> do
+          let html = toStrict $ renderText $ toHtml page
+          html `shouldSatisfy` T.isInfixOf "id=\"main-content\""
+          html `shouldSatisfy` T.isInfixOf "id=\"dashboardPage\""
+        NavigationPartial _ _ -> expectationFailure "sidebar navigation returned a tab fragment, blanking the page"
 
     it "returns the shared fragment contract for an htmx tab navigation" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Partial navigation"
@@ -1407,7 +1417,7 @@ spec = sequential $ aroundAll withTestResources do
             Nothing
             Nothing
             (Just "24H")
-            (Just "true")
+            (Just "dashboard-tabs-content")
             Nothing
             [ ("var-host", Just "dellyman.com")
             , ("var-endpointHash", Just "ba3431d5")
@@ -1547,9 +1557,10 @@ spec = sequential $ aroundAll withTestResources do
     -- /rum and its older /rum/dashboard open the dashboard; /rum/sessions the Explorer. Links from
     -- emails and alerts carry a window, which both must keep.
     it "rumRedirects_openTheDashboardOrSessions_andKeepTheWindow" \tr -> do
-      let location view ps = runAuthHandler tr (Dashboards.rumRedirectH testPid view ps) <&> \h -> case lookupResponseHeader @"Location" h of
-            Header l -> l
-            _ -> ""
+      let location view ps =
+            runAuthHandler tr (Dashboards.rumRedirectH testPid view ps) <&> \h -> case lookupResponseHeader @"Location" h of
+              Header l -> l
+              _ -> ""
           window = [("since", Just "7D"), ("environment", Just "prod")]
       dashboard <- location [] window
       dashboard `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/dashboards/")

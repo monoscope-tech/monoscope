@@ -500,7 +500,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , widgetAlertToggle :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> "toggle_active" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Post '[HTML] (RespHeaders (Html ()))
   , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Dashboards.DashboardBulkAction :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
   , -- Dashboard tab routes (htmx lazy loading)
-    dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> Header "HX-Trigger-Name" Text :> AllQueryParams :> Get '[HTML] (RespHeaders (NavigationResponse Dashboards.DashboardGet))
+    dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Header "HX-Target" Text :> Header "HX-Trigger-Name" Text :> AllQueryParams :> Get '[HTML] (RespHeaders (NavigationResponse Dashboards.DashboardGet))
   , dashboardTabRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.TabRenameForm :> Patch '[HTML] (RespHeaders Dashboards.TabRenameRes)
   , dashboardYamlGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardYamlPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> ReqBody '[FormUrlEncoded] Dashboards.YamlForm :> Put '[HTML] (RespHeaders (Html ()))
@@ -541,7 +541,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders Settings.StorageGet)
   , bringS3Remove :: mode :- "p" :> ProjectId :> "byob_s3" :> Delete '[HTML] (RespHeaders Settings.StorageGet)
   , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (Html ()))
-  , projectWikiGet :: mode :- "p" :> ProjectId :> "wiki" :> CaptureAll "path" Text :> QueryParam "after" ProjectMemory.PagePath :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
+  , projectWikiGet :: mode :- "p" :> ProjectId :> "wiki" :> CaptureAll "path" Text :> QueryParam "after" ProjectMemory.PagePath :> QueryParam "q" Text :> QueryParam "folder" Text :> QueryFlag "edit" :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
   , projectMemoryGet :: mode :- "p" :> ProjectId :> "memories" :> QueryParam "page" (UUIDId "memory_page") :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
   , projectMemoryPost :: mode :- "p" :> ProjectId :> "memories" :> ReqBody '[FormUrlEncoded] PageCodeContext.MemoryForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
   , repositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> QueryParam "tab" PageCodeContext.RepositoryTab :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
@@ -1343,9 +1343,10 @@ clientPostgresSqlRejection dbSource pidM querySqlM = case (dbSource, pidM, Utils
 
 -- | @rollup_sql@ is a Postgres statement over an hourly rollup that answers the same
 -- series as the chart's KQL query, for hours from @rollup_from@ on. It replaces the
--- query whenever the window starts inside that coverage and no environment or service
--- scope applies (the rollup has no column to honour one). Short windows included: on a
--- busy project three live hours of the query took 90s, and hourly bars do not.
+-- query when coverage and whole-hour boundaries permit it, with no environment or
+-- service scope. A partial first hour cannot use hourly counts: filtering its bucket
+-- drops in-range events, while including it counts events before the requested start.
+-- A partial last hour is safe only while it is still the current hour.
 --
 -- >>> import Data.Time (addUTCTime)
 -- >>> let now = Parser.fixedUTCTime; t = Utils.isoT . (`addUTCTime` now) . (* 3600); since s = TimePicker.TimePicker (Just s) Nothing Nothing; abs' a b = TimePicker.TimePicker Nothing (Just $ t a) (Just $ t b)
@@ -1354,16 +1355,22 @@ clientPostgresSqlRejection dbSource pidM querySqlM = case (dbSource, pidM, Utils
 -- (Just SqlPostgres,Just SqlPostgres,Just SqlPostgres)
 -- >>> (route (since "24H") (r (-12)), route (since "24H") (("environment", Just "prod") : r (-72)), route (since "24H") (take 1 $ r (-72)))
 -- (Nothing,Nothing,Nothing)
+-- >>> (route (abs' (-2 + 1/6) (-1)) (r (-72)), route (abs' (-2) (-1 + 1/6)) (r (-72)))
+-- (Nothing,Nothing)
+-- >>> fst $ rollupRoute (addUTCTime 1800 now) (since "1H") (r (-72)) (Nothing, Nothing)
+-- Nothing
 rollupRoute :: UTCTime -> TimePicker.TimePicker -> [(Text, Maybe Text)] -> (Maybe Hasql.SqlSource, Maybe Text) -> (Maybe Hasql.SqlSource, Maybe Text)
 rollupRoute now tp params source = case (param "rollup_sql", iso8601ParseM . toString =<< param "rollup_from", fromM) of
   (Just rollup, Just covered, Just start)
     | all (isNothing . param) ["environment", "service"]
-    , start >= covered ->
+    , start >= covered
+    , start == Utils.truncateHour start
+    , all (\end -> end == Utils.truncateHour end || end >= now) toM ->
         (Just Hasql.SqlPostgres, Just rollup)
   _ -> source
   where
     param k = Utils.nonEmptyT $ join $ L.lookup k params
-    (fromM, _, _) = TimePicker.parseTimeRange now tp
+    (fromM, toM, _) = TimePicker.parseTimeRange now tp
 
 
 -- | The @/chart_data@ handler shape, shared by the buffered and the streamed route.

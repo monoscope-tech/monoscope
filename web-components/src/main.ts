@@ -367,7 +367,10 @@ function preservePageContext(target: EventTarget | null) {
   if (!link) return;
   const next = new URL(link.href);
   const source = new URLSearchParams(window.location.search);
-  if (TIME_PARAMS.some((key) => source.get(key))) {
+  // Issue details choose a window around the incident; the surrounding page's
+  // moving range must not replace that window or an explicitly shared range.
+  const issueDetail = /^\/p\/[^/]+\/issues\/(?:[0-9a-f-]{36}|by_hash\/[^/]+)\/?$/i.test(next.pathname);
+  if (!issueDetail && TIME_PARAMS.some((key) => source.get(key))) {
     for (const key of TIME_PARAMS) next.searchParams.delete(key);
     copyParams(source, next.searchParams);
   }

@@ -248,8 +248,11 @@ spec = do
         nested <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/retries") []
         H.statusCode nested.simpleStatus `shouldBe` 200
         html nested `shouldSatisfy` T.isInfixOf "runbooks"
-        html nested `shouldSatisfy` T.isInfixOf "<wiki-editor"
-        html nested `shouldSatisfy` T.isInfixOf "Markdown source"
+        html nested `shouldNotSatisfy` T.isInfixOf "<wiki-editor"
+        html nested `shouldSatisfy` T.isInfixOf "/wiki/runbooks/retries?edit=true"
+        editing <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/retries?edit=true") []
+        html editing `shouldSatisfy` T.isInfixOf "<wiki-editor"
+        html editing `shouldSatisfy` T.isInfixOf "form=\"wiki-form\""
         html nested `shouldSatisfy` T.isInfixOf "/wiki/runbooks/retries"
         for_
           ( zip
@@ -333,6 +336,8 @@ spec = do
         readOnly <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
         H.statusCode readOnly.simpleStatus `shouldBe` 200
         html readOnly `shouldNotSatisfy` T.isInfixOf "Save page"
+        viewerMissing <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/unwritten") []
+        H.statusCode viewerMissing.simpleStatus `shouldBe` 404
         refused <- save testPid 2 "Retry behavior" "Viewer must not write"
         H.statusCode refused.simpleStatus `shouldBe` 403
         length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
@@ -353,7 +358,28 @@ spec = do
         moved <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/services/retries") []
         H.statusCode moved.simpleStatus `shouldBe` 200
         oldPath <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/retries") []
-        H.statusCode oldPath.simpleStatus `shouldBe` 404
+        H.statusCode oldPath.simpleStatus `shouldBe` 200
+        html oldPath `shouldSatisfy` T.isInfixOf "id=\"wiki-form\""
+        html oldPath `shouldSatisfy` T.isInfixOf "value=\"runbooks/retries\""
+        derived <- request H.methodPost (base testPid) [("pageId", UUID.toText (UUID.fromWords 50 0 0 99)), ("version", "0"), ("path", "runbooks/"), ("title", "Restart the Consumer"), ("body", "Steps")]
+        html derived `shouldSatisfy` T.isInfixOf "/wiki/runbooks/restart-the-consumer"
+        folderNew <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki?folder=runbooks") []
+        html folderNew `shouldSatisfy` T.isInfixOf "value=\"runbooks/\""
+        linking <- request H.methodPost (base testPid) [("pageId", duplicate.toText), ("version", "1"), ("path", "services/other"), ("title", "Other page"), ("body", "See [[services/retries|retry notes]] and [[javascript:alert(1)]].")]
+        html linking `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/wiki/services/retries\"")
+        html linking `shouldSatisfy` T.isInfixOf ">retry notes</a>"
+        T.toLower (html linking) `shouldNotSatisfy` T.isInfixOf "href=\"javascript"
+        html linking `shouldNotSatisfy` T.isInfixOf "/wiki/javascript"
+        linked <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/services/retries") []
+        html linked `shouldSatisfy` T.isInfixOf "Linked from"
+        html linked `shouldSatisfy` T.isInfixOf "/wiki/services/other"
+        searched <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki?q=RETRY%20NOTES") []
+        html searched `shouldSatisfy` T.isInfixOf "/wiki/services/other"
+        html searched `shouldNotSatisfy` T.isInfixOf "/wiki/services/retries"
+        changes <- request H.methodGet (base testPid <> "?page=" <> duplicate.toText) []
+        html changes `shouldSatisfy` T.isInfixOf "Changes from revision 1"
+        html changes `shouldSatisfy` T.isInfixOf "- Other notes"
+        html changes `shouldSatisfy` T.isInfixOf "+ See [[services/retries|retry notes]]"
         legacy <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
         H.statusCode legacy.simpleStatus `shouldBe` 200
         length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 3
@@ -839,8 +865,8 @@ spec = do
         forM_ repositories \repository ->
           T.isInfixOf ("/repositories/" <> repository.id.toText <> "\"") html `shouldBe` (isNothing repository.apiBase && repository.repo `elem` ["checkout-service", "shared-source"])
         html `shouldSatisfy` T.isInfixOf "All services"
-        html `shouldSatisfy` T.isInfixOf "Repositories for team/api &amp; jobs"
-        html `shouldSatisfy` T.isInfixOf "All repositories"
+        html `shouldSatisfy` T.isInfixOf "team/api &amp; jobs"
+        html `shouldSatisfy` T.isInfixOf "Source mappings that apply to this service, including mappings for all services."
         html `shouldNotSatisfy` T.isInfixOf "id=\"repository-nav\""
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| DELETE FROM projects.code_mappings WHERE project_id = #{testPid} |]
         (_, unlinkedPage) <- testServant tr $ PageCodeContext.serviceRepositoriesGetH testPid service

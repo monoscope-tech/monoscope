@@ -9,7 +9,7 @@ import debounce from 'lodash/debounce';
 import { LiveStream, tableRowToArray, traceEntriesFor } from './live-stream';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
-import { groupSpans } from './log-worker-functions';
+import { applySpanExpansion, groupSpans } from './log-worker-functions';
 import { spriteUrl } from './assets';
 import clsx from 'clsx';
 import {
@@ -297,6 +297,7 @@ export class LogList extends LitElement {
   @state() private totalSessions: number = 0;
   @state() private isLiveStreaming: boolean = false;
   @state() private isLoading: boolean = false;
+  @state() private hasLoaded = false;
   @state() private isFetchingRecent: boolean = false;
   @state() private isLoadingMore: boolean = false;
   @state() private fetchError: string | null = null;
@@ -389,8 +390,12 @@ export class LogList extends LitElement {
   private handleUpdateQuery = (e: Event) => {
     const source = (e as CustomEvent).detail?.source || 'default';
     if (source === 'expand-timerange') return;
-    if (source === 'auto-refresh' && !this.initialFetchUrl && !this.isAggregate && this.canPage) {
-      void this.fetchData(this.buildRecentFetchUrl(), false, true, false, false, 'auto-refresh');
+    if (source === 'auto-refresh') {
+      if (!this.initialFetchUrl && !this.isAggregate && this.canPage) {
+        void this.fetchData(this.buildRecentFetchUrl(), false, true, false, false, 'auto-refresh');
+      } else {
+        void this.fetchData(this.buildJsonUrl(), true, false, false, false, 'auto-refresh');
+      }
       return;
     }
     this.debouncedRefetchLogs();
@@ -1136,6 +1141,7 @@ export class LogList extends LitElement {
     this.initWorker();
     this.setupEventListeners();
     // Initialize empty state
+    this.hasLoaded = false;
     this.logsColumns = [];
     this.colIdxMap = {};
     this.serviceColors = {};
@@ -1253,6 +1259,7 @@ export class LogList extends LitElement {
   // value so the initial undefined→mode set doesn't wipe server-seeded rows.
   willUpdate(changedProperties: PropertyValues) {
     if (changedProperties.has('mode') && changedProperties.get('mode') !== undefined) {
+      this.hasLoaded = false;
       this.spanListTree = [];
       this.seenIds.clear();
       this.virtualListItems = [];
@@ -1496,6 +1503,8 @@ export class LogList extends LitElement {
   }
 
   private updateVisibleItems() {
+    // Worker results may predate the user's latest expand/collapse click.
+    if (this.mode === 'logs') applySpanExpansion(this.spanListTree, this.expandedTraces);
     const items = this.renderableRows(this.spanListTree);
     this.visibleItems = items;
 
@@ -1816,6 +1825,8 @@ export class LogList extends LitElement {
     // radio sets this before it refetches, so switching back to Logs loads the list then.
     if ((window as any).chartVizTypes?.includes((window as any).currentVisualizationType)) return;
     // A tick during the initial or refresh load has no cursor yet and would re-run that whole load.
+    const background = recentDelivery === 'auto-refresh';
+    if (background && this.isLoading) return;
     if (isRecentFetch && (this.isFetchingRecent || this.isLoading)) return;
     if (isLoadMore && this.isLoadingMore) return;
 
@@ -1863,7 +1874,7 @@ export class LogList extends LitElement {
       // A replacement query owns all query-scoped state even when it returns no rows. Doing
       // this only in the non-empty branch left the old live buffer/pill available on an empty
       // result page, ready to inject rows that did not match the new query.
-      if (isRefresh) {
+      if (isRefresh && !background) {
         this.expandedAggregates = {};
         this.hasNewer = false;
         this.recentDataToBeAdded = [];
@@ -1890,7 +1901,7 @@ export class LogList extends LitElement {
           this.seenIds.clear();
           this.loadedCount = 0;
           this.hasNewer = false;
-          if (meta.cols) this.logsColumns = meta.cols;
+          if (meta.cols && (!background || this.logsColumns.length === 0)) this.logsColumns = meta.cols;
           if (meta.colIdxMap) this.colIdxMap = meta.colIdxMap;
           if (meta.count !== undefined) this.totalCount = meta.count;
           this.updateVisibleItems();
@@ -1914,7 +1925,7 @@ export class LogList extends LitElement {
       // Only a new query / refresh redefines the column set. Load-more pages and
       // 5s live-stream ticks return the same server cols, so adopting them here
       // would silently undo a user's hideColumn / reorder on every tick.
-      if (isFullFetch) this.logsColumns = meta.cols;
+      if (isFullFetch && (!background || this.logsColumns.length === 0)) this.logsColumns = meta.cols;
       this.colIdxMap = meta.colIdxMap;
       // Cache one adjacency entry per trace for expand/collapse and direction flips.
       // Inclusive cursor pages repeat the boundary trace; keeping those duplicates
@@ -1930,10 +1941,25 @@ export class LogList extends LitElement {
       }
 
       if (isRefresh) {
-        this.spanListTree = dedupeById(tree);
+        const anchor = background ? this.captureScrollAnchor() : null;
+        // Session children are fetched separately and are absent from the refreshed roots.
+        const children = new Map<string, EventLine[]>();
+        if (background && this.mode === 'sessions') {
+          for (const row of this.spanListTree) {
+            const parentId = row.parentIds[0];
+            if (parentId) {
+              const siblings = children.get(parentId);
+              if (siblings) siblings.push(row);
+              else children.set(parentId, [row]);
+            }
+          }
+          for (const row of tree) row.expanded = this.expandedTraces[row.id] ?? false;
+        }
+        this.spanListTree = dedupeById(tree.flatMap((row) => [row, ...(children.get(row.id) ?? [])]));
         this.seenIds = new Set(this.spanListTree.map((r) => r.id));
         this.updateVisibleItems();
-        if (tree.length > 0) {
+        if (anchor) void this.restoreScrollAnchor(anchor);
+        if (!background && tree.length > 0) {
           requestAnimationFrame(() => {
             const container = this.logsContainer || document.querySelector('#logs_list_container_inner');
             if (container) container.scrollTop = this.flipDirection ? container.scrollHeight : 0;
@@ -2018,7 +2044,10 @@ export class LogList extends LitElement {
       // unrelated recent/refresh finishes first.
       if (isRecentFetch) this.isFetchingRecent = false;
       else if (isLoadMore) this.isLoadingMore = false;
-      else if (gen === this.fetchGeneration) this.isLoading = false;
+      else if (gen === this.fetchGeneration) {
+        this.isLoading = false;
+        this.hasLoaded = true;
+      }
       if (!isFullFetch || gen === this.fetchGeneration) this.showLoadingSpinner(false);
       if (isFullFetch && gen === this.fetchGeneration && (resubscribeLive || this.liveStream !== null)) this.syncLiveSubscription();
       this.requestUpdate();
@@ -2292,7 +2321,7 @@ export class LogList extends LitElement {
     const retainedIds = new Set(kept.map((r) => r.id));
     const retainedTraces = new Set(kept.map((r) => r.traceId));
     this.cachedServerTraces = this.cachedServerTraces.filter((t) => retainedTraces.has(t.trace_id));
-    this.expandedTraces = Object.fromEntries(Object.entries(this.expandedTraces).filter(([id]) => retainedTraces.has(id)));
+    this.expandedTraces = Object.fromEntries(Object.entries(this.expandedTraces).filter(([id]) => retainedIds.has(id) || retainedTraces.has(id)));
     this.loadingSessions = Object.fromEntries(Object.entries(this.loadingSessions).filter(([id]) => retainedIds.has(id)));
     if (isRecentFetch) this.hasMore = true;
     else this.hasNewer = true;
@@ -2746,7 +2775,7 @@ export class LogList extends LitElement {
   // Comment to allow classes be rendered.
   render() {
     // Check if we're in initial loading state
-    const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
+    const isInitialLoading = this.isLoading && !this.hasLoaded && this.spanListTree.length === 0;
     const isPatterns = this.mode === 'patterns';
     const isAggregate = isPatterns;
     const activeQuery = new URL(this.initialFetchUrl || window.location.href, window.location.origin).searchParams.get('query')?.trim();

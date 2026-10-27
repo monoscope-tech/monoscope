@@ -787,6 +787,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   let bwconf =
         bw
           { pageTitle = "Explorer"
+          , pageProvidesLogDetails = True
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
           , freeTierStatus = freeTierStatus
           , headContent = Nothing
@@ -1548,7 +1549,7 @@ apiLogsPage page = do
       <> ", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json()); window.logDataPromise = load().catch(load);}"
   sectionWrapper_ do
     template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
-    div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border border-strokeWeak rounded top-32 bg-bgBase shadow-2xl", id_ "sessionPlayerWrapper"] do
+    div_ [class_ "fixed z-10030 hidden right-4 w-max h-max rounded-2xl top-32 border-2 border-strokeStrong p-0.5 bg-bgRaised shadow-lg [&_#replayerOuterContainer]:shadow-none", id_ "sessionPlayerWrapper"] do
       termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" pidTxt, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
     queryControlsSection
     facetsAndLogListSection

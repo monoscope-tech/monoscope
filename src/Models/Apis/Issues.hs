@@ -34,6 +34,8 @@ module Models.Apis.Issues (
   APIChangeData (..),
   apiChangeDataFrom,
   hasFieldDrift,
+  knownMethod,
+  knownHost,
   RuntimeExceptionData (..),
   QueryAlertData (..),
   ThresholdDirection (..),
@@ -460,7 +462,9 @@ serviceLabel = fromMaybe "unknown-service"
 
 isNewEndpointOnly :: Issue -> Bool
 isNewEndpointOnly issue = case issuePayload issue of
-  Just (ApiChangeP d) -> not $ hasFieldDrift d
+  Just (ApiChangeP d) -> case d.subject of
+    Just (ApiChanges.SpanSchema _) -> False
+    _ -> not $ hasFieldDrift d
   _ -> False
 
 
@@ -468,9 +472,16 @@ hasFieldDrift :: APIChangeData -> Bool
 hasFieldDrift d = not $ all V.null ([d.newFields, d.deletedFields, d.modifiedFields] :: [V.Vector Text])
 
 
+-- | The endpoint's method and host, absent the placeholders 'apiChangeDataFrom' stores for missing values.
+knownMethod, knownHost :: APIChangeData -> Maybe Text
+knownMethod d = mfilter (`notElem` ["", "UNKNOWN"]) $ Just $ T.strip d.endpointMethod
+knownHost d = mfilter (`notElem` ["", "Unknown"]) $ Just $ T.strip d.endpointHost
+
+
 -- | API Change issue data
 data APIChangeData = APIChangeData
-  { endpointMethod :: Text
+  { subject :: Maybe ApiChanges.SchemaSubject
+  , endpointMethod :: Text
   , endpointPath :: Text
   , endpointHost :: Text
   , anomalyHashes :: V.Vector Text
@@ -490,7 +501,8 @@ data APIChangeData = APIChangeData
 instance Semigroup APIChangeData where
   a <> b =
     b
-      { anomalyHashes = u (.anomalyHashes)
+      { subject = b.subject <|> a.subject
+      , anomalyHashes = u (.anomalyHashes)
       , shapeChanges = a.shapeChanges <> b.shapeChanges
       , formatChanges = a.formatChanges <> b.formatChanges
       , newFields = u (.newFields)
@@ -725,12 +737,12 @@ selectIssueByHash :: DB es => Projects.ProjectId -> Text -> IssueScope -> Eff es
 selectIssueByHash pid tgtHash scope =
   Hasql.interpOne
     $ selectFrom @Issue
-    <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash}|]
-    <> case scope of
-      AnyIssue -> [HI.sql| ORDER BY updated_at DESC, id DESC|]
-      OfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type ORDER BY created_at DESC|]
-      OpenOfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type AND acknowledged_at IS NULL AND archived_at IS NULL|]
-    <> [HI.sql| LIMIT 1 |]
+      <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash}|]
+      <> case scope of
+        AnyIssue -> [HI.sql| ORDER BY updated_at DESC, id DESC|]
+        OfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type ORDER BY created_at DESC|]
+        OpenOfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type AND acknowledged_at IS NULL AND archived_at IS NULL|]
+      <> [HI.sql| LIMIT 1 |]
 
 
 -- | Bump updated_at and occurrence count; @extra@ appends further SET clauses
@@ -858,6 +870,11 @@ selectIssues pid projection f = do
                     AND ((^{col}is_framework AND ep.parent_hash = ^{col}target_hash)
                       OR (NOT ^{col}is_framework AND ep.hash = ^{col}target_hash))),
                  (^{col}issue_data->>'last_seen')::timestamptz)
+               WHEN ^{col}issue_type = ^{enumLit ApiChange} THEN COALESCE(
+                 (SELECT MAX(an.created_at) FROM apis.anomalies an
+                  WHERE an.project_id = ^{col}project_id
+                    AND an.target_hash IN (SELECT jsonb_array_elements_text(^{col}issue_data->'anomaly_hashes'))),
+                 ^{col}created_at)
                END, ^{col}updated_at) |]
       orderBy pfx | f.order == Just "-last_seen" = lastSeenAt pfx <> [HI.sql| DESC, ^{rawSql pfx}id DESC|]
       orderBy pfx = rawSql case T.uncons =<< f.order of
@@ -882,7 +899,7 @@ selectIssues pid projection f = do
     PIssue ->
       Hasql.interp
         $ selectFrom @Issue
-        <> [HI.sql| WHERE project_id = #{pid} ^{cFilters} ORDER BY ^{orderBy "apis.issues."} LIMIT #{f.limit} OFFSET #{f.offset} |]
+          <> [HI.sql| WHERE project_id = #{pid} ^{cFilters} ORDER BY ^{orderBy "apis.issues."} LIMIT #{f.limit} OFFSET #{f.offset} |]
     PIssueL ->
       Hasql.interp
         [HI.sql|
@@ -946,13 +963,12 @@ selectIssues pid projection f = do
   pure (issues, total)
 
 
--- | Fold an anomaly group's drift into an open API-change issue, escalating it on a breaking change.
+-- | Fold observed schema drift into an open issue without inferring consumer compatibility.
 -- The row lock keeps concurrent jobs folding into the same issue from dropping each other's drift.
 updateIssueWithNewAnomaly :: (DB es, Time :> es) => IssueId -> NonEmpty ApiChanges.AnomalyVM -> Eff es ()
 updateIssueWithNewAnomaly issueId anomalies = do
   now <- Time.currentTime
   let new = apiChangeDataFrom anomalies
-      breaking = not (V.null new.deletedFields && V.null new.modifiedFields)
   Hasql.transaction TxS.ReadCommitted TxS.Write do
     old <-
       Hasql.queryTx @[HI.OneColumn (Aeson AE.Value)]
@@ -962,8 +978,7 @@ updateIssueWithNewAnomaly issueId anomalies = do
       [HI.sql|
         UPDATE apis.issues SET
           issue_data = issue_data || #{Aeson merged}::jsonb,
-          critical = critical OR #{breaking},
-          severity = CASE WHEN #{breaking} THEN #{Critical} ELSE severity END,
+          service = #{(head anomalies).serviceName},
           affected_requests = affected_requests + 1,
           updated_at = #{now}
         WHERE id = #{issueId} |]
@@ -1132,8 +1147,8 @@ ackCascade pid uid window iids
                    SET acknowledged_by = #{uid}, acknowledged_at = #{now},
                        acknowledged_until = #{ackUntil now window}, updated_at = #{now}
                    WHERE project_id = #{pid} |]
-        <> prefixNarrowing
-        <> [HI.sql| AND target_hash LIKE ANY(#{(<> "%") <$> targets}) RETURNING id |]
+          <> prefixNarrowing
+          <> [HI.sql| AND target_hash LIKE ANY(#{(<> "%") <$> targets}) RETURNING id |]
 
 
 -- | Clear acknowledgements whose window has closed, returning the affected ids so
@@ -1327,7 +1342,8 @@ autoArchiveStaleDiscoveryIssues pid now days =
 apiChangeDataFrom :: NonEmpty ApiChanges.AnomalyVM -> APIChangeData
 apiChangeDataFrom anomalies@(a :| _) =
   APIChangeData
-    { endpointMethod = fromMaybe "UNKNOWN" a.endpointMethod
+    { subject = ApiChanges.schemaSubject <$> a.keyKind <*> (getAeson <$> a.scope)
+    , endpointMethod = fromMaybe "UNKNOWN" a.endpointMethod
     , endpointPath = fromMaybe "/" a.endpointUrlPath
     , endpointHost = fromMaybe "Unknown" a.endpointHost
     , anomalyHashes = V.fromList $ toList $ fmap (.targetHash) anomalies
@@ -1346,23 +1362,23 @@ createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Tex
 createAPIChangeIssue projectId endpointHash anomalies = do
   let firstAnomaly = head anomalies
       apiChangeData = apiChangeDataFrom anomalies
-      breakingChanges = V.length apiChangeData.deletedFields + V.length apiChangeData.modifiedFields
-      isCritical = breakingChanges > 0
   mkIssue
     MkIssueOpts
       { projectId
       , targetHash = endpointHash
       , parentHash = Nothing
       , isFramework = False
-      , service = Just $ ApiChanges.detectService Nothing firstAnomaly.endpointUrlPath
-      , critical = isCritical
-      , severity = if isCritical then Critical else Warning
-      , title =
-          if any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies
-            then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath <> " on " <> apiChangeData.endpointHost
-            else "API structure has changed"
+      , service = firstAnomaly.serviceName
+      , critical = False
+      , severity = Warning
+      , title = case apiChangeData.subject of
+          Just (ApiChanges.SpanSchema scope) -> ApiChanges.spanSchemaTitle scope
+          _ ->
+            if any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies
+              then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath <> " on " <> apiChangeData.endpointHost
+              else "API schema changed"
       , recommendedAction = defaultRecommendedAction
-      , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
+      , migrationComplexity = "low"
       , payload = ApiChangeP apiChangeData
       , timestamp = Just firstAnomaly.createdAt
       }
@@ -2061,7 +2077,7 @@ sanitizeLogPatternTitle raw sampleM serviceM =
           $ words
           $ flipfoldl' (uncurry T.replace) raw
           $ [(m, " ") | m <- [";neutral⇒", ";badge-error⇒", ";badge-warning⇒", ";badge-info⇒", ";badge-success⇒"]]
-          <> [(p, "") | p <- ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]]
+            <> [(p, "") | p <- ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]]
       -- printable-ASCII ratio > 0.7, as integer arithmetic
       usable = not (T.null stripped) && 10 * T.length (T.filter (\c -> isPrint c && isAscii c) stripped) > 7 * T.length stripped
       fallback = fromMaybe "log event" $ ((\svc s -> svc <> ": " <> T.take 80 s) <$> serviceM <*> sampleM) <|> sampleM <|> serviceM

@@ -1634,17 +1634,6 @@ code, pre, .code, .monospace {
 .replayer-wrapper > iframe {
   border: none;
 }
-.event-container.expanded {
-  @apply border border-strokeBrand-strong
-}
-.event-container.expanded  button > svg {
-  @apply rotate-180
-}
-.event-container.expanded > .event-detail {
-  display: flex;
-}
-
-
 /* Database-specific badges - consolidated with CSS custom properties */
 .badge-postgres, .badge-mysql, .badge-redis, .badge-mongo, .badge-mongodb,
 .badge-elastic, .badge-elasticsearch, .badge-cassandra, .badge-dynamodb,
@@ -2800,3 +2789,20 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
     width: min(24rem, calc(100vw - 1rem));
   }
 }
+
+/* Keep trace hover cards above the third-party tooltip stylesheet's unlayered defaults. */
+  .tippy-box[data-theme~='trace-span'] {
+    color: var(--color-textStrong);
+    background: var(--color-bgRaised);
+    border: 1px solid var(--color-strokeStrong);
+    border-radius: var(--radius-field);
+    box-shadow: var(--shadow-lg);
+    animation: none;
+  }
+  .tippy-box[data-theme~='trace-span'] .tippy-content {
+    padding: 12px;
+    text-align: start;
+  }
+  .tippy-box[data-theme~='trace-span'] .tippy-arrow {
+    color: var(--color-bgRaised);
+  }

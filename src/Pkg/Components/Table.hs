@@ -566,30 +566,30 @@ renderBody :: [Attribute] -> Table a -> Html ()
 renderBody extra tbl
   | not tbl.config.renderAsTable = div_ [class_ "stagger-fade"] $ V.mapM_ (renderListRow tbl) tbl.rows
   | Just groupOf <- tbl.features.rowGroup =
-      if isJust tbl.features.grouping then groupedRows groupOf else body $ groupedRows groupOf
+      if V.null tbl.rows then body pass else groupedRows groupOf
   | otherwise = body $ V.mapM_ (renderTableRow tbl) tbl.rows
   where
     body = tbody_ (extra <> [class_ "stagger-fade"])
     columnCount = length tbl.columns + bool 0 1 (isJust tbl.features.rowId)
     groups groupOf = sortWith (fst . head) $ NE.groupAllWith (\(idx, row) -> maybeToRight idx $ groupOf row) $ zip [0 :: Int ..] (V.toList tbl.rows)
     groupedRows groupOf = iforM_ (groups groupOf) $ \idx ((_, row) :| siblings) ->
-      let renderedRows = mapM_ (renderTableRow tbl) (row : map snd siblings)
+      let labelM = groupOf row
+          collapsible = isNothing tbl.features.grouping && isJust labelM && not (null siblings)
           groupLabel label suffix = toHtml label >> span_ [class_ "ms-2 text-xs font-normal text-textWeak tabular-nums"] (toHtml $ show (1 + length siblings) <> suffix)
-       in if isJust tbl.features.grouping
-            then tbody_ ([class_ "stagger-fade not-has-[.itemsListItem:not(.hidden)]:hidden"] <> if idx == 0 then extra else []) do
-              forM_ (groupOf row) $ \label -> tr_ [data_ "table-group" label] $ td_ [colspan_ $ show columnCount, class_ "px-4 py-3 text-sm font-medium text-textStrong"] $ groupLabel label " items"
-              renderedRows
-            else case (groupOf row, siblings) of
-              (Just label, _ : _) -> tr_ [class_ "not-has-[.itemsListItem:not(.hidden)]:hidden"]
-                $ td_ [colspan_ $ show columnCount]
-                $ details_ [class_ "group/disclosure", [__|on input from closest <[id$='_page']/> if event.target.type is "search" set my.open to true end|]] do
-                  summary_ [class_ "cursor-pointer px-4 py-3 text-sm font-medium text-textStrong focus-visible:outline-offset-[-2px]"] $ groupLabel label " items on this page"
-                  table_ [class_ tbl.config.tableClasses] do
-                    thead_ [class_ "sr-only"] $ tr_ do
-                      when (isJust tbl.features.rowId) $ th_ [scope_ "col"] "Select issue"
-                      forM_ tbl.columns $ \c -> th_ [scope_ "col", data_ "column-key" c.name] $ toHtml c.name
-                    tbody_ renderedRows
-              _ -> renderedRows
+       in tbody_
+            ([class_ $ if collapsible then "stagger-fade bg-fillWeaker/30 not-has-[.itemsListItem:not(.hidden)]:hidden not-has-[>tr:first-child_.row-group-toggle[open]]:[&>tr:not(:first-child)]:hidden" else if isJust tbl.features.grouping then "stagger-fade not-has-[.itemsListItem:not(.hidden)]:hidden" <> bool "" " bg-fillWeaker/30" (isJust labelM) else "stagger-fade"] <> if idx == 0 then extra else [])
+            do
+              forM_ labelM $ \label ->
+                if isJust tbl.features.grouping
+                  then tr_ [data_ "table-group" label] $ td_ [colspan_ $ show columnCount, class_ "px-4 py-3 text-sm font-medium text-textStrong"] $ groupLabel label " items"
+                  else
+                    when collapsible
+                      $ tr_ [data_ "table-group" label]
+                      $ td_ [colspan_ $ show columnCount, class_ "p-0"]
+                      $ details_ [class_ "row-group-toggle group/disclosure", [__|on input from closest <[id$='_page']/> if event.target.type is "search" set my.open to true end|]]
+                      $ summary_ [class_ "cursor-pointer px-4 py-3 text-sm font-medium text-textStrong focus-visible:outline-offset-[-2px]"]
+                      $ groupLabel label " items on this page"
+              mapM_ (renderTableRow tbl) (row : map snd siblings)
 
 
 treeRowAttrs :: a -> TreeConfig a -> [Attribute]
@@ -614,17 +614,22 @@ treeRowAttrs row tc =
 -- List mode: render columns in a flex container (no table wrapper/headers)
 {-# INLINE renderListRow #-}
 renderListRow :: Table a -> a -> Html ()
-renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ "flex gap-4 md:gap-8 items-start itemsListItem py-3 hover:bg-fillWeak transition-colors duration-75"]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
+renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ " flex gap-4 md:gap-8 items-start itemsListItem py-3 hover:bg-fillWeak transition-colors duration-75 "]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
 
 
--- Table mode: render as table rows with columns
+-- | Table mode: render as table rows with columns. A @rowAttrs@ class stays separate from the row's own classes.
+--
+-- >>> import Lucid (class_)
+-- >>> let tbl = Table (def :: Config){renderAsTable = True} [col "c" (const "x")] (V.singleton ()) (def :: Features ()){rowAttrs = Just (const [class_ "hover:bg-fillWeaker"])}
+-- >>> "hover:bg-fillWeaker hover:bg-fillWeak" `TL.isInfixOf` renderText (toHtml tbl)
+-- True
 {-# INLINE renderTableRow #-}
 renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
-  tr_ ([class_ $ "hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> bool "" " cursor-pointer" (isTreeGroup || isJust tbl.features.rowLink)] <> treeAttrs <> rowAttrs <> linkHandler) do
+  tr_ ([class_ $ " hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> bool "" " cursor-pointer" (isTreeGroup || isJust tbl.features.rowLink) <> " "] <> treeAttrs <> rowAttrs <> linkHandler) do
     whenJust tbl.features.rowId \getId ->
       td_ [class_ "w-8 align-top pt-4 max-md:hidden"]
         $ input_
@@ -635,7 +640,7 @@ renderTableRow tbl row =
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
     isTreeGroup = maybe False (\tc -> tc.isGroupRow row) tbl.features.treeConfig
-    -- single class_ attribute: Lucid concatenates duplicates with no separator
+    -- Lucid joins duplicate class_ attributes with no separator, so the row class is space-padded for rowAttrs classes.
     linkHandler = maybe [] (\getLink -> [hxGet_ (getLink row), hxPushUrl_ "true"] <> navTabAttrs) tbl.features.rowLink
 
 

@@ -1,5 +1,4 @@
 wiki-editor[data-mode='rich'] textarea,
-wiki-editor[data-mode='source'] [data-editor-formatting],
 wiki-editor[data-mode='source'] [data-rich-editor] { display: none; }
 
 wiki-editor .milkdown {
@@ -21,11 +20,12 @@ wiki-editor .milkdown {
   --crepe-color-error: var(--color-textError);
   --crepe-font-default: inherit;
   --crepe-font-title: inherit;
-  --crepe-base-font-size: 14px;
+  --crepe-base-font-size: 16px;
 }
 
-wiki-editor .milkdown .ProseMirror { min-height: 16rem; padding: 1rem; }
-wiki-editor .milkdown :focus-visible { outline: 2px solid var(--color-strokeBrand-strong); outline-offset: -2px; }
+wiki-editor .milkdown .ProseMirror { min-height: 24rem; padding: 0.5rem 0 0.5rem 3rem; }
+wiki-editor .milkdown :focus-visible:not(.ProseMirror) { outline: 2px solid var(--color-strokeBrand-strong); outline-offset: -2px; }
 
 wiki-editor .milkdown ul { list-style-type: disc; padding-inline-start: 1.5rem; }
 wiki-editor .milkdown ol { list-style-type: decimal; padding-inline-start: 1.5rem; }
+wiki-editor .milkdown .ProseMirror:focus-visible { outline: none; }

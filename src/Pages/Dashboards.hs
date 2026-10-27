@@ -103,7 +103,6 @@ import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..),
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
-import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pages.Rum qualified as Rum
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_)
@@ -367,10 +366,6 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
     -- Hidden form for widget order PATCH via HTMX (tab slug hardcoded in URL)
     widgetOrderTriggerForm_ widgetOrderUrl False
-
-    -- Where a logs widget's row click loads its details. A dashboard has no third
-    -- pane to give it, so it is always the drawer.
-    LogItem.detailsPanel_ pid Nothing LogItem.DrawerPanel
 
     -- ?expand=<widgetId> opens the widget in the global drawer. drawerLoadAttrs_ already
     -- checks the drawer toggle and fires its change handler (body overflow + focus trap),
@@ -2771,11 +2766,11 @@ processDashWidgets prefill pid dashId now timeParams paramsWithConstants widgets
 -- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}
 -- This renders the full page with the specified tab active
 dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (NavigationResponse DashboardGet))
-dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxTriggerName allParams =
-  Metrics.timed Metrics.dashboardShellDuration [("navigation", OA.toAttribute $ if isJust hxRequest then ("tab" :: Text) else "initial")]
-    $ withSpan_ "dashboard.tab.render" [("monoscope.dashboard.navigation", OA.toAttribute $ if isJust hxRequest then ("tab" :: Text) else "initial")]
+dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxTarget hxTriggerName allParams =
+  Metrics.timed Metrics.dashboardShellDuration [("navigation", navigation)]
+    $ withSpan_ "dashboard.tab.render" [("monoscope.dashboard.navigation", navigation)]
     $ do
-      let prefill = prefillFor hxRequest
+      let prefill = prefillFor hxTarget
       (session, project, bw) <- mkPageCtx pid
       now <- Time.currentTime
       let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
@@ -2821,7 +2816,10 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxT
                   breadcrumbSuffixOob_ activeTab.name
                   when (dash''.file == Just "rum.yaml" && tabSlug `elem` ["audience", "errors"]) $ Rum.segmentToolbar_ pid paramsWithTab
                   widgetCanvas_ pid ("tab-panel-" <> dashId.toText <> "-" <> show activeTabIdx) activeTab.widgets
-      addRespHeaders $ navigationResponse hxRequest page fragment
+      addRespHeaders $ navigationResponse tabTarget page fragment
+  where
+    tabTarget = mfilter (== "dashboard-tabs-content") hxTarget
+    navigation = OA.toAttribute @Text $ bool "initial" "tab" $ isJust tabTarget
 
 
 -- | Dashboard URLs carry variables and time, not a second global scope authority. Internal

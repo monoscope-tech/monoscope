@@ -1,4 +1,4 @@
-module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), pageLimit, latestPages, pageHistory, writePage) where
+module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), PageFilter (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), pageLimit, latestPages, pageHistory, writePage) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isAlphaNum, isAscii)
@@ -161,15 +161,25 @@ pageAtPath :: DB es => UUIDId "project" -> PagePath -> Eff es (Maybe PageId)
 pageAtPath pid path = fmap HI.getOneColumn <$> Hasql.interpOne [HI.sql| SELECT page_id FROM projects.memory_pages WHERE project_id = #{pid} AND path = #{path} |]
 
 
-pageWindow :: DB es => UUIDId "project" -> Maybe PagePath -> Eff es [Page]
-pageWindow pid after =
-  Hasql.interp
-    [HI.sql|
+-- | 'LinkingTo' matches both @[[path]]@ and @[[path|title]]@ wikilinks; 'Matching' is a case-insensitive substring of path, title or body.
+data PageFilter = AllPages | Matching Text | LinkingTo PagePath
+
+
+pageWindow :: DB es => UUIDId "project" -> PageFilter -> Maybe PagePath -> Eff es [Page]
+pageWindow pid scope after =
+  let (search, target) = case scope of
+        AllPages -> (Nothing, Nothing)
+        Matching term -> (Just $ T.toLower term, Nothing)
+        LinkingTo path -> (Nothing, Just path)
+   in Hasql.interp
+        [HI.sql|
     SELECT p.page_id, r.version, r.document, r.author, r.created_at, p.path
     FROM projects.memory_pages p CROSS JOIN LATERAL (
       SELECT version, document, author, created_at FROM projects.memory_revisions
       WHERE project_id = p.project_id AND page_id = p.page_id ORDER BY version DESC LIMIT 1
     ) r WHERE p.project_id = #{pid} AND (#{after}::text IS NULL OR p.path > #{after})
+      AND (#{search}::text IS NULL OR strpos(lower(p.path || ' ' || (r.document->>'title') || ' ' || (r.document->>'body')), #{search}) > 0)
+      AND (#{target}::text IS NULL OR p.path <> #{target} AND (strpos(r.document->>'body', '[[' || #{target} || ']]') > 0 OR strpos(r.document->>'body', '[[' || #{target} || '|') > 0))
     ORDER BY p.path LIMIT #{pageLimit + 1}
   |]
 

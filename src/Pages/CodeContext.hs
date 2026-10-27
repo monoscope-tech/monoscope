@@ -12,11 +12,12 @@ module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), Wi
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
 import Commonmark.Blocks qualified as MarkdownBlocks
-import Commonmark.Extensions (gfmExtensions)
+import Commonmark.Extensions (HasWikilinks (..), TitlePosition (..), gfmExtensions, wikilinksSpec)
 import Commonmark.Tag qualified as MarkdownTag
 import Commonmark.TokParsers (symbol)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.Algorithm.Diff qualified as Diff
 import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
@@ -27,6 +28,7 @@ import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (throwError)
@@ -43,10 +45,10 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RepositorySync qualified as RepositorySync
-import Network.HTTP.Types.URI (urlEncode)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), colorChip_, disclosure_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, options_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), callout_, colorChip_, disclosure_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, localTimeFmt_, options_, panel_, settingsH2_)
+import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as ImpactReview
@@ -57,7 +59,8 @@ import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Parsec qualified as Parsec
-import Utils (LoadingSize (..), faSprite_, htmxIndicator_, nonEmptyT, renderMarkdown)
+import Text.Slugify (slugify)
+import Utils (LoadingSize (..), TabStrip (..), faSprite_, htmxIndicator_, navTabStrip_, nonEmptyT, renderMarkdown, toUriStr)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
@@ -79,7 +82,7 @@ codeContextH pid fileM lineM svcM revM = do
     (Just path, Just n) ->
       W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonEmptyT revM) path n)
         >>= addRespHeaders
-        . either reason_ snippet_
+          . either reason_ snippet_
     _ -> addRespHeaders $ note_ "This frame has no file and line to look up." Nothing
   where
     -- An unmapped frame is the one failure the reader can act on from here, so it is the one
@@ -92,7 +95,7 @@ codeContextH pid fileM lineM svcM revM = do
       toHtml msg
       whenJust fixPathM \path ->
         a_
-          [ href_ ("/p/" <> pid.toText <> "/repositories?sample=" <> decodeUtf8 (urlEncode True $ encodeUtf8 path))
+          [ href_ ("/p/" <> pid.toText <> "/repositories?sample=" <> toUriStr path)
           , class_ "not-italic text-textBrand underline shrink-0"
           ]
           "Choose a repository"
@@ -142,43 +145,64 @@ data MemoryForm = MemoryForm {pageId :: Memory.PageId, version :: Word32, path :
   deriving anyclass (FromForm)
 
 
-data WikiSelection = NewPage | ById Memory.PageId | ByPath Memory.PagePath
+-- | @NewPage@ carries the path to prefill; @Landing@ is the wiki index.
+data WikiSelection = Landing | NewPage Text | ById Memory.PageId | ByPath Memory.PagePath
 
 
 data WikiTree = WikiTree (Maybe Memory.Page) (Map Text WikiTree)
 
 
-wikiGetH :: Projects.ProjectId -> [Text] -> Maybe Memory.PagePath -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
-wikiGetH pid segments after = do
+-- | Markdown rendered for the wiki, where @[[path|label]]@ links to another page.
+data WikiDoc
+
+
+instance Markdown.Rangeable (Markdown.Html WikiDoc) where
+  ranged _ = id
+
+
+-- | Valid targets become @wiki:@ hrefs that the renderer resolves to the project wiki; others stay plain text.
+instance {-# OVERLAPPING #-} HasWikilinks (Markdown.Html WikiDoc) where
+  wikilink target label = either (const label) (\path -> Markdown.addAttribute ("class", "wikilink") $ Markdown.link ("wiki:" <> Memory.pagePathText path) "" label) $ Memory.mkPagePath target
+
+
+wikiGetH :: Projects.ProjectId -> [Text] -> Maybe Memory.PagePath -> Maybe Text -> Maybe Text -> Bool -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
+wikiGetH pid segments after search folder edit = do
   when (any (T.any (== '/')) segments) $ throwError err404
-  selection <- if null segments then pure NewPage else either (const $ throwError err404) (pure . ByPath) $ Memory.mkPagePath $ T.intercalate "/" segments
-  memoryPageH pid selection after Nothing
+  selection <- if null segments then pure $ maybe Landing (NewPage . (\f -> bool (f <> "/") "" $ T.null f) . T.dropAround (== '/')) folder else either (const $ throwError err404) (pure . ByPath) $ Memory.mkPagePath $ T.intercalate "/" segments
+  memoryPageH pid selection after (nonEmptyT $ T.strip <$> search) edit Nothing
 
 
 memoryGetH :: Projects.ProjectId -> Maybe Memory.PageId -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
-memoryGetH pid page = memoryPageH pid (maybe NewPage ById page) Nothing Nothing
+memoryGetH pid page = memoryPageH pid (maybe Landing ById page) Nothing Nothing False Nothing
 
 
 memoryPostH :: Projects.ProjectId -> MemoryForm -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
 memoryPostH pid form = do
   requireReviewWrite pid
   session <- Projects.getSession
-  case (,) <$> traverse Memory.mkPagePath form.path <*> (Memory.Document <$> Memory.mkMemoryText form.title <*> Memory.mkMemoryText form.body) of
-    Left message -> memoryPageH pid (ById form.pageId) Nothing (Just (form, message))
-    Right (path, document) -> do
-      saved <- Memory.writePage pid form.pageId form.version path document $ Memory.Member session.user.id
-      case saved of
-        Left failure -> memoryPageH pid (ById form.pageId) Nothing (Just (form, case failure of Memory.StaleRevision -> "This page changed while you were editing. Your draft is below. Open the latest revision before saving again."; Memory.PathTaken -> "Another page already uses this path. Your draft is below. Choose a different path."))
+  -- A blank path, or one ending in a folder, takes its page name from the title.
+  let named path = bool path (path <> slugify form.title) $ T.null path || "/" `T.isSuffixOf` path
+  case (,) <$> traverse (Memory.mkPagePath . named . T.strip) form.path <*> (Memory.Document <$> Memory.mkMemoryText form.title <*> Memory.mkMemoryText form.body) of
+    Left message -> redraft message
+    Right (path, document) ->
+      Memory.writePage pid form.pageId form.version path document (Memory.Member session.user.id) >>= \case
+        Left Memory.StaleRevision -> redraft "This page changed while you were editing. Your draft is below. Open the latest revision before saving again."
+        Left Memory.PathTaken -> redraft "Another page already uses this path. Your draft is below. Choose a different path."
         Right page -> do
           addSuccessToast "Wiki page saved" Nothing
           redirectCS $ "/p/" <> pid.toText <> "/wiki/" <> Memory.pagePathText page.path
           memoryGetH pid $ Just form.pageId
+  where
+    redraft message = memoryPageH pid (ById form.pageId) Nothing Nothing False (Just (form, message))
 
 
 data WikiGet = WikiGet
   { projectId :: Projects.ProjectId
   , canEdit :: Bool
+  , editing :: Bool
   , pages :: [Memory.Page]
+  , search :: Maybe Text
+  , backlinks :: [Memory.Page]
   , history :: [Memory.Page]
   , form :: MemoryForm
   , message :: Maybe Text
@@ -186,151 +210,190 @@ data WikiGet = WikiGet
   deriving stock (Generic, Show)
 
 
-memoryPageH :: Projects.ProjectId -> WikiSelection -> Maybe Memory.PagePath -> Maybe (MemoryForm, Text) -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
-memoryPageH pid selection after draft = do
+memoryPageH :: Projects.ProjectId -> WikiSelection -> Maybe Memory.PagePath -> Maybe Text -> Bool -> Maybe (MemoryForm, Text) -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
+memoryPageH pid selection after search editRequested draft = do
   (session, _, bw) <- mkPageCtx pid
   when (session.persistentSession.id == demoGuestSessionId) $ throwError err404
   canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
-  selected <- case selection of
-    NewPage -> pure Nothing
-    ById page -> pure $ Just page
-    ByPath path -> Just <$> (maybe (throwError err404) pure =<< Memory.pageAtPath pid path)
-  pages <- Memory.pageWindow pid after
+  -- @newPath@ is the path a new page starts at; an editor following a link to a missing page gets one there.
+  (selected, newPath) <- case selection of
+    Landing -> pure (Nothing, Nothing)
+    NewPage path -> pure (Nothing, Just path)
+    ById page -> pure (Just page, Nothing)
+    ByPath path ->
+      Memory.pageAtPath pid path >>= \case
+        Just page -> pure (Just page, Nothing)
+        Nothing | canEdit -> pure (Nothing, Just $ Memory.pagePathText path)
+        Nothing -> throwError err404
+  pages <- Memory.pageWindow pid (maybe Memory.AllPages Memory.Matching search) after
   history <- maybe (pure []) (Memory.pageHistory pid) selected
   let current = listToMaybe history
   when (isJust selected && isNothing current && isNothing draft) $ throwError err404
+  backlinks <- maybe (pure []) (\page -> Memory.pageWindow pid (Memory.LinkingTo page.path) Nothing) current
   fresh <- maybe (UUIDId <$> UUIDEff.genUUID) pure selected
-  let edit = maybe (MemoryForm fresh 0 (Just "") "" "") (\page -> MemoryForm page.id (fromIntegral page.version) (Just $ Memory.pagePathText page.path) (Memory.memoryText page.document.title) (Memory.memoryText page.document.body)) current
-  addRespHeaders $ PageCtx bw{pageTitle = "Repositories"} $ WikiGet pid canEdit pages history (maybe edit fst draft) (snd <$> draft)
+  let edit = maybe (MemoryForm fresh 0 (newPath <|> Just "") "" "") (\page -> MemoryForm page.id (fromIntegral page.version) (Just $ Memory.pagePathText page.path) (Memory.memoryText page.document.title) (Memory.memoryText page.document.body)) current
+  let editing = canEdit && (editRequested || isJust draft || isJust newPath)
+      base = "/p/" <> pid.toText <> "/wiki"
+      pageLink page = base <> "/" <> Memory.pagePathText page.path
+      actions = div_ [class_ "flex items-center gap-2"] case (editing, current) of
+        (True, _) -> do
+          span_ [id_ "wiki-dirty", hidden_ "", class_ "text-xs text-textWeak", [__|on input from #wiki-form remove @hidden from me|]] "Unsaved changes"
+          for_ current \page -> a_ [href_ $ pageLink page, class_ "btn btn-ghost btn-sm", [__|on click if #wiki-dirty.hidden is false and not confirm('Discard unsaved changes?') halt the event|]] "Cancel"
+          button_ [type_ "submit", term "form" "wiki-form", title_ "Save (\x2318S)", class_ "btn btn-primary btn-sm"] "Save page"
+        (False, Just page) -> a_ (class_ "btn btn-primary btn-sm gap-1.5" : repositoryNavAttrs (pageLink page <> "?edit=true")) $ faSprite_ "pen-to-square" "regular" "h-3.5 w-3.5" >> "Edit"
+        (False, Nothing) -> a_ (class_ "btn btn-primary btn-sm gap-1.5" : repositoryNavAttrs (base <> "?folder=")) $ faSprite_ "plus" "regular" "h-3.5 w-3.5" >> "New page"
+  addRespHeaders $ PageCtx (repositoryBWConfig bw pid Wiki Nothing canEdit True){pageActions = actions <$ guard canEdit} $ WikiGet pid canEdit editing pages search backlinks history (maybe edit fst draft) (snd <$> draft)
 
 
 instance ToHtml WikiGet where
-  toHtml WikiGet{projectId = pid, canEdit, pages, history, form, message} = toHtmlRaw $ repositoryLayout_ pid Wiki Nothing canEdit True do
+  toHtml WikiGet{projectId = pid, canEdit, editing, pages, search, backlinks, history, form, message} = toHtmlRaw $ repositoryLayout_ Nothing do
     let current = listToMaybe history
         base = "/p/" <> pid.toText <> "/wiki"
         pageLink page = base <> "/" <> Memory.pagePathText page.path
         visible = take Memory.pageLimit pages
         displayed = visible <> [page | page <- maybeToList current, all ((/= page.id) . (.id)) visible]
+        title page = toHtml $ Memory.memoryText page.document.title
         authorName = \case Memory.Member _ -> "Project member"; Memory.Agent _ -> "Agent"
-        baseSyntax = gfmExtensions <> Markdown.defaultSyntaxSpec
+        edited page = span_ [class_ "tabular-nums"] do
+          toHtml @Text $ "Revision " <> show page.version <> " · " <> authorName page.author <> " · "
+          localTimeFmt_ "MMM d, yyyy HH:mm" page.updatedAt
+        baseSyntax = wikilinksSpec TitleAfterPipe <> gfmExtensions <> Markdown.defaultSyntaxSpec
         -- Embedded HTML is text; only Markdown constructs may create markup.
         syntax =
           baseSyntax
-            { Markdown.syntaxBlockSpecs = filter ((/= (MarkdownBlocks.rawHtmlSpec @Identity @(Markdown.Html ()) @(Markdown.Html ())).blockType) . (.blockType)) baseSyntax.syntaxBlockSpecs
+            { Markdown.syntaxBlockSpecs = filter ((/= (MarkdownBlocks.rawHtmlSpec @Identity @(Markdown.Html WikiDoc) @(Markdown.Html WikiDoc)).blockType) . (.blockType)) baseSyntax.syntaxBlockSpecs
             , Markdown.syntaxInlineParsers = (Markdown.str . Markdown.untokenize <$> Parsec.try ((:) <$> symbol '<' <*> MarkdownTag.htmlTag)) : baseSyntax.syntaxInlineParsers
             }
-        pageBody body = div_ [class_ "prose prose-sm max-w-none break-words text-sm text-textStrong [&_pre]:overflow-x-auto"] $ case runIdentity $ Markdown.commonmarkWith syntax "" body of
+        pageBody body = div_ [class_ "prose max-w-none break-words text-textStrong [&_pre]:overflow-x-auto"] $ case runIdentity $ Markdown.commonmarkWith syntax "" body of
           Left _ -> toHtml body
-          Right (parsed :: Markdown.Html ()) -> toHtmlRaw $ sanitizeBalance $ toStrict $ Markdown.renderHtml parsed
-    div_ [class_ "grid gap-6 md:grid-cols-[15rem_minmax(0,1fr)]"] do
-      nav_ [Aria.label_ "Wiki pages", class_ "space-y-3", term "preload" "mouseover"] do
-        when canEdit $ a_ (class_ "btn btn-sm btn-ghost" : repositoryNavAttrs base) "New page"
-        when (null pages) $ p_ [class_ "text-sm text-textWeak"] "No wiki pages yet. Record service context, investigation notes, or runbooks here."
+          Right (parsed :: Markdown.Html WikiDoc) -> toHtmlRaw $ sanitizeBalance $ T.replace "href=\"wiki:" ("href=\"" <> base <> "/") $ toStrict $ Markdown.renderHtml parsed
+        revisionLines page = ("Title: " <> Memory.memoryText page.document.title) : "" : lines (Memory.memoryText page.document.body)
+        revisionDiff old new = pre_ [class_ "overflow-x-auto rounded-lg bg-fillWeak py-2 text-xs leading-relaxed"] $ for_ (Diff.getGroupedDiff (revisionLines old) (revisionLines new)) \case
+          Diff.First removed -> diffLines "bg-fillError-weak text-textError" "- " removed
+          Diff.Second added -> diffLines "bg-fillSuccess-weak text-textSuccess" "+ " added
+          Diff.Both same _ -> diffLines "text-textWeak" "  " $ if length same > 5 then take 2 same <> ["\x22EF " <> show (length same - 4) <> " unchanged lines"] <> drop (length same - 2) same else same
+          where
+            diffLines cls sigil = traverse_ \line -> span_ [class_ $ "block whitespace-pre-wrap break-words px-2 " <> cls] $ toHtml @Text $ sigil <> line
+        newPageIn folder = a_ ([Aria.label_ $ "New page in " <> folder, title_ "New page", class_ "btn btn-ghost btn-xs btn-square shrink-0 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"] <> repositoryNavAttrs (base <> "?folder=" <> toUriStr folder)) $ faSprite_ "plus" "regular" "h-3 w-3"
+    div_ [class_ "grid min-h-full md:grid-cols-[16rem_minmax(0,1fr)]"] do
+      nav_ [Aria.label_ "Wiki pages", class_ "min-w-0 space-y-3 border-strokeWeak pb-6 md:sticky md:top-0 md:max-h-[calc(100dvh-8rem)] md:self-start md:overflow-y-auto md:border-r md:pr-3", term "preload" "mouseover"] do
+        div_ [class_ "flex items-center justify-between gap-2 ps-2"] do
+          span_ [class_ "text-xs font-semibold uppercase tracking-wider text-textWeak"] "Pages"
+          when canEdit $ a_ ([Aria.label_ "New page", title_ "New page", class_ "btn btn-ghost btn-sm btn-square"] <> repositoryNavAttrs (base <> "?folder=")) $ faSprite_ "plus" "regular" "h-3.5 w-3.5"
+        form_ [method_ "get", action_ base, role_ "search", class_ "relative"] do
+          faSprite_ "magnifying-glass" "regular" "pointer-events-none absolute start-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-iconNeutral"
+          input_ [type_ "search", id_ "wiki-search", name_ "q", value_ $ fromMaybe "" search, placeholder_ "Search pages", Aria.label_ "Search wiki pages", class_ "input input-sm w-full ps-8", hxGet_ base, hxTrigger_ "input changed delay:300ms, search", hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph", hxPushUrl_ "true"]
+        when (null pages) $ p_ [class_ "px-2 text-sm text-textWeak"] $ maybe "No pages yet." (\q -> toHtml $ "No pages match \x201C" <> q <> "\x201D.") search
         let insert page [] (WikiTree _ children) = WikiTree (Just page) children
             insert page (segment : rest) (WikiTree item children) = WikiTree item $ Map.alter (Just . insert page rest . fromMaybe (WikiTree Nothing mempty)) segment children
             tree = foldr (\page -> insert page $ T.splitOn "/" $ Memory.pagePathText page.path) (WikiTree Nothing mempty) displayed
-            renderTree prefix (WikiTree _ children) = ul_ [class_ "space-y-1 border-l border-strokeWeak pl-3"] $ for_ (Map.toAscList children) \(segment, branch@(WikiTree page descendants)) -> li_ do
-              let link item = a_ ([class_ $ "block rounded-md px-2 py-2 text-sm text-textBrand hover:bg-fillWeak break-words focus-visible:outline-2 focus-visible:outline-strokeBrand-strong" <> bool "" " bg-fillBrand-weak font-medium" (Just item.id == ((.id) <$> current)), title_ $ Memory.memoryText item.document.title] <> [term "aria-current" "page" | Just item.id == ((.id) <$> current)] <> repositoryNavAttrs (pageLink item)) $ toHtml segment
+            isCurrent item = Just item.id == ((.id) <$> current)
+            link item = a_ ([class_ $ "flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm focus-visible:outline-2 focus-visible:outline-strokeFocus " <> bool "text-textWeak hover:bg-fillWeak hover:text-textStrong" "bg-fillBrand-weak font-medium text-textStrong" (isCurrent item), title_ $ Memory.pagePathText item.path] <> [term "aria-current" "page" | isCurrent item] <> repositoryNavAttrs (pageLink item)) do
+              faSprite_ "file-lines" "regular" "h-3.5 w-3.5 shrink-0"
+              span_ [class_ "truncate"] $ title item
+            renderTree prefix (WikiTree _ children) = ul_ [class_ "space-y-px"] $ for_ (Map.toAscList children) \(segment, branch@(WikiTree page descendants)) -> li_ do
+              let folder = T.intercalate "/" (prefix <> [segment])
+                  holdsCurrent = maybe True (\item -> Memory.pagePathText item.path == folder || (folder <> "/") `T.isPrefixOf` Memory.pagePathText item.path) current
               if Map.null descendants
                 then for_ page link
-                else details_ ([class_ "py-1"] <> [open_ "" | maybe False (\item -> let path = T.intercalate "/" (prefix <> [segment]) in Memory.pagePathText item.path == path || (path <> "/") `T.isPrefixOf` Memory.pagePathText item.path) current || isNothing current]) do
-                  summary_ [class_ "cursor-pointer py-2 text-sm font-medium text-textStrong"] $ toHtml segment
-                  for_ page link
-                  renderTree (prefix <> [segment]) branch
-        renderTree [] tree
+                else details_ ([class_ "group/folder"] <> [open_ "" | holdsCurrent]) do
+                  summary_ [class_ "group/row flex cursor-pointer list-none items-center gap-1 rounded-md py-1 ps-1 pe-1 text-sm text-textStrong hover:bg-fillWeak [&::-webkit-details-marker]:hidden"] do
+                    faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-iconNeutral transition-transform group-open/folder:rotate-90"
+                    faSprite_ "folder" "regular" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
+                    span_ [class_ "min-w-0 flex-1 truncate"] $ toHtml segment
+                    when canEdit $ newPageIn folder
+                  div_ [class_ "ms-3 border-s border-strokeWeak ps-1"] do
+                    for_ page link
+                    renderTree (prefix <> [segment]) branch
+        case search of
+          Nothing -> renderTree [] tree
+          Just _ -> ul_ [class_ "space-y-px"] $ for_ visible \page -> li_ $ a_ (class_ "block rounded-md px-2 py-1.5 hover:bg-fillWeak" : repositoryNavAttrs (pageLink page)) do
+            span_ [class_ "block truncate text-sm text-textStrong"] $ title page
+            span_ [class_ "block truncate font-mono text-xs text-textWeak"] $ toHtml $ Memory.pagePathText page.path
         when (length pages > Memory.pageLimit) $ for_ (viaNonEmpty last visible) \page ->
-          a_ (class_ "block py-2 text-sm text-textBrand hover:underline" : repositoryNavAttrs (base <> "?after=" <> decodeUtf8 (urlEncode True $ encodeUtf8 $ Memory.pagePathText page.path))) "More pages"
-      section_ [class_ "min-w-0 space-y-5"] do
-        h2_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml $ maybe "New wiki page" (Memory.memoryText . (.document.title)) current
-        for_ current \page -> nav_ [Aria.label_ "Wiki breadcrumb", class_ "flex flex-wrap gap-1 text-xs text-textWeak"] do
-          a_ (class_ "text-textBrand hover:underline" : repositoryNavAttrs base) "Wiki"
-          for_ (T.splitOn "/" $ Memory.pagePathText page.path) \segment -> do
-            span_ [Aria.hidden_ "true"] "/"
-            span_ [class_ "break-all"] $ toHtml segment
-        p_ [class_ "text-sm text-textWeak"] "Shared project notes and runbooks. Check dated conclusions against current source and telemetry."
-        for_ current \page -> do
-          p_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ authorName page.author <> " · Revision " <> show page.version <> " · " <> show page.updatedAt
-          pageBody $ Memory.memoryText page.document.body
-        when canEdit $ details_ ([class_ "border-t border-strokeWeak pt-4"] <> [open_ "" | isNothing current || isJust message]) do
-          summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ if isNothing current then "Write a page" else "Edit this page"
-          form_ [method_ "post", action_ ("/p/" <> pid.toText <> "/memories"), hxPost_ ("/p/" <> pid.toText <> "/memories"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", class_ "mt-4 space-y-4"] do
-            input_ [type_ "hidden", name_ "pageId", value_ form.pageId.toText]
-            input_ [type_ "hidden", name_ "version", value_ $ show form.version]
-            for_ message $ p_ [id_ "memory-error", role_ "alert", class_ "text-sm text-textError"] . toHtml
-            label_ [term "for" "memory-path", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
-              span_ "Page path (required)"
-              input_ ([id_ "memory-path", name_ "path", required_ "", maxlength_ "512", placeholder_ "runbooks/payments/retries", value_ $ fromMaybe "" form.path, class_ "input input-bordered w-full"] <> [Aria.describedby_ "memory-error" | isJust message])
-            label_ [term "for" "memory-title", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
-              span_ "Title (required)"
-              input_ ([id_ "memory-title", name_ "title", required_ "", maxlength_ "120", value_ form.title, class_ "input input-bordered w-full"] <> [Aria.describedby_ "memory-error" | isJust message])
-            term "wiki-editor" [class_ "block", term "data-mode" "source"] do
-              div_ [hidden_ "", term "data-editor-controls" "", class_ "mb-3 space-y-2 text-sm text-textStrong"] do
-                label_ do
-                  "Editing mode "
-                  select_ [term "data-editor-mode" "", class_ "select select-bordered select-sm"] do
-                    option_ [value_ "rich"] "Rich text"
-                    option_ [value_ "source"] "Markdown source"
-                div_ [term "data-editor-formatting" "", class_ "flex flex-wrap gap-1", role_ "group", Aria.label_ "Text formatting"]
-                  $ for_
-                    ( [ ("Bold", "ToggleStrong", Nothing)
-                      , ("Italic", "ToggleEmphasis", Nothing)
-                      , ("Inline code", "ToggleInlineCode", Nothing)
-                      , ("Paragraph", "TurnIntoText", Nothing)
-                      , ("Heading 1", "WrapInHeading", Just "1")
-                      , ("Heading 2", "WrapInHeading", Just "2")
-                      , ("Bullet list", "WrapInBulletList", Nothing)
-                      , ("Numbered list", "WrapInOrderedList", Nothing)
-                      , ("Quote", "WrapInBlockquote", Nothing)
-                      , ("Code block", "CreateCodeBlock", Nothing)
-                      , ("Undo", "Undo", Nothing)
-                      , ("Redo", "Redo", Nothing)
-                      ]
-                        :: [(Text, Text, Maybe Text)]
-                    )
-                    \(label, command, parameter) ->
-                      button_ ([type_ "button", term "data-editor-command" command, class_ "btn btn-sm btn-ghost focus-visible:outline-2 focus-visible:outline-offset-2"] <> maybe [] (pure . term "data-editor-parameter") parameter) $ toHtml label
-              label_ [term "for" "memory-body", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
-                span_ [id_ "memory-body-label"] "Page content (required)"
-                textarea_ ([id_ "memory-body", name_ "body", required_ "", maxlength_ "16000", rows_ "12", class_ "textarea textarea-bordered w-full text-sm font-normal"] <> [Aria.describedby_ "memory-error" | isJust message]) $ toHtml form.body
-              div_ [term "data-rich-editor" "", hidden_ "", class_ "mt-2 rounded-md border border-strokeWeak"] pass
-              p_ [term "data-editor-status" "", role_ "status", class_ "mt-2 text-xs text-textWeak"] "Content is saved as Markdown."
-            button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save page"
-        unless (null history) $ details_ [class_ "border-t border-strokeWeak pt-4"] do
-          summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Revision history"
-          when (length history == Memory.pageLimit) $ p_ [class_ "mt-3 text-sm text-textWeak"] $ toHtml @Text $ "Showing the " <> show Memory.pageLimit <> " most recent revisions. Older revisions remain stored."
-          div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ history \page -> details_ [class_ "py-3"] do
-            summary_ [class_ "cursor-pointer text-sm text-textWeak"] $ toHtml @Text $ "Revision " <> show page.version <> " · " <> authorName page.author <> " · " <> show page.updatedAt
-            h3_ [class_ "mt-3 text-sm font-semibold text-textStrong"] $ toHtml $ Memory.memoryText page.document.title
-            div_ [class_ "mt-2"] $ pageBody $ Memory.memoryText page.document.body
+          a_ (class_ "block px-2 py-1.5 text-sm text-textBrand hover:underline" : repositoryNavAttrs (base <> "?after=" <> toUriStr (Memory.pagePathText page.path) <> foldMap (("&q=" <>) . toUriStr) search)) "More pages"
+      article_ [class_ "min-w-0 pb-16 md:px-10"] do
+        header_ [class_ "sticky top-0 z-10 flex min-h-12 flex-wrap items-center gap-x-3 gap-y-1 border-b border-strokeWeak bg-bgBase py-2"] do
+          nav_ [Aria.label_ "Wiki breadcrumb", class_ "flex min-w-0 flex-1 items-center gap-1 text-sm text-textWeak"] do
+            a_ (class_ "hover:text-textStrong" : repositoryNavAttrs base) "Wiki"
+            for_ (maybe (bool [] ["New page"] editing) (T.splitOn "/" . Memory.pagePathText . (.path)) current) \segment -> do
+              faSprite_ "chevron-right" "regular" "h-2.5 w-2.5 shrink-0"
+              span_ [class_ "truncate last:text-textStrong"] $ toHtml segment
+          unless editing $ for_ current $ p_ [class_ "text-xs text-textWeak"] . edited
+        div_ [class_ "mx-auto max-w-3xl"] do
+          unless editing $ case current of
+            Just page -> div_ [class_ "space-y-6 pt-8"] do
+              h2_ [class_ "text-3xl font-bold tracking-tight text-balance text-textStrong"] $ title page
+              pageBody $ Memory.memoryText page.document.body
+            Nothing -> div_ [class_ "space-y-4 pt-16"] do
+              h2_ [class_ "text-2xl font-semibold tracking-tight text-textStrong"] "Project wiki"
+              p_ [class_ "max-w-prose text-sm text-textWeak"] "Shared notes and runbooks for this project. Check dated conclusions against current source and telemetry."
+              unless (null pages) $ section_ [Aria.labelledby_ "wiki-recent", class_ "space-y-1 pt-4"] do
+                h3_ [id_ "wiki-recent", class_ "text-xs font-semibold uppercase tracking-wider text-textWeak"] "Recently updated"
+                ul_ [class_ "divide-y divide-strokeWeak"] $ for_ (take 8 $ sortOn (Down . (.updatedAt)) visible) \page -> li_ $ a_ (class_ "flex items-baseline justify-between gap-4 py-2 hover:text-textBrand" : repositoryNavAttrs (pageLink page)) do
+                  span_ [class_ "truncate text-sm text-textStrong"] $ title page
+                  span_ [class_ "shrink-0 text-xs text-textWeak tabular-nums"] $ localTimeFmt_ "MMM d, HH:mm" page.updatedAt
+          when editing $ div_ [class_ "pt-8"] do
+            when (isNothing current) $ h2_ [class_ "sr-only"] "New page"
+            form_ [id_ "wiki-form", method_ "post", action_ ("/p/" <> pid.toText <> "/memories"), hxPost_ ("/p/" <> pid.toText <> "/memories"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", class_ "space-y-3", [__|on keydown[(metaKey or ctrlKey) and key is 's'] from window halt the event then call me.requestSubmit()|]] do
+              input_ [type_ "hidden", name_ "pageId", value_ form.pageId.toText]
+              input_ [type_ "hidden", name_ "version", value_ $ show form.version]
+              for_ message $ p_ [id_ "memory-error", role_ "alert", class_ "rounded-lg bg-fillError-weak px-3 py-2 text-sm text-textError"] . toHtml
+              term "wiki-editor" [class_ "block space-y-3", term "data-mode" "source"] do
+                input_ ([id_ "memory-title", name_ "title", required_ "", maxlength_ "120", value_ form.title, placeholder_ "Untitled", Aria.label_ "Title", class_ "w-full rounded-md bg-transparent text-3xl font-bold tracking-tight text-textStrong placeholder:text-textWeak focus-visible:outline-none"] <> [Aria.describedby_ "memory-error" | isJust message])
+                div_ [class_ "flex items-center gap-1.5 text-xs text-textWeak"] do
+                  faSprite_ "folder" "regular" "h-3 w-3 shrink-0"
+                  input_ ([id_ "memory-path", name_ "path", maxlength_ "512", placeholder_ "folder/page \x2014 blank uses the title", value_ $ fromMaybe "" form.path, Aria.label_ "Page path", class_ "min-w-0 flex-1 rounded bg-transparent px-1 py-0.5 font-mono text-xs text-textWeak placeholder:text-textWeak hover:bg-fillWeak focus-visible:bg-fillWeak focus-visible:outline-2 focus-visible:outline-strokeFocus"] <> [Aria.describedby_ "memory-error" | isJust message])
+                  div_ [hidden_ "", term "data-editor-controls" ""]
+                    $ select_ [term "data-editor-mode" "", Aria.label_ "Editing mode", class_ "select select-ghost select-xs w-auto text-textWeak"] do
+                      option_ [value_ "rich"] "Rich text"
+                      option_ [value_ "source"] "Markdown"
+                label_ [term "for" "memory-body", id_ "memory-body-label", class_ "sr-only"] "Page content"
+                textarea_ ([id_ "memory-body", name_ "body", required_ "", maxlength_ "16000", rows_ "18", class_ "textarea w-full font-mono text-sm leading-relaxed"] <> [Aria.describedby_ "memory-error" | isJust message]) $ toHtml form.body
+                div_ [term "data-rich-editor" "", hidden_ "", class_ "-ms-12"] pass
+                p_ [term "data-editor-status" "", role_ "status", class_ "text-xs text-textWeak"] "Markdown \x00B7 / for blocks \x00B7 [[path]] or [[path|label]] links a page \x00B7 \x2318S saves"
+          unless (null backlinks) $ section_ [Aria.labelledby_ "wiki-backlinks", class_ "mt-12 space-y-2 border-t border-strokeWeak pt-4"] do
+            h3_ [id_ "wiki-backlinks", class_ "flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-textWeak"] $ faSprite_ "link" "regular" "h-3 w-3" >> "Linked from"
+            ul_ [class_ "flex flex-wrap gap-2"] $ for_ backlinks \page -> li_ $ a_ (class_ "inline-flex items-center gap-1.5 rounded-md bg-fillWeak px-2 py-1 text-sm text-textStrong hover:text-textBrand" : repositoryNavAttrs (pageLink page)) $ faSprite_ "file-lines" "regular" "h-3 w-3" >> title page
+          unless (null history) $ details_ [class_ "mt-6 border-t border-strokeWeak pt-4"] do
+            summary_ [class_ "flex cursor-pointer items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-textWeak hover:text-textStrong"] $ faSprite_ "clock-rotate-left" "regular" "h-3 w-3" >> "Revision history"
+            when (length history == Memory.pageLimit) $ p_ [class_ "mt-3 text-sm text-textWeak"] $ toHtml @Text $ "Showing the " <> show Memory.pageLimit <> " most recent revisions. Older revisions remain stored."
+            div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ (zip history $ map Just (drop 1 history) <> [Nothing]) \(page, previous) -> details_ [class_ "py-3"] do
+              summary_ [class_ "cursor-pointer text-sm text-textWeak"] $ edited page
+              for_ previous \old -> div_ [class_ "mt-3 space-y-1"] do
+                p_ [class_ "text-xs font-medium text-textWeak"] $ toHtml @Text $ "Changes from revision " <> show old.version
+                revisionDiff old page
+              h3_ [class_ "mt-3 text-sm font-semibold text-textStrong"] $ title page
+              div_ [class_ "mt-2"] $ pageBody $ Memory.memoryText page.document.body
 
 
   toHtmlRaw = toHtml
 
 
-repositoryLayout_ :: Projects.ProjectId -> RepositoryTab -> Maybe Text -> Bool -> Bool -> Html () -> Html ()
-repositoryLayout_ pid tab serviceM canEdit canReadWiki content =
+repositoryBWConfig :: BWConfig -> Projects.ProjectId -> RepositoryTab -> Maybe Text -> Bool -> Bool -> BWConfig
+repositoryBWConfig bw pid tab serviceM canEdit canReadWiki =
   let base = "/p/" <> pid.toText <> "/repositories"
-   in div_ [class_ "h-full w-full overflow-y-auto"] do
-        section_ [class_ "mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
-          header_ [class_ "flex flex-col items-start gap-4 sm:flex-row sm:justify-between"] do
-            div_ [class_ "min-w-0 w-full flex-1 space-y-1"] do
-              h1_ [class_ "text-xl sm:text-2xl font-semibold tracking-tight text-textStrong break-words"] $ toHtml $ maybe "Repositories" ("Repositories for " <>) serviceM
-              p_ [class_ "text-sm text-textWeak max-w-2xl"] $ toHtml @Text $ maybe "Manage source context, pull request reviews, and configuration sync for each repository." (const "Source mappings that apply to this service, including mappings for all services.") serviceM
-              when (isJust serviceM) $ a_ [href_ base, class_ "inline-flex items-center gap-1 py-1 text-sm text-textBrand hover:underline"] "All repositories"
-            when canEdit $ a_ [href_ (base <> "/connect"), class_ "btn btn-sm btn-ghost gap-2"] do
-              faSprite_ "plus" "regular" "h-3.5 w-3.5"
-              "Add repositories"
-          when (isNothing serviceM)
-            $ nav_ [id_ "repository-nav", Aria.label_ "Repository views", class_ "flex flex-wrap gap-1 border-b border-strokeWeak pb-2", term "preload" "mouseover"]
-            $ forM_ ([(Overview, "Repositories", ""), (PullRequests, "Pull requests", "?tab=reviews"), (Wiki, "Project wiki", "?tab=wiki")] :: [(RepositoryTab, Text, Text)]) \(value, label, query) ->
-              when (value /= Wiki || canReadWiki)
-                $ a_
-                  ( [class_ $ "rounded-lg px-3 py-2 text-sm font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeak hover:text-textStrong" "bg-fillBrand-weak text-textBrand" (tab == value)]
-                      <> repositoryNavAttrs (if value == Wiki then "/p/" <> pid.toText <> "/wiki" else base <> query)
-                      <> [term "aria-current" "page" | tab == value]
-                  )
-                $ toHtml @Text label
-          section_ [id_ "repository-content", class_ "min-w-0"] content
+   in bw
+        { pageTitle = "Repositories"
+        , menuItem = Just "Repositories"
+        , pageTitleSuffix = serviceM
+        , pageActions =
+            a_ [href_ (base <> "/connect"), class_ "btn btn-sm btn-primary gap-2"] (faSprite_ "plus" "regular" "h-3.5 w-3.5" >> "Add repositories") <$ guard canEdit
+        , navTabs =
+            Just
+              $ navTabStrip_
+                NavLinks
+                "Repository views"
+                ""
+                [(toHtml label, url, tab == value) | (value, label, url) <- [(Overview, "Repositories" :: Text, base), (PullRequests, "Pull requests", base <> "?tab=reviews"), (Wiki, "Project wiki", "/p/" <> pid.toText <> "/wiki")], value /= Wiki || canReadWiki]
+        }
+
+
+repositoryLayout_ :: Maybe Text -> Html () -> Html ()
+repositoryLayout_ serviceM content =
+  div_ [class_ "h-full w-full overflow-y-auto"] do
+    when (isJust serviceM) $ p_ [class_ "px-4 pt-4 text-sm text-textWeak"] "Source mappings that apply to this service, including mappings for all services."
+    section_ [id_ "repository-content", class_ "min-w-0 p-4"] content
 
 
 repositoryNavAttrs :: Text -> [Attribute]
@@ -339,7 +402,7 @@ repositoryNavAttrs url =
   , hxGet_ url
   , hxTarget_ "#repository-content"
   , hxSelect_ "#repository-content"
-  , term "hx-select-oob" "#repository-nav:outerMorph"
+  , term "hx-select-oob" "#main-navbar:outerMorph"
   , hxSwap_ "outerMorph"
   , hxPushUrl_ "true"
   , [__|on click set my.preloadState to 'DONE'|]
@@ -384,84 +447,139 @@ repositoriesPageH pid selection = do
       settings <- ImpactReviews.repositorySettings pid
       credentials <- GitSync.getGitHubCredentials pid
       repositories <- GitSync.getRepositories pid
-      conflicts <- Hasql.interp @[HI.OneColumn GitSync.GitHubSyncId] [HI.sql| SELECT DISTINCT sync_id FROM projects.repository_resources WHERE project_id = #{pid} AND conflicted |]
+      conflicts <- map HI.getOneColumn <$> Hasql.interp @[HI.OneColumn GitSync.GitHubSyncId] [HI.sql| SELECT DISTINCT sync_id FROM projects.repository_resources WHERE project_id = #{pid} AND conflicted |]
       let applicable = filter (\m -> maybe True (\service -> isNothing m.service || m.service == Just service) serviceM) mappings
           visible = filter (\repository -> isNothing serviceM || any (mappingInRepository credentials repository) applicable) repositories
-      pure $ overview_ canEdit serviceM sampleM base applicable syncs settings credentials visible [sid | HI.OneColumn sid <- conflicts]
+      pure do
+        let linked = [((c.host, c.apiBase, m.owner, m.repo), m) | m <- applicable, c <- credentials, c.id == m.credentialId]
+            repositoryKey repository = (repository.host, repository.apiBase, repository.owner, repository.repo)
+            servicesFor repository = sort . ordNub $ mapMaybe (\(key, m) -> guard (key == repositoryKey repository) *> m.service) linked
+            repositoryUrl repository = base <> "/" <> repository.id.toText <> foldMap (("/source?sample=" <>) . toUriStr) sampleM
+        toHtml
+          $ Table.Table
+            { Table.config = def{Table.elemID = "repositoriesTable", Table.renderAsTable = True}
+            , Table.columns =
+                [ Table.col
+                    "Repository"
+                    ( \repository -> div_ [class_ "min-w-0 space-y-1"] do
+                        a_ [href_ $ repositoryUrl repository, class_ "font-medium text-textStrong hover:text-textBrand hover:underline break-all"] $ toHtml (repository.owner <> "/" <> repository.repo)
+                        p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ fromMaybe (Git.hostLabel repository.host) repository.apiBase
+                    )
+                , Table.col "Services" (\repository -> span_ [class_ "text-xs text-textWeak break-words"] $ toHtml $ if any (\(key, m) -> key == repositoryKey repository && isNothing m.service) linked then "All services" else case servicesFor repository of [] -> "No services linked"; services -> T.intercalate ", " services)
+                , Table.col
+                    "Source context"
+                    ( \repository ->
+                        if repository.sourceEnabled && any ((== repositoryKey repository) . fst) linked
+                          then colorChip_ SuccessBadge "circle-check" "Active"
+                          else colorChip_ NeutralBadge "circle-info" $ if repository.sourceEnabled then "Needs setup" else "Off"
+                    )
+                , Table.col
+                    "Production impact reviews"
+                    ( \repository -> case find (\s -> repository.host == Git.GitHub && isNothing repository.apiBase && s.owner == T.toLower repository.owner && s.repo == T.toLower repository.repo) settings of
+                          Just s | s.enabled && not (null $ servicesFor repository) -> colorChip_ SuccessBadge "circle-check" "Enabled"
+                          Just s | s.enabled -> colorChip_ WarningBadge "circle-info" "Link a service"
+                          Just _ -> colorChip_ NeutralBadge "circle-info" "Off"
+                          Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
+                    )
+                , Table.col
+                    "Configuration sync"
+                    ( \repository -> case find (\s -> (s.host, s.apiBase, s.owner, s.repo) == repositoryKey repository) syncs of
+                          Just s | s.id `elem` conflicts -> colorChip_ WarningBadge "circle-exclamation" "Conflicts need input"
+                          Just s | s.exportPaused -> colorChip_ WarningBadge "circle-info" "Export paused"
+                          Just s | isJust s.lastExportHash -> colorChip_ WarningBadge "code-branch" "Changes pending"
+                          Just s | Just err <- s.lastError -> colorChip_ ErrorBadge "circle-exclamation" "Sync failed" >> p_ [class_ "text-xs text-textError break-words"] (toHtml err.message)
+                          Just s | not s.syncEnabled -> colorChip_ NeutralBadge "circle-info" "Paused"
+                          Just s | isJust s.announcedRevision -> colorChip_ WarningBadge "circle-info" "Changes pending"
+                          Just s | isJust s.lastRevision -> colorChip_ SuccessBadge "circle-check" "Synced"
+                          Just _ -> colorChip_ NeutralBadge "circle-info" "Awaiting first sync"
+                          Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
+                    )
+                , Table.col "" (const $ span_ [Aria.hidden_ "true", class_ "flex justify-end text-iconNeutral"] $ faSprite_ "chevron-right" "regular" "h-3.5 w-3.5")
+                ]
+            , Table.rows = V.fromList visible
+            , Table.features =
+                def
+                  { Table.search = Just Table.ClientSide
+                  , Table.searchPlaceholder = Just "Search repositories"
+                  , Table.rowLink = Just repositoryUrl
+                  , Table.zeroState =
+                      Just
+                        Table.ZeroState
+                          { Table.icon = "code-branch"
+                          , Table.title = maybe "Connect the repositories behind your services" (const "No repositories linked to this service") serviceM
+                          , Table.description = if canEdit then maybe "Link services to their code for source context and production impact reviews. You can also connect repositories that only contain dashboards." (const "Choose a repository, then link this service in Configure source context.") serviceM else "Ask a project editor to link services to their source repositories."
+                          , Table.action = Table.ESCustom $ when canEdit $ a_ [href_ (base <> maybe "/connect" (const "") serviceM), class_ "btn btn-sm btn-primary"] $ toHtml @Text $ maybe "Connect repositories" (const "Choose a repository") serviceM
+                          }
+                  }
+            }
     ReviewsPage -> do
       cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
       runs <- ImpactReviews.latestRuns pid
-      pure $ reviewHistory_ canEdit cfg runs
-  addRespHeaders $ bodyWrapper bw{pageTitle = "Repositories"} $ repositoryLayout_ pid tab serviceM canEdit canReadWiki content
-  where
-    overview_ :: Bool -> Maybe Text -> Maybe Text -> Text -> [CodeContext.CodeMapping] -> [GitSync.GitHubSync] -> [ImpactReviews.ReviewSettings] -> [GitSync.GitHubCredential] -> [GitSync.Repository] -> [GitSync.GitHubSyncId] -> Html ()
-    overview_ canEdit serviceM sampleM base mappings syncs settings credentials repositories conflicts = do
-      let linked = [((c.host, c.apiBase, m.owner, m.repo), m) | m <- mappings, c <- credentials, c.id == m.credentialId]
-      if null repositories
-        then div_ [class_ "rounded-xl border border-strokeWeak p-6 sm:p-8 space-y-3"] do
-          h2_ [class_ "font-semibold text-textStrong"] $ toHtml @Text $ maybe "Connect the repositories behind your services" (const "No repositories linked to this service") serviceM
-          p_ [class_ "text-sm text-textWeak max-w-xl"]
-            $ toHtml @Text
-            $ if canEdit
-              then maybe "Link services to their code for source context and production impact reviews. You can also connect repositories that only contain dashboards." (const "Choose a repository, then link this service in Configure source context.") serviceM
-              else "Ask a project editor to link services to their source repositories."
-          when canEdit $ a_ [href_ (base <> maybe "/connect" (const "") serviceM), class_ "btn btn-sm btn-primary"] $ toHtml @Text $ maybe "Connect repositories" (const "Choose a repository") serviceM
-        else div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ repositories \repository -> do
-          let host = repository.host
-              origin = repository.apiBase
-              owner = repository.owner
-              repo = repository.repo
-              key = (host, origin, owner, repo)
-              services = sort . ordNub $ mapMaybe (\(repoKey, m) -> guard (repoKey == key) *> m.service) linked
-              reviewM = find (\s -> host == Git.GitHub && isNothing origin && s.owner == T.toLower owner && s.repo == T.toLower repo) settings
-              sync = find (\s -> (s.host, s.apiBase, s.owner, s.repo) == key) syncs
-          article_ [class_ "grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))]"] do
-            div_ [class_ "min-w-0 space-y-2"] do
-              a_ [href_ (base <> "/" <> repository.id.toText <> foldMap (\sample -> "/source?sample=" <> decodeUtf8 (urlEncode True $ encodeUtf8 sample)) sampleM), class_ "font-medium text-sm text-textBrand break-all hover:underline"] $ toHtml (owner <> "/" <> repo)
-              p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ fromMaybe (Git.hostLabel host) origin
-              p_ [class_ "text-xs text-textWeak break-words"] $ toHtml $ if any (\(repoKey, m) -> repoKey == key && isNothing m.service) linked then "All services" else if null services then "No services linked" else T.intercalate ", " services
+      pure $ div_ [class_ "space-y-4"] do
+        p_ [class_ "text-sm text-textWeak max-w-2xl"] "Pull request reviews connect code changes to production telemetry. Configure reviews and evidence sharing in each repository."
+        toHtml
+          $ Table.Table
+            { Table.config = def{Table.elemID = "pullRequestsTable", Table.renderAsTable = True}
+            , Table.columns =
+                [ Table.col "Repository" (\run -> span_ [class_ "font-medium text-textStrong break-all"] $ toHtml (run.owner <> "/" <> run.repo))
+                , Table.col
+                    "Pull request"
+                    ( \run -> a_ [href_ $ "https://github.com/" <> run.owner <> "/" <> run.repo <> "/pull/" <> show run.number, target_ "_blank", rel_ "noopener noreferrer", class_ "inline-flex items-center gap-2 text-textBrand hover:underline whitespace-nowrap tabular-nums", Aria.label_ $ "Open pull request #" <> show run.number <> " in " <> run.owner <> "/" <> run.repo] do
+                        toHtml @Text $ "#" <> show run.number
+                        faSprite_ "arrow-up-right-from-square" "regular" "h-3 w-3"
+                    )
+                , Table.col
+                    "Status"
+                    ( \run -> case run.state of
+                        ImpactReviews.Superseded -> span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak"] $ faSprite_ "clock-rotate-left" "regular" "h-3 w-3" >> "Superseded"
+                        ImpactReviews.Completed -> colorChip_ SuccessBadge "circle-check" "Completed"
+                        ImpactReviews.Incomplete -> colorChip_ WarningBadge "circle-exclamation" "Incomplete"
+                        ImpactReviews.Queued -> colorChip_ NeutralBadge "clock" "Queued"
+                        ImpactReviews.Reviewing -> colorChip_ BrandBadge "arrows-rotate" "Reviewing"
+                    )
+                , Table.col "Revision" (\run -> code_ [class_ "text-xs text-textWeak", title_ run.revision] $ toHtml $ T.take 8 run.revision)
+                , Table.col "Reviewed" (\run -> span_ [class_ "whitespace-nowrap text-xs text-textWeak tabular-nums"] $ localTimeFmt_ "MMM d, HH:mm" run.createdAt)
+                , Table.col "" (\run -> button_ [type_ "button", class_ "btn btn-sm btn-ghost btn-square -me-2", onclick_ $ "document.getElementById('review-" <> run.id.toText <> "').showModal()", Aria.label_ $ "View review for " <> run.owner <> "/" <> run.repo <> " #" <> show run.number] $ faSprite_ "chevron-right" "regular" "h-3.5 w-3.5")
+                ]
+            , Table.rows = V.fromList runs
+            , Table.features =
+                def
+                  { Table.search = Just Table.ClientSide
+                  , Table.searchPlaceholder = Just "Search pull requests"
+                  , Table.rowAttrs = Just \run -> [class_ "cursor-pointer", term "_" $ "on click if not event.target.closest('a, button') call #review-" <> run.id.toText <> ".showModal() end"]
+                  , Table.zeroState =
+                      Just
+                        Table.ZeroState
+                          { Table.icon = "code-branch"
+                          , Table.title = "No pull requests reviewed yet"
+                          , Table.description = "Link a GitHub repository and its services to review pull requests with production telemetry."
+                          , Table.action = Table.ESCustom $ a_ [href_ $ "/p/" <> pid.toText <> "/repositories", class_ "btn btn-sm btn-primary"] "Configure repositories"
+                          }
+                  }
+            }
+        forM_ runs \run -> term "dialog" [id_ $ "review-" <> run.id.toText, Aria.labelledby_ $ "review-title-" <> run.id.toText, class_ "modal overscroll-contain"] do
+          div_ [class_ "modal-box w-full max-w-4xl space-y-5 p-6"] do
             div_ [class_ "space-y-2"] do
-              p_ [class_ "text-xs font-medium text-textWeak"] "Source context"
-              if repository.sourceEnabled && any ((== key) . fst) linked
-                then colorChip_ SuccessBadge "circle-check" "Active"
-                else colorChip_ NeutralBadge "circle-info" $ if repository.sourceEnabled then "Needs setup" else "Off"
-            div_ [class_ "space-y-2"] do
-              p_ [class_ "text-xs font-medium text-textWeak"] "Production impact reviews"
-              case reviewM of
-                Just s | s.enabled && not (null services) -> colorChip_ SuccessBadge "circle-check" "Enabled"
-                Just s | s.enabled -> colorChip_ WarningBadge "circle-info" "Link a service"
-                Just _ -> colorChip_ NeutralBadge "circle-info" "Off"
-                Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
-            div_ [class_ "space-y-2"] do
-              p_ [class_ "text-xs font-medium text-textWeak"] "Configuration sync"
-              case sync of
-                Just s | s.id `elem` conflicts -> colorChip_ WarningBadge "circle-exclamation" "Conflicts need input"
-                Just s | s.exportPaused -> colorChip_ WarningBadge "circle-info" "Export paused"
-                Just s | isJust s.lastExportHash -> colorChip_ WarningBadge "code-branch" "Changes pending"
-                Just s | Just err <- s.lastError -> colorChip_ ErrorBadge "circle-exclamation" "Sync failed" >> p_ [class_ "text-xs text-textError break-words"] (toHtml err.message)
-                Just s | not s.syncEnabled -> colorChip_ NeutralBadge "circle-info" "Paused"
-                Just s | isJust s.announcedRevision -> colorChip_ WarningBadge "circle-info" "Changes pending"
-                Just s | isJust s.lastRevision -> colorChip_ SuccessBadge "circle-check" "Synced"
-                Just _ -> colorChip_ NeutralBadge "circle-info" "Awaiting first sync"
-                Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
-
-    reviewHistory_ :: Bool -> EnvConfig -> [ImpactReviews.ReviewRun] -> Html ()
-    reviewHistory_ canEdit cfg runs = div_ [class_ "space-y-4"] do
-      h2_ [class_ "text-base font-semibold text-textStrong"] "Production impact reviews"
-      p_ [class_ "text-sm text-textWeak max-w-2xl"] "Advisory pull request reviews connect code changes to this project's production telemetry. Open a repository to configure reviews and evidence sharing."
-      when (null runs) $ div_ [class_ "rounded-xl border border-strokeWeak p-5 space-y-2"] do
-        p_ [class_ "text-sm font-medium text-textStrong"] "No pull requests reviewed yet"
-        p_ [class_ "text-sm text-textWeak"] "Link a GitHub repository and its services to receive reviews when ready pull requests are opened or updated."
-      forM_ runs \run -> details_ [class_ "rounded-lg border border-strokeWeak p-4"] do
-        summary_ [class_ "cursor-pointer flex flex-wrap items-center gap-2 text-sm text-textStrong"] do
-          span_ [class_ "font-medium break-all"] $ toHtml (run.owner <> "/" <> run.repo <> " #" <> show run.number)
-          colorChip_ (case run.state of ImpactReviews.Completed -> SuccessBadge; ImpactReviews.Incomplete -> WarningBadge; ImpactReviews.Queued -> NeutralBadge; ImpactReviews.Reviewing -> BrandBadge; ImpactReviews.Superseded -> NeutralBadge) "code-branch" (show run.state)
-          code_ [class_ "text-xs text-textWeak"] $ toHtml $ T.take 8 run.revision
-        whenJust run.error $ p_ [class_ "mt-2 text-sm text-textError break-words"] . toHtml
-        whenJust run.result \value -> case AE.fromJSON value of
-          AE.Error _ -> p_ [class_ "mt-2 text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
-          AE.Success result -> div_ [class_ "prose prose-sm mt-3 max-w-none"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run True result)
-        when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-sm btn-ghost mt-3", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph"] "Rerun review"
+              h2_ [id_ $ "review-title-" <> run.id.toText, class_ "text-lg font-semibold text-textStrong break-words"] $ toHtml (run.owner <> "/" <> run.repo <> " #" <> show run.number)
+              div_ [class_ "flex flex-wrap items-center gap-3 text-xs text-textWeak"] do
+                toHtml @Text $ "Review " <> show run.state
+                code_ [title_ run.revision] $ toHtml $ T.take 8 run.revision
+            whenJust run.error $ p_ [class_ "text-sm text-textError break-words"] . toHtml
+            case run.result of
+              Nothing -> p_ [class_ "text-sm text-textWeak"] $ toHtml @Text case run.state of
+                ImpactReviews.Queued -> "This review is queued."
+                ImpactReviews.Reviewing -> "This review is in progress."
+                ImpactReviews.Superseded -> "A newer revision replaced this review."
+                ImpactReviews.Completed -> "No review result is available."
+                ImpactReviews.Incomplete -> "No review result is available."
+              Just value -> case AE.fromJSON value of
+                AE.Error _ -> p_ [class_ "text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
+                AE.Success result -> div_ [class_ "prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run True result)
+            div_ [class_ "flex flex-wrap justify-end gap-2 border-t border-strokeWeak pt-4"] do
+              form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Close"
+              when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [type_ "button", class_ "btn btn-sm btn-primary", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph"] "Rerun review"
+          form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close review"] "Close"
+  addRespHeaders $ bodyWrapper (repositoryBWConfig bw pid tab serviceM canEdit canReadWiki) $ repositoryLayout_ serviceM content
 
 
 data ReviewReadiness
@@ -512,7 +630,7 @@ repositoryGetH pid rid = do
   conflictVersions <- forM (filter (.conflicted) resources) $ \resource -> (resource.id,) <$> RepositorySync.localDefinition resource
   folderCandidates <- RepositorySync.folderCandidates pid
   analysis <- GitSync.getRepositoryAnalysis pid rid
-  addRespHeaders $ PageCtx bw{pageTitle = repository.owner <> "/" <> repository.repo} RepositoryGet{repository, mappings, dashboardSync, reviewReadiness, reviewSettings, resources, conflictVersions, folderCandidates, analysis, permission}
+  addRespHeaders $ PageCtx bw{prePageTitle = Just "Repositories", pageTitle = repository.owner <> "/" <> repository.repo, menuItem = Just "Repositories"} RepositoryGet{repository, mappings, dashboardSync, reviewReadiness, reviewSettings, resources, conflictVersions, folderCandidates, analysis, permission}
 
 
 newtype ConflictForm = ConflictForm {useGit :: Bool}
@@ -627,94 +745,108 @@ repositoryDeleteH pid rid = do
 
 
 instance ToHtml RepositoryGet where
-  toHtml page = section_ [id_ "repository-detail", class_ "mx-auto max-w-4xl space-y-8 px-4 py-6 sm:px-8 sm:py-8"] do
+  toHtml page = section_ [id_ "repository-detail", class_ "@container/repository w-full min-w-0 space-y-5 p-4 sm:p-6"] do
     let repository = page.repository
         base = "/p/" <> repository.projectId.toText <> "/repositories"
+        self = base <> "/" <> repository.id.toText
         canEdit = maybe False (>= ProjectMembers.PEdit) page.permission
-    a_ [href_ base, class_ "inline-flex items-center gap-2 text-sm text-textBrand hover:underline"] do
-      faSprite_ "arrow-left" "regular" "h-3 w-3"
-      "All repositories"
-    header_ [class_ "space-y-2"] do
-      h1_ [class_ "text-xl font-semibold text-textStrong break-all"] $ toHtml $ repository.owner <> "/" <> repository.repo
-      p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ fromMaybe (Git.hostLabel repository.host) repository.apiBase
+        post path attrs = form_ ([method_ "post", action_ (self <> path), hxPost_ (self <> path), hxTarget_ "#repository-detail", hxSelect_ "#repository-detail", hxSwap_ "outerMorph"] <> attrs)
+        syncLink = a_ [href_ (self <> "/dashboards"), class_ "btn btn-sm btn-outline"] $ if canEdit then "Configure sync" else "View sync"
+    header_ [class_ "flex flex-wrap items-center gap-x-6 gap-y-3"] do
+      div_ [class_ "min-w-0 space-y-2 break-words"] do
+        settingsH2_ $ repository.owner <> "/" <> repository.repo
+        p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ fromMaybe (Git.hostLabel repository.host) repository.apiBase
+      when canEdit $ post "/analyze" [] $ button_ [type_ "submit", class_ "btn btn-sm btn-outline gap-2"] do
+        faSprite_ "arrows-rotate" "regular" "h-3.5 w-3.5"
+        "Analyze repository"
+      when canEdit $ p_ [class_ "w-full max-w-[65ch] text-xs text-textWeak"] "Analysis matches this repository to services in your telemetry. The first run can link those services and turn on dashboard sync; existing settings are kept."
     whenJust (page.analysis >>= (.error)) $ \err -> p_ [role_ "status", class_ "text-sm text-textError"] $ toHtml $ "Setup needs attention: " <> err
     whenJust (page.analysis >>= (.suggestions)) $ \suggestions -> when (null page.mappings) $ div_ [class_ "rounded-xl border border-strokeWeak p-4 space-y-2"] do
       p_ [class_ "text-sm font-medium text-textStrong"] "Service mapping needs input"
       p_ [class_ "text-sm text-textWeak break-words"] $ toHtml $ if null suggestions.services then "No service names have been observed yet. Link a service when its telemetry arrives." else "Observed services: " <> T.intercalate ", " (take 12 suggestions.services)
-    when canEdit $ form_ [method_ "post", action_ (base <> "/" <> repository.id.toText <> "/analyze"), hxPost_ (base <> "/" <> repository.id.toText <> "/analyze"), hxTarget_ "#repository-detail", hxSelect_ "#repository-detail", hxSwap_ "outerMorph"] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost"] "Analyze repository"
-    section_ [class_ "space-y-3"] do
-      h2_ [class_ "text-base font-semibold text-textStrong"] "Services and source context"
-      colorChip_ NeutralBadge "circle-info" $ if repository.sourceEnabled then "Source context enabled" else "Source context disabled"
-      when canEdit $ form_ [method_ "post", action_ (base <> "/" <> repository.id.toText <> "/source/enabled"), hxPost_ (base <> "/" <> repository.id.toText <> "/source/enabled"), hxTarget_ "#repository-detail", hxSelect_ "#repository-detail", hxSwap_ "outerMorph"] do
-        input_ [type_ "hidden", name_ "enabled", value_ (if repository.sourceEnabled then "false" else "true")]
-        button_ [type_ "submit", class_ "btn btn-sm btn-ghost"] $ if repository.sourceEnabled then "Disable source context" else "Enable source context"
-
-      if null page.mappings
-        then p_ [class_ "text-sm text-textWeak"] "No source paths are linked. Link a service to read the failing code directly from its stack trace."
-        else div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ page.mappings \mapping -> div_ [class_ "p-4 space-y-2"] do
-          p_ [class_ "text-sm font-medium text-textStrong break-words"] $ toHtml $ fromMaybe "All services" mapping.service
-          p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ scopeLabel mapping
-          code_ [class_ "text-xs text-textWeak break-all"] $ toHtml mapping.ref
-      a_ [href_ (base <> "/" <> repository.id.toText <> "/source"), class_ "btn btn-sm btn-ghost"] $ if canEdit then "Configure source context" else "View source context"
-    section_ [class_ "space-y-3"] do
-      h2_ [class_ "text-base font-semibold text-textStrong"] "Production impact reviews"
-      case page.reviewReadiness of
-        ReviewReady settings -> do
-          colorChip_ SuccessBadge "circle-check" "Ready for pull requests"
-          p_ [class_ "text-sm text-textWeak"] $ if settings.includeEvidence then "Reviews share production aggregates and links in GitHub." else "Reviews share links to production evidence in GitHub."
-        ReviewDisabled -> colorChip_ NeutralBadge "circle-info" "Reviews disabled"
-        ReviewNeedsService -> p_ [class_ "text-sm text-textWeak"] "Link a named service so reviews can find the production telemetry for this repository."
-        ReviewNeedsApp -> p_ [class_ "text-sm text-textWeak"] "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and configuration sync."
-        ReviewNeedsServer -> p_ [class_ "text-sm text-textWeak"] "An administrator must configure the GitHub App and webhook before automatic reviews can run."
-        ReviewUnsupportedHost -> p_ [class_ "text-sm text-textWeak"] "Automatic pull request reviews currently support GitHub.com. Source context and configuration sync remain available for this host."
-      when (canEdit && repository.host == Git.GitHub && isNothing repository.apiBase) $ form_ [method_ "post", action_ (base <> "/" <> repository.id.toText <> "/source/reviews"), hxPost_ (base <> "/" <> repository.id.toText <> "/source/reviews"), hxTarget_ "#repository-detail", hxSelect_ "#repository-detail", hxSwap_ "outerMorph", class_ "flex flex-wrap items-end gap-3"] do
-        input_ [type_ "hidden", name_ "owner", value_ repository.owner]
-        input_ [type_ "hidden", name_ "repo", value_ repository.repo]
-        label_ [class_ "space-y-1 text-sm text-textWeak"] do
-          span_ [class_ "block"] "PR reviews"
-          select_ [name_ "enabled", class_ "select select-sm"] $ forM_ ([(True, "Enabled"), (False, "Disabled")] :: [(Bool, Text)]) \(value, label) -> option_ ([value_ (if value then "true" else "false")] <> [selected_ "selected" | value == maybe False (.enabled) page.reviewSettings]) $ toHtml @Text label
-        label_ [class_ "space-y-1 text-sm text-textWeak"] do
-          span_ [class_ "block"] "Production evidence in GitHub"
-          select_ [name_ "includeEvidence", class_ "select select-sm"] $ forM_ ([(False, "Links only"), (True, "Aggregates and links")] :: [(Bool, Text)]) \(value, label) -> option_ ([value_ (if value then "true" else "false")] <> [selected_ "selected" | value == maybe False (.includeEvidence) page.reviewSettings]) $ toHtml @Text label
-        button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
-      div_ [class_ "flex flex-wrap gap-2"] do
-        a_ [href_ (base <> "?tab=reviews"), class_ "btn btn-sm btn-ghost"] "Review history"
-    section_ [class_ "space-y-3"] do
-      h2_ [class_ "text-base font-semibold text-textStrong"] "Dashboards and monitors"
-      case page.dashboardSync of
-        Nothing -> p_ [class_ "text-sm text-textWeak"] "Configuration sync is not configured. This repository remains connected for your team."
-        Just sync -> do
-          whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml . (.message)
-          p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ sync.branch <> " · " <> GitSync.getDashboardsPath sync
-          colorChip_ NeutralBadge "code-branch" $ if not sync.syncEnabled then "Disabled" else if sync.exportPaused then "Export paused" else if any (.conflicted) page.resources then "Conflicts need input" else if isJust sync.lastExportHash then "Changes proposed" else if isJust sync.lastRevision then "Synced" else "Preparing folder"
-          whenJust sync.pullRequestNumber $ \number -> a_ [href_ ("https://github.com/" <> sync.owner <> "/" <> sync.repo <> "/pull/" <> show number), target_ "_blank", rel_ "noopener noreferrer", class_ "text-sm text-textBrand hover:underline"] $ toHtml $ "Configuration PR #" <> show @Text number
-          p_ [class_ "text-sm text-textWeak"] "Monoscope edits are active immediately. Git changes apply after merge into the target branch. Dashboards and monitor definitions share this folder."
-          when (canEdit && sync.exportPaused) $ form_ [method_ "post", action_ (base <> "/" <> repository.id.toText <> "/resume"), hxPost_ (base <> "/" <> repository.id.toText <> "/resume"), hxTarget_ "#repository-detail", hxSelect_ "#repository-detail", hxSwap_ "outerMorph"] $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Resume export"
-          unless (null page.resources) $ ul_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ page.resources \resource -> li_ [class_ "flex flex-wrap items-center justify-between gap-3 p-3"] do
-            code_ [class_ "text-xs text-textStrong break-all"] $ toHtml resource.filePath
-            when resource.conflicted do
-              span_ [class_ "text-sm text-textWarning"] "Both versions changed"
-              details_ [class_ "w-full min-w-0 space-y-3"] do
-                summary_ [class_ "cursor-pointer text-sm text-textBrand"] "Compare versions"
-                div_ [class_ "grid min-w-0 gap-4 md:grid-cols-2"] $ for_ ([("Active in Monoscope", Yaml.encode . AE.toJSON <$> join (lookup resource.id page.conflictVersions)), ("Merged Git version", Yaml.encode <$> resource.remoteDefinition)] :: [(Text, Maybe ByteString)]) \(label, version) -> div_ [class_ "min-w-0 space-y-2"] do
-                  h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml label
-                  pre_ [class_ "max-h-80 overflow-auto rounded-lg bg-fillWeak p-3 text-xs text-textWeak"] $ toHtml @Text $ maybe "Deleted" decodeUtf8 version
-              when canEdit $ form_ [method_ "post", action_ (base <> "/" <> repository.id.toText <> "/resources/" <> resource.id.toText <> "/conflict"), hxPost_ (base <> "/" <> repository.id.toText <> "/resources/" <> resource.id.toText <> "/conflict"), hxTarget_ "#repository-detail", hxSelect_ "#repository-detail", hxSwap_ "outerMorph", class_ "flex gap-2"] do
-                button_ [type_ "submit", name_ "useGit", value_ "false", class_ "btn btn-sm btn-ghost"] "Keep Monoscope"
-                button_ [type_ "submit", name_ "useGit", value_ "true", class_ "btn btn-sm btn-ghost"] "Use Git"
-          when canEdit $ details_ [class_ "space-y-3"] do
-            summary_ [class_ "cursor-pointer text-sm text-textBrand"] "Move existing resources into this folder"
-            for_ ([RepositorySync.Dashboard, RepositorySync.Query, RepositorySync.Uptime, RepositorySync.Cron] :: [RepositorySync.ResourceKind]) \kind -> do
-              let candidates = filter ((== kind) . (.kind)) page.folderCandidates
-              unless (null candidates) $ form_ [method_ "post", action_ (base <> "/" <> repository.id.toText <> "/folder"), hxPost_ (base <> "/" <> repository.id.toText <> "/folder"), hxTarget_ "#repository-detail", hxSelect_ "#repository-detail", hxSwap_ "outerMorph", class_ "flex flex-wrap items-end gap-2"] do
-                input_ [type_ "hidden", name_ "kind", value_ $ T.toLower $ show kind]
-                formSelectField_ FieldSm (show kind) "localId" True $ for_ candidates \candidate -> option_ [value_ $ show candidate.localId] $ toHtml candidate.title
-                button_ [type_ "submit", class_ "btn btn-sm btn-ghost"] "Move into folder"
-      a_ [href_ (base <> "/" <> repository.id.toText <> "/dashboards"), class_ "btn btn-sm btn-ghost"] $ if canEdit then "Configure sync" else "View sync"
-    when canEdit $ section_ [class_ "space-y-3 border-t border-strokeWeak pt-6"] do
-      h2_ [class_ "text-base font-semibold text-textStrong"] "Remove connection"
-      p_ [class_ "max-w-2xl text-sm text-textWeak"] "Stop using this repository for source context, pull request reviews, and configuration sync. Dashboards and monitors stay local and review history is retained. Shared repository accounts remain connected."
-      button_ [type_ "button", onclick_ "document.getElementById('remove-repository-dialog').showModal()", class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak"] "Remove repository"
+    div_ [class_ "grid min-w-0 items-start gap-5 @min-[64rem]/repository:grid-cols-2"] do
+      section_ [class_ "min-w-0 @min-[64rem]/repository:col-start-1 @min-[64rem]/repository:row-start-1", Aria.label_ "Services and source context"]
+        $ panel_ Raised def{icon = Just "code-branch"} "Services and source context"
+        $ div_ [class_ "space-y-4"] do
+          bool (colorChip_ NeutralBadge "circle-info" "Disabled") (colorChip_ SuccessBadge "circle-check" "Enabled") repository.sourceEnabled
+          if null page.mappings
+            then p_ [class_ "text-sm text-textWeak"] "No source paths are linked. Link a service to read the failing code directly from its stack trace."
+            else div_ [class_ "divide-y divide-strokeWeak rounded-lg bg-fillWeak"] $ forM_ page.mappings \mapping -> div_ [class_ "flex flex-wrap items-start justify-between gap-3 p-3"] do
+              div_ [class_ "min-w-0 space-y-1"] do
+                p_ [class_ "text-sm font-medium text-textStrong break-words"] $ toHtml $ fromMaybe "All services" mapping.service
+                p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ scopeLabel mapping
+              code_ [class_ "rounded bg-bgBase px-2 py-1 text-xs text-textWeak break-all"] $ toHtml mapping.ref
+          div_ [class_ "flex flex-wrap items-center gap-2"] do
+            a_ [href_ (self <> "/source"), class_ "btn btn-sm btn-outline"] $ if canEdit then "Configure source context" else "View source context"
+            when canEdit $ post "/source/enabled" [] do
+              input_ [type_ "hidden", name_ "enabled", value_ (if repository.sourceEnabled then "false" else "true")]
+              button_ [type_ "submit", class_ "btn btn-sm btn-ghost"] $ if repository.sourceEnabled then "Disable source context" else "Enable source context"
+      section_ [class_ "min-w-0 @min-[64rem]/repository:col-start-2 @min-[64rem]/repository:row-start-1 @min-[64rem]/repository:row-span-2", Aria.label_ "Production impact reviews"]
+        $ panel_ Raised def{icon = Just "code-pull-request"} "Production impact reviews"
+        $ div_ [class_ "space-y-4"] do
+          let setupRequired = (,True) . callout_ WarningBadge (Just "Setup required")
+              (readiness, blocked) = case page.reviewReadiness of
+                ReviewReady settings -> (,False) do
+                  colorChip_ SuccessBadge "circle-check" "Ready for pull requests"
+                  p_ [class_ "text-sm text-textWeak"] $ if settings.includeEvidence then "Reviews share production aggregates and links in GitHub." else "Reviews share links to production evidence in GitHub."
+                ReviewDisabled -> (colorChip_ NeutralBadge "circle-info" "Reviews disabled", False)
+                ReviewNeedsService -> setupRequired "Link a named service so reviews can find the production telemetry for this repository."
+                ReviewNeedsApp -> setupRequired "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and configuration sync."
+                ReviewNeedsServer -> setupRequired "An administrator must configure the GitHub App and webhook before automatic reviews can run."
+                ReviewUnsupportedHost -> (callout_ NeutralBadge (Just "Unavailable") "Automatic pull request reviews currently support GitHub.com. Source context and configuration sync remain available for this host.", True)
+          readiness
+          when (canEdit && repository.host == Git.GitHub && isNothing repository.apiBase) $ post "/source/reviews" [class_ "flex flex-wrap items-end gap-3"] do
+            input_ [type_ "hidden", name_ "owner", value_ repository.owner]
+            input_ [type_ "hidden", name_ "repo", value_ repository.repo]
+            formSelectField_ FieldSm "Automatic pull request reviews" "enabled" False
+              $ options_ (Just $ bool "false" "true" $ maybe False (.enabled) page.reviewSettings) [("true", "On"), ("false", "Off")]
+            formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False
+              $ options_ (Just $ bool "false" "true" $ maybe False (.includeEvidence) page.reviewSettings) [("false", "Links only"), ("true", "Aggregates and links")]
+            button_ [type_ "submit", class_ $ "btn btn-sm mb-1 " <> bool "btn-primary" "btn-outline" blocked] "Save review settings"
+            when blocked $ p_ [class_ "w-full text-xs text-textWeak"] "Saved settings take effect once setup is complete."
+          a_ [href_ (base <> "?tab=reviews"), class_ "btn btn-sm btn-outline"] "Review history"
+      section_ [class_ "min-w-0 @min-[64rem]/repository:col-start-1 @min-[64rem]/repository:row-start-2", Aria.label_ "Dashboards and monitors"]
+        $ panel_ Raised def{icon = Just "dashboard"} "Dashboards and monitors"
+        $ div_ [class_ "space-y-4"] do
+          case page.dashboardSync of
+            Nothing -> div_ [class_ "space-y-3"] do
+              p_ [class_ "text-sm text-textWeak"] "Keep dashboards and monitors as files in this repository. Monoscope proposes changes as pull requests, and merged changes apply automatically."
+              syncLink
+            Just sync -> do
+              whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml . (.message)
+              p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ sync.branch <> " · " <> GitSync.getDashboardsPath sync
+              colorChip_ NeutralBadge "code-branch" $ if not sync.syncEnabled then "Disabled" else if sync.exportPaused then "Export paused" else if any (.conflicted) page.resources then "Conflicts need input" else if isJust sync.lastExportHash then "Changes proposed" else if isJust sync.lastRevision then "Synced" else "Preparing folder"
+              whenJust sync.pullRequestNumber $ \number -> a_ [href_ ("https://github.com/" <> sync.owner <> "/" <> sync.repo <> "/pull/" <> show number), target_ "_blank", rel_ "noopener noreferrer", class_ "text-sm text-textBrand hover:underline"] $ toHtml $ "Configuration PR #" <> show @Text number
+              p_ [class_ "text-sm text-textWeak"] "Monoscope edits are active immediately. Git changes apply after merge into the target branch. Dashboards and monitor definitions share this folder."
+              syncLink
+              when (canEdit && sync.exportPaused) $ post "/resume" [] $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Resume export"
+              when canEdit $ details_ [class_ "space-y-3"] do
+                summary_ [class_ "cursor-pointer text-sm text-textBrand"] "Move existing resources into this folder"
+                for_ ([RepositorySync.Dashboard, RepositorySync.Query, RepositorySync.Uptime, RepositorySync.Cron] :: [RepositorySync.ResourceKind]) \kind -> do
+                  let candidates = filter ((== kind) . (.kind)) page.folderCandidates
+                  unless (null candidates) $ post "/folder" [class_ "flex flex-wrap items-end gap-2"] do
+                    input_ [type_ "hidden", name_ "kind", value_ $ T.toLower $ show kind]
+                    formSelectField_ FieldSm (show kind) "localId" True $ for_ candidates \candidate -> option_ [value_ $ show candidate.localId] $ toHtml candidate.title
+                    button_ [type_ "submit", class_ "btn btn-sm btn-ghost"] "Move into folder"
+    unless (null page.resources)
+      $ panel_ Raised def{icon = Just "dashboard"} "Synced resources"
+      $ ul_ [class_ "divide-y divide-strokeWeak"]
+      $ forM_ page.resources \resource -> li_ [class_ "flex flex-wrap items-center justify-between gap-3 p-3"] do
+        code_ [class_ "text-xs text-textStrong break-all"] $ toHtml resource.filePath
+        when resource.conflicted do
+          span_ [class_ "text-sm text-textWarning"] "Both versions changed"
+          details_ [class_ "w-full min-w-0 space-y-3"] do
+            summary_ [class_ "cursor-pointer text-sm text-textBrand"] "Compare versions"
+            div_ [class_ "grid min-w-0 gap-4 md:grid-cols-2"] $ for_ ([("Active in Monoscope", Yaml.encode . AE.toJSON <$> join (lookup resource.id page.conflictVersions)), ("Merged Git version", Yaml.encode <$> resource.remoteDefinition)] :: [(Text, Maybe ByteString)]) \(label, version) -> div_ [class_ "min-w-0 space-y-2"] do
+              h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml label
+              pre_ [class_ "max-h-80 overflow-auto rounded-lg bg-fillWeak p-3 text-xs text-textWeak"] $ toHtml @Text $ maybe "Deleted" decodeUtf8 version
+          when canEdit $ post ("/resources/" <> resource.id.toText <> "/conflict") [class_ "flex gap-2"] do
+            button_ [type_ "submit", name_ "useGit", value_ "false", class_ "btn btn-sm btn-ghost"] "Keep Monoscope"
+            button_ [type_ "submit", name_ "useGit", value_ "true", class_ "btn btn-sm btn-ghost"] "Use Git"
+    when canEdit $ panel_ Raised def{icon = Just "link-slash"} "Remove connection" $ do
+      div_ [class_ "space-y-3"] do
+        p_ [class_ "max-w-[65ch] text-sm leading-relaxed text-textWeak"] "Stop using this repository for source context, pull request reviews, and configuration sync. Dashboards and monitors stay local and review history is retained. Shared repository accounts remain connected."
+        button_ [type_ "button", onclick_ "document.getElementById('remove-repository-dialog').showModal()", class_ "btn btn-sm btn-outline text-textError hover:bg-fillError-weak"] "Remove repository"
       term "dialog" [id_ "remove-repository-dialog", Aria.labelledby_ "remove-repository-title", Aria.describedby_ "remove-repository-description", class_ "modal overscroll-contain"] do
         div_ [class_ "modal-box space-y-4 p-6"] do
           h2_ [id_ "remove-repository-title", class_ "text-lg font-semibold text-textStrong break-all"] $ toHtml $ "Remove " <> repository.owner <> "/" <> repository.repo <> "?"
@@ -722,7 +854,7 @@ instance ToHtml RepositoryGet where
           div_ [id_ "remove-repository-feedback"] ""
           div_ [class_ "flex flex-wrap justify-end gap-2"] do
             form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Cancel"
-            button_ [type_ "button", hxDelete_ (base <> "/" <> repository.id.toText), hxTarget_ "#remove-repository-feedback", hxSwap_ "innerHTML", term "hx-disable" "this", hxIndicator_ "#remove-repository-indicator", class_ "btn btn-sm bg-fillError-strong text-textInverse-strong hover:opacity-90 gap-2"] do
+            button_ [type_ "button", hxDelete_ self, hxTarget_ "#remove-repository-feedback", hxSwap_ "innerHTML", term "hx-disable" "this", hxIndicator_ "#remove-repository-indicator", class_ "btn btn-sm bg-fillError-strong text-textInverse-strong hover:opacity-90 gap-2"] do
               "Remove repository"
               htmxIndicator_ "remove-repository-indicator" LdXS
         form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Cancel removal"] "Close"
@@ -741,8 +873,7 @@ repositorySourceGetH pid rid cid sample = do
   (_, _, bw) <- mkPageCtx pid
   repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
   content <- codeMappingsContent pid sample cid (Just repository)
-  addRespHeaders $ bodyWrapper bw{pageTitle = "Source context"} $ section_ [class_ "mx-auto max-w-4xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
-    a_ [href_ ("/p/" <> pid.toText <> "/repositories/" <> rid.toText), class_ "text-sm text-textBrand hover:underline"] $ toHtml $ repository.owner <> "/" <> repository.repo
+  addRespHeaders $ bodyWrapper bw{prePageTitle = Just "Repositories", pageTitle = repository.owner <> "/" <> repository.repo, pageTitleUrl = Just $ "/p/" <> pid.toText <> "/repositories/" <> rid.toText, pageTitleSuffix = Just "Source context", menuItem = Just "Repositories"} $ section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
     header_ [class_ "space-y-2"] do
       h1_ [class_ "text-xl font-semibold text-textStrong"] "Source context"
       p_ [class_ "text-sm text-textWeak max-w-2xl"] "Link this repository to the services it builds. Stack traces and pull request reviews use these mappings to find the right code and production telemetry."
@@ -821,7 +952,9 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
   authConfig <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
   pure $ div_ [class_ "space-y-6"] do
     unless canEdit $ p_ [class_ "text-sm text-textWeak"] "A project editor can configure source context and pull request reviews."
-    unless (null mappings) $ div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ mappings (mappingRow_ canEdit)
+    unless (null mappings) $ section_ [class_ "space-y-3 rounded-xl border border-strokeWeak p-4 sm:p-5"] do
+      h2_ [class_ "text-base font-semibold text-textStrong"] "Linked services"
+      div_ [class_ "divide-y divide-strokeWeak rounded-lg bg-fillWeak"] $ forM_ mappings (mappingRow_ canEdit)
     when (canEdit && not (null accounts) && isNothing repositoryM)
       $ form_
         ( [ action_ editorUrl
@@ -844,8 +977,8 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
               ([value_ account.id.toText] <> [selected_ "selected" | Just account.id == ((.id) <$> credM)])
               $ toHtml
               $ account.account
-              <> " · "
-              <> fromMaybe (Git.hostLabel account.host) account.apiBase
+                <> " · "
+                <> fromMaybe (Git.hostLabel account.host) account.apiBase
         htmxIndicator_ "code-account-indicator" LdXS
     when canEdit $ case credM of
       Nothing | null accounts -> do
@@ -919,7 +1052,7 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
     addMappingForm_ :: [Git.GitRepo] -> GitSync.GitHubCredential -> Html ()
     addMappingForm_ repos credential =
       form_
-        ( [ class_ "pt-4 space-y-3 border-t border-strokeWeak"
+        ( [ class_ "space-y-4 rounded-xl border border-strokeWeak bg-bgBase p-4 sm:p-5"
           , hxPost_ postUrl
           , hxTarget_ "#code-mappings-content"
           , hxIndicator_ "#code-mapping-indicator"
@@ -927,8 +1060,9 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
             <> scopedSwap
         )
         $ do
+          h2_ [class_ "text-base font-semibold text-textStrong"] "Link a service"
           input_ [type_ "hidden", name_ "credentialId", value_ credential.id.toText]
-          div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-3"] do
+          div_ [class_ "grid grid-cols-1 gap-4 sm:grid-cols-2"] do
             -- Each option carries its own default branch, so the Branch field below can fill
             -- itself in and a repo whose trunk is not called "main" needs no correction.
             case repositoryM of
@@ -1027,7 +1161,7 @@ repositoryConnectPage projectId cid = do
   selectedAccount <- codeContextCredential projectId cid
   repositories <- maybe (pure $ Right []) (credentialRepos Nothing) selectedAccount
   let credential = find (\account -> Just account.id == ((.id) <$> selectedAccount)) accounts
-  pure $ PageCtx bw{pageTitle = "Connect repositories"} RepositoryConnectGet{projectId, accounts, credential, repositories, selected = [], connectionError = Nothing}
+  pure $ PageCtx bw{prePageTitle = Just "Repositories", pageTitle = "Connect repositories", menuItem = Just "Repositories"} RepositoryConnectGet{projectId, accounts, credential, repositories, selected = [], connectionError = Nothing}
 
 
 repositoryConnectPostH :: Projects.ProjectId -> Maybe GitSync.GitHubCredentialId -> RepositoryConnectForm -> ATAuthCtx (RespHeaders (PageCtx RepositoryConnectGet))
@@ -1056,14 +1190,13 @@ repositoryConnectPostH pid cid form = do
 
 
 instance ToHtml RepositoryConnectGet where
-  toHtml page = section_ [class_ "mx-auto max-w-4xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
+  toHtml page = section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
     let base = "/p/" <> page.projectId.toText <> "/repositories"
         connectionUrl = base <> "/connect" <> foldMap (\c -> "?credentialId=" <> c.id.toText) page.credential
-    a_ [href_ base, class_ "text-sm text-textBrand hover:underline"] "All repositories"
     header_ [class_ "space-y-2"] do
       h1_ [class_ "text-xl font-semibold text-textStrong"] "Connect repositories"
       p_ [class_ "text-sm text-textWeak max-w-2xl"] "Choose repositories to add. Monoscope analyzes their services and enables source context, PR reviews, and dashboard and monitor sync where setup is clear. This can post reviews and open configuration PRs. You can disable each capability at any time."
-    div_ [id_ "repository-connect-content", class_ "space-y-5"] do
+    div_ [id_ "repository-connect-content", class_ "space-y-5 rounded-xl border border-strokeWeak bg-bgBase p-4 sm:p-5"] do
       unless (null page.accounts) $ form_
         [action_ (base <> "/connect"), method_ "get", hxGet_ (base <> "/connect"), hxTrigger_ "change", hxPushUrl_ "true", hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-account-indicator", class_ "space-y-2"]
         do
@@ -1093,8 +1226,8 @@ instance ToHtml RepositoryConnectGet where
                 "Connect selected repositories"
                 htmxIndicator_ "repository-connect-indicator" LdXS
           whenJust account.installationId $ installationSettingsLink_ . GitSync.installationSettingsUrl
-      a_ [href_ ("/p/" <> page.projectId.toText <> "/settings/git-sync/install?to=code"), class_ "btn btn-sm btn-ghost"] "Connect GitHub account"
-      p_ [class_ "text-xs text-textWeak"] do
+      a_ [href_ ("/p/" <> page.projectId.toText <> "/settings/git-sync/install?to=code"), class_ "btn btn-sm btn-outline"] "Connect GitHub account"
+      p_ [class_ "border-t border-strokeWeak pt-4 text-xs text-textWeak"] do
         "Using another Git host or a repository token? "
         a_ [href_ (base <> "/connect/token"), class_ "text-textBrand underline underline-offset-2"] "Connect with a token"
   toHtmlRaw = toHtml
@@ -1125,7 +1258,7 @@ repositoryTokenPage :: Projects.ProjectId -> ATAuthCtx (PageCtx RepositoryTokenG
 repositoryTokenPage pid = do
   requireReviewWrite pid
   (_, _, bw) <- mkPageCtx pid
-  pure $ PageCtx bw{pageTitle = "Connect with a token"} $ RepositoryTokenGet pid Git.GitHub Nothing "" Nothing
+  pure $ PageCtx bw{prePageTitle = Just "Repositories", pageTitle = "Connect repositories", pageTitleUrl = Just $ "/p/" <> pid.toText <> "/repositories/connect", pageTitleSuffix = Just "Token", menuItem = Just "Repositories"} $ RepositoryTokenGet pid Git.GitHub Nothing "" Nothing
 
 
 repositoryTokenGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx RepositoryTokenGet))
@@ -1171,13 +1304,12 @@ repositoryTokenPostH pid form = do
 
 
 instance ToHtml RepositoryTokenGet where
-  toHtml page = section_ [class_ "mx-auto max-w-2xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
+  toHtml page = section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
     let base = "/p/" <> page.projectId.toText <> "/repositories/connect"
-    a_ [href_ base, class_ "text-sm text-textBrand hover:underline"] "Back to repository connections"
     header_ [class_ "space-y-2"] do
       h1_ [class_ "text-xl font-semibold text-textStrong"] "Connect with a token"
       p_ [class_ "text-sm text-textWeak"] "Monoscope analyzes this repository and configures source context and configuration sync where supported. Automatic PR reviews require the GitHub App. You can disable each capability later."
-    div_ [id_ "repository-token-content", class_ "space-y-4"] do
+    div_ [id_ "repository-token-content", class_ "space-y-4 rounded-xl border border-strokeWeak bg-bgBase p-4 sm:p-5"] do
       whenJust page.connectionError $ p_ [role_ "alert", class_ "text-sm text-textError break-words"] . toHtml
       form_ [action_ (base <> "/token"), method_ "post", hxPost_ (base <> "/token"), hxTarget_ "#repository-token-content", hxSelect_ "#repository-token-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-token-indicator", class_ "space-y-4"] do
         formSelectField_ FieldSm "Git host" "host" True $ forM_ (universe @Git.GitHost) \host ->
@@ -1186,7 +1318,7 @@ instance ToHtml RepositoryTokenGet where
         formField_ FieldSm def{value = page.repoFullName, placeholder = "team/checkout"} "Full repository name" "repoFullName" True Nothing
         formField_ FieldSm def{inputType = "password", extraAttrs = [autocomplete_ "new-password"]} "Access token" "accessToken" True Nothing
         p_ [class_ "text-xs text-textWeak"] "The token needs read access to this repository. Dashboard sync will also need write access if you enable it later."
-        details_ [class_ "space-y-3"] do
+        details_ [class_ "space-y-3 rounded-lg bg-fillWeak p-3"] do
           summary_ [class_ "cursor-pointer text-sm text-textWeak"] "Replacing an existing connection?"
           label_ [class_ "flex items-start gap-3 text-sm text-textStrong"] do
             input_ [type_ "checkbox", name_ "replaceToken", value_ "true", class_ "checkbox checkbox-sm shrink-0"]
@@ -1273,7 +1405,7 @@ saveCodeMapping pid form = do
         hoistEither
           $ maybeToRight ("No file in " <> repoRef.repo <> "@" <> repoRef.ref <> " lines up with " <> sample <> ". Check the branch, or fill the paths in under Advanced.")
           $ (\(prefix, root, _) -> (prefix, root))
-          <$> CodeContext.deriveMapping (map (.path) entries) sample
+            <$> CodeContext.deriveMapping (map (.path) entries) sample
 
 
 codeMappingsDeleteH :: Projects.ProjectId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Html ()))
