@@ -2818,7 +2818,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxTarget hxTr
                   widgetCanvas_ pid ("tab-panel-" <> dashId.toText <> "-" <> show activeTabIdx) activeTab.widgets
       addRespHeaders $ navigationResponse tabTarget page fragment
   where
-    tabTarget = mfilter (== "dashboard-tabs-content") hxTarget
+    tabTarget = mfilter ("#dashboard-tabs-content" `T.isSuffixOf`) hxTarget -- htmx 4 sends `tag#id`
     navigation = OA.toAttribute @Text $ bool "initial" "tab" $ isJust tabTarget
 
 

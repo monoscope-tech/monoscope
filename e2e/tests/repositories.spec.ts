@@ -75,7 +75,7 @@ test('rerunning a pull request review replaces its view without nesting content'
   try {
     await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
     await page.goto(`/p/${pid}/repositories?tab=reviews`);
-    await page.getByText('team/checkout #1', { exact: true }).click();
+    await page.getByRole('button', { name: 'View review for team/checkout #1', exact: true }).click();
     await page.getByRole('button', { name: 'Rerun review', exact: true }).click();
     await expect(page.locator('#repository-content').getByText('Queued', { exact: true })).toBeVisible();
     await expect(page.locator('#repository-content')).toHaveCount(1);
@@ -93,7 +93,7 @@ test('repositories are discoverable and their views survive navigation and histo
   await page.goto(`${project}/settings/integrations`);
   await page.locator('#main-sidenav').getByRole('link', { name: 'Repositories', exact: true }).click();
   await expect(page).toHaveURL(`${project}/repositories`);
-  await expect(page.locator('#main-content').getByRole('heading', { name: 'Repositories', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Repositories', exact: true })).toBeVisible();
   const views = page.getByRole('navigation', { name: 'Repository views' });
   await views.getByRole('link', { name: 'Pull requests', exact: true }).click();
   await expect(page).toHaveURL(/repositories\?tab=reviews/);
@@ -487,7 +487,7 @@ test('service investigations reach only applicable repositories by keyboard in b
       const link = menu.getByRole('link', { name: 'View repositories', exact: true });
       await link.focus();
       await page.keyboard.press('Enter');
-      await expect(page.getByRole('heading', { name: `Repositories for ${service}`, exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { level: 1, name: `Repositories ${service}`, exact: true })).toBeVisible();
       const content = page.locator('#repository-content');
       await expect(content.locator('article')).toHaveCount(2);
       await expect(content.getByRole('link', { name: 'acme/checkout', exact: true })).toHaveAttribute('href', `/p/${pid}/repositories/${repositories[0]}`);
@@ -500,7 +500,7 @@ test('service investigations reach only applicable repositories by keyboard in b
       await page.getByRole('link', { name: 'All repositories', exact: true }).click();
       await expect(page.locator('#repository-content article')).toHaveCount(4);
       await page.goBack();
-      await expect(page.getByRole('heading', { name: `Repositories for ${service}`, exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { level: 1, name: `Repositories ${service}`, exact: true })).toBeVisible();
     }
     sql(`DELETE FROM projects.code_mappings WHERE project_id = '${pid}' AND service IS NULL;`);
     await page.goto(`/p/${pid}/repositories/services/unmapped`);
