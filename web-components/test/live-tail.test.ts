@@ -126,6 +126,23 @@ describe('Live Tail row buffer', () => {
     expect(list.renderItem).not.toBe(before);
   });
 
+  // lit-virtualizer rejects `layoutComplete` with 'disconnected' when torn down; Clear, a
+  // restart or navigating away mid-follow left that rejection unhandled.
+  test('liveTail_virtualizerRemovedMidFollow_leavesNoUnhandledRejection', async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onRejection);
+    const el = await mount();
+    el.appendRows(pushed(0, 200).map((r: any) => r.log));
+    await published();
+    await el.updateComplete;
+    el.remove();
+    for (let i = 0; i < 3; i++) await nextFrame();
+    await new Promise(r => setTimeout(r, 20));
+    process.off('unhandledRejection', onRejection);
+    expect(rejections).toEqual([]);
+  });
+
   test('caps the buffer and counts what it dropped', async () => {
     // 1200 rows into a 1000-row cap. The count matters as much as the cap: rows vanishing with
     // no number attached is indistinguishable from a filter that stopped matching.

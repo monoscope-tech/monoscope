@@ -579,7 +579,7 @@ export class LiveTail extends LitElement {
       const frame = this.followFrame;
       const list = this.querySelector<HTMLElement & { layoutComplete?: Promise<void> }>('[data-rows]');
       if (list?.layoutComplete) {
-        await Promise.race([list.layoutComplete, new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))]);
+        await Promise.race([list.layoutComplete.catch(() => {}), new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))]);
       }
       if (this.followFrame !== frame) return;
       if (this.followPinned && list?.isConnected) list.scrollTop = list.scrollHeight;
