@@ -1,5 +1,5 @@
 // This file will be executed before running tests
-import { vi } from 'vitest';
+import { afterAll, vi } from 'vitest';
 
 // main.ts runs at import time and calls these globals; stub them so any component
 // (e.g. log-list → widgets → main) is importable in jsdom without throwing.
@@ -109,3 +109,7 @@ globalThis.MonacoEnvironment = {
 
 // Canvas 2D context is provided realistically by `vitest-canvas-mock` (first
 // entry in setupFiles), so no hand-rolled getContext stub is needed here.
+
+// Disconnect whatever a file left mounted, so components clear their own timers before jsdom
+// is torn down; a LogList's chart poll otherwise fires against a missing `window`.
+afterAll(() => document.body.replaceChildren());

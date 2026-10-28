@@ -30,10 +30,7 @@ const childPayload = (ids: string[]) => ({
 const ids = (el: any) => el.spanListTree.map((r: any) => r.id);
 const shown = (el: any) => (el.virtualListItems as any[]).filter((i) => 'id' in i).map((i) => i.id);
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  document.body.innerHTML = '';
-});
+afterEach(() => vi.restoreAllMocks());
 
 describe('expanding a session', () => {
   test('fetches its events and shows them under the parent', async () => {
