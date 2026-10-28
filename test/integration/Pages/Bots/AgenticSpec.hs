@@ -9,6 +9,7 @@ import Data.Aeson.Lens (key, values, _Array, _String)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.IORef qualified as IORef
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Data.Time (UTCTime, addUTCTime)
@@ -16,7 +17,9 @@ import Data.UUID qualified as UUID
 import Effectful qualified as Eff
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Langchain.LLM.Core qualified as LLM
 import Lucid qualified
+import Models.Apis.Investigations (ToolCallInfo (..), ToolResult (..))
 import Models.Apis.Issues qualified as Issues
 import Pages.AIThreads qualified as AIThreads
 import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, getOpenAIModel)
@@ -118,7 +121,7 @@ spec = around withTestResources do
       it "assistantPages_defaultToAssistant" \tr -> do
         let convId = UUIDId UUID.nil
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing
         let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
         html `shouldSatisfy` T.isInfixOf "id=\"nav-view-ai\" class=\"sr-only\" checked"
 
@@ -126,7 +129,7 @@ spec = around withTestResources do
         let issueId = UUIDId UUID.nil :: Issues.IssueId
             convId = UUIDId issueId.unUUIDId
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTAnomaly})|]
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing
         let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
         html `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/issues/" <> issueId.toText <> "\"")
 
@@ -135,12 +138,51 @@ spec = around withTestResources do
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
         (_, conversationPage) <- testServant tr $ AIThreads.threadsGetH testPid
         (_, routinesPage) <- testServant tr $ AIThreads.routinesGetH testPid
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing
         let render = LT.toStrict . Lucid.renderText . Lucid.toHtml
             conversationHtml = render conversationPage
         all (`T.isInfixOf` conversationHtml) ["href=\"/p/" <> testPid.toText <> "/ai/routines\"", "Routines", "href=\"/p/" <> testPid.toText <> "/ai\"", "Conversations"] `shouldBe` True
         all (`T.isInfixOf` conversationHtml) ["id=\"ai-composer-modal\"", "backdrop:backdrop-blur-sm"] `shouldBe` True
         for_ [conversationHtml, render routinesPage, render threadPage] (`shouldSatisfy` T.isInfixOf "data-header-actions")
+
+      it "routineResults_everyRunRendersNotJustTheFirst" \tr -> do
+        let convId = UUIDId UUID.nil
+        void $ runTestBg frozenTime tr do
+          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
+          Issues.insertChatMessage testPid convId Issues.ChatUser "Watch checkout latency" Nothing Nothing
+          for_ ["First run result", "Second run result"] \r -> Issues.insertChatMessage testPid convId Issues.ChatAssistant r Nothing Nothing
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing
+        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
+        filter (not . (`T.isInfixOf` html)) ["First run result", "Second run result"] `shouldBe` []
+
+      it "agentDocuments_savedAppendedAndListedBesideTheConversation" \tr -> do
+        let convId = UUIDId UUID.nil
+            web = (AI.defaultAgenticConfig testPid){AI.conversationId = Just convId, AI.conversationType = Just Issues.CTWeb}
+            routine = web{AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) False, AI.timezone = Just "America/New_York"}
+            call cfg name args = AI.executeToolCall cfg (LLM.ToolCall "call" "function" $ LLM.ToolFunction name $ Map.fromList args)
+        (saved, appended, listed, readBack, slack, routinePrompt) <- runTestBg frozenTime tr do
+          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
+          saved <- call web "save_artifact" [("key", "Checkout Review"), ("title", "Checkout review"), ("content", "## Summary\nAll good.")]
+          appended <- call web "save_artifact" [("key", "checkout-review"), ("mode", "append"), ("content", "## Follow-up\nLatency recovered.")]
+          listed <- call web "read_artifact" []
+          readBack <- call web "read_artifact" [("key", "checkout-review")]
+          slack <- call web{AI.conversationType = Just Issues.CTSlackThread} "save_artifact" [("key", "x"), ("content", "y")]
+          Issues.insertChatMessage testPid convId Issues.ChatAssistant "Saved." Nothing $ Just $ AE.toJSON ([ToolCallInfo "save_artifact" mempty "" saved.rawData] :: [ToolCallInfo])
+          (system, _, _) <- AI.agenticSetup routine "run" "model"
+          pure (saved, appended, listed, readBack, slack, system.content)
+        saved.formatted `shouldSatisfy` T.isPrefixOf "Saved document 'checkout-review'"
+        saved.rawData `shouldBe` Just "checkout-review"
+        appended.formatted `shouldSatisfy` T.isInfixOf "Checkout review"
+        listed.formatted `shouldSatisfy` T.isInfixOf "\"key\":\"checkout-review\""
+        readBack.formatted `shouldBe` "## Summary\nAll good.\n\n## Follow-up\nLatency recovered."
+        slack.formatted `shouldSatisfy` T.isPrefixOf "Documents are only available"
+        -- frozenTime is 2025-01-01T00:00Z, still New Year's Eve in New York.
+        routinePrompt `shouldSatisfy` T.isInfixOf "key \"2024-12-31\""
+        (_, chatPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing
+        LT.toStrict (Lucid.renderText $ Lucid.toHtml chatPage) `shouldSatisfy` T.isInfixOf "href=\"?doc=checkout-review\""
+        (_, docPage) <- testServant tr $ AIThreads.threadGetH testPid convId (rightToMaybe $ Issues.mkArtifactKey "checkout-review")
+        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml docPage
+        filter (not . (`T.isInfixOf` html)) ["?doc=checkout-review", "<h2 id=\"followup\">", "href=\"#followup\"", "Latency recovered."] `shouldBe` []
 
       it "lists titled threads and schedules and pauses their routine" \tr -> do
         let convId = UUIDId UUID.nil

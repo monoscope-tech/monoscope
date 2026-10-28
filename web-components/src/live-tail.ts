@@ -118,8 +118,8 @@ const prepareRow = (row: ArrivedRow): PreparedRow => {
     name: row.name ?? undefined,
     body: row.body,
     ...(row.fields ?? {}),
-    ...(parsedBody === null || isObject(parsedBody) ? {} : { body: parsedBody }),
   };
+  if (parsedBody !== null && !isObject(parsedBody)) displayFields.body = parsedBody;
   for (const [key, value] of bodyFields) displayFields[`body.${key}`] = value;
   return { ...row, displayFields, parsedBody, bodyPrefix, bodyFields };
 };
@@ -244,7 +244,7 @@ export class LiveTail extends LitElement {
   private kind = 'logs';
   private query = '';
   private buffer: ArrivedRow[] = [];
-  // Prepared when first rendered: of a 1000-row buffer only the mounted window is ever parsed.
+  // Prepared when first rendered, so only the mounted window is parsed until the field picker opens.
   private prepared = new WeakMap<ArrivedRow, PreparedRow>();
   private arrivals = 0;
   // Snapshot taken while the picker is open, so arriving rows cannot churn the list under the cursor.
@@ -296,8 +296,10 @@ export class LiveTail extends LitElement {
     // Stable between field changes so a publish re-renders only rows the guard has not seen;
     // a new function is what tells the virtualizer its mounted rows are stale.
     if (changed.has('selectedFields')) this.renderRow = (row) => guard([row, this.selectedFields], () => this.rowTemplate(row));
-    if (this.fieldsOpen && (changed.has('fieldsOpen') || changed.has('selectedFields') || changed.has('schemaFields')))
-      this.fieldOptions = this.availableFields;
+    // Opening scans the buffer once; a toggle only re-sorts what is already listed.
+    if (this.fieldsOpen && (changed.has('fieldsOpen') || changed.has('schemaFields')))
+      this.fieldOptions = this.sortFields([...this.schemaFields, ...this.buffer.flatMap((row) => Object.keys(this.prepare(row).displayFields))]);
+    else if (this.fieldsOpen && changed.has('selectedFields')) this.fieldOptions = this.sortFields(this.fieldOptions);
   }
 
   updated(changed: PropertyValues) {
@@ -338,9 +340,8 @@ export class LiveTail extends LitElement {
     return this.streamState === 'live' || this.streamState === 'connecting' || this.streamState === 'reconnecting';
   }
 
-  private get availableFields(): string[] {
-    const seen = this.buffer.flatMap((row) => Object.keys(this.prepare(row).displayFields));
-    return [...new Set([...BASE_FIELDS, ...this.selectedFields, ...this.schemaFields, ...seen])]
+  private sortFields(fields: string[]): string[] {
+    return [...new Set([...BASE_FIELDS, ...this.selectedFields, ...fields])]
       .filter((field) => !PINNED_FIELDS.includes(field))
       .sort((a, b) => {
         const ai = this.selectedFields.indexOf(a);

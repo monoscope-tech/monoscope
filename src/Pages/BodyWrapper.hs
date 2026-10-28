@@ -757,8 +757,8 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       "Sidebar view"
       "nav-view"
       "nav-view-"
-      [ (view, label, [checked_ | view == defaultView] <> [term "hx-live:checked" ("this.value === (sessionStorage.getItem('sidebar-view') || '" <> defaultView <> "')"), [__|on input call sessionStorage.setItem('sidebar-view', my.value)|]])
-      | (view, label) <- [("menu", "Navigate"), ("ai", "Assistant")]
+      [ (view, label, [checked_ | view == defaultView] <> [term "hx-live" ("if (!this.dataset.seeded) { this.dataset.seeded = '1'; this.checked = this.value === (sessionStorage.getItem('sidebar-view') || '" <> defaultView <> "') }"), [__|on input call sessionStorage.setItem('sidebar-view', my.value)|]])
+      | (view, label) <- [("menu", "Navigate"), ("ai", "Agents")]
       ]
     nav_ [id_ "main-sidenav", class_ "mt-2 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col gap-1 text-textWeak group-has-[#nav-view-ai:checked]/nav:hidden [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
       let pidTxt = project.id.toText

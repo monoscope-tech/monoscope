@@ -147,16 +147,16 @@ describe('Live Tail row buffer', () => {
     const el = await mount();
     vi.useFakeTimers();
     el.appendRows(pushed(0, 100).map((r: any) => r.log));
-    let published = 0;
+    let publishes = 0;
     let last = el.rows;
     for (let n = 100; n < 100 + 63 * 10; n += 10) {
       el.appendRows(pushed(n, n + 10).map((r: any) => r.log));
       vi.advanceTimersByTime(16);
-      if (el.rows !== last) (published++, (last = el.rows));
+      if (el.rows !== last) (publishes++, (last = el.rows));
     }
     vi.useRealTimers();
-    expect(published).toBeGreaterThan(0);
-    expect(published).toBeLessThanOrEqual(4);
+    expect(publishes).toBeGreaterThan(0);
+    expect(publishes).toBeLessThanOrEqual(4);
   });
 
   test('liveTail_hiddenTab_publishesNothingUntilShownAgain', async () => {
