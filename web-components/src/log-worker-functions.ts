@@ -150,6 +150,13 @@ const MAX_SUBTREE_SEGMENTS = 64;
  */
 const MAX_TREE_DEPTH = 512;
 
+export function applySpanExpansion(rows: EventLine[], expanded: Record<string, boolean>): void {
+  for (const row of rows) {
+    row.expanded = expanded[row.id] ?? expanded[row.traceId] ?? false;
+    row.show = row.depth === 0 || row.parentIds.every((id) => expanded[id] ?? expanded[row.traceId] ?? false);
+  }
+}
+
 export function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string, boolean> = {}): EventLine[] {
   const result: EventLine[] = [];
   // One span belongs to one place in one trace, so visiting it twice means the adjacency is
@@ -242,5 +249,6 @@ export function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string
     });
   });
   if (truncatedAtDepth) console.warn(`[trace] ${truncatedAtDepth} span(s) below depth ${MAX_TREE_DEPTH} not nested — parent chain is cyclic or malformed`);
+  applySpanExpansion(result, expandedTraces);
   return result;
 }

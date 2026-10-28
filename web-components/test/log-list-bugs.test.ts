@@ -1058,7 +1058,7 @@ describe('LogList — concurrent refresh vs load-more', () => {
     (el as any).spanListTree = [row('onscreen')];
     (el as any).seenIds = new Set(['onscreen']);
     (el as any).updateVisibleItems();
-    const collapsedChild = { ...row('child'), depth: 1, show: false, traceId: 'root' };
+    const collapsedChild = { ...row('child'), depth: 1, parentIds: ['root'], show: false, traceId: 'root' };
 
     (el as any).recentDataToBeAdded = (el as any).addWithFlipDirection([], [row('onscreen'), row('root'), collapsedChild], true);
 

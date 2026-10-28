@@ -3,8 +3,7 @@ module Models.Projects.Dashboards (
   DashboardVM (..),
   DashboardView (..),
   variablesForTab,
-  updateSavedView,
-  deleteSavedView,
+  setSavedView,
   mkDashboardVM,
   DashboardId,
   readDashboardFile,
@@ -403,24 +402,18 @@ variablesForTab :: Dashboard -> Maybe Tab -> [Variable]
 variablesForTab dash tab = filter (\v -> maybe True (v.key `elem`) (tab >>= (.variables))) (fold dash.variables)
 
 
--- | Update one named view atomically; concurrent saves of other views survive.
-updateSavedView :: DB es => Projects.ProjectId -> DashboardId -> DashboardView -> Eff es Int64
-updateSavedView pid did savedView =
-  Hasql.interpExecute
-    [HI.sql|
+-- | Replace (@Just@) or delete (@Nothing@) one named view atomically; concurrent saves of other views survive.
+setSavedView :: DB es => Projects.ProjectId -> DashboardId -> Text -> Maybe (Map Text Text) -> Eff es (Maybe (V.Vector DashboardView))
+setSavedView pid did viewName variables =
+  HI.getOneColumn
+    <<$>> Hasql.interpOne
+      [HI.sql|
   UPDATE projects.dashboards SET saved_views =
-    ARRAY(SELECT v FROM unnest(saved_views) v WHERE v->>'name' <> #{savedView.name}) || ARRAY[#{savedView}::jsonb]
-  WHERE project_id = #{pid} AND id = #{did}
+    ARRAY(SELECT v FROM unnest(saved_views) v WHERE v->>'name' <> #{viewName}) || #{replacement}
+  WHERE project_id = #{pid} AND id = #{did} RETURNING saved_views
 |]
-
-
-deleteSavedView :: DB es => Projects.ProjectId -> DashboardId -> Text -> Eff es Int64
-deleteSavedView pid did viewName =
-  Hasql.interpExecute
-    [HI.sql|
-  UPDATE projects.dashboards SET saved_views = ARRAY(SELECT v FROM unnest(saved_views) v WHERE v->>'name' <> #{viewName})
-  WHERE project_id = #{pid} AND id = #{did}
-|]
+  where
+    replacement = foldMap (V.singleton . DashboardView viewName) variables
 
 
 updateTitle :: DB es => Projects.ProjectId -> DashboardId -> Text -> Eff es Int64

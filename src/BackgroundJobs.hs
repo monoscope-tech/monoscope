@@ -3799,13 +3799,14 @@ enhanceIssuesWithLLM pid issueIds = do
                         enhancement.enhancedTitle
                         enhancement.recommendedAction
                         enhancement.migrationComplexity
-                    -- Also classify and update criticality
-                    criticalityResult <- Enhancement.classifyIssueCriticality ctx issue
-                    case criticalityResult of
-                      Left err -> Log.logAttention "Failed to classify issue criticality" (issueId, err)
-                      Right (isCritical, breakingCount, _incrementalCount) -> do
-                        void $ Enhancement.updateIssueClassification issue.id isCritical breakingCount
-                        Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
+                    -- Schema observations do not establish consumer compatibility or urgency.
+                    when (issue.issueType /= Issues.ApiChange) do
+                      criticalityResult <- Enhancement.classifyIssueCriticality ctx issue
+                      case criticalityResult of
+                        Left err -> Log.logAttention "Failed to classify issue criticality" (issueId, err)
+                        Right (isCritical, breakingCount, _incrementalCount) -> do
+                          void $ Enhancement.updateIssueClassification issue.id isCritical breakingCount
+                          Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
 
                     -- Analyze error patterns for root cause and category.
                     -- Left = not a runtime exception, or the LLM call failed.

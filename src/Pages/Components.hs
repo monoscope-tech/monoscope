@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -139,10 +139,10 @@ el_ n = with (makeElement n)
 -- >>> let h = toStrict $ renderText $ drawer_ "d" False Nothing Nothing ""
 -- >>> "drawer-side top-0 left-0 w-full h-full flex justify-end z-10000 overflow-y-scroll overflow-x-hidden" `T.isInfixOf` h
 -- True
--- >>> "pointer-events-none max-md:pointer-events-auto" `T.isInfixOf` h
--- True
--- >>> "aria-modal" `T.isInfixOf` h
+-- >>> "hidden max-md:flex" `T.isInfixOf` h
 -- False
+-- >>> "aria-modal=\"true\"" `T.isInfixOf` h
+-- True
 drawer_ :: Text -> Bool -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
 drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
   input_
@@ -154,12 +154,10 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
         <> [checked_ | startOpen]
         <> [ [__|on change
             if my.checked then
-              if window.matchMedia('(max-width: 767px)').matches then
-                add .overflow-hidden to <body/>
-                set my._focusTrapCleanup to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > [role=dialog]'))
-                set :closeBtn to my.closest('.drawer').querySelector('[data-drawer-close-primary]') or my.closest('.drawer').querySelector('button[aria-label="Close drawer"]')
-                if :closeBtn then call :closeBtn.focus() end
-              end
+              add .overflow-hidden to <body/>
+              set my._focusTrapCleanup to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > [role=dialog]'))
+              set :closeBtn to my.closest('.drawer').querySelector('[data-drawer-close-primary]') or my.closest('.drawer').querySelector('button[aria-label="Close drawer"]')
+              if :closeBtn then call :closeBtn.focus() end
             else
               remove .overflow-hidden from <body/>
               if my._focusTrapCleanup then
@@ -167,7 +165,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
                 set my._focusTrapCleanup to null
               end
             end
-          on keydown[key == 'Escape' and my.checked and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
+          on keydown[key == 'Escape' and my.checked and not event.defaultPrevented and no <#details-open:checked/> and no <[popover]:popover-open/> and no <dialog[open]/>] from window
             set my.checked to false
             trigger change on me
           end
@@ -177,15 +175,14 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
   label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
   -- The closed panel is translated beyond the viewport. Clip it here rather than letting
   -- its transformed width create a page-level horizontal scroll range.
-  -- Desktop drawers are non-modal workbench panels: the page remains interactive so
-  -- list rows and charts can load their next selection straight into the open drawer.
-  -- Mobile keeps the ordinary modal overlay because the panel occupies the viewport.
-  div_ [class_ "drawer-side top-0 left-0 w-full h-full flex justify-end z-10000 overflow-y-scroll overflow-x-hidden pointer-events-none max-md:pointer-events-auto"] do
-    label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "hidden max-md:flex w-full drawer-overlay grow flex-1"] ""
+  -- Standard drawers are modal. Explorer log details use their separate non-modal panel.
+  div_ [class_ "drawer-side top-0 left-0 w-full h-full flex justify-end z-10000 overflow-y-scroll overflow-x-hidden"] do
+    label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
     div_
       [ id_ $ drawerId <> "-panel"
       , class_ "pointer-events-auto fixed right-0 top-0 h-dvh w-[min(90vw,75rem)] max-sm:w-screen! overflow-y-auto overscroll-contain overflow-x-hidden bg-bgRaised border-s border-strokeWeak shadow-2xl relative [&:has(.widget-editor)>.drawer-floating-close]:hidden"
       , role_ "dialog"
+      , term "aria-modal" "true"
       , Aria.label_ "Details"
       ]
       do
@@ -743,7 +740,7 @@ data PanelCfg = PanelCfg
 panel_ :: Monad m => PanelStyle -> PanelCfg -> Text -> HtmlT m () -> HtmlT m ()
 panel_ style cfg title content = case style of
   Raised -> div_ [class_ "surface-raised rounded-2xl p-4 relative"] do
-    span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong mb-3"] do
+    h3_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong mb-3"] do
       whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-4 h-4 text-iconNeutral"
       toHtml title
       whenJust cfg.subtitle $ span_ [class_ "normal-case tracking-normal font-normal"] . toHtml
@@ -949,11 +946,16 @@ kbdHints_ hints = div_ [class_ "cmd-palette-hints mt-3 flex items-center justify
 -- | Segmented two-or-more-way radio switch; the first option starts checked. Input ids are
 -- @idPrefix <> value@ so callers can style siblings on @:checked@.
 segmented_ :: Text -> Text -> Text -> Text -> [(Text, Text)] -> Html ()
-segmented_ cls legend grp idPrefix opts = fieldset_ [class_ cls] do
+segmented_ cls legend grp idPrefix opts =
+  segmentedWith_ [class_ cls] legend grp idPrefix [(val, lbl, [checked_ | active]) | (active, (val, lbl)) <- zip (True : repeat False) opts]
+
+
+segmentedWith_ :: [Attribute] -> Text -> Text -> Text -> [(Text, Text, [Attribute])] -> Html ()
+segmentedWith_ attrs legend grp idPrefix opts = fieldset_ attrs do
   legend_ [class_ "sr-only"] $ toHtml legend
-  forM_ (zip (True : repeat False) opts) \(active, (val, lbl)) ->
+  forM_ opts \(val, lbl, inputAttrs) ->
     label_ [class_ "cursor-pointer rounded-md px-3 py-1 text-center font-medium text-textWeak has-[:checked]:bg-bgRaised has-[:checked]:text-textStrong has-[:checked]:shadow-xs has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] do
-      input_ $ [type_ "radio", name_ grp, id_ (idPrefix <> val), class_ "sr-only"] <> [checked_ | active] <> [value_ val]
+      input_ $ [type_ "radio", name_ grp, id_ (idPrefix <> val), class_ "sr-only"] <> inputAttrs <> [value_ val]
       toHtml lbl
 
 

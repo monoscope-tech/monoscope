@@ -968,15 +968,16 @@ variablePresets density pid mf mt allParams currentTime =
       audience = Rum.audienceFilters allParams
       audienceSessions = Rum.audienceSessionsSql browserSql errorSql audience
       bound op t field' = field' <> " " <> op <> " '" <> formatUTC t <> "'"
-      clause field = case catMaybes [bound ">=" <$> mf, bound "<=" <$> mt] of
+      clause endOp field = case catMaybes [bound ">=" <$> mf, bound endOp <$> mt] of
         [] -> ""
         bs -> andPrefix $ "(" <> T.intercalate " AND " (map ($ field) bs) <> ")"
    in Map.fromList
         $ [ ("project_id", pid)
           , ("from", andPrefix $ fmtUTC mf)
           , ("to", andPrefix $ fmtUTC mt)
-          , ("time_filter", clause "timestamp")
-          , ("time_filter_sql_created_at", clause "created_at")
+          , ("time_filter", clause "<=" "timestamp")
+          , ("rollup_time_filter", clause "<" "timestamp")
+          , ("time_filter_sql_created_at", clause "<=" "created_at")
           , ("rollup_interval", calculateAutoBinWidth density (mf, mt) currentTime)
           , ("browser_filter", browserSql)
           , ("pageview_filter", pageViewSql)

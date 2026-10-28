@@ -155,7 +155,7 @@ spec = do
       ingestSpanReq tr
         $ withSpanStatus PT.Status'STATUS_CODE_ERROR
         $ withSpanKind PT.Span'SPAN_KIND_CLIENT
-        $ mkSpanRequest trId childSid (Just rootSid) "pg.query" [] Nothing [] (mkResource apiKey []) frozenTime
+        $ mkSpanRequest trId childSid (Just rootSid) "pg.query" [mkSpanEvent "exception" [] frozenTime] Nothing [mkAttr "db.statement" "\n    SELECT <unsafe>\n      FROM checkout\n    \n"] (mkResource apiKey []) frozenTime
 
       traceM' <- runTestBg frozenTime tr $ Telemetry.getTraceDetailsForView False testPid trId (Just frozenTime) frozenTime Nothing
       spans <- maybe (fail "expected the ingested trace to be found") (\(_, sps, _) -> pure sps) traceM'
@@ -173,6 +173,9 @@ spec = do
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       for_ ["Waterfall", "GET /checkout", "pg.query", ">Errors</", ">1<"] \text ->
         html `shouldSatisfy` T.isInfixOf text
+      for_ ["<template data-trace-tooltip", "Span information", "Error span", "No error message available in this preview."] \text ->
+        html `shouldSatisfy` T.isInfixOf text
+      html `shouldSatisfy` T.isInfixOf ">SELECT &lt;unsafe&gt;\n  FROM checkout</p>"
 
     -- A 1300-span trace was 4.4MB of HTML and ~8s of browser parse, on top of a
     -- 56s cold read. The view now takes a page at a time and offers the next one.
@@ -230,9 +233,9 @@ spec = do
       -- drag the detail panel back to the first span on every click.
       let embeddedHtml p' = LT.toStrict $ Lucid.renderText $ Lucid.toHtml p'
       (_, firstEmbedded) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing (Just "true") Nothing
-      embeddedHtml firstEmbedded `shouldSatisfy` T.isInfixOf "load[window.innerWidth"
+      embeddedHtml firstEmbedded `shouldSatisfy` T.isInfixOf "load[document.getElementById(&#39;trace_span_container&#39;).clientWidth"
       (_, moreEmbedded) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing (Just "true") (Just 100)
-      embeddedHtml moreEmbedded `shouldSatisfy` not . T.isInfixOf "load[window.innerWidth"
+      embeddedHtml moreEmbedded `shouldSatisfy` not . T.isInfixOf "load[document.getElementById(&#39;trace_span_container&#39;).clientWidth"
 
   -- 'getMetricChartListData' dominates the /metrics page (640ms of ~850ms before the
   -- de-duplicate-then-aggregate rewrite). The rewrite splices the source/prefix filters into

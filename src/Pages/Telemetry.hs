@@ -22,7 +22,9 @@ module Pages.Telemetry (
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Char (isSpace)
 import Data.Default
+import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -189,18 +191,38 @@ resizeDivider_ cssVar minPct maxPct resizeEvt extraCls =
             if pct < $minT set pct to $minT end
             if pct > $maxT set pct to $maxT end
             call container.style.setProperty($qVar, pct + '%')
+            set @aria-valuenow to Math.round(pct)
             send $resizeEvt to window
           end
           set document.body.style.userSelect to ''
           set document.body.style.cursor to ''
+        on keydown[key is 'ArrowLeft' or key is 'ArrowRight']
+          halt the event
+          set container to the closest parent <div[style*=$qVar]/>
+          if no container exit end
+          set delta to -2
+          if event.key is 'ArrowRight' set delta to 2 end
+          set pct to Math.max($minT, Math.min($maxT, (((my.offsetLeft + 4) / container.clientWidth) * 100) + delta))
+          call container.style.setProperty($qVar, pct + '%')
+          set @aria-valuenow to Math.round(pct)
+          send $resizeEvt to window
+        on focus
+          set container to the closest parent <div[style*=$qVar]/>
+          if container set @aria-valuenow to Math.round(((my.offsetLeft + 4) / container.clientWidth) * 100) end
         |]
    in div_
-        [ class_ $ "absolute top-0 bottom-0 w-2 cursor-col-resize z-20 flex justify-center group " <> extraCls
+        [ class_ $ "absolute top-0 bottom-0 w-2 cursor-col-resize z-20 flex justify-center group focus-visible:outline-2 focus-visible:outline-strokeBrand-strong " <> extraCls
         , style_ $ "left:calc(var(" <> cssVar <> ") - 4px)"
+        , tabindex_ "0"
+        , role_ "separator"
+        , Aria.label_ "Resize trace columns"
+        , term "aria-orientation" "vertical"
+        , term "aria-valuemin" minT
+        , term "aria-valuemax" maxT
         , term "_" script
         ]
         $ div_ [class_ "w-px h-full bg-strokeWeak group-hover:bg-fillBrand-strong group-active:bg-fillBrand-strong transition-colors pointer-events-none relative"] do
-          div_ [class_ "absolute top-1/2 -translate-y-1/2 -translate-x-[3px] w-2 h-6 flex flex-col justify-center gap-px opacity-0 group-hover:opacity-100 transition-opacity"] do
+          div_ [class_ "absolute top-1/2 -translate-y-1/2 -translate-x-[3px] w-2 h-6 flex flex-col justify-center gap-px opacity-50 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity"] do
             forM_ ([1 .. 3] :: [Int]) \_ -> div_ [class_ "w-full h-px bg-fillBrand-strong rounded-full"] pass
 
 
@@ -229,11 +251,10 @@ instance ToHtml TraceDetailsGet where
   toHtml (TraceDetails pid tr spanRecs openFirst moreUrl) = do
     toHtml $ tracePage pid tr spanRecs moreUrl
     when openFirst $ whenJust (spanRecs V.!? 0) \sr ->
-      -- Desktop only: on mobile the trace panel is a full-screen overlay, so
-      -- auto-opening it would bury the page behind span details on load.
+      -- Preload only when details fit inline; a drawer must wait for a span click.
       -- KeepCurrent: the panel opens when content lands rather than flashing a
       -- skeleton, so a re-fired preload can't wipe rendered details back to a loader.
-      div_ (spanDetailAttrs_ KeepCurrent pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[window.innerWidth>=768]", term "hx-sync" "this:replace"]) pass
+      div_ (spanDetailAttrs_ KeepCurrent pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[document.getElementById('trace_span_container').clientWidth >= 64 * parseFloat(getComputedStyle(document.documentElement).fontSize)]", term "hx-sync" "this:replace"]) pass
   toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn Nothing
   toHtml (TraceDetailsUnavailable selfUrl explorerUrl embedded reason) =
     -- The id is what Retry swaps: `closest div` would only replace the button row.
@@ -752,7 +773,7 @@ metricWidget pid metricName metricType metricUnit source mLabel mTitle mId mExpa
     { Widget.wType = Widget.WTTimeseriesLine
     , Widget.title = if isDistribution then (<> " · mean") <$> mTitle else mTitle
     , Widget.query = Just metricQuery
-    , Widget.layout = Just $ Widget.Layout{minWidth = Nothing, x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+    , Widget.layout = Just $ (def :: Widget.Layout){Widget.x = Just 0, Widget.y = Just 0, Widget.w = Just 2, Widget.h = Just 1}
     , Widget.unit = Just metricUnit
     , Widget.eager = Just True
     , Widget.hideValue = Just True
@@ -1162,7 +1183,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
       -- reports counts and durations only. Node size comes from the duration share.
       (traceHops, traceDurationNs) = ServiceGraph.traceEdgeSamples spanRecords
       traceGraph = ServiceGraph.buildServiceGraph 0 serviceMapNodeCap ServiceGraph.CollapseOff (Just traceDurationNs) traceHops
-  div_ [class_ "w-full h-full flex overflow-hidden", id_ "trace_span_container"] $ do
+  div_ [class_ "@container/trace w-full h-full flex overflow-hidden", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col grow min-w-0 gap-4 p-2 pb-4 overflow-y-auto overflow-x-hidden overscroll-y-contain c-scroll"] $ do
       div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
         div_ [class_ "flex items-center gap-3"] $ do
@@ -1292,7 +1313,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                 div_ [class_ "flex items-center gap-1.5"] do
                   div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> getServiceColor s serviceColors] pass
                   span_ [class_ "truncate max-w-40"] $ toHtml s
-            div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden relative", style_ "--wf-left:35%", id_ $ "waterfall-container-" <> traceItem.traceId] do
+            div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden relative", style_ "--wf-left:min(60%,max(18rem,40%))", id_ $ "waterfall-container-" <> traceItem.traceId] do
               resizeDivider_ "--wf-left" 15 70 "waterfallResize" "waterfall-divider"
               div_ [class_ "h-full top-0 absolute z-30 hidden pointer-events-none", id_ $ "wf-time-indicator-" <> traceItem.traceId] do
                 div_ [class_ "relative h-full"] do
@@ -1315,10 +1336,16 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
             serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors Nothing
     -- Open state is this checkbox: rows check it before loading a span, close unchecks it.
     input_ [type_ "checkbox", class_ "hidden peer/trace", id_ "trace-details-open"]
-    div_ [class_ "hidden md:peer-checked/trace:block", id_ "trace-details-resizer-wrapper"]
+    div_ [class_ "hidden @min-[64rem]/trace:peer-checked/trace:block", id_ "trace-details-resizer-wrapper"]
       $ Components.resizerWith_ [data_ "min" "260", data_ "max" "70vw"] "trace_details_container" "trace_details_width" False
+    label_
+      [ Lucid.for_ "trace-details-open"
+      , Aria.label_ "Close span details"
+      , class_ "hidden @max-[64rem]/trace:peer-checked/trace:block fixed inset-0 z-40 bg-transparent pointer-events-none max-md:bg-black/40 max-md:pointer-events-auto"
+      ]
+      ""
     div_
-      [ class_ "details-panel group/tdp shrink-0 h-full w-1/3 max-w-0 overflow-hidden overflow-y-auto c-scroll bg-bgBase peer-checked/trace:max-w-[70vw] peer-checked/trace:border-l border-strokeWeak max-md:fixed max-md:inset-0 max-md:z-50 max-md:w-full! max-md:peer-checked/trace:max-w-full"
+      [ class_ "details-panel group/tdp shrink-0 h-full w-1/3 max-w-0 overflow-hidden overflow-y-auto c-scroll bg-bgBase peer-checked/trace:max-w-[70vw] peer-checked/trace:border-l border-strokeWeak @max-[64rem]/trace:hidden @max-[64rem]/trace:peer-checked/trace:block @max-[64rem]/trace:fixed! @max-[64rem]/trace:inset-[0_0_0_auto]! @max-[64rem]/trace:z-50 @max-[64rem]/trace:w-[min(56rem,100vw)]! @max-[64rem]/trace:h-dvh! @max-[64rem]/trace:max-h-none! @max-[64rem]/trace:peer-checked/trace:max-w-full!"
       , id_ "trace_details_container"
       , -- Close buttons in the shared detail view send closeDetailPanel to their .details-panel.
         [__|init set my *width to localStorage.getItem('resizer-trace_details_width') or '' end
@@ -1530,10 +1557,16 @@ buildSpanTree_ :: Projects.ProjectId -> SpanTree -> Int -> HashMap Text Text -> 
 buildSpanTree_ pid sp level scol = do
   let hasChildren = not $ null sp.children
       serviceCol = getServiceColor sp.spanRecord.serviceName scol
-      indent = show (level * 12) <> "px"
+      treeIndent = min level 4 * 8 + max 0 (level - 4) * 4
+      indent = show (8 + treeIndent) <> "px"
       isSynthetic = isNothing sp.spanRecord.uSpanId
       label = fromMaybe sp.spanRecord.spanName (spanDisplayLabel sp.spanRecord.attributes)
-      tip = sp.spanRecord.serviceName <> " — " <> label
+      attr k = Telemetry.atMapText k sp.spanRecord.attributes
+      operation = fromMaybe label (attr "db.query.text" <|> attr "db.statement")
+      operationLines = L.dropWhileEnd (T.all isSpace) $ dropWhile (T.all isSpace) $ lines operation
+      operationIndent = fromMaybe 0 $ viaNonEmpty minimum1 [T.length $ T.takeWhile isSpace line | line <- operationLines, not $ T.all isSpace line]
+      errorMessage = fold $ guard sp.spanRecord.hasErrors *> (attr "exception.message" <|> attr "error.message")
+      tip = "Service: " <> sp.spanRecord.serviceName <> "\nSpan: " <> sp.spanRecord.spanName <> (if label == sp.spanRecord.spanName then "" else "\nOperation: " <> label) <> "\nDepth: " <> show level
   div_ [class_ "span-filterble"] do
     div_
       ( [ class_ $ "flex items-center w-full h-7 hover:bg-fillWeaker waterfall-row" <> bool "" " bg-fillError-weak/40 hover:bg-fillError-weak" sp.spanRecord.hasErrors <> bool " cursor-pointer" " italic text-textWeak bg-fillWeaker/50" isSynthetic
@@ -1553,7 +1586,7 @@ buildSpanTree_ pid sp level scol = do
             sp.spanRecord.uSpanId
       )
       do
-        div_ [class_ "shrink-0 flex items-center gap-1 px-2 overflow-hidden", style_ $ "width:var(--wf-left);padding-left:" <> indent] do
+        div_ [class_ "relative h-full shrink-0 flex items-center gap-1 px-2 overflow-hidden before:absolute before:left-2 before:inset-y-0 before:w-[min(32px,var(--wf-indent))] before:pointer-events-none before:bg-[repeating-linear-gradient(to_right,transparent_0px,transparent_7px,var(--color-strokeWeak)_7px,var(--color-strokeWeak)_8px)] after:absolute after:left-10 after:inset-y-0 after:w-[max(0px,calc(var(--wf-indent)_-_32px))] after:pointer-events-none after:bg-[repeating-linear-gradient(to_right,transparent_0px,transparent_3px,var(--color-strokeWeak)_3px,var(--color-strokeWeak)_4px)]", style_ $ "width:var(--wf-left);padding-left:" <> indent <> ";--wf-indent:" <> show treeIndent <> "px"] do
           if hasChildren
             then
               button_
@@ -1568,7 +1601,7 @@ buildSpanTree_ pid sp level scol = do
             else div_ [class_ "w-6 shrink-0"] pass
           if isSynthetic
             then faSprite_ "circle-question" "regular" "h-3 w-3 text-textWeak shrink-0"
-            else div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol, title_ sp.spanRecord.serviceName] pass
+            else div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol] pass
           when sp.spanRecord.hasErrors
             $ span_
               [ class_ "shrink-0 w-3.5 h-3.5 rounded-sm bg-fillError-strong text-textInverse-strong text-2xs font-bold flex items-center justify-center leading-none"
@@ -1576,8 +1609,25 @@ buildSpanTree_ pid sp level scol = do
               , Aria.label_ "Error span"
               ]
             $ toHtml @Text "!"
-          span_ [class_ "text-xs font-medium text-textStrong truncate max-w-20", title_ tip] $ toHtml sp.spanRecord.serviceName
-          span_ [class_ "text-xs text-textWeak truncate", title_ tip] $ toHtml label
+          div_
+            [ class_ "min-w-0 flex-1 flex items-center gap-1"
+            , term "data-tippy-placement" "bottom-start"
+            , term "data-tippy-theme" "trace-span"
+            ]
+            do
+              span_ [class_ "w-20 max-w-[30%] shrink-0 text-xs text-textWeak truncate"] $ toHtml sp.spanRecord.serviceName
+              span_ [class_ "min-w-0 flex-1 text-xs text-textStrong truncate"] $ toHtml label
+              template_ [data_ "trace-tooltip" ""] $ div_ [class_ "space-y-3"] do
+                div_ [class_ "flex flex-wrap items-center gap-2"] do
+                  strong_ [class_ "min-w-0 flex-1 text-sm font-semibold break-normal [overflow-wrap:anywhere] text-textStrong"] $ toHtml sp.spanRecord.serviceName
+                  when sp.spanRecord.hasErrors $ span_ [class_ "rounded-md bg-fillError-weak px-1.5 py-0.5 text-2xs font-medium text-textError"] "Error span"
+                  span_ [class_ "text-2xs tabular-nums text-textWeak"] $ toHtml $ getDurationNSMS sp.spanRecord.spanDurationNs
+                div_ [class_ "space-y-3 max-h-[min(18rem,50vh)] overflow-y-auto overscroll-contain c-scroll focus-visible:outline-2 focus-visible:outline-strokeBrand-strong", tabindex_ "0", role_ "region", Aria.label_ "Span information"] do
+                  forM_ ([("Span", sp.spanRecord.spanName), ("Operation", if operation == sp.spanRecord.spanName then "" else T.intercalate "\n" $ map (T.drop operationIndent) operationLines), ("Error", errorMessage)] :: [(Text, Text)]) \(heading, value) ->
+                    unless (T.null value) $ div_ do
+                      p_ [class_ "mb-1 text-2xs font-medium text-textWeak"] $ toHtml @Text heading
+                      p_ [class_ $ "text-xs leading-relaxed whitespace-pre-wrap break-normal [overflow-wrap:anywhere] " <> bool "font-mono text-textStrong" "text-textError" (heading == "Error")] $ toHtml value
+                  when (sp.spanRecord.hasErrors && T.all isSpace errorMessage) $ p_ [class_ "border-t border-strokeWeak pt-3 text-xs leading-relaxed text-textWeak"] "No error message available in this preview. Select the span for details."
         div_
           [ class_ "h-full relative grow min-w-0"
           , id_ $ "waterfall-bar-" <> sp.spanRecord.spanId

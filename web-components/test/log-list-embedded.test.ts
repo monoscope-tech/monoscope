@@ -112,11 +112,12 @@ describe('embedded log widget: refresh triggers', () => {
   // while every chart around it updated.
   test('refetches when the dashboard auto-refresh fires on window', async () => {
     const el = await embedded();
-    const refetch = vi.spyOn(el as any, 'refetchLogs').mockResolvedValue(undefined);
+    const fetchData = vi.spyOn(el as any, 'fetchData').mockResolvedValue(undefined);
 
     window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
 
-    await vi.waitFor(() => expect(refetch).toHaveBeenCalled());
+    // A background refresh, so the dashboard tick keeps the reader's columns and scroll.
+    await vi.waitFor(() => expect(fetchData).toHaveBeenCalledWith(expect.stringContaining('json=true'), true, false, false, false, 'auto-refresh'));
   });
 
   test('a widened-time-range refetch from the list itself does not loop', async () => {

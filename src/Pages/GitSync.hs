@@ -468,7 +468,7 @@ repositoryDashboardPage pid rid = do
   repos <- maybe (pure Nothing) (liftIO . Cache.lookup ctx.repoListCache) repository.credentialId
   let branch = maybe "" (.defaultBranch) $ find ((== repository.owner <> "/" <> repository.repo) . (.fullName)) (fold repos)
   permission <- ProjectMembers.getUserPermission pid session.user.id
-  pure $ PageCtx bw{pageTitle = "Configuration sync"} RepositoryDashboardGet{repository, sync, accounts, form = RepositoryDashboardForm repository.credentialId branch Nothing, hostUrl = ctx.config.hostUrl, permission, setupError = Nothing}
+  pure $ PageCtx bw{prePageTitle = Just "Repositories", pageTitle = repository.owner <> "/" <> repository.repo, pageTitleUrl = Just $ "/p/" <> pid.toText <> "/repositories/" <> rid.toText, pageTitleSuffix = Just "Configuration sync", menuItem = Just "Repositories"} RepositoryDashboardGet{repository, sync, accounts, form = RepositoryDashboardForm repository.credentialId branch Nothing, hostUrl = ctx.config.hostUrl, permission, setupError = Nothing}
 
 
 repositoryDashboardGetH :: Projects.ProjectId -> GitSync.RepositoryId -> ATAuthCtx (RespHeaders (PageCtx RepositoryDashboardGet))
@@ -512,14 +512,13 @@ repositoryDashboardPostH pid rid form = do
 
 
 instance ToHtml RepositoryDashboardGet where
-  toHtml page = section_ [class_ "mx-auto max-w-4xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
+  toHtml page = section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
     let repository = page.repository
         base = "/p/" <> repository.projectId.toText <> "/repositories/" <> repository.id.toText
-    a_ [href_ base, class_ "text-sm text-textBrand hover:underline"] $ toHtml $ repository.owner <> "/" <> repository.repo
     header_ [class_ "space-y-2"] do
       h1_ [class_ "text-xl font-semibold text-textStrong"] "Configuration sync"
       p_ [class_ "text-sm text-textWeak max-w-2xl"] "Keep dashboard and monitor definitions alongside code. Monoscope edits open or update one configuration PR; merged target-branch changes update Monoscope."
-    div_ [id_ "repository-dashboard-content", class_ "space-y-4"] do
+    div_ [id_ "repository-dashboard-content", class_ "space-y-4 rounded-xl border border-strokeWeak bg-bgBase p-4 sm:p-5"] do
       whenJust page.setupError $ p_ [role_ "alert", class_ "text-sm text-textError"] . toHtml
       if not (maybe False (>= ProjectMembers.PEdit) page.permission)
         then do

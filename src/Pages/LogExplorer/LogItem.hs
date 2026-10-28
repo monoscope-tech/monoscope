@@ -204,7 +204,7 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
     $ label_
       [ Lucid.for_ "details-open"
       , Aria.label_ "Close item details"
-      , class_ "fixed inset-0 z-40 bg-transparent pointer-events-none max-md:bg-black/40 max-md:pointer-events-auto hidden group-has-[#details-open:checked]/details:block"
+      , class_ "fixed inset-0 z-10010 bg-transparent pointer-events-none max-md:bg-black/40 max-md:pointer-events-auto hidden group-has-[#details-open:checked]/details:block"
       ]
       ""
   div_
@@ -212,7 +212,7 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
         $ memptyIfFalse (layout == IssuesPanel) "peer-checked/open:max-w-full! max-lg:peer-checked/open:w-full! "
         <> "details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden "
         <> "group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto "
-        <> "max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase "
+        <> "max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-10020 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase "
         -- Drawer geometry. `!` on width/max-width beats the inline style the
         -- resizer leaves behind when the reader switches modes mid-session.
         --
@@ -220,7 +220,7 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
         -- containing block for every `position: fixed` descendant, which is what put the
         -- Share-link modal (fixed inset-0, meant to centre on the viewport) half off the
         -- screen when it opened inside the drawer.
-        <> "peer-checked/drawer:fixed peer-checked/drawer:top-0 peer-checked/drawer:bottom-0 peer-checked/drawer:z-50 peer-checked/drawer:h-full peer-checked/drawer:w-[min(56rem,94vw)]! peer-checked/drawer:max-w-full! peer-checked/drawer:bg-bgBase peer-checked/drawer:border-l peer-checked/drawer:border-strokeWeak peer-checked/drawer:shadow-2xl peer-checked/drawer:overflow-y-auto peer-checked/drawer:transition-[right] peer-checked/drawer:right-[-100vw] "
+        <> "peer-checked/drawer:fixed peer-checked/drawer:top-0 peer-checked/drawer:bottom-0 peer-checked/drawer:z-10020 peer-checked/drawer:h-full peer-checked/drawer:w-[min(56rem,94vw)]! peer-checked/drawer:max-w-full! peer-checked/drawer:bg-bgBase peer-checked/drawer:border-l peer-checked/drawer:border-strokeWeak peer-checked/drawer:shadow-2xl peer-checked/drawer:overflow-y-auto peer-checked/drawer:transition-[right] peer-checked/drawer:right-[-100vw] "
         -- Open state. Inline mode never positions the panel, so this is inert there.
         <> "peer-checked/open:right-0! peer-checked/open:block!"
     , data_ "inline-width" (if layout == IssuesPanel then "33.333333%" else "")

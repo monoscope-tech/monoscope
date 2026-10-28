@@ -621,7 +621,7 @@ gridStackAttrs widgets =
   ]
     <> [data_ "min-width" (show minWidth) | minWidth > 0]
   where
-    minWidth = foldl' max 0 [max 0 pixels * 12 `div` max 1 (fromMaybe defaultWidgetWidth layout.w) | widget <- widgets, layout <- toList widget.layout, pixels <- toList layout.minWidth]
+    minWidth = foldl' max 0 [pixels * 12 `div` max 1 (fromMaybe defaultWidgetWidth layout.w) | widget <- widgets, layout <- toList widget.layout, pixels <- toList layout.minWidth]
     rows = if null widgets then 2 else layoutRows widgets
 
 
@@ -636,22 +636,22 @@ gridStackAttrs widgets =
 --
 -- Missing positions, oversized widths, overlaps, and row packing:
 --
--- >>> let widgets = [testWidget WTList Layout{minWidth = Nothing, x = Just 0, y = Just 2, w = Just 20, h = Just 2}, testWidget WTList Layout{minWidth = Nothing, x = Just 0, y = Just 0, w = Just 6, h = Just 1}, testWidget WTList Layout{minWidth = Nothing, x = Nothing, y = Nothing, w = Just 6, h = Just 1}]
+-- >>> let widgets = [testWidget WTList (def :: Layout){x = Just 0, y = Just 2, w = Just 20, h = Just 2}, testWidget WTList (def :: Layout){x = Just 0, y = Just 0, w = Just 6, h = Just 1}, testWidget WTList (def :: Layout){w = Just 6, h = Just 1}]
 -- >>> map coordinates (normalizeWidgetLayouts widgets)
 -- [Just (Just 0,Just 0,Just 6,Just 1),Just (Just 6,Just 0,Just 6,Just 1),Just (Just 0,Just 1,Just 12,Just 2)]
 --
 -- Saved visual order wins over YAML array order, and a clamped full-width group
 -- derives its height from its children:
 --
--- >>> let lower = testWidget WTList Layout{minWidth = Nothing, x = Just 0, y = Just 4, w = Just 6, h = Just 2}
--- >>> let golden = (testWidget WTGroup Layout{minWidth = Nothing, x = Just 0, y = Just 0, w = Just 20, h = Just 10}){children = Just []}
+-- >>> let lower = testWidget WTList (def :: Layout){x = Just 0, y = Just 4, w = Just 6, h = Just 2}
+-- >>> let golden = (testWidget WTGroup (def :: Layout){x = Just 0, y = Just 0, w = Just 20, h = Just 10}){children = Just []}
 -- >>> map coordinates (normalizeWidgetLayouts [lower, golden])
 -- [Just (Just 0,Just 0,Just 12,Just 2),Just (Just 0,Just 2,Just 6,Just 2)]
 --
 -- Nested group children are normalized recursively:
 --
 -- >>> let child position = testWidget WTList position
--- >>> let groupWidget = (testWidget WTGroup Layout{minWidth = Nothing, x = Just 0, y = Just 0, w = Just 12, h = Just 1}){children = Just [child Layout{minWidth = Nothing, x = Just 0, y = Just 0, w = Just 8, h = Just 1}, child Layout{minWidth = Nothing, x = Just 0, y = Just 0, w = Just 8, h = Just 1}]}
+-- >>> let groupWidget = (testWidget WTGroup (def :: Layout){x = Just 0, y = Just 0, w = Just 12, h = Just 1}){children = Just [child (def :: Layout){x = Just 0, y = Just 0, w = Just 8, h = Just 1}, child (def :: Layout){x = Just 0, y = Just 0, w = Just 8, h = Just 1}]}
 -- >>> fmap coordinates (listToMaybe $ normalizeWidgetLayouts [groupWidget])
 -- Just (Just (Just 0,Just 0,Just 12,Just 3))
 -- >>> map coordinates (fold $ listToMaybe (normalizeWidgetLayouts [groupWidget]) >>= (.children))
@@ -659,8 +659,8 @@ gridStackAttrs widgets =
 --
 -- A saved four-stat row with shrunken cards still fills its group:
 --
--- >>> let stat x width height = testWidget WTStat Layout{minWidth = Nothing, x = Just x, y = Just 0, w = Just width, h = Just height}
--- >>> let overview = (testWidget WTGroup Layout{minWidth = Nothing, x = Just 0, y = Just 0, w = Just 12, h = Just 3}){children = Just [stat 0 3 2, stat 3 3 2, stat 6 2 1, stat 9 2 2]}
+-- >>> let stat x width height = testWidget WTStat (def :: Layout){x = Just x, y = Just 0, w = Just width, h = Just height}
+-- >>> let overview = (testWidget WTGroup (def :: Layout){x = Just 0, y = Just 0, w = Just 12, h = Just 3}){children = Just [stat 0 3 2, stat 3 3 2, stat 6 2 1, stat 9 2 2]}
 -- >>> map coordinates (fold $ listToMaybe (normalizeWidgetLayouts [overview]) >>= (.children))
 -- [Just (Just 0,Just 0,Just 3,Just 2),Just (Just 3,Just 0,Just 3,Just 2),Just (Just 6,Just 0,Just 3,Just 2),Just (Just 9,Just 0,Just 3,Just 2)]
 -- >>> let html = toStrict $ renderText $ widget_ overview

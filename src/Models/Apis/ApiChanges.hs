@@ -8,6 +8,9 @@
 -- that nothing ever read back.
 module Models.Apis.ApiChanges (
   AnomalyVM (..),
+  SchemaSubject (..),
+  schemaSubject,
+  spanSchemaTitle,
   FieldEvidence (..),
   FieldSnapshot (..),
   fieldSnapshot,
@@ -19,7 +22,6 @@ module Models.Apis.ApiChanges (
   FieldChange (..),
   FieldChangeKind (..),
   parseAnomalyTypes,
-  detectService,
   getAnomaliesVM,
 )
 where
@@ -28,7 +30,6 @@ import Data.Aeson qualified as AE
 import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
-import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time
 import Data.Vector qualified as V
@@ -88,12 +89,30 @@ data AnomalyVM = AnomalyVM
   , endpointMethod :: Maybe Text
   , endpointUrlPath :: Maybe Text
   , endpointHost :: Maybe Text
+  , serviceName :: Maybe Text
+  , keyKind :: Maybe Catalog.KeyKind
+  , scope :: Maybe (Aeson Catalog.Scope)
   , newFields :: V.Vector Text
   , modifiedFields :: V.Vector Text
   , fieldEvidence :: Aeson (V.Vector FieldEvidence)
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
+
+
+-- | HTTP and non-HTTP schema observations have different telemetry identities.
+data SchemaSubject = EndpointSchema Catalog.Scope | SpanSchema Catalog.Scope
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+
+
+schemaSubject :: Catalog.KeyKind -> Catalog.Scope -> SchemaSubject
+schemaSubject Catalog.HttpEndpoint = EndpointSchema
+schemaSubject Catalog.SpanIdentity = SpanSchema
+
+
+spanSchemaTitle :: Catalog.Scope -> Text
+spanSchemaTitle scope = "Span schema changed" <> foldMap (": " <>) scope.spanName
 
 
 -- | Immutable observations at detection time; absence of a prior snapshot means a new field.
@@ -143,6 +162,9 @@ SELECT
     COALESCE(an.method, endpoints.method),
     COALESCE(an.url_path, endpoints.url_path),
     COALESCE(an.host, endpoints.host),
+    COALESCE(NULLIF(btrim(c.scope->>'service'), ''), NULLIF(btrim(endpoints.service_name), '')),
+    c.key_kind,
+    c.scope,
     an.new_fields,
     an.modified_fields,
     an.field_evidence
@@ -150,6 +172,8 @@ from
     apis.anomalies an
     LEFT JOIN apis.endpoints ON an.project_id = endpoints.project_id
                             AND endpoints.hash = split_part(an.target_hash, ':', 1)
+    LEFT JOIN apis.schema_catalog c ON c.project_id = an.project_id
+                                  AND c.key_hash = split_part(an.target_hash, ':', 1)
 where
   an.project_id=#{pid} AND an.target_hash=ANY(#{hash})
       |]
@@ -201,30 +225,6 @@ data FieldChange = FieldChange
 data FieldChangeKind = Modified | Added | Removed
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
-
-
--- | Derive a service name from the path (@\/api\/v1\/auth\/login@ → @auth-service@), falling back to the host.
---
--- The @api@ form skips the version segment, so @\/api\/v1\/auth\/…@ and @\/api\/v2\/auth\/…@ are
--- one service rather than two:
---
--- >>> detectService Nothing (Just "/api/v1/auth/login")
--- "auth-service"
--- >>> detectService Nothing (Just "/billing/invoices")
--- "billing-service"
---
--- Anything with no usable first segment — no path, a bare @\/@, or an @\/api@ too short to
--- carry a service — falls back to the host, then to a constant:
---
--- >>> detectService (Just "checkout.internal") (Just "/")
--- "checkout.internal"
--- >>> detectService Nothing Nothing
--- "api-service"
-detectService :: Maybe Text -> Maybe Text -> Text
-detectService hostM endpointPathM = case maybe [] (T.splitOn "/" . T.dropWhile (== '/')) endpointPathM of
-  ("api" : _ : service : _) -> service <> "-service"
-  (service : _) | service /= "" -> service <> "-service"
-  _ -> fromMaybe "api-service" hostM
 
 
 -- $setup

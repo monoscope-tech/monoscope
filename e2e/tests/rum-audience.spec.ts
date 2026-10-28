@@ -97,6 +97,7 @@ test("saved views work on custom dashboards across tabs and retain the time rang
     expect(new URL(page.url()).searchParams.get("since")).toBe("7D");
     await page.getByRole("tab", { name: "Errors", exact: true }).click();
     await expect(page.locator('#dashboard-variables [name="region"]')).toHaveCount(1);
+    page.once("dialog", dialog => dialog.accept());
     await toolbar.getByRole("button", { name: "Delete view US worker", exact: true }).click();
     await expect(toolbar.getByRole("link", { name: "US worker", exact: true })).toHaveCount(0);
   } finally {

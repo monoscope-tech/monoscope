@@ -43,6 +43,7 @@ export class SessionReplay extends LitElement {
   @state() private userName: string | null = null;
   @state() private userIdLabel: string | null = null;
   @state() private sessionIdCopied = false;
+  @state() private consoleCopy: { timestamp: number; field: 'message' | 'trace'; status: 'copied' | 'failed' } | null = null;
   @state() private momentLinkCopied = false;
   @state() private showShortcuts = false;
   // Timeline markers: errors/warnings rendered as ticks on the scrubber,
@@ -111,7 +112,6 @@ export class SessionReplay extends LitElement {
     this.goTo = this.goTo.bind(this);
     this.fetchNewSessionData = this.fetchNewSessionData.bind(this);
     this.initiatePlayer = this.initiatePlayer.bind(this);
-    this.handleTimeSeek = this.handleTimeSeek.bind(this);
     this.closePlayerWindow = this.closePlayerWindow.bind(this);
     document.addEventListener('mousemove', (e) => {
       if (this.startX !== null) {
@@ -135,6 +135,7 @@ export class SessionReplay extends LitElement {
   // Keyboard shortcuts — only fire when the player window is visible and the
   // user isn't typing in an input. Mirrors conventions from YouTube/video.js.
   private handleKeydown = (e: KeyboardEvent) => {
+    if (e.defaultPrevented) return;
     const container = document.querySelector(`#${this.containerId}`);
     if (!container || container.classList.contains('hidden')) return;
 
@@ -155,8 +156,7 @@ export class SessionReplay extends LitElement {
     if (this.isLoading || this.loadError) return;
 
     const t = e.target as HTMLElement | null;
-    const tag = t?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return;
+    if (t?.closest('button, summary, input, textarea, select, a[href], [role="button"], [role="slider"]') || t?.isContentEditable) return;
 
     // Don't hijack Cmd/Ctrl/Alt combos — those belong to the browser/OS
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -263,11 +263,13 @@ export class SessionReplay extends LitElement {
     this.stopTimer();
   }
 
-  goTo(tm: number, paused?: boolean) {
+  goTo(tm: number, paused = false) {
     this.pause();
-    if (!paused) {
-      this.play(tm);
-    }
+    this.currentTime = Math.max(0, Math.min(tm, this.metaData.totalTime));
+    this.finished = this.currentTime >= this.metaData.totalTime;
+    this.paused = paused;
+    if (paused) this.player?.pause(this.currentTime);
+    else this.play(this.currentTime);
   }
 
   loopTimer() {
@@ -310,7 +312,7 @@ export class SessionReplay extends LitElement {
   // instead of a fixed 550px that letterboxes wide recordings and crops tall ones.
   private fitHeight() {
     if (!this.fullWidth) return;
-    const maxH = Math.max(160, window.innerHeight - 124 - 96); // 124 player chrome, ~96 workspace header
+    const maxH = Math.max(160, window.innerHeight - 132 - 96); // 132 player chrome, ~96 workspace header
     const h = Math.max(160, Math.min(maxH, Math.round((this.containerWidth * this.iframeHeight) / this.iframeWidth)));
     if (h !== this.containerHeight) {
       this.containerHeight = h;
@@ -362,12 +364,14 @@ export class SessionReplay extends LitElement {
       }
       if (changedProperties.has('currentEventTime')) {
         if (this.syncScrolling) {
-          // Defer scrollIntoView to avoid forced reflow during property changes
           requestAnimationFrame(() => {
-            const element = document.querySelector('#a-' + this.currentEventTime);
-            if (element) {
-              // Use smooth scrolling to reduce reflow impact
-              element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const list = this.renderRoot.querySelector<HTMLElement>('#replay-console-events');
+            const element = list?.querySelector<HTMLElement>('#a-' + this.currentEventTime);
+            if (list && element) {
+              list.scrollTo({
+                top: list.scrollTop + element.getBoundingClientRect().top - list.getBoundingClientRect().top - (list.clientHeight - element.clientHeight) / 2,
+                behavior: 'smooth',
+              });
             }
           });
         }
@@ -410,15 +414,11 @@ export class SessionReplay extends LitElement {
     this.warnTicks = [];
     this.navMarkers = [];
     this.seenFirstMeta = false;
-    // rrweb seeks use offsets from the first event, so markers are computed
-    // relative to sessionStart. ingestMarkers appends, so it's reused verbatim as
-    // later shards stream in during progressive load.
-    this.sessionStart = events[0].timestamp;
-    this.ingestMarkers(events);
-
     this.player = new Replayer(events, { root: target, plugins: [{ handler: (event) => this.handleConsoleEvents(event as eventWithTime) }], skipInactive: this.skipInactive });
     this.trickPlayer = null;
     this.metaData = this.player.getMetaData();
+    this.sessionStart = this.metaData.startTime;
+    this.ingestMarkers(events);
     this.updateScale();
     // Honor ?t=SECONDS from the URL exactly once per fresh load — so a shared
     // link lands on the right moment. Clamp to session bounds in case events
@@ -441,7 +441,7 @@ export class SessionReplay extends LitElement {
             const mContainer = Number(comp.width.replace('px', ''));
             const mHeight = Number(comp.height.replace('px', ''));
             this.containerWidth = mContainer - this.activityWidth;
-            this.containerHeight = mHeight - 124;
+            this.containerHeight = mHeight - 132;
 
             this.updateScale();
           }
@@ -454,7 +454,8 @@ export class SessionReplay extends LitElement {
   // Append timeline markers for a batch of events (relative to sessionStart).
   // Append-only so it's reused verbatim for the initial shard and every shard
   // streamed in afterwards; new array identities let Lit re-render the scrubber.
-  private ingestMarkers(events: eventWithTime[]) {
+  private ingestMarkers(unsorted: eventWithTime[]) {
+    const events = [...unsorted].sort((a, b) => a.timestamp - b.timestamp);
     const errs: number[] = [];
     const warns: number[] = [];
     const navs: { offset: number; href: string }[] = [];
@@ -482,19 +483,22 @@ export class SessionReplay extends LitElement {
   }
 
   // Feed a streamed shard's events into the live player and extend derived state.
-  private appendEvents(events: eventWithTime[]) {
-    if (!this.player || events.length === 0) return;
+  private async appendEvents(events: eventWithTime[]) {
+    const player = this.player;
+    if (!player || events.length === 0) return;
     for (const ev of events) {
       try {
-        this.player.addEvent(ev);
+        player.addEvent(ev);
       } catch (e) {
         console.warn('addEvent failed for streamed replay event:', e);
       }
       this.events.push(ev); // grow in place; concat per shard is O(shards²)
     }
+    // rrweb queues addEvent in a microtask; reading metadata sooner misses the shard's tail.
+    await Promise.resolve();
+    if (this.player !== player) return;
     this.ingestMarkers(events);
-    // totalTime grows as later shards arrive, so the scrubber extends live.
-    this.metaData = this.player.getMetaData();
+    this.metaData = player.getMetaData();
     // Playback can hit the end of the *loaded-so-far* shards while later ones are
     // still streaming — that's not the real end of the session. Clear the finished
     // state and resume (respecting an explicit user pause) so multi-shard sessions
@@ -526,7 +530,7 @@ export class SessionReplay extends LitElement {
         try {
           const evs = await this.fetchSegment(this.loadedSegments);
           if (this.currentSessionId !== requestedId) return;
-          this.appendEvents(evs);
+          await this.appendEvents(evs);
           break;
         } catch (e) {
           if (this.currentSessionId !== requestedId) return;
@@ -750,14 +754,6 @@ export class SessionReplay extends LitElement {
     }
   }
 
-  handleTimeSeek(e: MouseEvent) {
-    const x = e.clientX;
-    const bounding = this.progressBar.getBoundingClientRect();
-    const toWidth = x - bounding.x;
-    const toGo = (toWidth * this.metaData.totalTime) / bounding.width;
-    this.goTo(toGo);
-  }
-
   handleTrickPlay(e: MouseEvent) {
     // Clear any pending cleanup timer
     if (this.trickPlayerCleanupTimer) {
@@ -798,29 +794,54 @@ export class SessionReplay extends LitElement {
     this.resizeObserver = null;
   }
 
+  private copyConsoleText = async (event: ConsoleEvent, field: 'message' | 'trace') => {
+    const text = (field === 'message' ? event.data.payload.payload : event.data.payload.trace).join('\n');
+    try {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const input = document.createElement('textarea');
+        const focused = document.activeElement;
+        input.value = text;
+        input.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+        document.body.append(input);
+        try {
+          input.select();
+          if (!document.execCommand('copy')) throw new Error('Clipboard copy failed');
+        } finally {
+          input.remove();
+          if (focused instanceof HTMLElement) focused.focus({ preventScroll: true });
+        }
+      }
+      this.consoleCopy = { timestamp: event.timestamp, field, status: 'copied' };
+    } catch {
+      this.consoleCopy = { timestamp: event.timestamp, field, status: 'failed' };
+    }
+    const result = this.consoleCopy;
+    setTimeout(() => { if (this.consoleCopy === result) this.consoleCopy = null; }, 2000);
+  };
+
+  private consoleCopyLabel(timestamp: number, field: 'message' | 'trace'): string {
+    return this.consoleCopy?.timestamp === timestamp && this.consoleCopy.field === field
+      ? this.consoleCopy.status === 'copied' ? 'Copied' : 'Copy failed'
+      : 'Copy';
+  }
+
   displayConsoleEvent = (event: ConsoleEvent) => {
     const payload = event.data.payload;
-    if (payload.level === 'error' && !this.consoleEventsEnable[0]) return nothing;
-    if (payload.level === 'warn' && !this.consoleEventsEnable[1]) return nothing;
-    if (payload.level === 'info' && !this.consoleEventsEnable[2]) return nothing;
-
-    let bgColor = '';
     let textColor = '';
     let hoverColor = '';
 
     switch (payload.level) {
       case 'error':
-        bgColor = 'bg-fillError-weak';
         textColor = 'text-textError';
         hoverColor = 'hover:bg-fillError-weak';
         break;
       case 'warn':
-        bgColor = 'bg-fillWarning-weak';
         textColor = 'text-textWarning';
         hoverColor = 'hover:bg-fillWarning-weak';
         break;
       case 'info':
-        bgColor = 'bg-fillBrand-weak';
         textColor = 'text-textBrand';
         hoverColor = 'hover:bg-fillBrand-weak';
         break;
@@ -829,52 +850,34 @@ export class SessionReplay extends LitElement {
     }
 
     return html`
-      <div class="text-sm flex flex-col min-w-0 event-container" id="a-${event.timestamp}">
-        <div class="flex items-center w-full">
-          <span class="h-2 w-2 shrink-0 rounded-full ${this.currentEventTime === event.timestamp ? 'bg-fillBrand-strong' : ''} ml-1"></span>
-          <span class="text-xs font-medium text-center text-textWeak min-w-11">
-            ${SessionReplay.formatTime(event.timestamp - this.metaData.startTime)}
-          </span>
-          ${faSprite_('console', 'regular', 'w-3 h-3 mr-1 shrink-0 font-semibold')}
-          <span class="w-full min-w-0 truncate px-2 pb-1 overflow-ellipsis ${hoverColor} ${bgColor}">
-            ${payload.payload.join('').substring(0, 100)}
-          </span>
-          <button
-            @click=${(e: MouseEvent) => {
-              const container = (e.currentTarget as HTMLElement).closest('.event-container');
-              container?.classList.toggle('expanded');
-            }}
-            class="cursor-pointer h-full flex flex-col px-1 rounded-lg shrink-0 items-center justify-center hover:bg-fillWeak"
-          >
-            ${faSprite_('chevron-up', 'regular', 'w-2.5 h-2.5 fill-current')}
-          </button>
+      <details class="group/console min-w-0 border-b border-strokeWeak open:bg-fillWeaker" id="a-${event.timestamp}">
+        <summary class="flex items-center gap-2 px-3 py-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden ${hoverColor} ${this.currentEventTime === event.timestamp ? 'bg-fillBrand-weak' : ''} focus-visible:outline-2 focus-visible:outline-offset-[-2px]">
+          <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-current ${textColor}"></span>
+          <span class="text-2xs tabular-nums text-textWeak shrink-0">${SessionReplay.formatTime(event.timestamp - this.metaData.startTime)}</span>
+          <span class="flex-1 min-w-0 truncate text-xs ${textColor}" title=${payload.payload.join('')}>${payload.payload.join('').substring(0, 100)}</span>
+          <span class="shrink-0 text-textWeak" aria-hidden="true">${faSprite_('chevron-right', 'regular', 'w-3 h-3 group-open/console:rotate-90')}</span>
+        </summary>
+        <div class="px-3 pb-3 space-y-3 min-w-0">
+          ${(
+            [
+              ['message', 'Message', 'console message', textColor, payload.payload],
+              ['trace', 'Stack trace', 'stack trace', 'text-textStrong', payload.trace],
+            ] as const
+          )
+            .filter(([field, , , , lines]) => field === 'message' || lines.length > 0)
+            .map(
+              ([field, label, copyLabel, color, lines]) => html`<div class="rounded-lg bg-bgBase p-3 min-w-0">
+                <div class="flex items-center justify-between gap-2 mb-2">
+                  <span class="text-2xs font-semibold text-textWeak">${label}</span>
+                  <button type="button" class="btn btn-xs btn-ghost h-6 min-h-6 px-1 text-textWeak" aria-label="Copy ${copyLabel}" title="Copy ${copyLabel}" @click=${() => this.copyConsoleText(event, field)}>
+                    ${faSprite_('copy', 'regular', 'h-3 w-3')}<span role="status" aria-live="polite">${this.consoleCopyLabel(event.timestamp, field)}</span>
+                  </button>
+                </div>
+                <pre class="m-0 text-xs leading-relaxed font-mono whitespace-pre-wrap break-normal [overflow-wrap:anywhere] ${color}">${lines.join('\n')}</pre>
+              </div>`
+            )}
         </div>
-        <div class="flex-col ${bgColor} p-2 w-full min-w-0 hidden event-detail">
-          <div class="bg-bgBase rounded-xl p-3 whitespace-pre-wrap relative ${textColor} font-medium">
-            <button
-              class="absolute right-2 cursor-pointer"
-              @click=${() => {
-                navigator.clipboard.writeText(payload.payload.join('\n'));
-              }}
-            >
-              ${faSprite_('copy', 'regular', 'h-5 w-5')}
-            </button>
-            <span>${payload.payload.join('\n')}</span>
-          </div>
-          <span class="mt-4 mb-1 font-semibold">Stack trace</span>
-          <div class="bg-bgBase rounded-xl p-3 whitespace-pre-wrap relative font-medium">
-            <button
-              class="absolute right-2 cursor-pointer"
-              @click=${() => {
-                navigator.clipboard.writeText(payload.trace.join('\n'));
-              }}
-            >
-              ${faSprite_('copy', 'regular', 'h-5 w-5')}
-            </button>
-            <span>${payload.trace.join('\n')}</span>
-          </div>
-        </div>
-      </div>
+      </details>
     `;
   };
 
@@ -882,12 +885,14 @@ export class SessionReplay extends LitElement {
     // The header spans the replay column only, so the console panel's width never buys it
     // room. Below ~760px demote every control to icon-only (tooltips and aria-labels carry
     // the words) so the identity keeps its width; icon buttons keep a 44px-wide target.
+    const enabledLevels = { error: this.consoleEventsEnable[0], warn: this.consoleEventsEnable[1], info: this.consoleEventsEnable[2] };
+    const visibleConsoleEvents = this.consoleEvents.filter((event) => enabledLevels[event.data.payload.level]);
     const compactHeader = this.containerWidth < 760;
-    const compactBtn = compactHeader ? 'min-w-11 h-10 justify-center' : '';
+    const compactBtn = compactHeader ? 'min-w-9 justify-center' : '';
     return html`<div
-      class="flex overflow-hidden rr-block relative rounded shadow-lg ${this.fullWidth ? 'w-full' : 'min-h-[400px] resize min-w-[640px] max-w-[90vw]'}"
+      class="flex overflow-hidden rr-block relative bg-bgBase ${this.fullWidth ? 'w-full rounded shadow-lg' : 'min-h-[400px] resize min-w-[640px] max-w-[90vw] rounded-xl shadow-lg'}"
       id="replayerOuterContainer"
-      style="height:${this.containerHeight + 124}px;${this.fullWidth ? '' : ` width:${this.containerWidth + this.activityWidth}px`}"
+      style="height:${this.containerHeight + 132}px;${this.fullWidth ? '' : ` width:${this.containerWidth + this.activityWidth}px`}"
     >
       <!-- Intentional SE resize hint: the native handle still drives resize, this is just the affordance -->
       <div
@@ -896,15 +901,15 @@ export class SessionReplay extends LitElement {
         style="background: linear-gradient(135deg, transparent 0 50%, var(--color-strokeStrong) 50% 60%, transparent 60% 70%, var(--color-strokeStrong) 70% 80%, transparent 80% 100%);"
       ></div>
       <div class="w-full flex flex-col justify-start shrink-1 min-w-0 overflow-hidden">
-        <div class="bg-fillWeak w-full px-3 h-10 min-h-10 flex items-center border-b ${compactHeader ? 'gap-2' : 'gap-4'} cursor-move justify-between playerHeader">
+        <div class="bg-bgRaised w-full px-4 h-12 min-h-12 flex items-center border-b border-strokeWeak ${compactHeader ? 'gap-2' : 'gap-4'} cursor-move justify-between playerHeader">
           <!-- Identity block: who, when, how long, how many errors -->
           <div class="flex items-center gap-3 min-w-0 shrink">
-            <div class="flex flex-col min-w-0 leading-tight">
+            <div class="flex flex-col gap-1 min-w-0 leading-tight">
               <span class="text-sm font-semibold truncate" title=${this.userLabel() ?? 'Anonymous session — no user was identified when this was recorded'}>
                 ${this.userLabel() ?? 'Anonymous session'}
               </span>
-              <span class="text-2xs text-textWeak font-medium tabular-nums flex items-center gap-1.5 truncate">
-                <span title="Session started">${this.formattedStartedAt()}</span>
+              <span class="text-2xs text-textWeak tabular-nums flex items-center gap-2 min-w-0">
+                <span class="truncate" title="Session started">${this.formattedStartedAt()}</span>
                 <span aria-hidden="true">·</span>
                 <span title="Session duration" class="whitespace-nowrap">${SessionReplay.formatTime(this.metaData.totalTime || 0)}</span>
                 ${this.consoleTypesCounts.error > 0
@@ -914,7 +919,7 @@ export class SessionReplay extends LitElement {
                           if (this.activityWidth <= 0) this.activityWidth = 300;
                           this.jumpToNextError();
                         }}
-                        class="text-textError font-semibold whitespace-nowrap cursor-pointer hover:underline"
+                        class="rounded bg-fillError-weak px-1.5 py-0.5 text-textError font-medium whitespace-nowrap cursor-pointer hover:underline"
                         title="Jump to the next error and open the console"
                       >
                         ${this.consoleTypesCounts.error} error${this.consoleTypesCounts.error === 1 ? '' : 's'}
@@ -927,40 +932,40 @@ export class SessionReplay extends LitElement {
               </span>
             </div>
             <!-- Copy / Share utilities: icon group, text labels collapse at narrow widths -->
-            <div class="flex items-center gap-1 shrink-0">
+            <div class="flex items-center gap-1 shrink-0 border-l border-strokeWeak pl-3">
               <button
                 @click=${this.copySessionId}
-                class="flex items-center gap-1 px-1.5 h-6 rounded cursor-pointer hover:bg-fillWeaker text-textWeak hover:text-textStrong text-2xs font-medium"
+                class="flex items-center gap-1.5 px-2 h-8 min-w-8 justify-center rounded-md cursor-pointer hover:bg-fillWeaker text-textWeak hover:text-textStrong text-2xs font-medium"
                 title="Copy session ID"
                 aria-label="Copy session ID"
               >
                 ${faSprite_('copy', 'regular', 'w-3 h-3')}
                 ${compactHeader
                   ? nothing
-                  : html`<span class="whitespace-nowrap">${this.sessionIdCopied ? 'Copied' : 'Copy session ID'}</span>`}
+                  : html`<span class="whitespace-nowrap">${this.sessionIdCopied ? 'Copied' : 'Copy ID'}</span>`}
               </button>
               <button
                 @click=${this.shareAtTimestamp}
-                class="flex items-center gap-1 px-1.5 h-6 rounded cursor-pointer hover:bg-fillWeaker text-textWeak hover:text-textStrong text-2xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                class="flex items-center gap-1.5 px-2 h-8 min-w-8 justify-center rounded-md cursor-pointer hover:bg-fillWeaker text-textWeak hover:text-textStrong text-2xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Copy a link that opens the player at this moment"
-                aria-label="Share this moment"
+                aria-label="Copy moment link"
                 ?disabled=${this.isLoading || !!this.loadError}
               >
                 ${faSprite_('link-simple', 'regular', 'w-3 h-3')}
                 ${compactHeader
                   ? nothing
-                  : html`<span class="whitespace-nowrap">${this.momentLinkCopied ? 'Link copied' : 'Share moment'}</span>`}
+                  : html`<span class="whitespace-nowrap">${this.momentLinkCopied ? 'Link copied' : 'Copy moment link'}</span>`}
               </button>
             </div>
           </div>
 
-          <div class="flex items-center ${compactHeader ? 'gap-0' : 'gap-4'} text-xs font-semibold shrink-0 whitespace-nowrap">
+          <div class="flex items-center gap-1 text-xs font-medium shrink-0 whitespace-nowrap">
             <div class="dropdown" title="Playback speed (press &lt; or &gt; to step)">
               <div
                 tabindex="0"
                 role="button"
                 aria-label="Playback speed"
-                class="cursor-pointer flex items-center gap-1 tabular-nums ${compactBtn} ${this.playSpeed !== 1 ? 'text-textBrand' : ''}"
+                class="cursor-pointer flex items-center gap-1.5 h-8 px-2 rounded-md hover:bg-fillWeaker tabular-nums ${compactBtn} ${this.playSpeed !== 1 ? 'bg-fillBrand-weak text-textBrand' : 'text-textWeak'}"
               >
                 ${faSprite_('gauge', 'regular', 'w-3 h-3')} ${compactHeader ? '' : 'Speed '}${this.playSpeed}×
               </div>
@@ -981,7 +986,7 @@ export class SessionReplay extends LitElement {
               </ul>
             </div>
             <button
-              class="flex items-center cursor-pointer gap-1 ${compactBtn} ${this.skipInactive ? 'text-textBrand' : ''}"
+              class="flex items-center cursor-pointer gap-1.5 h-8 px-2 rounded-md hover:bg-fillWeaker ${compactBtn} ${this.skipInactive ? 'bg-fillBrand-weak text-textBrand' : 'text-textWeak'}"
               title="Skip idle stretches longer than 2 seconds"
               aria-label="Skip idle"
               aria-pressed=${this.skipInactive}
@@ -994,7 +999,7 @@ export class SessionReplay extends LitElement {
               @click=${() => {
                 this.activityWidth = this.activityWidth <= 0 ? 300 : 0;
               }}
-              class="cursor-pointer flex items-center gap-1 ${compactBtn} ${this.activityWidth > 0 ? 'text-textBrand' : ''}"
+              class="cursor-pointer flex items-center gap-1.5 h-8 px-2 rounded-md hover:bg-fillWeaker ${compactBtn} ${this.activityWidth > 0 ? 'bg-fillBrand-weak text-textBrand' : 'text-textWeak'}"
               title="Toggle the console panel (errors, warnings, logs)"
               aria-label=${compactHeader ? 'Console' : nothing}
               aria-pressed=${this.activityWidth > 0}
@@ -1026,7 +1031,7 @@ export class SessionReplay extends LitElement {
               style="height:${this.containerHeight}px; width:${this.containerWidth}px"
             ></div>
             <div
-              class="absolute inset-0 flex items-center justify-center ${this.loadError || this.isLoading ? 'bg-black/75' : 'bg-black/25'} ${this.paused || this.finished || this.isLoading || this.loadError
+              class="absolute inset-0 flex items-center justify-center ${this.loadError || this.isLoading ? 'bg-black/75' : this.finished ? 'bg-black/40' : 'bg-black/25'} ${this.paused || this.finished || this.isLoading || this.loadError
                 ? ''
                 : 'hidden'}"
             >
@@ -1073,31 +1078,30 @@ export class SessionReplay extends LitElement {
                   `
                 : this.finished
                 ? html`
-                    <div class="flex flex-col items-stretch gap-3 max-w-sm w-full px-6">
-                      <!-- Instrument-grade end card: numbers first, navigation second -->
-                      <div class="text-2xs uppercase tracking-wider text-white/70 font-semibold">End of session</div>
-                      <div class="flex items-baseline gap-5 text-white">
+                    <div class="flex flex-col items-stretch gap-4 max-w-sm w-full m-4 p-5 rounded-2xl border border-strokeWeak bg-bgRaised text-textStrong shadow-xl">
+                      <div class="text-2xs uppercase tracking-wider text-textWeak font-semibold">End of session</div>
+                      <div class="flex items-baseline gap-5 text-textStrong">
                         <div class="flex flex-col">
                           <span class="text-2xl font-semibold tabular-nums leading-none">${SessionReplay.formatTime(this.metaData.totalTime)}</span>
-                          <span class="text-2xs uppercase tracking-wider text-white/70 mt-1">Duration</span>
+                          <span class="text-2xs uppercase tracking-wider text-textWeak mt-1">Duration</span>
                         </div>
                         <div class="flex flex-col">
                           <span class="text-2xl font-semibold tabular-nums leading-none ${this.consoleTypesCounts.error > 0 ? 'text-textError' : ''}">${this.consoleTypesCounts.error}</span>
-                          <span class="text-2xs uppercase tracking-wider text-white/70 mt-1">Errors</span>
+                          <span class="text-2xs uppercase tracking-wider text-textWeak mt-1">Errors</span>
                         </div>
                         <div class="flex flex-col">
                           <span class="text-2xl font-semibold tabular-nums leading-none">${this.navMarkers.length + 1}</span>
-                          <span class="text-2xs uppercase tracking-wider text-white/70 mt-1">Pages</span>
+                          <span class="text-2xs uppercase tracking-wider text-textWeak mt-1">Pages</span>
                         </div>
                       </div>
                       ${this.errorTicks.length > 0
                         ? html`<div class="flex flex-col gap-1 mt-1">
-                            <div class="text-2xs uppercase tracking-wider text-white/70 font-semibold">Jump to error</div>
+                            <div class="text-2xs uppercase tracking-wider text-textWeak font-semibold">Jump to error</div>
                             <div class="flex flex-wrap gap-1">
                               ${this.errorTicks.slice(0, 6).map(
                                 (t, i) => html`<button
                                   @click=${() => this.goTo(t)}
-                                  class="cursor-pointer flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/15 text-xs text-white tabular-nums"
+                                  class="cursor-pointer flex items-center gap-1 px-2 py-1 rounded-md bg-fillError-weak hover:bg-fillWeak text-xs text-textError tabular-nums"
                                   title="Jump to error ${i + 1}"
                                 >
                                   <span class="h-1.5 w-1.5 rounded-full bg-textError"></span>
@@ -1105,15 +1109,15 @@ export class SessionReplay extends LitElement {
                                 </button>`
                               )}
                               ${this.errorTicks.length > 6
-                                ? html`<span class="text-xs text-white/70 px-1 self-center tabular-nums">+${this.errorTicks.length - 6} more</span>`
+                                ? html`<span class="text-xs text-textWeak px-1 self-center tabular-nums">+${this.errorTicks.length - 6} more</span>`
                                 : nothing}
                             </div>
                           </div>`
                         : nothing}
-                      <div class="flex gap-2 mt-1">
+                      <div class="flex flex-wrap gap-2 mt-1">
                         <button
                           @click=${() => this.goTo(0)}
-                          class="flex-1 cursor-pointer flex items-center justify-center gap-2 px-3 py-2 rounded bg-white/15 hover:bg-white/25 text-sm font-medium text-white"
+                          class="flex-1 cursor-pointer flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-fillBrand-strong hover:brightness-110 text-sm font-medium text-white whitespace-nowrap"
                           title="Replay from the beginning (Home)"
                         >
                           ${faSprite_('replay', 'regular', 'w-3.5 h-3.5')}
@@ -1121,11 +1125,11 @@ export class SessionReplay extends LitElement {
                         </button>
                         <button
                           @click=${this.shareAtTimestamp}
-                          class="cursor-pointer flex items-center justify-center gap-1.5 px-3 py-2 rounded bg-white/5 hover:bg-white/15 text-sm font-medium text-white/70"
+                          class="cursor-pointer flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-fillWeaker hover:bg-fillWeak text-sm font-medium text-textStrong whitespace-nowrap"
                           title="Copy a link that opens the player at this moment"
                         >
                           ${faSprite_('link-simple', 'regular', 'w-3.5 h-3.5')}
-                          ${this.momentLinkCopied ? 'Link copied' : 'Share moment'}
+                          ${this.momentLinkCopied ? 'Link copied' : 'Copy moment link'}
                         </button>
                       </div>
                     </div>
@@ -1145,7 +1149,6 @@ export class SessionReplay extends LitElement {
           <div class="flex flex-col items-center w-full px-4 pt-3 pb-1 gap-1">
             <div
               id="progressBar"
-              @click=${this.handleTimeSeek}
               @mouseover=${this.handleTrickPlay}
               @mousemove=${this.handleTrickPlay}
               @mouseleave=${() => {
@@ -1158,7 +1161,7 @@ export class SessionReplay extends LitElement {
                   this.trickPlayerCleanupTimer = null;
                 }, 1000);
               }}
-              class="relative progress-container h-2.5 cursor-pointer rounded-sm group bg-fillWeak w-full"
+              class="relative progress-container h-2.5 rounded-sm group bg-fillWeak w-full focus-within:outline-2 focus-within:outline-offset-4 focus-within:outline-strokeBrand-strong"
             >
               <div
                 class="bg-bgInverse absolute text-sm font-medium rounded -translate-x-1/2 overflow-hidden border border-strokeStrong hidden group-hover:block"
@@ -1170,6 +1173,18 @@ export class SessionReplay extends LitElement {
               <div class="relative h-full bg-fillBrand-strong rounded-sm" style="width:${(this.currentTime / (this.metaData.totalTime || 1)) * 100}%">
                 <span class="absolute -right-1.5 h-3.5 w-3.5 top-1/2 -translate-y-1/2 rounded-full bg-fillBrand-strong ring-2 ring-bgBase shadow-sm"></span>
               </div>
+              <input
+                type="range"
+                min="0"
+                max=${this.metaData.totalTime}
+                step="1"
+                .value=${String(this.currentTime)}
+                aria-label="Playback position"
+                aria-valuetext=${`${SessionReplay.formatTime(this.currentTime)} of ${SessionReplay.formatTime(this.metaData.totalTime)}`}
+                ?disabled=${this.isLoading || !!this.loadError || this.metaData.totalTime <= 0}
+                @input=${(e: Event) => this.goTo((e.currentTarget as HTMLInputElement).valueAsNumber, this.paused)}
+                class="absolute left-0 -top-2 w-full h-7 m-0 opacity-0 cursor-pointer"
+              />
               <!-- Warning ticks: half-height amber, rendered beneath errors -->
               ${this.warnTicks.map(
                 (t) => html`<span
@@ -1303,14 +1318,14 @@ export class SessionReplay extends LitElement {
           }}
         ></div>
         <div class="w-full h-full overflow-hidden">
-          <div class="bg-fillWeak w-full px-4 h-10 cursor-move flex items-center border-b gap-4 justify-between playerHeader">
-            <div class="flex items-center gap-4 text-xs font-semibold">
+          <div class="bg-bgRaised w-full px-3 h-12 min-h-12 cursor-move flex items-center border-b border-strokeWeak gap-3 justify-between playerHeader">
+            <div class="flex flex-1 items-center justify-between gap-3 text-xs font-medium">
               <span class="font-semibold">Console</span>
               <div class="dropdown" title="Show or hide event levels">
                 <div
                   tabindex="0"
                   role="button"
-                  class="cursor-pointer flex items-center gap-1 text-textWeak hover:text-textStrong"
+                  class="cursor-pointer flex items-center gap-1.5 h-8 px-2 rounded-md hover:bg-fillWeaker text-textWeak hover:text-textStrong"
                   aria-label="Filter console events by level"
                 >
                   ${faSprite_('filter', 'regular', 'w-3 h-3')} Filter
@@ -1355,14 +1370,20 @@ export class SessionReplay extends LitElement {
               : nothing}
           </div>
           <div
+            id="replay-console-events"
             class="flex flex-col h-full overflow-y-auto w-full overflow-x-hidden c-scroll scroll-smooth"
-            style="height:calc(100% - 80px)"
+            style="height:calc(100% - 88px)"
           >
             ${this.consoleEvents.length === 0
               ? html`<div class="px-4 py-6 text-xs text-textWeak">
                   No console output captured in this session. Errors, warnings, and <code>console.*</code> calls made in the browser tab will appear here as the recording plays.
                 </div>`
-              : this.consoleEvents.map((e) => this.displayConsoleEvent(e))}
+              : visibleConsoleEvents.length === 0
+                ? html`<div class="px-4 py-6 space-y-2 text-xs text-textWeak" role="status">
+                    <p>No events match these filters.</p>
+                    <button type="button" class="btn btn-xs btn-ghost text-textBrand" @click=${() => (this.consoleEventsEnable = [true, true, true])}>Reset filters</button>
+                  </div>`
+                : visibleConsoleEvents.map((e) => this.displayConsoleEvent(e))}
           </div>
           <div class="flex items-center h-10 bg-fillWeak border-t">
             <button

@@ -25,6 +25,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.DeriveUtils (DB, UUIDId, WrappedEnumShow (..), assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
@@ -230,6 +231,7 @@ data BWConfig = BWConfig
   , currProject :: Maybe Projects.Project
   , prePageTitle :: Maybe Text
   , pageTitle :: Text
+  , pageTitleUrl :: Maybe Text -- Link for a parent breadcrumb with a dynamic route.
   , pageTitleSuffix :: Maybe Text -- Additional breadcrumb after pageTitle (e.g., tab name)
   , pageTitleModalId :: Maybe Text -- Modal ID for renaming page title
   , pageTitleSuffixModalId :: Maybe Text -- Modal ID for renaming suffix (e.g., tab)
@@ -243,6 +245,7 @@ data BWConfig = BWConfig
   , needsGridStack :: Bool
   , needsTagify :: Bool
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
+  , pageProvidesLogDetails :: Bool -- Explorer supplies its resizable panel; other project pages use the shell drawer.
   , globalDrawerContent :: Maybe (Html ())
   , config :: EnvConfig -- Environment configuration for telemetry
   , envOptions :: V.Vector Text
@@ -501,6 +504,8 @@ bodyWrapper bcfg child = do
                   if bcfg.isSettingsPage
                     then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                     else child
+                  unless bcfg.pageProvidesLogDetails $ forM_ bcfg.currProject \p ->
+                    LogItem.detailsPanel_ p.id Nothing LogItem.DrawerPanel
                 div_ [class_ "h-0 shrink"] do
                   Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
                   -- Modal for copying widgets to other dashboards
@@ -654,7 +659,7 @@ bodyWrapper bcfg child = do
               ""
           div_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"] do
             label_ [Lucid.for_ "ai-routine-interval", class_ "text-xs font-medium text-textStrong"] "Run every"
-            select_ [id_ "ai-routine-interval", name_ "intervalMinutes", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-xs text-textStrong"] do
+            select_ [id_ "ai-routine-interval", name_ "intervalMinutes", disabled_ "disabled", term "hx-live:disabled" "!q('#ai-composer-routine').checked", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-xs text-textStrong"] do
               option_ [value_ "60", class_ "bg-bgRaised text-textStrong"] "Hour"
               option_ [value_ "1440", selected_ "selected", class_ "bg-bgRaised text-textStrong"] "Day"
               option_ [value_ "10080", class_ "bg-bgRaised text-textStrong"] "Week"
@@ -746,7 +751,15 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       -- Collapsed: search icon
       button_ ([class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg hover:bg-fillHover text-textWeak hover:text-textStrong cursor-pointer transition-colors duration-100", searchScript, Aria.label_ "Search"] <> tippyRight_ "Search (\x2318K)") do
         faSprite_ "sidebar-search" "regular" "w-4 h-4"
-    Components.segmented_ "hidden group-has-[#sidenav-toggle:checked]/pg:grid grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs" "Sidebar view" "nav-view" "nav-view-" [("menu", "Navigate"), ("ai", "Assistant")]
+    let defaultView = bool "menu" "ai" (bcfg.menuItem == Just "AI") :: Text
+    Components.segmentedWith_
+      [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:grid grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs"]
+      "Sidebar view"
+      "nav-view"
+      "nav-view-"
+      [ (view, label, [checked_ | view == defaultView] <> [term "hx-live:checked" ("this.value === (sessionStorage.getItem('sidebar-view') || '" <> defaultView <> "')"), [__|on input call sessionStorage.setItem('sidebar-view', my.value)|]])
+      | (view, label) <- [("menu", "Navigate"), ("ai", "Assistant")]
+      ]
     nav_ [id_ "main-sidenav", class_ "mt-2 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col gap-1 text-textWeak group-has-[#nav-view-ai:checked]/nav:hidden [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
       let pidTxt = project.id.toText
           flyoutLink (linkText, link) =
@@ -1024,12 +1037,12 @@ navbar bcfg menuL =
             toHtml pt
           faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
         h1_ [class_ "flex min-w-0 items-center text-textStrong"] do
-          let targetPageM = Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix
+          let targetPageM = bcfg.pageTitleUrl <|> ((\p path -> "/p/" <> p.id.toText <> path) <$> bcfg.currProject <*> (Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix))
           case targetPageM of
-            Just targetPage -> whenJust bcfg.currProject \p -> a_ ([class_ "max-w-48 truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong hover:bg-fillWeak max-md:max-w-24 max-md:text-sm", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
+            Just targetPage -> a_ ([class_ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong hover:bg-fillWeak max-md:max-w-24 max-md:text-sm", href_ targetPage, id_ "pageTitleText", title_ bcfg.pageTitle] <> navTabAttrs) $ toHtml bcfg.pageTitle
             Nothing -> case bcfg.pageTitleModalId of
-              Just modalId -> label_ [class_ "max-w-48 truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 max-md:max-w-24 max-md:text-sm", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, Components.keyboardActivateAttr_] $ toHtml bcfg.pageTitle
-              Nothing -> span_ [class_ "max-w-48 truncate p-1 py-2 text-xl font-semibold leading-none text-textStrong max-md:max-w-24 max-md:text-sm", id_ "pageTitleText"] $ toHtml bcfg.pageTitle
+              Just modalId -> label_ [class_ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 max-md:max-w-24 max-md:text-sm", Lucid.for_ modalId, id_ "pageTitleText", title_ bcfg.pageTitle, role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, Components.keyboardActivateAttr_] $ toHtml bcfg.pageTitle
+              Nothing -> span_ [class_ "max-w-[40ch] truncate p-1 py-2 text-xl font-semibold leading-none text-textStrong max-md:max-w-24 max-md:text-sm", id_ "pageTitleText", title_ bcfg.pageTitle] $ toHtml bcfg.pageTitle
           -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
           span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
             faSprite_ "chevron-right" "regular" "w-3 h-3"

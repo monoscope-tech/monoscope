@@ -18,6 +18,7 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Lucid (ToHtml, renderText, toHtml)
+import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
@@ -30,6 +31,7 @@ import Pages.Issues qualified as IssuesPage
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -148,7 +150,7 @@ spec = sequential $ aroundAll withTestResources do
 
     -- Regression: since #376 dropped apis.shapes/fields/formats, getAnomaliesVM selected
     -- NULL drift detail, so new/changed fields never reached the issue, never updated an
-    -- open one, and a breaking change never marked it critical.
+    -- open one. Observed field drift does not establish consumer breakage.
     it "apiChangeIssue_fieldDrift_neverReachedIssuePayload" \tr -> do
       nowTxt <- nowText
       let ingest body = do
@@ -173,7 +175,7 @@ spec = sequential $ aroundAll withTestResources do
       ingest "eyJ1c2VybmFtZSI6MiwicGFzc3dvcmQiOiJ4Iiwibmlja25hbWUiOjJ9" -- username, nickname: string -> number
       (i2, d2) <- driftIssue
       (hasField "password" d2.newFields, hasField "username" d2.modifiedFields, hasField "password" d2.modifiedFields) `shouldBe` (True, True, False)
-      (i2.id == i0.id, i2.critical) `shouldBe` (True, True)
+      (i2.id == i0.id, i2.critical, i2.severity) `shouldBe` (True, False, Issues.Warning)
       (_, detail) <- testServant tr $ IssuesPage.issueDetailGetH testPid i2.id Nothing Nothing Nothing Nothing Nothing
       let html = renderPage detail
       for_ ["Before", "After", "Detected", "a@b.co", "string", "number"] \text ->
@@ -183,7 +185,7 @@ spec = sequential $ aroundAll withTestResources do
       for_ ["Historical types and values were not captured", "Current observations", "a@b.co"] \text ->
         renderPage legacyDetail `shouldSatisfy` T.isInfixOf text
       for_ ([("Added", "2026-01-01T00:00:00Z"), ("Modified", "2026-01-02T00:00:00Z")] :: [(Text, Text)]) \(kind, detected) ->
-        T.splitOn "</tr>" (renderPage legacyDetail) `shouldSatisfy` any (\row -> all (`T.isInfixOf` row) ["nickname", ">" <> kind <> "</td>", detected])
+        T.splitOn "</tbody>" (renderPage legacyDetail) `shouldSatisfy` any (\batch -> all (`T.isInfixOf` batch) ["nickname", ">" <> kind <> "</td>", detected])
 
     it "apiChangeEvidence_unavailable_doesNotHideIssue" \tr -> do
       issueId <- pickApiChangeIssue tr
@@ -196,7 +198,7 @@ spec = sequential $ aroundAll withTestResources do
             (_, detail) <- testServant tr $ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing Nothing Nothing Nothing
             for_ ["Field changes", "Field evidence unavailable"] \text -> renderPage detail `shouldSatisfy` T.isInfixOf text
 
-    it "apiChanges_sameService_collapseWithoutLosingEndpointIssues" \tr -> do
+    it "apiChanges_sameHost_collapseWithoutLosingEndpointIssues" \tr -> do
       nowTxt <- nowText
       for_ ["eyJ1c2VybmFtZSI6ImFAYi5jbyJ9", "eyJ1c2VybmFtZSI6Mn0="] \body -> do
         processMessagesAndBackgroundJobs tr [("group", encMsg $ msgWithBody "/v1/grouped-drift" body nowTxt)]
@@ -211,9 +213,9 @@ spec = sequential $ aroundAll withTestResources do
           do
             (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing Nothing [] ["api_change"]
             let html = renderPage page
-            for_ ["<details", "Breaking API changes", "items on this page", "/v1/drift", "/v1/grouped-drift"] \text ->
+            for_ ["<details", "API changes", "items on this page", "/v1/drift", "/v1/grouped-drift"] \text ->
               html `shouldSatisfy` T.isInfixOf text
-            T.splitOn "</details>" html `shouldSatisfy` any (\disclosure -> all (`T.isInfixOf` disclosure) ["<summary", "Breaking API changes", "/v1/drift", "/v1/grouped-drift"])
+            T.splitOn "</tbody>" html `shouldSatisfy` any (\batch -> all (`T.isInfixOf` batch) ["<summary", "API changes", "/v1/drift", "/v1/grouped-drift"])
             html `shouldNotSatisfy` T.isInfixOf "172.31.29.11 · 172.31.29.11"
             (_, singletonPage) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just "1") Nothing Nothing [] ["api_change"]
             renderPage singletonPage `shouldNotSatisfy` T.isInfixOf "items on this page"
@@ -222,7 +224,7 @@ spec = sequential $ aroundAll withTestResources do
       -- Put the issues created above back in one customer-visible list. The bulk handler
       -- is the same action the Acknowledged tab offers, and avoids fixture-only state.
       acknowledged <- listAnomalies tr (Just "Acknowledged")
-      let acknowledgedIds = [issue.base.id.toText | IssuesPage.IssueVM _ _ issue <- V.toList acknowledged]
+      let acknowledgedIds = [issue.base.id.toText | IssuesPage.IssueVM _ issue <- V.toList acknowledged]
       unless (null acknowledgedIds) do
         void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAUnacknowledge Nothing Nothing IssuesPage.IssueBulk{itemId = acknowledgedIds}
 
@@ -292,7 +294,7 @@ spec = sequential $ aroundAll withTestResources do
     -- the issue row is the only state; this asserts it leaves the inbox.
     it "bulk archive removes the issue from the inbox" \tr -> do
       issueId <- pickApiChangeIssue tr
-      let containsIssue = V.any \(IssuesPage.IssueVM _ _ issue) -> issue.base.id == issueId
+      let containsIssue = V.any \(IssuesPage.IssueVM _ issue) -> issue.base.id == issueId
 
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET archived_at=NULL, acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
@@ -547,7 +549,38 @@ spec = sequential $ aroundAll withTestResources do
           html `shouldSatisfy` T.isInfixOf "data-end=\"2026-09-02T10:04:43Z\""
           html `shouldSatisfy` T.isInfixOf ("\"from\":\"" <> from <> "\"")
           html `shouldSatisfy` T.isInfixOf ("\"to\":\"" <> to <> "\"")
-          html `shouldSatisfy` T.isInfixOf "first_occurrence=true&amp;from=2026-09-02T06"
+          html `shouldNotSatisfy` T.isInfixOf "first_occurrence=true"
+          html `shouldSatisfy` T.isInfixOf "Selected event is outside this range."
+          html `shouldSatisfy` T.isInfixOf "Jump to latest occurrence"
+
+    it "spanSchemaIssue_doesNotLookUpTraceUsingLegacyHttpPlaceholders" \tr -> do
+      let subject = ApiChanges.SpanSchema Catalog.emptyScope{Catalog.service = Just "checkout", Catalog.spanName = Just "process-order"}
+          payload =
+            [aesonQQ|{ "subject": #{subject}, "endpoint_method": "UNKNOWN", "endpoint_path": "/", "endpoint_host": "Unknown",
+                              "anomaly_hashes": [], "shape_changes": [], "format_changes": [], "new_fields": [], "deleted_fields": [], "modified_fields": [] }|]
+      traceIdText <- DataUUID.toText <$> UUID.nextRandom
+      issueId <- withResource tr.trPool \conn -> do
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO otel_logs_and_spans
+          (id, project_id, timestamp, start_time, attributes___http___request___method, attributes___url___path, context___trace_id, summary)
+          VALUES (gen_random_uuid(), ?, ?, ?, 'UNKNOWN', '/', ?, '{}') |]
+            (testPid, frozenTime, frozenTime, traceIdText)
+        maybe (fail "expected schema issue") (pure . fromOnly)
+          . listToMaybe
+          =<< PGS.query
+            conn
+            [sql| INSERT INTO apis.issues
+          (project_id, issue_type, title, target_hash, issue_data, created_at, updated_at)
+          VALUES (?, 'api_change', 'Span schema changed', ?, ?::jsonb, ?, ?) RETURNING id |]
+            (testPid, "span-schema-" <> traceIdText, AE.encode payload, frozenTime, frozenTime)
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing Nothing Nothing Nothing
+      let html = renderPage page
+      html `shouldSatisfy` T.isInfixOf "process-order"
+      html `shouldNotSatisfy` T.isInfixOf traceIdText
+      html `shouldSatisfy` T.isInfixOf "Span schema observed"
+      html `shouldNotSatisfy` T.isInfixOf "New endpoint discovered"
 
     it "log-pattern evidence loads separately and honors the shared absolute range" \tr -> do
       patternHash <- DataUUID.toText <$> UUID.nextRandom
@@ -586,9 +619,10 @@ spec = sequential $ aroundAll withTestResources do
       sampleHtml `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText <> "?timestamp=")
       (_, emptySample) <- testServant tr $ IssuesPage.issueSampleGetH testPid (UUIDId issueId) Nothing (Just $ iso $ addUTCTime 3600 frozenTime) (Just $ iso $ addUTCTime 3660 frozenTime)
       let emptyHtml = TL.toStrict $ renderText emptySample
-      emptyHtml `shouldSatisfy` T.isInfixOf "No matching event"
+      emptyHtml `shouldSatisfy` T.isInfixOf "No occurrences in this range."
       emptyHtml `shouldSatisfy` T.isInfixOf "Stored sample"
       emptyHtml `shouldSatisfy` T.isInfixOf "saved occurrence"
+      emptyHtml `shouldSatisfy` T.isInfixOf "independently of the date filter and raw-event retention"
       let otherPid = UUIDId $ DataUUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
       (_, otherProjectSample) <- testServant tr $ IssuesPage.issueSampleGetH otherPid (UUIDId issueId) Nothing (Just from) (Just to)
       TL.toStrict (renderText otherProjectSample) `shouldSatisfy` not . T.isInfixOf "occurrence"
@@ -775,7 +809,7 @@ spec = sequential $ aroundAll withTestResources do
     it "issueList_mobileEventCount_labelsPeriodNotTimeFilter" \tr -> do
       void $ seedIssue tr Issues.LogPattern "mobile count probe" "mobile-count"
       (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing (Just "7d") Nothing (Just "100") Nothing (Just "24h") [] []
-      renderPage page `shouldSatisfy` T.isInfixOf "0 events (24h)"
+      renderPage page `shouldSatisfy` T.isInfixOf "0 events · 24h"
       renderPage page `shouldNotSatisfy` T.isInfixOf "(7d)"
 
     it "the user journey offers search, newest-first ordering and copy, and skips contentless events" \tr -> do
@@ -786,11 +820,11 @@ spec = sequential $ aroundAll withTestResources do
       apiKey <- createTestAPIKey tr testPid "journey-key"
       let at dt = addUTCTime dt frozenTime
           checkoutEvents = [mkSpanEvent "message" [("rpc.message.type", "SENT")] (at 0), mkSpanEvent "log" [("message", "checkout declined")] (at 0)]
-      forM_ @[] [(-2, "a1", "GET /cart", []), (-1, "a2", "cart item missing price", []), (0, "a3", "POST /checkout", checkoutEvents)] \(dt, sid, name, evs) ->
+      forM_ @[] [(-5, "a0", "page loaded", []), (-4, "b0", "cart opened", []), (-3, "c0", "shipping selected", []), (-2, "a1", "GET /cart", []), (-1, "a2", "cart item missing price", []), (0, "a3", "POST /checkout", checkoutEvents)] \(dt, sid, name, evs) ->
         ingestSpanReq tr $ mkSpanRequest traceIdText sid Nothing name evs Nothing [] (mkResource apiKey []) (at dt)
       issueId <- seedIssue tr Issues.RuntimeException "journey probe" "journey-probe"
       html <- eventually (renderPage . snd <$> testServant tr (IssuesPage.issueActivityGetH testPid issueId (Just traceIdText) (Just frozenTime))) (T.isInfixOf "checkout declined")
-      html `shouldContainAll` ["id=\"issue-journey\"", "Search the user journey", "crumb-rev", "issue-journey-text", "cart item missing price", "checkout declined"]
+      html `shouldContainAll` ["id=\"issue-journey\"", "Search the user journey", "crumb-rev", "issue-journey-text", "cart item missing price", "checkout declined", "id=\"issue-journey-events\"", "View all", "Show fewer", "Last 5 events"]
       html `shouldNotSatisfy` T.isInfixOf ">message</span>"
 
     it "comments, external links and viewers show in the issue's activity" \tr -> do
@@ -803,7 +837,7 @@ spec = sequential $ aroundAll withTestResources do
       _ <- testServant tr $ IssuesPage.linkPostH testPid iid (IssuesPage.LinkForm "javascript:alert(1)" Nothing)
       (_, activity) <- testServant tr $ IssuesPage.issueActivityGetH testPid iid Nothing Nothing
       let html = renderPage activity
-      html `shouldContainAll` ["Rolled back the cart service", "External links", "GitHub", "Cart crash", "Participating:", "name=\"body\""]
+      html `shouldContainAll` ["Rolled back the cart service", "External links", "GitHub", "Cart crash", "Participating:", "/api/avatar/", "People", "name=\"body\""]
       html `shouldSatisfy` not . T.isInfixOf "javascript:alert"
       -- Two views in a day record one, and views stay off the timeline.
       withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'viewed' |] (Only iid)) `shouldReturn` [Only (1 :: Int)]
@@ -834,8 +868,12 @@ spec = sequential $ aroundAll withTestResources do
               _ -> fail "no Location"
       eventually (stepTo Telemetry.Older (IssuesPage.EventRef tc (at 0))) (T.isInfixOf tb) >>= (`shouldSatisfy` T.isInfixOf tb)
       stepTo Telemetry.Older (IssuesPage.EventRef ta (at (-600))) >>= (`shouldSatisfy` T.isInfixOf ta)
+      -- A triage edit must not move a historical event's default investigation window.
+      withResource tr.trPool \conn -> void $ PGS.execute conn [sql| UPDATE apis.issues SET updated_at=? WHERE id=? |] (at 86400, iid)
       (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef tb (at (-300)))
       renderPage page `shouldContainAll` [tb, "id=\"issue-events\"", "/step?dir=older", "/step?dir=recommended", "class=\"dropdown dropdown-end menu", "id=\"issue-copy-pop\""]
+      renderPage page `shouldContainAll` ["data-start=\"2024-12-31T21:55:00Z\"", "data-end=\"2025-01-01T01:55:00Z\"", "Around selected event", "±2 hours", "2024-12-31 23:55:00 UTC"]
+      renderPage page `shouldNotSatisfy` T.isInfixOf "Selected event is outside this range."
 
     it "category views, filter chips and saved views on the issue list" \tr -> do
       let list types = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] types)
@@ -1344,11 +1382,11 @@ spec = sequential $ aroundAll withTestResources do
 
 
 isApiChange :: IssuesPage.IssueVM -> Bool
-isApiChange (IssuesPage.IssueVM _ _ c) = c.base.issueType == Issues.ApiChange
+isApiChange (IssuesPage.IssueVM _ c) = c.base.issueType == Issues.ApiChange
 
 
 issueOf :: IssuesPage.IssueVM -> Issues.IssueL
-issueOf (IssuesPage.IssueVM _ _ issue) = issue
+issueOf (IssuesPage.IssueVM _ issue) = issue
 
 
 issueIdOf :: IssuesPage.IssueVM -> Issues.IssueId

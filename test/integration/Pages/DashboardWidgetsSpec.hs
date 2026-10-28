@@ -181,18 +181,22 @@ spec = sequential $ aroundAll withTestResources do
     it "rendersConfiguredViews_andTabScopedVariables_onAnyDashboard" \tr -> do
       did <- newDashboard tr "overview.yaml" "Shared views"
       _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid did $ Dashboards.YamlForm "title: Shared views\nwidgets: []\nvariables:\n  - {key: service, title: Service, type: values, options: [[api]]}\n  - {key: region, title: Region, type: values, options: [[eu]]}\nviews:\n  - {name: Europe API, variables: {service: api, region: eu}}\ntabs:\n  - {name: Overview, variables: [service], widgets: []}\n  - {name: Errors, variables: [service, region], widgets: []}\n"
-      (_, page) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "overview" Nothing Nothing Nothing (Just "24H") Nothing Nothing []
+      (_, page) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "overview" Nothing Nothing Nothing (Just "24H") Nothing []
       let html = toStrict $ renderText $ toHtml page
       html `shouldSatisfy` T.isInfixOf ">Europe API</a>"
       html `shouldSatisfy` T.isInfixOf "name=\"service\""
       html `shouldNotSatisfy` T.isInfixOf "name=\"region\""
-      (_, errors) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "errors" Nothing Nothing Nothing (Just "24H") (Just "true") Nothing []
+      (_, errors) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "errors" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") []
       toStrict (renderText $ toHtml errors) `shouldSatisfy` T.isInfixOf "name=\"region\""
       form <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.DashboardViewForm "name=US+worker&var-service=worker&var-region=us&var-unknown=ignored&since=24H&activeTabSlug=errors"
       _ <- testServant tr $ Dashboards.dashboardViewPostH testPid did form
       (saved, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
       map (.variables) (V.toList saved.savedViews) `shouldBe` [Map.fromList [("service", "worker"), ("region", "us")]]
-      (_, reloaded) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "overview" Nothing Nothing Nothing (Just "24H") (Just "true") Nothing [("since", Just "24H")]
+      (_, overridden) <- testServant tr $ Dashboards.dashboardViewPostH testPid did form{Dashboards.name = "Europe API"}
+      toStrict (renderText overridden) `shouldNotSatisfy` T.isInfixOf "var-region=eu"
+      (_, revealed) <- testServant tr $ Dashboards.dashboardViewDeleteH testPid did "Europe API" form.params
+      toStrict (renderText revealed) `shouldSatisfy` T.isInfixOf "var-region=eu"
+      (_, reloaded) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") [("since", Just "24H")]
       let root = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/overview"
       linkParams root (toStrict $ renderText $ toHtml reloaded) `shouldSatisfy` any (\ps -> lookup "var-service" ps == Just "worker" && lookup "var-region" ps == Just "us" && lookup "since" ps == Just "24H")
 
@@ -1082,7 +1086,7 @@ spec = sequential $ aroundAll withTestResources do
               , Endpoints.outgoing = True
               }
           filters hash = do
-            (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "true") Nothing [("var-host", Just "integrations.routelift.com"), ("var-endpointHash", Just hash)]
+            (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") [("var-host", Just "integrations.routelift.com"), ("var-endpointHash", Just hash)]
             let Dashboards.DashboardGet _ _ _ _ params = tabDashboard response
                 values = Map.fromList params
             pure (Map.lookup "const-endpointFilter" values, Map.lookup "const-endpointFilter-kql" values)
@@ -1126,8 +1130,7 @@ spec = sequential $ aroundAll withTestResources do
             Nothing
             Nothing
             (Just "3D")
-            (Just "true")
-            Nothing
+            (Just "div#dashboard-tabs-content")
             [ ("const-endpointFilter", Just "hashes @> ARRAY['']")
             , ("const-endpointFilter-kql", Just "hashes[*] in (\"\")")
             , ("var-endpointHash", Just "faa041ff")
@@ -1194,7 +1197,6 @@ spec = sequential $ aroundAll withTestResources do
                 Nothing
                 Nothing
                 (Just "24H")
-                Nothing
                 Nothing
                 [ ("var-host", Just "dellyman.com")
                 , ("var-endpointHash", Just "endpoint / hash")
@@ -1356,7 +1358,7 @@ spec = sequential $ aroundAll withTestResources do
       prefilled :: Widget.Widget -> Bool
       prefilled w = isJust w.html || isJust w.dataset
       openTab tr dashId params = do
-        (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing Nothing params)
+        (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing params)
 
     it "skips the widget phase whose results the picker would discard" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint Analytics"
@@ -1380,7 +1382,7 @@ spec = sequential $ aroundAll withTestResources do
           , Endpoints.host = "dellyman.com"
           , Endpoints.hash = "ba3431d5"
           }
-      let open params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "true") Nothing params)
+      let open params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") params)
           partialHtml = \case
             NavigationPartial _ fragment -> pure $ toStrict $ renderText fragment
             NavigationFull _ -> expectationFailure "htmx picker navigation returned a full document" $> ""
@@ -1407,8 +1409,7 @@ spec = sequential $ aroundAll withTestResources do
             Nothing
             Nothing
             (Just "24H")
-            (Just "true")
-            (Just "dashboard-variable-option")
+            (Just "div#dashboard-tabs-content")
             [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
       case response of
         NavigationFull _ -> expectationFailure "htmx tab navigation returned a full document"
@@ -1426,7 +1427,7 @@ spec = sequential $ aroundAll withTestResources do
   describe "Dependent variable keeps a live template" do
     it "endpointHash_parentHostChanges_dropdownRefetchesForNewHost" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Dependent Vars"
-      dg <- (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing Nothing [("var-host", Just "dellyman.com")])
+      dg <- (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing [("var-host", Just "dellyman.com")])
       let html = toStrict $ renderText $ toHtml (dg :: Dashboards.DashboardGet)
       html `shouldSatisfy` T.isInfixOf "{{var-host}}"
       html `shouldNotSatisfy` T.isInfixOf "host=&#39;dellyman.com&#39;"
@@ -1435,23 +1436,33 @@ spec = sequential $ aroundAll withTestResources do
   -- themselves rather than blocking on the widget phase (measured 4.9s -> 1.2s).
   describe "Prefill on a full load, skeletons on a swap" do
     let openTab tr dashId hx = do
-          (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx Nothing [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")])
+          snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")])
         eagerOnes = filter (\w -> w.eager == Just True || isJust w.html || isJust w.dataset)
 
     it "keeps the server-side prefill for a full page load" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Prefill Full"
       full <- openTab tr dashId Nothing
-      eagerOnes (renderedWidgets full) `shouldSatisfy` not . null
+      eagerOnes (renderedWidgets $ tabDashboard full) `shouldSatisfy` not . null
       T.count "id=\"log_details_container\"" (toStrict $ renderText $ toHtml full) `shouldBe` 1
 
     it "hands a swap the same widgets with nothing prefilled" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Prefill Swap"
-      swapped <- openTab tr dashId (Just "true")
-      let ws = renderedWidgets swapped
+      swapped <- openTab tr dashId (Just "div#dashboard-tabs-content")
+      let ws = renderedWidgets $ tabDashboard swapped
       ws `shouldSatisfy` not . null
       -- lazyWidget strips `eager` too: renderStatContent reads the flag as "data is here"
       -- and would otherwise spin forever.
       map (fromMaybe "<untitled>" . (.title)) (eagerOnes ws) `shouldBe` []
+
+    it "dashboardTab_sidebarNavigationFromSessions_keepsMainContent" \tr -> do
+      dashId <- newDashboard tr "rum.yaml" "RUM sidebar navigation"
+      (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#main-content") []
+      case response of
+        NavigationFull page -> do
+          let html = toStrict $ renderText $ toHtml page
+          html `shouldSatisfy` T.isInfixOf "id=\"main-content\""
+          html `shouldSatisfy` T.isInfixOf "id=\"dashboardPage\""
+        NavigationPartial _ _ -> expectationFailure "sidebar navigation returned a tab fragment, blanking the page"
 
     it "returns the shared fragment contract for an htmx tab navigation" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Partial navigation"
@@ -1465,8 +1476,7 @@ spec = sequential $ aroundAll withTestResources do
             Nothing
             Nothing
             (Just "24H")
-            (Just "true")
-            Nothing
+            (Just "div#dashboard-tabs-content")
             [ ("var-host", Just "dellyman.com")
             , ("var-endpointHash", Just "ba3431d5")
             ]

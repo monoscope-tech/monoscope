@@ -227,23 +227,10 @@ createDash :: TestResources -> Text -> [Text] -> IO Dashboards.DashboardId
 createDash tr title tags = do
   now <- getCurrentTime
   dashId <- UUIDId <$> UUID.nextRandom
-  let dash = Dashboards.DashboardVM
-        { Dashboards.id = dashId
-        , Dashboards.projectId = testPid
-        , Dashboards.createdAt = now
-        , Dashboards.updatedAt = now
-        , Dashboards.createdBy = Projects.UserId UUID.nil
-        , Dashboards.baseTemplate = Nothing
-        , Dashboards.schema = Just $ (def :: Dashboards.Dashboard) & field @"title" .~ Just title & field @"tags" .~ Just tags
-        , Dashboards.starredSince = Nothing
-        , Dashboards.homepageSince = Nothing
+  let dash = (Dashboards.mkDashboardVM dashId testPid now (Projects.UserId UUID.nil))
+        { Dashboards.schema = Just (def :: Dashboards.Dashboard){Dashboards.title = Just title, Dashboards.tags = Just tags}
         , Dashboards.tags = V.fromList tags
         , Dashboards.title = title
-        , Dashboards.teams = V.empty
-        , Dashboards.filePath = Nothing
-        , Dashboards.savedViews = V.empty
-        , Dashboards.gitSyncId = Nothing
-        , Dashboards.fileSha = Nothing
         }
   _ <- runTestBg frozenTime tr $ Dashboards.insert dash
   pure dashId
