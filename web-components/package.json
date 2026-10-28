@@ -15,6 +15,8 @@
     "bench:query:build": "vite build --config bench/vite.config.ts",
     "bench:query:serve": "vite preview --config bench/vite.config.ts --port 3099",
     "bench:query:browser": "node bench/browser.mjs",
+    "bench:live-tail:build": "vite build --config bench/live-tail.vite.config.ts",
+    "bench:live-tail:serve": "vite preview --config bench/live-tail.vite.config.ts",
     "test:query:browser": "playwright test --config bench/playwright.config.ts"
   },
   "type": "module",

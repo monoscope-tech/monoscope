@@ -1,4 +1,4 @@
-import { describe, test, expect, afterEach } from 'vitest';
+import { describe, test, expect, afterEach, vi } from 'vitest';
 import '../src/live-tail';
 
 // The Live Tail component owns exactly two things `LiveStream` does not: the capped row buffer
@@ -55,6 +55,8 @@ const settle = async () => {
 };
 
 const nextFrame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+/** Past the component's publish window, so a busy buffer has reached `rows`. */
+const published = () => new Promise<void>(resolve => setTimeout(resolve, 300));
 
 const mount = async () => {
   stubServer();
@@ -94,7 +96,7 @@ describe('Live Tail row buffer', () => {
   test('keeps the full buffer but mounts only a viewport-sized row window', async () => {
     const el = await mount();
     el.appendRows(pushed(0, 1000).map((r: any) => r.log));
-    await nextFrame();
+    await published();
     await el.updateComplete;
 
     expect(el.rows).toHaveLength(1000);
@@ -109,12 +111,27 @@ describe('Live Tail row buffer', () => {
     expect(list.scrollTop).toBe(4000);
   });
 
+  // lit-virtualizer re-renders mounted rows only when handed a new items array or renderItem;
+  // jsdom mounts none, so assert the hand-off itself.
+  test('liveTail_virtualizedRows_reRenderWhenAFieldIsToggled', async () => {
+    const el = await mount();
+    el.appendRows(pushed(0, 200).map((r: any) => r.log));
+    await published();
+    await el.updateComplete;
+    const list = el.querySelector('lit-virtualizer') as any;
+    const before = list.renderItem;
+
+    el.toggleField('attributes.order.id', true);
+    await el.updateComplete;
+    expect(list.renderItem).not.toBe(before);
+  });
+
   test('caps the buffer and counts what it dropped', async () => {
     // 1200 rows into a 1000-row cap. The count matters as much as the cap: rows vanishing with
     // no number attached is indistinguishable from a filter that stopped matching.
     const el = await mount();
     el.appendRows(pushed(0, 1200).map((r: any) => r.log));
-    await nextFrame();
+    await published();
     await el.updateComplete;
 
     expect(el.rows).toHaveLength(1000);
@@ -122,6 +139,39 @@ describe('Live Tail row buffer', () => {
     // Drops the oldest, so the live edge is what survives — showing the start of a burst while
     // discarding what is happening now would be worse than showing fewer rows.
     expect(el.rows[el.rows.length - 1].body).toBe('row 1199');
+  });
+
+  // Customer report 2026-10-28: the page and its query editor froze on weaker machines. Each
+  // 100-row SSE frame re-rendered the list; at 4x CPU those frames land in separate tasks.
+  test('liveTail_burstyFrames_publishRowsAtMostFourTimesASecond', async () => {
+    const el = await mount();
+    vi.useFakeTimers();
+    el.appendRows(pushed(0, 100).map((r: any) => r.log));
+    let published = 0;
+    let last = el.rows;
+    for (let n = 100; n < 100 + 63 * 10; n += 10) {
+      el.appendRows(pushed(n, n + 10).map((r: any) => r.log));
+      vi.advanceTimersByTime(16);
+      if (el.rows !== last) (published++, (last = el.rows));
+    }
+    vi.useRealTimers();
+    expect(published).toBeGreaterThan(0);
+    expect(published).toBeLessThanOrEqual(4);
+  });
+
+  test('liveTail_hiddenTab_publishesNothingUntilShownAgain', async () => {
+    const el = await mount();
+    el.appendRows(pushed(0, 99).map((r: any) => r.log));
+    const shown = el.rows;
+    expect(shown).toHaveLength(99);
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    el.appendRows(pushed(99, 200).map((r: any) => r.log));
+    await published();
+    expect(el.rows).toBe(shown);
+
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(el.rows).toHaveLength(200);
   });
 
   test('pause freezes the display without stopping the stream', async () => {
@@ -275,6 +325,43 @@ describe('Live Tail fields and details', () => {
     expect((el as any).selectedFields).toEqual(['level', 'body', 'attributes.order.id']);
     expect(el.querySelector('input[aria-label*="service in each row"]')).toBeNull();
     expect(el.querySelector('input[aria-label*="timestamp in each row"]')).toBeNull();
+  });
+
+  // With the picker open, every row batch re-sorted and re-rendered ~2,000 field labels:
+  // 87% of the main thread at 4x CPU (customer report 2026-10-28).
+  test('liveTail_fieldPicker_rendersOnlyWhileOpenAndHoldsStillUnderLoad', async () => {
+    const el = await mount();
+    el.appendRows([{ ...logRow(1), fields: { 'attributes.order.id': 'ord-42' } }]);
+    await el.updateComplete;
+    const toggles = () => [...el.querySelectorAll('[aria-label="Visible live-tail fields"] input')].map((i: Element) => i.getAttribute('aria-label'));
+    expect(toggles()).toEqual([]);
+
+    const picker = el.querySelector('details') as HTMLDetailsElement;
+    picker.open = true;
+    picker.dispatchEvent(new Event('toggle'));
+    await el.updateComplete;
+    const opened = toggles();
+    expect(opened).toContain('Show attributes.order.id in each row');
+
+    el.appendRows([{ ...logRow(2), fields: { 'attributes.cart.size': 3 } }]);
+    await el.updateComplete;
+    expect(toggles()).toEqual(opened);
+  });
+
+  test('liveTail_fieldPicker_rendersAWindowAndSearchesTheRest', async () => {
+    const el = await mount();
+    el.schemaFields = Array.from({ length: 500 }, (_, i) => `attributes.f${i}`);
+    const picker = el.querySelector('details') as HTMLDetailsElement;
+    picker.open = true;
+    picker.dispatchEvent(new Event('toggle'));
+    await el.updateComplete;
+    const list = () => el.querySelector('[aria-label="Visible live-tail fields"]')!;
+    expect(list().querySelectorAll('input').length).toBe(200);
+    expect(list().textContent).toContain('Search to find the other');
+
+    el.fieldSearch = 'attributes.f499';
+    await el.updateComplete;
+    expect(list().querySelector('input[aria-label="Show attributes.f499 in each row"]')).not.toBeNull();
   });
 
   test('renders structured bodies as readable key-value pairs in the message column', async () => {
