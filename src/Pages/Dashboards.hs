@@ -295,9 +295,9 @@ dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-vari
             , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
             , value_ $ maybeToMonoid var.value
             ]
-            -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
-            -- when present); a second data_ attr would be (<>)-merged by Lucid.
-            <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
+          -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
+          -- when present); a second data_ attr would be (<>)-merged by Lucid.
+          <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
         faSprite_ "chevron-down" "regular" "h-3 w-3 shrink-0 text-iconNeutral pointer-events-none"
 
 
@@ -845,9 +845,9 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
         -- an option list is never worth blocking the shell on.
         withRenderBudget ("variable:" <> variable.key) variable
           $ LogQueries.executeSecuredQuery useTf pid sqlQuery 1000
-            <&> \case
-              Right queryResults -> variable{Dashboards.options = Just $ queryRowsToText queryResults}
-              Left _ -> variable -- Return unchanged on error
+          <&> \case
+            Right queryResults -> variable{Dashboards.options = Just $ queryRowsToText queryResults}
+            Left _ -> variable -- Return unchanged on error
       _ -> pure variable
 
 
@@ -909,8 +909,8 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
             a_
               ( [ class_
                     $ "var-opt [&[hidden]]:hidden flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
-                      <> bool "" " active" (idx == 0)
-                      <> bool "" " var-opt-current" isCurrent
+                    <> bool "" " active" (idx == 0)
+                    <> bool "" " var-opt-current" isCurrent
                 , role_ "option"
                 , href_ optUrl
                 , name_ "dashboard-variable-option"
@@ -1090,9 +1090,9 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
     (issues, _) <- Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.period = "24h", Issues.hideLowSeverity = True, Issues.limit = 2}
     pure
       $ widget
-        & #html
-          ?~ renderText
-            (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
+      & #html
+        ?~ renderText
+          (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
   Widget.WTTable -> do
     let sortParam = join $ lookup "table-sort" allParams
         (query, sql) = Widget.tableQuery widget sortParam
@@ -1101,8 +1101,8 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
     -- Render the table with data server-side
     pure
       $ widget
-        & #html
-          ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+      & #html
+        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTServiceMap -> do
     let (fromM, toM, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
         endpointM = join $ lookup "var-endpointHash" allParams
@@ -1123,8 +1123,8 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
                   )
         pure
           $ widget
-            & #cta ?~ Widget.WidgetCta "Open Service Map" serviceMapUrl
-            & #html ?~ renderText (endpointDependencyMapPanel_ pid mapId graph serviceColors)
+          & #cta ?~ Widget.WidgetCta "Open Service Map" serviceMapUrl
+          & #html ?~ renderText (endpointDependencyMapPanel_ pid mapId graph serviceColors)
   -- Stat and chart widgets
   _ ->
     widgetMetrics pid timeRange allParams widget <&> \md ->
@@ -1260,10 +1260,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ fromMaybe def orig.layout
-                & #x .~ (item.x <|> (orig.layout >>= (.x)))
-                & #y .~ (item.y <|> (orig.layout >>= (.y)))
-                & #w .~ (item.w <|> (orig.layout >>= (.w)))
-                & #h .~ (item.h <|> (orig.layout >>= (.h)))
+              & #x .~ (item.x <|> (orig.layout >>= (.x)))
+              & #y .~ (item.y <|> (orig.layout >>= (.y)))
+              & #w .~ (item.w <|> (orig.layout >>= (.w)))
+              & #h .~ (item.h <|> (orig.layout >>= (.h)))
       pure
         orig
           { Widget.layout = newLayout
@@ -1501,7 +1501,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                         , id_ $ widPrefix <> "-tab-" <> T.toLower tabName
                         , name_ $ wid <> "-drawer-tab"
                         ]
-                        <> [checked_ | isActive]
+                      <> [checked_ | isActive]
                     toHtml tabName
               mkTab "Edit" (effectiveActiveTab /= "alerts")
               mkTab "Monitors" (effectiveActiveTab == "alerts")
@@ -1585,7 +1585,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
     div_
       [ class_
           $ "rounded-xl border border-strokeWeak bg-bgRaised p-4 [@media(max-height:48rem)]:p-3"
-            <> if isNewWidget then "" else " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"
+          <> if isNewWidget then "" else " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"
       ]
       do
         div_ [class_ "space-y-5 [@media(max-height:48rem)]:space-y-4"] do
@@ -1897,7 +1897,7 @@ renderDashboardListItem checked title value icon = label_
               set :name.dataset.templateTitle to :item.dataset.title
           |]
         ]
-        <> [checked_ | checked]
+      <> [checked_ | checked]
     span_ [class_ "flex size-7 shrink-0 items-center justify-center bg-fillWeak rounded-md group-has-[input:checked]/it:bg-fillBrand-weak group-has-[input:checked]/it:text-textBrand"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" $ if icon == Just "cloudflare" then "w-5 h-5" else "w-4 h-4"
     span_ [class_ "grow"] $ toHtml title
     span_ [class_ "px-2 p-1 invisible text-textBrand group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
@@ -1916,7 +1916,7 @@ starButton_ pid dashId isStarred =
     ]
     $ faSprite_ "star" (if isStarred then "solid" else "regular")
     $ "w-4 h-4 "
-      <> if isStarred then "text-iconWarning" else "text-iconNeutral"
+    <> if isStarred then "text-iconWarning" else "text-iconNeutral"
 
 
 data DashboardNew = DashboardNew
@@ -1979,12 +1979,12 @@ dashboardNewForm_ dg = form_
                   div_
                     [ class_
                         $ "col-span-6 flex min-h-28 min-w-0 flex-col rounded-lg border border-strokeWeak bg-bgRaised p-3 "
-                          <> ( case widget.layout >>= (.w) of
-                                 Just w | w <= 3 -> "sm:col-span-3"
-                                 Just w | w <= 4 -> "sm:col-span-4"
-                                 Just w | w <= 6 -> "sm:col-span-6"
-                                 _ -> "sm:col-span-12"
-                             )
+                        <> ( case widget.layout >>= (.w) of
+                               Just w | w <= 3 -> "sm:col-span-3"
+                               Just w | w <= 4 -> "sm:col-span-4"
+                               Just w | w <= 6 -> "sm:col-span-6"
+                               _ -> "sm:col-span-12"
+                           )
                     ]
                     do
                       p_ [class_ "truncate text-xs font-medium text-textStrong", title_ $ fromMaybe "Untitled widget" widget.title] $ toHtml $ fromMaybe "Untitled widget" widget.title
