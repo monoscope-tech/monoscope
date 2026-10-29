@@ -286,7 +286,7 @@ data ApiV1Routes mode = ApiV1Routes
   , apiKeyActivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "activate" :> Post '[JSON] ApiKeySummary
   , apiKeyDeactivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "deactivate" :> Post '[JSON] ApiKeySummary
   , apiKeyDelete :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Delete '[JSON] NoContent
-  , -- Plan B: /me + /project (singular) + /issues + /endpoints + /log_patterns
+  , -- /me + /project (singular) + /issues + /endpoints + /log_patterns
     meGet :: mode :- "me" :> Get '[JSON] MeResponse
   , projectGet :: mode :- "project" :> Get '[JSON] ProjectFull
   , projectPatch :: mode :- "project" :> ReqBody '[JSON] Projects.ProjectPatch :> Patch '[JSON] ProjectFull
@@ -326,7 +326,7 @@ data ApiV1Routes mode = ApiV1Routes
   , issuesBulk :: mode :- "issues" :> "bulk" :> ReqBody '[JSON] (BulkAction Issues.IssueId) :> Post '[JSON] (BulkResult Issues.IssueId)
   , incidentsList :: mode :- "incidents" :> QueryParam "phase" Incidents.EpisodePhase :> QueryParam "limit" Int :> Get '[JSON] [IncidentSummary]
   , incidentGet :: mode :- "incidents" :> Capture "incident_id" Incidents.EpisodeId :> Get '[JSON] IncidentSummary
-  , -- Teams (B3) + Members (B4)
+  , -- Teams + Members
     teamsList :: mode :- "teams" :> Get '[JSON] [TeamSummary]
   , teamGet :: mode :- "teams" :> Capture "team_id" TeamId :> Get '[JSON] TeamFull
   , teamCreate :: mode :- "teams" :> ReqBody '[JSON] TeamInput :> Post '[JSON] TeamFull
@@ -414,7 +414,7 @@ apiV1Server actor principal queryEvents dashboardRenderer mcpHandler =
       metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM environmentM serviceM ->
         ChartsPage.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM Nothing [("environment", environmentM), ("service", serviceM)]
     , metricsCatalog = apiMetricsCatalog pid
-    , -- C1: derive schema from the live introspected column set (seeded at
+    , -- Derive schema from the live introspected column set (seeded at
       -- startup) and decorate with the hand-coded descriptions / examples in
       -- 'Schema.telemetrySchema'. Live entries without a decoration get a
       -- bare {type:"text", description:"", examples:null} entry — so a new
@@ -463,7 +463,7 @@ apiV1Server actor principal queryEvents dashboardRenderer mcpHandler =
     , apiKeyActivate = apiKeyActivate pid
     , apiKeyDeactivate = apiKeyDeactivate pid
     , apiKeyDelete = apiKeyDelete pid
-    , -- Plan B
+    , -- Project, endpoints, log patterns
       meGet = apiMe pid
     , projectGet = apiProjectGet pid
     , projectPatch = apiProjectPatch pid

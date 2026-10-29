@@ -235,7 +235,7 @@ spec = sequential $ aroundAll withTestResources do
       issue <- maybe (fail "the runtime issue was not listed") pure $ find ((== patternWithTrace.hash) . (.targetHash)) issues
       (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
       let html = TL.toStrict $ renderText $ toHtml page
-          titleHtml = toText $ renderText $ toHtml issue.title
+          titleHtml = renderT issue.title
       html `shouldSatisfy` T.isInfixOf titleHtml
       -- The header once read "New Error: Error - <message cut at 80 chars>", under a
       -- canned "Investigate the new error…" line, with severity shown twice.

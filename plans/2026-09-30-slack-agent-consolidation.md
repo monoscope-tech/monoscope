@@ -1,6 +1,6 @@
 # Slack Agent consolidation plan
 
-Status: resumed on 2026-10-29; rebased onto master `efefb3b83`. Implementation in progress. Interactive project writes require an in-app, per-message grant; confirmed writes remain unavailable. The native Slack Agent has not passed sandbox acceptance or gone live.
+Status: resumed on 2026-10-29; rebased onto master `a8517cd54`. Implementation in progress. Interactive project writes require an in-app, per-message grant; confirmed writes remain unavailable. The native Slack Agent has not passed sandbox acceptance or gone live.
 
 This plan narrows the [Slack Agent roadmap](2026-09-08-slack-agent.md) to the unfinished conversation and tool experience. The [implementation log](2026-09-08-slack-agent-implementation.md) records earlier work. Current code, tests, and live behavior take precedence over old status notes in that log.
 
@@ -378,3 +378,20 @@ that fixture reproduced the failure under seed 172613282. The assertion now
 compares escaped text, including the cross-project rejection. All 35 error-pattern
 examples pass. The repeated reviews and final simplification found no further change.
 Signoff was stopped before this test correction and will restart on its commit.
+
+### Integration with the latest dashboard refactor
+
+Master advanced to `a8517cd54` during final verification. The branch was rebased
+again to include that dashboard and widget refactor. API definitions remain in
+the shared handler module. Slack report replies retain explicit success results
+and use the new optional PNG URL contract. The moved API comments preserve
+master's cleanup. The title assertion reuses master's new HTML rendering helper.
+
+Before this rebase, all local checks passed, including all twelve integration
+shards and 161 browser tests. The pending image was stopped before integrating
+master. The combined tree needs focused verification and fresh final signoff.
+
+On the combined tree, the server compiles, all 133 bot examples pass, and all
+35 error-pattern examples pass with seed 172613282. Formatting and focused HLint
+pass. Repeated distillation, evasion, and locality reviews found no material issue
+in the conflict resolutions. The final simplification uses the shared rendering helper.
