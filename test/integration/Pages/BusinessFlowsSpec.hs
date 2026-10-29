@@ -131,7 +131,8 @@ onboardingTests =
       apiKey <- createTestAPIKey tr testPid "automatic-integration-check"
       getCurrentTime >>= ingestTrace tr apiKey "onboarding-automatic-check"
       (verifiedHeaders, verified) <- testServant tr $ Onboarding.checkIntegrationGet testPid (Just "Javascript")
-      lookupResponseHeader @"HX-Trigger" verifiedHeaders `shouldBe` Header ("{}" :: Text)
+      -- No toast; the first verification carries the project's one-time ad activation instead.
+      lookupResponseHeader @"HX-Trigger" verifiedHeaders `shouldBe` Header ("{\"adConversion\":{\"value\":[{\"id\":\"" <> testPid.toText <> "\",\"name\":\"activated\"}]}}" :: Text)
       lookupResponseHeader @"HX-Redirect" verifiedHeaders `shouldBe` (MissingHeader :: ResponseHeader "HX-Redirect" Text)
       renderText verified `shouldSatisfy` TL.isInfixOf "verified"
       renderText verified `shouldSatisfy` (not . TL.isInfixOf "intersect")

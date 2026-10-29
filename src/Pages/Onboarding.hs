@@ -43,10 +43,11 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), OnboardingStep (..), PageCtx (..), mkPageCtx, stepUrl)
 import Pages.Components
+import Pkg.AdConversions qualified as AdConversions
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
+import System.Types (ATAuthCtx, HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, addTriggerEvent, redirectCS)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
@@ -232,7 +233,9 @@ checkIntegrationGet pid languageM = do
     Nothing -> maybe (addErrorToast "No events found yet" Nothing >> addRespHeaders "") (addRespHeaders . integrationPoller_ pid) languageM
     Just _ -> do
       markStepCompleted pid $ show Integration
-      Activation.recordActivationMilestone pid Activation.IngestVerified
+      activated <- Activation.recordActivationMilestones Activation.IngestVerified Nothing [pid]
+      AdConversions.sendActivations appCtx.config activated
+      forM_ activated \_ -> addTriggerEvent "adConversion" $ AE.object ["name" AE..= ("activated" :: Text), "id" AE..= pid]
       if isJust languageM
         then addRespHeaders $ div_ [class_ "flex items-center gap-2 text-textSuccess"] do
           span_ "verified"

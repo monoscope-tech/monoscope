@@ -81,6 +81,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.Activation qualified as Activation
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
@@ -103,6 +104,7 @@ import Pages.Bots.Utils qualified as Bots
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.AI qualified as AI
+import Pkg.AdConversions qualified as AdConversions
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
@@ -1393,6 +1395,10 @@ runHourlyJob scheduledTime hour = do
   let activeProjects = ordNub $ mapMaybe Projects.projectIdFromText spanProjects <> metricProjects
 
   Log.logTrace "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
+  -- Projects that never run the onboarding check activate here, at most an hour after their first data.
+  tryStep "ad-activations"
+    $ Activation.recordActivationMilestones Activation.IngestVerified (Just $ addUTCTime (-(30 * 86400)) scheduledTime) (V.fromList activeProjects)
+    >>= AdConversions.sendActivations ctx.config
   let projectBatches = chunksOf 10 activeProjects
 
   enqueueJobs ctx

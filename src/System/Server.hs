@@ -37,6 +37,7 @@ import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware)
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Replay (processReplayEvents)
+import Pkg.AdConversions qualified as AdConversions
 import Pkg.DeriveUtils (staticAssetHashes, stripAssetHash)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.LiveTail qualified as LiveTail
@@ -385,6 +386,7 @@ runServer appLogger env tp = do
           . gzip compressionSettings
           . otelWaiMw
           -- . loggingMiddleware
+          . AdConversions.attributionMiddleware
           . hashedAssetMiddleware
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp

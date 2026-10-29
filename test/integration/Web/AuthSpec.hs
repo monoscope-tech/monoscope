@@ -2,15 +2,20 @@ module Web.AuthSpec (spec) where
 
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List qualified as L
+import Data.Map.Strict qualified as M
 import Data.Text qualified as T
+import Data.Time (UTCTime (..), fromGregorian)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Hasql.Interpolate qualified as HI
 import Lucid qualified
+import Models.Projects.Activation qualified as Activation
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie)
+import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, status200)
 import Network.Wai qualified as Wai
+import Network.Wai.Test qualified as WT
+import Pkg.AdConversions qualified as AdConversions
 import Pkg.TestUtils
 import Relude
 import Servant.API (Header, Headers, ResponseHeader (..), getResponse, lookupResponseHeader)
@@ -21,7 +26,7 @@ import System.Config (AuthContext (hasqlPool))
 import System.Config qualified as Config
 import Test.Hspec
 import Web.Auth qualified as Auth
-import Web.Cookie (SetCookie)
+import Web.Cookie (SetCookie, parseSetCookie, setCookieName, setCookieValue)
 import Web.I18n qualified as I18n
 
 
@@ -126,6 +131,41 @@ spec = aroundAll withTestResources do
       let session = getResponse response
       session.service `shouldBe` Just "frontend-proxy"
       session.environment `shouldBe` Just "production"
+
+  describe "ad attribution" do
+    let metaCfg tr = tr.trATCtx.config{Config.metaCapiAccessToken = Just "capi-token", Config.metaCapiPixelId = Just "123", Config.redditConversionsToken = Just "rdt-token", Config.redditAdAccountId = Just "t2_acct"}
+        bodiesTo url = map (decodeUtf8 @Text . snd) . filter (T.isInfixOf url . fst)
+        metaBodies = bodiesTo "graph.facebook.com/v21.0/123/events"
+
+    it "carries a landing's click IDs through signup to the account and Meta, once" \tr -> do
+      let land path = WT.runSession (WT.request $ WT.setPath Wai.defaultRequest path) (AdConversions.attributionMiddleware \_ respond -> respond $ Wai.responseLBS status200 [] "")
+          setCookies resp = [(setCookieName c, setCookieValue c) | ("Set-Cookie", raw) <- WT.simpleHeaders resp, let c = parseSetCookie raw]
+      land "/p/x" >>= (`shouldBe` []) . setCookies
+      cookies <- setCookies <$> land "/?gclid=G1&utm_source=google&fbclid=F1&rdt_cid=R1&page=2"
+      let attrs = AdConversions.attributionFromCookies cookies (Just "UA")
+          -- As the auth callback does: only a sign-in that created the account records a signup.
+          signIn = do
+            Right (_, newM) <- runTestEffect tr.trPool tr.trATCtx.hasqlPool tr.trLogger tr.trTracerProvider $ Auth.authorizeUserAndPersist Nothing "Ada" "Lovelace" "" "ads@example.com"
+            runAsBaseRecordingHTTP tr $ forM newM \uid -> (uid,) <$> AdConversions.recordSignup (metaCfg tr) uid " Ads@Example.com" attrs
+      M.keys attrs `shouldBe` ["clicked_at", "fbc", "fbclid", "gclid", "rdt_cid", "user_agent", "utm_source"]
+      (reqs, Just (uid, signupCookie)) <- signIn
+      setCookieValue signupCookie `shouldBe` encodeUtf8 uid.toText
+      [body] <- pure $ metaBodies reqs
+      body `shouldContainAll` ["\"signup-" <> uid.toText <> "\"", "CompleteRegistration", "b8a540005b96c041b6b71b7233a370787511dc61fba4500c81cc3ab1a84f93c9", "fb.1." <> attrs M.! "clicked_at" <> "000.F1"]
+      [reddit] <- pure $ bodiesTo "ads-api.reddit.com/api/v2.0/conversions/events/t2_acct" reqs
+      reddit `shouldContainAll` ["\"SignUp\"", "\"click_id\":\"R1\"", "\"signup-" <> uid.toText <> "\"", "b8a540005b96c041b6b71b7233a370787511dc61fba4500c81cc3ab1a84f93c9"]
+      (body <> reddit) `shouldNotSatisfy` T.isInfixOf "ads@example.com"
+      runQueryEffect tr (Hasql.interpOne [HI.sql| SELECT attribution->>'gclid' FROM users.users WHERE id = #{uid} |]) >>= (`shouldBe` Just (Just "G1" :: Maybe Text))
+      signIn >>= (`shouldBe` ([], Nothing)) . second (fmap fst)
+      runAsBaseRecordingHTTP tr (AdConversions.recordSignup tr.trATCtx.config uid "ads@example.com" attrs) >>= (`shouldBe` []) . fst
+
+    it "reports a new project's first ingest once, credited to its creator" \tr -> do
+      let activate createdAfter = runAsBaseRecordingHTTP tr $ Activation.recordActivationMilestones Activation.IngestVerified createdAfter [testPid] >>= \ps -> ps <$ AdConversions.sendActivations (metaCfg tr) ps
+      activate (Just $ UTCTime (fromGregorian 2100 1 1) 0) >>= (`shouldBe` ([], []))
+      (reqs, activated) <- activate Nothing
+      activated `shouldBe` [testPid]
+      map (T.isInfixOf $ "\"activated-" <> testPid.toText <> "\"") (metaBodies reqs) `shouldBe` [True]
+      activate Nothing >>= (`shouldBe` ([], []))
 
   describe "loginH" do
     -- Invite emails link to /login?screen_hint=signup&login_hint=<email> so

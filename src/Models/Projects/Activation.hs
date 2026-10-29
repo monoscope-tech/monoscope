@@ -1,9 +1,12 @@
 module Models.Projects.Activation (
   ActivationMilestone (..),
   recordActivationMilestone,
+  recordActivationMilestones,
 ) where
 
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Time (UTCTime)
+import Data.Vector qualified as V
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
@@ -26,11 +29,19 @@ data ActivationMilestone
 -- | First occurrence wins. Repeating a successful notification test should improve operator
 -- confidence, but it must not inflate the funnel's project count or reset its elapsed time.
 recordActivationMilestone :: DB es => Projects.ProjectId -> ActivationMilestone -> Eff es ()
-recordActivationMilestone projectId milestone =
-  void
-    $ Hasql.interpExecute
-      [HI.sql|
-        INSERT INTO projects.activation_milestones (project_id, milestone)
-        VALUES (#{projectId}, #{milestone})
-        ON CONFLICT (project_id, milestone) DO NOTHING
-      |]
+recordActivationMilestone projectId milestone = void $ recordActivationMilestones milestone Nothing [projectId]
+
+
+-- | Batch form, returning the projects that reached the milestone in this call. @createdAfter@
+-- limits it to projects created since then, so a caller sweeping every active project records
+-- (and reports as ad conversions) new projects only, not years of existing ones.
+recordActivationMilestones :: DB es => ActivationMilestone -> Maybe UTCTime -> V.Vector Projects.ProjectId -> Eff es [Projects.ProjectId]
+recordActivationMilestones milestone createdAfter projectIds =
+  Hasql.interp
+    [HI.sql|
+      INSERT INTO projects.activation_milestones (project_id, milestone)
+      SELECT id, #{milestone} FROM projects.projects
+      WHERE id = ANY(#{projectIds}::uuid[]) AND (#{createdAfter}::timestamptz IS NULL OR created_at > #{createdAfter})
+      ON CONFLICT (project_id, milestone) DO NOTHING
+      RETURNING project_id
+    |]

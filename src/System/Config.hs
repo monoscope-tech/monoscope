@@ -203,8 +203,17 @@ data EnvConfig = EnvConfig
   , -- External scripts configuration
     googleTagManagerId :: Maybe Text
   , googleAdsConversionId :: Maybe Text
+  , googleAdsSignupLabel :: Maybe Text
+  , googleAdsActivationLabel :: Maybe Text
   , facebookPixelId1 :: Maybe Text
   , facebookPixelId2 :: Maybe Text
+  , metaCapiPixelId :: Maybe Text
+  -- ^ Dataset (pixel) the Conversions API sends signup and activation to; one of the pixels above, so
+  -- browser and server events dedupe. Server-side sending needs this and 'metaCapiAccessToken'.
+  , metaCapiAccessToken :: Maybe Text
+  , metaCapiTestEventCode :: Maybe Text
+  , redditAdAccountId :: Maybe Text
+  , redditConversionsToken :: Maybe Text
   , linkedInPartnerId :: Maybe Text
   , postHogApiKey :: Maybe Text
   , postHogApiHost :: Maybe Text
@@ -592,10 +601,12 @@ configToEnv config = do
   liftIO $ introspectAndCacheOtelColumns pool
   -- A missing or corrupt GeoIP file must not stop the server booting; errors just go unplaced.
   geoDb <-
-    liftIO $ join <$> forM (guarded (not . T.null) config.geoipDbPath) \path ->
-      Safe.try (GeoIP2.openGeoDB (toString path)) >>= \case
-        Right db -> pure (Just db)
-        Left (e :: SomeException) -> Nothing <$ blueMessage ("GeoIP disabled, cannot open " <> path <> ": " <> show e)
+    liftIO
+      $ join
+      <$> forM (guarded (not . T.null) config.geoipDbPath) \path ->
+        Safe.try (GeoIP2.openGeoDB (toString path)) >>= \case
+          Right db -> pure (Just db)
+          Left (e :: SomeException) -> Nothing <$ blueMessage ("GeoIP disabled, cannot open " <> path <> ": " <> show e)
   pure
     AuthContext
       { pool

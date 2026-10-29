@@ -470,7 +470,8 @@ ensureTemplateDatabase connInfo templateDbName = do
 testSessionHeader :: MonadIO m => Pool Connection -> OHasql.TracedPool -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
 testSessionHeader pool hpool = do
   pSessId <-
-    Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
+    fst
+      <$> Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 100])
       & runHTTPGolden "./tests/golden/"
       & runHasqlPool hpool
@@ -1792,18 +1793,22 @@ mkSpanRequest trId spanId parentSpanIdM spanName events statusM attrs resource t
       otelSpan =
         defMessage
           & PTF.traceId
-          .~ hexPad 32 trId & PTF.spanId
+          .~ hexPad 32 trId
+            & PTF.spanId
           .~ hexPad 16 spanId
             & PTF.parentSpanId
           .~ maybe "" (hexPad 16) parentSpanIdM
             & PTF.name
-          .~ spanName & PTF.kind
+          .~ spanName
+            & PTF.kind
           .~ PT.Span'SPAN_KIND_SERVER
             & PTF.startTimeUnixNano
-          .~ startTime & PTF.endTimeUnixNano
+          .~ startTime
+            & PTF.endTimeUnixNano
           .~ endTime
             & PTF.attributes
-          .~ attrs & PTF.events
+          .~ attrs
+            & PTF.events
           .~ events
             & maybe id (PTF.status .~) statusM
       scopeSpan = defMessage & PTF.spans .~ [otelSpan]

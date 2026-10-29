@@ -273,6 +273,7 @@ extra-source-files:
     static/migrations/0255_api_change_recorded_service.sql
     static/migrations/0255_dashboard_saved_views.sql
     static/migrations/0256_ai_artifacts.sql
+    static/migrations/0257_ad_attribution.sql
     test/fixtures/github-app-test.pem
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
@@ -388,6 +389,7 @@ library
       Pages.Settings
       Pages.Share
       Pages.Telemetry
+      Pkg.AdConversions
       Pkg.AI
       Pkg.AssetManifestFingerprint
       Pkg.Components.Facets
@@ -1036,6 +1038,7 @@ test-suite test-dev
       Pages.Settings
       Pages.Share
       Pages.Telemetry
+      Pkg.AdConversions
       Pkg.AI
       Pkg.AssetManifestFingerprint
       Pkg.Components.Facets

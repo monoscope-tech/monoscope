@@ -70,9 +70,10 @@ import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, urlEncode)
 import Network.Wai (Request (queryString, rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pkg.AdConversions qualified as AdConversions
 import Pkg.Mail (addConvertKitUser)
 import Relude hiding (ask, asks)
-import Servant (Header, Headers, NoContent (..), addHeader)
+import Servant (Header, Headers, NoContent (..), addHeader, noHeader)
 import Servant qualified
 import Servant.Server (Handler, ServerError (..), err302, err401)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
@@ -158,7 +159,7 @@ authHandler logger env =
             sessId <-
               cookieSession >>= \case
                 Just ps | ps.user.getUser.email == CI.mk basicEmail -> pure ps.id
-                _ -> authorizeUserAndPersist Nothing "Basic" "Auth" "" basicEmail
+                _ -> fst <$> authorizeUserAndPersist Nothing "Basic" "Auth" "" basicEmail
             session (Just sessId) Nothing
           -- Without credentials only a live cookie session gets in; anything else is
           -- challenged for basic auth instead of being redirected to Auth0.
@@ -264,7 +265,7 @@ demoGuestSession =
   Projects.getPersistentSession demoGuestSessionId >>= \case
     Just sess -> pure $ Just sess
     Nothing -> do
-      uid <- userIdForEmail "Guest" "User" "" guestEmail
+      uid <- fst <$> userIdForEmail "Guest" "User" "" guestEmail
       -- Two concurrent first-requests would both insert; the id is the primary key, so the
       -- loser is a no-op rather than a 500 on a page that is meant to need no account.
       Projects.insertSession demoGuestSessionId uid (Projects.SessionData Map.empty)
@@ -278,11 +279,13 @@ type ApiKeyAuthContext = AuthHandler Request ApiPrincipal
 
 resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es) => Text -> Maybe Projects.ProjectId -> Eff es (Maybe Projects.ProjectId)
 resolveApiKeyProject bearerToken pidM =
-  runMaybeT $ MaybeT (ProjectApiKeys.getProjectIdByApiKey token) <|> do
-    sessId <- hoistMaybe $ Projects.PersistentSessionId <$> UUID.fromText token
-    pid <- hoistMaybe pidM
-    sess <- MaybeT $ Projects.getPersistentSession sessId
-    pid <$ guard (V.any ((== pid) . (.id)) sess.projects.getProjects)
+  runMaybeT
+    $ MaybeT (ProjectApiKeys.getProjectIdByApiKey token)
+    <|> do
+      sessId <- hoistMaybe $ Projects.PersistentSessionId <$> UUID.fromText token
+      pid <- hoistMaybe pidM
+      sess <- MaybeT $ Projects.getPersistentSession sessId
+      pid <$ guard (V.any ((== pid) . (.id)) sess.projects.getProjects)
   where
     token = stripBearer bearerToken
 
@@ -350,8 +353,10 @@ authCallbackH
   :: Maybe Text
   -> Maybe Text -- state variable from auth0
   -> Maybe Text
-  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
-authCallbackH codeM _ redirectToM = do
+  -> Maybe Text -- Cookie
+  -> Maybe Text -- User-Agent
+  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] (Html ()))
+authCallbackH codeM _ redirectToM cookieM userAgentM = do
   envCfg <- ask @AuthContext
   pool <- asks pool
   resp <- runExceptT do
@@ -372,10 +377,13 @@ authCallbackH codeM _ redirectToM = do
     let opts = defaults & header "Authorization" L..~ ["Bearer " <> encodeUtf8 @Text @ByteString accessToken]
     resp <- liftIO $ getWith opts (toString $ envCfg.config.auth0Domain <> "/userinfo")
     let field k = fromMaybe "" $ resp L.^? responseBody . key k . _String
-    lift $ authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) (field "given_name") (field "family_name") (field "picture") (field "email")
+    lift do
+      (sessId, newUserM) <- authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) (field "given_name") (field "family_name") (field "picture") (field "email")
+      let attribution = AdConversions.attributionFromCookies (foldMap (parseCookies . encodeUtf8) cookieM) userAgentM
+      (sessId,) <$> traverse (\uid -> AdConversions.recordSignup envCfg.config uid (field "email") attribution) newUserM
   case resp of
     Left err -> Logging.logAttention "unable to process auth callback page" err >> throwError err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}
-    Right persistentSessId -> pure $ addHeader (fromMaybe "/" redirectToM) $ addHeader (craftSessionCookie persistentSessId True) do
+    Right (persistentSessId, signupCookieM) -> pure $ addHeader (fromMaybe "/" redirectToM) $ addHeader (craftSessionCookie persistentSessId True) $ maybe noHeader addHeader signupCookieM do
       html_ do
         head_ $ meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
         body_ $ a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
@@ -385,10 +393,10 @@ authCallbackH codeM _ redirectToM = do
 --
 -- Split out of 'authorizeUserAndPersist' so the demo guest can resolve its user without also
 -- minting a session row — the whole point of 'demoGuestSession' is that it does not.
-userIdForEmail :: (DB es, Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff es Projects.UserId
+userIdForEmail :: (DB es, Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff es (Projects.UserId, Bool)
 userIdForEmail firstName lastName picture email =
   Projects.userByEmail email >>= \case
-    Just user -> pure user.id
+    Just user -> pure (user.id, False)
     Nothing -> do
       user <- Projects.createUser firstName lastName picture email
       -- Basic-auth users are admins of their own deployment. The annotation disambiguates
@@ -396,16 +404,17 @@ userIdForEmail firstName lastName picture email =
       let userWithSudo :: Projects.User
           userWithSudo = if T.isSuffixOf "@basic-auth.local" email then user{Projects.isSudo = True} else user
       Projects.insertUser userWithSudo
-      pure userWithSudo.id
+      pure (userWithSudo.id, True)
 
 
-authorizeUserAndPersist :: (DB es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Projects.PersistentSessionId
+-- | A new session for the user, with the user's id when this sign-in created the account.
+authorizeUserAndPersist :: (DB es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es (Projects.PersistentSessionId, Maybe Projects.UserId)
 authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
-  userId <- userIdForEmail firstName lastName picture email
+  (userId, created) <- userIdForEmail firstName lastName picture email
   persistentSessId <- Projects.newPersistentSessionId
   Projects.insertSession persistentSessId userId (Projects.SessionData Map.empty)
   _ <- whenJust convertkitApiKeyM \ckKey -> addConvertKitUser ckKey email firstName lastName
-  pure persistentSessId
+  pure (persistentSessId, userId <$ guard created)
 
 
 htmlServerError :: EnvConfig -> Int -> ServerError
