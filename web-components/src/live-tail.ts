@@ -714,7 +714,9 @@ export class LiveTail extends LitElement {
             default-value=${this.query}
             standalone-ai-search
             @open-ai-search=${this.openAiSearch}
-            @update-query=${(event: CustomEvent<{ value: string }>) => {
+            @update-query=${(event: CustomEvent<{ value: string; source?: string }>) => {
+              // A restart clears the rows; restart on a submitted query, not every typing pause.
+              if (event.detail?.source === 'typing') return;
               const next = (event.detail?.value ?? '').trim();
               if (next === this.query) return;
               this.query = next;

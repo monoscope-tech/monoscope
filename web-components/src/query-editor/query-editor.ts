@@ -280,14 +280,14 @@ export class QueryEditorComponent extends LitElement {
             clearTimeout(this.validationTimer);
             clearTimeout(this.updateTimer);
             this.validationTimer = setTimeout(() => void this.validateAndMark(this.getValue()), 400);
-            this.updateTimer = setTimeout(() => this.emitQuery(), 500);
+            this.updateTimer = setTimeout(() => this.emitQuery(false, 'typing'), 500);
           }),
           EditorView.domEventHandlers({
             compositionend: () => {
               clearTimeout(this.validationTimer);
               clearTimeout(this.updateTimer);
               this.validationTimer = setTimeout(() => void this.validateAndMark(this.getValue()), 400);
-              this.updateTimer = setTimeout(() => this.emitQuery(), 500);
+              this.updateTimer = setTimeout(() => this.emitQuery(false, 'typing'), 500);
             },
           }),
         ],
@@ -396,7 +396,8 @@ export class QueryEditorComponent extends LitElement {
     }
     if (seq === this.validationSeq && this.isConnected) this.showError(verdictToError(verdict));
   }
-  private emitQuery(force = false) {
+  // `source: 'typing'` marks the debounced emit, so listeners can wait for a submitted query.
+  private emitQuery(force = false, source?: 'typing') {
     clearTimeout(this.updateTimer);
     const value = this.getValue();
     if (!force && value === this.lastEmitted) return;
@@ -410,7 +411,7 @@ export class QueryEditorComponent extends LitElement {
     const target = this.getAttribute('target-widget-preview');
     if (target) document.getElementById(target)?.dispatchEvent(new CustomEvent('update-widget-query', { detail: { value } }));
     else {
-      this.dispatchEvent(new CustomEvent('update-query', { detail: { value }, bubbles: true }));
+      this.dispatchEvent(new CustomEvent('update-query', { detail: { value, source }, bubbles: true }));
       // The bubbling event already reaches window; emit once to avoid duplicate refetches.
     }
     void this.validateAndMark(value);

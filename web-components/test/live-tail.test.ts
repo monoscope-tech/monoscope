@@ -229,6 +229,29 @@ describe('Live Tail row buffer', () => {
   });
 });
 
+describe('Live Tail query edits', () => {
+  // A restart clears the rows, so restarting on every typing pause wiped the stream while the
+  // reader was still mid-query. Only a submitted query (Enter, AI search, a facet) restarts.
+  test('liveTail_typingPause_doesNotRestartTheStream', async () => {
+    const el = await mount();
+    await settle();
+    el.appendRows(pushed(0, 5).map((r: any) => r.log));
+    const editor = el.querySelector('query-editor') as HTMLElement;
+    const registrations = posted.length;
+    const send = (detail: object) => editor.dispatchEvent(new CustomEvent('update-query', { detail, bubbles: true }));
+
+    send({ value: 'level == "err', source: 'typing' });
+    await settle();
+    expect(posted).toHaveLength(registrations);
+    expect(el.rows).toHaveLength(5);
+
+    send({ value: 'level == "error"' });
+    await settle();
+    expect(posted).toHaveLength(registrations + 1);
+    expect(posted.at(-1).query).toBe('level == "error"');
+  });
+});
+
 describe('Live Tail reconnection', () => {
   test('re-registers with the same selectors the user chose', async () => {
     // A reconnect that silently widened or narrowed the filter would show rows the user never
