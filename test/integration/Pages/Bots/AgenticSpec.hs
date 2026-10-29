@@ -13,7 +13,7 @@ import Data.IORef qualified as IORef
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful qualified as Eff
@@ -490,6 +490,21 @@ spec = around withTestResources do
         ((.routineActive) <$> paused, (.routineNextRunAt) =<< paused) `shouldBe` (Just False, Nothing)
         (.scheduledAt) <$> resumed `shouldBe` Just (addUTCTime 900 frozenTime)
         ((.routineInterval) =<< deleted) `shouldBe` Nothing
+
+      it "weeklyRoutine_dstTransitions_keepTheNextRunAtItsLocalTime" \tr -> do
+        template <- maybe (fail "Missing weekly template") pure $ find ((== "weekly-reliability-review") . (.key)) Issues.routineTemplates
+        let clock day hour minute = UTCTime day (fromIntegral $ hour * 3600 + minute * 60)
+            uid = (getResponse tr.trSessAndHeader).user.id
+            convId = UUIDId UUID.nil
+        for_ ([(clock (fromGregorian 2026 10 26) 13 0, clock (fromGregorian 2026 11 2) 14 0, 1, 9, 0), (clock (fromGregorian 2026 3 1) 7 30, clock (fromGregorian 2026 3 15) 6 30, 7, 2, 30)] :: [(UTCTime, UTCTime, Int, Int, Int)]) $ \(now, expected, weekday, hour, minute) -> do
+          scheduled <- runTestBg now tr do
+            void $ Issues.getOrCreateConversation testPid convId Issues.CTWeb (AE.object [])
+            void $ Issues.installRoutineTemplate uid testPid convId "America/New_York" template
+            Hasql.interpExecute_
+              [HI.sql|UPDATE apis.ai_routines SET schedule_weekday = #{weekday}, schedule_hour = #{hour}, schedule_minute = #{minute}
+              WHERE project_id = #{testPid} AND conversation_id = #{convId}|]
+            Issues.resumeRoutine uid testPid convId
+          fmap (.scheduledAt) scheduled `shouldBe` Just expected
 
       it "installs a built-in routine at the next project-local wall-clock time" \tr -> do
         length Issues.routineTemplates `shouldSatisfy` (>= 15)

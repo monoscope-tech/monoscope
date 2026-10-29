@@ -353,3 +353,21 @@ those commands and publication will be recorded in PR #619.
 
 Live Slack validation remains a separate installation gate. No connected Slack
 workspace tool is available in this session, and no live manifest was changed.
+
+### Daylight-saving regression and final verification
+
+The final audit reproduced a weekly routine losing its next execution across
+a daylight-saving transition. The seven-day UTC search missed the next local
+wall time. A regression failed before the fix. It covers the autumn offset
+change and a nonexistent spring wall time, which must skip one week.
+
+The search now covers fifteen days. Both cases pass, and all 34 Agentic examples
+pass. Focused HLint reports no hints. The repeated distillation, evasion, and
+locality reviews found no further material change in this fix. The final manual
+simplification retained the existing bounded search and table-driven integration test.
+
+The earlier signoff passed compilation, doctests, integration shards, CLI, unit,
+UI, release, lint, frontend, and weeder checks. A complete browser rerun passed
+161 tests with one existing skip, using two workers after parallel dashboard
+timeouts. That signoff and its pending image were stopped before this fix.
+The corrected commit requires a fresh final signoff and production image.

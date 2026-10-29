@@ -1898,7 +1898,8 @@ nextRoutineAt schedule timezone scheduledAt now = case schedule of
   where
     nextMinute = posixSecondsToUTCTime $ fromIntegral (((floor (utcTimeToPOSIXSeconds now) :: Integer) `div` 60 + 1) * 60)
     tz = fromMaybe utcTZ $ TZ.tzByName $ encodeUtf8 timezone
-    nextClock time matchesDay = find matches [addUTCTime (fromIntegral n * 60) nextMinute | n <- [0 .. 10079 :: Int]]
+    -- A weekly wall time can skip a DST gap, so search past the following week.
+    nextClock time matchesDay = find matches [addUTCTime (fromIntegral n * 60) nextMinute | n <- [0 .. 15 * 1440 - 1 :: Int]]
       where
         matches instant =
           let LocalTime day (TimeOfDay hour minute _) = utcToLocalTimeTZ tz instant
