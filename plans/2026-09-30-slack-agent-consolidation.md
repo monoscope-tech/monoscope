@@ -371,3 +371,10 @@ UI, release, lint, frontend, and weeder checks. A complete browser rerun passed
 161 tests with one existing skip, using two workers after parallel dashboard
 timeouts. That signoff and its pending image were stopped before this fix.
 The corrected commit requires a fresh final signoff and production image.
+
+The next integration run exposed an order-dependent assertion in the error-page
+test. An apostrophe-containing title was compared with escaped HTML. Selecting
+that fixture reproduced the failure under seed 172613282. The assertion now
+compares escaped text, including the cross-project rejection. All 35 error-pattern
+examples pass. The repeated reviews and final simplification found no further change.
+Signoff was stopped before this test correction and will restart on its commit.

@@ -230,12 +230,13 @@ spec = sequential $ aroundAll withTestResources do
       issueCount `shouldSatisfy` (> 0)
       (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Issues.PIssue Issues.defIssueFilters{Issues.types = ["runtime_exception"], Issues.order = Just "-updated_at", Issues.limit = 10}
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
-      patternWithTrace <- maybe (fail "the ingested exception has no trace") pure $ find (isJust . (.firstTraceId)) patterns
+      patternWithTrace <- maybe (fail "the ingested exception has no trace") pure $ find (\p -> p.errorType == "TypeError" && T.isInfixOf "'id'" p.message && isJust p.firstTraceId) patterns
       traceIdText <- maybe (fail "the ingested exception has no trace") pure patternWithTrace.firstTraceId
       issue <- maybe (fail "the runtime issue was not listed") pure $ find ((== patternWithTrace.hash) . (.targetHash)) issues
       (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
       let html = TL.toStrict $ renderText $ toHtml page
-      html `shouldSatisfy` T.isInfixOf issue.title
+          titleHtml = toText $ renderText $ toHtml issue.title
+      html `shouldSatisfy` T.isInfixOf titleHtml
       -- The header once read "New Error: Error - <message cut at 80 chars>", under a
       -- canned "Investigate the new error…" line, with severity shown twice.
       fresh <- runTestBg frozenTime tr $ Issues.createNewErrorIssue pid patternWithTrace
@@ -249,7 +250,7 @@ spec = sequential $ aroundAll withTestResources do
       (_, otherPage) <- testServant tr $ Pages.Issues.issueDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing Nothing
       let otherHtml = TL.toStrict $ renderText $ toHtml otherPage
       otherHtml `shouldSatisfy` T.isInfixOf "Issue not found"
-      otherHtml `shouldSatisfy` not . T.isInfixOf issue.title
+      otherHtml `shouldSatisfy` not . T.isInfixOf titleHtml
 
     it "2a. Repeat upsert on a non-resolved pattern does NOT rewrite toastable fields (TOAST bloat guard)" \tr -> do
       -- Regression: ON CONFLICT DO UPDATE used to set message/error_data unconditionally,
