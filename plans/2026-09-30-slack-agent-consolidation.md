@@ -395,3 +395,14 @@ On the combined tree, the server compiles, all 133 bot examples pass, and all
 35 error-pattern examples pass with seed 172613282. Formatting and focused HLint
 pass. Repeated distillation, evasion, and locality reviews found no material issue
 in the conflict resolutions. The final simplification uses the shared rendering helper.
+
+### Requester identity in captured run details
+
+The review artifact's interface captures exposed an empty requester label for
+users without profile names. A browser regression failed on that missing identity.
+The run page now uses the email when the trimmed name is empty and wraps long
+identifiers. The fixture uses a valid 64-character email local part. The complete
+routine browser flow passes in 22 seconds at desktop and 320px, in both themes.
+All 34 Agentic examples pass. Formatting and focused HLint pass. Repeated Haskell
+and interface reviews found no further material change; final simplification kept
+the fallback local to its element. The earlier image was stopped before this fix.

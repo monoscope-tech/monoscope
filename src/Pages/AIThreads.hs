@@ -3,6 +3,7 @@ module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
@@ -603,7 +604,9 @@ routineRunGetH pid runId = do
             Issues.TriggeredRun (Issues.PullRequestReview _) -> "Pull request"
             Issues.TriggeredRun (Issues.IssueEnrichment _) -> "New issue"
           span_ $ toHtml $ "Attempt " <> show @Text run.attempt
-          whenJust requestedBy $ \user -> span_ $ toHtml $ "Requested by " <> user.firstName <> " " <> user.lastName
+          whenJust requestedBy $ \user -> do
+            let name = T.strip $ user.firstName <> " " <> user.lastName
+            span_ [class_ "min-w-0 break-words"] $ toHtml $ "Requested by " <> if T.null name then CI.original user.email else name
           time_ [datetime_ $ show run.startedAt] $ toHtml $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" run.startedAt
       whenJust run.error $ p_ [class_ $ "rounded-lg border border-strokeWeak p-4 text-sm break-words " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; _ -> "text-textWeak"), role_ "status"] . toHtml
       whenJust evidence.input $ \input -> section_ [Aria.label_ "Run request"] do

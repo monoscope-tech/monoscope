@@ -35,6 +35,7 @@ not outstanding defects.
 | 8 | LOW | Colors | `src/Pages/AIThreads.hs:608` | User cancellation reasons used error coloring | Use neutral text for cancellation, warning for timeout and error for failure | The message's visual meaning must agree with the run status |
 | 9 | LOW | Writing | `src/Pages/AIThreads.hs:185` | Recent runs showed the scheduling timestamp | Show execution time consistently with run details | Event execution history must describe when work ran |
 | 10 | MEDIUM | Writing | `src/Pages/AIThreads.hs:155`, `src/Pages/AIThreads.hs:188` | The introduction omitted issue events and said results stayed only in Monoscope | Describe schedule and project events; state that Slack and PR reviews also post replies | Activation must explain where AI results go |
+| 11 | MEDIUM | Writing and layout | `src/Pages/AIThreads.hs:607` | A member without profile names rendered an empty requester label | Use the email when the trimmed name is empty and wrap long identifiers | The permanent browser regression failed on the missing requester and passes with a 64-character local part at 320px |
 
 ## Considered but rejected
 
@@ -47,7 +48,7 @@ not outstanding defects.
 
 ## Verification
 
-- Long-lived test watcher: all 132 bot examples, 73 API/MCP examples, three PR
+- Long-lived test watcher: all 133 bot examples, 73 API/MCP examples, three PR
   review examples and 62 repository examples passed. These include activation,
   instruction snapshots, retained evidence, retry and delivery-failure behavior. Reader writes return 403; another project's run returns 404.
 - Local browser adapter: `scripts/local/routine-ui-review.cjs` ran against
@@ -61,7 +62,7 @@ not outstanding defects.
   --reporter=line` passed against the same isolated live-server mechanism. It
   covers activation, instruction editing, disclosure state across polls, completed
   artifacts, immutable history, deleted conversations and 320px repository forms.
-  The latest run passed in 20.3 seconds. It also checks revoked membership and
+  The latest run passed in 22 seconds. It also verifies requester identity for unnamed users with long email addresses. It also checks revoked membership and
   issue-enrichment activation at 320px. Both polling-state loss and form overlap
   failed before their fixes.
 - `make post-css` passed. Captures are under ignored

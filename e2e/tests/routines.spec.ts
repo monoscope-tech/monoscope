@@ -2,9 +2,10 @@ import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { sql } from './helpers';
 
-test('event routine instructions and artifacts survive polling, later edits, and conversation deletion', async ({ page, baseURL }, testInfo) => {
+test('event routine history shows unnamed requesters and survives polling, edits, and conversation deletion', async ({ page, baseURL }, testInfo) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), run = randomUUID(), repository = randomUUID();
-  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+  const email = `${uid.replaceAll('-', '').repeat(2)}@example.test`;
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${email}');
        INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
        INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Routine lifecycle');
        INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
@@ -29,6 +30,7 @@ test('event routine instructions and artifacts survive polling, later edits, and
          FROM apis.ai_routines WHERE id = '${routine}';`);
     await page.goto(`${root}/runs/${run}`);
     await expect(page.getByRole('status')).toHaveText('Running');
+    await expect(page.getByText(`Requested by ${email}`, { exact: true })).toBeVisible();
     await expect(page.getByText('Artifacts will appear when this run finishes.', { exact: true })).toBeVisible();
     const instructions = page.getByText('Instructions used for this run', { exact: true });
     await instructions.focus();
@@ -52,6 +54,7 @@ test('event routine instructions and artifacts survive polling, later edits, and
          INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${renewedSession}', '${uid}');`);
     await page.context().addCookies([{ name: 'monoscope_session', value: renewedSession, url: baseURL! }]);
     await page.goto(`${root}/runs/${run}`);
+    await page.screenshot({ path: testInfo.outputPath('routine-run-desktop.png') });
     for (const theme of ['light', 'dark']) {
       await page.evaluate(value => document.body.dataset.theme = value, theme);
       await page.setViewportSize({ width: 320, height: 844 });
