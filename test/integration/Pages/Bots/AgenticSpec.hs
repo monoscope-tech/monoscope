@@ -121,7 +121,7 @@ spec = around withTestResources do
       it "assistantPages_defaultToAssistant" \tr -> do
         let convId = UUIDId UUID.nil
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
         let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
         html `shouldSatisfy` T.isInfixOf "id=\"nav-view-ai\" class=\"sr-only\" checked"
 
@@ -129,7 +129,7 @@ spec = around withTestResources do
         let issueId = UUIDId UUID.nil :: Issues.IssueId
             convId = UUIDId issueId.unUUIDId
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTAnomaly})|]
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
         let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
         html `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/issues/" <> issueId.toText <> "\"")
 
@@ -138,7 +138,7 @@ spec = around withTestResources do
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
         (_, conversationPage) <- testServant tr $ AIThreads.threadsGetH testPid
         (_, routinesPage) <- testServant tr $ AIThreads.routinesGetH testPid
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
         let render = LT.toStrict . Lucid.renderText . Lucid.toHtml
             conversationHtml = render conversationPage
         all (`T.isInfixOf` conversationHtml) ["href=\"/p/" <> testPid.toText <> "/ai/routines\"", "Routines", "href=\"/p/" <> testPid.toText <> "/ai\"", "Conversations"] `shouldBe` True
@@ -151,7 +151,7 @@ spec = around withTestResources do
           void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
           Issues.insertChatMessage testPid convId Issues.ChatUser "Watch checkout latency" Nothing Nothing
           for_ ["First run result", "Second run result"] \r -> Issues.insertChatMessage testPid convId Issues.ChatAssistant r Nothing Nothing
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
         let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
         filter (not . (`T.isInfixOf` html)) ["First run result", "Second run result"] `shouldBe` []
 
@@ -178,11 +178,34 @@ spec = around withTestResources do
         slack.formatted `shouldSatisfy` T.isPrefixOf "Documents are only available"
         -- frozenTime is 2025-01-01T00:00Z, still New Year's Eve in New York.
         routinePrompt `shouldSatisfy` T.isInfixOf "key \"2024-12-31\""
-        (_, chatPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing
+        (_, chatPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
         LT.toStrict (Lucid.renderText $ Lucid.toHtml chatPage) `shouldSatisfy` T.isInfixOf "href=\"?doc=checkout-review\""
-        (_, docPage) <- testServant tr $ AIThreads.threadGetH testPid convId (rightToMaybe $ Issues.mkArtifactKey "checkout-review")
+        (_, docPage) <- testServant tr $ AIThreads.threadGetH testPid convId (rightToMaybe $ Issues.mkArtifactKey "checkout-review") Nothing
         let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml docPage
         filter (not . (`T.isInfixOf` html)) ["?doc=checkout-review", "<h2 id=\"followup\">", "href=\"#followup\"", "Latency recovered."] `shouldBe` []
+
+      it "agentDocuments_boundedPerDocumentPerConversationAndPerRead" \tr -> do
+        let convId = UUIDId UUID.nil
+            web = (AI.defaultAgenticConfig testPid){AI.conversationId = Just convId, AI.conversationType = Just Issues.CTWeb}
+            call name args = (.formatted) <$> AI.executeToolCall web (LLM.ToolCall "call" "function" $ LLM.ToolFunction name $ Map.fromList args)
+            big = AE.String $ T.replicate 90_000 "x"
+        (badMode, longRead, overflow, overCap, existing) <- runTestBg frozenTime tr do
+          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
+          badMode <- call "save_artifact" [("key", "a"), ("content", "y"), ("mode", "merge")]
+          void $ call "save_artifact" [("key", "log"), ("content", big)]
+          void $ call "save_artifact" [("key", "log"), ("mode", "append"), ("content", big)]
+          longRead <- call "read_artifact" [("key", "log")]
+          overflow <- call "save_artifact" [("key", "log"), ("mode", "append"), ("content", big)]
+          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content) SELECT #{testPid}, #{convId}, 'doc-' || n, 'Doc', '' FROM generate_series(1, #{Issues.maxArtifactsPerConversation - 1}) n|]
+          overCap <- call "save_artifact" [("key", "one-too-many"), ("content", "y")]
+          existing <- call "save_artifact" [("key", "log"), ("content", "rewritten")]
+          pure (badMode, longRead, overflow, overCap, existing)
+        badMode `shouldBe` "mode must be replace or append."
+        T.length longRead `shouldSatisfy` (< 41_000)
+        longRead `shouldSatisfy` T.isInfixOf "140002 of 180002 characters omitted"
+        overflow `shouldSatisfy` T.isPrefixOf "Document 'log' is full."
+        overCap `shouldSatisfy` T.isInfixOf "already holds 500 documents"
+        existing `shouldSatisfy` T.isPrefixOf "Saved document 'log'"
 
       it "lists titled threads and schedules and pauses their routine" \tr -> do
         let convId = UUIDId UUID.nil

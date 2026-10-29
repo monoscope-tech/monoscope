@@ -590,7 +590,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , aiRoutinesGet :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , aiRoutineInstallPost :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> "install" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineTemplateForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiThreadsGet :: mode :- "p" :> ProjectId :> "ai" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiThreadGet :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> QueryParam "doc" Issues.ArtifactKey :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , aiThreadGet :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> QueryParam "doc" Issues.ArtifactKey :> Header "HX-Target" Text :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , aiThreadsPost :: mode :- "p" :> ProjectId :> "ai" :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiThreadPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiThreadTitlePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "title" :> ReqBody '[FormUrlEncoded] AIThreads.TitleForm :> Post '[HTML] (RespHeaders (Html ()))
