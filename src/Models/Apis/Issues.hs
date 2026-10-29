@@ -2005,8 +2005,10 @@ instance FromHttpApiData ArtifactKey where
 -- Left "Document key must contain letters or digits."
 -- >>> toText <$> mkArtifactKey (T.replicate 80 "a")
 -- Right "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+-- >>> T.length . toText <$> mkArtifactKey (T.replicate 63 "a" <> " b")
+-- Right 63
 mkArtifactKey :: Text -> Either Text ArtifactKey
-mkArtifactKey raw = case T.take 64 $ slugify raw of
+mkArtifactKey raw = case T.dropWhileEnd (== '-') $ T.take 64 $ slugify raw of
   "" -> Left "Document key must contain letters or digits."
   k -> Right $ ArtifactKey k
 
