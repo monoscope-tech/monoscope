@@ -5,7 +5,7 @@ module Pages.Bots.WorkflowsSpec (spec) where
 import BackgroundJobs qualified as Jobs
 import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), bracket_, throwIO)
-import Control.Lens (ix, (.~), (^.), (^?))
+import Control.Lens (ix, toListOf, (.~), (^.), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _Bool, _Number, _String)
 import Data.Base64.Types (extractBase64)
@@ -55,7 +55,7 @@ import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx)
-import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldNotContain, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -417,6 +417,23 @@ spec = around withTestResources do
               [sql|UPDATE projects.dashboards SET schema = ? WHERE id::text = ?|]
               (Aeson $ schema "Changed", did)
         denied 400 submit
+        -- A chart URL too large to sign used to be posted as image_url "", which Slack
+        -- rejects; the share must go out without the image block instead.
+        withResource tr.trPool \conn ->
+          void
+            $ PGS.execute
+              conn
+              [sql|UPDATE projects.dashboards SET schema = ? WHERE id::text = ?|]
+              (Aeson $ schema $ T.concat [show @Text i <> "abcdefg" | i <- [1 .. 3000 :: Int]], did)
+        (rechosen, _) <- run $ payload initial "block_actions" (select "dashboard-select" did) AE.Null
+        rechosenBody <- body rechosen
+        hugeContext <- metadata rechosenBody
+        hugeOption <- maybe (fail "Missing widget option") pure $ rechosenBody ^? key "view" . key "blocks" . _Array . ix 0 . key "accessory" . key "options" . _Array . ix 0 . key "value" . _String
+        let hugeState = AE.object ["values" AE..= AE.object ["widget-select" AE..= AE.object ["widget-select" AE..= AE.object ["selected_option" AE..= AE.object ["value" AE..= hugeOption]]]]]
+        (hugeShared, hugeStatus) <- run $ payload hugeContext "view_submission" [] hugeState
+        hugeStatus `shouldBe` 200
+        hugeBody <- body hugeShared
+        toListOf (key "blocks" . _Array . traverse . key "type" . _String) hugeBody `shouldNotContain` ["image"]
         withResource tr.trPool \conn ->
           void
             $ PGS.execute

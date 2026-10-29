@@ -34,7 +34,7 @@ import Pkg.AI qualified as AI
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId, idFromText)
-import Pkg.Mail (arr, plainTxt, slackActions, slackContext, slackHeader, slackImage, slackSection)
+import Pkg.Mail (arr, dcGallery, plainTxt, slackActions, slackContext, slackHeader, slackImage, slackSection)
 import Pkg.Parser (parseQueryToAST)
 import Relude
 import Servant.API (Header)
@@ -132,11 +132,6 @@ dcContainer accent components = AE.object ["flags" AE..= (32768 :: Int), "compon
 
 dcText :: Text -> AE.Value
 dcText content = AE.object ["type" AE..= (10 :: Int), "content" AE..= content]
-
-
--- | Media gallery; one entry per (url, alt-text) pair.
-dcGallery :: [(Text, Text)] -> AE.Value
-dcGallery items = AE.object ["type" AE..= (12 :: Int), "items" AE..= arr [AE.object ["media" AE..= AE.object ["url" AE..= u], "description" AE..= d] | (u, d) <- items]]
 
 
 dcLinkButton :: Text -> Text -> AE.Value
@@ -314,7 +309,7 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
         Nothing -> send $ ReplyText $ textReply $ "No " <> display reportType <> " report found. Reports are generated automatically on schedule."
         Just report -> do
           let stamp = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
-              png q theme = fold <$> Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just q, Widget.theme = theme} Nothing (Just $ stamp report.startTime) (Just $ stamp report.endTime)
+              png q theme = Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just q, Widget.theme = theme} Nothing (Just $ stamp report.startTime) (Just $ stamp report.endTime)
           eventsUrl <- png "summarize count(*) by bin_auto(timestamp), status_code" Nothing
           errorsUrl <- png "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code" (Just "roma")
           send $ ReplyText $ formatReport report eventsUrl errorsUrl
@@ -336,23 +331,21 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
     formatReport report eventsUrl errorsUrl = case target of
       Slack ->
         slackResponse
-          [ slackHeader $ title " Report"
-          , slackContext ["*Period:* " <> period " → "]
-          , slackSection $ "Total Events: *" <> show totalEvents <> "*  •  Total Errors: *" <> show totalErrors <> "*"
-          , AE.object ["type" AE..= ("divider" :: Text)]
-          , slackImage (chartAlt "Events" " showing " totalEvents) Nothing eventsUrl
-          , slackImage (chartAlt "Errors" " showing " totalErrors) Nothing errorsUrl
-          , slackActions [linkButton "view-full-report" (botEmoji EmojiSearch <> " View Full Report") reportUrl]
-          ]
+          $ [ slackHeader $ title " Report"
+            , slackContext ["*Period:* " <> period " → "]
+            , slackSection $ "Total Events: *" <> show totalEvents <> "*  •  Total Errors: *" <> show totalErrors <> "*"
+            , AE.object ["type" AE..= ("divider" :: Text)]
+            ]
+          <> catMaybes [slackImage (chartAlt "Events" " showing " totalEvents) Nothing <$> eventsUrl, slackImage (chartAlt "Errors" " showing " totalErrors) Nothing <$> errorsUrl]
+          <> [slackActions [linkButton "view-full-report" (botEmoji EmojiSearch <> " View Full Report") reportUrl]]
       Discord ->
-        dcContainer
-          26879
-          [ dcText $ botEmoji EmojiChart <> " **" <> T.toTitle (display report.reportType) <> " Report**"
-          , dcText $ "**Period:** " <> period " → "
-          , dcText $ "Total Events: **" <> show totalEvents <> "**  •  Total Errors: **" <> show totalErrors <> "**"
-          , dcGallery [(eventsUrl, chartAlt "Events" ": " totalEvents), (errorsUrl, chartAlt "Errors" ": " totalErrors)]
-          , dcLinkButton (botEmoji EmojiSearch <> " View Full Report") reportUrl
-          ]
+        dcContainer 26879
+          $ [ dcText $ botEmoji EmojiChart <> " **" <> T.toTitle (display report.reportType) <> " Report**"
+            , dcText $ "**Period:** " <> period " → "
+            , dcText $ "Total Events: **" <> show totalEvents <> "**  •  Total Errors: **" <> show totalErrors <> "**"
+            ]
+          <> dcGallery [(eventsUrl, chartAlt "Events" ": " totalEvents), (errorsUrl, chartAlt "Errors" ": " totalErrors)]
+          <> [dcLinkButton (botEmoji EmojiSearch <> " View Full Report") reportUrl]
       WhatsApp -> textReply $ title " Report\nPeriod: " <> period " - " <> "\nTotal Events: " <> show totalEvents <> "\nTotal Errors: " <> show totalErrors <> "\nView: " <> reportUrl
       where
         reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
@@ -378,28 +371,28 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
               let wType = Widget.mapChartTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   queryUrl = explorerUrl <> "viz_type=" <> chartType <> "&query=" <> toUriStr query
-              imageUrl <- fold <$> Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing (iso fromTimeM) (iso toTimeM)
+              imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing (iso fromTimeM) (iso toTimeM)
               send $ ReplyChart $ case target of
                 Slack ->
                   AE.object
                     [ "blocks"
                         AE..= arr
-                          [ slackHeader (botEmoji EmojiChart <> " " <> userQuery)
-                          , slackImage ("Chart: " <> userQuery) Nothing imageUrl
-                          , slackContext ["*Query:* `" <> query <> "`"]
-                          , slackActions [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " View in Log Explorer") queryUrl]
-                          ]
+                          ( [slackHeader (botEmoji EmojiChart <> " " <> userQuery)]
+                              <> maybeToList (slackImage ("Chart: " <> userQuery) Nothing <$> imageUrl)
+                              <> [ slackContext ["*Query:* `" <> query <> "`"]
+                                 , slackActions [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " View in Log Explorer") queryUrl]
+                                 ]
+                          )
                     , "response_type" AE..= ("in_channel" :: Text)
                     , "replace_original" AE..= True
                     ]
                 Discord ->
-                  dcContainer
-                    26879
-                    [ dcText $ botEmoji EmojiChart <> " **" <> userQuery <> "**"
-                    , dcGallery [(imageUrl, "Chart visualization: " <> userQuery)]
-                    , dcText $ "**Query:** `" <> query <> "`"
-                    , dcLinkButton (botEmoji EmojiSearch <> " View in Log Explorer") queryUrl
-                    ]
+                  dcContainer 26879
+                    $ [dcText $ botEmoji EmojiChart <> " **" <> userQuery <> "**"]
+                    <> dcGallery [(imageUrl, "Chart visualization: " <> userQuery)]
+                    <> [ dcText $ "**Query:** `" <> query <> "`"
+                       , dcLinkButton (botEmoji EmojiSearch <> " View in Log Explorer") queryUrl
+                       ]
                 -- Twilio content-template variables: WhatsApp renders the chart itself, so
                 -- "3" is the query string the template appends to the chart endpoint, "4"
                 -- the (host-relative) explorer link.

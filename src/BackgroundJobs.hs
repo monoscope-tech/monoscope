@@ -7,7 +7,7 @@ import BackgroundJobs.Types qualified as Jobs
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
-import Control.Lens (view, (.~), (?~), (^.), (^..), (^?), _1, _3)
+import Control.Lens (view, (.~), (?~), (^.), (^?), _1, _3)
 import Control.Monad.Extra (whileM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
@@ -44,7 +44,6 @@ import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
-import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent.Async (concurrently, concurrently_, forConcurrently, forConcurrently_)
 import Effectful.Ki qualified as Ki
@@ -3248,7 +3247,7 @@ sendReportForProject pid rType = do
       let stmTxt = formatUTCMicros startTime
           currentTimeTxt = formatUTCMicros currentTime
           reportUrl = projectUrl ctx pid <> "/reports/" <> report.id.toText
-          png w = fold <$> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just stmTxt) (Just currentTimeTxt)
+          png w = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just stmTxt) (Just currentTimeTxt)
       allQ <- png RP.eventsWidget
       errQ <- png RP.errorsWidget
       let alert = ReportAlert rType stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ

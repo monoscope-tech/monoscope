@@ -362,7 +362,7 @@ slackActionsH action = do
         widget <- maybe (throwError err400{errBody = "This widget changed. Reopen /dashboard."}) pure $ find ((== selected) . widgetSelectionId) dashboard.widgets
         let title = fromMaybe "Untitled" widget.title
         requireAccess
-        chartUrl <- fold <$> widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl context.projectId widget Nothing Nothing Nothing
+        chartUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl context.projectId widget Nothing Nothing Nothing
         perform did dashboard title chartUrl
   case slackAction.type_ of
     "block_actions" -> case slackAction.actions >>= viaNonEmpty head of
@@ -373,7 +373,7 @@ slackActionsH action = do
       Just a | a.action_id == "widget-select" -> do
         selected <- maybe (throwError err400) (pure . (.value)) a.selected_option
         withWidget selected \_ dashboard title chartUrl ->
-          updateModal context $ selectBlocks dashboard.widgets $ V.singleton $ slackImage title Nothing chartUrl
+          updateModal context $ selectBlocks dashboard.widgets $ V.fromList $ maybeToList $ slackImage title Nothing <$> chartUrl
       _ -> pass
     "view_submission" -> do
       -- Slack nests the value under values.<blockId>.<actionId>; both ids match here.
@@ -385,10 +385,11 @@ slackActionsH action = do
             [ "channel" AE..= context.channelId
             , "blocks"
                 AE..= arr
-                  [ slackSection $ "<" <> envCfg.hostUrl <> "p/" <> context.projectId.toText <> "/dashboards/" <> did.toText <> "|" <> title <> ">"
-                  , slackSection $ "Shared by <@" <> slackAction.user.id <> "> using /dashboard"
-                  , slackImage title Nothing chartUrl
-                  ]
+                  ( [ slackSection $ "<" <> envCfg.hostUrl <> "p/" <> context.projectId.toText <> "/dashboards/" <> did.toText <> "|" <> title <> ">"
+                    , slackSection $ "Shared by <@" <> slackAction.user.id <> "> using /dashboard"
+                    ]
+                      <> maybeToList (slackImage title Nothing <$> chartUrl)
+                  )
             ]
     _ -> pass
   pure $ AE.object []

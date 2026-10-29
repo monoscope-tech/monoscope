@@ -44,6 +44,7 @@ spec = do
       apiKey <- createTestAPIKey tr testPid "datapoint-window-key"
       ingestMetric tr apiKey [] [] "datapoint.current" 1 frozenTime
       ingestMetric tr apiKey [] [] "datapoint.stale" 1 (addUTCTime (-7200) frozenTime)
+      ingestMetric tr apiKey [] [] "datapoint.recent" 1 (addUTCTime (-1800) frozenTime)
       runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
 
       (_, overview) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
@@ -71,6 +72,17 @@ spec = do
       (_, countCells) <- testServant tr $ Trace.dataPointCountsGetH testPid Nothing Nothing Nothing
       let countsHtml = LT.toStrict $ Lucid.renderText countCells
       for_ ["metric-datapoint-count-datapoint.current", "metric-datapoint-count-datapoint.stale", "hx-swap-oob", ">1<", ">0<"] \text -> countsHtml `shouldSatisfy` T.isInfixOf text
+
+      -- A cleared picker submits since=&from=&to=; that must read as "no range" and take the
+      -- default window, not collapse to now..now and report every metric as empty.
+      (_, blankCells) <- testServant tr $ Trace.dataPointCountsGetH testPid (Just "") (Just "") (Just "")
+      LT.toStrict (Lucid.renderText blankCells) `shouldBe` countsHtml
+      (_, blankOverview) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") (Just "") (Just "") (Just "") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      case blankOverview of
+        Trace.MetricsOVDataPointMain (PageCtx _ (_, _, _, countUrl, _, pageUrl, _)) -> do
+          countUrl `shouldBe` "/p/" <> testPid.toText <> "/metrics/datapoints/counts?since=1H"
+          pageUrl `shouldBe` "/p/" <> testPid.toText <> "/metrics?tab=datapoints&since=1H"
+        _ -> expectationFailure "expected the datapoints overview"
 
     it "datapointSourceOverflow_defersAdditionalSourcesToDetails" \tr -> do
       let seedSvc svc =
