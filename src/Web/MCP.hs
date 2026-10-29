@@ -234,7 +234,6 @@ mkToolsFromOpenApi spec =
         , (m, op) <- pathItemOps item
         , (m, p) /= ("POST", "/mcp") -- never expose MCP itself as a tool
         ]
-          <> compositeTools
     ]
   where
     pathItemOps i =

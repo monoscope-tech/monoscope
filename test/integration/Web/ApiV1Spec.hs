@@ -12,7 +12,7 @@ import Data.List (lookup)
 import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
@@ -21,25 +21,25 @@ import Effectful (Eff, IOE, (:>))
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Monitors qualified as Monitors
-import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
-import Pkg.Git qualified as Git
+import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Pages.Charts.Charts qualified as Charts
 import Pages.Charts.Types (MetricsData (..))
 import Pages.Dashboards qualified as DashPage
 import Pages.LogExplorer.Log qualified as Log
-import Pkg.Components.Widget qualified as Widget
 import Pkg.AI qualified as AI
+import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Git qualified as Git
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TestUtils
 import Relude
 import Servant (NoContent (..))
-import System.Types (ATBaseCtx, ApiPrincipal (..), effToServantHandlerTestHTTP)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Types (ATBaseCtx, ApiPrincipal (..), effToServantHandlerTestHTTP)
 import Test.Hspec
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
@@ -451,8 +451,8 @@ spec = around withTestResources do
 
     describe "Dashboard CRUD" do
       it "returns an empty dashboard's title and widget list" $ \tr -> do
-        created <- runAsBase tr $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid ApiT.DashboardInput{ApiT.title = "empty dashboard", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
-        rendered <- runAsBase tr $ DashPage.apiDashboardData testPid created.summary.id Nothing Nothing (Just "1h") Nothing Nothing []
+        created <- toBaseServantResponse tr $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid ApiT.DashboardInput{ApiT.title = "empty dashboard", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
+        rendered <- toBaseServantResponse tr $ DashPage.apiDashboardData testPid created.summary.id Nothing Nothing (Just "1h") Nothing Nothing []
         rendered.id `shouldBe` created.summary.id
         rendered.title `shouldBe` "empty dashboard"
         rendered.widgets `shouldSatisfy` null
@@ -488,14 +488,13 @@ spec = around withTestResources do
         d1 <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc
         d2 <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc
         d1.summary.id `shouldBe` d2.summary.id -- same row updated, not inserted again
-
       it "apply_doesNotOverwriteARepositoryOwnedDashboardWithTheSamePath" $ \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
             doc = ApiT.DashboardYAMLDoc{ApiT.filePath = "overview.yaml", ApiT.title = Just "Repository overview", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.schema = def}
         Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
-        remote <- toBaseServantResponse tr $ ApiH.apiDashboardApply testPid doc
+        remote <- toBaseServantResponse tr $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc
         runQueryEffect tr (GitSync.assignDashboardRepository testPid remote.summary.id sync.id) `shouldReturn` Right ()
-        applied <- toBaseServantResponse tr $ ApiH.apiDashboardApply testPid doc{ApiT.title = Just "Local overview"}
+        applied <- toBaseServantResponse tr $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc{ApiT.title = Just "Local overview"}
         applied.summary.id `shouldNotBe` remote.summary.id
         Just retained <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid remote.summary.id
         retained.title `shouldBe` "Repository overview"
@@ -759,7 +758,7 @@ spec = around withTestResources do
 
       it "runs the Agent project adapter through the same MCP route" \tr -> do
         let backend = Routes.mcpProjectTools
-        result <- runAsBase tr $ AI.invoke backend ApiT.ApiKeyPrincipal testPid "get_project" Map.empty
+        result <- toBaseServantResponse tr $ AI.invoke backend ApiT.ApiKeyPrincipal testPid "get_project" Map.empty
         (result ^? key "isError") `shouldBe` Just (AE.Bool False)
         (result ^? key "structuredContent" . key "summary" . key "id" . _String) `shouldBe` Just testPid.toText
 
@@ -778,9 +777,9 @@ spec = around withTestResources do
         Map.member "get_incident" reg `shouldBe` True
 
       it "requires an explicit Agent policy or exclusion for every MCP operation" $ \_tr -> do
-        let covered = Map.keysSet MCP.agentPolicies `Set.union` Map.keysSet MCP.agentExclusions
+        let covered = Map.keysSet MCP.agentPolicies `S.union` Map.keysSet MCP.agentExclusions
         Map.keysSet reg `shouldBe` covered
-        Map.keysSet MCP.agentPolicies `Set.intersection` Map.keysSet MCP.agentExclusions `shouldBe` Set.empty
+        Map.keysSet MCP.agentPolicies `S.intersection` Map.keysSet MCP.agentExclusions `shouldBe` S.empty
         Map.lookup "list_metrics" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PView MCP.ReadOnly)
         Map.lookup "create_monitor" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PEdit MCP.RequestedWrite)
         Map.lookup "bulk_monitors" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PAdmin MCP.ConfirmedWrite)
@@ -836,21 +835,33 @@ spec = around withTestResources do
           Nothing -> expectationFailure ("structuredContent missing; body: " <> show content)
 
       it "tools/call list_metrics returns a project-scoped catalog page" $ \tr -> do
-        runQueryEffect tr $ Hasql.interpExecute_
-          [HI.sql|INSERT INTO otel_metrics_meta
+        runQueryEffect tr
+          $ Hasql.interpExecute_
+            [HI.sql|INSERT INTO otel_metrics_meta
             (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
             VALUES (#{testPid}, 'checkout.duration', 'GAUGE', 'ms', 'request metric', 'checkout', 'test', '{}', #{frozenTime}, #{frozenTime}, #{frozenTime}, #{frozenTime})|]
         let oldTime = addUTCTime (-(8 * 24 * 3600)) frozenTime
-        runQueryEffect tr $ Hasql.interpExecute_
-          [HI.sql|INSERT INTO otel_metrics_meta
+        runQueryEffect tr
+          $ Hasql.interpExecute_
+            [HI.sql|INSERT INTO otel_metrics_meta
             (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
             VALUES (#{testPid}, 'checkout.old', 'GAUGE', 'ms', 'old metric', 'checkout', 'test', '{}', #{oldTime}, #{oldTime}, #{oldTime}, #{oldTime})|]
-        resp <- runAsBase tr $ MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid
-          (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "limit" AE..= (1 :: Int)])
+        resp <-
+          toBaseServantResponse tr
+            $ MCP.handleJsonRpc
+              reg
+              (buildTestApp tr testPid)
+              testPid
+              (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "limit" AE..= (1 :: Int)])
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
         (resp ^? key "result" . key "structuredContent" . key "metrics" . _Array . ix 0 . key "metricName" . _String) `shouldBe` Just "checkout.duration"
-        inactive <- runAsBase tr $ MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid
-          (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "active" AE..= False])
+        inactive <-
+          toBaseServantResponse tr
+            $ MCP.handleJsonRpc
+              reg
+              (buildTestApp tr testPid)
+              testPid
+              (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "active" AE..= False])
         (inactive ^? key "result" . key "structuredContent" . key "active") `shouldBe` Just (AE.Bool False)
         (inactive ^? key "result" . key "structuredContent" . key "metrics" . _Array . ix 0 . key "metricName" . _String) `shouldBe` Just "checkout.old"
 
@@ -912,7 +923,7 @@ spec = around withTestResources do
 
       it "tools/call search_events_nl passes project and timezone to the registered translator" $ \tr -> do
         let req = rpcCallNamed "search_events_nl" $ AE.object ["input" AE..= ("checkout errors" :: Text), "timezone" AE..= ("Europe/Berlin" :: Text)]
-        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
         (resp ^? key "result" . key "structuredContent" . key "project_id") `shouldBe` Just (AE.toJSON testPid)
         (resp ^? key "result" . key "structuredContent" . key "query") `shouldBe` Just (AE.String "checkout errors")
         (resp ^? key "result" . key "structuredContent" . key "timezone") `shouldBe` Just (AE.String "Europe/Berlin")

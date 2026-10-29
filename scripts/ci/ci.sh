@@ -400,6 +400,7 @@ run_body() { # <check>
       prepare_browser
       scripts/e2e.sh
       ;;
+    # The Slack installation regression also reads docs/slack/agent-manifest.json.
     integration-tests) run_integration ;;
     *) die "no body for check '$1'" ;;
   esac

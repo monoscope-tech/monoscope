@@ -2,6 +2,7 @@ module Web.Routes (server, genAuthServerContext, KeepPrefixExp, LogDataFieldExp,
 
 import Control.Lens
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Builder (Builder)
@@ -11,9 +12,8 @@ import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as Wreq
 import Data.List qualified as L
-import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
-import Data.OpenApi qualified as OA
 import Data.Map.Strict qualified as Map
+import Data.OpenApi (OpenApi)
 import Data.Ord (clamp)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -22,17 +22,15 @@ import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff)
 import Effectful qualified as Eff
-import UnliftIO (withRunInIO)
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static (ask)
+import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 import GHC.TypeLits (Symbol)
 import Hasql.Interpolate qualified as HI
 import Log (Logger)
 import Lucid
-import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
@@ -47,13 +45,10 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as ProjectMemory
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes (Scope)
-import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Types qualified as H
-import Network.Wai (Request, queryString)
+import Network.Wai (Request)
 import Network.Wai qualified as Wai
-import Network.Wai.Test qualified as WT
-import Pkg.AI qualified as AI
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (NavigationResponse, PageCtx (..))
@@ -87,6 +82,7 @@ import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
+import Pkg.AI qualified as AI
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -95,26 +91,23 @@ import Pkg.EmailTemplates qualified as ET
 import Pkg.Git qualified as Git
 import Pkg.LiveTail qualified as LT
 import Pkg.Parser qualified as Parser
-import Pkg.Parser.Expr qualified as ParserExpr
 import Relude hiding (ask)
 import Servant
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx
-import Servant.OpenApi (HasOpenApi (..), toOpenApi)
 import Servant.QueryParam.Record (RecordParam)
 import Servant.QueryParam.Server.Record ()
 import Servant.QueryParam.TypeLevel (Eval, Exp)
 import Servant.Server.Generic (AsServerT, genericServeTWithContext)
-import Servant.Server.Internal.Delayed (passToServer)
 import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, HXReswap (..), ProjectToolCtx, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, atAuthToBase, effToServantHandler)
+import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, HXReswap (..), ProjectToolCtx, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, atAuthToBase)
+import UnliftIO (withRunInIO)
 import UnliftIO.Exception (handle)
 import Utils qualified
-import Web.ApiHandlers qualified as ApiH
 import Web.ApiHandlers (AllQueryParams, ApiV1Routes (..), apiV1OpenApiSpec)
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes (ApiActor (..))
@@ -123,7 +116,6 @@ import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, au
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.MCP qualified as MCP
-import Web.Wire qualified as Wire
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 
@@ -428,6 +420,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , aiRoutinesGet :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , aiRoutineInstallPost :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> "install" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineTemplateForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiThreadsGet :: mode :- "p" :> ProjectId :> "ai" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , aiRoutineRunGet :: mode :- "p" :> ProjectId :> "ai" :> "runs" :> Capture "run_id" (UUIDId "ai_routine_run") :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , aiRoutineInstructionsPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "instructions" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineInstructionsForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiThreadGet :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> QueryParam "doc" Issues.ArtifactKey :> Header "HX-Target" Text :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , aiThreadsPost :: mode :- "p" :> ProjectId :> "ai" :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiThreadPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
@@ -633,62 +627,62 @@ server :: Logger -> AuthContext -> TracerProvider -> OtlpHttpHandler -> OtlpHttp
 server logger env tp otlpTraces otlpLogs =
   let projectTools = Just mcpProjectTools
    in Routes
-    { public = Servant.serveDirectoryWebApp "./static/public"
-    , ping = pure "pong"
-    , status = statusH
-    , login = Auth.loginH
-    , toLogin = Auth.loginRedirectH
-    , logout = Auth.logoutH
-    , setLanguage = Auth.setLanguageH
-    , authCallback = Auth.authCallbackH
-    , otlpTracesPost = otlpHttpH otlpTraces
-    , otlpLogsPost = otlpHttpH otlpLogs
-    , shareLinkGet = Share.shareLinkGetH
-    , shareReplaySessionGet = Share.shareReplaySessionGetH
-    , discordLinkProjectGet = Discord.linkDiscordGetH
-    , discordInteractions = Discord.discordInteractionsH
-    , slackInteractions = Slack.slackFormPostH $ Slack.slackInteractionsHWithTools projectTools
-    , slackActionsPost = Slack.slackFormPostH Slack.slackActionsH
-    , slackEventsPost = Slack.slackEventsPostH
-    , externalOptionsGet = Slack.slackFormPostH Slack.externalOptionsH
-    , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
-    , clientMetadata = Auth.clientMetadataH
-    , lemonWebhook = Settings.webhookPostH
-    , stripeWebhook = Settings.stripeWebhookPostH
-    , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
-    , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
-        GitSync.gitWebhookPostH
-          host
-          Git.WebhookReq
-            { event = asum [giteaEvent, glEvent, bbEvent]
-            , signature = asum [giteaSig, glSig, bbSig]
-            , gitlabToken = glToken
-            , gitlabWebhookId = glId
-            , gitlabTimestamp = glTs
-            , body = body
-            }
-    , chartsDataShot = Charts.queryMetrics Nothing
-    , avatarGet = avatarGetH
-    , widgetPngGet = widgetPngGetH
-    , proxyLanding = \path ->
-        Onboarding.proxyLandingH path
-          & State.evalState @TriggerEvents mempty
-          & State.evalState @HXRedirectDest Nothing
-          & State.evalState @XWidgetJSON Nothing
-          & State.evalState (HXReswap Nothing)
-    , deviceCode = Auth.deviceCodeH
-    , deviceToken = Auth.deviceTokenH
-    , emailPreviewList = emailPreviewListH
-    , emailPreview = emailPreviewH
-    , apiV1 = apiV1Server
-    , apiV1OpenApi = pure apiV1OpenApiSpec
-    , cookieProtected = \sessionWithCookies ->
-        Servant.hoistServerWithContext
-          (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
-          (Proxy @'[APItoolkitAuthContext])
-          (atAuthToBase sessionWithCookies)
-          (cookieProtectedServer projectTools)
-    }
+        { public = Servant.serveDirectoryWebApp "./static/public"
+        , ping = pure "pong"
+        , status = statusH
+        , login = Auth.loginH
+        , toLogin = Auth.loginRedirectH
+        , logout = Auth.logoutH
+        , setLanguage = Auth.setLanguageH
+        , authCallback = Auth.authCallbackH
+        , otlpTracesPost = otlpHttpH otlpTraces
+        , otlpLogsPost = otlpHttpH otlpLogs
+        , shareLinkGet = Share.shareLinkGetH
+        , shareReplaySessionGet = Share.shareReplaySessionGetH
+        , discordLinkProjectGet = Discord.linkDiscordGetH
+        , discordInteractions = Discord.discordInteractionsH
+        , slackInteractions = Slack.slackFormPostH $ Slack.slackInteractionsHWithTools projectTools
+        , slackActionsPost = Slack.slackFormPostH Slack.slackActionsH
+        , slackEventsPost = Slack.slackEventsPostH
+        , externalOptionsGet = Slack.slackFormPostH Slack.externalOptionsH
+        , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
+        , clientMetadata = Auth.clientMetadataH
+        , lemonWebhook = Settings.webhookPostH
+        , stripeWebhook = Settings.stripeWebhookPostH
+        , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
+        , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
+            GitSync.gitWebhookPostH
+              host
+              Git.WebhookReq
+                { event = asum [giteaEvent, glEvent, bbEvent]
+                , signature = asum [giteaSig, glSig, bbSig]
+                , gitlabToken = glToken
+                , gitlabWebhookId = glId
+                , gitlabTimestamp = glTs
+                , body = body
+                }
+        , chartsDataShot = Charts.queryMetrics Nothing
+        , avatarGet = avatarGetH
+        , widgetPngGet = widgetPngGetH
+        , proxyLanding = \path ->
+            Onboarding.proxyLandingH path
+              & State.evalState @TriggerEvents mempty
+              & State.evalState @HXRedirectDest Nothing
+              & State.evalState @XWidgetJSON Nothing
+              & State.evalState (HXReswap Nothing)
+        , deviceCode = Auth.deviceCodeH
+        , deviceToken = Auth.deviceTokenH
+        , emailPreviewList = emailPreviewListH
+        , emailPreview = emailPreviewH
+        , apiV1 = apiV1Server
+        , apiV1OpenApi = pure apiV1OpenApiSpec
+        , cookieProtected = \sessionWithCookies ->
+            Servant.hoistServerWithContext
+              (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
+              (Proxy @'[APItoolkitAuthContext])
+              (atAuthToBase sessionWithCookies)
+              (cookieProtectedServer projectTools)
+        }
 
 
 -- API v1 server
@@ -728,7 +722,7 @@ mcpProjectTools =
           Just tool -> withRunInIO \run ->
             run
               $ Error.runErrorNoCallStack @ServerError (Eff.inject $ MCP.runTool (apiV1App run principal (Authenticated pid)) pid tool $ KM.fromMapText args)
-                <&> either (MCP.toolError . decodeUtf8 . errBody) id
+              <&> either (MCP.toolError . decodeUtf8 . errBody) id
     }
 
 
@@ -854,6 +848,8 @@ cookieProtectedServer projectTools =
     , aiRoutinesGet = AIThreads.routinesGetH
     , aiRoutineInstallPost = AIThreads.routineInstallPostH
     , aiThreadsGet = AIThreads.threadsGetH
+    , aiRoutineRunGet = AIThreads.routineRunGetH
+    , aiRoutineInstructionsPost = AIThreads.routineInstructionsPostH
     , aiThreadGet = AIThreads.threadGetH
     , aiThreadsPost = AIThreads.startThreadPostHWithTools projectTools
     , aiThreadPost = AIThreads.threadPostHWithTools projectTools

@@ -4,6 +4,7 @@ module Pages.Bots.BotTestHelpers (
   -- * Setup Helpers
   setupSlackData,
   setupLinkedSlackData,
+  setupSlackAgent,
   withHTTPResponses,
   withSlackReplyResponses,
   receiveSlackEvent,
@@ -86,6 +87,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (RequestBody (..), defaultRequest, requestBody)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types qualified as WreqTypes
+import Pages.AIThreads qualified as AIThreads
 import Pages.Bots.BotFixtures (slackCallbackEnvelope)
 import Pages.Bots.Slack qualified as SlackEvents
 import Pkg.DeriveUtils (UUIDId)
@@ -134,6 +136,13 @@ setupLinkedSlackData tr pid teamId = do
         [sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id)
       VALUES (?, 'U0123ABCDEF', ?, ?)|]
         (teamId, (getResponse tr.trSessAndHeader).user.id, pid)
+
+
+-- | A linked requester with the Slack investigation template explicitly activated.
+setupSlackAgent :: TestResources -> Projects.ProjectId -> Text -> IO ()
+setupSlackAgent tr pid teamId = do
+  setupLinkedSlackData tr pid teamId
+  void $ testServant tr $ AIThreads.routineInstallPostH pid (AIThreads.RoutineTemplateForm "slack-investigation")
 
 
 -- | Override selected HTTP responses while retaining request recording.

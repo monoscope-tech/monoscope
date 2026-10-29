@@ -8,13 +8,19 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, values, _Array, _String)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.LLM qualified as ELLM
 import Data.IORef qualified as IORef
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Effectful qualified as Eff
+import Effectful.Concurrent.Async (concurrently_)
+import Effectful.Dispatch.Dynamic (interpose)
+import Effectful.Error.Static (catchError)
+import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Langchain.LLM.Core qualified as LLM
@@ -31,11 +37,13 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
+import Servant (ServerError (..))
 import Servant.API.ResponseHeaders (getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
+import System.Types (ATBackgroundCtx)
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (urlDecodeAsForm)
 
 
@@ -127,7 +135,7 @@ spec = around withTestResources do
             granted = urlDecodeAsForm @AIThreads.AIChatForm "query=acknowledge+issue&mode=chat&allowActions=true"
         fmap (.allowActions) absent `shouldBe` Right Nothing
         fmap (.allowActions) granted `shouldBe` Right (Just True)
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid (UUIDId UUID.nil)
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid (UUIDId UUID.nil) Nothing Nothing
         (LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage) `shouldSatisfy` T.isInfixOf "name=\"allowActions\""
 
       it "assistantPages_defaultToAssistant" \tr -> do
@@ -156,6 +164,122 @@ spec = around withTestResources do
         all (`T.isInfixOf` conversationHtml) ["href=\"/p/" <> testPid.toText <> "/ai/routines\"", "Routines", "href=\"/p/" <> testPid.toText <> "/ai\"", "Conversations"] `shouldBe` True
         all (`T.isInfixOf` conversationHtml) ["id=\"ai-composer-modal\"", "backdrop:backdrop-blur-sm"] `shouldBe` True
         for_ [conversationHtml, render routinesPage, render threadPage] (`shouldSatisfy` T.isInfixOf "data-header-actions")
+
+      it "eventRoutineActivation_appearsInstalledWithoutAnInterval" \tr -> do
+        void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
+        conversations <- runTestBg frozenTime tr $ Issues.listConversations testPid
+        conversation <- maybe (fail "Missing Slack routine") pure $ find ((== Just "slack-investigation") . (.templateKey)) conversations
+        (_, page) <- testServant tr $ AIThreads.routinesGetH testPid
+        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+        html `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/ai/" <> conversation.conversationId.toText <> "\"")
+        html `shouldSatisfy` T.isInfixOf "1 routine"
+        (_, thread) <- testServant tr $ AIThreads.threadGetH testPid conversation.conversationId Nothing Nothing
+        (LT.toStrict $ Lucid.renderText $ Lucid.toHtml thread) `shouldSatisfy` T.isInfixOf "Routine instructions"
+
+        void $ testServant tr $ AIThreads.routinePostH testPid conversation.conversationId (AIThreads.RoutineForm $ fromRightShow $ Issues.mkRoutineInterval 15)
+        unchanged <- runQueryEffect tr $ Issues.getConversation testPid conversation.conversationId
+        (unchanged >>= (.routineKind)) `shouldBe` Just Issues.ScheduleSlackMessage
+
+      it "eventRoutineCancellation_stopsActiveRunAndRetainsSnapshotsAcrossRetry" \tr -> do
+        void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
+        (routine, run) <- runTestBg frozenTime tr do
+          routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (throwIO $ ErrorCall "Missing routine") pure
+          run <- Issues.startEventRun routine (Issues.SlackMessage $ UUIDId UUID.nil) Issues.ContinueRun routine.conversationId (getResponse tr.trSessAndHeader).user.id "Investigate checkout" >>= maybe (throwIO $ ErrorCall "Missing run") pure
+          Issues.saveRunResult testPid run.id "Investigation" "Original evidence"
+          pure (routine, run)
+        void $ testServant tr $ AIThreads.routineCancelPostH testPid routine.conversationId
+        active <- runQueryEffect tr $ Issues.eventRunActive testPid run.id
+        active `shouldBe` False
+        runQueryEffect tr $ Issues.finishRoutineRun run.id run.startedAt Issues.CompletedCancelled Nothing Nothing (Just "Cancelled by member")
+        void $ testServant tr $ AIThreads.routineInstructionsPostH testPid routine.conversationId (AIThreads.RoutineInstructionsForm "Check the new deployment first.")
+        void $ testServant tr $ AIThreads.routineResumePostH testPid routine.conversationId
+        retry <- runTestBg frozenTime tr do
+          retry <- Issues.startEventRun routine (Issues.SlackMessage $ UUIDId UUID.nil) Issues.RestartRun routine.conversationId (getResponse tr.trSessAndHeader).user.id "Investigate checkout again" >>= maybe (throwIO $ ErrorCall "Missing retry") pure
+          Issues.saveRunResult testPid retry.id "Investigation" "Revised evidence"
+          Issues.finishRoutineRun retry.id retry.startedAt Issues.CompletedSucceeded Nothing Nothing Nothing
+          pure retry
+        (original, revised, oldInstructions, newInstructions, runs, duplicate) <-
+          runTestBg frozenTime tr
+            $ (,,,,,)
+            <$> Issues.listRunArtifacts testPid run.id
+            <*> Issues.listRunArtifacts testPid retry.id
+            <*> Issues.getRoutineRunEvidence testPid run.id
+            <*> Issues.getRoutineRunEvidence testPid retry.id
+            <*> Issues.listConversationRuns testPid routine.conversationId 20
+            <*> Issues.startEventRun routine (Issues.SlackMessage $ UUIDId UUID.nil) Issues.ContinueRun routine.conversationId (getResponse tr.trSessAndHeader).user.id "Replay"
+        map (.content) original `shouldBe` [Just "Original evidence"]
+        map (.content) revised `shouldBe` [Just "Revised evidence"]
+        (oldInstructions >>= (.instructions)) `shouldBe` Just routine.instructions
+        (newInstructions >>= (.instructions)) `shouldBe` Just "Check the new deployment first."
+        map (.attempt) runs `shouldBe` [2, 1]
+        fmap (.id) duplicate `shouldBe` Just retry.id
+        (_, page) <- testServant tr $ AIThreads.routineRunGetH testPid run.id
+        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+        for_ ["Original evidence", "Cancelled", "Investigate checkout", "Instructions used for this run"] $ \text -> html `shouldSatisfy` T.isInfixOf text
+        html `shouldSatisfy` (not . T.isInfixOf "Revised evidence")
+        failed <- runTestBg frozenTime tr do
+          failed <- Issues.startEventRun routine (Issues.SlackMessage $ UUIDId UUID.nil) Issues.RestartRun routine.conversationId (getResponse tr.trSessAndHeader).user.id "Try again" >>= maybe (throwIO $ ErrorCall "Missing failed attempt") pure
+          Issues.finishRoutineRun failed.id failed.startedAt Issues.CompletedFailed Nothing Nothing (Just "Model unavailable")
+          Issues.listRunArtifacts testPid failed.id
+        map (.content) failed `shouldBe` []
+        other <- createTestProject tr "Other routine project"
+        hidden <- runAuthHandler tr $ (AIThreads.routineRunGetH other run.id $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+        hidden `shouldBe` 404
+        pending <-
+          runTestBg frozenTime tr
+            $ Issues.startEventRun routine (Issues.SlackMessage $ UUIDId UUID.nil) Issues.RestartRun routine.conversationId (getResponse tr.trSessAndHeader).user.id "Work finishing during deletion"
+            >>= maybe (throwIO $ ErrorCall "Missing pending attempt") pure
+        runQueryEffect tr do
+          Issues.deleteConversation testPid routine.conversationId
+          Issues.saveRunResult testPid pending.id "Retained result" "The published result survives conversation deletion."
+          Issues.insertRunResultMessage testPid pending.id "The published result survives conversation deletion."
+          Issues.finishRoutineRun pending.id pending.startedAt Issues.CompletedSucceeded Nothing Nothing Nothing
+        retainedArtifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid pending.id
+        map (.content) retainedArtifacts `shouldBe` [Just "The published result survives conversation deletion."]
+        (_, retained) <- testServant tr $ AIThreads.routineRunGetH testPid run.id
+        let retainedHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml retained
+        retainedHtml `shouldSatisfy` T.isInfixOf "Original evidence"
+        retainedHtml `shouldSatisfy` (not . T.isInfixOf "Open conversation and follow up")
+        (_, recent) <- testServant tr $ AIThreads.routinesGetH testPid
+        (LT.toStrict $ Lucid.renderText $ Lucid.toHtml recent) `shouldSatisfy` T.isInfixOf ("/ai/runs/" <> run.id.toText)
+
+      it "eventRoutinePermissions_readersInspectButCannotActivateOrEdit" \tr -> do
+        void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
+        conversations <- runQueryEffect tr $ Issues.listConversations testPid
+        conversation <- maybe (fail "Missing routine") pure $ find ((== Just "slack-investigation") . (.templateKey)) conversations
+        let uid = (getResponse tr.trSessAndHeader).user.id
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid}|]
+        (_, page) <- testServant tr $ AIThreads.routinesGetH testPid
+        (_, thread) <- testServant tr $ AIThreads.threadGetH testPid conversation.conversationId Nothing Nothing
+        let render = LT.toStrict . Lucid.renderText . Lucid.toHtml
+        render page `shouldSatisfy` T.isInfixOf "1 routine"
+        render page `shouldSatisfy` (not . T.isInfixOf "Add routine")
+        render thread `shouldSatisfy` T.isInfixOf "Routine instructions"
+        render thread `shouldSatisfy` (not . T.isInfixOf "Save instructions")
+        for_ [AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review"), AIThreads.routineInstructionsPostH testPid conversation.conversationId (AIThreads.RoutineInstructionsForm "Overwrite"), AIThreads.routineResumePostH testPid conversation.conversationId] $ \handler -> do
+          result <- runAuthHandler tr $ (handler $> 200) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+          result `shouldBe` 403
+        runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= (`shouldSatisfy` isNothing)
+
+      it "eventRoutineAuthorization_rechecksAccountProjectAndPlanAccess" \tr -> do
+        void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
+        (routine, run, actor) <- runTestBg frozenTime tr do
+          routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (throwIO $ ErrorCall "Missing routine") pure
+          actor <- Projects.createUser "Routine" "Reader" "" "routine-reader@example.test"
+          Projects.insertUser actor
+          Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{actor.id}, 'view')|]
+          run <- Issues.startEventRun routine (Issues.SlackCommand routine.conversationId) Issues.StartRun routine.conversationId actor.id "Inspect checkout" >>= maybe (throwIO $ ErrorCall "Missing run") pure
+          pure (routine, run, actor)
+        runQueryEffect tr (Issues.eventRunActive testPid run.id) >>= (`shouldBe` True)
+        for_ [([HI.sql|UPDATE users.users SET active = FALSE WHERE id = #{routine.requestedBy}|], [HI.sql|UPDATE users.users SET active = TRUE WHERE id = #{routine.requestedBy}|]), ([HI.sql|UPDATE projects.projects SET active = FALSE WHERE id = #{testPid}|], [HI.sql|UPDATE projects.projects SET active = TRUE WHERE id = #{testPid}|])] $ \(disable, restore) -> do
+          runQueryEffect tr $ Hasql.interpExecute_ disable
+          runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= (`shouldSatisfy` isNothing)
+          runQueryEffect tr (Issues.eventRunActive testPid run.id) >>= (`shouldBe` False)
+          tryAny (runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess routine.requestedBy) testPid) >>= (`shouldSatisfy` isLeft)
+          runQueryEffect tr $ Hasql.interpExecute_ restore
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = #{testPid}|]
+        tryAny (runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess actor.id) testPid) >>= (`shouldSatisfy` isLeft)
+        runQueryEffect tr (Issues.eventRunActive testPid run.id) >>= (`shouldBe` False)
 
       it "routineResults_everyRunRendersNotJustTheFirst" \tr -> do
         let convId = UUIDId UUID.nil
@@ -219,6 +343,130 @@ spec = around withTestResources do
         overCap `shouldSatisfy` T.isInfixOf "already holds 500 documents"
         existing `shouldSatisfy` T.isPrefixOf "Saved document 'log'"
 
+      it "routineResult_keepsRunEvidenceWhenTheConversationDocumentLimitIsReached" \tr -> do
+        void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
+        execution <- runTestBg frozenTime tr do
+          routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (throwIO $ ErrorCall "Missing active template") pure
+          run <- Issues.startEventRun routine (Issues.SlackCommand routine.conversationId) Issues.StartRun routine.conversationId routine.requestedBy "Retain this run result" >>= maybe (throwIO $ ErrorCall "Missing run") pure
+          void
+            $ Hasql.interpExecute
+              [HI.sql|INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content)
+            SELECT #{testPid}, #{routine.conversationId}, 'doc-' || n, 'Document', 'Evidence' FROM generate_series(1, #{Issues.maxArtifactsPerConversation}) n|]
+          Issues.saveRunResult testPid run.id "Retained result" "The run keeps its evidence even when the conversation is full."
+          Issues.finishRoutineRun run.id run.startedAt Issues.CompletedSucceeded Nothing Nothing Nothing
+          pure run
+        count <- runQueryEffect tr $ Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM apis.ai_artifacts WHERE project_id = #{testPid}|]
+        count `shouldBe` fromIntegral Issues.maxArtifactsPerConversation
+        artifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid execution.id
+        mapMaybe (.content) artifacts `shouldSatisfy` elem "The run keeps its evidence even when the conversation is full."
+
+      it "issueEnrichment_requiresActivationAndRetainsAnEditableRoutineRun" \tr -> do
+        issueId <- runTestBg frozenTime tr do
+          issue <- Issues.createQueryAlertIssue testPid "checkout-alert" "Checkout latency" "service == checkout" 100 200 Issues.Above
+          Issues.insertIssueReturningId issue
+        let configured = Reader.local (\ctx -> ctx{config = ctx.config{openaiApiKey = "routine-test-key"}})
+            job = BackgroundJobs.EnhanceIssuesWithLLM testPid (V.singleton issueId)
+            execute = configured $ BackgroundJobs.processBackgroundJob tr.trATCtx job
+            model :: Bool -> ATBackgroundCtx a -> ATBackgroundCtx a
+            model activated = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallLLM _ prompt _ -> do
+                liftIO $ activated `shouldBe` True
+                liftIO $ prompt `shouldSatisfy` T.isInfixOf "Prefer checkout evidence."
+                pure
+                  $ Right
+                  $ if
+                    | "issue titler" `T.isInfixOf` prompt -> "Checkout latency exceeds its threshold"
+                    | "issue describer" `T.isInfixOf` prompt -> "Checkout latency is twice the threshold.\nCompare the checkout traces.\nlow"
+                    | otherwise -> "critical\n0\n0"
+              ELLM.CallAgenticChat history params token -> ELLM.callAgenticChat history params token
+              ELLM.EmbedDocuments config docs -> ELLM.embedDocuments config docs
+        -- Unactivated automation must not spend tokens or change issue metadata.
+        runTestBg frozenTime tr $ model False execute
+        void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
+        conversations <- runQueryEffect tr $ Issues.listConversations testPid
+        routine <- maybe (fail "Missing issue enrichment routine") pure $ find ((== Just "issue-enrichment") . (.templateKey)) conversations
+        void $ testServant tr $ AIThreads.routineInstructionsPostH testPid routine.conversationId (AIThreads.RoutineInstructionsForm "Prefer checkout evidence.")
+        runTestBg frozenTime tr $ model True $ concurrently_ execute execute >> execute
+        runs <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+        map (.status) runs `shouldBe` [Issues.RunSucceeded]
+        usage <- runQueryEffect tr $ Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.ai_usage WHERE project_id = #{testPid} AND source = 'routine'|]
+        usage `shouldBe` 3
+        run <- maybe (fail "Missing visible issue enrichment run") pure $ listToMaybe runs
+        evidence <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid run.id
+        (evidence >>= (.instructions)) `shouldBe` Just "Prefer checkout evidence."
+        artifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid run.id
+        T.intercalate " " (mapMaybe (.content) artifacts) `shouldSatisfy` T.isInfixOf "Compare the checkout traces."
+        updated <- runQueryEffect tr $ Issues.selectIssueById testPid issueId
+        fmap (.title) updated `shouldBe` Just "Checkout latency exceeds its threshold"
+        fmap (.recommendedAction) updated `shouldBe` Just "Compare the checkout traces."
+        retryIssue <- runTestBg frozenTime tr do
+          issue <- Issues.createQueryAlertIssue testPid "retry-alert" "Retry latency" "service == checkout" 100 200 Issues.Above
+          Issues.insertIssueReturningId issue
+        let retryJob = configured $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.EnhanceIssuesWithLLM testPid $ V.singleton retryIssue)
+            failing :: ATBackgroundCtx a -> ATBackgroundCtx a
+            failing = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallLLM{} -> pure $ Left "Provider unavailable"
+              ELLM.CallAgenticChat history params token -> ELLM.callAgenticChat history params token
+              ELLM.EmbedDocuments config docs -> ELLM.embedDocuments config docs
+        failed <- tryAny $ runTestBg frozenTime tr $ failing retryJob
+        failed `shouldSatisfy` isLeft
+        attempts <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+        map (.status) attempts `shouldSatisfy` elem Issues.RunFailed
+        for_ ([("issue describer", "Truncated description"), ("issue-severity", "ambiguous\n-1\n0")] :: [(Text, Text)]) $ \(stage, invalid) -> do
+          let malformed :: ATBackgroundCtx a -> ATBackgroundCtx a
+              malformed = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallLLM _ prompt _ -> pure $ Right $ if stage `T.isInfixOf` prompt then invalid else if "issue describer" `T.isInfixOf` prompt then "Observed latency.\nCompare traces.\nlow" else "critical\n0\n0"
+                ELLM.CallAgenticChat history params token -> ELLM.callAgenticChat history params token
+                ELLM.EmbedDocuments config docs -> ELLM.embedDocuments config docs
+          invalidResult <- tryAny $ runTestBg frozenTime tr $ malformed retryJob
+          invalidResult `shouldSatisfy` isLeft
+        runTestBg frozenTime tr $ model True retryJob
+        retried <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+        sort (map (.attempt) retried) `shouldBe` [1, 1, 2, 3, 4]
+        -- The source lease survives a worker interruption; its next delivery resumes
+        -- the existing run instead of starting a concurrent or duplicate attempt.
+        interrupted <- runTestBg frozenTime tr do
+          installed <- Issues.getEventRoutine testPid Issues.EventIssueEnrichment >>= maybe (throwIO $ ErrorCall "Missing active template") pure
+          issue <- Issues.createQueryAlertIssue testPid "interrupted-alert" "Interrupted latency" "service == checkout" 100 200 Issues.Above
+          iid <- Issues.insertIssueReturningId issue
+          let convId = UUIDId iid.unUUIDId
+          void $ Issues.getOrCreateConversation testPid convId Issues.CTAnomaly (AE.object [])
+          void $ Issues.startEventRun installed (Issues.IssueEnrichment iid) Issues.StartRun convId installed.requestedBy "Interrupted worker"
+          pure iid
+        runTestBg frozenTime tr $ model True $ configured $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.EnhanceIssuesWithLLM testPid $ V.singleton interrupted)
+        recovered <- runQueryEffect tr $ Issues.getEventRun testPid (Issues.IssueEnrichment interrupted)
+        fmap (.status) recovered `shouldBe` Just Issues.RunSucceeded
+        fmap (.attempt) recovered `shouldBe` Just 1
+        -- Saved instructions affect future work, never the existing artifact snapshot.
+        void $ testServant tr $ AIThreads.routineInstructionsPostH testPid routine.conversationId (AIThreads.RoutineInstructionsForm "Use the current error budget.")
+        stoppedIssue <- runTestBg frozenTime tr do
+          issue <- Issues.createQueryAlertIssue testPid "stopped-alert" "Keep original title" "service == checkout" 100 200 Issues.Above
+          Issues.insertIssueReturningId issue
+        let stoppedJob = configured $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.EnhanceIssuesWithLLM testPid $ V.singleton stoppedIssue)
+            stopDuringModel :: ATBackgroundCtx a -> ATBackgroundCtx a
+            stopDuringModel = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallLLM{} -> Issues.pauseRoutine testPid routine.conversationId $> Right "Unauthorized new title"
+              ELLM.CallAgenticChat history params token -> ELLM.callAgenticChat history params token
+              ELLM.EmbedDocuments config docs -> ELLM.embedDocuments config docs
+        runTestBg frozenTime tr $ stopDuringModel stoppedJob
+        cancelled <- runQueryEffect tr $ Issues.getEventRun testPid (Issues.IssueEnrichment stoppedIssue)
+        fmap (.status) cancelled `shouldBe` Just Issues.RunCancelled
+        original <- runQueryEffect tr $ Issues.selectIssueById testPid stoppedIssue
+        fmap (.title) original `shouldBe` Just "Keep original title"
+        runTestBg frozenTime tr $ model False stoppedJob
+        prior <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid run.id
+        (prior >>= (.instructions)) `shouldBe` Just "Prefer checkout evidence."
+
+      it "issueFollowup_readsTheRetainedInvestigationArtifactAsTheSignedInMember" \tr -> do
+        let convId = UUIDId UUID.nil
+            artifact = fromRightShow $ Issues.mkArtifactKey "issue-evidence"
+            config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly}
+        result <- runTestBg frozenTime tr do
+          void $ Issues.getOrCreateConversation testPid convId Issues.CTAnomaly (AE.object [])
+          void $ Issues.saveArtifact testPid convId artifact (Just "Investigation evidence") "Checkout recovered after the deployment." Issues.ArtifactReplace
+          AI.executeToolCall config (LLM.ToolCall "read-evidence" "function" $ LLM.ToolFunction "read_artifact" $ one ("key", AE.String "issue-evidence"))
+        result.formatted `shouldBe` "Checkout recovered after the deployment."
+
       it "lists titled threads and schedules and pauses their routine" \tr -> do
         let convId = UUIDId UUID.nil
         (needsTitle, summary, listed, scheduled, paused, resumed, deleted) <- runTestBg frozenTime tr do
@@ -245,7 +493,7 @@ spec = around withTestResources do
 
       it "installs a built-in routine at the next project-local wall-clock time" \tr -> do
         length Issues.routineTemplates `shouldSatisfy` (>= 15)
-        case viaNonEmpty head Issues.routineTemplates of
+        case find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates of
           Nothing -> expectationFailure "routine catalog must not be empty"
           Just template -> do
             let convId = UUIDId UUID.nil
@@ -262,7 +510,7 @@ spec = around withTestResources do
             slackEnabled `shouldBe` True
 
       it "rescheduling a template as an interval keeps that schedule after resume" \tr -> do
-        case viaNonEmpty head Issues.routineTemplates of
+        case find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates of
           Nothing -> expectationFailure "routine catalog must not be empty"
           Just template -> do
             let convId = UUIDId UUID.nil
@@ -305,6 +553,10 @@ spec = around withTestResources do
         ((.routineNextRunAt) =<< routine) `shouldSatisfy` isJust
         runRecord `shouldBe` Just ("succeeded", True, True, Nothing)
         map (\run -> (run.conversationId, run.status)) recentRuns `shouldBe` [(convId, Issues.RunSucceeded)]
+        for_ recentRuns \run -> do
+          evidence <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid run.id
+          (evidence >>= (.input)) `shouldBe` Just "Send a daily reliability brief to Slack"
+          (evidence >>= (.instructions)) `shouldBe` Just "Send a daily reliability brief to Slack"
 
       it "suppresses a findings-only routine answer when the agent reports no findings" \tr -> do
         case find ((== "error-regression-radar") . (.key)) Issues.routineTemplates of

@@ -1,6 +1,7 @@
 module Pages.Bots.SlackSpec (spec) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful.Error.Static (catchError)
@@ -18,6 +19,11 @@ import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, sho
 spec :: Spec
 spec = around withTestResources do
   describe "Slack Bot" do
+    it "agentManifest_doesNotUseUnsupportedMetadataRegistration" \_ -> do
+      manifest <- either fail pure =<< AE.eitherDecodeFileStrict' @AE.Object "docs/slack/agent-manifest.json"
+      KM.member "metadata" manifest `shouldBe` False
+      KM.member "events" manifest `shouldBe` False
+
     describe "/here command" do
       it "sets notification channel and saves golden response" \tr -> do
         setupLinkedSlackData tr testPid "T01HEREA9X"
@@ -47,7 +53,7 @@ spec = around withTestResources do
 
     describe "/monoscope command" do
       it "returns loading message immediately" \tr -> do
-        setupLinkedSlackData tr testPid "T03MONOSC0P"
+        setupSlackAgent tr testPid "T03MONOSC0P"
         let interaction = slackInteraction "/monoscope" "show error rate" "T03MONOSC0P"
         result <- toBaseServantResponse tr $ slackInteractionsH interaction
 
@@ -80,7 +86,7 @@ spec = around withTestResources do
         notifs `shouldBe` []
 
       it "user can ask about anomalies via /monoscope" \tr -> do
-        setupLinkedSlackData tr testPid "T06ANOMQRY2"
+        setupSlackAgent tr testPid "T06ANOMQRY2"
 
         let interaction = slackInteraction "/monoscope" "show me recent anomalies" "T06ANOMQRY2"
         result <- toBaseServantResponse tr $ slackInteractionsH interaction

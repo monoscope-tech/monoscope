@@ -16,9 +16,11 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Error.Static (catchError)
 import Effectful.Reader.Static qualified as Reader
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as Reviews
+import Pages.AIThreads qualified as AIThreads
 import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.CodeContext qualified as CodeContextPage
 import Pages.GitSync qualified as GitSyncPage
@@ -47,6 +49,7 @@ setup tr = do
   runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "impact-org" "checkout" "main") (Just "test-service") "" ""
   -- Handlers render the repository list; a warm cache keeps them off the GitHub token endpoint.
   Cache.insert tr.trATCtx.repoListCache credential.id [Git.GitRepo "impact-org/checkout" "checkout" False "main"]
+  void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
 
 
 payload :: Text -> Text -> Text -> AE.Value
@@ -183,6 +186,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let queryResult = result{Impact.evidence = [Impact.Evidence "telemetry-1" Impact.Monitor Nothing Nothing "/monitor" (Just "private-customer-query") Nothing]}
     for_ [False, True] \includeEvidence -> Impact.renderReview cfg.hostUrl run includeEvidence queryResult `shouldNotSatisfy` T.isInfixOf "private-customer-query"
     (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeModel result $ Impact.reviewPullRequest run.id
+    visibleRuns <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+    visibleRuns `shouldSatisfy` (not . null)
+    for_ visibleRuns \visible -> do
+      visible.status `shouldBe` Issues.RunSucceeded
+      runQueryEffect tr (Issues.listArtifacts testPid visible.conversationId Nothing) >>= (`shouldSatisfy` (not . null))
     let comments = filter (T.isInfixOf "/issues/comments/99" . fst) requests
     length comments `shouldBe` 1
     let published = T.intercalate " " $ map (decodeUtf8 . snd) comments
@@ -196,6 +204,27 @@ spec = around withTestResources $ describe "Production impact reviews" do
     completed <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     completed.state `shouldBe` Reviews.Completed
     completed.commentId `shouldBe` Just 99
+    usage <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM projects.ai_usage WHERE project_id = ? AND source = 'routine'" (Only testPid) :: IO [Only Int]
+    usage `shouldBe` [Only 1]
+    -- A worker can stop after recording the GitHub publication but before
+    -- finishing its routine ledger. A replay must repair that ledger locally.
+    withResource tr.trPool \conn -> do
+      void $ execute conn "UPDATE apis.ai_routine_runs SET status = 'running', finished_at = NULL WHERE project_id = ?" (Only testPid)
+      void $ execute conn "DELETE FROM apis.ai_routine_run_artifacts WHERE run_id IN (SELECT id FROM apis.ai_routine_runs WHERE project_id = ?)" (Only testPid)
+    (recoveryRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeModel result $ replicateM_ 2 $ Impact.reviewPullRequest run.id
+    recoveryRequests `shouldBe` []
+    recovered <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+    map (.status) recovered `shouldBe` [Issues.RunSucceeded]
+    for_ recovered \visible -> runQueryEffect tr (Issues.listRunArtifacts testPid visible.id) >>= (`shouldSatisfy` (not . null))
+    assistantMessages <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM apis.ai_chat_messages WHERE project_id = ? AND role = 'assistant'" (Only testPid) :: IO [Only Int]
+    assistantMessages `shouldBe` [Only 1]
+    withResource tr.trPool \conn -> do
+      void $ execute conn "UPDATE apis.ai_routine_runs SET status = 'running', finished_at = NULL WHERE project_id = ?" (Only testPid)
+      void $ execute conn "UPDATE projects.pr_review_runs SET result = ? WHERE id = ?" (Aeson $ AE.object ["invalid" AE..= True], run.id)
+    (invalidRecoveryRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Impact.reviewPullRequest run.id
+    invalidRecoveryRequests `shouldBe` []
+    invalidRecovery <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+    map (.status) invalidRecovery `shouldBe` [Issues.RunFailed]
     -- Reruns recover the app-owned comment and keep production prose out of links-only output.
     void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH testPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
     void $ testServant tr $ CodeContextPage.impactReviewRetryH testPid run.id
@@ -228,6 +257,16 @@ spec = around withTestResources $ describe "Production impact reviews" do
     retried <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     retried.state `shouldBe` Reviews.Completed
     retried.error `shouldBe` Nothing
+    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    let rejectedPublication = withHTTPResponses \_ endpoint ->
+          if "/issues/comments/99" `T.isSuffixOf` toText endpoint
+            then throwIO $ userError "Publication transport interrupted"
+            else pure Nothing
+    rejected <- tryAny $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ rejectedPublication $ transport True $ fakeModel result $ Impact.reviewPullRequest run.id
+    rejected `shouldSatisfy` isLeft
+    rejectedRun <- runQueryEffect tr $ Issues.getEventRun testPid (Issues.PullRequestReview run.id)
+    fmap (.status) rejectedRun `shouldBe` Just Issues.RunFailed
+    for_ rejectedRun \visible -> runQueryEffect tr (Issues.listRunArtifacts testPid visible.id) >>= (`shouldSatisfy` (not . null))
     -- Unmapped repositories publish a coverage gap without calling the model.
     void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.code_mappings SET service = NULL WHERE project_id = ?" (Only testPid)
     runQueryEffect tr $ Reviews.retryRun testPid run.id

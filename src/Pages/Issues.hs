@@ -127,7 +127,6 @@ import Pkg.SchemaLearning.Catalog qualified as Catalog
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (minimum1)
-import Servant (Header, Headers, NoContent (..), addHeader)
 import Servant (Header, Headers, NoContent (..), addHeader, err403)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)

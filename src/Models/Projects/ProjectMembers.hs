@@ -11,6 +11,7 @@ module Models.Projects.ProjectMembers (
   getActiveProjectMemberByUserId,
   selectAllProjectMembers,
   getUserPermission,
+  activeMembership,
   sessionAndProjectAtLeast,
   updateProjectMembersPermissons,
   softDeleteProjectMembers,
@@ -201,13 +202,25 @@ getActiveProjectMemberByUserId pid uid =
     <> Projects.accessibleMembership
 
 
+-- | Current account, project, and plan eligibility, shared by member and Slack authorization.
+-- Requires the query to alias @projects.project_members@ as @member@,
+-- @users.users@ as @account@ and @projects.projects@ as @project@.
+activeMembership :: HI.Sql
+activeMembership =
+  [HI.sql| AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
+    AND project.active AND project.deleted_at IS NULL
+    AND (lower(project.payment_plan) <> 'free' OR member.user_id = (
+      SELECT user_id FROM projects.project_members WHERE project_id = project.id ORDER BY created_at, id LIMIT 1)) |]
+
+
 getUserPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
 getUserPermission pid uid =
   Hasql.interp
-    $ [HI.sql| SELECT pm.permission FROM projects.project_members pm
-           JOIN projects.projects p ON p.id = pm.project_id
-           WHERE pm.project_id = #{pid} AND pm.user_id = #{uid} |]
-    <> Projects.accessibleMembership
+    $ [HI.sql|SELECT member.permission FROM projects.project_members member
+    JOIN users.users account ON account.id = member.user_id
+    JOIN projects.projects project ON project.id = member.project_id
+    WHERE member.project_id = #{pid} AND member.user_id = #{uid} |]
+    <> activeMembership
 
 
 -- | 'Projects.sessionAndProject' (members only), then at least @perm@ on the project. A membership's

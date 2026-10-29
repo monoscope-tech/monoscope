@@ -21,6 +21,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
@@ -28,13 +29,12 @@ import Log.Backend.LogList qualified as LogList
 import Log.Data (showLogMessage)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
-import Database.PostgreSQL.Simple qualified as PGS
 import Pages.Share qualified as Share
 import Pkg.TestUtils
 import Relude
+import Servant qualified
 import System.Environment (setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
-import Servant qualified
 import Test.Hspec
 import UnliftIO.Exception (finally)
 
@@ -71,8 +71,13 @@ jsonOut out = case AE.eitherDecodeStrict' (encodeUtf8 out) of
 
 
 shouldHaveKeys :: AE.Value -> [Text] -> Expectation
-shouldHaveKeys (AE.Object obj) keys = forM_ keys \k -> unless (KM.member (fromString (toString k)) obj) $
-  expectationFailure $ "missing key " <> toString k <> " in: " <> take 300 (decodeUtf8 (AE.encode obj))
+shouldHaveKeys (AE.Object obj) keys = forM_ keys \k ->
+  unless (KM.member (fromString (toString k)) obj)
+    $ expectationFailure
+    $ "missing key "
+    <> toString k
+    <> " in: "
+    <> take 300 (decodeUtf8 (AE.encode obj))
 shouldHaveKeys other _ = expectationFailure $ "expected JSON object, got: " <> show other
 
 
@@ -101,9 +106,11 @@ spec = around withCliResources do
       ec `shouldBe` ExitFailure 1
 
     it "picked_log_pattern_uses_an_integer_id" \tr -> do
-      withPool tr.trPool $ void $ DBT.execute
-        [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash) VALUES (?, 'picker test', 'picker-pattern') |]
-        (Only testPid)
+      withPool tr.trPool
+        $ void
+        $ DBT.execute
+          [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash) VALUES (?, 'picker test', 'picker-pattern') |]
+          (Only testPid)
       let choosePattern _ choices = do
             map fst choices `shouldSatisfy` all (T.all (`elem` ['0' .. '9']))
             pure (fst <$> viaNonEmpty head choices)
@@ -128,27 +135,37 @@ spec = around withCliResources do
       jsonOut out >>= (`shouldHaveKeys` ["data", "pagination"])
 
     it "status_reportsTotalOpenIssuesBeyondFirstPage" \tr -> do
-      withPool tr.trPool $ void $ DBT.execute [sql|
+      withPool tr.trPool
+        $ void
+        $ DBT.execute
+          [sql|
         INSERT INTO apis.issues
           (id, project_id, issue_type, target_hash, endpoint_hash, title, severity,
            critical, affected_requests, affected_clients, issue_data, created_at, updated_at)
         SELECT gen_random_uuid(), ?, 'runtime_exception', gen_random_uuid()::text, '',
                'CLI status issue', 'warning', false, 1, 1, '{}'::jsonb, now(), now()
         FROM generate_series(1, 6)
-      |] (Only testPid)
+      |]
+          (Only testPid)
       (ec, out) <- runCLILifecycle tr ["--json", "status"]
       ec `shouldBe` ExitSuccess
       jsonOut out >>= \case
-        AE.Object o -> KM.lookup "open_issues" o `shouldSatisfy` \case
-          Just (AE.Number n) -> n >= 6
-          _ -> False
+        AE.Object o ->
+          KM.lookup "open_issues" o `shouldSatisfy` \case
+            Just (AE.Number n) -> n >= 6
+            _ -> False
         _ -> expectationFailure "status did not return a JSON object"
       (humanEc, humanOut) <- runCLILifecycle tr ["--table", "status"]
       humanEc `shouldBe` ExitSuccess
       toString humanOut `shouldContain` "CLI status issue"
-      (pickedEc, _) <- runCLILifecyclePicking tr (\_ choices -> do
-        length choices `shouldSatisfy` (>= 6)
-        pure (fst <$> viaNonEmpty last choices)) ["--table", "issues", "get"]
+      (pickedEc, _) <-
+        runCLILifecyclePicking
+          tr
+          ( \_ choices -> do
+              length choices `shouldSatisfy` (>= 6)
+              pure (fst <$> viaNonEmpty last choices)
+          )
+          ["--table", "issues", "get"]
       pickedEc `shouldBe` ExitSuccess
 
     it "issues_get_uses_latest_pattern_event_for_runtime_last_seen" \tr ->
@@ -158,27 +175,32 @@ spec = around withCliResources do
             patternHash = if grouped then target <> "-child" else target
             latest = addUTCTime 300 frozenTime
             sampled = addUTCTime 60 frozenTime
-            payload = AE.object
-              [ "error_type" AE..= ("Error" :: Text)
-              , "error_message" AE..= ("boom" :: Text)
-              , "stack_trace" AE..= ("frame" :: Text)
-              , "occurrence_count" AE..= (1 :: Int)
-              , "first_seen" AE..= frozenTime
-              , "last_seen" AE..= frozenTime
-              ]
+            payload =
+              AE.object
+                [ "error_type" AE..= ("Error" :: Text)
+                , "error_message" AE..= ("boom" :: Text)
+                , "stack_trace" AE..= ("frame" :: Text)
+                , "occurrence_count" AE..= (1 :: Int)
+                , "first_seen" AE..= frozenTime
+                , "last_seen" AE..= frozenTime
+                ]
         void $ runTestBg frozenTime tr do
-          _ <- Hasql.interpExecute [HI.sql|
+          _ <-
+            Hasql.interpExecute
+              [HI.sql|
             INSERT INTO apis.error_patterns
               (project_id, error_type, message, stacktrace, hash, error_data, created_at, updated_at, recent_trace_at, last_event_at, parent_hash, is_framework)
             VALUES (#{testPid}, 'Error', 'boom', 'frame', #{patternHash}, '{}'::jsonb, #{frozenTime}, #{frozenTime}, #{sampled}, #{latest}, #{if grouped then Just target else Nothing}, #{grouped}) |]
-          Hasql.interpExecute [HI.sql|
+          Hasql.interpExecute
+            [HI.sql|
             INSERT INTO apis.issues (id, project_id, issue_type, title, target_hash, is_framework, issue_data, created_at, updated_at)
             VALUES (#{uid}, #{testPid}, 'runtime_exception', 'stale last seen', #{target}, #{grouped}, #{Aeson payload}, #{frozenTime}, #{frozenTime}) |]
         (ec, out) <- runCLILifecycle tr ["--json", "issues", "get", toString target]
         ec `shouldBe` ExitSuccess
         jsonOut out >>= \case
-          AE.Object o | Just (AE.Object issueData) <- KM.lookup "issue_data" o ->
-            KM.lookup "last_seen" issueData `shouldBe` Just (AE.toJSON latest)
+          AE.Object o
+            | Just (AE.Object issueData) <- KM.lookup "issue_data" o ->
+                KM.lookup "last_seen" issueData `shouldBe` Just (AE.toJSON latest)
           v -> expectationFailure $ "missing issue_data: " <> show v
 
     it "issues_list_orders_active_runtime_errors_by_latest_event" \tr -> do
@@ -192,18 +214,28 @@ spec = around withCliResources do
           latest = addUTCTime 300 frozenTime
           groupLatest = addUTCTime 120 latest
           metadataUpdate = addUTCTime 60 latest
-          quietData = AE.toJSON $ Issues.RuntimeExceptionData
-            { Issues.errorType = "Error", Issues.errorMessage = "quiet now", Issues.stackTrace = "frame"
-            , Issues.requestPath = Nothing, Issues.requestMethod = Nothing, Issues.occurrenceCount = 1
-            , Issues.firstSeen = later, Issues.lastSeen = later
-            }
+          quietData =
+            AE.toJSON
+              $ Issues.RuntimeExceptionData
+                { Issues.errorType = "Error"
+                , Issues.errorMessage = "quiet now"
+                , Issues.stackTrace = "frame"
+                , Issues.requestPath = Nothing
+                , Issues.requestMethod = Nothing
+                , Issues.occurrenceCount = 1
+                , Issues.firstSeen = later
+                , Issues.lastSeen = later
+                }
       void $ runTestBg frozenTime tr do
-        _ <- Hasql.interpExecute [HI.sql|
+        _ <-
+          Hasql.interpExecute
+            [HI.sql|
           INSERT INTO apis.error_patterns
             (project_id, error_type, message, stacktrace, hash, parent_hash, is_framework, error_data, last_event_at)
           VALUES (#{testPid}, 'Error', 'still happening', 'frame', #{oldHash}, NULL, false, '{}'::jsonb, #{latest}),
                  (#{testPid}, 'Error', 'framework child', 'frame', #{groupHash <> "-child"}, #{groupHash}, true, '{}'::jsonb, #{groupLatest}) |]
-        Hasql.interpExecute [HI.sql|
+        Hasql.interpExecute
+          [HI.sql|
           INSERT INTO apis.issues (id, project_id, issue_type, title, target_hash, service, is_framework, issue_data, created_at, updated_at)
           VALUES (#{oldId}, #{testPid}, 'runtime_exception', 'active old issue', #{oldHash}, 'recency-smoke', false, '{}'::jsonb, #{frozenTime}, #{frozenTime}),
                  (#{newerId}, #{testPid}, 'runtime_exception', 'newer quiet issue', #{newerHash}, 'recency-smoke', false, #{Aeson quietData}, #{later}, #{metadataUpdate}),
@@ -457,17 +489,23 @@ spec = around withCliResources do
       ec `shouldBe` ExitFailure 1
 
     it "lists a scoped metric catalog page through the CLI and public API" \tr -> do
-      withResource tr.trPool \conn -> for_ (["checkout.duration", "checkout.requests"] :: [Text]) \name -> void $ PGS.execute conn
-        [sql|INSERT INTO otel_metrics_meta
+      withResource tr.trPool \conn -> for_ (["checkout.duration", "checkout.requests"] :: [Text]) \name ->
+        void
+          $ PGS.execute
+            conn
+            [sql|INSERT INTO otel_metrics_meta
           (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
           VALUES (?, ?, 'GAUGE', 'ms', 'request metric', 'checkout', 'test', '{}', ?, ?, ?, ?)|]
-        (testPid, name, frozenTime, frozenTime, frozenTime, frozenTime)
+            (testPid, name, frozenTime, frozenTime, frozenTime, frozenTime)
       let oldTime = addUTCTime (-(8 * 24 * 3600)) frozenTime
-      withResource tr.trPool \conn -> void $ PGS.execute conn
-        [sql|INSERT INTO otel_metrics_meta
+      withResource tr.trPool \conn ->
+        void
+          $ PGS.execute
+            conn
+            [sql|INSERT INTO otel_metrics_meta
           (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
           VALUES (?, 'checkout.old', 'GAUGE', 'ms', 'old metric', 'checkout', 'test', '{}', ?, ?, ?, ?)|]
-        (testPid, oldTime, oldTime, oldTime, oldTime)
+            (testPid, oldTime, oldTime, oldTime, oldTime)
       (ec, out) <- runCLILifecycle tr ["--json", "metrics", "list", "--service", "checkout", "--limit", "1"]
       ec `shouldBe` ExitSuccess
       jsonOut out >>= (`shouldHaveKeys` ["metrics", "total", "active", "hasMore", "activeSince"])

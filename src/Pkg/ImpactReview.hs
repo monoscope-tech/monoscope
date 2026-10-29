@@ -5,7 +5,6 @@ module Pkg.ImpactReview (reviewPullRequest, ReviewResult (..), Finding (..), Evi
 import Data.Aeson qualified as AE
 import Data.Char (isDigit)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Effectful.LLM qualified as LLM
 import Data.List.Extra (lookup, nubOrd)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay)
@@ -17,11 +16,13 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Effectful.Timeout qualified as Timeout
 import Hasql.Interpolate qualified as HI
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as Reviews
 import Network.HTTP.Types.URI (urlEncode)
-import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Pkg.AI qualified as AI
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.Git qualified as Git
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -173,25 +174,61 @@ validateResult files evidence gaps result = do
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()
 reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
   case run.state of
-    (Reviews.Completed; Reviews.Superseded) -> pass
+    Reviews.Completed -> whenJustM (Issues.getEventRun run.projectId $ Issues.PullRequestReview run.id) \execution ->
+      when (execution.status == Issues.RunRunning) $ completeRun run execution.id execution.startedAt
+    Reviews.Superseded -> pass
     (Reviews.Queued; Reviews.Reviewing; Reviews.Incomplete) -> review run
   where
     review run
       | run.revision /= run.latestRevision = Reviews.supersedeRun run
-      | otherwise = bracket (Reviews.claimRun run) (\claimed -> when claimed $ Reviews.releaseRun run) $ \claimed -> when claimed do
-          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ runErrorNoCallStack $ execute run
-          let retryMessage = "Review failed; retry to collect current evidence"
-              failure = case outcome of
-                Left err -> Just (retryMessage, show err)
-                Right Nothing -> Just ("Review exceeded its two-minute budget", "Review timed out")
-                Right (Just (Left (ReviewFailure err))) -> Just (retryMessage, err)
-                Right (Just (Right ())) -> Nothing
-          whenJust failure \(message, detail) -> do
-            Log.logAttention "Production impact review failed" (run.id, detail)
-            Reviews.recordFailure run message
-            throwIO $ ReviewFailure message
-    execute :: Reviews.ReviewRun -> ReviewCtx ()
-    execute run = do
+      | otherwise = bracket (Reviews.claimRun run) (\claimed -> when claimed $ Reviews.releaseRun run) $ \claimed ->
+          when claimed
+            $ Issues.getEventRoutine run.projectId Issues.EventPullRequest
+            >>= \case
+              Nothing -> Reviews.recordFailure run "Activate or resume Production impact review in AI routines."
+              Just routine -> do
+                let convId = UUIDId run.threadId.unUUIDId
+                    input = "Review " <> run.owner <> "/" <> run.repo <> " #" <> show run.number <> " at " <> run.revision
+                    continuation = if run.state == Reviews.Queued then Issues.RestartRun else Issues.ContinueRun
+                void $ Issues.getOrCreateConversation run.projectId convId Issues.CTPullRequest (AE.object ["pull_request" AE..= run.number, "repository" AE..= (run.owner <> "/" <> run.repo)])
+                Issues.renameConversation run.projectId convId (run.owner <> "/" <> run.repo <> " #" <> show run.number)
+                whenJustM (Issues.startEventRun routine (Issues.PullRequestReview run.id) continuation convId routine.requestedBy input) \execution ->
+                  when (execution.status == Issues.RunRunning) do
+                    outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ runErrorNoCallStack $ execute run execution
+                    let retryMessage = "Review failed; retry to collect current evidence"
+                        failure = case outcome of
+                          Left err -> Just (Issues.CompletedFailed, retryMessage, show err)
+                          Right Nothing -> Just (Issues.CompletedTimedOut, "Review exceeded its two-minute budget", "Review timed out")
+                          Right (Just (Left (ReviewFailure err))) -> Just (Issues.CompletedFailed, retryMessage, err)
+                          Right (Just (Right ())) -> Nothing
+                        finish = Issues.finishRoutineRun execution.id execution.startedAt
+                    case failure of
+                      Just (status, message, detail) -> do
+                        Log.logAttention "Production impact review failed" (run.id, detail)
+                        active <- Issues.eventRunActive run.projectId execution.id
+                        finish (if active then status else Issues.CompletedCancelled) Nothing Nothing (Just message)
+                        Reviews.recordFailure run message
+                        throwIO $ ReviewFailure message
+                      Nothing -> do
+                        current <- Reviews.getRun run.id
+                        case current of
+                          Just completed | completed.state == Reviews.Completed -> completeRun completed execution.id execution.startedAt
+                          _ -> finish Issues.CompletedCancelled Nothing Nothing (Just "The PR changed or review authorization was withdrawn before publication.")
+    completeRun :: Reviews.ReviewRun -> UUIDId "ai_routine_run" -> UTCTime -> ATBackgroundCtx ()
+    completeRun completed runId startedAt =
+      case traverse (\value -> case AE.fromJSON value of AE.Success parsed -> Right parsed; AE.Error err -> Left err) completed.result of
+        Left _ -> Issues.finishRoutineRun runId startedAt Issues.CompletedFailed Nothing Nothing (Just "Stored review result could not be read. Retry the review to collect fresh evidence.")
+        Right result -> do
+          ctx <- ask @AuthContext
+          let body = maybe "Documentation-only change. No production impact review was needed." (renderReview ctx.config.hostUrl completed True) result
+              status = if maybe True ((== NoFinding) . (.verdict)) result then Issues.CompletedNoFindings else Issues.CompletedSucceeded
+          Issues.saveRunResult completed.projectId runId "Production impact review" body
+          Issues.insertRunResultMessage completed.projectId runId body
+          Issues.finishRoutineRun runId startedAt status completed.result Nothing Nothing
+
+    execute :: Reviews.ReviewRun -> Issues.EventRun -> ReviewCtx ()
+    execute run execution = do
+      requireActive run execution
       ctx <- ask @AuthContext
       let cfg = ctx.config
           ref = Git.RepoRef run.owner run.repo run.revision
@@ -215,14 +252,17 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           if documentationOnly
             then Reviews.finishRun run Nothing
             else do
-              result <- analyse run mappings pr files
-              publish run conn ref pr result
+              result <- analyse run execution mappings pr files
+              requireActive run execution
+              Issues.saveRunResult run.projectId execution.id "Production impact review" (renderReview cfg.hostUrl run True result)
+              publish run execution conn ref pr result
 
     sameRevision :: Git.PullRequest -> Git.PullRequest -> Bool
     sameRevision expected actual = expected.head == actual.head && expected.base == actual.base && actual.state == "open" && not actual.draft
 
-    analyse :: Reviews.ReviewRun -> [CodeContext.CodeMapping] -> Git.PullRequest -> [Git.PullRequestFile] -> ReviewCtx ReviewResult
-    analyse run mappings pr files = do
+    analyse :: Reviews.ReviewRun -> Issues.EventRun -> [CodeContext.CodeMapping] -> Git.PullRequest -> [Git.PullRequestFile] -> ReviewCtx ReviewResult
+    analyse run execution mappings pr files = do
+      requireActive run execution
       cfg <- (.config) <$> ask @AuthContext
       until <- Time.currentTime
       let from = addUTCTime (negate $ nominalDay * 7) until
@@ -239,7 +279,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       draft <-
         if any ((== Telemetry) . (.kind)) evidence
           then do
-            answer <- fromMaybe (Left "Model review timed out") <$> Timeout.timeout (90 * 1000000) (LLM.callLLM cfg.openaiModel prompt cfg.openaiApiKey)
+            answer <- fromMaybe (Left "Model review timed out") <$> Timeout.timeout (90 * 1000000) (AI.callRoutineLLM cfg cfg.openaiModel run.projectId execution prompt)
             pure $ answer >>= first (const "Model response is not valid review JSON") . AE.eitherDecodeStrict @ReviewDraft . encodeUtf8
           else pure $ Right $ ReviewDraft [] ["No measured service evidence is available for a production finding."]
       let validated = do
@@ -247,11 +287,13 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
             validateResult bounded evidence (gaps <> diffGaps) (ReviewResult NoFinding parsed.findings parsed.coverage evidence from until)
           reviewed = fromRight (ReviewResult CoverageUnknown [] (gaps <> diffGaps <> ["The model review did not produce verifiable findings; rerun the review."]) evidence from until) validated
       whenLeft_ validated $ \err -> Log.logAttention "Production impact model validation failed" (run.id, err)
+      requireActive run execution
       Reviews.saveResult run reviewed
       pure reviewed
 
-    publish :: Reviews.ReviewRun -> Git.GitConn -> Git.RepoRef -> Git.PullRequest -> ReviewResult -> ReviewCtx ()
-    publish run conn ref pr result = do
+    publish :: Reviews.ReviewRun -> Issues.EventRun -> Git.GitConn -> Git.RepoRef -> Git.PullRequest -> ReviewResult -> ReviewCtx ()
+    publish run execution conn ref pr result = do
+      requireActive run execution
       cfg <- (.config) <$> ask @AuthContext
       whenM (Reviews.currentRun run) do
         current <- require =<< Git.getPullRequest conn ref run.number
@@ -263,8 +305,13 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
         appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
         let existing = (.id) <$> find (\c -> fmap (.id) c.performedViaGithubApp == Just appId && marker `T.isInfixOf` c.body) comments
         whenM (Reviews.currentRun run) do
-          cid <- require =<< Git.publishPullRequestComment conn ref run.number existing (marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result)
+          requireActive run execution
+          let runLink = "\n\n[Run and artifacts](" <> T.dropWhileEnd (== '/') cfg.hostUrl <> "/p/" <> run.projectId.toText <> "/ai/runs/" <> execution.id.toText <> ")"
+          cid <- require =<< Git.publishPullRequestComment conn ref run.number existing (marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink)
           Reviews.finishRun run (Just cid)
+    requireActive :: Reviews.ReviewRun -> Issues.EventRun -> ReviewCtx ()
+    requireActive run execution = unlessM (Issues.eventRunActive run.projectId execution.id) $ throwError $ ReviewFailure "Routine paused, stopped, or requester access revoked"
+
     require :: Either Text a -> ReviewCtx a
     require = either (throwError . ReviewFailure) pure
 

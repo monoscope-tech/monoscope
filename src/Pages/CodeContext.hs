@@ -38,6 +38,7 @@ import Lucid hiding (for_)
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxDelete_, hxGet_, hxInclude_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
@@ -585,6 +586,7 @@ repositoriesPageH pid selection = do
 data ReviewReadiness
   = ReviewReady ImpactReviews.ReviewSettings
   | ReviewDisabled
+  | ReviewNeedsRoutine
   | ReviewNeedsService
   | ReviewNeedsApp
   | ReviewNeedsServer
@@ -615,6 +617,7 @@ repositoryGetH pid rid = do
   allMappings <- CodeContext.getCodeMappings pid
   syncs <- GitSync.getGitSyncs pid
   settings <- ImpactReviews.repositorySettings pid
+  routine <- Issues.getEventRoutine pid Issues.EventPullRequest
   cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
   permission <- ProjectMembers.getUserPermission pid session.user.id
   let mappings = filter (mappingInRepository credentials repository) allMappings
@@ -622,9 +625,9 @@ repositoryGetH pid rid = do
       reviewSettings = find (\s -> s.owner == T.toLower repository.owner && s.repo == T.toLower repository.repo) settings
       reviewReadiness
         | repository.host /= Git.GitHub || isJust repository.apiBase = ReviewUnsupportedHost
-        | any T.null [cfg.githubAppWebhookSecret, cfg.githubAppId, cfg.githubAppPrivateKey] = ReviewNeedsServer
+        | any T.null ([cfg.githubAppWebhookSecret, cfg.githubAppId, cfg.githubAppPrivateKey] :: [Text]) = ReviewNeedsServer
         | not (any (isJust . (.service)) mappings) = ReviewNeedsService
-        | Just s <- reviewSettings = if s.enabled then ReviewReady s else ReviewDisabled
+        | Just s <- reviewSettings = if not s.enabled then ReviewDisabled else maybe ReviewNeedsRoutine (const $ ReviewReady s) routine
         | otherwise = ReviewNeedsApp
   resources <- maybe (pure []) (RepositorySync.resources pid . (.id)) dashboardSync
   conflictVersions <- forM (filter (.conflicted) resources) $ \resource -> (resource.id,) <$> RepositorySync.localDefinition resource
@@ -789,21 +792,23 @@ instance ToHtml RepositoryGet where
                 ReviewReady settings -> (,False) do
                   colorChip_ SuccessBadge "circle-check" "Ready for pull requests"
                   p_ [class_ "text-sm text-textWeak"] $ if settings.includeEvidence then "Reviews share production aggregates and links in GitHub." else "Reviews share links to production evidence in GitHub."
+                ReviewNeedsRoutine -> setupRequired "Activate or resume the Production impact review routine. Repository settings choose which pull requests it reviews."
                 ReviewDisabled -> (colorChip_ NeutralBadge "circle-info" "Reviews disabled", False)
                 ReviewNeedsService -> setupRequired "Link a named service so reviews can find the production telemetry for this repository."
                 ReviewNeedsApp -> setupRequired "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and configuration sync."
                 ReviewNeedsServer -> setupRequired "An administrator must configure the GitHub App and webhook before automatic reviews can run."
                 ReviewUnsupportedHost -> (callout_ NeutralBadge (Just "Unavailable") "Automatic pull request reviews currently support GitHub.com. Source context and configuration sync remain available for this host.", True)
           readiness
-          when (canEdit && repository.host == Git.GitHub && isNothing repository.apiBase) $ post "/source/reviews" [class_ "flex flex-wrap items-end gap-3"] do
+          a_ [href_ ("/p/" <> repository.projectId.toText <> "/ai/routines#routine-production-impact-review"), class_ "text-sm text-textBrand hover:underline"] "Manage review routine and runs"
+          when (canEdit && repository.host == Git.GitHub && isNothing repository.apiBase) $ post "/source/reviews" [class_ "grid items-end gap-3 sm:grid-cols-2"] do
             input_ [type_ "hidden", name_ "owner", value_ repository.owner]
             input_ [type_ "hidden", name_ "repo", value_ repository.repo]
             formSelectField_ FieldSm "Automatic pull request reviews" "enabled" False
               $ options_ (Just $ bool "false" "true" $ maybe False (.enabled) page.reviewSettings) [("true", "On"), ("false", "Off")]
             formSelectField_ FieldSm "Production evidence in GitHub" "includeEvidence" False
               $ options_ (Just $ bool "false" "true" $ maybe False (.includeEvidence) page.reviewSettings) [("false", "Links only"), ("true", "Aggregates and links")]
-            button_ [type_ "submit", class_ $ "btn btn-sm mb-1 " <> bool "btn-primary" "btn-outline" blocked] "Save review settings"
-            when blocked $ p_ [class_ "w-full text-xs text-textWeak"] "Saved settings take effect once setup is complete."
+            button_ [type_ "submit", class_ $ "btn btn-sm mb-1 justify-self-start sm:col-span-2 " <> bool "btn-primary" "btn-outline" blocked] "Save review settings"
+            when blocked $ p_ [class_ "text-xs text-textWeak sm:col-span-2"] "Saved settings take effect once setup is complete."
           a_ [href_ (base <> "?tab=reviews"), class_ "btn btn-sm btn-outline"] "Review history"
       section_ [class_ "min-w-0 @min-[64rem]/repository:col-start-1 @min-[64rem]/repository:row-start-2", Aria.label_ "Dashboards and monitors"]
         $ panel_ Raised def{icon = Just "dashboard"} "Dashboards and monitors"
@@ -997,7 +1002,8 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
         addMappingForm_ (fromRight [] repoResult) cred
     when (isNothing repositoryM) $ section_ [class_ "pt-6 space-y-3 border-t border-strokeWeak"] do
       h3_ [class_ "text-sm font-semibold text-textStrong"] "Production impact reviews"
-      p_ [class_ "text-xs text-textWeak"] "Linked GitHub repositories receive advisory PR comments based on this project's telemetry. Ready PRs are reviewed when opened or updated."
+      p_ [class_ "text-xs text-textWeak"] "The Production impact review routine reviews ready pull requests for enabled repositories. Activate the routine to start automatic reviews and inspect its runs."
+      a_ [href_ ("/p/" <> pid.toText <> "/ai/routines#routine-production-impact-review"), class_ "text-sm text-textBrand hover:underline"] "Manage review routine and runs"
       when (T.null authConfig.githubAppWebhookSecret) $ p_ [class_ "text-xs text-textError"] "Reviews need a GitHub App webhook secret. Ask your Monoscope administrator to configure it."
       when (null reviewSettings) $ p_ [class_ "text-xs text-textWeak"] "Link a repository using a GitHub App installation to enable automatic reviews."
       forM_ reviewSettings \settings ->

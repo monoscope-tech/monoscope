@@ -108,6 +108,7 @@ type ProjectToolCtx es =
   , Effectful.Reader.Static.Reader AuthContext :> es
   , UUIDEff :> es
   , HTTP :> es
+  , Sleep :> es
   , Hasql :> es
   , Labeled "timefusion" Hasql :> es
   , Time :> es

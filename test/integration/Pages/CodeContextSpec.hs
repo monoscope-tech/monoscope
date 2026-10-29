@@ -45,6 +45,7 @@ import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Test qualified as WT
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job qualified as Jobs
+import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.CodeContext qualified as PageCodeContext
@@ -927,7 +928,10 @@ spec = do
         render (Lucid.toHtml details.content) `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/" <> repository.id.toText <> "/source\"")
         map (.service) details.content.mappings `shouldBe` [Just "checkout"]
         fmap (.id) details.content.dashboardSync `shouldBe` Just sync.id
-        details.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False
+        details.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsRoutine -> True; _ -> False
+        void $ testServant configured $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
+        (_, activated) <- testServant configured $ PageCodeContext.repositoryGetH testPid repository.id
+        activated.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False
         let incomplete = configured{trATCtx = configured.trATCtx{config = configured.trATCtx.config{githubAppPrivateKey = ""}}}
         (_, unavailable) <- testServant incomplete $ PageCodeContext.repositoryGetH testPid repository.id
         unavailable.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsServer -> True; _ -> False

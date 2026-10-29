@@ -1,6 +1,6 @@
 # Slack Agent consolidation plan
 
-Status: implementation in progress. Interactive project writes require an in-app, per-message grant; confirmed writes remain unavailable. The native Slack Agent has not passed sandbox acceptance or gone live.
+Status: resumed on 2026-10-29; rebased onto master `efefb3b83`. Implementation in progress. Interactive project writes require an in-app, per-message grant; confirmed writes remain unavailable. The native Slack Agent has not passed sandbox acceptance or gone live.
 
 This plan narrows the [Slack Agent roadmap](2026-09-08-slack-agent.md) to the unfinished conversation and tool experience. The [implementation log](2026-09-08-slack-agent-implementation.md) records earlier work. Current code, tests, and live behavior take precedence over old status notes in that log.
 
@@ -115,3 +115,241 @@ Slack's Agent migration can be irreversible. Review the live manifest against th
 - [Polylane's Slack flow](https://polylane.com/product/slack/) shows mentions, threaded follow-ups, a live checklist, and outcomes in the originating thread. Its [investigation model](https://docs.polylane.com/investigation/investigations) keeps one issue's evidence and fix outcome in one thread. These are product references, not claims about its internal implementation.
 
 The recommended launch boundary is reliable requested conversations and authorized tools. Ambient replies, autonomous fixes, and automatic deployment follow only after the requested path passes live acceptance.
+
+
+## Routine integration (2026-10-29)
+
+The product record is an installed routine, its runs, and its artifacts. Slack and
+PR webhooks remain delivery adapters with their existing deduplication, leases,
+and publication checks. They must not become separate invisible AI systems.
+
+1. Rebase while preserving master’s repository setup, documents, saved views,
+   cancellation, and shared effects. Verify with the long-lived watchers and the
+   affected API, bot, routine, and PR-review integration tests.
+2. Extend the existing routine schedule algebra with event triggers. Add Slack
+   investigation and production-impact-review templates alongside scheduled
+   templates. External AI work requires an explicitly activated template owned by an
+   authorizing member. Keep existing review history visible; show a clear
+   activation action for connected integrations. Pausing an installation suppresses
+   future work without disconnecting notification or repository access.
+3. Record every triggered execution in the routine run ledger, including source,
+   requester, input, status, result, and errors. Preserve the source workers’
+   retry/publication guarantees. Keep run artifacts as snapshots so later edits
+   do not rewrite past evidence. Scheduled routines use the same artifact record.
+4. Expose installed event routines, editable instructions, run details, artifacts,
+   and conversation follow-ups in the AI UI. Link Slack replies and PR reviews to
+   their visible record. Repository review settings control the same activation.
+   Verify meaningful complete flows, narrow layouts, keyboard operation, and both
+   themes using emil-design-eng and all six better-interface domain reviews.
+5. Run hs-distill, hs-evasion-review, and hs-lob-review repeatedly; apply valuable
+   findings, then simplify. Only after implementation and focused verification are
+   complete, run final local signoff and the required image check, push the branch,
+   and update the pull request. No production deployment is requested.
+
+Acceptance requires signed Slack intake through a visible run and retained
+artifact; PR webhook through an authorized review run and artifact; disabled,
+revoked, duplicate, stopped, failed, and retried work handled visibly; project
+isolation; and a user able to inspect and iterate from the routine UI. Tests must
+first reproduce missing behavior at handler/worker level. Live Slack sandbox
+acceptance remains a separate external installation gate, and must be reported
+honestly if the installation is unavailable.
+
+### Verified implementation checkpoints
+
+- Rebased on `origin/master` at `efefb3b83`; retained the newer repository,
+  document, dashboard, authorization, and effect work.
+- Signed private-channel Slack requests and PR review publication now produce
+  routine runs and artifacts. Their original focused regressions failed because
+  no runs existed, then passed after integration.
+- Event templates appear as installed routines without requiring an interval.
+  The routines page, sidebar, conversation run history, and run-detail route use
+  the trigger kind. Instructions can be edited for future runs; the detail page
+  shows the snapshot used by a past run.
+- Handler/model regression tests pass for activation, cancellation, replay,
+  retry attempts, artifact retention, saved instructions, and reader permissions.
+  Cancellation initially ignored event runs; artifact capture initially compared
+  two clock domains. Both failures were reproduced before their fixes. Completion
+  now snapshots the conversation document workspace, including unchanged evidence.
+- Missing and paused Slack installations return private activation guidance and
+  do not invoke the model. The legacy slash-command entry point is also being
+  moved onto the activated template; its missing-run regression is reproduced.
+
+Still required: finish and verify slash-command integration; broaden signed bot,
+PR, and routine verification; review queued/revoked/failed work and project
+isolation; inspect the rendered UI in both themes and narrow layouts; complete
+all skill review loops and final simplification; run final local signoff and
+image checks; push and update PR #619. Live Slack installation acceptance remains
+unverified. These checkpoints are progress evidence, not completion signoff.
+
+### Integration and browser evidence
+
+- Full bot workflows: 64 examples, 0 failures. The metric catalog test now has
+  a distinct editor who activates the routine and a linked reader who requests
+  the investigation, so it exercises reader access instead of disabling the
+  installation by demoting its owner.
+- PR review integration: 3 examples, 0 failures, including signed webhooks,
+  publication, retry, repository disable, and evidence-sharing settings.
+- Slash commands now use the same activated Slack template and run ledger. The
+  dedicated missing-run regression failed first and now passes with an artifact.
+- Browser inspection uses `withLiveServer` and an ephemeral test database. The
+  harness now includes production's hashed-asset middleware. A local Playwright
+  capture checked real HTTP instruction saving/reloading, keyboard disclosure,
+  prior-result immutability, and narrow overflow. Light/dark desktop and narrow
+  screenshots are in ignored `scripts/local/routine-ui/`. Temporary browser
+  capture instrumentation was removed from the integration spec afterward.
+- Visual review changed cancellation reasons to neutral text and recent-run
+  timestamps to execution time. Resizing screenshots now wait for the sidebar's
+  existing CSS transition to settle rather than capturing its intermediate frame.
+- Further failing regressions demonstrated that a direct schedule request could
+  coerce an event template into an interval, and that a failed retry could inherit
+  its predecessor's result artifact. Both now pass: event triggers stay fixed,
+  and a run's result is stored atomically under its own run ID. Conversation
+  document snapshots remain separate from the latest-result document.
+
+The complete Agentic suite, remaining UI states and review loops still need
+verification after these latest fixes. No final signoff, branch push, or PR
+update has been performed during this integration work.
+
+Latest watcher result: all 28 Agentic examples pass after the event-trigger and
+per-run result fixes. The full bot workflow suite is being rerun against that
+final artifact-writing change before the next review pass.
+
+### Review loop continuation
+
+The first Haskell and interface passes found and fixed further concrete gaps:
+PR publication recovery, malformed stored-result handling, duplicate result
+messages, artifacts lost on publication failure, scheduled instruction snapshots,
+retention after conversation deletion, polling disclosure state, unnamed mobile
+actions, and overlapping repository settings at 320px. Each behavioral gap has
+an integration or browser regression. The permanent browser regression is
+`e2e/tests/routines.spec.ts`; temporary capture instrumentation was removed.
+
+Latest verification: 73 API/MCP examples, 22 CLI lifecycle examples, the focused
+PR recovery/publication regression, and the permanent Playwright routine flow
+pass. `make cli-build` passes. The UI report is
+`plans/2026-10-29-routine-interface-review.md`. Final signoff is not started.
+
+The broader automation audit is still open. In particular,
+`BackgroundJobs.enhanceIssuesWithLLM` changes issue titles, recommendations,
+criticality and error analysis outside the routine ledger. It must be evaluated
+and integrated as a visible, controllable workflow before claiming that all
+requested autonomous AI work uses routines. Query translation, conversation
+labels and embedding/grouping internals are component operations rather than
+standalone investigation workflows; do not mistake their function names for
+separate agent executions or silently claim uninspected scope is complete.
+
+
+### Automation audit and current verification
+
+The branch now includes master commit `5f30465e3`. The rebase preserves its document
+limits, document refresh handling, dashboard views menu, and Live Tail fixes.
+Local routine changes were restored and their conflicts resolved. The build
+watcher reports successful compilation. Server startup still fails with the
+existing production database credentials; browser tests use an isolated test server.
+
+Issue enrichment now requires the **Issue enrichment** template. Each eligible
+issue uses its issue conversation, a source lease, and the shared run ledger.
+The worker records instructions, assessment, artifacts, failures, retry attempts,
+and usage. Duplicate deliveries skip completed work. Interrupted work resumes
+its existing attempt. Pausing during a model call prevents metadata publication.
+
+The regression first exposed an unactivated model call. It then exposed a dropped
+recommended action and acceptance of malformed model output. The fixes preserve
+the three-line description and reject invalid descriptions and severity responses.
+The focused regression passes, including duplicate concurrent delivery, retry,
+worker recovery, and pause during a model call. Before the malformed-output
+extension, all 32 Agentic examples passed. All three PR integration examples
+pass with shared routine authorization and usage accounting.
+
+Repository analysis was inspected: it reads repository metadata and proposes
+service mappings without an LLM call. Query translation, conversation titles,
+embeddings, and pattern grouping remain implementation steps of existing product
+operations. They are not separate investigation or review workflows. Existing
+Discord and WhatsApp prompt handlers are interactive adapters outside this Slack
+launch; this change does not introduce autonomous work through those adapters.
+
+Still required: repeat the full affected test groups after these changes, repeat
+the Haskell and interface review loops, and complete final simplification.
+Then run local signoff and the required image check, push, and update PR #619.
+Live Slack workspace acceptance remains unverified.
+
+
+### Repeated review results
+
+The hs-distill pass shared routine completion authorization and usage accounting
+between PR reviews and issue enrichment. The issue model functions accept that
+completion operation. This removes their direct dependence on application settings.
+The pass also removed redundant wrappers and sequencing. Focused HLint reports
+no hints in the five changed routine implementation modules.
+
+The hs-evasion-review pass found malformed model descriptions and severity
+responses accepted as valid metadata. A failing regression reproduced this.
+The parser now requires the stated fields, severity values, and nonnegative counts.
+The same pass checked caller identity, source types, member eligibility, lease
+ownership, JSON boundaries, and interpreter preservation. No new warning
+suppression, unsafe escape, or nested production interpreter was added.
+
+The next pass found the routine result writer bypassing master's conversation
+document limit. Its regression produced 501 documents against a limit of 500.
+The writer now preserves the per-run result without exceeding the conversation
+limit. Another regression reproduced a rejected Slack follow-up marked successful.
+Rejected delivery now records failure and retains the generated artifact.
+
+The hs-lob-review pass retained native disclosures, inline behaviors, and HTMX
+forms and polling. It found no useful client-side demotion after the earlier
+polling and layout fixes. The interface review clarified external reply delivery
+and includes issue-enrichment activation. The browser flow passed in 19.9 seconds.
+
+Current verification: 131 bot examples, 73 API/MCP examples, three PR review
+examples, and 62 repository examples pass. The wiki browser initially used stale
+frontend assets; rebuilding them and refreshing the compiled manifest resolved
+that failure. Repository readiness now tests explicit routine activation.
+`make post-css` passes. CLI lifecycle verification and final signoff remain.
+
+No simplify skill is installed. The final manual simplification pass removed
+redundant sequencing and reused existing domain operations. Further record/type
+frameworks, extra source queues, and replacement client state would increase the
+implementation without improving the requested behavior. They were rejected.
+
+
+### Final focused verification and installation correction
+
+The latest browser flow passes in 20.3 seconds against fresh frontend bundles.
+All 35 error-pattern examples pass. The runtime-error pipeline now explicitly
+activates enrichment and executes the queued jobs with the LLM effect interpreter.
+It checks metadata changes and retained analysis artifacts. All 45 issue-page
+examples and 22 CLI lifecycle examples pass.
+
+The installed formatter was 0.21; CI pins 0.19. The changed files now use the
+pinned formatter, and `make fmt-check` passes. The remote branch's additional
+commit only sorts imports and formatting; those changes are preserved.
+
+Current Slack references exposed an invalid inherited manifest field:
+`metadata.event_subscriptions`. Slack's published v0.5.0 manifest schema rejected
+it. The template now omits this field and passes that schema. The obsolete
+metadata overlay was removed. Custom metadata does not require registration;
+optional publisher schemas use top-level `events` and require org-wide deployment.
+See [Slack metadata](https://docs.slack.dev/messaging/message-metadata/) and the
+[published schema](https://github.com/slackapi/manifest-schema/blob/v0.5.0/schemas/manifest.schema.1.0.0.json).
+The permanent installation regression failed before the correction and passes now.
+
+That regression reads the shipped JSON file, so the integration fingerprint now
+includes it. The CI definition and runner were updated together. `make ci-selftest`
+passes, including declared inputs, fingerprints, capabilities, and release safety.
+The native session method, stop event, and Agent view fields were checked against
+current Slack references. Live app validation and sandbox acceptance remain unverified.
+
+The repeated Haskell and interface passes have no remaining material finding in
+the implemented diff. Final local signoff, image verification, branch push, and
+PR update are still required. No merge or production deployment is requested.
+
+
+### Pre-signoff checkpoint
+
+All 132 bot examples pass after the manifest correction. The repeated reviews
+and final simplification found no further material change to make. The reviewed
+implementation is ready for local signoff and image verification. Results from
+those commands and publication will be recorded in PR #619.
+
+Live Slack validation remains a separate installation gate. No connected Slack
+workspace tool is available in this session, and no live manifest was changed.

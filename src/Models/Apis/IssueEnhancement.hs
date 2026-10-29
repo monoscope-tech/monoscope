@@ -9,18 +9,16 @@ module Models.Apis.IssueEnhancement (
 ) where
 
 import Data.Aeson qualified as AE
-import Data.Effectful.LLM qualified as ELLM
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
-import Effectful (Eff, (:>))
+import Effectful (Eff)
 import Models.Apis.Issues qualified as Issues
 import NeatInterpolation (text)
 import Pkg.AI qualified as AI
 import PyF (fmtTrim)
 import Relude hiding (id)
-import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (DB)
 
 
@@ -35,41 +33,33 @@ data IssueEnhancement = IssueEnhancement
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-enhanceIssueWithLLM :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text IssueEnhancement)
-enhanceIssueWithLLM authCtx issue = runExceptT do
-  enhancedTitle <- ExceptT $ generateEnhancedTitle authCtx issue
-  (enhancedDescription, recommendedAction, migrationComplexity) <- ExceptT $ generateEnhancedDescription authCtx issue
+enhanceIssueWithLLM :: (Text -> Eff es (Either Text Text)) -> Issues.Issue -> Eff es (Either Text IssueEnhancement)
+enhanceIssueWithLLM complete issue = runExceptT do
+  enhancedTitle <- ExceptT $ generateEnhancedTitle complete issue
+  (enhancedDescription, recommendedAction, migrationComplexity) <- ExceptT $ generateEnhancedDescription complete issue
   pure IssueEnhancement{issueId = issue.id, enhancedTitle, enhancedDescription, recommendedAction, migrationComplexity}
 
 
--- | Call the small model with a plain-text prompt.
-askLLMRaw :: ELLM.LLM :> es => AuthContext -> Text -> Eff es (Either Text Text)
-askLLMRaw authCtx prompt = ELLM.callLLM authCtx.config.openaiSmallModel prompt authCtx.config.openaiApiKey
-
-
--- | Prompt the small model and unwrap the plain-text completion.
-askLLM :: ELLM.LLM :> es => AuthContext -> Text -> Eff es (Either Text Text)
-askLLM authCtx prompt = (fmap fst . AI.getNormalTupleResponse =<<) <$> askLLMRaw authCtx prompt
-
-
 -- | Completion split into stripped lines, for the strict N-line reply formats.
-askLLMLines :: ELLM.LLM :> es => AuthContext -> Text -> Eff es (Either Text [Text])
-askLLMLines authCtx prompt = fmap (map T.strip . lines . T.strip) <$> askLLMRaw authCtx prompt
+askLLMLines :: (Text -> Eff es (Either Text Text)) -> Text -> Eff es (Either Text [Text])
+askLLMLines complete prompt = fmap (map T.strip . lines . T.strip) <$> complete prompt
 
 
 badFormat :: Either Text a
 badFormat = Left "Invalid response format from LLM"
 
 
-generateEnhancedTitle :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text Text)
-generateEnhancedTitle authCtx issue = fmap (T.take 200) <$> askLLM authCtx (buildTitlePrompt issue)
+generateEnhancedTitle :: (Text -> Eff es (Either Text Text)) -> Issues.Issue -> Eff es (Either Text Text)
+generateEnhancedTitle complete issue = fmap (T.take 200 . fst) . (AI.getNormalTupleResponse =<<) <$> complete (buildTitlePrompt issue)
 
 
 -- | (description, recommended action, migration complexity) — one per response line.
-generateEnhancedDescription :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Text, Text, Text))
-generateEnhancedDescription authCtx issue = fmap (triple . lines) <$> askLLM authCtx (buildDescriptionPrompt issue)
+generateEnhancedDescription :: (Text -> Eff es (Either Text Text)) -> Issues.Issue -> Eff es (Either Text (Text, Text, Text))
+generateEnhancedDescription complete issue = (parse =<<) <$> askLLMLines complete (buildDescriptionPrompt issue)
   where
-    triple ls = (fromMaybe "" $ ls !!? 0, fromMaybe Issues.defaultRecommendedAction $ ls !!? 1, fromMaybe "medium" $ ls !!? 2)
+    parse [description, action, complexity]
+      | not (any T.null [description, action]) && complexity `elem` (["low", "medium", "high"] :: [Text]) = Right (description, action, complexity)
+    parse _ = badFormat
 
 
 withIssueData :: AE.FromJSON a => Issues.Issue -> b -> (a -> b) -> b
@@ -295,12 +285,13 @@ schemaObservationPrompt observation =
 
 
 -- | Classify issue as critical/safe and count breaking/incremental changes
-classifyIssueCriticality :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
-classifyIssueCriticality authCtx issue = (parse =<<) <$> askLLMLines authCtx (buildCriticalityPrompt issue)
+classifyIssueCriticality :: (Text -> Eff es (Either Text Text)) -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
+classifyIssueCriticality complete issue = (parse =<<) <$> askLLMLines complete (buildCriticalityPrompt issue)
   where
-    parse (critical : breaking : incremental : _) = Right (T.toLower critical == "critical", count breaking, count incremental)
+    parse [critical, breaking, incremental]
+      | critical `elem` (["critical", "safe"] :: [Text]) = (,,) (critical == "critical") <$> count breaking <*> count incremental
     parse _ = badFormat
-    count = fromMaybe 0 . readMaybe . toString
+    count value = maybe badFormat Right $ readMaybe (toString value) >>= guarded (>= 0)
 
 
 buildCriticalityPrompt :: Issues.Issue -> Text
@@ -372,10 +363,10 @@ updateIssueClassification issueId isCritical breakingCount =
 
 -- | Analyze a RuntimeException issue to extract root cause and error category.
 -- Returns (rootCause, category) on success.
-analyzeErrorPattern :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Text, Text))
-analyzeErrorPattern authCtx issue
+analyzeErrorPattern :: (Text -> Eff es (Either Text Text)) -> Issues.Issue -> Eff es (Either Text (Text, Text))
+analyzeErrorPattern complete issue
   | issue.issueType /= Issues.RuntimeException = pure $ Left "not a runtime exception"
-  | otherwise = (parse =<<) <$> askLLMLines authCtx (buildAnalysisPrompt issue)
+  | otherwise = (parse =<<) <$> askLLMLines complete (buildAnalysisPrompt issue)
   where
     parse (rootCause : category : _) = Right (rootCause, T.toLower category)
     parse _ = badFormat

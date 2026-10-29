@@ -6,10 +6,7 @@ import Data.Aeson.Lens (key, _Number)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
-import Data.Effectful.Hasql (Hasql)
-import Data.Effectful.LLM qualified as ELLM
-import Data.Effectful.UUID (UUIDEff)
-import Data.Effectful.Wreq (HTTP, Options, header)
+import Data.Effectful.Wreq (Options, header)
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (addUTCTime, defaultTimeLocale, formatTime)
@@ -223,6 +220,7 @@ processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid
               AI.SlackInvestigationAccess{} -> 12
               AI.SlackAccess{} -> defaults.maxIterations
               AI.ServiceAccess -> defaults.maxIterations
+              AI.MemberAccess{} -> defaults.maxIterations
           }
   result <-
     AI.runAgenticChatWithHistory config userQuery model apiKey >>= either (pure . Left) \answer -> do
@@ -309,12 +307,13 @@ runBotQuery
   -- ^ resolves the conversation thread; run only for agentic queries, so a
   -- report request never pays for a thread backfill
   -> Eff es ()
-runBotQuery = runBotQueryWithTools Nothing
+runBotQuery target deliver env access pid query thread = void $ runBotQueryWithTools Nothing AI.InteractiveReadOnly target deliver env access pid query thread
 
 
 runBotQueryWithTools
   :: ProjectToolCtx es
   => Maybe AI.ProjectTools
+  -> AI.InvocationMode
   -> BotType
   -> (BotReply -> Eff es ())
   -> EnvConfig
@@ -322,22 +321,24 @@ runBotQueryWithTools
   -> Projects.ProjectId
   -> Text
   -> Eff es (Maybe (UUIDId "conversation"))
-  -> Eff es ()
-runBotQueryWithTools projectTools target deliver envCfg access pid userQuery resolveThread =
+  -> Eff es (Either Text ())
+runBotQueryWithTools projectTools invocationMode target deliver envCfg access pid userQuery resolveThread =
   AI.requireAgentAccess access pid >> case detectReportIntent userQuery of
     ReportIntent reportType ->
-      Issues.getLatestReportByType pid reportType >>= \case
-        Nothing -> send $ ReplyText $ textReply $ "No " <> display reportType <> " report found. Reports are generated automatically on schedule."
-        Just report -> do
-          let stamp = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
-              png q theme = Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just q, Widget.theme = theme} Nothing (Just $ stamp report.startTime) (Just $ stamp report.endTime)
-          eventsUrl <- png "summarize count(*) by bin_auto(timestamp), status_code" Nothing
-          errorsUrl <- png "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code" (Just "roma")
-          send $ ReplyText $ formatReport report eventsUrl errorsUrl
+      fmap Right
+        $ Issues.getLatestReportByType pid reportType
+        >>= \case
+          Nothing -> send $ ReplyText $ textReply $ "No " <> display reportType <> " report found. Reports are generated automatically on schedule."
+          Just report -> do
+            let stamp = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
+                png q theme = Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just q, Widget.theme = theme} Nothing (Just $ stamp report.startTime) (Just $ stamp report.endTime)
+            eventsUrl <- png "summarize count(*) by bin_auto(timestamp), status_code" Nothing
+            errorsUrl <- png "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code" (Just "roma")
+            send $ ReplyText $ formatReport report eventsUrl errorsUrl
     GeneralQueryIntent -> do
       threadM <- resolveThread
-      processAIQueryWithMode (Just envCfg) envCfg.enableTimefusionReads projectTools AI.InteractiveReadOnly access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
-        >>= either (const $ send $ ReplyText $ formatBotError target ServiceError) dispatchAIResponse
+      processAIQueryWithMode (Just envCfg) envCfg.enableTimefusionReads projectTools invocationMode access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
+        >>= either (\err -> send (ReplyText $ formatBotError target ServiceError) $> Left err) (\response -> dispatchAIResponse response $> Right ())
   where
     send reply = AI.requireAgentAccess access pid >> deliver reply
     explorerUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/log_explorer?"

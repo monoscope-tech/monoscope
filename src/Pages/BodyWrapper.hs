@@ -849,12 +849,12 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             , Components.filterInputAttr_ "#ai-conversation-nav .ai-thread-item"
             ]
         p_ [class_ "hidden px-2 py-2 text-xs text-textWeak", term "hx-live:.hidden" "q('.ai-thread-item:not(.hidden) in #ai-conversation-nav').count > 0"] "No matching conversations"
-      let (routines, chats) = partition (isJust . (.routineInterval)) bcfg.conversations
+      let (routines, chats) = partition (isJust . (.routineKind)) bcfg.conversations
           conversationHref c = "/p/" <> project.id.toText <> "/ai/" <> c.conversationId.toText
           scheduleLabel c
             | isJust c.routineRunningSince = "Running now"
             | not c.routineActive = "Paused"
-            | otherwise = maybe "Waiting to be scheduled" (\t -> "Next " <> toText (formatTime defaultTimeLocale "%-d %b, %H:%M UTC" t)) c.routineNextRunAt
+            | otherwise = maybe (foldMap Issues.routineKindLabel c.routineKind) (\t -> "Next " <> toText (formatTime defaultTimeLocale "%-d %b, %H:%M UTC" t)) c.routineNextRunAt
           relativeTime t =
             let seconds = max 0 $ floor (diffUTCTime bcfg.shellNow t) :: Int
              in if
@@ -899,13 +899,13 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                             call #ai-thread-rename-modal.showModal()|]
                         ]
                         "Rename"
-                    when (c.conversationType == Issues.CTWeb && isNothing c.routineInterval) $ li_ [] $ form_ [class_ "w-full", hxPost_ $ href <> "/routine", hxSwap_ "none", hxConfirm_ "Turn this chat into a daily routine?"] do
+                    when (c.conversationType == Issues.CTWeb && isNothing c.routineKind) $ li_ [] $ form_ [class_ "w-full", hxPost_ $ href <> "/routine", hxSwap_ "none", hxConfirm_ "Turn this chat into a daily routine?"] do
                       input_ [type_ "hidden", name_ "intervalMinutes", value_ "1440"]
                       button_ [type_ "submit", class_ "w-full text-start"] "Make daily routine"
                     li_ [] $ button_ [type_ "button", class_ "text-textError", hxDelete_ href, hxSwap_ "none", hxConfirm_ "Delete this chat and its message history? This cannot be undone."] "Delete chat"
           routineCard c = do
             let isActive = bcfg.activeConversationId == Just c.conversationId
-                cadenceLabel = foldMap Issues.routineCadence c.routineInterval
+                cadenceLabel = foldMap Issues.routineKindLabel c.routineKind
                 statusLabel = scheduleLabel c
                 stateLabel
                   | isJust c.routineRunningSince = "Running"

@@ -39,12 +39,10 @@ import Deriving.Aeson qualified as AE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Hasql.Interpolate qualified as HI
+import Models.Projects.ProjectMembers (activeMembership)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId, enumLit)
-import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)
 
@@ -110,18 +108,6 @@ getSlackLink linkId =
     WHERE request.id = #{linkId} AND request.expires_at > now() AND request.consumed_at IS NULL|]
 
 
--- | The guard every Slack authorization query applies. Splice it rather than
--- retyping it: a copy that misses a clause silently authorizes a revoked member.
--- Requires the query to alias @projects.project_members@ as @member@,
--- @users.users@ as @account@ and @projects.projects@ as @project@.
-activeMembership :: HI.Sql
-activeMembership =
-  [HI.sql| AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
-    AND project.active AND project.deleted_at IS NULL
-    AND (lower(project.payment_plan) <> 'free' OR member.user_id = (
-      SELECT user_id FROM projects.project_members WHERE project_id = project.id ORDER BY created_at, id LIMIT 1)) |]
-
-
 slackLinkProjects :: DB es => Text -> Projects.UserId -> Eff es [SlackLinkProject]
 slackLinkProjects teamId userId =
   Hasql.interp
@@ -130,7 +116,7 @@ slackLinkProjects teamId userId =
     JOIN users.users account ON account.id = member.user_id
     JOIN apis.slack installation ON installation.project_id = project.id
     WHERE installation.team_id = #{teamId} AND member.user_id = #{userId}|]
-    <> activeMembership
+    <> ProjectMembers.activeMembership
     <> [HI.sql|ORDER BY project.title, project.id|]
 
 
@@ -148,7 +134,7 @@ completeSlackLink linkId userId projectId = do
       JOIN users.users account ON account.id = member.user_id
       JOIN projects.projects project ON project.id = member.project_id
       WHERE request.id = #{linkId} AND request.expires_at > now() AND request.consumed_at IS NULL|]
-      <> activeMembership
+      <> ProjectMembers.activeMembership
       <> [HI.sql|FOR UPDATE OF request
     ), identity AS (
       INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id)
@@ -171,7 +157,7 @@ resolveSlackPrincipal teamId slackUserId threadProject =
     JOIN projects.projects project ON project.id = member.project_id
     JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = identity.team_id
     WHERE identity.team_id = #{teamId} AND identity.slack_user_id = #{slackUserId}|]
-    <> activeMembership
+    <> ProjectMembers.activeMembership
 
 
 slackThreadProject :: DB es => Text -> Text -> Text -> Eff es (Maybe Projects.ProjectId)
@@ -198,7 +184,7 @@ bindSlackInvestigation principal teamId channelId threadTs = do
       JOIN users.users account ON account.id = member.user_id
       JOIN apis.slack installation ON installation.project_id = project.id AND installation.team_id = #{teamId}
       WHERE member.project_id = #{principal.projectId} AND member.user_id = #{principal.userId}|]
-      <> activeMembership
+      <> ProjectMembers.activeMembership
       <> [HI.sql|ON CONFLICT (team_id, channel_id, thread_ts) DO UPDATE SET thread_ts = EXCLUDED.thread_ts
       WHERE slack_investigation_threads.project_id = EXCLUDED.project_id RETURNING TRUE|]
   pure $ isJust result
@@ -229,7 +215,7 @@ recordSlackSessionEvent teamId eventId =
       AND thread.team_id = receipt.team_id AND thread.project_id = member.project_id
       AND thread.channel_id = receipt.payload->'event'->>'channel'
       AND thread.thread_ts = receipt.payload->'event'->>'thread_ts'|]
-    <> activeMembership
+    <> ProjectMembers.activeMembership
 
 
 slackInvestigationStopped :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es Bool
@@ -260,7 +246,7 @@ createSlackInstall stateId userId projectId onboarding = do
       JOIN users.users account ON account.id = member.user_id
       WHERE member.project_id = #{projectId} AND member.user_id = #{userId}
         AND member.permission = ^{enumLit ProjectMembers.PAdmin}|]
-      <> activeMembership
+      <> ProjectMembers.activeMembership
   pure $ affected == 1
 
 
@@ -274,7 +260,7 @@ consumeSlackInstall stateId userId =
     WHERE request.id = #{stateId} AND request.user_id = #{userId} AND request.expires_at > now()
       AND member.project_id = request.project_id AND member.user_id = request.user_id
       AND project.id = member.project_id AND account.id = member.user_id AND member.permission = ^{enumLit ProjectMembers.PAdmin} |]
-    <> activeMembership
+    <> ProjectMembers.activeMembership
     <> [HI.sql| RETURNING request.project_id, request.onboarding |]
 
 

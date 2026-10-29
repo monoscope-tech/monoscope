@@ -144,19 +144,16 @@ import Pages.Replay qualified as Replay
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..))
-import Pkg.Parser qualified as Parser
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.SchemaLearning.Catalog qualified as Fields
 import Relude hiding (ask, id)
-import Network.Wai (Request, queryString)
-import Servant (Capture, Delete, Get, HasServer (..), JSON, Description, Optional, Strict, QueryParam', NamedRoutes, Header, Headers, NoContent (..), addHeader, Patch, Post, Put, QueryParam, ReqBody, ServerError (..), err400, err401, err403, err404, (:-), (:>))
+import Servant (Capture, Delete, Description, Get, HasServer (..), Header, Headers, JSON, NamedRoutes, NoContent (..), Optional, Patch, Post, Put, QueryParam, QueryParam', ReqBody, ServerError (..), Strict, addHeader, err400, err401, err403, err404, (:-), (:>))
 import Servant.OpenApi (HasOpenApi (..), toOpenApi)
 import Servant.Server.Internal.Delayed (passToServer)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx, ApiPrincipal (..), useTfReads)
 import Utils (hostPath)
 import Web.ApiTypes hiding (count)
-import Web.ApiTypes qualified as ApiT
 import Web.FacetsFallback (facetsFallback)
 import Web.Wire qualified as Wire
 
@@ -747,7 +744,6 @@ apiDashboardCreate principal pid inp = do
   when (T.null inp.title) $ throwError err400{errBody = "title is required"}
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
-  -- API-key creation retains the legacy unattributed creator.
   insertDashboard pid (fromMaybe Projects.systemUserId $ principalUser principal) now did inp.title inp.tags inp.teams inp.filePath inp.schema
 
 
@@ -759,7 +755,6 @@ apiDashboardApply principal pid doc = do
   let newTitle = fromMaybe (T.takeWhileEnd (/= '/') doc.filePath) doc.title
   case existingM of
     Just existing -> do
-      now <- Time.currentTime
       _ <- Dashboards.updateSchema existing.id doc.schema (Just now)
       _ <- Dashboards.updateTitle pid existing.id newTitle
       whenJust doc.tags (void . Dashboards.updateTags pid existing.id . V.fromList)

@@ -2,6 +2,7 @@ module Pages.ErrorPatternsSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Default (def)
+import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.Notify (Notification (..), SlackData (..))
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -14,6 +15,8 @@ import Data.Vector.Unboxed qualified as VU
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Effectful.Dispatch.Dynamic (interpose)
+import Effectful.Reader.Static qualified as Reader
 import Lucid (renderText, toHtml)
 import Models.Apis.ErrorPatterns (ErrorState (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
@@ -21,6 +24,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.Projects qualified as Projects
+import Pages.AIThreads qualified as AIThreads
 import Pages.Issues qualified
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorFingerprint qualified as EF
@@ -28,6 +32,7 @@ import Pkg.TestUtils
 import Relude
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
+import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldReturn, shouldSatisfy)
 
 
@@ -958,24 +963,44 @@ spec = sequential $ aroundAll withTestResources do
       ingestTraceWithException tr apiKey "GET /api/orders/:id" "TypeError" "Cannot read properties of undefined (reading 'orderId')" typeErrStack2 (addUTCTime (-20) frozenTime)
       ingestTraceWithException tr apiKey "POST /api/connect" "ConnectionRefusedError" "connect ECONNREFUSED 10.0.0.1:5432" connErrStack (addUTCTime (-10) frozenTime)
 
-      -- b) Process errors → creates error patterns + RuntimeException issues
-      -- Exclude PatternEmbeddingAndMerge to prevent auto-merging TypeErrors before manual assignment
-      let notEmbedMerge = \case BackgroundJobs.PatternEmbeddingAndMerge _ _ -> False; _ -> True
+      -- Keep the queued enrichment jobs for the deterministic LLM interpreter below.
+      let nonEnhancementJob = \case BackgroundJobs.PatternEmbeddingAndMerge{} -> False; BackgroundJobs.EnhanceIssuesWithLLM{} -> False; _ -> True
       drainExtractionWorker tr
-      void $ runBackgroundJobsWhere frozenTime tr.trATCtx notEmbedMerge
+      void $ runBackgroundJobsWhere frozenTime tr.trATCtx nonEnhancementJob
 
-      -- c) Run pending background jobs (processOneMinuteErrors enqueued EnhanceIssuesWithLLM jobs)
-      --    This executes the LLM enhancement: titles, criticality, root cause analysis
-      void $ runBackgroundJobsWhere frozenTime tr.trATCtx notEmbedMerge
+      void $ testServant tr $ AIThreads.routineInstallPostH pid (AIThreads.RoutineTemplateForm "issue-enrichment")
+      routine <- runQueryEffect tr (Issues.getEventRoutine pid Issues.EventIssueEnrichment) >>= maybe (fail "Missing activated enrichment template") pure
+      queued <- getPendingBackgroundJobs tr.trATCtx
+      let enhancements = [job | (_, job@BackgroundJobs.EnhanceIssuesWithLLM{}) <- toList queued]
+          provider = interpose @LLM.LLM \_ -> \case
+            LLM.CallLLM _ prompt _ ->
+              pure
+                $ Right
+                $ if
+                  | "issue titler" `T.isInfixOf` prompt -> "Checkout runtime failure"
+                  | "issue describer" `T.isInfixOf` prompt -> "A runtime failure was observed.\nCompare the application trace.\nlow"
+                  | "issue-severity" `T.isInfixOf` prompt -> "critical\n0\n0"
+                  | otherwise -> "The fixture application dereferenced an absent value.\nruntime"
+            LLM.CallAgenticChat{} -> pure $ Left "Unexpected agent call"
+            LLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+          appCtx = tr.trATCtx{config = tr.trATCtx.config{openaiApiKey = "issue-routine-test-key"}}
+      enhancements `shouldSatisfy` (not . null)
+      runTestBg frozenTime tr $ Reader.local (const appCtx) $ provider $ traverse_ (BackgroundJobs.processBackgroundJob appCtx) enhancements
+      executions <- runQueryEffect tr $ Issues.listConversationRuns pid routine.conversationId 100
+      executions `shouldSatisfy` (not . null)
+      map (.status) executions `shouldSatisfy` all (== Issues.RunSucceeded)
+      artifacts <- runQueryEffect tr $ concat <$> traverse (Issues.listRunArtifacts pid . (.id)) executions
+      mapMaybe (.content) artifacts `shouldSatisfy` any (T.isInfixOf "The fixture application dereferenced an absent value.")
+      void $ testServant tr $ AIThreads.routinePausePostH pid routine.conversationId
 
-      -- Verify at least one issue got an enhanced title (golden file provides cached LLM response)
+      -- Verify the worker changed metadata, not just the initial issue title.
       enhancedCount <- withResource tr.trPool \conn -> do
         [PGS.Only n] <-
           PGS.query
             conn
             [sql| SELECT COUNT(*)::INT FROM apis.issues
                 WHERE project_id = ? AND issue_type = 'runtime_exception'
-                AND title != '' AND length(title) > 5 |]
+                AND title = 'Checkout runtime failure' |]
             (PGS.Only pid)
         pure (n :: Int)
       enhancedCount `shouldSatisfy` (>= 1)

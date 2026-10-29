@@ -51,6 +51,7 @@ module Pkg.AI (
 
   -- * Utilities
   ensureConversationTitle,
+  callRoutineLLM,
   stripCodeBlock,
 ) where
 
@@ -76,7 +77,7 @@ import Data.Time.Zones.All qualified as TZ
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
@@ -114,7 +115,6 @@ import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
 import Utils (encodeText, unwrapJsonPrimValue)
-import Utils (unwrapJsonPrimValue)
 import Web.ApiTypes (ApiActor (..))
 import Web.MCP qualified as MCP
 
@@ -494,11 +494,11 @@ data ProjectTools = ProjectTools
 
 -- | ServiceAccess leaves authorization to its caller. Slack investigations
 -- retain the requesting identity and revalidate it at each data-use boundary.
-requireAgentAccess :: DB es => AgentAccess -> Projects.ProjectId -> Eff es ()
+requireAgentAccess :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> Eff es ()
 requireAgentAccess access projectId = void $ agentAuthority access projectId
 
 
-agentAuthority :: DB es => AgentAccess -> Projects.ProjectId -> Eff es AgentAuthority
+agentAuthority :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> Eff es AgentAuthority
 agentAuthority ServiceAccess _ = pure ServiceAuthority
 agentAuthority (MemberAccess userId) projectId =
   maybe (throwIO AgentAccessDenied) (pure . MemberAuthority) =<< ProjectMembers.getUserPermission projectId userId
@@ -534,7 +534,7 @@ data AgenticConfig = AgenticConfig
 
 -- | Invocation policy carries the routine whose persisted installation grants
 -- action authority. A scheduled prompt alone can never grant it.
-data InvocationMode = InteractiveReadOnly | InteractiveWithActions | ScheduledRoutine (UUIDId "ai_routine") Bool
+data InvocationMode = InteractiveReadOnly | InteractiveWithActions | ScheduledRoutine (UUIDId "ai_routine") Bool | RoutineEventRun (UUIDId "ai_routine_run")
   deriving stock (Eq, Generic, Show)
 
 
@@ -543,14 +543,16 @@ actionsAllowed = \case
   InteractiveReadOnly -> False
   InteractiveWithActions -> True
   ScheduledRoutine _ allowed -> allowed
+  RoutineEventRun{} -> False
 
 
--- | Documents live beside web conversations and routines; Slack and issue chats have nowhere to show them.
+-- | Documents live beside conversations, including linked Slack investigations.
 documentConversation :: AgenticConfig -> Maybe (UUIDId "conversation")
 documentConversation config = case config.access of
   ServiceAccess -> config.conversationId <* guard (all (== Issues.CTWeb) config.conversationType)
-  SlackAccess{} -> Nothing
-  SlackInvestigationAccess{} -> Nothing
+  MemberAccess{} -> config.conversationId
+  SlackAccess{} -> config.conversationId
+  SlackInvestigationAccess{} -> config.conversationId
 
 
 userMessagePersistence :: InvocationMode -> Bool
@@ -558,6 +560,17 @@ userMessagePersistence = \case
   InteractiveReadOnly -> True
   InteractiveWithActions -> True
   ScheduledRoutine{} -> False
+  RoutineEventRun{} -> True
+
+
+requireConfigAccess :: (DB es, IOE :> es) => AgenticConfig -> Eff es ()
+requireConfigAccess config = do
+  requireAgentAccess config.access config.projectId
+  case config.invocationMode of
+    RoutineEventRun runId -> unlessM (Issues.eventRunActive config.projectId runId) $ throwIO AgentStopped
+    InteractiveReadOnly -> pass
+    InteractiveWithActions -> pass
+    ScheduledRoutine{} -> pass
 
 
 -- | Default agentic configuration with reasonable defaults (maxIterations=5, facetContext=Nothing)
@@ -905,8 +918,17 @@ runAgenticChatWithHistory
   -> Text
   -> Text
   -> Eff es (Either Text AgenticChatResult)
-runAgenticChatWithHistory config userQuery model apiKey = do
-  requireAgentAccess config.access config.projectId
+runAgenticChatWithHistory initialConfig userQuery model apiKey = do
+  requireConfigAccess initialConfig
+  instructions <- case initialConfig.invocationMode of
+    RoutineEventRun runId -> do
+      evidence <- Issues.getRoutineRunEvidence initialConfig.projectId runId >>= maybe (throwIO AgentStopped) pure
+      pure evidence.instructions
+    InteractiveReadOnly -> pure Nothing
+    InteractiveWithActions -> pure Nothing
+    ScheduledRoutine{} -> pure Nothing
+  let config = initialConfig{customContext = instructions <> initialConfig.customContext}
+  requireConfigAccess config
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
   let initial history = Investigations.ModelPending $ Investigations.Step (systemMsg :| (mapMaybe dbMessageToLLMMessage history <> [userMsg])) params 0 config.timeRange []
       run turn checkpoint = withInvestigationJournal config userQuery model $ \journal -> runAgenticLoopRaw turn journal config apiKey checkpoint
@@ -916,7 +938,7 @@ runAgenticChatWithHistory config userQuery model apiKey = do
       unless (convId == expected) $ throwIO AgentAccessDenied
       let turn = Investigations.Turn config.projectId convId investigation.userId investigation.messageTs
       Investigations.loadAnswer turn >>= \case
-        Just answer -> requireAgentAccess config.access config.projectId $> Right answer
+        Just answer -> requireConfigAccess config $> Right answer
         Nothing -> do
           checkpoint <-
             Investigations.loadCheckpoint turn
@@ -927,7 +949,7 @@ runAgenticChatWithHistory config userQuery model apiKey = do
                 )
                 pure
           result <- run (Just $ Investigations.CheckpointCursor turn checkpoint.revision) checkpoint.checkpoint
-          requireAgentAccess config.access config.projectId
+          requireConfigAccess config
           traverse (Investigations.saveAnswer turn) result
     _ -> do
       history <-
@@ -940,7 +962,7 @@ runAgenticChatWithHistory config userQuery model apiKey = do
 -- Persisted Slack turns resume their checkpoint while each worker attempt retains its own activity log.
 withInvestigationJournal :: (DB es, IOE :> es, UUIDEff :> es) => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
 withInvestigationJournal config userQuery model action = do
-  requireAgentAccess config.access config.projectId
+  requireConfigAccess config
   case config.access of
     SlackInvestigationAccess run -> do
       runId <- UUIDId <$> genUUID
@@ -950,6 +972,7 @@ withInvestigationJournal config userQuery model action = do
       Investigations.recordEvent scope $ either (const Investigations.InvestigationFailed) (const Investigations.InvestigationFinished) result
       pure result
     ServiceAccess -> action Nothing
+    MemberAccess{} -> action Nothing
     SlackAccess{} -> action Nothing
 
 
@@ -957,7 +980,7 @@ withInvestigationJournal config userQuery model action = do
 -- run again after an interrupted call; completed tools and model responses replay.
 runAgenticLoopRaw :: ProjectToolCtx es => Maybe Investigations.CheckpointCursor -> Maybe Investigations.Scope -> AgenticConfig -> Text -> Investigations.Checkpoint -> Eff es (Either Text AgenticChatResult)
 runAgenticLoopRaw turn journal config apiKey checkpoint = do
-  requireAgentAccess config.access config.projectId
+  requireConfigAccess config
   case checkpoint of
     Investigations.AnswerReady answer -> do
       Log.logTrace "AI final response" (AE.object ["responseLength" AE..= T.length answer.response, "toolCount" AE..= length answer.toolCalls])
@@ -972,7 +995,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
               request = if finalRound then step.request{OpenAIV1.tools = Nothing} else step.request
           Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= step.iteration, "historySize" AE..= length step.history, "finalRound" AE..= finalRound])
           response <- ELLM.callAgenticChat step.history request apiKey
-          requireAgentAccess config.access config.projectId
+          requireConfigAccess config
           case response of
             Left err -> do
               record $ Investigations.ModelReturned step.iteration Investigations.ModelRequestFailed
@@ -981,6 +1004,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
             Right message -> do
               let source = case (config.invocationMode, config.access) of
                     (ScheduledRoutine{}, _) -> Projects.UsageRoutine
+                    (RoutineEventRun{}, _) -> Projects.UsageRoutine
                     (_, SlackInvestigationAccess{}) -> Projects.UsageSlackInvestigation
                     _ -> Projects.UsageInteractive
               Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (estimatedTokens (step.history, request)) (estimatedTokens message)
@@ -1019,7 +1043,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
         candidates <- Investigations.pendingFollowups scope
         authorized <- filterM (\followup -> isJust <$> Integrations.resolveSlackPrincipal scope.teamId followup.slackUserId (Just scope.projectId)) candidates
         forM (nonEmpty authorized) $ \followups -> do
-          requireAgentAccess config.access config.projectId
+          requireConfigAccess config
           let followupMessages = map (\followup -> LLM.Message LLM.User ("Slack reply from <@" <> followup.slackUserId <> "> at " <> followup.messageTs <> ":\n" <> followup.text) LLM.defaultMessageData) $ toList followups
           history <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer step.history followupMessages
           let next = Investigations.ModelPending step{Investigations.history = history, Investigations.iteration = step.iteration + 1}
@@ -1081,6 +1105,19 @@ addMessagesToMemory maxTokens history newMsgs = do
   pure $ fromMaybe allMsgs (rightToMaybe result)
 
 
+callRoutineLLM :: (DB es, ELLM.LLM :> es, Time.Time :> es) => Config.EnvConfig -> Text -> Projects.ProjectId -> Issues.EventRun -> Text -> Eff es (Either Text Text)
+callRoutineLLM config model pid execution task = do
+  active <- Issues.eventRunActive pid execution.id
+  if not active
+    then pure $ Left "Routine paused, stopped, or requester access revoked"
+    else do
+      let prompt = execution.instructions <> "\n\n" <> task
+      response <- ELLM.callLLM model prompt config.openaiApiKey
+      for_ response $ \answer -> Projects.recordAIUsage pid model Projects.UsageRoutine $ pricedUsage (Just config) (estimatedTokens prompt) (estimatedTokens answer)
+      stillActive <- Issues.eventRunActive pid execution.id
+      pure $ if stillActive then response else Left "Routine paused, stopped, or requester access revoked"
+
+
 estimatedTokens :: AE.ToJSON a => a -> Int
 estimatedTokens = ceiling . (/ 4) . fromIntegral . BSL.length . AE.encode
 
@@ -1100,7 +1137,7 @@ pricedUsage config inputTokens outputTokens =
 
 executeToolCall :: ProjectToolCtx es => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
 executeToolCall config tc = do
-  requireAgentAccess config.access config.projectId
+  requireConfigAccess config
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
       args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
       noRaw t = ToolResult t Nothing
@@ -1120,24 +1157,28 @@ executeToolCall config tc = do
          in AE.object ["tools" AE..= map (\(_, (name, description)) -> AE.object ["name" AE..= name, "description" AE..= description]) (take 12 matches), "total" AE..= length matches, "has_more" AE..= (length matches > 12)]
     "get_project_tool_schema" -> pure $ noRaw $ decodeUtf8 $ AE.encode $ case getTextArg "name" args >>= projectToolDef config >>= toolFunction of
       Nothing -> AE.object ["error" AE..= ("unknown project operation" :: Text)]
-      Just fn -> AE.object $ ["name" AE..= fn.name, "description" AE..= fn.description, "input_schema" AE..= fn.parameters]
-        <> maybe [] (\policy -> ["minimum_permission" AE..= policy.minimumPermission, "action" AE..= show @Text policy.action]) (Map.lookup fn.name MCP.agentPolicies)
-    name | Just backend <- config.projectTools, Just _ <- Map.lookup name backend.catalog ->
-      case Map.lookup name MCP.agentPolicies of
-        Nothing -> pure $ noRaw "This project operation has no Agent policy."
-        Just policy -> do
-          authority <- agentAuthority config.access config.projectId
-          let allowed = case authority of
-                ServiceAuthority -> True
-                MemberAuthority permission -> permission >= policy.minimumPermission
-          if not allowed
-            then pure $ noRaw "Your project role does not permit this operation."
-            else case policy.action of
-              MCP.ReadOnly -> runProjectTool backend name args
-              MCP.RequestedWrite -> do
-                permitted <- actionAuthorized
-                if permitted then runProjectTool backend name args else pure $ noRaw "This operation requires an explicit request and is not available in this conversation."
-              MCP.ConfirmedWrite -> pure $ noRaw "This operation requires confirmation and is not available in this conversation."
+      Just fn ->
+        AE.object
+          $ ["name" AE..= fn.name, "description" AE..= fn.description, "input_schema" AE..= fn.parameters]
+          <> maybe [] (\policy -> ["minimum_permission" AE..= policy.minimumPermission, "action" AE..= show @Text policy.action]) (Map.lookup fn.name MCP.agentPolicies)
+    name
+      | Just backend <- config.projectTools
+      , Just _ <- Map.lookup name backend.catalog ->
+          case Map.lookup name MCP.agentPolicies of
+            Nothing -> pure $ noRaw "This project operation has no Agent policy."
+            Just policy -> do
+              authority <- agentAuthority config.access config.projectId
+              let allowed = case authority of
+                    ServiceAuthority -> True
+                    MemberAuthority permission -> permission >= policy.minimumPermission
+              if not allowed
+                then pure $ noRaw "Your project role does not permit this operation."
+                else case policy.action of
+                  MCP.ReadOnly -> runProjectTool backend name args
+                  MCP.RequestedWrite -> do
+                    permitted <- actionAuthorized
+                    if permitted then runProjectTool backend name args else pure $ noRaw "This operation requires an explicit request and is not available in this conversation."
+                  MCP.ConfirmedWrite -> pure $ noRaw "This operation requires confirmation and is not available in this conversation."
     "get_investigation_history" -> noRaw <$> slackThread "Investigation history requires an authorized Slack investigation." \run -> encodeText <$> Investigations.recentEvents config.projectId run.teamId run.channelId run.threadTs
     "get_incident_context" -> noRaw <$> slackThread "Incident context requires an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackInvestigationContext config.projectId run.teamId run.channelId run.threadTs
     "get_related_incidents" -> noRaw <$> slackThread "Related incidents require an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackRelatedIncidents config.projectId run.teamId run.channelId run.threadTs
@@ -1192,10 +1233,12 @@ executeToolCall config tc = do
       body <- maybeToRight (toolError "save_artifact" "missing 'content'" args) (getTextArg "content" args)
       when (T.length body > 100_000) $ Left "content must be at most 100000 characters per write."
       write <- maybe (Right Issues.ArtifactReplace) (first (const "mode must be replace or append.") . parseEither AE.parseJSON) (Map.lookup "mode" args)
-      pure $ Issues.saveArtifact config.projectId convId key' (getTextArg "title" args) body write <&> \case
-        Right doc -> ToolResult ("Saved document '" <> toText doc.key <> "' (" <> doc.title <> ", " <> show doc.characters <> " characters).") (Just $ AE.toJSON doc.key)
-        Left Issues.ArtifactFull -> noRaw $ "Document '" <> toText key' <> "' is full. Continue in a new document with a different key."
-        Left Issues.ArtifactLimitReached -> noRaw $ "This conversation already holds " <> show Issues.maxArtifactsPerConversation <> " documents. Rewrite an existing one instead; read_artifact without a key lists them."
+      pure
+        $ Issues.saveArtifact config.projectId convId key' (getTextArg "title" args) body write
+        <&> \case
+          Right doc -> ToolResult ("Saved document '" <> toText doc.key <> "' (" <> doc.title <> ", " <> show doc.characters <> " characters).") (Just $ AE.toJSON doc.key)
+          Left Issues.ArtifactFull -> noRaw $ "Document '" <> toText key' <> "' is full. Continue in a new document with a different key."
+          Left Issues.ArtifactLimitReached -> noRaw $ "This conversation already holds " <> show Issues.maxArtifactsPerConversation <> " documents. Rewrite an existing one instead; read_artifact without a key lists them."
     "read_artifact" -> inConversation \convId ->
       noRaw <$> case getTextArg "key" args of
         Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]
@@ -1224,7 +1267,7 @@ executeToolCall config tc = do
         (True, _) -> pure "Slack message must contain between 1 and 4000 characters."
         _ -> pure "External actions require an explicit request and edit permission."
     _ -> pure $ noRaw $ "Unknown tool: " <> funcName
-  requireAgentAccess config.access config.projectId
+  requireConfigAccess config
   Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length result.formatted, "resultPreview" AE..= T.take 200 result.formatted])
   pure result
   where
@@ -1237,6 +1280,7 @@ executeToolCall config tc = do
     slackThread denied f = case config.access of
       SlackInvestigationAccess run -> f run
       ServiceAccess -> pure denied
+      MemberAccess{} -> pure denied
       SlackAccess{} -> pure denied
     actionAuthorized = case config.invocationMode of
       ScheduledRoutine routineId True -> Issues.routineCanAct routineId

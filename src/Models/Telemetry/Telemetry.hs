@@ -122,7 +122,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Types qualified as AET
-import Data.OpenApi (ToSchema)
 import Data.ByteString qualified as BS
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql, retryTransientLoop)

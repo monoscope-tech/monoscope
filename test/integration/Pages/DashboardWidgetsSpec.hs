@@ -937,7 +937,7 @@ spec = sequential $ aroundAll withTestResources do
       let backend = ["backend", "25.0", "25.0", "0.4", "0.4", "2"]
           frontend = ["frontend", "50.0", "50.0", "0.8", "0.8", "2"]
       forM_ [(Nothing :: Maybe Text, [frontend, backend]), (Just "+service", [backend, frontend]), (Just "-service", [frontend, backend]), (Just "-service; SELECT 1", [frontend, backend])] \(sortParam, expected) -> do
-        result <- toBaseServantResponse tr $ Api.apiDashboardData testPid dashId Nothing (Just "resources") (Just "24h") Nothing Nothing [("table-sort", sortParam)]
+        result <- toBaseServantResponse tr $ Dashboards.apiDashboardData testPid dashId Nothing (Just "resources") (Just "24h") Nothing Nothing [("table-sort", sortParam)]
         let widgets = result.widgets :: [ApiTypes.RenderedWidget]
         map (.error) widgets `shouldBe` [Nothing]
         concatMap (.textRows) widgets `shouldBe` expected

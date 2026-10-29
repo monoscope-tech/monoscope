@@ -1597,7 +1597,7 @@ runHTTPtoServant tr = interpret $ \_ -> \case
 -- that need a real HTTP listener — e.g. the OTel SDK exporter inside
 -- @send-event@, which ships OTLP/HTTP outside the 'HTTP' effect.
 withLiveServer :: TestResources -> (Int -> IO a) -> IO a
-withLiveServer tr = Warp.testWithApplication (pure (Server.mkServer tr.trLogger tr.trATCtx tr.trTracerProvider))
+withLiveServer tr = Warp.testWithApplication (pure $ Server.hashedAssetMiddleware $ Server.mkServer tr.trLogger tr.trATCtx tr.trTracerProvider)
 
 
 extractPath :: String -> Text

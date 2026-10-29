@@ -74,7 +74,6 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime)
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
@@ -135,9 +134,9 @@ import Text.Slugify (slugify)
 import UnliftIO qualified
 import UnliftIO.Exception (try)
 import Utils
+import Web.ApiTypes qualified as ApiT
 import Web.FormUrlEncoded (FromForm (..), parseUnique, toListStable)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
-import Web.ApiTypes qualified as ApiT
 
 
 -- | Server-rendered dashboard data: one request returns every widget on the

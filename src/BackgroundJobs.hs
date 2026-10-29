@@ -8,6 +8,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
 import Control.Lens (view, (.~), (?~), (^.), (^?), _1, _3)
+import Control.Monad.Except (throwError)
 import Control.Monad.Extra (whileM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
@@ -417,7 +418,7 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       deliveryContext = case routine.destination of
         Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
         Issues.DestinationConversation -> Nothing
-      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess routine.requestedBy, AI.invocationMode = AI.ScheduledRoutine routineId routine.allowActions}
+      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = routine.instructions <> deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess routine.requestedBy, AI.invocationMode = AI.ScheduledRoutine routineId routine.allowActions}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
     AI.requireAgentAccess config.access routine.projectId
@@ -427,12 +428,15 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
         Left err -> do
           Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent ("Routine failed: " <> err) Nothing Nothing
           pure (Issues.CompletedFailed, Nothing, Nothing, Just err)
-        Right answer
-          | routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) ->
-              pure (Issues.CompletedNoFindings, Nothing, Just $ AE.toJSON answer.toolCalls, Nothing)
-          | otherwise -> do
+        Right answer -> do
+          let report = either (const answer.response) (fromMaybe answer.response . (.explanation)) $ AI.parseAgenticResponse answer
+          Issues.saveRunResult routine.projectId routine.runId "Routine result" report
+          if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer)
+            then pure (Issues.CompletedNoFindings, Just $ AE.toJSON answer, Just $ AE.toJSON answer.toolCalls, Nothing)
+            else do
               void $ Bots.storeAgenticResponse routine.projectId routine.conversationId answer
               pure (Issues.CompletedSucceeded, Just $ AE.toJSON answer, Just $ AE.toJSON answer.toolCalls, Nothing)
+
   case outcome of
     Nothing -> do
       ifM
@@ -3788,49 +3792,55 @@ processIssuesEnhancement scheduledTime = do
   enqueueJobs ctx [Jobs.EnhanceIssuesWithLLM pid (V.fromList $ map (UUIDId . fst) $ toList g) | g@((_, pid) :| _) <- NE.groupAllWith snd issuesToEnhance]
 
 
--- | Enhance issues with LLM-generated titles and descriptions
+-- | Issue metadata is changed only by an explicitly activated routine.
 enhanceIssuesWithLLM :: Projects.ProjectId -> V.Vector Issues.IssueId -> ATBackgroundCtx ()
 enhanceIssuesWithLLM pid issueIds = do
   ctx <- ask @Config.AuthContext
-  if T.null ctx.config.openaiApiKey
-    then Log.logAttention "OpenAI API key not configured, skipping issue enhancement" pid
-    else do
-      Log.logInfo "Enhancing issues with LLM" (pid.toText, V.length issueIds)
-      forM_ issueIds \issueId -> do
-        issueM <- Issues.selectIssueById pid issueId
-        case issueM of
-          Nothing -> Log.logTrace "Issue not found for enhancement (likely cleaned up by endpoint canonicalization)" issueId
-          Just issue
-            | Issues.isNewEndpointOnly issue -> Log.logTrace "Skipping LLM enhancement for new endpoint issue" issueId
-            | otherwise -> do
-                enhancementResult <- Enhancement.enhanceIssueWithLLM ctx issue
-                case enhancementResult of
-                  Left err -> Log.logAttention "Failed to enhance issue with LLM" (issueId, err)
-                  Right enhancement -> do
-                    void
-                      $ Issues.updateIssueEnhancement
-                        enhancement.issueId
-                        enhancement.enhancedTitle
-                        enhancement.recommendedAction
-                        enhancement.migrationComplexity
-                    -- Schema observations do not establish consumer compatibility or urgency.
-                    when (issue.issueType /= Issues.ApiChange) do
-                      criticalityResult <- Enhancement.classifyIssueCriticality ctx issue
-                      case criticalityResult of
-                        Left err -> Log.logAttention "Failed to classify issue criticality" (issueId, err)
-                        Right (isCritical, breakingCount, _incrementalCount) -> do
-                          void $ Enhancement.updateIssueClassification issue.id isCritical breakingCount
-                          Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
-
-                    -- Analyze error patterns for root cause and category.
-                    -- Left = not a runtime exception, or the LLM call failed.
-                    Enhancement.analyzeErrorPattern ctx issue >>= \case
-                      Left _ -> pass
-                      Right (rootCause, category) -> do
-                        epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
-                        for_ epM \ep -> void $ ErrorPatterns.updateErrorPatternAnalysis ep.id rootCause category
-
-                    Log.logInfo "Successfully enhanced issue" issueId
+  unless (T.null ctx.config.openaiApiKey) $ for_ issueIds \issueId ->
+    whenJustM (Issues.getEventRoutine pid Issues.EventIssueEnrichment) \routine ->
+      void
+        $ withXactLease ctx ("issue-enrichment:" <> pid.toText <> ":" <> issueId.toText)
+        $ whenJustM (Issues.selectIssueById pid issueId) \issue -> unless (Issues.isNewEndpointOnly issue) do
+          let convId = UUIDId issueId.unUUIDId
+          void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object [])
+          whenJustM (Issues.startEventRun routine (Issues.IssueEnrichment issueId) Issues.ContinueRun convId routine.requestedBy ("Enrich issue: " <> issue.title)) \execution ->
+            when (execution.status == Issues.RunRunning) do
+              outcome <- tryAny $ Timeout.timeout (120 * 1_000_000) $ runExceptT do
+                let complete = AI.callRoutineLLM ctx.config ctx.config.openaiSmallModel pid execution
+                enhancement <- ExceptT $ Enhancement.enhanceIssueWithLLM complete issue
+                classification <- if issue.issueType == Issues.ApiChange then pure Nothing else Just <$> ExceptT (Enhancement.classifyIssueCriticality complete issue)
+                analysis <- if issue.issueType /= Issues.RuntimeException then pure Nothing else Just <$> ExceptT (Enhancement.analyzeErrorPattern complete issue)
+                active <- lift $ Issues.eventRunActive pid execution.id
+                unless active $ throwError "Routine authorization withdrawn"
+                let body =
+                      "# "
+                        <> enhancement.enhancedTitle
+                        <> "\n\n"
+                        <> enhancement.enhancedDescription
+                        <> "\n\n## Recommended action\n"
+                        <> enhancement.recommendedAction
+                        <> "\n\nMigration complexity: "
+                        <> enhancement.migrationComplexity
+                        <> foldMap (\(critical, _, _) -> "\n\nSeverity assessment: " <> bool "Not critical" "Critical" critical) classification
+                        <> foldMap (\(cause, category) -> "\n\n## Error analysis\n" <> cause <> "\n\nCategory: " <> category) analysis
+                    findings = AE.object ["enhancement" AE..= enhancement, "classification" AE..= classification, "analysis" AE..= analysis]
+                lift do
+                  Issues.saveRunResult pid execution.id "Issue enrichment" body
+                  Issues.updateIssueEnhancement issueId enhancement.enhancedTitle enhancement.recommendedAction enhancement.migrationComplexity
+                  for_ classification $ \(critical, breaking, _) -> Enhancement.updateIssueClassification issueId critical breaking
+                  for_ analysis $ \(cause, category) -> whenJustM (ErrorPatterns.getErrorPatternByHash pid issue.targetHash) $ \ep -> void $ ErrorPatterns.updateErrorPatternAnalysis ep.id cause category
+                  now <- Time.currentTime
+                  Hasql.interpExecute_ [HI.sql|UPDATE apis.issues SET llm_enhanced_at = #{now} WHERE id = #{issueId} AND project_id = #{pid}|]
+                  Issues.insertRunResultMessage pid execution.id body
+                pure findings
+              active <- Issues.eventRunActive pid execution.id
+              case outcome of
+                Right (Just (Right findings)) -> Issues.finishRoutineRun execution.id execution.startedAt Issues.CompletedSucceeded (Just findings) Nothing Nothing
+                _ -> do
+                  let status = if not active then Issues.CompletedCancelled else case outcome of Right Nothing -> Issues.CompletedTimedOut; _ -> Issues.CompletedFailed
+                      message = if active then "Issue enrichment failed. A retry will create a new attempt." else "Routine paused, stopped, or requester access revoked."
+                  Issues.finishRoutineRun execution.id execution.startedAt status Nothing Nothing (Just message)
+                  when active $ throwIO $ CE.ErrorCall $ toString message
 
 
 patternEmbeddingAndMerge :: Projects.ProjectId -> ATBackgroundCtx ()

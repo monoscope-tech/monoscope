@@ -1,9 +1,9 @@
-module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routineDeleteH, aiSearchH) where
+module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routineDeleteH, aiSearchH) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
-import Data.Default (def)
 import Data.Aeson.Types qualified as AET
+import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
@@ -11,6 +11,7 @@ import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid hiding (for_)
+import Lucid qualified
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
@@ -76,6 +77,11 @@ newtype RoutineTemplateForm = RoutineTemplateForm {templateKey :: Text}
   deriving anyclass (FromForm)
 
 
+newtype RoutineInstructionsForm = RoutineInstructionsForm {instructions :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
 newtype RoutineDestinationForm = RoutineDestinationForm {destination :: Issues.RoutineDestination}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -103,11 +109,11 @@ threadsGetH pid = do
           { pageTitle = "Conversations"
           , menuItem = Just "AI"
           , conversations = allConversations
-          , pageActions = Just $ button_ [type_ "button", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", [__|on click set #ai-composer-input.value to '' then set #ai-composer-chat.checked to true then call #ai-composer-modal.showModal()|]] do
+          , pageActions = Just $ button_ [type_ "button", Aria.label_ "New chat", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", [__|on click set #ai-composer-input.value to '' then set #ai-composer-chat.checked to true then call #ai-composer-modal.showModal()|]] do
               faSprite_ "plus" "regular" "h-3.5 w-3.5"
               span_ [class_ "max-md:hidden"] "New chat"
           }
-  addRespHeaders $ PageCtx pageConfig $ conversationsPage_ $ filter (isNothing . (.routineInterval)) allConversations
+  addRespHeaders $ PageCtx pageConfig $ conversationsPage_ $ filter (isNothing . (.routineKind)) allConversations
   where
     conversationsPage_ :: [Issues.ConversationSummary] -> Html ()
     conversationsPage_ items = div_ [class_ "h-full overflow-y-auto bg-bgBase"] do
@@ -128,24 +134,25 @@ threadsGetH pid = do
 
 routinesGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 routinesGetH pid = do
+  canEdit <- canEditRoutines pid
   (_, _, bw) <- mkAIPageCtx pid
   (conversations, runs) <- concurrently (Issues.listConversations pid) (Issues.listRoutineRuns pid 12)
-  let installed = filter (isJust . (.routineInterval)) conversations
+  let installed = filter (isJust . (.routineKind)) conversations
       pageConfig =
         bw
           { pageTitle = "Routines"
           , menuItem = Just "AI"
           , conversations
-          , pageActions = Just $ button_ [type_ "button", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", [__|on click set #ai-composer-input.value to '' then set #ai-composer-routine.checked to true then call #ai-composer-modal.showModal()|]] do
+          , pageActions = Just $ button_ [type_ "button", Aria.label_ "New custom routine", class_ "btn btn-sm btn-primary gap-2 active:scale-[0.96] transition-transform", [__|on click set #ai-composer-input.value to '' then set #ai-composer-routine.checked to true then call #ai-composer-modal.showModal()|]] do
               faSprite_ "plus" "regular" "h-3.5 w-3.5"
               span_ [class_ "max-md:hidden"] "New custom routine"
           }
-  addRespHeaders $ PageCtx pageConfig $ routinesPage_ installed runs
+  addRespHeaders $ PageCtx pageConfig{pageActions = pageConfig.pageActions <* guard canEdit} $ routinesPage_ canEdit installed runs
   where
-    routinesPage_ :: [Issues.ConversationSummary] -> [Issues.RoutineRun] -> Html ()
-    routinesPage_ installedRoutines recentRuns = div_ [class_ "h-full overflow-y-auto bg-bgBase"] do
+    routinesPage_ :: Bool -> [Issues.ConversationSummary] -> [Issues.RoutineRun] -> Html ()
+    routinesPage_ canEdit installedRoutines recentRuns = div_ [class_ "h-full overflow-y-auto bg-bgBase"] do
       main_ [class_ "mx-auto max-w-6xl space-y-10 px-4 py-6 sm:px-6 sm:py-8"] do
-        p_ [class_ "max-w-2xl text-sm text-textWeak"] "Scheduled operational reviews for your project."
+        p_ [class_ "max-w-2xl text-sm text-textWeak"] "AI work triggered by a schedule or project event. Inspect each run and its artifacts."
         section_ [Aria.label_ "Installed routines"] do
           div_ [class_ "mb-3 flex items-baseline justify-between"] do
             h2_ [class_ "text-sm font-semibold text-textStrong"] "Installed"
@@ -157,29 +164,28 @@ routinesGetH pid = do
                 span_ [class_ $ "h-2 w-2 rounded-full " <> bool "bg-fillWeak" "bg-fillSuccess-strong" routine.routineActive, Aria.hidden_ "true"] mempty
                 a_ [href_ $ threadUrl pid routine.conversationId, class_ "min-w-0 grow rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2"] do
                   div_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml routine.title
-                  div_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml $ maybe "Custom schedule" Issues.routineCadence routine.routineInterval <> " · " <> bool "Paused" "Active" routine.routineActive
-                let (toggle, toggleLabel) = bool ("/resume", "Resume") ("/pause", "Pause") routine.routineActive
-                form_ [hxPost_ $ routineUrl routine <> toggle, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ toHtml @Text toggleLabel
-                when (isJust routine.routineRunningSince) $ form_ [hxPost_ $ routineUrl routine <> "/cancel", hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost text-textWarning active:scale-[0.96] transition-transform", type_ "submit"] "Cancel run"
-                form_ [hxPost_ $ routineUrl routine <> "/destination", hxSwap_ "none"] do
-                  let slackEnabled = routine.routineDestination == Just Issues.DestinationSlack
-                  input_ [type_ "hidden", name_ "destination", value_ $ bool "slack" "conversation" slackEnabled]
-                  button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ bool "Send results to Slack" "Stop Slack delivery" slackEnabled
-                button_ [class_ "btn btn-xs btn-ghost text-textError active:scale-[0.96] transition-transform", hxDelete_ $ routineUrl routine, hxConfirm_ "Delete this schedule? Its conversation and past results will be kept.", hxSwap_ "none"] "Delete"
+                  div_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml $ maybe "Routine" Issues.routineKindLabel routine.routineKind <> " · " <> bool "Paused" "Active" routine.routineActive
+                when canEdit do
+                  let (toggle, toggleLabel) = bool ("/resume", "Resume") ("/pause", "Pause") routine.routineActive
+                  form_ [hxPost_ $ routineUrl routine <> toggle, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ toHtml @Text toggleLabel
+                  when (isJust routine.routineRunningSince) $ form_ [hxPost_ $ routineUrl routine <> "/cancel", hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost text-textWarning active:scale-[0.96] transition-transform", type_ "submit"] "Stop active runs"
+                  when (isJust routine.routineInterval) $ form_ [hxPost_ $ routineUrl routine <> "/destination", hxSwap_ "none"] do
+                    let slackEnabled = routine.routineDestination == Just Issues.DestinationSlack
+                    input_ [type_ "hidden", name_ "destination", value_ $ bool "slack" "conversation" slackEnabled]
+                    button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ bool "Send results to Slack" "Stop Slack delivery" slackEnabled
+                  button_ [class_ "btn btn-xs btn-ghost text-textError active:scale-[0.96] transition-transform", hxDelete_ $ routineUrl routine, hxConfirm_ "Delete this routine? Its conversation and past results will be kept.", hxSwap_ "none"] "Delete"
         unless (null recentRuns) $ section_ [Aria.label_ "Recent routine runs"] do
           h2_ [class_ "mb-3 text-sm font-semibold text-textStrong"] "Recent runs"
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak bg-bgRaised"] $ for_ recentRuns \run ->
             div_ [class_ "grid gap-1 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center sm:gap-4"] do
               div_ [class_ "min-w-0"] do
-                case run.title of
-                  Just title -> a_ [href_ $ threadUrl pid run.conversationId, class_ "truncate text-sm font-medium text-textBrand hover:underline"] $ toHtml title
-                  Nothing -> span_ [class_ "text-sm font-medium text-textWeak"] "Deleted routine"
-                whenJust run.error $ p_ [class_ "mt-0.5 truncate text-xs text-textError"] . toHtml
+                a_ [href_ $ runUrl pid run.id, class_ "break-words text-sm font-medium text-textBrand hover:underline"] $ toHtml $ fromMaybe "Deleted routine" run.title
+                whenJust run.error $ p_ [class_ $ "mt-0.5 truncate text-xs " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; _ -> "text-textWeak")] . toHtml
               uncurry tonePill_ $ runStatus run.status
-              time_ [datetime_ $ show run.scheduledAt, class_ "text-xs tabular-nums text-textWeak sm:text-right"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.scheduledAt
+              time_ [datetime_ $ show run.startedAt, class_ "text-xs tabular-nums text-textWeak sm:text-right"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
         section_ [Aria.label_ "Routine catalog"] do
           h2_ [class_ "text-sm font-semibold text-textStrong"] "Built-in routines"
-          p_ [class_ "mt-1 text-sm text-textWeak"] "Read-only by default. Times are in the project’s time zone. Results stay in Monoscope; AI usage is tracked and billed at your project rate."
+          p_ [class_ "mt-1 text-sm text-textWeak"] "Times use the project’s time zone. Runs and artifacts are saved here; Slack and PR reviews also post replies. AI usage is billed at your project rate."
           let categories = [minBound .. maxBound]
           nav_ [Aria.label_ "Routine categories", class_ "mt-4 flex gap-2 overflow-x-auto pb-1"] $ for_ categories \category ->
             a_ [href_ $ "#" <> categoryId category, class_ "shrink-0 rounded-md border border-strokeWeak bg-bgRaised px-3 py-1.5 text-xs font-medium text-textWeak hover:bg-fillHover hover:text-textStrong"] $ toHtml $ Issues.routineCategoryLabel category
@@ -191,14 +197,14 @@ routinesGetH pid = do
         categoryId = ("routine-category-" <>) . T.toLower . T.replace " " "-" . Issues.routineCategoryLabel
         templateCard_ template = do
           let added = template.key `elem` mapMaybe (.templateKey) installedRoutines
-          article_ [class_ "flex flex-col rounded-xl border border-strokeWeak bg-bgRaised p-5 transition-[border-color,box-shadow] duration-150 hover:border-strokeStrong hover:shadow-md"] do
+          article_ [id_ $ "routine-" <> template.key, class_ "scroll-mt-16 flex flex-col rounded-xl border border-strokeWeak bg-bgRaised p-5 transition-[border-color,box-shadow] duration-150 hover:border-strokeStrong hover:shadow-md"] do
             div_ [class_ "flex min-h-8 items-center justify-between gap-3"] do
               span_ [class_ "whitespace-nowrap rounded-md bg-fillWeak px-2 py-0.5 font-mono text-xs text-textStrong"] $ toHtml $ Issues.routineScheduleLabel template.schedule
               if added
                 then span_ [class_ "inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-textSuccess"] $ faSprite_ "check" "solid" "h-3 w-3" >> "Added"
-                else form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/routines/install", hxSwap_ "none", class_ "shrink-0"] do
+                else when canEdit $ form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/routines/install", hxSwap_ "none", class_ "shrink-0"] do
                   input_ [type_ "hidden", name_ "templateKey", value_ template.key]
-                  button_ [type_ "submit", class_ "btn btn-sm gap-1.5 hover:border-strokeBrand-strong hover:text-textBrand active:scale-[0.96] transition-[color,border-color,scale]"] $ faSprite_ "plus" "regular" "h-3 w-3" >> "Add routine"
+                  button_ [type_ "submit", Aria.label_ $ "Add " <> template.title, class_ "btn btn-sm gap-1.5 hover:border-strokeBrand-strong hover:text-textBrand active:scale-[0.96] transition-[color,border-color,scale]"] $ faSprite_ "plus" "regular" "h-3 w-3" >> "Add routine"
             div_ [class_ "mt-4 flex items-center gap-2"] do
               let (tone, icon) = categoryBadge template.category
               iconBadge_ IconXs tone icon
@@ -227,17 +233,11 @@ routinesGetH pid = do
           Issues.CategoryIncidents -> (ErrorBadge, "triangle-exclamation")
           Issues.CategoryCost -> (WarningBadge, "chart-line")
           Issues.CategorySecurity -> (ErrorBadge, "lock")
-        runStatus = \case
-          Issues.RunRunning -> (BrandBadge, "Running")
-          Issues.RunSucceeded -> (SuccessBadge, "Succeeded")
-          Issues.RunNoFindings -> (NeutralBadge, "No findings")
-          Issues.RunFailed -> (ErrorBadge, "Failed")
-          Issues.RunTimedOut -> (WarningBadge, "Timed out")
-          Issues.RunCancelled -> (NeutralBadge, "Cancelled")
 
 
 threadGetH :: Projects.ProjectId -> UUIDId "conversation" -> Maybe Issues.ArtifactKey -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 threadGetH pid convId docM hxTarget = do
+  canEdit <- canEditRoutines pid
   (_, _, bw) <- mkAIPageCtx pid
   -- The open document's refresh keeps only #ai-document (htmx 4 sends `tag#id`), so skip what it discards.
   let unlessRefresh :: Applicative f => f [a] -> f [a]
@@ -247,6 +247,8 @@ threadGetH pid convId docM hxTarget = do
       (unlessRefresh $ Issues.listConversations pid)
       $ concurrently (Issues.getConversation pid convId)
       $ concurrently (unlessRefresh $ Issues.selectChatHistory pid convId) (Issues.listArtifacts pid convId docM)
+  instructions <- Issues.getRoutineInstructions pid convId
+  runs <- Issues.listConversationRuns pid convId 20
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
       docs = bool [] artifacts (isJust conversationM)
@@ -263,9 +265,9 @@ threadGetH pid convId docM hxTarget = do
                 Just issueId -> Just $ a_ ([href_ $ "/p/" <> pid.toText <> "/issues/" <> issueId.toText, class_ "btn btn-sm btn-ghost gap-2 active:scale-[0.96] transition-transform", Aria.label_ "View issue"] <> navTabAttrs) do
                   faSprite_ "bug" "regular" "h-3.5 w-3.5"
                   span_ [class_ "max-md:hidden"] "View issue"
-                Nothing -> scheduleControl_ conversation.conversationId routineM <$ guard (conversation.conversationType == Issues.CTWeb)
+                Nothing -> scheduleControl_ conversation.conversationId routineM <$ guard (canEdit && conversation.conversationType == Issues.CTWeb && (isNothing conversation.routineKind || isJust conversation.routineInterval))
           }
-  addRespHeaders $ PageCtx pageConfig $ threadPage_ pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
+  addRespHeaders $ PageCtx pageConfig $ threadPage_ canEdit instructions runs conversationM pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
   where
     scheduleControl_ :: UUIDId "conversation" -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
     scheduleControl_ conversationId routineState = details_ [class_ "relative group/routine"] do
@@ -281,8 +283,8 @@ threadGetH pid convId docM hxTarget = do
           button_ [type_ "submit", class_ "btn btn-sm btn-primary w-full active:scale-[0.96] transition-transform"] "Save routine"
         when (any ((.routineActive) . fst) routineState) $ form_ [class_ "mt-3 border-t border-strokeWeak pt-2", hxPost_ $ threadUrl pid conversationId <> "/routine/pause", hxSwap_ "none"] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost w-full active:scale-[0.96] transition-transform"] "Pause routine"
 
-    threadPage_ :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Bool -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
-    threadPage_ projectId activeConversationIdM routineM allowActionUi messages docs openDoc = div_ [class_ "h-full flex bg-bgBase"] do
+    threadPage_ :: Bool -> Maybe Text -> [Issues.RoutineRun] -> Maybe Issues.ConversationSummary -> Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Bool -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
+    threadPage_ canEdit instructions runs conversationM projectId activeConversationIdM routineM allowActionUi messages docs openDoc = div_ [class_ "h-full flex bg-bgBase"] do
       div_ [class_ "min-w-0 grow flex flex-col"] do
         div_ [id_ "ai-thread-messages", class_ "min-h-0 grow overflow-y-auto"] do
           div_ [class_ "max-w-3xl mx-auto px-5 py-8"] do
@@ -295,6 +297,24 @@ threadGetH pid convId docM hxTarget = do
               Just doc -> documentView_ doc
               Nothing -> do
                 for_ routineM routineOverview_
+                when (any (isJust . (.routineKind)) conversationM) $ section_ [class_ "mb-6 space-y-4", Aria.label_ "Routine configuration"] do
+                  when (isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] $ toHtml $ foldMap (\c -> maybe "" Issues.routineKindLabel c.routineKind <> " · " <> bool "Paused" "Active" c.routineActive) conversationM
+                  details_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
+                    summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Routine instructions"
+                    p_ [class_ "my-3 text-sm text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
+                    if canEdit
+                      then do
+                        form_ [hxPost_ $ threadHref <> "/routine/instructions", hxSwap_ "none", class_ "space-y-3"] do
+                          label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
+                          textarea_ [id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-sm"] $ toHtml $ fromMaybe "" instructions
+                          button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
+                      else p_ [class_ "whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "" instructions
+                  when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
+                unless (null runs) $ section_ [class_ "mb-6 space-y-2", Aria.label_ "Routine runs"] do
+                  h2_ [class_ "text-sm font-semibold text-textStrong"] "Runs"
+                  for_ runs \run -> a_ [href_ $ runUrl projectId run.id, class_ "flex flex-wrap items-center justify-between gap-2 rounded-lg border border-strokeWeak px-3 py-2 hover:bg-fillHover"] do
+                    time_ [datetime_ $ show run.startedAt, class_ "text-sm text-textStrong"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
+                    uncurry tonePill_ $ runStatus run.status
                 if hasVisibleHistory messages
                   then do
                     when (isJust routineM) $ h2_ [class_ "mb-2 mt-6 text-xs font-medium uppercase tracking-wide text-textWeak"] "Recent results"
@@ -398,7 +418,7 @@ threadGetH pid convId docM hxTarget = do
 routineInstallPostH :: Projects.ProjectId -> RoutineTemplateForm -> ATAuthCtx (RespHeaders (Html ()))
 routineInstallPostH pid form = do
   (_, project, _) <- mkAIPageCtx pid
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   case find ((== form.templateKey) . (.key)) Issues.routineTemplates of
     Nothing -> reject "Unknown routine template."
     Just template -> do
@@ -417,9 +437,13 @@ routineInstallPostH pid form = do
 startThreadPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
 startThreadPostHWithTools projectTools pid form = do
   authorizeProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   case normalizeNewThread form of
     Left err -> reject err
     Right request -> do
+      case request of
+        NewChat _ -> pass
+        NewRoutine{} -> void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
       convId <- UUIDId <$> UUID.genUUID
       void $ Issues.getOrCreateConversation pid convId Issues.CTWeb (AE.object [])
       case request of
@@ -513,7 +537,7 @@ enqueue write = do
 
 routinePostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineForm -> ATAuthCtx (RespHeaders (Html ()))
 routinePostH pid convId form = do
-  authorizeProject pid
+  void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
   whenJustM (Issues.getConversation pid convId) \conversation ->
     when (conversation.conversationType == Issues.CTWeb) $ enqueue (Issues.upsertRoutine sess.user.id pid convId form.intervalMinutes)
@@ -521,22 +545,103 @@ routinePostH pid convId form = do
 
 
 routinePausePostH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Html ()))
-routinePausePostH pid convId = authorizeProject pid >> Issues.pauseRoutine pid convId >> redirectToThread pid convId
+routinePausePostH pid convId = void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> redirectToThread pid convId
 
 
 routineCancelPostH, routineResumePostH, routineDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Html ()))
-routineCancelPostH pid convId = authorizeProject pid >> Issues.cancelRoutineRun pid convId >> redirect pid "/routines"
+routineCancelPostH pid convId = void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.cancelRoutineRun pid convId >> redirect pid "/routines"
 routineResumePostH pid convId = do
-  authorizeProject pid
+  void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
   enqueue (Issues.resumeRoutine sess.user.id pid convId)
   redirect pid "/routines"
-routineDeleteH pid convId = authorizeProject pid >> Issues.deleteRoutine pid convId >> redirect pid "/routines"
+routineDeleteH pid convId = void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.deleteRoutine pid convId >> redirect pid "/routines"
 
 
 routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (RespHeaders (Html ()))
 routineDestinationPostH pid convId form = do
-  authorizeProject pid
+  void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
   Issues.setRoutineDestination sess.user.id pid convId form.destination
   redirect pid "/routines"
+
+
+runStatus :: Issues.RoutineRunStatus -> (BadgeColor, Text)
+runStatus = \case
+  Issues.RunRunning -> (BrandBadge, "Running")
+  Issues.RunSucceeded -> (SuccessBadge, "Succeeded")
+  Issues.RunNoFindings -> (NeutralBadge, "No findings")
+  Issues.RunFailed -> (ErrorBadge, "Failed")
+  Issues.RunTimedOut -> (WarningBadge, "Timed out")
+  Issues.RunCancelled -> (NeutralBadge, "Cancelled")
+
+
+routineRunGetH :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+routineRunGetH pid runId = do
+  (_, _, bw) <- mkAIPageCtx pid
+  run <- Issues.getRoutineRun pid runId >>= maybe (throwError Servant.err404) pure
+  evidence <- Issues.getRoutineRunEvidence pid runId >>= maybe (throwError Servant.err404) pure
+  requestedBy <- maybe (pure Nothing) Projects.userById evidence.requestedBy
+  artifacts <- Issues.listRunArtifacts pid runId
+  conversations <- Issues.listConversations pid
+  addRespHeaders
+    $ PageCtx bw{pageTitle = "Routine run", menuItem = Just "AI", conversations}
+    $ main_
+      ( [id_ "routine-run", class_ "h-full overflow-y-auto bg-bgBase px-4 py-6 sm:px-6"]
+          <> concat [[hxGet_ $ runUrl pid run.id, hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxSwap_ "outerMorph"] | run.status == Issues.RunRunning]
+      )
+    $ div_ [class_ "mx-auto max-w-3xl space-y-6"] do
+      a_ [href_ $ "/p/" <> pid.toText <> "/ai/routines", class_ "text-sm text-textBrand hover:underline"] "All routines"
+      header_ [class_ "space-y-2"] do
+        h1_ [class_ "text-xl font-semibold text-textStrong break-words"] $ toHtml $ fromMaybe "Routine run" run.title
+        div_ [class_ "flex flex-wrap items-center gap-3 text-sm text-textWeak"] do
+          span_ [role_ "status"] $ uncurry tonePill_ $ runStatus run.status
+          span_ $ toHtml $ case run.source of
+            Issues.ScheduledRun -> "Scheduled"
+            Issues.TriggeredRun (Issues.SlackMessage _) -> "Slack request"
+            Issues.TriggeredRun (Issues.SlackCommand _) -> "Slack command"
+            Issues.TriggeredRun (Issues.PullRequestReview _) -> "Pull request"
+            Issues.TriggeredRun (Issues.IssueEnrichment _) -> "New issue"
+          span_ $ toHtml $ "Attempt " <> show @Text run.attempt
+          whenJust requestedBy $ \user -> span_ $ toHtml $ "Requested by " <> user.firstName <> " " <> user.lastName
+          time_ [datetime_ $ show run.startedAt] $ toHtml $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" run.startedAt
+      whenJust run.error $ p_ [class_ $ "rounded-lg border border-strokeWeak p-4 text-sm break-words " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; _ -> "text-textWeak"), role_ "status"] . toHtml
+      whenJust evidence.input $ \input -> section_ [Aria.label_ "Run request"] do
+        h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Request"
+        p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml input
+      details_ [class_ "rounded-lg border border-strokeWeak p-4", term "hx-morph-skip" ""] do
+        summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Instructions used for this run"
+        p_ [class_ "mt-3 whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "This run predates instruction snapshots." evidence.instructions
+        whenJust evidence.templateVersion $ \version -> p_ [class_ "mt-2 text-xs text-textWeak"] $ toHtml $ "Template version " <> show @Text version
+      section_ [Aria.label_ "Run artifacts", class_ "space-y-4"] do
+        h2_ [class_ "text-sm font-semibold text-textStrong"] "Artifacts"
+        if null artifacts
+          then p_ [class_ "text-sm text-textWeak"] $ if run.status == Issues.RunRunning then "Artifacts will appear when this run finishes." else "This run did not produce an artifact."
+          else for_ artifacts \artifact -> article_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4 sm:p-6"] do
+            h3_ [class_ "font-medium text-textStrong break-words"] $ toHtml artifact.title
+            div_ [class_ "prose prose-sm mt-4 max-w-none break-words overflow-x-auto"] $ fst $ renderMarkdownToc $ fromMaybe "" artifact.content
+      for_ ([("Findings", evidence.findings), ("Tool results", evidence.actions)] :: [(Text, Maybe AE.Value)]) \(title, value) -> whenJust value \body ->
+        details_ [class_ "rounded-lg border border-strokeWeak p-4"] do
+          summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ toHtml @Text title
+          pre_ [class_ "mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs text-textWeak"] $ toHtml @Text $ decodeUtf8 $ AE.encode body
+      if any ((== run.conversationId) . (.conversationId)) conversations
+        then a_ [href_ $ threadUrl pid run.conversationId, class_ "btn btn-sm btn-primary"] "Open conversation and follow up"
+        else p_ [class_ "text-sm text-textWeak"] "This conversation was deleted. Its run and artifacts are retained here."
+
+
+runUrl :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Text
+runUrl pid runId = "/p/" <> pid.toText <> "/ai/runs/" <> runId.toText
+
+
+routineInstructionsPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineInstructionsForm -> ATAuthCtx (RespHeaders (Html ()))
+routineInstructionsPostH pid convId form = do
+  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  case normalizeQuery form.instructions of
+    Left err -> reject err
+    Right instructions -> Issues.setRoutineInstructions pid convId instructions >> redirectToThread pid convId
+
+
+canEditRoutines :: Projects.ProjectId -> ATAuthCtx Bool
+canEditRoutines pid = do
+  (sess, _) <- Projects.sessionAndProject pid
+  maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid sess.user.id

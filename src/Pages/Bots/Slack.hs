@@ -4,10 +4,10 @@
 module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, processSlackEventWithTools, refreshSlackProgress, resetSlackSession, reconcileIncidentDeliveries, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, slackInteractionsHWithTools, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
 
 import BackgroundJobs.Types qualified as BgJobs
-import Control.Lens ((.~), (^.), (^?))
+import Control.Lens ((%~), (.~), (^.), (^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
-import Data.Aeson.Lens (key, _Bool, _String)
+import Data.Aeson.Lens (key, values, _Array, _Bool, _String)
 import Data.Aeson.Types qualified as AE
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
@@ -57,13 +57,13 @@ import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (renderSimpleQuery, statusIsSuccessful)
+import Network.HTTP.Types (Status, renderSimpleQuery, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, pageTitle, sessM)
 import Pages.Bots.SlackProgress qualified as Progress
-import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, installedResponse, runBotQueryWithTools, slackResponse, withBotThread)
+import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, installedResponse, runBotQueryWithTools, slackResponse, withBotThread)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
@@ -79,9 +79,8 @@ import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO (timeout, withRunInIO)
-import UnliftIO.Exception (Handler (..), bracket_, catch, catches, finally, throwIO, tryAny)
+import UnliftIO.Exception (Handler (..), bracket, catch, catches, finally, throwIO, tryAny)
 import Utils (encodeText)
-import UnliftIO.Exception (bracket, catch, finally, throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
 
@@ -260,10 +259,61 @@ slackInteractionsHWithTools projectTools interaction = do
           AI.requireAgentAccess access principal.projectId
           triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView (SlackDashboardContext principal.projectId interaction.user_id interaction.channel_id Nothing) (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
           traceResp $ textResp "modal opened"
-        _ -> do
-          forkBackground authCtx.backgroundScope ("Slack slash command (team " <> interaction.team_id <> ")")
-            $ runBotQueryWithTools projectTools Slack (sendSlackFollowupResponse interaction.response_url . botReplyPayload) authCtx.env access principal.projectId interaction.text (pure Nothing)
-          traceResp $ textResp $ getLoadingMessage (detectReportIntent interaction.text)
+        _ ->
+          Issues.getEventRoutine principal.projectId Issues.EventSlackMessage >>= \case
+            Nothing -> traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("Ask a project editor to activate or resume Slack investigation in AI routines: " <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/routines")]
+            Just routine -> do
+              AI.requireAgentAccess access principal.projectId
+              let convId = Issues.slackCommandConversationId principal.projectId interaction.team_id interaction.channel_id interaction.trigger_id
+              void $ Issues.getOrCreateConversation principal.projectId convId Issues.CTSlackThread (AE.object ["team_id" AE..= interaction.team_id, "channel_id" AE..= interaction.channel_id])
+              run <- Issues.startEventRun routine (Issues.SlackCommand convId) Issues.StartRun convId principal.userId interaction.text
+              for_ run \execution -> forkBackground authCtx.backgroundScope ("Slack command routine " <> execution.id.toText) do
+                let requireRun = do
+                      AI.requireAgentAccess access principal.projectId
+                      unlessM (Issues.eventRunActive principal.projectId execution.id) $ throwIO AI.AgentStopped
+                    finish status findings = Issues.finishRoutineRun execution.id execution.startedAt status findings Nothing
+                    runLink = "<" <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/runs/" <> execution.id.toText <> "|View run and artifacts>"
+                ( do
+                    replies <- newIORef []
+                    result <- tryAny do
+                      requireRun
+                      outcome <-
+                        runBotQueryWithTools
+                          projectTools
+                          (AI.RoutineEventRun execution.id)
+                          Slack
+                          ( \reply -> do
+                              requireRun
+                              let payload = botReplyPayload reply
+                                  linked = case payload ^? key "blocks" . _Array of
+                                    Just _ -> payload & key "blocks" . _Array %~ (<> V.singleton (slackSection runLink))
+                                    Nothing -> payload & key "text" . _String %~ (<> "\n\n" <> runLink)
+                              modifyIORef' replies (<> [payload])
+                              rendered <- readIORef replies
+                              let report = T.intercalate "\n\n" $ concatMap (\replyBody -> replyBody ^.. key "blocks" . values . key "text" . key "text" . _String) rendered
+                              Issues.saveRunResult principal.projectId execution.id "Slack command result" report
+                              sendSlackFollowupResponse interaction.response_url linked
+                          )
+                          authCtx.env
+                          access
+                          principal.projectId
+                          interaction.text
+                          (pure $ Just convId)
+                      requireRun
+                      pure outcome
+                    case result of
+                      Left err -> do
+                        active <- Issues.eventRunActive principal.projectId execution.id
+                        let message = case fromException @SlackFollowupRejected err of
+                              Just _ -> "Slack did not accept the reply. The result is retained in this run."
+                              Nothing -> "Slack command was interrupted before completion"
+                        finish (if active then Issues.CompletedFailed else Issues.CompletedCancelled) Nothing (Just message)
+                        throwIO err
+                      Right (Left err) -> finish Issues.CompletedFailed Nothing (Just err)
+                      Right (Right ()) -> finish Issues.CompletedSucceeded Nothing Nothing
+                  )
+                  `finally` finish Issues.CompletedFailed Nothing (Just "Slack command worker stopped before recording its result")
+              traceResp $ textResp $ getLoadingMessage (detectReportIntent interaction.text)
   where
     traceResp resp = resp <$ Log.logTrace ("Slack interaction response" :: Text) resp
 
@@ -422,17 +472,16 @@ textResp t = AE.object ["text" AE..= t, "replace_original" AE..= True, "delete_o
 -- | Slack's response_url is ephemeral (30 min / 5 uses). A 4xx means the URL
 -- expired or the channel/user is gone; surface it so failed slash-command
 -- follow-ups don't vanish silently.
+newtype SlackFollowupRejected = SlackFollowupRejected Status
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
 sendSlackFollowupResponse :: Text -> AE.Value -> ATBaseCtx ()
 sendSlackFollowupResponse responseUrl content = do
   Log.logTrace ("Slack followup response" :: Text) content
   rs <- postWith (defaults & contentTypeHeader "application/json") (toString responseUrl) content
-  unless (statusIsSuccessful (rs ^. Wreq.responseStatus))
-    $ Log.logAttention "Slack followup POST non-2xx"
-    $ AE.object
-      [ "response_url_prefix" AE..= T.take 60 responseUrl
-      , "status" AE..= show @Text (rs ^. Wreq.responseStatus)
-      , "body" AE..= T.take 200 (decodeUtf8 @Text (toStrict (rs ^. Wreq.responseBody)))
-      ]
+  unless (statusIsSuccessful (rs ^. Wreq.responseStatus)) $ throwIO $ SlackFollowupRejected $ rs ^. Wreq.responseStatus
 
 
 -- | views.open / views.update returns ok:false on expired trigger_id, bad
@@ -822,7 +871,16 @@ processSlackEventWithTools projectTools receiptId =
               unless bound $ throwError err403{errBody = "Slack investigation thread belongs to another project"}
               unlessM (Investigations.isAcceptedFollowup principal.projectId workspaceId event.channel threadTs event.ts) $ void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
                 if Integrations.slackAgentScopesGranted slackData
-                  then processThreadedEvent principal envCfg slackData event workspaceId threadTs
+                  then
+                    Issues.getEventRoutine principal.projectId Issues.EventSlackMessage >>= \case
+                      Just routine -> processThreadedEvent routine principal envCfg slackData event workspaceId threadTs
+                      Nothing ->
+                        slackApiOrThrow "Slack routine activation" slackData.botToken "chat.postEphemeral"
+                          $ AE.object
+                            [ "channel" AE..= event.channel
+                            , "user" AE..= event.user
+                            , "text" AE..= ("Ask a project editor to activate or resume Slack investigation in <" <> envCfg.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/routines|AI routines>. Notifications remain connected.")
+                            ]
                   else do
                     AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) principal.projectId
                     slackApiOrThrow "Slack reconnect notice" slackData.botToken "chat.postEphemeral"
@@ -833,78 +891,116 @@ processSlackEventWithTools projectTools receiptId =
                         ]
         else Log.logTrace "Slack message is outside an active investigation" (AE.object ["team_id" AE..= workspaceId, "channel_id" AE..= event.channel])
 
-    processThreadedEvent principal envCfg slackData event workspaceId threadTs = do
+    processThreadedEvent routine principal envCfg slackData event workspaceId threadTs = do
       unless (slackData.teamId == workspaceId) $ throwError err403
       -- An alert thread resolves to the issue it is about, so the Slack
       -- investigation and that issue's in-app chat are one conversation.
       convId <- Incidents.threadConversationId slackData.projectId workspaceId event.channel threadTs
-      let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts
-          addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
-          historyMessage message =
-            (if not (T.null envCfg.slackAppId) && message.app_id == Just envCfg.slackAppId then Issues.ChatAssistant else Issues.ChatUser, message.text)
-          resolveThread =
-            Just
-              <$> withBotThread
-                Slack
-                slackData.projectId
-                convId
-                Issues.CTSlackThread
-                (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
-                (if event.ts == threadTs then pure $ Just [] else fmap (map historyMessage . filter ((/= event.ts) . (.ts))) <$> getChannelMessages access slackData.projectId slackData.botToken event.channel threadTs event.ts)
-          deliverAnswer = do
-            let turn = Investigations.Turn slackData.projectId convId principal.userId event.ts
-            batch <-
-              Investigations.loadReplyBatch turn
-                >>= maybe
-                  ( do
-                      rendered <- newIORef []
-                      runBotQueryWithTools projectTools Slack (\reply -> modifyIORef' rendered (<> [botReplyPayload reply])) envCfg access slackData.projectId event.text resolveThread
-                      replies <- readIORef rendered >>= maybe (throwIO $ ErrorCall "Slack query produced no reply") pure . nonEmpty
-                      Investigations.saveReplyBatch turn replies
-                  )
-                  pure
-            for_ (zip [batch.deliveredCount ..] $ drop batch.deliveredCount $ toList batch.replies) $ \(part, reply) -> do
-              AI.requireAgentAccess access slackData.projectId
-              publication <- Investigations.claimReplyPart turn workspaceId event.channel threadTs part
-              case publication of
-                Nothing -> do
-                  reconcileReplyHistory envCfg.slackAppId access slackData turn part
-                  current <- Investigations.loadReplyBatch turn
-                  unless (maybe False ((> part) . (.deliveredCount)) current) $ throwIO SlackPublicationPending
-                Just reserved ->
-                  publishReservedMessage
-                    "monoscope_investigation_reply"
-                    slackData.botToken
-                    reserved
-                    (addThread reply)
-                    (Investigations.rejectReplyPublication reserved)
-                    (Investigations.confirmReplyPublication reserved)
-      ( do
-          AI.requireAgentAccess access slackData.projectId
-          let resetJob = BgJobs.ResetSlackSession slackData.projectId principal.userId receiptId
-          slackRetryTime 60 >>= scheduleSessionReset receiptId resetJob
-          bracket
-            ( do
-                status <- tryAny $ setSessionStatus slackData.botToken event.channel threadTs Processing
-                case status of
-                  Right () -> pure True
-                  Left err -> do
-                    Log.logAttention "Slack session status unavailable; continuing investigation" $ AE.object ["receipt_id" AE..= receiptId, "error" AE..= show @Text err]
-                    clearQueuedSlackJob resetJob
-                    pure False
-            )
-            ( \started -> when started $ whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active >> clearQueuedSlackJob resetJob) \_ ->
-                Log.logAttention "Slack session status cleanup remains queued" $ AE.object ["receipt_id" AE..= receiptId, "channel_id" AE..= event.channel, "thread_ts" AE..= threadTs]
-            )
-            ( \_ ->
-                race_
-                  (forever $ AI.requireAgentAccess access slackData.projectId >> Concurrent.threadDelay 500_000)
-                  (withInvestigationProgress slackData access deliverAnswer)
-            )
-        )
-        `catch` \AI.AgentStopped -> do
-          AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) slackData.projectId
-          sendSlackChatMessage slackData.botToken $ addThread $ AE.object ["text" AE..= ("Investigation stopped. Send another message to continue." :: Text)]
+      void
+        $ Issues.getOrCreateConversation
+          slackData.projectId
+          convId
+          Issues.CTSlackThread
+          (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= workspaceId])
+      whenJustM (Issues.startEventRun routine (Issues.SlackMessage receiptId) Issues.ContinueRun convId principal.userId event.text) \run ->
+        when (run.status == Issues.RunRunning) do
+          let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts
+              turn = Investigations.Turn slackData.projectId convId principal.userId event.ts
+              requireRunAccess = do
+                AI.requireAgentAccess access slackData.projectId
+                unlessM (Issues.eventRunActive slackData.projectId run.id) $ throwIO AI.AgentStopped
+              finish = Issues.finishRoutineRun run.id run.startedAt
+              addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
+              historyMessage message =
+                (if not (T.null envCfg.slackAppId) && message.app_id == Just envCfg.slackAppId then Issues.ChatAssistant else Issues.ChatUser, message.text)
+              resolveThread =
+                Just
+                  <$> withBotThread
+                    Slack
+                    slackData.projectId
+                    convId
+                    Issues.CTSlackThread
+                    (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
+                    (if event.ts == threadTs then pure $ Just [] else fmap (map historyMessage . filter ((/= event.ts) . (.ts))) <$> getChannelMessages access slackData.projectId slackData.botToken event.channel threadTs event.ts)
+              deliverAnswer = do
+                batch <-
+                  Investigations.loadReplyBatch turn
+                    >>= maybe
+                      ( do
+                          rendered <- newIORef []
+                          void $ runBotQueryWithTools projectTools (AI.RoutineEventRun run.id) Slack (\reply -> modifyIORef' rendered (<> [botReplyPayload reply])) envCfg access slackData.projectId event.text resolveThread
+                          replies <- readIORef rendered >>= maybe (throwIO $ ErrorCall "Slack query produced no reply") pure . nonEmpty
+                          let link = "<" <> envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/ai/" <> convId.toText <> "|View runs and artifacts>"
+                              linked reply = case reply ^? key "blocks" . _Array of
+                                Just _ -> reply & key "blocks" . _Array %~ (<> V.singleton (slackSection link))
+                                Nothing -> reply & key "text" . _String %~ (<> "\n\n" <> link)
+                          Investigations.saveReplyBatch turn (linked <$> replies)
+                      )
+                      pure
+                for_ (zip [batch.deliveredCount ..] $ drop batch.deliveredCount $ toList batch.replies) $ \(part, reply) -> do
+                  requireRunAccess
+                  publication <- Investigations.claimReplyPart turn workspaceId event.channel threadTs part
+                  case publication of
+                    Nothing -> do
+                      reconcileReplyHistory envCfg.slackAppId access slackData turn part
+                      current <- Investigations.loadReplyBatch turn
+                      unless (maybe False ((> part) . (.deliveredCount)) current) $ throwIO SlackPublicationPending
+                    Just reserved ->
+                      publishReservedMessage
+                        "monoscope_investigation_reply"
+                        slackData.botToken
+                        reserved
+                        (addThread reply)
+                        (Investigations.rejectReplyPublication reserved)
+                        (Investigations.confirmReplyPublication reserved)
+          outcome <-
+            tryAny
+              $ ( do
+                    requireRunAccess
+                    let resetJob = BgJobs.ResetSlackSession slackData.projectId principal.userId receiptId
+                    slackRetryTime 60 >>= scheduleSessionReset receiptId resetJob
+                    bracket
+                      ( do
+                          status <- tryAny $ setSessionStatus slackData.botToken event.channel threadTs Processing
+                          case status of
+                            Right () -> pure True
+                            Left err -> do
+                              Log.logAttention "Slack session status unavailable; continuing investigation" $ AE.object ["receipt_id" AE..= receiptId, "error" AE..= show @Text err]
+                              clearQueuedSlackJob resetJob
+                              pure False
+                      )
+                      ( \started -> when started $ whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active >> clearQueuedSlackJob resetJob) \_ ->
+                          Log.logAttention "Slack session status cleanup remains queued" $ AE.object ["receipt_id" AE..= receiptId, "channel_id" AE..= event.channel, "thread_ts" AE..= threadTs]
+                      )
+                      ( \_ ->
+                          race_
+                            (forever $ requireRunAccess >> Concurrent.threadDelay 500_000)
+                            (withInvestigationProgress slackData access deliverAnswer)
+                      )
+                    pure True
+                )
+              `catch` \AI.AgentStopped -> do
+                AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) slackData.projectId
+                sendSlackChatMessage slackData.botToken (addThread $ AE.object ["text" AE..= ("Investigation stopped. Send another message to continue." :: Text)]) $> False
+          case outcome of
+            Left err -> do
+              finish Issues.CompletedFailed Nothing Nothing (Just "Slack investigation interrupted; delivery will retry.")
+              throwIO err
+            Right False -> finish Issues.CompletedCancelled Nothing Nothing Nothing
+            Right True -> do
+              answer <- Investigations.loadAnswer turn
+              case answer of
+                Just result -> do
+                  let report = either (const result.response) (fromMaybe result.response . (.explanation)) $ AI.parseAgenticResponse result
+                  Issues.saveRunResult slackData.projectId run.id "Slack investigation" report
+                  finish Issues.CompletedSucceeded (Just $ AE.toJSON result) (Just $ AE.toJSON result.toolCalls) Nothing
+                Nothing -> case detectReportIntent event.text of
+                  GeneralQueryIntent -> finish Issues.CompletedFailed Nothing Nothing (Just "The agent did not produce an answer.")
+                  ReportIntent{} -> do
+                    batch <- Investigations.loadReplyBatch turn
+                    let report = T.intercalate "\n\n" [text | saved <- maybeToList batch, reply <- toList saved.replies, text <- reply ^.. key "blocks" . values . key "text" . key "text" . _String]
+                    Issues.saveRunResult slackData.projectId run.id "Slack report" report
+                    finish Issues.CompletedSucceeded Nothing Nothing Nothing
 
 
 withInvestigationLock :: Text -> Text -> Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
@@ -1008,11 +1104,13 @@ refreshSlackProgress :: UUIDId "slack_progress" -> ATBackgroundCtx ()
 refreshSlackProgress publicationId = do
   let retryAfter seconds = slackRetryTime seconds >>= scheduleProgressRefresh publicationId
   outcome <-
-    tryAny $ Investigations.loadProgressRefresh publicationId >>= traverse_ \(target, timestamp) ->
-      withInvestigationLock target.teamId target.channelId target.threadTs
-        $ RateLimit.withRateLimits target.teamId do
-          recovered <- maybe (reconcileProgressHistory target publicationId) (pure . Just) timestamp
-          maybe (retryAfter 60) (refreshObservedProgress target) recovered
+    tryAny
+      $ Investigations.loadProgressRefresh publicationId
+      >>= traverse_ \(target, timestamp) ->
+        withInvestigationLock target.teamId target.channelId target.threadTs
+          $ RateLimit.withRateLimits target.teamId do
+            recovered <- maybe (reconcileProgressHistory target publicationId) (pure . Just) timestamp
+            maybe (retryAfter 60) (refreshObservedProgress target) recovered
   for_ (leftToMaybe outcome) $ \err ->
     case fromException @RateLimit.SlackRateLimited err of
       Just (RateLimit.SlackRateLimited retryAt) -> scheduleProgressRefresh publicationId retryAt
@@ -1029,13 +1127,15 @@ refreshSlackProgress publicationId = do
 -- No match is never treated as proof that Slack rejected the original send.
 reconcileReplyHistory :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => Text -> AI.AgentAccess -> SlackData -> Investigations.Turn -> Int -> Eff es ()
 reconcileReplyHistory appId access slackData turn part =
-  unless (T.null appId) $ Investigations.loadReplySearch turn part >>= traverse_ \search -> do
-    AI.requireAgentAccess access turn.projectId
-    expected <- Incidents.threadConversationId turn.projectId search.teamId search.channelId search.threadTs
-    unless (search.teamId == slackData.teamId && turn.conversationId == expected) $ throwIO AI.AgentAccessDenied
-    outcome <- searchPublicationHistory appId slackData "monoscope_investigation_reply" search
-    AI.requireAgentAccess access turn.projectId
-    settlePublicationSearch (Investigations.confirmReplyPublication search.publicationId) (Investigations.saveReplySearchCursor search) outcome
+  unless (T.null appId)
+    $ Investigations.loadReplySearch turn part
+    >>= traverse_ \search -> do
+      AI.requireAgentAccess access turn.projectId
+      expected <- Incidents.threadConversationId turn.projectId search.teamId search.channelId search.threadTs
+      unless (search.teamId == slackData.teamId && turn.conversationId == expected) $ throwIO AI.AgentAccessDenied
+      outcome <- searchPublicationHistory appId slackData "monoscope_investigation_reply" search
+      AI.requireAgentAccess access turn.projectId
+      settlePublicationSearch (Investigations.confirmReplyPublication search.publicationId) (Investigations.saveReplySearchCursor search) outcome
 
 
 reconcileProgressHistory :: Investigations.ProgressTarget -> UUIDId "slack_progress" -> ATBackgroundCtx (Maybe Text)
@@ -1043,12 +1143,14 @@ reconcileProgressHistory target publicationId = do
   let access = AI.SlackAccess target.teamId target.slackUserId target.userId
   AI.requireAgentAccess access target.projectId
   appId <- (.slackAppId) <$> asks env
-  unless (T.null appId) $ Investigations.loadProgressSearch publicationId >>= traverse_ \search -> do
-    slackData <- getProjectSlackData target.projectId >>= maybe (throwIO AI.AgentAccessDenied) pure
-    unless (search.teamId == slackData.teamId && search.teamId == target.teamId && search.channelId == target.channelId && search.threadTs == target.threadTs && search.messageTs == target.messageTs) $ throwIO AI.AgentAccessDenied
-    outcome <- searchPublicationHistory appId slackData "monoscope_investigation_progress" search
-    AI.requireAgentAccess access target.projectId
-    settlePublicationSearch (Investigations.confirmProgress publicationId) (Investigations.saveProgressSearchCursor search) outcome
+  unless (T.null appId)
+    $ Investigations.loadProgressSearch publicationId
+    >>= traverse_ \search -> do
+      slackData <- getProjectSlackData target.projectId >>= maybe (throwIO AI.AgentAccessDenied) pure
+      unless (search.teamId == slackData.teamId && search.teamId == target.teamId && search.channelId == target.channelId && search.threadTs == target.threadTs && search.messageTs == target.messageTs) $ throwIO AI.AgentAccessDenied
+      outcome <- searchPublicationHistory appId slackData "monoscope_investigation_progress" search
+      AI.requireAgentAccess access target.projectId
+      settlePublicationSearch (Investigations.confirmProgress publicationId) (Investigations.saveProgressSearchCursor search) outcome
   ((.timestamp) =<<) <$> Investigations.loadProgress target
 
 

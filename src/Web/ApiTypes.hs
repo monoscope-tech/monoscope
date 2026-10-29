@@ -67,6 +67,8 @@ import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
@@ -79,7 +81,7 @@ import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types qualified as Charts
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (CamelSchema (..), JsonValueSchema (..), UUIDId, SnakeJSON (..), SnakeSchema (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (CamelSchema (..), JsonValueSchema (..), SnakeJSON (..), SnakeSchema (..), WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
 import Web.Wire (Paged (..))

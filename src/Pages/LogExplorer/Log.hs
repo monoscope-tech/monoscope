@@ -50,7 +50,6 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Exception (trySync)
@@ -76,14 +75,13 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPa
 import Pages.Components (FieldCfg (..), FieldSize (..), formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
-import Pkg.AI qualified as AI
 import Pkg.Components.Facets (FacetChoice (..), FacetContent (..), FacetNode (..), FacetOverflow (..), facetHeadCount, facetNode_, facetTail_)
 import Pkg.Components.Facets qualified as Facets
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), VizSurface (..), VizType (..), enrichSchemaWithFacets, logQueryBox_, visTypes)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (CamelSchema (..), SnakeSchema (..))
+import Pkg.DeriveUtils (CamelSchema (..))
 import Pkg.LiveTail (capRowValue)
 import Pkg.Parser (PageCursor (..), PageDirection (..), defaultQueryLimit, pSource, parseQueryToAST, toQText)
 import Pkg.Parser.Expr qualified as ParserExpr
@@ -104,7 +102,6 @@ import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 
 import Web.ApiTypes (LogResult (..), TraceTreeEntry (..))
-
 
 
 data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text, isQueryResult :: Bool, rowIdx :: Int}
