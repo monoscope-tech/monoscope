@@ -2164,7 +2164,7 @@ dashboardsGet_ dg = do
                       Nothing -> [class_ "group/row"]
                   , Table.search = if noBulkActions then Nothing else Just Table.ClientSide
                   , Table.tableHeaderActions = dg.tableActions
-                  , Table.header = if dg.embedded || null dg.filters.tag || inCopyMode then Nothing else Just $ activeFilters_ dg.projectId baseUrl dg.filters
+                  , Table.header = if dg.embedded || null dg.filters.tag || inCopyMode then Nothing else Just $ activeFilters_ dg.projectId ((.currentSort) <$> dg.tableActions) dg.filters
                   , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", action = Table.ESCustom $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn text-sm w-max mx-auto btn-primary"] "Create Dashboard"}
                   }
             }
@@ -2178,11 +2178,10 @@ dashboardsGet_ dg = do
       toHtml table
 
 
-activeFilters_ :: Projects.ProjectId -> Text -> DashboardFilters -> Html ()
-activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"] do
+activeFilters_ :: Projects.ProjectId -> Maybe Text -> DashboardFilters -> Html ()
+activeFilters_ pid sortM filters = div_ [class_ "flex items-center gap-2 mb-4"] do
   let basePath = "/p/" <> pid.toText <> "/dashboards"
-      -- Remove a specific tag from the URL
-      removeTag tag = T.replace ("&tag=" <> toUriStr tag) "" baseUrl
+      removeTag tag = basePath <> queryStringFrom (foldMap (\s -> [("sort", Just s)]) sortM <> [("tag", Just t) | t <- filters.tag, t /= tag])
   span_ [class_ "text-sm text-textWeak"] "Filtered by:"
   forM_ filters.tag \tag ->
     span_ [class_ "badge badge-sm badge-primary gap-1"] do

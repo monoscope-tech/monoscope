@@ -1,4 +1,4 @@
-module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackSection, slackHeader, slackContext, slackImage, slackActions) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackSection, slackHeader, slackContext, slackImage, dcGallery, slackActions) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -56,8 +56,8 @@ data NotificationAlerts
       , totalEvents :: Int
       , breakDown :: V.Vector (Text, Int, Int)
       , reportUrl :: Text
-      , allChartUrl :: Text
-      , errorChartUrl :: Text
+      , allChartUrl :: Maybe Text
+      , errorChartUrl :: Maybe Text
       }
   | MonitorsAlert
       { monitorTitle :: Text
@@ -180,8 +180,8 @@ sendWhatsAppAlert alert pid pTitle tos = do
       let template = appCtx.config.whatsappAllReportTemplate
           templateErr = appCtx.config.whatsappErrorReportTemplate
           urlVar = fromMaybe "" $ viaNonEmpty last $ T.splitOn "/p/" reportUrl
-          cUrl = fromMaybe "" $ viaNonEmpty last $ T.splitOn "?" allChartUrl
-          eUrl = fromMaybe "" $ viaNonEmpty last $ T.splitOn "?" errorChartUrl
+          cUrl = fromMaybe "" $ viaNonEmpty last . T.splitOn "?" =<< allChartUrl
+          eUrl = fromMaybe "" $ viaNonEmpty last . T.splitOn "?" =<< errorChartUrl
           contentVars =
             KEM.fromList
               [ "1" AE..= display reportType
@@ -211,18 +211,16 @@ sendWhatsAppAlert alert pid pTitle tos = do
             ]
 
 
-slackReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> Text -> AE.Value
+slackReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> AE.Value
 slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown project channelId url allUrl errUrl =
   slackAttachment
     channelId
     "#64748b"
-    [ slackSection ("<" <> url <> "|📊 *" <> T.toTitle (display reportType) <> " report* · " <> project <> ">")
-    , slackContext ["*From:* " <> startTime <> "  *To:* " <> endTime <> "  *Events:* " <> show totalEvents <> "  *Errors:* " <> show totalErrors]
-    , slackImage "Events" (Just $ "Events: " <> show totalEvents) allUrl
-    , slackImage "Errors" (Just $ "Errors: " <> show totalErrors) errUrl
-    , slackContext sumr
-    , slackActions [slackButton "Open report" (Just "primary") url]
-    ]
+    $ [ slackSection ("<" <> url <> "|📊 *" <> T.toTitle (display reportType) <> " report* · " <> project <> ">")
+      , slackContext ["*From:* " <> startTime <> "  *To:* " <> endTime <> "  *Events:* " <> show totalEvents <> "  *Errors:* " <> show totalErrors]
+      ]
+    <> catMaybes [slackImage "Events" (Just $ "Events: " <> show totalEvents) <$> allUrl, slackImage "Errors" (Just $ "Errors: " <> show totalErrors) <$> errUrl]
+    <> [slackContext sumr, slackActions [slackButton "Open report" (Just "primary") url]]
   where
     sumr = take 10 $ V.toList breakDown <&> \(name, errCount, evCount) -> "*" <> name <> ":* " <> show evCount <> " events · " <> show errCount <> " errors"
 
@@ -570,26 +568,21 @@ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName dir
     (icon, _, color, _, label, rows) = rateChangeSeverity isError direction currentRate baselineMean changePercent logLevel serviceName
 
 
-discordReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value
+discordReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Maybe Text -> Maybe Text -> AE.Value
 discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown project url allUrl errUrl =
   AE.object
     [ "flags" AE..= 32768
     , "components"
         AE..= arr
-          [ text ("## 📊 " <> T.toTitle (display reportType) <> " Report for " <> project)
-          , text ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)
-          , text ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 28 "  " <> " Total Errors: **" <> show totalErrors <> "**")
-          , AE.object
-              [ "type" AE..= 12
-              , "items"
-                  AE..= arr
-                    [ AE.object ["media" AE..= AE.object ["url" AE..= allUrl, "description" AE..= "Total events"]]
-                    , AE.object ["media" AE..= AE.object ["url" AE..= errUrl, "description" AE..= "Total errors"]]
-                    ]
-              ]
-          , text servicesStat
-          , AE.object ["type" AE..= 1, "components" AE..= arr [AE.object ["type" AE..= 2, "label" AE..= "Open report", "url" AE..= url, "style" AE..= 5]]]
-          ]
+          ( [ text ("## 📊 " <> T.toTitle (display reportType) <> " Report for " <> project)
+            , text ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)
+            , text ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 28 "  " <> " Total Errors: **" <> show totalErrors <> "**")
+            ]
+              <> dcGallery [(allUrl, "Total events"), (errUrl, "Total errors")]
+              <> [ text servicesStat
+                 , AE.object ["type" AE..= 1, "components" AE..= arr [AE.object ["type" AE..= 2, "label" AE..= "Open report", "url" AE..= url, "style" AE..= 5]]]
+                 ]
+          )
     ]
   where
     text t = AE.object ["type" AE..= 10, "content" AE..= (t :: Text)]
@@ -771,7 +764,7 @@ sampleAlertByIssueTypeText issueTypeText title = case issueTypeText of
 
 -- | The project title is supplied by the sender, not the alert, so this takes none.
 sampleReport :: NotificationAlerts
-sampleReport = ReportAlert Projects.RTWeekly "2025-01-01" "2025-01-02" 42 1250 (V.singleton ("api", 42, 1250)) "https://example.com" "https://example.com/chart.png" "https://example.com/errors.png"
+sampleReport = ReportAlert Projects.RTWeekly "2025-01-01" "2025-01-02" 42 1250 (V.singleton ("api", 42, 1250)) "https://example.com" (Just "https://example.com/chart.png") (Just "https://example.com/errors.png")
 
 
 -- | Per-alert presentation: Slack-flavored emoji shortcode, short label for titles,
@@ -831,6 +824,19 @@ slackImage alt titleM url =
   AE.object
     $ ["type" AE..= "image", "image_url" AE..= url, "alt_text" AE..= alt]
     <> maybeToList (titleM <&> \t -> "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= t])
+
+
+-- | Media gallery of the charts that rendered, one entry per (url, alt-text) pair. Discord
+-- rejects an empty gallery, so with no chart there is no component at all.
+--
+-- >>> dcGallery [(Nothing, "events"), (Nothing, "errors")]
+-- []
+-- >>> dcGallery [(Just "https://x/a.png", "events"), (Nothing, "errors")]
+-- [Object (fromList [("items",Array [Object (fromList [("description",String "events"),("media",Object (fromList [("url",String "https://x/a.png")]))])]),("type",Number 12.0)])]
+dcGallery :: [(Maybe Text, Text)] -> [AE.Value]
+dcGallery items = [AE.object ["type" AE..= (12 :: Int), "items" AE..= arr [AE.object ["media" AE..= AE.object ["url" AE..= u], "description" AE..= d] | (u, d) <- rendered]] | not (null rendered)]
+  where
+    rendered = [(u, d) | (Just u, d) <- items]
 
 
 slackActions :: [AE.Value] -> AE.Value

@@ -282,6 +282,19 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldContainAll` ["No dashboards yet", "for=\"newDashboardMdl\""]
       html `shouldSatisfy` (not . T.isInfixOf "href=\"newDashboardMdl\"")
 
+    -- Removing a tag filter deleted "&tag=<tag>" by substring replace, so dropping
+    -- "prod" also mangled "&tag=production" into "&uction" and lost that filter.
+    it "activeFilters_removeTag_keepsTagsSharingItsPrefix" \tr -> do
+      let dashId = UUIDId $ UUID.fromWords 0xda5 0x7a9 0x9 0x1
+      _ <- runTestBg frozenTime tr $ DashboardModel.insert (DashboardModel.mkDashboardVM dashId testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.title = "Tagged", DashboardModel.tags = ["prod", "production"]}
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters{Dashboards.tag = ["prod", "production"]}
+      let removeLink tag = T.takeWhile (/= '"') . T.drop 8 . snd . T.breakOn "hx-get=\"" . snd $ T.breakOn ("aria-label=\"Remove filter: " <> tag <> "\"") (renderT pg)
+          base = "/p/" <> testPid.toText <> "/dashboards?sort=-updated_at"
+      removeLink "prod" `shouldBe` base <> "&amp;tag=production"
+      removeLink "production" `shouldBe` base <> "&amp;tag=prod"
+      -- Later tests in this sequential spec count the project's dashboards.
+      void $ runTestBg frozenTime tr $ DashboardModel.deleteDashboardsByIds testPid [dashId]
+
     it "dashboardTemplatePicker_defersHiddenPreviewsUntilOpened" \tr -> do
       (_, initial) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
       let initialHtml = renderT initial

@@ -66,7 +66,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
 -- Shared URL/form state: search is applied before pagination in both views.
@@ -314,7 +314,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           (fromMaybe "all" sourceM)
           (fromMaybe "all" prefixM)
           (T.strip $ fromMaybe "" queryM)
-          [(k, v) | (k, Just v) <- [("from", fromM), ("to", toM), ("since", sinceOrDefault)]]
+          [(k, v) | (k, Just v) <- [("from", fromM), ("to", toM), ("since", sinceOrDefault)], not (T.null v)]
           groups
       cursor = max 0 $ fromMaybe 0 cursorM
   if dataPointsTab
@@ -359,11 +359,12 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
         else addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, filters.source, nextFetchUrl)
 
 
--- | With no time parameters at all 'parseTime' yields no window, which turns the datapoint
--- COUNT into an unbounded scan over every metric row the project has ever written. Fall
--- back to the time picker's own default so the control and the data agree.
+-- | With no time parameters at all — absent, or blank as a cleared picker submits them —
+-- 'parseTime' yields no window, which turns the datapoint COUNT into an unbounded scan over
+-- every metric row the project has ever written. Fall back to the time picker's own default
+-- so the control and the data agree.
 sinceWithDefault :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text
-sinceWithDefault fromM toM sinceM = if all isNothing [fromM, toM, sinceM] then Just TimePicker.defaultSince else sinceM
+sinceWithDefault fromM toM sinceM = if all (isNothing . nonEmptyT) [fromM, toM, sinceM] then Just TimePicker.defaultSince else sinceM
 
 
 dataPointCountsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
