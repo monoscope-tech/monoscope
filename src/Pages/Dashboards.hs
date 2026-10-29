@@ -375,8 +375,7 @@ dashboardViews_ pid did dash vm params extraAttrs =
 
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
 dashboardPage_ pid dashId dash dashVM allParams = do
-  let pidText = pid.toText
-      dashIdText = dashId.toText
+  let dashIdText = dashId.toText
       allTabs = fold dash.tabs
       activeTabSlug = join (lookup activeTabSlugKey allParams)
       activeTabInfo = activeTabSlug >>= findTabBySlug allTabs
@@ -384,28 +383,28 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       -- Slug used for content/widget-order, falling back to the first tab when unset
       renderTabSlug = dash.tabs *> (activeTabSlug <|> (slugify . (.name) <$> listToMaybe allTabs))
       renderTab = renderTabSlug >>= findTabBySlug allTabs <&> snd
-  actionPickerModal_ "pageTitleModalId" "Rename dashboard" [hxPatch_ ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/rename"), hxSwap_ "innerHTML", hxTarget_ "#pageTitleText"]
+  actionPickerModal_ "pageTitleModalId" "Rename dashboard" [hxPatch_ (dashboardUrl pid dashId <> "/rename"), hxSwap_ "innerHTML", hxTarget_ "#pageTitleText"]
     $ div_ [class_ "flex flex-col gap-3 p-3"] do
       actionPickerField_ "Dashboard title" "title" "Insert new title" (dashTitle dashVM.title)
       actionPickerField_ "Folder" "fileDir" "reports/" (folderFromPath dashVM.filePath)
 
   when (isJust dash.tabs)
-    $ actionPickerModal_ "tabRenameModalId" "Rename tab" [hxPatch_ ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> fromMaybe "" activeTabSlug <> "/rename"), hxSwap_ "none"]
+    $ actionPickerModal_ "tabRenameModalId" "Rename tab" [hxPatch_ (dashboardUrl pid dashId <> "/tab/" <> fromMaybe "" activeTabSlug <> "/rename"), hxSwap_ "none"]
     $ div_ [class_ "p-3"]
     $ actionPickerField_ "Tab name" "newName" "Enter tab name" (maybe "" ((.name) . snd) activeTabInfo)
 
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 max-md:py-0.5 gap-4 max-md:gap-2 items-center flex-wrap sticky top-0 z-10"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
-    whenJust dash.tabs \tabs -> dashboardTabStrip_ pidText dashIdText activeTabIdx tabs allParams []
+    whenJust dash.tabs \tabs -> dashboardTabStrip_ pid dashId activeTabIdx tabs allParams []
 
     -- Views + variables, pushed to the right (variables collapsible on mobile)
     unless (null $ fold dash.variables) $ dashboardViews_ pid dashId dash dashVM allParams []
     whenJust dash.variables \_ -> dashboardVariables_ pid dashId (Dashboards.variablesForTab dash renderTab) []
-  let widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
+  let widgetOrderUrl = dashboardUrl pid dashId <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
       constants = constantsJson allParams
 
   let visibleWidgetCount = maybe (length dash.widgets) (maybe 0 (length . (.widgets)) . (!!? activeTabIdx)) dash.tabs
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constants, data_ "dashboard-id" dashIdText, data_ "widget-count" (show visibleWidgetCount), data_ "settled-url" ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/settled")] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constants, data_ "dashboard-id" dashIdText, data_ "widget-count" (show visibleWidgetCount), data_ "settled-url" (dashboardUrl pid dashId <> "/settled")] do
     -- Only warn when a constant actually ran and returned zero rows (Just []).
     -- result == Nothing means the query was skipped (nothing references it) or
     -- failed (logged separately) — neither is a "no data" condition.
@@ -439,7 +438,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     -- checks the drawer toggle and fires its change handler (body overflow + focus trap),
     -- and htmx processes the swapped content itself.
     whenJust (join $ lookup "expand" allParams) \wid ->
-      div_ (hxTrigger_ "load" : drawerLoadAttrs_ ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets/" <> wid <> "/expand")) pass
+      div_ (hxTrigger_ "load" : drawerLoadAttrs_ (dashboardUrl pid dashId <> "/widgets/" <> wid <> "/expand")) pass
 
     script_
       [text|
@@ -1387,7 +1386,7 @@ widgetMonitorTitle :: Text -> Maybe Text -> Text
 widgetMonitorTitle dashboardTitle widgetTitle = fromMaybe "Widget" (mfilter (not . T.null) $ T.strip <$> widgetTitle) <> " · " <> dashboardTitle
 
 
-widgetMonitorStatus_ :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Monitors.QueryMonitor -> Html ()
+widgetMonitorStatus_ :: Projects.ProjectId -> Text -> Text -> Maybe Dashboards.DashboardId -> Maybe Monitors.QueryMonitor -> Html ()
 widgetMonitorStatus_ pid statusId widgetId dashboardIdM monitorM = div_ [id_ statusId, class_ "flex items-center justify-between gap-3 rounded-xl border border-strokeWeak bg-fillWeaker p-4"] do
   div_ [] do
     h4_ [class_ "font-medium text-textStrong"] $ case monitorM of
@@ -1398,7 +1397,7 @@ widgetMonitorStatus_ pid statusId widgetId dashboardIdM monitorM = div_ [id_ sta
     button_
       [ type_ "button"
       , class_ "btn btn-ghost btn-sm shrink-0"
-      , hxPost_ $ "/p/" <> pid.toText <> "/widgets/" <> widgetId <> "/alert/toggle_active" <> maybe "" ("?dashboard_id=" <>) dashboardIdM
+      , hxPost_ $ "/p/" <> pid.toText <> "/widgets/" <> widgetId <> "/alert/toggle_active" <> foldMap (("?dashboard_id=" <>) . (.toText)) dashboardIdM
       , hxTarget_ $ "#" <> statusId
       , hxSwap_ "outerHTML"
       ]
@@ -1701,7 +1700,7 @@ widgetViewerEditor_ pid paymentPlan dashId tabSlugM currentRange existingWidgetM
     div_ [id_ monitorSectionId, class_ $ "group/walert hidden scroll-mt-24 max-md:scroll-mt-72 flex-col gap-4 rounded-xl border border-strokeWeak bg-bgRaised p-4 [@media(max-height:48rem)]:p-3" <> if isNewWidget then " group-has-[.new-widget-monitor:checked]/wgtexp:flex" else " group-has-[.page-drawer-tab-monitors:checked]/wgtexp:flex"] do
       let hasAlert = isJust monitorM
           canMonitor = isNewWidget || maybe False (not . T.null . T.strip) widgetToUse.query
-      when (canMonitor && not isNewWidget) $ widgetMonitorStatus_ pid "widget-monitor-status" sourceWid (Just dashId.toText) monitorM
+      when (canMonitor && not isNewWidget) $ widgetMonitorStatus_ pid "widget-monitor-status" sourceWid (Just dashId) monitorM
       if not canMonitor
         then emptyState_ def{icon = Just "bell", size = ESCompact} "This widget can't be monitored" "Monitors evaluate a KQL query, and this widget is built from raw SQL."
         else do
@@ -1868,7 +1867,7 @@ widgetAlertToggleH pid widgetId dashboardIdM = do
   void $ Monitors.monitorToggleActiveById pid monitor.id
   updated <- Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId
   addSuccessToast (if isJust monitor.deactivatedAt then "Monitor resumed" else "Monitor paused") Nothing
-  addRespHeaders $ widgetMonitorStatus_ pid "widget-monitor-status" widgetId ((.toText) <$> dashboardIdM) updated
+  addRespHeaders $ widgetMonitorStatus_ pid "widget-monitor-status" widgetId dashboardIdM updated
 
 
 --------------------------------------------------------------------
@@ -2150,7 +2149,7 @@ dashboardsGet_ dg = do
                         ]
                           <> case sourceDashIdM of
                             -- The widget already exists server-side; copy it across.
-                            Just sourceDashId -> [hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText <> "/widgets/" <> widgetId <> "/duplicate?source_dashboard_id=" <> sourceDashId.toText]
+                            Just sourceDashId -> [hxPost_ $ dashboardUrl dg.projectId dash.id <> "/widgets/" <> widgetId <> "/duplicate?source_dashboard_id=" <> sourceDashId.toText]
                             -- It does not: the only definition of it is the JSON the page
                             -- is holding, so send that to the widget upsert instead. No
                             -- widget_id — that is what makes the upsert append a widget
@@ -2158,7 +2157,7 @@ dashboardsGet_ dg = do
                             -- chart is always called "visualization-widget", so passing it
                             -- would make every add overwrite the previous one.
                             Nothing ->
-                              [ term "hx-put" $ "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
+                              [ term "hx-put" $ dashboardUrl dg.projectId dash.id
                               , hxExt_ "json-enc"
                               , hxVals_ "js:{...JSON.parse(document.getElementById('dashboards-modal-widget-json').value || '{}')}"
                               ]
@@ -2889,7 +2888,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxTarget allP
       let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParamsWithConstants
       let page = PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM paramsWithTab
           fragment = do
-            dashboardTabStrip_ pid.toText dashId.toText activeTabIdx (fold dash''.tabs) paramsWithTab [hxSwapOob_ "outerMorph"]
+            dashboardTabStrip_ pid dashId activeTabIdx (fold dash''.tabs) paramsWithTab [hxSwapOob_ "outerMorph"]
             whenJust dash''.variables \_ -> dashboardVariables_ pid dashId (Dashboards.variablesForTab dash'' (snd <$> activeTabInfo)) [hxSwapOob_ "true"]
             unless (null $ fold dash''.variables) $ dashboardViews_ pid dashId dash'' dashVM paramsWithTab [hxSwapOob_ "true"]
             div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content", data_ "constants" $ constantsJson paramsWithTab]
@@ -2916,8 +2915,8 @@ dashboardScopedParams environment params = [("environment", environment)] <> fil
 -- | The tab strip is rendered both in the full page and as an OOB replacement in a
 -- partial navigation response.  Its URL is always the canonical document URL; htmx
 -- merely asks for the shared fragment contract and preserves browser history/preload.
-dashboardTabStrip_ :: Text -> Text -> Int -> [Dashboards.Tab] -> [(Text, Maybe Text)] -> [Attribute] -> Html ()
-dashboardTabStrip_ pidText dashIdText activeTabIdx tabs params extraAttrs =
+dashboardTabStrip_ :: Projects.ProjectId -> Dashboards.DashboardId -> Int -> [Dashboards.Tab] -> [(Text, Maybe Text)] -> [Attribute] -> Html ()
+dashboardTabStrip_ pid dashId activeTabIdx tabs params extraAttrs =
   div_
     ( [ role_ "tablist"
       , class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]"
@@ -2927,7 +2926,7 @@ dashboardTabStrip_ pidText dashIdText activeTabIdx tabs params extraAttrs =
         <> extraAttrs
     )
     $ forM_ (zip [0 ..] tabs) \(idx, tab) -> do
-      let tabUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name <> queryStr
+      let tabUrl = dashboardUrl pid dashId <> "/tab/" <> slugify tab.name <> queryStr
       a_
         ( [ role_ "tab"
           , href_ tabUrl

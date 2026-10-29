@@ -1609,7 +1609,7 @@ renderTableWithDataAndParams widget dataRows params = do
         -- max values per column, for percentage progress bars
         maxValues =
           M.fromList
-            [ (col.field, V.foldl' max 0 $ V.mapMaybe (\row -> row V.!? idx >>= readMaybe . toString) dataRows)
+            [ (col.field, V.foldl' max 0 $ V.mapMaybe (readMaybe . toString . getRowValue idx) dataRows)
             | (col, idx) <- zip columns [0 ..]
             , col.progress == Just ColumnPercent
             ]
