@@ -11,7 +11,6 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (Default (..), def)
 import Data.Effectful.Wreq qualified as W
-import Data.Generics.Product.Fields (field)
 import Data.Map.Strict qualified as M
 import Data.Maybe (fromJust)
 import Data.Pool (withResource)
@@ -227,13 +226,12 @@ createDash :: TestResources -> Text -> [Text] -> IO Dashboards.DashboardId
 createDash tr title tags = do
   now <- getCurrentTime
   dashId <- UUIDId <$> UUID.nextRandom
-  let dash = (Dashboards.mkDashboardVM dashId testPid now (Projects.UserId UUID.nil))
+  let dash = (Dashboards.mkDashboardVM dashId testPid now Projects.systemUserId)
         { Dashboards.schema = Just (def :: Dashboards.Dashboard){Dashboards.title = Just title, Dashboards.tags = Just tags}
         , Dashboards.tags = V.fromList tags
         , Dashboards.title = title
         }
-  _ <- runTestBg frozenTime tr $ Dashboards.insert dash
-  pure dashId
+  dashId <$ runTestBg frozenTime tr (Dashboards.insert dash)
 
 
 runSyncJobs :: TestResources -> IO ()
@@ -403,7 +401,7 @@ spec = sequential do
           Right s -> (s.title, s.tags) `shouldBe` (Just "Test", Just ["prod"])
 
       it "serializes dashboard to YAML" \_ -> do
-        let schema = (def :: Dashboards.Dashboard) & field @"title" .~ Just "My Dash" & field @"tags" .~ Just (["a", "b"] :: [Text])
+        let schema = (def :: Dashboards.Dashboard){Dashboards.title = Just "My Dash", Dashboards.tags = Just (["a", "b"] :: [Text])}
         case GitSync.yamlToDashboard (GitSync.dashboardToYaml schema) of
           Left e -> fail $ toString e
           Right s -> s.title `shouldBe` Just "My Dash"
@@ -414,12 +412,7 @@ spec = sequential do
           Left e -> fail $ toString e
           Right s -> s.title `shouldBe` Just "Minimal"
 
-    describe "File Naming" do
-      it "converts title to kebab-case" \_ -> do
-        GitSync.titleToFilePath "My Dashboard" `shouldBe` "my-dashboard.yaml"
-        GitSync.titleToFilePath "Performance Stats" `shouldBe` "performance-stats.yaml"
-        GitSync.titleToFilePath "Test 123" `shouldBe` "test-123.yaml"
-
+    -- titleToFilePath's kebab-casing is covered by its own doctests (src/Models/Projects/GitSync.hs).
     describe "Path Helpers" do
       it "getDashboardsPath without prefix" \_ -> do
         let sync = def{GitSync.pathPrefix = ""}

@@ -778,9 +778,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
       chartViz = any (\v -> v.surface == Chart && Just v.key == effectiveVizType) visTypes
       preloadUrl = guard (not chartViz && isNothing showTraceM) $> explorerUrl pid dataEndpoint def{query = queryM', cols = cols', since = sinceM, from = fromM, to = toM, source = sourceM, environment = sess.environment, serviceScope = sess.service}
 
-  let stampPng base = do
-        url <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid base sinceM fromM toM
-        pure $ if T.null url then base else base{Widget.pngUrl = Just url}
+  let stampPng = Widget.stampPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid sinceM fromM toM
   chartWidget <- stampPng logChartWidget
   latencyWidget <- stampPng logLatencyWidget
 

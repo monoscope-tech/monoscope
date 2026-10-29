@@ -297,11 +297,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
   (_, _, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let dataPointsTab = any (/= "charts") tabM
-      -- With no time parameters at all 'parseTime' yields no window, which the datapoints
-      -- tab then turned into an unbounded count over every metric row the project has ever
-      -- written. Fall back to the time picker's own default so the control and the data
-      -- agree, rather than defaulting further down where the picker would still read empty.
-      sinceOrDefault = if all isNothing [fromM, toM, sinceM] then Just TimePicker.defaultSince else sinceM
+      sinceOrDefault = sinceWithDefault fromM toM sinceM
       (_, _, currentRange) = parseTime fromM toM sinceOrDefault now
       bwconf =
         bw
@@ -337,7 +333,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
               catalog
       dashboards <- Dashboards.selectDashboardsSortedBy pid Dashboards.Desc Dashboards.DSUpdatedAt
       monitors <- Monitors.queryMonitorsAll pid
-      drawerM <- forM expandM $ fmap (fmap (metricsDetailsPage pid dashboards monitors (fromMaybe "all" sourceM) labelM currentRange)) . Telemetry.getMetricData pid
+      drawerM <- forM expandM $ fmap (fmap (metricsDetailsPage pid dashboards monitors filters.source labelM currentRange)) . Telemetry.getMetricData pid
       -- (dashboards, widgets, monitors) referencing each metric
       let refCounts = Map.fromList [(m.metricName, (length ds, sum (maybe 0 (countWidgetsWithMetric m.metricName) . (.schema) <$> ds), length ms)) | m <- dataPoints, let (ds, ms) = metricReferences m.metricName dashboards monitors]
           pageUrl = metricPageUrl pid "datapoints" filters
@@ -360,8 +356,14 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           drawerM <- forM expandM \metricName -> metricDrawer pid metricName sourceM labelM currentRange
           let bwconf' = bwconf{globalDrawerContent = join drawerM}
           addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf' (pid, metricList, page.inactive, filters, page.activeTotal, nextFetchUrl)
-        else do
-          addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, fromMaybe "all" sourceM, nextFetchUrl)
+        else addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, filters.source, nextFetchUrl)
+
+
+-- | With no time parameters at all 'parseTime' yields no window, which turns the datapoint
+-- COUNT into an unbounded scan over every metric row the project has ever written. Fall
+-- back to the time picker's own default so the control and the data agree.
+sinceWithDefault :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text
+sinceWithDefault fromM toM sinceM = if all isNothing [fromM, toM, sinceM] then Just TimePicker.defaultSince else sinceM
 
 
 dataPointCountsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -369,12 +371,10 @@ dataPointCountsGetH pid fromM toM sinceM = do
   env <- (.env) <$> Reader.ask @AuthContext
   void $ Projects.sessionAndProject pid
   now <- Time.currentTime
-  -- With no time parameters at all 'parseTime' yields no window, and an absolute range can
-  -- still arrive with one end missing. 'CatalogWithCounts' takes a required window precisely
-  -- so neither can reach the COUNT as an unbounded scan; collapsing to now..now returns no
-  -- counts, which is the safe way to be wrong here.
-  let rangeSince = if all isNothing [fromM, toM, sinceM] then Just TimePicker.defaultSince else sinceM
-      (from, to, _) = parseTime fromM toM rangeSince now
+  -- An absolute range can still arrive with one end missing. 'CatalogWithCounts' takes a
+  -- required window so it can't reach the COUNT as an unbounded scan; collapsing to now..now
+  -- returns no counts, which is the safe way to be wrong here.
+  let (from, to, _) = parseTime fromM toM (sinceWithDefault fromM toM sinceM) now
   dataPoints <- Telemetry.getDataPointsData (Telemetry.CatalogWithCounts env.enableTimefusionReads (fromMaybe now from, fromMaybe now to)) pid
   addRespHeaders $ dataPointCountCells_ dataPoints
 
@@ -733,11 +733,11 @@ chartsPage pid metricList inactive filters activeCount nextUrl =
 
 
 metricDetailUrl :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text
-metricDetailUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics/details/" <> metricName <> "/?metric_source=" <> toUriStr source <> maybe "" (("&label=" <>) . toUriStr) labelM
+metricDetailUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics/details/" <> metricName <> "/?metric_source=" <> toUriStr source <> foldMap (("&label=" <>) . toUriStr) labelM
 
 
 metricExpandUrl :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text
-metricExpandUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics?tab=charts&metric_source=" <> toUriStr source <> "&expand=" <> toUriStr metricName <> maybe "" (("&label=" <>) . toUriStr) labelM
+metricExpandUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics?tab=charts&metric_source=" <> toUriStr source <> "&expand=" <> toUriStr metricName <> foldMap (("&label=" <>) . toUriStr) labelM
 
 
 -- | htmx wiring shared by every control that re-renders the metric details drawer.
@@ -773,7 +773,7 @@ metricWidget pid metricName metricType metricUnit source mLabel mTitle mId mExpa
     { Widget.wType = Widget.WTTimeseriesLine
     , Widget.title = if isDistribution then (<> " · mean") <$> mTitle else mTitle
     , Widget.query = Just metricQuery
-    , Widget.layout = Just $ (def :: Widget.Layout){Widget.x = Just 0, Widget.y = Just 0, Widget.w = Just 2, Widget.h = Just 1}
+    , Widget.layout = Just def{Widget.x = Just 0, Widget.y = Just 0, Widget.w = Just 2, Widget.h = Just 1}
     , Widget.unit = Just metricUnit
     , Widget.eager = Just True
     , Widget.hideValue = Just True
@@ -792,7 +792,7 @@ metricWidget pid metricName metricType metricUnit source mLabel mTitle mId mExpa
         <> " | summarize "
         <> bool "avg(value)" "sum(distribution_sum) / sum(distribution_count)" isDistribution
         <> " by bin_auto(timestamp)"
-        <> maybe "" ("," <>) mLabel
+        <> foldMap ("," <>) mLabel
 
 
 chartList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Maybe Text -> Html ()
@@ -800,10 +800,11 @@ chartList pid source metricList nextUrl = do
   forM_ metricList \metric -> metricCard pid source metric.metricName metric.metricType metric.metricUnit metric.metricLabels Nothing
   case nextUrl of
     Nothing -> p_ [class_ "col-span-full py-4 text-center text-xs text-textWeak", role_ "status"] "All matching metrics loaded."
-    Just url ->
+    Just url -> do
+      let loadNext = [hxGet_ $ url <> "&append=true", hxTarget_ "#metric-pagination", hxSwap_ "outerHTML", hxIndicator_ "#metric-pagination", term "hx-sync" "#metric-filters:drop"]
       div_ [id_ "metric-pagination", class_ "col-span-full relative min-h-20 flex items-center justify-center"] do
-        span_ [class_ "absolute -top-96 h-96 w-px pointer-events-none", Aria.hidden_ "true", hxTrigger_ "intersect once", hxGet_ $ url <> "&append=true", hxTarget_ "#metric-pagination", hxSwap_ "outerHTML", hxIndicator_ "#metric-pagination", term "hx-sync" "#metric-filters:drop"] pass
-        a_ [href_ url, hxGet_ $ url <> "&append=true", hxTarget_ "#metric-pagination", hxSwap_ "outerHTML", hxIndicator_ "#metric-pagination", term "hx-sync" "#metric-filters:drop", class_ "btn btn-sm [.htmx-request_&]:hidden"] "Load more metrics"
+        span_ ([class_ "absolute -top-96 h-96 w-px pointer-events-none", Aria.hidden_ "true", hxTrigger_ "intersect once"] <> loadNext) pass
+        a_ ([href_ url, class_ "btn btn-sm [.htmx-request_&]:hidden"] <> loadNext) "Load more metrics"
         span_ [class_ "hidden [.htmx-request_&]:inline-flex text-sm text-textWeak", role_ "status"] "Loading more metrics…"
 
 
@@ -945,7 +946,7 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
               }
         }
     let total = V.length allRows
-    unless (total <= dataPointPageSize)
+    when (total > dataPointPageSize)
       $ div_ [class_ "flex items-center justify-between px-4 py-3 text-sm text-textWeak"] do
         span_ [class_ "tabular-nums"] $ toHtml $ show (page * dataPointPageSize + 1) <> "-" <> show (min total ((page + 1) * dataPointPageSize)) <> " of " <> show total
         div_ [class_ "join"] do
@@ -1107,7 +1108,7 @@ relatedMetrics pid source metric candidates =
       linkList_ (Just ("Related metrics", "Metrics with a similar name or dimensions."))
         $ related
         <&> \candidate ->
-          ( [href_ $ metricDetailUrl pid candidate.metricName source Nothing, hxGet_ $ metricDetailUrl pid candidate.metricName source Nothing] <> metricDetailSwap_
+          ( ([href_, hxGet_] <*> [metricDetailUrl pid candidate.metricName source Nothing]) <> metricDetailSwap_
           , do
               span_ [class_ "block truncate font-medium text-textStrong"] $ toHtml candidate.metricName
               div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
@@ -1244,7 +1245,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
               div_ [class_ "flex items-center gap-2 shrink-0"] do
                 -- The stats describe what is drawn, so "Spans" reads e.g. "300+"
                 -- while more remain rather than claiming to be the whole trace.
-                stBox "Spans" (show (length spanRecords) <> maybe "" (const "+") moreUrl) Nothing
+                stBox "Spans" (show (length spanRecords) <> foldMap (const "+") moreUrl) Nothing
                 stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
                 stBox "Duration" (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-iconNeutral")
             whenJust moreUrl \url ->
@@ -1473,7 +1474,7 @@ renderSpanListTable services colors records =
             $ tr_ [class_ "p-2 border-b font-medium"]
             $ forM_ (["Time", "Span name", "Event type", "Span kind", "Exec. time"] :: [Text]) (td_ [] . toHtml)
           tbody_ $ forM_ filterRecords \spanRecord -> do
-            let reqType = maybe "" (\(t, _, _, _) -> t) $ getRequestDetails spanRecord.attributes
+            let reqType = foldMap (\(t, _, _, _) -> t) $ getRequestDetails spanRecord.attributes
             tr_ ([id_ $ "sp-list-" <> spanRecord.spanId, class_ "span-filterble font-medium"] <> spanDetailAttrs_ ShowSkeleton (UUID.toText spanRecord.projectId) spanRecord.uSpanId spanRecord.timestamp) do
               td_ $ Components.localTimeFmt_ "MMM dd yyyy HH:mm:ss.SSS" spanRecord.timestamp
               td_ $ toHtml spanRecord.spanName

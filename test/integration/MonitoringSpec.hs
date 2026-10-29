@@ -518,7 +518,7 @@ spec = sequential $ aroundAll withTestResources do
       -- Optional artifact capture uses a public fixture key, never installation secrets.
       fixturePath <- Env.lookupEnv "SLACK_CHART_FIXTURE_PATH"
       for_ fixturePath \path -> do
-        request <- runTestBgNoReset tr $ Widget.widgetPngUrl "slack-chart-fixture-key" "http://localhost/" testPid widget Nothing (Just $ toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" $ addUTCTime (-900) t0) (Just $ toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" t0)
+        request <- runTestBgNoReset tr $ fold <$> Widget.widgetPngUrl "slack-chart-fixture-key" "http://localhost/" testPid widget Nothing (Just $ toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" $ addUTCTime (-900) t0) (Just $ toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" t0)
         LBS.writeFile path
           $ AE.encode
           $ AE.object

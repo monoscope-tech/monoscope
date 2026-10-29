@@ -68,7 +68,6 @@ import Pages.LogExplorer.LiveTail qualified as LiveTail
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.LogExplorer.QueryLibrary qualified as QueryLibrary
-import Pages.Monitors qualified as Alerts
 import Pages.Monitors qualified as Testing
 import Pages.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
@@ -344,7 +343,7 @@ data ApiV1Routes mode = ApiV1Routes
   , apiKeyActivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "activate" :> Post '[JSON] ApiT.ApiKeySummary
   , apiKeyDeactivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "deactivate" :> Post '[JSON] ApiT.ApiKeySummary
   , apiKeyDelete :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Delete '[JSON] NoContent
-  , -- Plan B: /me + /project (singular) + /issues + /endpoints + /log_patterns
+  , -- /me + /project (singular) + /issues + /endpoints + /log_patterns
     meGet :: mode :- "me" :> Get '[JSON] ApiT.MeResponse
   , projectGet :: mode :- "project" :> Get '[JSON] ApiT.ProjectFull
   , projectPatch :: mode :- "project" :> ReqBody '[JSON] Projects.ProjectPatch :> Patch '[JSON] ApiT.ProjectFull
@@ -384,7 +383,7 @@ data ApiV1Routes mode = ApiV1Routes
   , issuesBulk :: mode :- "issues" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction Issues.IssueId) :> Post '[JSON] (ApiT.BulkResult Issues.IssueId)
   , incidentsList :: mode :- "incidents" :> QueryParam "phase" Incidents.EpisodePhase :> QueryParam "limit" Int :> Get '[JSON] [ApiT.IncidentSummary]
   , incidentGet :: mode :- "incidents" :> Capture "incident_id" Incidents.EpisodeId :> Get '[JSON] ApiT.IncidentSummary
-  , -- Teams (B3) + Members (B4)
+  , -- Teams + Members
     teamsList :: mode :- "teams" :> Get '[JSON] [ApiT.TeamSummary]
   , teamGet :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> Get '[JSON] ApiT.TeamFull
   , teamCreate :: mode :- "teams" :> ReqBody '[JSON] ApiT.TeamInput :> Post '[JSON] ApiT.TeamFull
@@ -727,15 +726,15 @@ type MonitorsRoutes' :: Type -> Type
 data MonitorsRoutes' mode = MonitorsRoutes'
   { listGet :: mode :- QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
   , overviewGet :: mode :- Capture "monitor_id" Text :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (RespHeaders Alerts.Alert)
-  , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Alerts.Alert)
-  , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
+  , alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Testing.AlertUpsertForm :> Post '[HTML] (RespHeaders Testing.Alert)
+  , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Testing.Alert)
+  , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Testing.Alert)
   , alertMutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration" Int :> Post '[HTML] (RespHeaders (Html ()))
   , alertUnmutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "unmute" :> Post '[HTML] (RespHeaders (Html ()))
   , alertResolvePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "resolve" :> Post '[HTML] (RespHeaders (Html ()))
   , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Delete '[HTML] (RespHeaders (Html ()))
   , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" ApiT.TeamId :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
-  , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[HTML] (RespHeaders Alerts.Alert)
+  , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[HTML] (RespHeaders Testing.Alert)
   , cronGet :: mode :- "cron" :> Get '[HTML] (RespHeaders Testing.CronMonitors)
   , cronPost :: mode :- "cron" :> ReqBody '[FormUrlEncoded] Testing.CronForm :> Post '[HTML] (RespHeaders (Html ()))
   , cronDelete :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
@@ -863,7 +862,7 @@ apiV1Server logger env tp principal =
       -- state it explicitly and receive the same generated predicate as a chart.
       metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM environmentM serviceM ->
         Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM Nothing [("environment", environmentM), ("service", serviceM)]
-    , -- C1: derive schema from the live introspected column set (seeded at
+    , -- Derive schema from the live introspected column set (seeded at
       -- startup) and decorate with the hand-coded descriptions / examples in
       -- 'Schema.telemetrySchema'. Live entries without a decoration get a
       -- bare {type:"text", description:"", examples:null} entry — so a new
@@ -912,7 +911,7 @@ apiV1Server logger env tp principal =
     , apiKeyActivate = ApiH.apiKeyActivate pid
     , apiKeyDeactivate = ApiH.apiKeyDeactivate pid
     , apiKeyDelete = ApiH.apiKeyDelete pid
-    , -- Plan B
+    , -- Project, endpoints, log patterns
       meGet = ApiH.apiMe pid
     , projectGet = ApiH.apiProjectGet pid
     , projectPatch = ApiH.apiProjectPatch pid
@@ -1210,15 +1209,15 @@ monitorsServer pid =
     , uptimePost = Testing.uptimeCheckPostH pid
     , uptimeToggle = Testing.uptimeCheckToggleH pid
     , uptimeDelete = Testing.uptimeCheckDeleteH pid
-    , alertUpsertPost = Alerts.alertUpsertPostH pid
-    , alertSingleGet = Alerts.alertSingleGetH pid
-    , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
+    , alertUpsertPost = Testing.alertUpsertPostH pid
+    , alertSingleGet = Testing.alertSingleGetH pid
+    , alertSingleToggleActive = Testing.alertSingleToggleActiveH pid
     , alertMutePost = Testing.alertMuteH pid
     , alertUnmutePost = Testing.alertUnmuteH pid
     , alertResolvePost = Testing.alertResolveH pid
     , alertDeleteRoute = Testing.alertDeleteH pid
     , teamAlertsGetH = Testing.teamAlertsGetH pid
-    , alertTeamDeleteH = Alerts.alertTeamDeleteH pid
+    , alertTeamDeleteH = Testing.alertTeamDeleteH pid
     , alertBulkAction = Testing.alertBulkActionH pid
     }
 
@@ -1404,7 +1403,6 @@ chartScopeParams pid params = case pid of
     pure $ [("environment", session.environment)] <> [("service", session.service) | isNothing $ join $ L.lookup "dashboard_id" params] <> filter (\(k, _) -> k `notElem` ["environment", "service", "dashboard_id"]) params
 
 
--- Widget GET handler that accepts dashboard parameters
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
 widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   -- widgetZ is what we render now (see 'Widget.widgetFetchUrl'); widgetJSON stays readable
@@ -1514,7 +1512,7 @@ emailTemplates =
             (Just "24H")
             Nothing
             Nothing
-        pure $ ET.sampleRuntimeErrors $ guarded (not . T.null) chartUrl
+        pure $ ET.sampleRuntimeErrors chartUrl
     )
   , ("anomaly-endpoint", pure ET.sampleAnomalyEndpoint)
   , ("issue-assigned", pure ET.sampleIssueAssigned)

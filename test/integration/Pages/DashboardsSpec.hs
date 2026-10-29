@@ -6,12 +6,10 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as List
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as TL
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Concurrent (runConcurrent)
-import Lucid (renderText, toHtml)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
@@ -21,7 +19,6 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.BodyWrapper qualified as BodyWrapper
 import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
-import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Projects (TeamForm (..))
 import Pages.Projects qualified as ManageMembers
@@ -30,7 +27,6 @@ import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
 import Relude
-import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import System.Config (AuthContext (..), DeploymentEnv (Prod, Staging), EnvConfig (..))
 import System.Directory (withCurrentDirectory)
@@ -43,10 +39,7 @@ import "cryptonite" Crypto.Hash qualified as Crypto
 
 
 filters :: Dashboards.DashboardFilters
-filters =
-  Dashboards.DashboardFilters
-    { tag = []
-    }
+filters = Dashboards.DashboardFilters []
 
 
 spec :: Spec
@@ -56,36 +49,31 @@ spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Dashboards Tests" do
     let mkDashboard t = Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
-        dashboard = mkDashboard "Test Dashboard"
+        postDashboards ts t = traverse_ (Dashboards.dashboardsPostH testPid . mkDashboard) ts >> Dashboards.dashboardsPostH testPid (mkDashboard t)
+        mkVar k m v = DashboardModel.Variable{key = k, title = Nothing, multi = m, required = Nothing, reloadOnChange = Nothing, helpText = Nothing, _vType = DashboardModel.VTValues, sql = Nothing, facetField = Nothing, query = Nothing, options = Nothing, value = v, dependsOn = Nothing}
+        renderDash t dash = renderT $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = t} []
+        listDashboards tr = do
+          (_, pg) <- testServant tr (Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters)
+          PageCtx _ d <- asDashboardsGet pg
+          pure d.dashboards
+        byTitle :: Text -> V.Vector DashboardModel.DashboardVM -> IO DashboardModel.DashboardVM
+        byTitle t = maybe (fail $ "no dashboard titled " <> toString t) pure . V.find ((== t) . (.title))
+        asDashboardsGet = \case
+          Dashboards.DashboardsGet pc -> pure pc
+          _ -> fail "Expected full dashboard list response"
+        expectNoContent = \case
+          Dashboards.DashboardNoContent -> pass
+          _ -> fail "Expected DashboardNoContent response"
 
     -- Regression: the variable input emitted data-tagify-mode twice for multi
     -- variables; Lucid merges duplicate attrs with (<>), so multi-select vars
     -- silently rendered as single-select ("" <> "select"). Multi vars must carry
     -- NO tagify-mode attr (main.ts only sets options.mode when it is present).
     it "dashboardVariables_renderCorrectlyAboveWidgetLayers" \_ -> do
-      let mkVar k m =
-            DashboardModel.Variable
-              { key = k
-              , title = Nothing
-              , multi = m
-              , required = Nothing
-              , reloadOnChange = Nothing
-              , helpText = Nothing
-              , _vType = DashboardModel.VTValues
-              , sql = Nothing
-              , facetField = Nothing
-              , query = Nothing
-              , options = Nothing
-              , value = Nothing
-              , dependsOn = Nothing
-              }
-          chart = (def :: Widget.Widget){Widget.wType = Widget.WTTimeseriesLine}
-          dash = (def :: DashboardModel.Dashboard){DashboardModel.variables = Just [mkVar "single" Nothing, mkVar "multi" (Just True)], DashboardModel.widgets = [chart]}
-          vm = (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = "t"}
-          html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
+      let chart = (def :: Widget.Widget){Widget.wType = Widget.WTTimeseriesLine}
+          html = renderDash "t" (def :: DashboardModel.Dashboard){DashboardModel.variables = Just [mkVar "single" Nothing Nothing, mkVar "multi" (Just True) Nothing], DashboardModel.widgets = [chart]}
       T.count "data-tagify-mode" html `shouldBe` 1
-      html `shouldSatisfy` T.isInfixOf "data-tagify-mode=\"select\""
-      html `shouldContainAll` ["sticky top-0 z-10", "dashboard-grid-wrapper relative isolate z-0"]
+      html `shouldContainAll` ["data-tagify-mode=\"select\"", "sticky top-0 z-10", "dashboard-grid-wrapper relative isolate z-0"]
 
     it "table widget loading shell defers headings until data arrives" \_ -> do
       let column field title = (def :: Widget.TableColumn){Widget.field = field, Widget.title = title}
@@ -95,7 +83,7 @@ spec = sequential $ aroundAll withTestResources do
               , Widget.title = Just "Status Code Breakdown"
               , Widget.columns = Just [column "status_code" "Status Code", column "count" "Count", column "avg_latency" "Avg Latency"]
               }
-          html = TL.toStrict $ renderText $ Widget.widget_ widget
+          html = renderT $ Widget.widget_ widget
       html `shouldSatisfy` (not . T.isInfixOf "<thead")
 
     -- The canonical tab URL stays a normal full-document URL, but its htmx response is
@@ -103,25 +91,18 @@ spec = sequential $ aroundAll withTestResources do
     -- /content route or imperative active-tab mutation.
     it "dashboardTabs_useTheSharedNavigationContract_notAContentEndpoint" \_ -> do
       let mkTab n = (def :: DashboardModel.Tab){DashboardModel.name = n}
-          dash = (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [mkTab "Overview", mkTab "Errors"]}
-          vm = (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = "t"}
-          html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
+          html = renderDash "t" (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [mkTab "Overview", mkTab "Errors"]}
       -- `morph`/`:morph` are htmx 2 + idiomorph names; htmx 4 calls them outerMorph/innerMorph
       -- and throws "Unknown swap style: morph" at swap time, so the names are asserted here.
-      for_ ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\""] \attr ->
-        html `shouldSatisfy` T.isInfixOf attr
+      html `shouldContainAll` ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\""]
       html `shouldSatisfy` (not . T.isInfixOf "hx-select=\"")
       -- No /content partial, and no hyperscript managing the active class.
       html `shouldSatisfy` (not . T.isInfixOf "/content")
       html `shouldSatisfy` (not . T.isInfixOf "remove .tab-active")
 
     it "reports a bounded dashboard-settlement sample after initial and tab renders" \_ -> do
-      let dash = (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [((def :: DashboardModel.Tab){DashboardModel.name = "Overview"} :: DashboardModel.Tab)]}
-          vm = (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = "Performance sample"}
-          html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
-      html `shouldSatisfy` T.isInfixOf "/dashboards/00000000-0000-0000-0000-000000000000/settled"
-      for_ ["duration_ms", "response_bytes", "htmx:before:request", "htmx:after:settle", "keepalive: true"] \needle ->
-        html `shouldSatisfy` T.isInfixOf needle
+      renderDash "Performance sample" (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [((def :: DashboardModel.Tab){DashboardModel.name = "Overview"} :: DashboardModel.Tab)]}
+        `shouldContainAll` ["/dashboards/00000000-0000-0000-0000-000000000000/settled", "duration_ms", "response_bytes", "htmx:before:request", "htmx:after:settle", "keepalive: true"]
 
     it "dashboardSettledPostH_nonMember_cannotProbeDashboards" \tr -> do
       victim <- createTestProject tr "victim"
@@ -144,23 +125,7 @@ spec = sequential $ aroundAll withTestResources do
     -- reader's selections, and clearing one must stay cleared rather than snapping back to
     -- the dashboard's default on the next load.
     it "URL variable values win over the dashboard's declared defaults" \_ -> do
-      let var k v =
-            DashboardModel.Variable
-              { key = k
-              , title = Nothing
-              , multi = Nothing
-              , required = Nothing
-              , reloadOnChange = Nothing
-              , helpText = Nothing
-              , _vType = DashboardModel.VTValues
-              , sql = Nothing
-              , facetField = Nothing
-              , query = Nothing
-              , options = Nothing
-              , value = v
-              , dependsOn = Nothing
-              }
-          vars = Just [var "env" (Just "prod"), var "region" (Just "eu")]
+      let vars = Just [mkVar "env" Nothing (Just "prod"), mkVar "region" Nothing (Just "eu")]
           resolve params = Dashboards.addVariableDefaults params vars
 
       -- Nothing supplied: both defaults apply.
@@ -299,22 +264,12 @@ spec = sequential $ aroundAll withTestResources do
       LBS.take 8 (Servant.getResponse response) `shouldBe` "\137PNG\r\n\26\n"
 
     it "Should create a dashboard" \tr -> do
-      (_, pg) <- testServant tr do
-        let dashboard1 = mkDashboard "Dashboard 1"
-            dashboard2 = mkDashboard "Dashboard 2"
-        _ <- Dashboards.dashboardsPostH testPid dashboard1
-        _ <- Dashboards.dashboardsPostH testPid dashboard2
-        Dashboards.dashboardsPostH testPid dashboard
-      case pg of
-        Dashboards.DashboardNoContent -> 1 `shouldBe` 1
-        _ -> fail "Expected DashboardGet' response"
+      testServant tr (postDashboards ["Dashboard 1", "Dashboard 2"] "Test Dashboard") >>= expectNoContent . snd
 
     it "Should not create a dashboard with an empty title" \tr -> do
-      let invalidDashboard = mkDashboard ""
-      (_, pg) <- testServant tr $ Dashboards.dashboardsPostH testPid invalidDashboard
+      (_, pg) <- testServant tr $ Dashboards.dashboardsPostH testPid (mkDashboard "")
       case pg of
-        Dashboards.DashboardPostError message -> do
-          message `shouldBe` "Dashboard title is required"
+        Dashboards.DashboardPostError message -> message `shouldBe` "Dashboard title is required"
         _ -> fail "Expected DashboardPostError response"
 
     -- The empty-state CTA passed a modal id where a URL was expected, and the
@@ -323,33 +278,29 @@ spec = sequential $ aroundAll withTestResources do
     -- with a <label for>, and so must this.
     it "dashboardsZeroState_opensTheNewDashboardModal_notADeadHref" \tr -> do
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters{Dashboards.tag = ["no-such-tag-so-the-list-is-empty"]}
-      let html = TL.toStrict $ renderText $ toHtml pg
-      html `shouldSatisfy` T.isInfixOf "No dashboards yet"
-      html `shouldSatisfy` T.isInfixOf "for=\"newDashboardMdl\""
+      let html = renderT pg
+      html `shouldContainAll` ["No dashboards yet", "for=\"newDashboardMdl\""]
       html `shouldSatisfy` (not . T.isInfixOf "href=\"newDashboardMdl\"")
 
     it "dashboardTemplatePicker_defersHiddenPreviewsUntilOpened" \tr -> do
       (_, initial) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-      let initialHtml = TL.toStrict $ renderText $ toHtml initial
+      let initialHtml = renderT initial
       initialHtml `shouldSatisfy` (not . T.isInfixOf "dashboardTemplatePreviews")
       initialHtml `shouldContainAll` ["hx-get=\"/p/" <> testPid.toText <> "/dashboards/new\"", "hx-trigger=\"change[target.checked] from:#newDashboardMdl\""]
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "true") filters
-      let html = TL.toStrict $ renderText $ toHtml pg
+      let html = renderT pg
       html `shouldContainAll` ["value=\"Blank dashboard\"", "data-title=\"Nginx\"", "data-template=\"nginx.yaml\"", "Requests"]
       html `shouldSatisfy` (not . T.isInfixOf "http-stats.svg")
-      case pg of
-        Dashboards.DashboardsGet (PageCtx _ d) ->
-          forM_ d.dashTemplates \template ->
-            html `shouldSatisfy` T.isInfixOf ("data-template=\"" <> fromMaybe "" template.file <> "\"")
-        _ -> fail "Expected full dashboard list response"
+      PageCtx _ d <- asDashboardsGet pg
+      for_ d.dashTemplates \template ->
+        html `shouldSatisfy` T.isInfixOf ("data-template=\"" <> fromMaybe "" template.file <> "\"")
 
     it "dashboardTemplates_deployedEnvironmentsDoNotReadYamlPerRequest" \tr ->
       withSystemTempDirectory "dashboard-templates" $ \dir -> withCurrentDirectory dir $ for_ [Prod, Staging] \env -> do
         let deployed = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{environment = env, liveReloadDashboards = True}}}
         (_, pg) <- testServant deployed $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-        case pg of
-          Dashboards.DashboardsGet (PageCtx _ d) -> d.dashTemplates `shouldSatisfy` (not . null)
-          _ -> fail "Expected full dashboard list response"
+        PageCtx _ d <- asDashboardsGet pg
+        d.dashTemplates `shouldSatisfy` (not . null)
 
     it "dashboardList_skipsUnusedTelemetryScopeButPreservesShellData" \tr -> do
       let scopeFields = ["service.name", "deployment.environment.name"]
@@ -358,171 +309,59 @@ spec = sequential $ aroundAll withTestResources do
       (_, (_, _, fullShell)) <- testServant tr $ BodyWrapper.mkPageCtx testPid >>= addRespHeaders
       fullShell.envOptions `shouldBe` V.singleton "production"
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-      case pg of
-        Dashboards.DashboardsGet (PageCtx bw _) -> do
-          (bw.envOptions, bw.serviceOptions) `shouldBe` (V.empty, V.empty)
-          map (.conversationId) bw.conversations `shouldBe` map (.conversationId) fullShell.conversations
-          isJust bw.activationProgressM `shouldBe` isJust fullShell.activationProgressM
-        _ -> fail "Expected full dashboard list response"
+      PageCtx bw _ <- asDashboardsGet pg
+      (bw.envOptions, bw.serviceOptions) `shouldBe` (V.empty, V.empty)
+      map (.conversationId) bw.conversations `shouldBe` map (.conversationId) fullShell.conversations
+      isJust bw.activationProgressM `shouldBe` isJust fullShell.activationProgressM
 
     it "Should update a dashboard" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-      case pg of
-        Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
-          let createdDashboard = Unsafe.fromJust $ V.find (\x -> x.title == "Test Dashboard") dashboards
-          let fm = Dashboards.DashboardRenameForm{Dashboards.title = "Updated Dashboard", Dashboards.fileDir = Nothing}
-          _ <- testServant tr $ Dashboards.dashboardRenamePatchH testPid createdDashboard.id fm
-          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-          case pg' of
-            Dashboards.DashboardsGet (PageCtx _ d) -> do
-              let updated = V.find (\x -> x.title == "Updated Dashboard") d.dashboards
-              isJust updated `shouldBe` True
-            _ -> fail "Expected DashboardGet' response"
-        _ -> fail "Expected DashboardGet' response"
+      created <- listDashboards tr >>= byTitle "Test Dashboard"
+      _ <- testServant tr $ Dashboards.dashboardRenamePatchH testPid created.id Dashboards.DashboardRenameForm{Dashboards.title = "Updated Dashboard", Dashboards.fileDir = Nothing}
+      void $ listDashboards tr >>= byTitle "Updated Dashboard"
 
     it "Should delete a dashboard" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-      case pg of
-        Dashboards.DashboardsGet (PageCtx _ d) -> do
-          let createdDashboard = V.find (\db -> db.title == "Dashboard 1") d.dashboards & Unsafe.fromJust
-          (_, pg') <- testServant tr $ Dashboards.dashboardDeleteH testPid createdDashboard.id
-          case pg' of
-            Dashboards.DashboardNoContent -> do
-              (_, pg'') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-              case pg'' of
-                Dashboards.DashboardsGet (PageCtx _ dd) -> do
-                  let v = V.find (\db -> db.title == "Dashboard 1") dd.dashboards
-                  isNothing v `shouldBe` True
-                _ -> fail "Expected DashboardGet' response"
-            _ -> fail "Expected DashboardDelete response"
-        _ -> fail "Expected DashboardGet' response"
+      created <- listDashboards tr >>= byTitle "Dashboard 1"
+      testServant tr (Dashboards.dashboardDeleteH testPid created.id) >>= expectNoContent . snd
+      V.any ((== "Dashboard 1") . (.title)) <$> listDashboards tr >>= (`shouldBe` False)
 
     it "Should duplicate dashboard" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-      case pg of
-        Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
-          let createdDashboard = Unsafe.fromJust $ V.find (\db -> db.title == "Updated Dashboard") dashboards
-          _ <- testServant tr $ Dashboards.dashboardDuplicatePostH testPid createdDashboard.id
-          (_, pg2) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-          case pg2 of
-            Dashboards.DashboardsGet (PageCtx _ d) -> do
-              let duplicatedDashboard = V.find (\db -> db.title == "Updated Dashboard (Copy)") d.dashboards
-              isJust duplicatedDashboard `shouldBe` True
-            _ -> fail "Expected DashboardGet' response"
-        _ -> fail "Expected DashboardGet' response"
+      created <- listDashboards tr >>= byTitle "Updated Dashboard"
+      _ <- testServant tr $ Dashboards.dashboardDuplicatePostH testPid created.id
+      void $ listDashboards tr >>= byTitle "Updated Dashboard (Copy)"
 
     it "Should handle bulk add teams to dashboards" \tr -> do
-      -- Note: Dashboards already created by "Should create a dashboard" test
-      -- Create test teams
       let team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = [], teamMembers = [], discordChannels = [], slackChannels = [], phoneNumbers = [], pagerdutyServices = [], teamId = Nothing}
-      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
-      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "hii"} Nothing
-      _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "broo"} Nothing
-      (_, tm) <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-      case tm of
-        ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams') -> do
-          let selectedTeams = V.filter (\t -> t.handle /= "broo") teams'
-          let teamIds = V.toList $ V.map (.id) selectedTeams
-          (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (DashboardFilters [])
-          case pg of
-            Dashboards.DashboardsGet (PageCtx _ d) -> do
-              let dIds = V.toList $ V.map (.id) $ V.filter (\db -> db.title /= "Updated Dashboard (Copy)") d.dashboards
-              let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamIds}
-              _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid Dashboards.BAAddTeams bulkActionForm
-              (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-              case pg' of
-                Dashboards.DashboardsGet (PageCtx _ dd) -> do
-                  length dd.dashboards `shouldBe` 3
-                  forM_ dd.dashboards $ \db -> do
-                    if db.title == "Updated Dashboard (Copy)"
-                      then length db.teams `shouldBe` 1
-                      else do
-                        -- Should have 3 teams: hello, hii, and @everyone
-                        length db.teams `shouldBe` 3
-                        -- Get team handles for assertions
-                        let dbTeamHandles = mapMaybe (\tid -> V.find (\t -> t.id == tid) teams' <&> (.handle)) (V.toList db.teams)
-                        -- Verify required teams are present and broo is excluded
-                        all (`elem` dbTeamHandles) ["hello", "hii", "everyone"] `shouldBe` True
-                        dbTeamHandles `shouldSatisfy` notElem "broo"
-                _ -> fail "Expected DashboardDelete response"
-            _ -> fail "Expected DashboardGet' response"
-        _ -> fail "Expected ManageTeamsGet' response"
+      for_ ["hello", "hii", "broo"] \h -> testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = h} Nothing
+      teams' <-
+        testServant tr (ManageMembers.manageTeamsGetH testPid (Just "")) >>= \case
+          (_, ManageMembers.ManageTeamsGet' (_, _, _, _, ts)) -> pure ts
+          _ -> fail "Expected ManageTeamsGet' response"
+      let teamIds = V.toList $ V.map (.id) $ V.filter ((/= "broo") . (.handle)) teams'
+      dIds <- V.toList . V.map (.id) . V.filter ((/= "Updated Dashboard (Copy)") . (.title)) <$> listDashboards tr
+      _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid Dashboards.BAAddTeams Dashboards.DashboardBulkActionForm{itemId = dIds, teamIds}
+      dashboards <- listDashboards tr
+      length dashboards `shouldBe` 3
+      for_ dashboards \db ->
+        if db.title == "Updated Dashboard (Copy)"
+          then length db.teams `shouldBe` 1
+          else -- the selected teams plus the implicit @everyone, never the unselected broo
+            (length db.teams, sort $ mapMaybe (\tid -> (.handle) <$> V.find ((== tid) . (.id)) teams') (V.toList db.teams)) `shouldBe` (3, ["everyone", "hello", "hii"])
 
     it "Should handle bulk delete of dashboards" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-      case pg of
-        Dashboards.DashboardsGet (PageCtx _ d) -> do
-          let dIds = V.toList $ V.map (.id) d.dashboards
-          let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamIds = []}
-          _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid Dashboards.BADelete bulkActionForm
-          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-          case pg' of
-            Dashboards.DashboardsGet (PageCtx _ dd) -> do
-              length dd.dashboards `shouldBe` 0
-            _ -> fail "Expected DashboardDelete response"
-        _ -> fail "Expected DashboardGet' response"
+      dIds <- V.toList . V.map (.id) <$> listDashboards tr
+      _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid Dashboards.BADelete Dashboards.DashboardBulkActionForm{itemId = dIds, teamIds = []}
+      listDashboards tr >>= (`shouldBe` 0) . V.length
 
     it "Should star and unstar a dashboard" \tr -> do
-      let dashboard1 = mkDashboard "Star Test Dashboard"
-          dashboardA = mkDashboard "Dashboard A"
-          dashboardB = mkDashboard "Dashboard B"
-          dashboardC = mkDashboard "Dashboard C"
-      _ <- testServant tr do
-        _ <- Dashboards.dashboardsPostH testPid dashboardA
-        _ <- Dashboards.dashboardsPostH testPid dashboardB
-        _ <- Dashboards.dashboardsPostH testPid dashboardC
-        Dashboards.dashboardsPostH testPid dashboard1
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-      case pg of
-        Dashboards.DashboardsGet (PageCtx _ d) -> do
-          let dash = Unsafe.fromJust $ V.find (\x -> x.title == "Star Test Dashboard") d.dashboards
-          dash.starredSince `shouldSatisfy` isNothing
-
-          -- Star the dashboard
-          _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dash.id
-          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-          case pg' of
-            Dashboards.DashboardsGet (PageCtx _ d') -> do
-              let starredDash = Unsafe.fromJust $ V.find (\x -> x.id == dash.id) d'.dashboards
-              starredDash.starredSince `shouldSatisfy` isJust
-
-              -- Unstar the dashboard
-              _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dash.id
-              (_, pg'') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-              case pg'' of
-                Dashboards.DashboardsGet (PageCtx _ d'') -> do
-                  let unstarredDash = Unsafe.fromJust $ V.find (\x -> x.id == dash.id) d''.dashboards
-                  unstarredDash.starredSince `shouldSatisfy` isNothing
-                  pass
-                _ -> fail "Expected DashboardsGet response"
-            _ -> fail "Expected DashboardsGet response"
-        _ -> fail "Expected DashboardsGet response"
+      _ <- testServant tr $ postDashboards ["Dashboard A", "Dashboard B", "Dashboard C"] "Star Test Dashboard"
+      dash <- listDashboards tr >>= byTitle "Star Test Dashboard"
+      dash.starredSince `shouldSatisfy` isNothing
+      for_ [isJust, isNothing] \starred -> do
+        _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dash.id
+        toggled <- listDashboards tr >>= byTitle "Star Test Dashboard"
+        toggled.starredSince `shouldSatisfy` starred
 
     it "Should sort starred dashboards first" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-      case pg of
-        Dashboards.DashboardsGet (PageCtx _ d) -> do
-          let dashA = Unsafe.fromJust $ V.find (\x -> x.title == "Dashboard A") d.dashboards
-          let dashC = Unsafe.fromJust $ V.find (\x -> x.title == "Dashboard C") d.dashboards
-
-          -- Star Dashboard C and Dashboard A
-          _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dashC.id
-          _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dashA.id
-
-          -- Fetch dashboards and verify starred ones appear first
-          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
-          case pg' of
-            Dashboards.DashboardsGet (PageCtx _ d') -> do
-              let dashboards = d'.dashboards
-              let starredDashboards = V.filter (\x -> isJust x.starredSince) dashboards
-              let unstarredDashboards = V.filter (\x -> isNothing x.starredSince) dashboards
-
-              -- Verify starred dashboards come first
-              V.length starredDashboards `shouldBe` 2
-              V.length unstarredDashboards `shouldBe` 2
-
-              -- Check that first dashboards in the list are starred
-              let firstTwo = V.take 2 dashboards
-              V.all (\x -> isJust x.starredSince) firstTwo `shouldBe` True
-            _ -> fail "Expected DashboardsGet response"
-        _ -> fail "Expected DashboardsGet response"
+      dashboards <- listDashboards tr
+      for_ ["Dashboard C", "Dashboard A"] \t -> byTitle t dashboards >>= testServant tr . Dashboards.dashboardStarPostH testPid . (.id)
+      map (isJust . (.starredSince)) . V.toList <$> listDashboards tr >>= (`shouldBe` [True, True, False, False])

@@ -32,7 +32,6 @@ import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful.Error.Static (catchError)
 import GHC.Clock (getMonotonicTime)
-import Lucid (renderText, toHtml)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards (DashboardVM (..))
@@ -70,6 +69,7 @@ import Utils qualified
 import Web.ApiHandlers qualified as Api
 import Web.ApiTypes qualified as ApiTypes
 import Web.Auth qualified as Auth
+import Web.Cookie (SetCookie)
 import Web.FormUrlEncoded (urlDecodeAsForm)
 import Web.Routes qualified as Routes
 
@@ -85,6 +85,62 @@ tabDashboard :: NavigationResponse Dashboards.DashboardGet -> Dashboards.Dashboa
 tabDashboard = \case
   NavigationFull (PageCtx _ dashboard) -> dashboard
   NavigationPartial dashboard _ -> dashboard
+
+
+getTab :: TestResources -> DashboardModel.DashboardId -> Text -> Maybe Text -> [(Text, Maybe Text)] -> IO (NavigationResponse Dashboards.DashboardGet)
+getTab tr dashId slug hx params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId slug Nothing Nothing Nothing (Just "24H") hx params)
+
+
+partialHtml :: NavigationResponse a -> IO Text
+partialHtml = \case
+  NavigationPartial _ fragment -> pure $ renderT fragment
+  NavigationFull _ -> expectationFailure "htmx navigation returned a full document" $> ""
+
+
+rumLocation :: TestResources -> Projects.ProjectId -> [Text] -> [(Text, Maybe Text)] -> IO Text
+rumLocation tr pid view ps = runAuthHandler tr (Dashboards.rumRedirectH pid view ps) >>= \h -> case lookupResponseHeader @"Location" h of
+  Header l -> pure l
+  _ -> fail "redirect carried no Location header"
+
+
+explorerLinkParams :: Projects.ProjectId -> Text -> [[(Text, Text)]]
+explorerLinkParams pid url = linkParams ("/p/" <> pid.toText <> "/log_explorer") ("href=\"" <> url <> "\"")
+
+
+rumTemplate :: IO DashboardModel.Dashboard
+rumTemplate = maybe (fail "missing rum.yaml") pure . find (\d -> d.file == Just "rum.yaml") =<< DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+
+
+widgetTitled :: Text -> [Widget.Widget] -> IO Widget.Widget
+widgetTitled t = maybe (fail $ "missing widget " <> toString t) pure . find ((== Just t) . (.title))
+
+
+-- The test session narrowed to the production environment and checkout service.
+checkoutSession :: TestResources -> IO (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
+checkoutSession tr =
+  fromRightShow
+    <$> runTestEffect tr.trPool (Config.hasqlPool tr.trATCtx) tr.trLogger tr.trTracerProvider (Auth.sessionByID (Just s.sessionId) s.requestID s.isSidebarClosed s.theme s.lang (Just "production") (Just "checkout") Nothing Auth.ChallengeRedirect)
+  where
+    s = Servant.getResponse tr.trSessAndHeader
+
+
+streamFrames :: Servant.Headers hs (Servant.SourceIO AE.Value) -> IO (Either String [AE.Value])
+streamFrames = runExceptT . Source.runSourceT . Servant.getResponse
+
+
+-- A stream's last frame carries the same result the JSON endpoint returns.
+completesWith :: Servant.Headers hs (Servant.SourceIO AE.Value) -> Charts.MetricsData -> Expectation
+completesWith response md = (fmap (viaNonEmpty last) <$> streamFrames response) `shouldReturn` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= md])
+
+
+completeFrame :: Servant.Headers hs (Servant.SourceIO AE.Value) -> IO Charts.MetricsData
+completeFrame response = do
+  frames <- streamFrames response >>= either fail pure
+  case [v | AE.Object frame <- frames, KM.lookup "type" frame == Just (AE.String "complete"), Just v <- [KM.lookup "data" frame]] of
+    [value] -> case AE.fromJSON value of
+      AE.Success metrics -> pure metrics
+      AE.Error err -> fail err
+    _ -> fail $ "missing stream completion: " <> show frames
 
 
 allWidgetTypes :: [Widget.WidgetType]
@@ -167,38 +223,35 @@ spec = sequential $ aroundAll withTestResources do
     it "savesArbitraryVariables_withoutFreezingTheTemplate_andKeepsTabAndWindow" \tr -> do
       did <- newDashboard tr "rum.yaml" "Shared views"
       let params = [("var-browser", Just "Safari"), ("since", Just "7D"), ("activeTabSlug", Just "errors")]
-          render = toStrict . renderText
           root = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/errors"
       form <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.DashboardViewForm "name=Mobile+Safari&var-browser=Safari&since=7D&activeTabSlug=errors"
       (_, saved) <- testServant tr $ Dashboards.dashboardViewPostH testPid did form
-      linkParams root (render saved) `shouldSatisfy` any (\ps -> lookup "var-browser" ps == Just "Safari" && lookup "since" ps == Just "7D")
+      linkParams root (renderT saved) `shouldSatisfy` any (\ps -> lookup "var-browser" ps == Just "Safari" && lookup "since" ps == Just "7D")
       (vm, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
       vm.schema `shouldSatisfy` isNothing
       map (.name) (V.toList vm.savedViews) `shouldBe` ["Mobile Safari"]
       (_, deleted) <- testServant tr $ Dashboards.dashboardViewDeleteH testPid did "Mobile Safari" params
-      render deleted `shouldNotSatisfy` T.isInfixOf ">Mobile Safari</a>"
+      renderT deleted `shouldNotSatisfy` T.isInfixOf ">Mobile Safari</a>"
 
     it "rendersConfiguredViews_andTabScopedVariables_onAnyDashboard" \tr -> do
       did <- newDashboard tr "overview.yaml" "Shared views"
       _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid did $ Dashboards.YamlForm "title: Shared views\nwidgets: []\nvariables:\n  - {key: service, title: Service, type: values, options: [[api]]}\n  - {key: region, title: Region, type: values, options: [[eu]]}\nviews:\n  - {name: Europe API, variables: {service: api, region: eu}}\ntabs:\n  - {name: Overview, variables: [service], widgets: []}\n  - {name: Errors, variables: [service, region], widgets: []}\n"
-      (_, page) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "overview" Nothing Nothing Nothing (Just "24H") Nothing []
-      let html = toStrict $ renderText $ toHtml page
-      html `shouldSatisfy` T.isInfixOf ">Europe API</a>"
-      html `shouldSatisfy` T.isInfixOf "name=\"service\""
+      html <- renderT <$> getTab tr did "overview" Nothing []
+      html `shouldContainAll` [">Europe API</a>", "name=\"service\""]
       html `shouldNotSatisfy` T.isInfixOf "name=\"region\""
-      (_, errors) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "errors" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") []
-      toStrict (renderText $ toHtml errors) `shouldSatisfy` T.isInfixOf "name=\"region\""
+      errors <- getTab tr did "errors" (Just "div#dashboard-tabs-content") []
+      renderT errors `shouldSatisfy` T.isInfixOf "name=\"region\""
       form <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.DashboardViewForm "name=US+worker&var-service=worker&var-region=us&var-unknown=ignored&since=24H&activeTabSlug=errors"
       _ <- testServant tr $ Dashboards.dashboardViewPostH testPid did form
       (saved, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
       map (.variables) (V.toList saved.savedViews) `shouldBe` [Map.fromList [("service", "worker"), ("region", "us")]]
       (_, overridden) <- testServant tr $ Dashboards.dashboardViewPostH testPid did form{Dashboards.name = "Europe API"}
-      toStrict (renderText overridden) `shouldNotSatisfy` T.isInfixOf "var-region=eu"
+      renderT overridden `shouldNotSatisfy` T.isInfixOf "var-region=eu"
       (_, revealed) <- testServant tr $ Dashboards.dashboardViewDeleteH testPid did "Europe API" form.params
-      toStrict (renderText revealed) `shouldSatisfy` T.isInfixOf "var-region=eu"
-      (_, reloaded) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") [("since", Just "24H")]
+      renderT revealed `shouldSatisfy` T.isInfixOf "var-region=eu"
+      reloaded <- getTab tr did "overview" (Just "div#dashboard-tabs-content") [("since", Just "24H")]
       let root = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/overview"
-      linkParams root (toStrict $ renderText $ toHtml reloaded) `shouldSatisfy` any (\ps -> lookup "var-service" ps == Just "worker" && lookup "var-region" ps == Just "us" && lookup "since" ps == Just "24H")
+      linkParams root (renderT reloaded) `shouldSatisfy` any (\ps -> lookup "var-service" ps == Just "worker" && lookup "var-region" ps == Just "us" && lookup "since" ps == Just "24H")
 
     it "rejectsInvalidNames_andCrossProjectChanges" \tr -> do
       did <- newDashboard tr "rum.yaml" "Private views"
@@ -274,7 +327,7 @@ spec = sequential $ aroundAll withTestResources do
       addWidgets tr dashId [w{Widget.layout = Nothing} | w <- numberedWidgets 5]
 
       stored <- storedWidgets tr dashId
-      for_ stored \widget -> toStrict (renderText $ Widget.widget_ widget) `shouldSatisfy` T.isInfixOf "gs-w=\"3\""
+      for_ stored \widget -> renderT (Widget.widget_ widget) `shouldSatisfy` T.isInfixOf "gs-w=\"3\""
       let widgets = Widget.normalizeWidgetLayouts stored
       map (\w -> (w.layout >>= (.x), w.layout >>= (.y), w.layout >>= (.w))) widgets
         `shouldBe` [(Just 0, Just 0, Just 3), (Just 3, Just 0, Just 3), (Just 6, Just 0, Just 3), (Just 9, Just 0, Just 3), (Just 0, Just 1, Just 3)]
@@ -297,27 +350,23 @@ spec = sequential $ aroundAll withTestResources do
       let metricCard = (widgetOf Widget.WTTimeseriesLine "metric"){Widget.layout = Just def{Widget.x = Just 0, Widget.y = Just 0, Widget.w = Just 2, Widget.h = Just 1}}
       normalized <- onlyWidget $ Widget.normalizeWidgetLayouts [metricCard]
       (normalized.layout >>= (.w), normalized.layout >>= (.h)) `shouldBe` (Just 2, Just 3)
-      let html = toStrict $ renderText $ Widget.widget_ metricCard{Widget.expandBtnFn = Just "/details"}
-      for_ ["aria-label=\"Expand widget\"", "gap-0.5 flex flex-col", "min-h-8 px-1", "min-h-0 p-3"] \fragment ->
-        html `shouldSatisfy` T.isInfixOf fragment
+      let html = renderT $ Widget.widget_ metricCard{Widget.expandBtnFn = Just "/details"}
+      html `shouldContainAll` ["aria-label=\"Expand widget\"", "gap-0.5 flex flex-col", "min-h-8 px-1", "min-h-0 p-3"]
 
       _ <- newDashboard tr "overview.yaml" "Widget destination"
       (_, picker) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "metric-widget") Nothing Nothing noFilters
       -- Rows PUT to the widget upsert, whose response carries the "Widget added" toast.
-      toStrict (renderText $ toHtml picker) `shouldSatisfy` T.isInfixOf "hx-put=\"/p/"
+      renderT picker `shouldSatisfy` T.isInfixOf "hx-put=\"/p/"
       (_, dashboards) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
-      toStrict (renderText $ toHtml dashboards)
+      renderT dashboards
         `shouldSatisfy` T.isInfixOf "aria-label=\"Add dashboard to favorites\""
 
     it "chartWidget_groupsTitleWithCardAndGuidesTheEmptyState" \_ -> do
-      let html = toStrict $ renderText $ Widget.widget_ (widgetOf Widget.WTTimeseriesLine "requests"){Widget.id = Just "requests-chart"}
-      html `shouldSatisfy` T.isInfixOf "gap-0.5 flex flex-col"
+      let html = renderT $ Widget.widget_ (widgetOf Widget.WTTimeseriesLine "requests"){Widget.id = Just "requests-chart"}
       html `shouldNotSatisfy` T.isInfixOf "gap-1.5 flex flex-col"
-      for_ ["id=\"requests-chart_empty\"", "role=\"status\"", "No data in this time range", "Try a wider time range or adjust the filters.", "aria-label=\"View widget query\"", "language=\"kql\""] \fragment ->
-        html `shouldSatisfy` T.isInfixOf fragment
-      let sqlHtml = toStrict $ renderText $ Widget.widget_ (widgetOf Widget.WTTimeseriesLine "requests"){Widget.sql = Just "SELECT '<script>'", Widget.expandBtnFn = Just "/details"}
-      sqlHtml `shouldSatisfy` T.isInfixOf "language=\"sql\""
-      sqlHtml `shouldSatisfy` T.isInfixOf "SELECT &#39;&lt;script&gt;&#39;"
+      html `shouldContainAll` ["gap-0.5 flex flex-col", "id=\"requests-chart_empty\"", "role=\"status\"", "No data in this time range", "Try a wider time range or adjust the filters.", "aria-label=\"View widget query\"", "language=\"kql\""]
+      let sqlHtml = renderT $ Widget.widget_ (widgetOf Widget.WTTimeseriesLine "requests"){Widget.sql = Just "SELECT '<script>'", Widget.expandBtnFn = Just "/details"}
+      sqlHtml `shouldContainAll` ["language=\"sql\"", "SELECT &#39;&lt;script&gt;&#39;"]
 
   -- The full canvas lifecycle, once per widget type, in one example: add it, drag it,
   -- resize it, then re-read the dashboard the way the next page load does. Every type goes
@@ -426,7 +475,7 @@ spec = sequential $ aroundAll withTestResources do
         Dashboards.DashboardsGet (PageCtx _ d) -> do
           let leaves = filter ((/= Widget.WTGroup) . (.wType)) $ foldMap DashboardModel.allWidgets $ V.toList d.dashboards >>= maybeToList . loadDashboardFromVM d.dashTemplates
           length leaves `shouldSatisfy` (> 20)
-          toStrict (renderText $ toHtml pg) `shouldSatisfy` T.isInfixOf (show (length leaves) <> " widgets")
+          renderT pg `shouldSatisfy` T.isInfixOf (show (length leaves) <> " widgets")
         _ -> fail "Expected DashboardsGet response"
 
     -- Regression: the expand drawer saved without a tab slug, so a rename of a tab's
@@ -456,7 +505,7 @@ spec = sequential $ aroundAll withTestResources do
     it "every widget type renders a grid item the canvas can address and position" \_ -> do
       for_ allWidgetTypes \wt -> do
         let w = (widgetOf wt "Canvas Widget"){Widget.id = Just "wgt-1", Widget.layout = Just def{Widget.x = Just 3, Widget.y = Just 2, Widget.w = Just 6, Widget.h = Just 4}}
-            html = toStrict $ renderText $ Widget.widget_ w
+            html = renderT $ Widget.widget_ w
             claim :: Text -> Bool -> IO ()
             claim what ok = (show @Text wt <> ": " <> what, ok) `shouldBe` (show @Text wt <> ": " <> what, True)
 
@@ -477,16 +526,14 @@ spec = sequential $ aroundAll withTestResources do
     -- try to position something that is not on it.
     it "a naked widget renders without grid chrome" \_ -> do
       let w = (widgetOf Widget.WTTimeseries "Standalone"){Widget.id = Just "wgt-1", Widget.naked = Just True}
-          html = toStrict $ renderText $ Widget.widget_ w
-      T.isInfixOf "wgt-1_widgetEl" html `shouldBe` False
+          html = renderT $ Widget.widget_ w
+      html `shouldNotSatisfy` T.isInfixOf "wgt-1_widgetEl"
 
     it "a group renders its children inside its own nested grid" \_ -> do
       let child = (widgetOf Widget.WTStat "Child"){Widget.id = Just "child-1"}
           groupWidget = (widgetOf Widget.WTGroup "Group"){Widget.id = Just "group-1", Widget.children = Just [child]}
-          html = toStrict $ renderText $ Widget.widget_ groupWidget
-      T.isInfixOf "nested-grid" html `shouldBe` True
-      T.isInfixOf "group-1_widgetEl" html `shouldBe` True
-      T.isInfixOf "child-1_widgetEl" html `shouldBe` True
+          html = renderT $ Widget.widget_ groupWidget
+      html `shouldContainAll` ["nested-grid", "group-1_widgetEl", "child-1_widgetEl"]
 
   -- Every drag and resize is persisted by one hidden form. A failure there loses the
   -- reader's work, and it used to do so silently: htmx swallows both a transport error and
@@ -502,40 +549,29 @@ spec = sequential $ aroundAll withTestResources do
     it "the widget-order form reports a failed save instead of losing it silently" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Save Failure Signal"
       (_, pg) <- testServant tr $ Dashboards.dashboardGetH testPid dashId Nothing Nothing Nothing Nothing Nothing []
-      let rendered = case pg of PageCtx _ d -> toStrict $ renderText $ toHtml d
+      let rendered = case pg of PageCtx _ d -> renderT d
           formTag = T.takeWhile (/= '>') $ snd $ T.breakOn "id=\"widget-order-trigger\"" rendered
 
-      formTag `shouldSatisfy` (not . T.null)
-      -- It still saves through the widget-order endpoint...
-      formTag `shouldSatisfy` T.isInfixOf "widgets_order"
-      -- ...and now says so when that fails, on the app's own toast channel.
-      formTag `shouldSatisfy` T.isInfixOf "htmx:responseError"
-      formTag `shouldSatisfy` T.isInfixOf "htmx:sendError"
-      formTag `shouldSatisfy` T.isInfixOf "errorToast"
+      -- It still saves through the widget-order endpoint, and says so when that fails.
+      formTag `shouldContainAll` ["widgets_order", "htmx:responseError", "htmx:sendError", "errorToast"]
 
   describe "The add-widget experience" do
     it "widget chart thresholds are editable in Edit and Monitors" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Widget Display Thresholds"
       (_, newEditor) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
-      let newHtml = toStrict $ renderText newEditor
-      newHtml `shouldSatisfy` T.isInfixOf "Chart thresholds"
-      newHtml `shouldSatisfy` T.isInfixOf "Widget name"
-      newHtml `shouldSatisfy` T.isInfixOf "page-drawer-tab-monitors"
-      newHtml `shouldSatisfy` T.isInfixOf "Add widget and monitor"
+      let newHtml = renderT newEditor
+      newHtml `shouldContainAll` ["Chart thresholds", "Widget name", "page-drawer-tab-monitors", "Add widget and monitor"]
       snd (T.breakOn "Name your widget" newHtml) `shouldSatisfy` T.isInfixOf "Chart thresholds"
 
       let widget = (widgetOf Widget.WTTimeseries "Thresholded"){Widget.alertThreshold = Just 10, Widget.warningThreshold = Just 7, Widget.unit = Just "requests/s"}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing widget
       wid <- firstWidgetId =<< storedWidgets tr dashId
       (_, editEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid Nothing
-      let editHtml = toStrict $ renderText editEditor
-      editHtml `shouldSatisfy` T.isInfixOf "Chart thresholds"
+      let editHtml = renderT editEditor
       T.take 120 (snd $ T.breakOn "group/thresholds" editHtml) `shouldSatisfy` T.isInfixOf "open"
-      editHtml `shouldSatisfy` T.isInfixOf "Monitors"
       (_, monitorEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid (Just "alerts")
-      T.take 180 (snd $ T.breakOn "page-drawer-tab-monitors" $ toStrict $ renderText monitorEditor) `shouldSatisfy` T.isInfixOf "checked"
-      for_ ["Measurement unit", "widgetJSON.alert_threshold", "widgetJSON.warning_threshold", "name=\"alertThreshold\"", "Create monitor"] \fragment ->
-        editHtml `shouldSatisfy` T.isInfixOf fragment
+      T.take 180 (snd $ T.breakOn "page-drawer-tab-monitors" $ renderT monitorEditor) `shouldSatisfy` T.isInfixOf "checked"
+      editHtml `shouldContainAll` ["Chart thresholds", "Monitors", "Measurement unit", "widgetJSON.alert_threshold", "widgetJSON.warning_threshold", "name=\"alertThreshold\"", "Create monitor"]
       editHtml `shouldNotSatisfy` T.isInfixOf "Save thresholds"
       fst (T.breakOn "widget-preview-container" editHtml) `shouldNotSatisfy` T.isInfixOf "Configure query"
       only <- onlyWidget =<< storedWidgets tr dashId
@@ -545,15 +581,14 @@ spec = sequential $ aroundAll withTestResources do
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid tableDashId Nothing Nothing (widgetOf Widget.WTTable "Rows")
       tableId <- firstWidgetId =<< storedWidgets tr tableDashId
       (_, tableEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid tableDashId tableId Nothing
-      toStrict (renderText tableEditor) `shouldNotSatisfy` T.isInfixOf ">Chart thresholds</strong>"
+      renderT tableEditor `shouldNotSatisfy` T.isInfixOf ">Chart thresholds</strong>"
 
       sqlDashId <- newDashboard tr "overview.yaml" "SQL Chart Thresholds"
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid sqlDashId Nothing Nothing (widgetOf Widget.WTTimeseries "SQL Chart"){Widget.query = Nothing, Widget.sql = Just "SELECT 1"}
       sqlId <- firstWidgetId =<< storedWidgets tr sqlDashId
       (_, sqlEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid sqlDashId sqlId Nothing
-      let sqlHtml = toStrict $ renderText sqlEditor
-      sqlHtml `shouldSatisfy` T.isInfixOf "Chart thresholds"
-      sqlHtml `shouldSatisfy` T.isInfixOf "Monitors evaluate a KQL query"
+      let sqlHtml = renderT sqlEditor
+      sqlHtml `shouldContainAll` ["Chart thresholds", "Monitors evaluate a KQL query"]
 
     -- Opening "add widget" on a dashboard must start on a chart. Logs is a full log
     -- table: it is the wrong thing to drop on a dashboard by default, and it is the
@@ -564,7 +599,7 @@ spec = sequential $ aroundAll withTestResources do
       -- Assert on the seeded `widgetJSON` rather than on which radio carries `checked`:
       -- that object is what the save actually posts, and every tab's inline hyperscript
       -- mentions `checked` anyway, so the markup is not a reliable signal.
-      let rendered = toStrict $ renderText html
+      let rendered = renderT html
           seededType = T.takeWhile (/= '"') <$> T.stripPrefix "\"type\":\"" (snd $ T.breakOn "\"type\":\"" rendered)
 
       seededType `shouldBe` Just "timeseries"
@@ -575,7 +610,7 @@ spec = sequential $ aroundAll withTestResources do
     it "offers only visualizations the API can actually store as a widget" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Add Widget Tabs"
       (_, html) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
-      let rendered = toStrict $ renderText html
+      let rendered = renderT html
           offered = [T.takeWhile (/= '"') seg | seg <- drop 1 (T.splitOn "id=\"viz-" rendered)]
       offered `shouldSatisfy` (not . null)
       for_ offered \vizType ->
@@ -588,7 +623,7 @@ spec = sequential $ aroundAll withTestResources do
   describe "Copy SQL widget menu action" do
     it "does not fall back to copying the KQL for a widget with no .sql field" \_ -> do
       let w = (widgetOf Widget.WTTimeseries "All traces"){Widget.id = Just "wgt-1", Widget._projectId = Just testPid}
-          copySqlBlock = snd $ T.breakOn "Copy generated SQL to clipboard" $ toStrict $ renderText $ Widget.widget_ w
+          copySqlBlock = snd $ T.breakOn "Copy generated SQL to clipboard" $ renderT $ Widget.widget_ w
       copySqlBlock `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/widget/sql-text?query=")
       copySqlBlock `shouldNotSatisfy` T.isInfixOf "widgetData.sql or widgetData.query"
 
@@ -598,15 +633,7 @@ spec = sequential $ aroundAll withTestResources do
       sql `shouldNotBe` "status_code == \"ERROR\""
 
     it "copies SQL scoped to the authenticated environment and service" \tr -> do
-      let session = Servant.getResponse tr.trSessAndHeader
-      scopedSession <-
-        fromRightShow
-          <$> runTestEffect
-            tr.trPool
-            (Config.hasqlPool tr.trATCtx)
-            tr.trLogger
-            tr.trTracerProvider
-            (Auth.sessionByID (Just session.sessionId) session.requestID session.isSidebarClosed session.theme session.lang (Just "production") (Just "checkout") Nothing Auth.ChallengeRedirect)
+      scopedSession <- checkoutSession tr
       let sqlFor dashboardIdM =
             Servant.getResponse
               <$> toBaseServantResponse
@@ -625,8 +652,7 @@ spec = sequential $ aroundAll withTestResources do
       (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid (Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)") Nothing Nothing Nothing Nothing
       sql `shouldNotSatisfy` T.isInfixOf "jsonb_build_array"
       let groupBy = snd $ T.breakOn "GROUP BY" sql
-      groupBy `shouldSatisfy` T.isInfixOf "status_code"
-      groupBy `shouldSatisfy` T.isInfixOf "level"
+      groupBy `shouldContainAll` ["status_code", "level"]
 
     it "reports a clear message instead of blank/failing when no query is given" \tr -> do
       (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid Nothing Nothing Nothing Nothing Nothing
@@ -639,6 +665,8 @@ spec = sequential $ aroundAll withTestResources do
   -- and the user got an error overlay instead of their table.
   describe "Raw-SQL widget column types" do
     let runSql tr q = runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just testPid) Nothing (Just q) (Just "24H") Nothing Nothing Nothing Nothing []
+        ingestScoped tr apiKey route env service traceIdValue spanId =
+          ingestSpanReq tr $ mkSpanRequest traceIdValue spanId Nothing (route <> service) [] Nothing [] (mkResource apiKey [mkAttr "deployment.environment.name" env, mkAttr "service.name" service]) frozenTime
 
     it "renders a non-text column instead of failing the widget" \tr -> do
       md <- runSql tr "SELECT 1::int4 AS n, 'ok'::text AS s"
@@ -669,25 +697,14 @@ spec = sequential $ aroundAll withTestResources do
       complete <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing scoped
       complete.error `shouldBe` Just message
       response <- runQueryEffect tr $ Charts.queryMetricsStream Nothing (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing scoped
-      frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+      frames <- streamFrames response
       frames `shouldSatisfy` \case
         Right values -> any (\case AE.Object obj -> KM.lookup "error" obj == Just (AE.String message); _ -> False) values
         Left _ -> False
 
     it "applies environment and service scope through a raw-SQL template" \tr -> do
       apiKey <- createTestAPIKey tr testPid "raw-template-scope"
-      let ingest env service traceIdValue spanId =
-            ingestSpanReq tr
-              $ mkSpanRequest
-                traceIdValue
-                spanId
-                Nothing
-                ("GET /raw/" <> service)
-                []
-                Nothing
-                []
-                (mkResource apiKey [mkAttr "deployment.environment.name" env, mkAttr "service.name" service])
-                frozenTime
+      let ingest = ingestScoped tr apiKey "GET /raw/"
           raw = "SELECT resource___service___name FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND name LIKE 'GET /raw/%' ORDER BY 1"
           scope = [("environment", Just "production"), ("service", Just "checkout")]
       ingest "production" "checkout" "10000000000000000000000000000001" "1000000000000001"
@@ -701,31 +718,12 @@ spec = sequential $ aroundAll withTestResources do
     -- the sticky selector. Both keep the authenticated environment boundary.
     it "uses sticky service scope outside dashboards but not inside them" \tr -> do
       apiKey <- createTestAPIKey tr testPid "chart-route-scope"
-      let ingest env service traceIdValue spanId =
-            ingestSpanReq tr
-              $ mkSpanRequest
-                traceIdValue
-                spanId
-                Nothing
-                ("GET /chart-scope/" <> service)
-                []
-                Nothing
-                []
-                (mkResource apiKey [mkAttr "deployment.environment.name" env, mkAttr "service.name" service])
-                frozenTime
+      let ingest = ingestScoped tr apiKey "GET /chart-scope/"
           raw = "SELECT resource___service___name FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND name LIKE 'GET /chart-scope/%' ORDER BY 1"
-          session = Servant.getResponse tr.trSessAndHeader
       ingest "production" "checkout" "40000000000000000000000000000004" "4000000000000004"
       ingest "staging" "catalog" "50000000000000000000000000000005" "5000000000000005"
       ingest "production" "catalog" "60000000000000000000000000000006" "6000000000000006"
-      scopedSession <-
-        fromRightShow
-          <$> runTestEffect
-            tr.trPool
-            (Config.hasqlPool tr.trATCtx)
-            tr.trLogger
-            tr.trTracerProvider
-            (Auth.sessionByID (Just session.sessionId) session.requestID session.isSidebarClosed session.theme session.lang (Just "production") (Just "checkout") Nothing Auth.ChallengeRedirect)
+      scopedSession <- checkoutSession tr
       result <-
         toBaseServantResponse tr
           $ atAuthToBase scopedSession
@@ -815,9 +813,8 @@ spec = sequential $ aroundAll withTestResources do
             (testPid, now)
       let widget = (widgetOf Widget.WTTimeseries "Query Results"){Widget.query = Just "metrics | where metric_name == \"timefusion.mem_buffer.oldest_bucket_age_seconds\" | summarize max(value)"}
           (query, decoder) = Widget.chartQuery widget
-          rendered = toStrict $ renderText $ Widget.widget_ widget
-      rendered `shouldSatisfy` T.isInfixOf "max(value) by bin_auto(timestamp)"
-      rendered `shouldSatisfy` T.isInfixOf "aria-label=\"View widget query\""
+          rendered = renderT $ Widget.widget_ widget
+      rendered `shouldContainAll` ["max(value) by bin_auto(timestamp)", "aria-label=\"View widget query\""]
       Widget.chartQuery widget{Widget.query = Just "metrics | where metric_name == \"summarize\""}
         `shouldBe` (Just "metrics | where metric_name == \"summarize\" | summarize count(*) by bin_auto(timestamp)", decoder)
       Widget.chartQuery widget{Widget.wType = Widget.WTStat, Widget.query = Just "metrics | where metric_name == \"summarize\""}
@@ -826,21 +823,17 @@ spec = sequential $ aroundAll withTestResources do
       md.error `shouldBe` Nothing
       V.toList (md.dataset >>= V.catMaybes . V.drop 1) `shouldBe` [42]
       response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just decoder) (Just testPid) query Nothing (Just "1H") Nothing Nothing Nothing Nothing []
-      frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
-      fmap (viaNonEmpty last) frames `shouldBe` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= md])
+      response `completesWith` md
 
   describe "Streaming chart results" do
     let sql = "SELECT i::bigint, 'value'::text, i::double precision FROM generate_series(1, 3) i"
     it "emits partial data and the same final chart as the JSON endpoint" \tr -> do
       expected <- runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing []
       response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing []
-      frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
-      case frames of
-        Right values -> do
-          length values `shouldSatisfy` (> 1)
-          take 1 values `shouldSatisfy` all (\case AE.Object obj -> KM.lookup "type" obj == Just (AE.String "partial"); _ -> False)
-          viaNonEmpty last values `shouldBe` Just (AE.object ["type" AE..= ("complete" :: Text), "data" AE..= expected])
-        Left message -> expectationFailure message
+      values <- streamFrames response >>= either fail pure
+      length values `shouldSatisfy` (> 1)
+      take 1 values `shouldSatisfy` all (\case AE.Object obj -> KM.lookup "type" obj == Just (AE.String "partial"); _ -> False)
+      viaNonEmpty last values `shouldBe` Just (AE.object ["type" AE..= ("complete" :: Text), "data" AE..= expected])
 
     it "renders rounded numeric chart and stat values from widget SQL" \tr -> do
       let numericSql = "SELECT 1::bigint, 'cpu'::text, ROUND(AVG(1.25::numeric), 2)"
@@ -848,15 +841,13 @@ spec = sequential $ aroundAll withTestResources do
       expected.error `shouldBe` Nothing
       expected.dataset `shouldBe` V.singleton (V.fromList [Just 1000, Just 1.25])
       response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just numericSql) (Just "24H") Nothing Nothing Nothing Nothing []
-      frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
-      fmap (viaNonEmpty last) frames `shouldBe` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= expected])
+      response `completesWith` expected
       let scalarSql = "SELECT ROUND(AVG(1.25::numeric), 2)"
       scalar <- runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just scalarSql) (Just "24H") Nothing Nothing Nothing Nothing []
       scalar.error `shouldBe` Nothing
       scalar.dataFloat `shouldBe` Just 1.25
       scalarResponse <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just scalarSql) (Just "24H") Nothing Nothing Nothing Nothing []
-      scalarFrames <- runExceptT $ Source.runSourceT $ Servant.getResponse scalarResponse
-      fmap (viaNonEmpty last) scalarFrames `shouldBe` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= scalar])
+      scalarResponse `completesWith` scalar
 
     it "discards a connection when a row consumer fails and keeps the pool usable" \tr -> do
       -- Two large rows flush a complete first row through PostgreSQL's socket buffer.
@@ -868,7 +859,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "ends decoder failures with an error frame" \tr -> do
       response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just "SELECT 'wrong type'::text, 'value'::text, 1::double precision") (Just "24H") Nothing Nothing Nothing Nothing []
-      frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+      frames <- streamFrames response
       frames `shouldSatisfy` \case
         Right [AE.Object obj] -> KM.lookup "type" obj == Just (AE.String "error")
         _ -> False
@@ -909,7 +900,7 @@ spec = sequential $ aroundAll withTestResources do
         ]
         $ \(service, metric, value, stamp) -> ingestMetric tr key [mkAttr "service.name" service] [] metric value stamp
       overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
-      resource <- maybe (fail "missing overview resource table") pure $ find ((== Just "Service Resource Usage") . (.title)) $ foldMap DashboardModel.allWidgets overview
+      resource <- widgetTitled "Service Resource Usage" $ foldMap DashboardModel.allWidgets overview
       tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
       let (_, sql) = Widget.tableQuery resource Nothing
           row service cpu memory points = V.fromList [AE.String service, AE.toJSON (cpu :: Maybe Double), AE.toJSON cpu, AE.toJSON (memory :: Maybe Double), AE.toJSON memory, AE.toJSON (points :: Int)]
@@ -925,7 +916,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "renders the overview resource table through the dashboard JSON API" \tr -> do
       overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
-      resource <- maybe (fail "missing overview resource table") pure $ find ((== Just "Service Resource Usage") . (.title)) $ foldMap DashboardModel.allWidgets overview
+      resource <- widgetTitled "Service Resource Usage" $ foldMap DashboardModel.allWidgets overview
       dashId <- newDashboard tr "" "Resource table API"
       let widget = resource{Widget.id = Just "resources", Widget.dbSource = Just Hasql.SqlPostgres}
       void $ toBaseServantResponse tr $ Api.apiDashboardWidgetUpsert testPid dashId widget
@@ -990,12 +981,9 @@ spec = sequential $ aroundAll withTestResources do
 
     it "exercises ascending and descending server sorts for every built-in sortable table column" \tr -> do
       templates <- DashboardModel.readDashboardsFromDisk "static/public/dashboards"
-      let flatten w = w : maybe [] (concatMap flatten) w.children
-          widgets d = concatMap flatten $ d.widgets <> maybe [] (concatMap (.widgets)) d.tabs
-          cases =
+      let cases =
             [ col
-            | d <- templates
-            , w <- widgets d
+            | w <- foldMap DashboardModel.allWidgets templates
             , w.wType == Widget.WTTable
             , col <- fromMaybe [] w.columns
             , col.sortable == Just True
@@ -1086,7 +1074,7 @@ spec = sequential $ aroundAll withTestResources do
               , Endpoints.outgoing = True
               }
           filters hash = do
-            (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") [("var-host", Just "integrations.routelift.com"), ("var-endpointHash", Just hash)]
+            response <- getTab tr dashId "overview" (Just "div#dashboard-tabs-content") [("var-host", Just "integrations.routelift.com"), ("var-endpointHash", Just hash)]
             let Dashboards.DashboardGet _ _ _ _ params = tabDashboard response
                 values = Map.fromList params
             pure (Map.lookup "const-endpointFilter" values, Map.lookup "const-endpointFilter-kql" values)
@@ -1158,22 +1146,21 @@ spec = sequential $ aroundAll withTestResources do
 
     it "copyable cells get a copy button; rows that go nowhere do not look clickable" \_ -> do
       let column = (def :: Widget.TableColumn){Widget.field = "q", Widget.title = "Query", Widget.copyable = Just True}
-          html = toStrict $ renderText $ Widget.renderTableWithDataAndParams (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column]} (V.singleton $ V.singleton "select 1") []
+          html = renderT $ Widget.renderTableWithDataAndParams (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column]} (V.singleton $ V.singleton "select 1") []
       html `shouldContainAll` ["data-copy=\"select 1\"", "navigator.clipboard.writeText"]
       snd (T.breakOn "<tbody" html) `shouldSatisfy` (not . T.isInfixOf "cursor-pointer")
 
     it "renders a dashboard table link with the current project and URL-encoded row value" \_ -> do
       let column = (def :: Widget.TableColumn){Widget.field = "session_id", Widget.title = "Session", Widget.link = Just "/p/{{project_id}}/log_explorer?viz_type=sessions&query={{row.session_id}}"}
           widget = (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column], Widget._projectId = Just testPid}
-          html = toStrict $ renderText $ Widget.renderTableWithDataAndParams widget (V.singleton $ V.singleton "session / id") []
+          html = renderT $ Widget.renderTableWithDataAndParams widget (V.singleton $ V.singleton "session / id") []
       html `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/log_explorer?viz_type=sessions&amp;query=session%20%2F%20id")
 
     -- Regression: rows on a tabless dashboard had no swap target and ignored clicks.
     it "tableRowClick_navigatesOnTablessAndTabbedDashboards" \_ -> do
       let column = (def :: Widget.TableColumn){Widget.field = "service", Widget.title = "Service"}
           rowNav tabM =
-            toStrict
-              . renderText
+            renderT
               $ Widget.renderTableWithDataAndParams
                 (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column], Widget._projectId = Just testPid, Widget._dashboardId = Just "d1", Widget._tabSlug = tabM, Widget.onRowClick = Just def{Widget.setVariable = Just "service"}}
                 (V.singleton $ V.singleton "api")
@@ -1185,23 +1172,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "renders a scoped dependency map with an endpoint-preserving Service Map link" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint dependency map"
-      dg <-
-        (tabDashboard . snd)
-          <$> testServant
-            tr
-            ( Dashboards.dashboardTabGetH
-                testPid
-                dashId
-                "dependencies"
-                Nothing
-                Nothing
-                Nothing
-                (Just "24H")
-                Nothing
-                [ ("var-host", Just "dellyman.com")
-                , ("var-endpointHash", Just "endpoint / hash")
-                ]
-            )
+      dg <- tabDashboard <$> getTab tr dashId "dependencies" Nothing [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "endpoint / hash")]
       let mapWidget = find ((== Widget.WTServiceMap) . (.wType)) (renderedWidgets dg)
       (mapWidget >>= (.cta) <&> (.title)) `shouldBe` Just "Open Service Map"
       (mapWidget >>= (.cta) <&> (.url)) `shouldBe` Just ("/p/" <> testPid.toText <> "/service_map?endpoint_hash=endpoint%20%2F%20hash&since=24H")
@@ -1226,14 +1197,7 @@ spec = sequential $ aroundAll withTestResources do
       let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
           params = [("var-endpointHash", Just "stream-cache")]
           fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
-          stream = do
-            response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
-            frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
-            case [v | AE.Object frame <- frames, KM.lookup "type" frame == Just (AE.String "complete"), Just v <- [KM.lookup "data" frame]] of
-              [value] -> case AE.fromJSON value of
-                AE.Success metrics -> pure (metrics :: Charts.MetricsData)
-                AE.Error err -> fail err
-              _ -> expectationFailure (show frames) >> fail "missing completion"
+          stream = completeFrame =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params)
       initialStream <- stream
       cachedJson <- fetch
       repeatedStream <- stream
@@ -1297,14 +1261,7 @@ spec = sequential $ aroundAll withTestResources do
           params = [("var-endpointHash", Just "benchmark")]
           fetch window streaming =
             if streaming
-              then do
-                response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params
-                frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
-                case [v | AE.Object frame <- frames, KM.lookup "type" frame == Just (AE.String "complete"), Just v <- [KM.lookup "data" frame]] of
-                  [value] -> case AE.fromJSON value of
-                    AE.Success metrics -> pure (metrics :: Charts.MetricsData)
-                    AE.Error err -> fail err
-                  _ -> fail "missing stream completion"
+              then completeFrame =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params)
               else runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params
           measured action = do
             start <- getMonotonicTime
@@ -1357,8 +1314,7 @@ spec = sequential $ aroundAll withTestResources do
       -- rendered html or a fetched dataset.
       prefilled :: Widget.Widget -> Bool
       prefilled w = isJust w.html || isJust w.dataset
-      openTab tr dashId params = do
-        (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing params)
+      openTab tr dashId = fmap tabDashboard . getTab tr dashId "overview" Nothing
 
     it "skips the widget phase whose results the picker would discard" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint Analytics"
@@ -1368,7 +1324,7 @@ spec = sequential $ aroundAll withTestResources do
       -- Not vacuous: the tab really does carry widgets, and the picker is what renders.
       ws `shouldSatisfy` not . null
       map (fromMaybe "<untitled>" . (.title)) (filter prefilled ws) `shouldBe` []
-      toStrict (renderText $ toHtml gated) `shouldSatisfy` T.isInfixOf "var-picker"
+      renderT gated `shouldSatisfy` T.isInfixOf "var-picker"
 
     it "successive required pickers stay inside the dashboard fragment" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Successive variable pickers"
@@ -1382,43 +1338,19 @@ spec = sequential $ aroundAll withTestResources do
           , Endpoints.host = "dellyman.com"
           , Endpoints.hash = "ba3431d5"
           }
-      let open params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") params)
-          partialHtml = \case
-            NavigationPartial _ fragment -> pure $ toStrict $ renderText fragment
-            NavigationFull _ -> expectationFailure "htmx picker navigation returned a full document" $> ""
-
+      let open = getTab tr dashId "overview" (Just "div#dashboard-tabs-content")
       firstHtml <- partialHtml =<< open []
       firstHtml `shouldSatisfy` T.isInfixOf "Select Domain"
-      for_ ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\"", "name=\"dashboard-variable-option\""] \attr ->
-        firstHtml `shouldSatisfy` T.isInfixOf attr
+      firstHtml `shouldContainAll` ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\"", "name=\"dashboard-variable-option\""]
       firstHtml `shouldNotSatisfy` T.isInfixOf "hx-select=\"#main-content\""
 
       secondHtml <- partialHtml =<< open [("var-endpointHash", Just ""), ("var-host", Just "dellyman.com")]
-      secondHtml `shouldSatisfy` T.isInfixOf "Select Endpoint"
-      secondHtml `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-content\""
+      secondHtml `shouldContainAll` ["Select Endpoint", "id=\"dashboard-tabs-content\""]
 
     it "dashboardTab_variableControlsReflectURLValues" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Tab variable controls"
-      (_, response) <-
-        testServant tr
-          $ Dashboards.dashboardTabGetH
-            testPid
-            dashId
-            "errors"
-            Nothing
-            Nothing
-            Nothing
-            (Just "24H")
-            (Just "div#dashboard-tabs-content")
-            [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
-      case response of
-        NavigationFull _ -> expectationFailure "htmx tab navigation returned a full document"
-        NavigationPartial _ fragment -> do
-          let html = toStrict $ renderText fragment
-          html `shouldSatisfy` T.isInfixOf "id=\"dashboard-variables\""
-          html `shouldSatisfy` T.isInfixOf "hx-swap-oob=\"true\""
-          html `shouldSatisfy` T.isInfixOf "value=\"dellyman.com\""
-          html `shouldSatisfy` T.isInfixOf "value=\"ba3431d5\""
+      html <- partialHtml =<< getTab tr dashId "errors" (Just "div#dashboard-tabs-content") [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
+      html `shouldContainAll` ["id=\"dashboard-variables\"", "hx-swap-oob=\"true\"", "value=\"dellyman.com\"", "value=\"ba3431d5\""]
 
   -- Picking a second domain left the Endpoint dropdown listing the first domain's
   -- endpoints. The input carries its own statement so the client can re-fetch options
@@ -1427,23 +1359,21 @@ spec = sequential $ aroundAll withTestResources do
   describe "Dependent variable keeps a live template" do
     it "endpointHash_parentHostChanges_dropdownRefetchesForNewHost" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Dependent Vars"
-      dg <- (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing [("var-host", Just "dellyman.com")])
-      let html = toStrict $ renderText $ toHtml (dg :: Dashboards.DashboardGet)
+      html <- renderT . tabDashboard <$> getTab tr dashId "overview" Nothing [("var-host", Just "dellyman.com")]
       html `shouldSatisfy` T.isInfixOf "{{var-host}}"
       html `shouldNotSatisfy` T.isInfixOf "host=&#39;dellyman.com&#39;"
 
   -- A swap already has a painted page around it, so it ships skeletons that fetch
   -- themselves rather than blocking on the widget phase (measured 4.9s -> 1.2s).
   describe "Prefill on a full load, skeletons on a swap" do
-    let openTab tr dashId hx = do
-          snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")])
+    let openTab tr dashId hx = getTab tr dashId "overview" hx [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
         eagerOnes = filter (\w -> w.eager == Just True || isJust w.html || isJust w.dataset)
 
     it "keeps the server-side prefill for a full page load" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Prefill Full"
       full <- openTab tr dashId Nothing
       eagerOnes (renderedWidgets $ tabDashboard full) `shouldSatisfy` not . null
-      T.count "id=\"log_details_container\"" (toStrict $ renderText $ toHtml full) `shouldBe` 1
+      T.count "id=\"log_details_container\"" (renderT full) `shouldBe` 1
 
     it "hands a swap the same widgets with nothing prefilled" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Prefill Swap"
@@ -1459,38 +1389,16 @@ spec = sequential $ aroundAll withTestResources do
       (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#main-content") []
       case response of
         NavigationFull page -> do
-          let html = toStrict $ renderText $ toHtml page
+          let html = renderT page
           html `shouldSatisfy` T.isInfixOf "id=\"main-content\""
           html `shouldSatisfy` T.isInfixOf "id=\"dashboardPage\""
         NavigationPartial _ _ -> expectationFailure "sidebar navigation returned a tab fragment, blanking the page"
 
     it "returns the shared fragment contract for an htmx tab navigation" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Partial navigation"
-      (_, response) <-
-        testServant tr
-          $ Dashboards.dashboardTabGetH
-            testPid
-            dashId
-            "errors"
-            Nothing
-            Nothing
-            Nothing
-            (Just "24H")
-            (Just "div#dashboard-tabs-content")
-            [ ("var-host", Just "dellyman.com")
-            , ("var-endpointHash", Just "ba3431d5")
-            ]
-      case response of
-        NavigationFull _ -> expectationFailure "htmx navigation returned a full document"
-        NavigationPartial _ fragment -> do
-          let html = toStrict $ renderText fragment
-          html `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-content\""
-          html `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-container\""
-          html `shouldSatisfy` T.isInfixOf "hx-swap-oob=\"outerMorph\""
-          html `shouldSatisfy` T.isInfixOf "id=\"dashboard-variables\""
-          html `shouldSatisfy` T.isInfixOf "tab-active"
-          html `shouldSatisfy` T.isInfixOf "hx-push-url=\"true\""
-          html `shouldNotSatisfy` T.isInfixOf "<html"
+      html <- partialHtml =<< getTab tr dashId "errors" (Just "div#dashboard-tabs-content") [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
+      html `shouldContainAll` ["id=\"dashboard-tabs-content\"", "id=\"dashboard-tabs-container\"", "hx-swap-oob=\"outerMorph\"", "id=\"dashboard-variables\"", "tab-active", "hx-push-url=\"true\""]
+      html `shouldNotSatisfy` T.isInfixOf "<html"
 
   -- RUM is this template plus the Explorer's sessions view; the template must hold up on
   -- real browser telemetry, not just parse.
@@ -1514,12 +1422,12 @@ spec = sequential $ aroundAll withTestResources do
       -- enough to estimate: 100 + 200·3/4. CLS in OTel's default (0, 5] bucket cannot be placed.
       exportVital "inp" [point (-10) (-20) [0, 4, 0, 0] & PMF.explicitBounds .~ [100, 300, 600]]
       exportVital "cls" [point (-10) (-20) [0, 4, 0] & PMF.explicitBounds .~ [0, 5]]
-      rum <- maybe (fail "missing rum.yaml") pure . find (\d -> d.file == Just "rum.yaml") =<< DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+      rum <- rumTemplate
       let from = toText $ iso8601Show $ at (-3600)
           to = toText $ iso8601Show $ at 3600
           dataType = \case Widget.WTTable -> Charts.DTText; Widget.WTStat -> Charts.DTFloat; _ -> Charts.DTMetric
           run ws = forM ws \w -> (w.title,) <$> runQueryEffect tr (Charts.queryMetrics Nothing (Just $ dataType w.wType) (Just projectId) w.query w.sql Nothing (Just from) (Just to) Nothing Nothing [])
-          widgetNamed t = maybe (fail $ "missing " <> toString t) pure $ find ((== Just t) . (.title)) (DashboardModel.allWidgets rum)
+          widgetNamed t = widgetTitled t (DashboardModel.allWidgets rum)
           table rs title = maybe V.empty (.dataText) $ lookup (Just title) rs
           vitalRow rs name = V.toList . V.take 5 <$> find ((== Just name) . (V.!? 0)) (table rs "Core Web Vitals")
       results <- run [w | w <- DashboardModel.allWidgets rum, isJust w.sql]
@@ -1532,9 +1440,8 @@ spec = sequential $ aroundAll withTestResources do
       -- Abbreviations explain themselves on hover: the row's hidden description on the cell,
       -- the column's on its header.
       vitals <- widgetNamed "Core Web Vitals"
-      let vitalsHtml = toStrict $ renderText $ Widget.renderTableWithDataAndParams vitals (table results "Core Web Vitals") []
-      vitalsHtml `shouldSatisfy` T.isInfixOf "data-tippy-content=\"Largest Contentful Paint: when the main content becomes visible."
-      vitalsHtml `shouldSatisfy` T.isInfixOf "aria-description=\"Real-user observations in the selected window.\""
+      let vitalsHtml = renderT $ Widget.renderTableWithDataAndParams vitals (table results "Core Web Vitals") []
+      vitalsHtml `shouldContainAll` ["data-tippy-content=\"Largest Contentful Paint: when the main content becomes visible.", "aria-description=\"Real-user observations in the selected window.\""]
       vitalsHtml `shouldNotSatisfy` T.isInfixOf ">About<"
       -- An SDK upgrade mixes bucket layouts: a [2500]-bounded export coarsens every point to
       -- the shared 2500 edge, giving [16, 4] over 20, so the 15th observation sits at 2500·15/16.
@@ -1555,7 +1462,7 @@ spec = sequential $ aroundAll withTestResources do
       viaSql <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just projectId) Nothing (Just "SELECT count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}}") Nothing (Just from) (Just to) Nothing Nothing []
       (sessions.error, sessions.queryResultCount, viaSql.dataFloat) `shouldBe` (Nothing, 2, Just 2)
       topPages <- widgetNamed "Top pages"
-      let html = toStrict $ renderText $ Widget.renderTableWithDataAndParams topPages{Widget._projectId = Just projectId} (table results "Top pages") [("since", Just "7D")]
+      let html = renderT $ Widget.renderTableWithDataAndParams topPages{Widget._projectId = Just projectId} (table results "Top pages") [("since", Just "7D")]
       html `shouldNotSatisfy` T.isInfixOf "Explorer query"
       map (\ps -> (lookup "since" ps, lookup "query" ps)) (linkParams ("/p/" <> projectId.toText <> "/log_explorer") html)
         `shouldBe` [(Just "7D", row V.!? 3) | row <- V.toList $ table results "Top pages"]
@@ -1569,11 +1476,11 @@ spec = sequential $ aroundAll withTestResources do
       emit 3 "chrome" (Just "Windows Chrome/151 Safari/537") [mkAttr "user.id" "bob"]
       emit 4 "unknown" Nothing []
       emit 5 "" (Just "Windows Chrome/151") [mkAttr "exception.type" "TypeError"]
-      rum <- maybe (fail "missing rum.yaml") pure . find (\d -> d.file == Just "rum.yaml") =<< DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+      rum <- rumTemplate
       let from = toText $ iso8601Show $ addUTCTime (-3600) frozenTime
           to = toText $ iso8601Show $ addUTCTime 3600 frozenTime
           readTable params title = do
-            w <- maybe (fail $ "missing " <> toString title) pure $ find ((== Just title) . (.title)) (DashboardModel.allWidgets rum)
+            w <- widgetTitled title (DashboardModel.allWidgets rum)
             result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just pid) w.query w.sql Nothing (Just from) (Just to) Nothing Nothing params
             result.error `shouldBe` Nothing
             pure result.dataText
@@ -1584,9 +1491,7 @@ spec = sequential $ aroundAll withTestResources do
       users <- readTable [("var-errors", Just "true")] "Identified users"
       map (V.toList . V.take 3) (V.toList users) `shouldBe` [["alice@example.com", "1", "1"]]
       forM_ ([([("var-browser", Just "Safari")], 2), ([("var-os", Just "iOS"), ("var-device", Just "Mobile")], 2), ([("var-browser", Just "Unknown")], 1), ([("var-errors", Just "true")], 2)] :: [([(Text, Maybe Text)], Int)]) \(params, expected) -> do
-        headers <- runAuthHandler tr $ Dashboards.rumRedirectH pid ["sessions"] params
-        let location = case lookupResponseHeader @"Location" headers of Header url -> url; _ -> ""
-            query = lookup "query" =<< listToMaybe (linkParams ("/p/" <> pid.toText <> "/log_explorer") ("href=\"" <> location <> "\""))
+        query <- (lookup "query" <=< listToMaybe) . explorerLinkParams pid <$> rumLocation tr pid ["sessions"] params
         (_, events) <- testServant tr $ Log.logExplorerDataH pid def{Log.query = query, Log.from = Just from, Log.to = Just to}
         (events.error, events.queryResultCount) `shouldBe` (Nothing, expected)
       readTable [("var-app", Just "missing-app")] "Browsers" `shouldReturn` V.empty
@@ -1598,19 +1503,15 @@ spec = sequential $ aroundAll withTestResources do
     -- /rum and its older /rum/dashboard open the dashboard; /rum/sessions the Explorer. Links from
     -- emails and alerts carry a window, which both must keep.
     it "rumRedirects_openTheDashboardOrSessions_andKeepTheWindow" \tr -> do
-      let location view ps =
-            runAuthHandler tr (Dashboards.rumRedirectH testPid view ps) <&> \h -> case lookupResponseHeader @"Location" h of
-              Header l -> l
-              _ -> ""
+      let location = rumLocation tr testPid
           window = [("since", Just "7D"), ("environment", Just "prod")]
       dashboard <- location [] window
-      dashboard `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/dashboards/")
-      dashboard `shouldSatisfy` T.isInfixOf "since=7D"
+      dashboard `shouldContainAll` ["/p/" <> testPid.toText <> "/dashboards/", "since=7D"]
       location ["dashboard"] window `shouldReturn` dashboard
       sessions <- location ["sessions"] window
       -- A trailing slash captures an empty last segment; it must not turn into a 404.
       location ["sessions", ""] window `shouldReturn` sessions
-      linkParams ("/p/" <> testPid.toText <> "/log_explorer") ("href=\"" <> sessions <> "\"") `shouldBe` [[("since", "7D"), ("viz_type", "sessions"), ("query", browserKql)]]
+      explorerLinkParams testPid sessions `shouldBe` [[("since", "7D"), ("viz_type", "sessions"), ("query", browserKql)]]
       -- A link shared from the old page lands on that session, not the dashboard.
       legacy <- location [] [("tab", Just "sessions"), ("session", Just "abc")]
-      linkParams ("/p/" <> testPid.toText <> "/log_explorer") ("href=\"" <> legacy <> "\"") `shouldBe` [[("viz_type", "sessions"), ("query", "attributes.session.id == \"abc\"")]]
+      explorerLinkParams testPid legacy `shouldBe` [[("viz_type", "sessions"), ("query", "attributes.session.id == \"abc\"")]]

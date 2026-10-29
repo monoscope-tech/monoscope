@@ -50,7 +50,6 @@ import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
 import Data.Generics.Product.Fields (HasField', field')
-import Data.List qualified as L (isSuffixOf)
 import Data.OpenApi (ToParamSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
@@ -81,7 +80,7 @@ import Pkg.Parser (fillQueryTemplate, variablePresets)
 import Relude
 import Servant (FromHttpApiData, ServerError (..), err404)
 import System.Directory (listDirectory)
-import System.FilePath ((</>))
+import System.FilePath (isExtensionOf, (</>))
 import System.Types (DB)
 
 
@@ -239,7 +238,7 @@ insertSql d =
 
 
 yamlFiles :: FilePath -> IO [FilePath]
-yamlFiles dir = sort . filter (".yaml" `L.isSuffixOf`) <$> listDirectory dir
+yamlFiles dir = sort . filter ("yaml" `isExtensionOf`) <$> listDirectory dir
 
 
 -- | Read dashboard YAML files from directory at compile time via TH
@@ -258,12 +257,11 @@ readDashboardFile dir file = do
         first (("read error: " <>) . show) raw
           >>= first (("YAML error: " <>) . show)
           . Yml.decodeEither'
-          >>= first toString
-          . validateDashboard
-          :: Either String Dashboard
+          >>= validateDashboard
+          :: Either Text Dashboard
   parsed
     & either
-      (\e -> Nothing <$ putStrLn ("Error loading dashboard " <> path <> ": " <> e))
+      (\e -> Nothing <$ putTextLn ("Error loading dashboard " <> toText path <> ": " <> e))
       (\d -> pure $ Just d{file = Just $ fromString file})
   where
     path = dir </> file
@@ -277,7 +275,7 @@ readDashboardEndpoint :: (Error ServerError :> es, HTTP :> es) => Text -> Eff es
 readDashboardEndpoint uri = do
   fileResp <- W.get (toString uri)
   either (\e -> throwError err404{errBody = "Error decoding dashboard: " <> show e}) pure
-    $ first (toText . show) (Yml.decodeEither' $ toStrict $ fileResp ^. W.responseBody)
+    $ first show (Yml.decodeEither' $ toStrict $ fileResp ^. W.responseBody)
     >>= validateDashboard
 
 
@@ -297,7 +295,7 @@ validateDashboard dashboard = case violations of
     violations =
       [ fromMaybe "<untitled>" widget.title
       | widget <- allWidgets dashboard
-      , any ((== Just True) . (.sortable)) $ fromMaybe [] widget.columns
+      , any ((== Just True) . (.sortable)) $ fold widget.columns
       , Just sql <- [widget.sql]
       , isNothing widget.defaultSort || not ("{{table_sort}}" `T.isInfixOf` sql)
       ]
@@ -399,7 +397,7 @@ updateSchema dashId dashboard updatedAt =
 
 -- | Absent tab variable lists retain the dashboard's full filter bar.
 variablesForTab :: Dashboard -> Maybe Tab -> [Variable]
-variablesForTab dash tab = filter (\v -> maybe True (v.key `elem`) (tab >>= (.variables))) (fold dash.variables)
+variablesForTab dash tab = filter (\v -> all (v.key `elem`) (tab >>= (.variables))) (fold dash.variables)
 
 
 -- | Replace (@Just@) or delete (@Nothing@) one named view atomically; concurrent saves of other views survive.
