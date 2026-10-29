@@ -1623,9 +1623,7 @@ fanOutToTeam team fan alert pid title alertUrl = do
 
 trendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Widget.Widget -> Text -> Text -> Eff es (Maybe Text)
 trendChartUrl ctx pid widget fromTxt toTxt =
-  mfilter (not . T.null)
-    . Just
-    <$> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid widget{Widget.pngProfile = Just Widget.PngSlack} Nothing (Just fromTxt) (Just toTxt)
+  Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid widget{Widget.pngProfile = Just Widget.PngSlack} Nothing (Just fromTxt) (Just toTxt)
 
 
 -- | A Slack image is fetched after its message is sent, so the PNG endpoint
@@ -3250,7 +3248,7 @@ sendReportForProject pid rType = do
       let stmTxt = formatUTCMicros startTime
           currentTimeTxt = formatUTCMicros currentTime
           reportUrl = projectUrl ctx pid <> "/reports/" <> report.id.toText
-          png w = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just stmTxt) (Just currentTimeTxt)
+          png w = fold <$> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just stmTxt) (Just currentTimeTxt)
       allQ <- png RP.eventsWidget
       errQ <- png RP.errorsWidget
       let alert = ReportAlert rType stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ

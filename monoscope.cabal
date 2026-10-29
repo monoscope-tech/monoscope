@@ -272,6 +272,7 @@ extra-source-files:
     static/migrations/0254_rum_segments.sql
     static/migrations/0255_api_change_recorded_service.sql
     static/migrations/0255_dashboard_saved_views.sql
+    static/migrations/0256_ai_artifacts.sql
     test/fixtures/github-app-test.pem
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json

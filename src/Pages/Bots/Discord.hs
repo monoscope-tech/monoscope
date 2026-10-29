@@ -177,7 +177,7 @@ discordInteractionsH rawBody signatureM timestampM = do
             case T.splitOn "___" selected of
               [widget, dashboardId] -> withDashboardTemplate discordData.projectId dashboardId \dashboard ->
                 whenJust (find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets) \w -> do
-                  chartUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w Nothing Nothing Nothing
+                  chartUrl <- fold <$> widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w Nothing Nothing Nothing
                   followup envCfg interaction $ sharedWidgetContent widget chartUrl (envCfg.hostUrl <> "p/" <> discordData.projectId.toText <> "/dashboards/" <> dashboardId)
               _ -> pass
           _ -> pass

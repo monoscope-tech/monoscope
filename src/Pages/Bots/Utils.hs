@@ -314,7 +314,7 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
         Nothing -> send $ ReplyText $ textReply $ "No " <> display reportType <> " report found. Reports are generated automatically on schedule."
         Just report -> do
           let stamp = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
-              png q theme = Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just q, Widget.theme = theme} Nothing (Just $ stamp report.startTime) (Just $ stamp report.endTime)
+              png q theme = fold <$> Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just q, Widget.theme = theme} Nothing (Just $ stamp report.startTime) (Just $ stamp report.endTime)
           eventsUrl <- png "summarize count(*) by bin_auto(timestamp), status_code" Nothing
           errorsUrl <- png "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code" (Just "roma")
           send $ ReplyText $ formatReport report eventsUrl errorsUrl
@@ -378,7 +378,7 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
               let wType = Widget.mapChartTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   queryUrl = explorerUrl <> "viz_type=" <> chartType <> "&query=" <> toUriStr query
-              imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing (iso fromTimeM) (iso toTimeM)
+              imageUrl <- fold <$> Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing (iso fromTimeM) (iso toTimeM)
               send $ ReplyChart $ case target of
                 Slack ->
                   AE.object

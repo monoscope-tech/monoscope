@@ -392,9 +392,8 @@ spec = around withTestResources do
             secret = tr.trATCtx.env.apiKeyEncryptionSecretKey
             baseUrl = tr.trATCtx.env.hostUrl
 
-        url <- liftIO $ Eff.runEff $ Logging.runLog "test" tr.trLogger tr.trATCtx.config.logLevel $ Widget.widgetPngUrl secret baseUrl testPid widget Nothing Nothing Nothing
+        url <- fold <$> liftIO (Eff.runEff $ Logging.runLog "test" tr.trLogger tr.trATCtx.config.logLevel $ Widget.widgetPngUrl secret baseUrl testPid widget Nothing Nothing Nothing)
 
-        url `shouldSatisfy` (not . T.null)
         url `shouldSatisfy` T.isInfixOf "widgetZ="
         url `shouldSatisfy` T.isInfixOf "&sig="
 
@@ -407,4 +406,4 @@ spec = around withTestResources do
 
         url <- liftIO $ Eff.runEff $ Logging.runLog "test" tr.trLogger tr.trATCtx.config.logLevel $ Widget.widgetPngUrl secret baseUrl testPid hugeWidget Nothing Nothing Nothing
 
-        url `shouldBe` ""
+        url `shouldBe` Nothing

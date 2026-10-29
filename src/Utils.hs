@@ -106,7 +106,7 @@ import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types qualified as AET
-import Data.Char (isAlpha, isAlphaNum, isDigit)
+import Data.Char (isAlpha, isAlphaNum, isDigit, isHexDigit)
 import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
@@ -481,9 +481,11 @@ deleteParam key url
       _ -> t
 
 
+-- | Collapse numeric path segments to @[*]@ so array indices don't fragment a JSON field
+-- path into one path per index.
+--
 -- >>> replaceNumbers "response_body.0.completed"
 -- "response_body[*].completed"
---
 replaceNumbers :: Text -> Text
 replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDigitPart parts)
   where
@@ -712,16 +714,15 @@ data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierSampled Int Int | FreeT
 
 freeTierUsageBanner :: Text -> FreeTierStatus -> Html ()
 freeTierUsageBanner pid = \case
-  FreeTierSampled oneIn limit ->
-    div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillWarning-weak text-textWarning rounded-lg justify-center"] do
-      strong_ $ "Free tier: today\x2019s events are sampled, about 1 in " <> toHtml (formatWithCommas $ fromIntegral oneIn) <> " kept, to stay within " <> toHtml (formatWithCommas $ fromIntegral limit) <> " a day."
-      a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Upgrade to keep every event \x2192"
-  FreeTierExceeded{} ->
-    div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillError-weak text-textError rounded-lg justify-center"] do
-      strong_ "Daily cap reached \x2014 new events are dropped until 00:00 UTC."
-      a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Upgrade to keep sending events \x2192"
+  FreeTierSampled oneIn limit -> banner "bg-fillWarning-weak text-textWarning" ("Free tier: today\x2019s events are sampled, about 1 in " <> toHtml (formatWithCommas $ fromIntegral oneIn) <> " kept, to stay within " <> toHtml (formatWithCommas $ fromIntegral limit) <> " a day.") "Upgrade to keep every event \x2192"
+  FreeTierExceeded{} -> banner "bg-fillError-weak text-textError" "Daily cap reached \x2014 new events are dropped until 00:00 UTC." "Upgrade to keep sending events \x2192"
   NotFreeTier -> pass
   FreeTierOk -> pass
+  where
+    banner :: Text -> Html () -> Html () -> Html ()
+    banner tone msg cta = div_ [class_ $ "flex w-full text-center items-center px-4 gap-4 py-1 rounded-lg justify-center " <> tone] do
+      strong_ msg
+      a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] cta
 
 
 -- | From today's (seen, kept) under a daily @limit@: sampled once about half or more is left out, and
@@ -1331,9 +1332,9 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     -- Hex+digit sequence starting with hex alpha (from suffix peeling)
     scanHexDigit :: Text -> TLB.Builder
     scanHexDigit !txt =
-      let (fullHex, rest) = T.span isHexDigit' txt
+      let (fullHex, rest) = T.span isHexDigit txt
           len = T.length fullHex
-          atBoundary = T.null rest || not (isHexDigit' (T.head rest))
+          atBoundary = T.null rest || not (isHexDigit (T.head rest))
           -- Fallback: emit one char at a time so digits within get replaced
           fallback = maybe (TLB.singleton (T.head txt) <> go (Just (T.head txt)) (T.drop 1 txt)) (<> go (Just '}') rest) (hexDigest len atBoundary)
        in if len >= 8 && not (T.null rest) && T.head rest == '-'
@@ -1345,7 +1346,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     scanDigit !txt
       -- 0x hex literal
       | T.compareLength txt 2 /= LT && T.head txt == '0' && T.index txt 1 == 'x' =
-          let (hexRun, rest) = T.span isHexDigit' (T.drop 2 txt)
+          let (hexRun, rest) = T.span isHexDigit (T.drop 2 txt)
            in if T.null hexRun then "{integer}" <> go (Just '}') (T.drop 1 txt) else "{hex}" <> go (Just '}') rest
       | otherwise =
           let (digits, afterDigits) = T.span isDigit txt
@@ -1384,9 +1385,9 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
 
     classifyHexContinuation :: Text -> Text -> TLB.Builder
     classifyHexContinuation !txt !afterDigits =
-      let (fullHex, rest) = T.span isHexDigit' txt
+      let (fullHex, rest) = T.span isHexDigit txt
           len = T.length fullHex
-          atBoundary = T.null rest || not (isHexDigit' (T.head rest))
+          atBoundary = T.null rest || not (isHexDigit (T.head rest))
           fallback
             | len == 8 && not (T.null rest) && T.head rest == '-' = maybe integerFb (\r -> "{uuid}" <> go (Just '}') r) (tryUUID txt)
             | otherwise = integerFb
@@ -1449,13 +1450,13 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     tryUUID :: Text -> Maybe Text
     tryUUID !txt = do
       r5 <- (hexSeg 8 >=> dashHex 4 >=> dashHex 4 >=> dashHex 4 >=> dashHex 12) txt
-      r5 <$ guard (T.null r5 || not (isHexDigit' (T.head r5)))
+      r5 <$ guard (T.null r5 || not (isHexDigit (T.head r5)))
       where
         dashHex n = T.stripPrefix "-" >=> hexSeg n
 
     -- Exactly @n@ hex chars, returning what follows.
     hexSeg :: Int -> Text -> Maybe Text
-    hexSeg n t = let (seg, rest) = T.splitAt n t in rest <$ guard (T.length seg == n && T.all isHexDigit' seg)
+    hexSeg n t = let (seg, rest) = T.splitAt n t in rest <$ guard (T.length seg == n && T.all isHexDigit seg)
 
     -- Exactly @n@ digits, returning what follows.
     digitsN :: Int -> Text -> Maybe Text
@@ -1472,9 +1473,6 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
 
     isHexAlpha :: Char -> Bool
     isHexAlpha c = (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
-
-    isHexDigit' :: Char -> Bool
-    isHexDigit' c = isDigit c || isHexAlpha c
 
 
 truncateHour :: UTCTime -> UTCTime

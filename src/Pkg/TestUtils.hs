@@ -49,6 +49,7 @@ module Pkg.TestUtils (
   drainExtractionWorker,
   deferredBody,
   shellHtml,
+  renderT,
   processMessagesAndBackgroundJobs,
   createTestSpans,
   -- OTLP/Telemetry helpers
@@ -1244,7 +1245,11 @@ deferredBody = \case
 
 -- | A handler's response rendered to HTML.
 shellHtml :: Lucid.ToHtml a => TestResources -> ATAuthCtx (RespHeaders a) -> IO Text
-shellHtml tr render = toStrict . Lucid.renderText . Lucid.toHtml . snd <$> testServant tr render
+shellHtml tr render = renderT . snd <$> testServant tr render
+
+
+renderT :: Lucid.ToHtml a => a -> Text
+renderT = toStrict . Lucid.renderText . Lucid.toHtml
 
 
 -- | Drain all queued extraction batches synchronously, then flush drain

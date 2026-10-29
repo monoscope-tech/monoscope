@@ -362,7 +362,7 @@ slackActionsH action = do
         widget <- maybe (throwError err400{errBody = "This widget changed. Reopen /dashboard."}) pure $ find ((== selected) . widgetSelectionId) dashboard.widgets
         let title = fromMaybe "Untitled" widget.title
         requireAccess
-        chartUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl context.projectId widget Nothing Nothing Nothing
+        chartUrl <- fold <$> widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl context.projectId widget Nothing Nothing Nothing
         perform did dashboard title chartUrl
   case slackAction.type_ of
     "block_actions" -> case slackAction.actions >>= viaNonEmpty head of

@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -128,9 +128,6 @@ data WidgetType
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
-  -- Parses the bare snake_case spelling a form actually submits (@widget_type=top_list@).
-  -- The blanket orphan this replaces ran the raw param through 'AE.eitherDecodeStrict',
-  -- so it only ever accepted a *quoted* JSON string.
   deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "WT" WidgetType
 
 
@@ -470,11 +467,6 @@ projectIdText :: Widget -> Text
 projectIdText w = foldMap (.toText) w._projectId
 
 
--- | Widget boolean flags round-trip as @Maybe Bool@ (Nothing = false); this reads them.
-isTrue :: Maybe Bool -> Bool
-isTrue = (== Just True)
-
-
 -- | HTMX fetch URL for a (already eager-prepared) widget: the project-scoped
 -- /widget endpoint carrying the widget as a compressed @widgetZ@ blob.
 --
@@ -501,25 +493,26 @@ decodeWidgetZ z = case B64URL.decodeBase64Untyped (encodeUtf8 z) of
   Right bs -> liftIO $ Safe.handleAny (const $ pure Nothing) $ Just <$> evaluateWHNF (decodeUtf8 @Text $ toStrict $ GZip.decompress $ fromStrict bs)
 
 
--- | Data attributes for table row click handling (delegated via global JS handler in widgets.ts)
-
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
 widgetPostH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget -> ATAuthCtx (RespHeaders Widget)
 widgetPostH pid sinceM fromM toM widget = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
-  let widgetWithPid = widget & #_projectId ?~ pid
-  pngUrl <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid widgetWithPid sinceM fromM toM
-  addRespHeaders $ if T.null pngUrl then widgetWithPid else widgetWithPid{pngUrl = Just pngUrl}
+  addRespHeaders =<< stampPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid sinceM fromM toM (widget & #_projectId ?~ pid)
 
 
-widgetPngUrl :: Log :> es => Text -> Text -> Projects.ProjectId -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
+-- | Nothing when the URL would exceed 8000 chars (logged), since chat/email clients reject it.
+widgetPngUrl :: Log :> es => Text -> Text -> Projects.ProjectId -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es (Maybe Text)
 widgetPngUrl secret hostUrl pid widget since fromM toM =
   let widgetJson = encodeText widget
       compressed = encodeWidgetZ widgetJson
       sig = signWidgetUrl secret pid widgetJson
       timeParams = mconcat $ catMaybes [("&since=" <>) . toUriStr <$> since, ("&from=" <>) . toUriStr <$> fromM, ("&to=" <>) . toUriStr <$> toM]
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetZ=" <> compressed <> timeParams <> "&sig=" <> sig
-   in if T.length url > 8000 then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) $> "" else pure url
+   in if T.length url > 8000 then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) $> Nothing else pure (Just url)
+
+
+stampPngUrl :: Log :> es => Text -> Text -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget -> Eff es Widget
+stampPngUrl secret hostUrl pid since fromM toM w = widgetPngUrl secret hostUrl pid w since fromM toM <&> \url -> w{pngUrl = url <|> w.pngUrl}
 
 
 signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text
@@ -569,14 +562,14 @@ widget_ w' = case w.wType of
         input_ [type_ "checkbox", class_ "sr-only peer wgt-collapse"]
         Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform peer-checked:rotate-180"
     -- Nested grid: flex-1 fills remaining space
-    div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : [data_ "stat-grid" "" | not (null normalizedChildren) && all (\child -> child.wType `elem` [WTStat, WTTimeseriesStat]) normalizedChildren] <> gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
+    div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : [data_ "stat-grid" "" | not (null normalizedChildren) && all isStatWidget normalizedChildren] <> gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
   WTTable -> wgtCard_ $ renderTable w
   WTLogs -> wgtCard_ $ renderLogsWidget w
   WTServiceMap -> wgtCard_ $ withCardFrame True w (ctaAction w) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
   where
-    normalizedChildren = fromMaybe [] $ listToMaybe (normalizeWidgetLayouts [w']) >>= (.children)
+    normalizedChildren = fold $ listToMaybe (normalizeWidgetLayouts [w']) >>= (.children)
     w = (w' & #children .~ (normalizedChildren <$ w'.children)) & #id %~ (<|> (slugify <$> w'.title))
     effectiveWidth = min 12 $ max 1 $ fromMaybe defaultWidgetWidth $ w.layout >>= (.w)
     isFullWidth = effectiveWidth == 12
@@ -603,7 +596,7 @@ widget_ w' = case w.wType of
     widgetJson = encodeText w
     autoFitAttr = memptyIfFalse (w.wType `elem` [WTAnomalies, WTGroup, WTTable, WTLogs, WTFlamegraph]) [data_ "mobile-autofit" ""]
     gridItem_ =
-      if isTrue w.naked
+      if or w.naked
         then Relude.id
         else div_ ([class_ "grid-stack-item h-full flex-1 !overflow-visible has-[details[open]]:z-50 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs <> autoFitAttr) . div_ [class_ "grid-stack-item-content h-full !overflow-visible [.grid-stack_&]:h-auto"]
     wgtCard_ = gridItem_ . div_ [class_ "h-full group/wgt "]
@@ -688,13 +681,13 @@ normalizeWidgetLayouts widgets =
     placeWidget (occupied, acc) (idx, widget) =
       let layout = fromMaybe def widget.layout
           width = min 12 $ max 1 $ fromMaybe defaultWidgetWidth layout.w
-          groupChildren = fromMaybe [] widget.children
+          groupChildren = fold widget.children
           fourStatRow =
             widget.wType
               == WTGroup
               && width
               == 12
-              && all (\child -> child.wType `elem` [WTStat, WTTimeseriesStat]) groupChildren
+              && all isStatWidget groupChildren
               && map (\child -> (child.layout >>= (.x), child.layout >>= (.y))) groupChildren
               == [(Just x, Just 0) | x <- [0, 3, 6, 9]]
           rowHeight = max 1 $ layoutRows groupChildren
@@ -725,6 +718,10 @@ defaultWidgetWidth :: Int
 defaultWidgetWidth = 3
 
 
+isStatWidget :: Widget -> Bool
+isStatWidget w = w.wType `elem` [WTStat, WTTimeseriesStat]
+
+
 layoutRows :: [Widget] -> Int
 layoutRows = foldl' (\rows widget -> max rows $ fromMaybe 0 (widget.layout >>= (.y)) + fromMaybe 1 (widget.layout >>= (.h))) 0
 
@@ -732,7 +729,7 @@ layoutRows = foldl' (\rows widget -> max rows $ fromMaybe 0 (widget.layout >>= (
 widgetHeightForWidth :: Int -> Widget -> Int
 widgetHeightForWidth width widget = case widget.wType of
   WTGroup ->
-    let requiredHeight = 1 + max 1 (layoutRows $ fromMaybe [] widget.children)
+    let requiredHeight = 1 + max 1 (layoutRows $ fold widget.children)
      in if width == 12 then requiredHeight else maybe requiredHeight (max requiredHeight) (widget.layout >>= (.h))
   WTTimeseriesLine -> max 3 $ fromMaybe 1 $ widget.layout >>= (.h)
   _ -> max 1 $ fromMaybe 1 $ widget.layout >>= (.h)
@@ -747,7 +744,7 @@ gridPercent value = toText (printf "%.10f%%" ((fromIntegral value :: Double) * 1
 
 
 gridStackHandleClassFor :: Widget -> Text
-gridStackHandleClassFor w = bool "grid-stack-handle" "nested-grid-stack-handle" (isTrue w._isNested)
+gridStackHandleClassFor w = bool "grid-stack-handle" "nested-grid-stack-handle" (or w._isNested)
 
 
 -- | Marks text that still contains @{{var-…}}@ placeholders so the client can
@@ -772,15 +769,6 @@ renderDottedTitle t = case T.breakOn "." t of
       (mid, lastSeg) -> do
         span_ [class_ "truncate text-textWeak font-normal"] $ toHtml ("." <> mid)
         span_ [class_ "shrink-0"] $ toHtml lastSeg
-
-
-displayUnit :: Text -> Text
-displayUnit = \case
-  "" -> ""
-  "1" -> ""
-  "{}" -> ""
-  "By" -> " bytes"
-  u -> " " <> u
 
 
 -- | Pick the same representative value used by the browser for a stat tile.
@@ -835,7 +823,7 @@ formatStatValue :: Double -> Text -> Text
 formatStatValue value unit
   | isNaN value || isInfinite value = "N/A"
   | Just factor <- unitNanos unit = formatDuration $ value * factor
-  | unit `elem` ["By", "by", "bytes", "byte", "B"] = formatBytes value
+  | isByteUnit unit = formatBytes value
   | value > 0, value < 0.01 = "<0.01" <> displayUnit unit
   | otherwise = formatNumber value <> displayUnit unit
   where
@@ -856,6 +844,12 @@ formatStatValue value unit
 
     trimFixed places = T.dropWhileEnd (== '.') . T.dropWhileEnd (== '0') . showFFloat' places
 
+    displayUnit u = memptyIfFalse (u `notElem` ["", "1", "{}"]) (" " <> u)
+
+
+isByteUnit :: Text -> Bool
+isByteUnit = (`elem` ["By", "by", "bytes", "byte", "B"])
+
 
 -- | The badge holding a widget's representative scalar for the current range —
 -- the sum for additive counts, a mean/rate/min/max per @summarizeBy@ (see
@@ -867,35 +861,29 @@ formatStatValue value unit
 -- header around a @naked@ chart shows the same number the widget would have,
 -- rather than computing a second total that could disagree with the chart.
 widgetValueSlot_ :: Text -> Maybe Text -> Html ()
-widgetValueSlot_ wid valueM =
-  span_
-    [ class_ $ "bg-fillWeak text-sm font-medium px-2 py-1 rounded-lg leading-none text-textWeak whitespace-nowrap max-md:hidden" <> bool " hidden" "" (isJust valueM)
-    , id_ $ wid <> "Value"
-    ]
-    $ whenJust valueM toHtml
+widgetValueSlot_ = valueSlot_ "bg-fillWeak text-sm font-medium px-2 py-1 rounded-lg leading-none text-textWeak whitespace-nowrap max-md:hidden"
 
 
 -- | 'widgetValueSlot_' styled as a headline rather than as a badge beside the title.
 widgetValueSlotAs_ :: Text -> Maybe Text -> Html ()
-widgetValueSlotAs_ wid valueM =
-  span_
-    [ class_ $ "text-2xl font-semibold text-textStrong tabular-nums leading-none" <> bool " hidden" "" (isJust valueM)
-    , id_ $ wid <> "Value"
-    ]
-    $ whenJust valueM toHtml
+widgetValueSlotAs_ = valueSlot_ "text-2xl font-semibold text-textStrong tabular-nums leading-none"
+
+
+valueSlot_ :: Text -> Text -> Maybe Text -> Html ()
+valueSlot_ cls wid valueM = span_ [class_ $ cls <> bool " hidden" "" (isJust valueM), id_ $ wid <> "Value"] $ whenJust valueM toHtml
 
 
 renderWidgetHeader :: Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
-renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "min-h-8 px-1 leading-none flex justify-between items-center " <> bool "grid-stack-handle" "" (isTrue widget.standalone), id_ $ wId <> "_header"] do
-  when (isTrue widget._centerTitle) $ div_ ""
+renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "min-h-8 px-1 leading-none flex justify-between items-center " <> bool "grid-stack-handle" "" (or widget.standalone), id_ $ wId <> "_header"] do
+  when (or widget._centerTitle) $ div_ ""
   div_ [class_ "inline-flex gap-3 items-center group/h min-w-0"] do
     span_ [class_ "text-sm text-textStrong font-semibold flex items-center gap-1 min-w-0"] do
-      unless (isTrue widget.standalone) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
+      unless (or widget.standalone) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       span_ ([class_ "flex min-w-0 overflow-hidden", title_ $ maybeToMonoid widget.title] <> varTemplateAttr widget.title) $ renderDottedTitle $ maybeToMonoid widget.title
       descIcon_ widget.description ""
-    widgetValueSlot_ wId (bool valueM Nothing (isTrue widget.hideValue))
-    span_ ([class_ $ "text-textWeak widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" (isTrue widget.hideSubtitle), id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
+    widgetValueSlot_ wId (bool valueM Nothing (or widget.hideValue))
+    span_ ([class_ $ "text-textWeak widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" (or widget.hideSubtitle), id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] Utils.reloadSpinner_
   div_ [class_ "text-iconNeutral flex items-center gap-0.5"] do
@@ -946,7 +934,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
     whenJust expandBtnFn \url ->
       button_
         ( Utils.drawerLoadAttrs_ url
-            <> maybe [] (pure . hxPushUrl_) widget.expandPushUrl
+            <> foldMap (pure . hxPushUrl_) widget.expandPushUrl
             <> [ class_ "p-2 cursor-pointer tap-target"
                , Aria.label_ "Expand widget"
                , data_ "tippy-content" "Expand widget"
@@ -1077,7 +1065,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
 -- @flex flex-col@. Pass @extraAction@ to attach an action button to the header.
 withCardFrame :: Bool -> Widget -> Maybe (Text, Text) -> Html () -> Html ()
 withCardFrame flexCol widget extraAction body = do
-  let naked = isTrue widget.naked
+  let naked = or widget.naked
   div_ [class_ "gap-0.5 flex flex-col h-full"] do
     unless naked $ renderWidgetHeader widget Nothing Nothing Nothing extraAction
     div_ [class_ "flex-1 flex min-h-0"]
@@ -1099,7 +1087,7 @@ renderLogsWidget widget = do
       pid = projectIdText widget
       queryParam = foldMap (\q -> "&query=" <> toUriStr q) widget.query
       fetchUrl = "/p/" <> pid <> "/log_explorer/data?json=true&layout=1" <> queryParam
-      action = Just ("Open in Explorer", "/p/" <> pid <> "/log_explorer" <> maybe "" ("?query=" <>) widget.query)
+      action = Just ("Open in Explorer", "/p/" <> pid <> "/log_explorer" <> foldMap ("?query=" <>) widget.query)
   withCardFrame False widget action
     $ termRaw
       "log-list"
@@ -1194,7 +1182,7 @@ renderTable widget = do
     $ div_
       [ class_ "h-full overflow-auto p-3"
       , hxGet_ $ widgetFetchUrl eagerWidget
-      , hxTrigger_ $ bool "intersect once, update-query from:window, table-sort" "update-query from:window, table-sort" (isJust widget.html) <> memptyIfFalse (widget.searchable == Just True) ", input delay:250ms, search"
+      , hxTrigger_ $ bool "intersect once, update-query from:window, table-sort" "update-query from:window, table-sort" (isJust widget.html) <> memptyIfFalse (or widget.searchable) ", input delay:250ms, search"
       , hxTarget_ $ "#" <> tableId
       , hxSelect_ $ "#" <> tableId
       , hxSwap_ "outerHTML"
@@ -1203,7 +1191,7 @@ renderTable widget = do
       , data_ "table-fetch" ""
       ]
     $ do
-      when (widget.searchable == Just True) $ searchInput_ "" ("Search " <> fromMaybe "rows" widget.title) []
+      when (or widget.searchable) $ searchInput_ "" ("Search " <> fromMaybe "rows" widget.title) []
       case widget.html of
         Just html -> toHtmlRaw html
         Nothing -> div_ [class_ "flex h-full min-h-32 items-center justify-center", id_ tableId] $ loadingIndicator_ LdSM LdSpinner
@@ -1215,10 +1203,10 @@ renderStatContent :: Widget -> Maybe Text -> Html ()
 renderStatContent widget valueM = do
   let chartId = maybeToMonoid widget.id
       statContentId = chartId <> "_stat"
-      hasData = isTrue widget.eager || isJust (widget.dataset >>= (.value))
+      hasData = or widget.eager || isJust (widget.dataset >>= (.value))
   div_
     [ id_ statContentId
-    , class_ $ "stat-widget px-3 flex flex-col " <> bool "py-3 " "py-2 " (isTrue widget._isNested)
+    , class_ $ "stat-widget px-3 flex flex-col " <> bool "py-3 " "py-2 " (or widget._isNested)
     , hxGet_ $ widgetFetchUrl (widget & #eager ?~ True)
     , hxTrigger_ $ bool "intersect once, update-query from:window" "update-query from:window" hasData
     , hxTarget_ $ "#" <> statContentId
@@ -1273,7 +1261,7 @@ renderChart widget = do
           , "alertThreshold" AE..= widget.alertThreshold
           , "seriesIntent" AE..= widget.seriesIntent
           , "warningThreshold" AE..= widget.warningThreshold
-          , "hideValue" AE..= isTrue widget.hideValue
+          , "hideValue" AE..= or widget.hideValue
           , "timeFrom" AE..= widget.timeFrom
           , "timeTo" AE..= widget.timeTo
           , "highlightFrom" AE..= widget.highlightFrom
@@ -1281,9 +1269,9 @@ renderChart widget = do
           , "markers" AE..= widget.markers
           , "dashboardId" AE..= widget._dashboardId
           ]
-      isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
+      isStat = isStatWidget widget
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
-    unless (isTrue widget.naked || isStat)
+    unless (or widget.naked || isStat)
       $ renderWidgetHeader widget valueM rateM widget.expandBtnFn Nothing
     div_ [class_ $ "flex-1 flex min-h-0 " <> bool "" (gridStackHandleClassFor widget) isStat] do
       div_
@@ -1294,7 +1282,7 @@ renderChart widget = do
               WTTimeseriesStat -> "justify-start "
               _ -> "justify-end "
             <> bool "min-h-0 " "" isStat
-            <> if isTrue widget.naked then "" else "surface-raised rounded-2xl relative"
+            <> if or widget.naked then "" else "surface-raised rounded-2xl relative"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -1349,13 +1337,6 @@ renderChart widget = do
 -- Echarts Logic
 -----------------------------------------------------------------------------
 
--- Helper: Extract series names from dataset source (headers[1:])
-extractSeriesNamesFromDataset :: Maybe WidgetDataset -> [Text]
-extractSeriesNamesFromDataset ds = case ds <&> (.source) of
-  Just (AE.Array arr) | Just (AE.Array headers) <- arr V.!? 0 -> mapMaybe (\case AE.String t -> Just t; _ -> Nothing) $ drop 1 $ V.toList headers
-  _ -> []
-
-
 -- | Whether a free-text unit word ("rows", "requests") is spelled out after the number.
 -- The y axis drops it: repeating it down every tick — @3.0K rows@ over @0 rows@ — widens the
 -- axis gutter by a word the widget's title already carries, and on a log-explorer-sized chart
@@ -1391,7 +1372,7 @@ unitValueExprJS unitWord unitM
     -- Bytes are their own case because formatNumber's suffixes are decimal magnitudes: a memory
     -- chart's axis read "1.0B" for a gigabyte -- B for "billion" -- directly above a table
     -- reading "1 GiB". The client-side @formatBytes@ mirrors 'Utils.formatBytes'.
-    isBytes = maybe False (`elem` ["By", "by", "bytes", "byte", "B"]) unitM
+    isBytes = any isByteUnit unitM
 
 
 -- Function to convert Widget to ECharts options
@@ -1399,14 +1380,17 @@ widgetToECharts :: Widget -> AE.Value
 widgetToECharts widget =
   let isStat = widget.wType == WTTimeseriesStat
       axisVisibility = not isStat
-      legendVisibility = not isStat && not (isTrue widget.hideLegend)
-      seriesNames = extractSeriesNamesFromDataset widget.dataset
+      legendVisibility = not isStat && not (or widget.hideLegend)
+      -- Series names from dataset source (headers[1:])
+      seriesNames = case widget.dataset <&> (.source) of
+        Just (AE.Array arr) | Just (AE.Array headers) <- arr V.!? 0 -> mapMaybe (\case AE.String t -> Just t; _ -> Nothing) $ drop 1 $ V.toList headers
+        _ -> []
       yMax = (.maxGroupSum) <$> (widget.dataset >>= (.stats))
-      maxLabel = if fromMaybe False (widget.yAxis >>= (.showOnlyMaxLabel)) then decodeUtf8 @Text . toStrict . AE.encode <$> yMax else Nothing
+      maxLabel = if or (widget.yAxis >>= (.showOnlyMaxLabel)) then encodeText <$> yMax else Nothing
       -- Detect categorical widget types (no time axis)
       isCategorical = widget.wType `elem` [WTDistribution, WTPieChart, WTTopList, WTTreeMap, WTFunnel]
       xAxisType = if isCategorical then "category" else "time"
-      legendTop = maybe False (T.isPrefixOf "top") widget.legendPosition
+      legendTop = any (T.isPrefixOf "top") widget.legendPosition
    in AE.object
         [ "tooltip"
             AE..= AE.object
@@ -1430,7 +1414,7 @@ widgetToECharts widget =
                       LSSm -> (12, 9, 9, [3, 6, 3, 6])
                       LSMd -> (14, 12, 12, [4, 8, 4, 8])
                       LSLg -> (16, 14, 14, [5, 10, 5, 10])
-                    isStatic = isTrue widget._staticRender
+                    isStatic = or widget._staticRender
                     legendOffset = if vPos == "top" then ["top" AE..= (0 :: Int)] else ["bottom" AE..= (2 :: Int)]
                  in [ "show" AE..= legendVisibility
                     , "type" AE..= if isStatic then "plain" else "scroll"
@@ -1449,8 +1433,8 @@ widgetToECharts widget =
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= if legendTop && legendVisibility then if widget.legendSize == Just LSXs then (20 :: Int) else 28 else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
-              , "bottom" AE..= if not legendTop && legendVisibility then (36 :: Int) else if isTrue widget.standalone then (0 :: Int) else (8 :: Int)
+              , "top" AE..= if legendTop && legendVisibility then if widget.legendSize == Just LSXs then (20 :: Int) else 28 else if or widget.naked then (16 :: Int) else (8 :: Int)
+              , "bottom" AE..= if not legendTop && legendVisibility then (36 :: Int) else if or widget.standalone then (0 :: Int) else (8 :: Int)
               , "containLabel" AE..= True
               , "show" AE..= False
               ]
@@ -1462,7 +1446,7 @@ widgetToECharts widget =
                 , "splitLine" AE..= AE.object ["show" AE..= False]
                 , "axisLine" AE..= AE.object ["show" AE..= axisVisibility, "lineStyle" AE..= AE.object ["color" AE..= "#000833A6", "type" AE..= "solid", "opacity" AE..= 0.1]]
                 , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget.xAxis >>= (.showAxisLabel))), "margin" AE..= (8 :: Int), "hideOverlap" AE..= True]
-                , "show" AE..= (axisVisibility || fromMaybe False (widget.xAxis >>= (.showAxisLabel)))
+                , "show" AE..= (axisVisibility || or (widget.xAxis >>= (.showAxisLabel)))
                 ]
                   <> if isCategorical
                     then [] -- For categorical, ECharts will derive categories from dataset
@@ -1502,7 +1486,7 @@ widgetToECharts widget =
               ["source" AE..= ((.source) <$> widget.dataset)]
         , "series" AE..= addMarkLinesToFirstSeries widget (zipWith (createSeries widget.wType) [1 ..] seriesNames)
         , "animation" AE..= False
-        , if isTrue widget.allowZoom
+        , if or widget.allowZoom
             then
               "toolbox"
                 AE..= AE.object
@@ -1519,7 +1503,7 @@ addMarkLinesToFirstSeries widget series
   where
     shouldShowLines = case fromMaybe TLAlways widget.showThresholdLines of
       TLNever -> False
-      TLOnBreach -> maybe False (/= Monitors.MSNormal) widget.alertStatus
+      TLOnBreach -> any (/= Monitors.MSNormal) widget.alertStatus
       TLAlways -> isJust widget.alertThreshold || isJust widget.warningThreshold
 
     mkMarkLine color label threshold =
@@ -1583,10 +1567,8 @@ createSeries widgetType colIdx name =
 -- >>> mapWidgetTypeToChartType WTServiceMap
 -- "graph"
 mapWidgetTypeToChartType :: WidgetType -> Text
-mapWidgetTypeToChartType WTTimeseries = "bar"
 mapWidgetTypeToChartType WTTimeseriesLine = "line"
 mapWidgetTypeToChartType WTTimeseriesStat = "line"
-mapWidgetTypeToChartType WTDistribution = "bar"
 mapWidgetTypeToChartType WTServiceMap = "graph" -- ECharts force-directed graph
 mapWidgetTypeToChartType WTHeatmap = "heatmap" -- ECharts heatmap
 mapWidgetTypeToChartType _ = "bar"
@@ -1600,7 +1582,7 @@ mapChartTypeToWidgetType _ = WTTimeseries
 
 renderTableWithDataAndParams :: Widget -> V.Vector (V.Vector Text) -> [(Text, Maybe Text)] -> Html ()
 renderTableWithDataAndParams widget dataRows params = do
-  let columns = fromMaybe [] widget.columns
+  let columns = fold widget.columns
       tableId = maybeToMonoid widget.id
       param k = join $ lookup k params
       currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
@@ -1623,14 +1605,21 @@ renderTableWithDataAndParams widget dataRows params = do
   table_ [class_ "dashboard-table table table-zebra table-sm w-full relative", id_ tableId] do
     sortableTableHead_ widget (find ((== "table-sort") . fst) params >>= snd)
     tbody_ [] do
-      let maxValues = calculateMaxValues columns dataRows
-          -- max formatted width per progress column, so bars line up
-          valueWidths =
-            M.fromList
-              [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (getRowValue idx row))) 5 dataRows)
-              | (col, idx) <- zip columns [0 ..]
-              , isJust col.progress
-              ]
+      let
+        -- max values per column, for percentage progress bars
+        maxValues =
+          M.fromList
+            [ (col.field, V.foldl' max 0 $ V.mapMaybe (\row -> row V.!? idx >>= readMaybe . toString) dataRows)
+            | (col, idx) <- zip columns [0 ..]
+            , col.progress == Just ColumnPercent
+            ]
+        -- max formatted width per progress column, so bars line up
+        valueWidths =
+          M.fromList
+            [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (getRowValue idx row))) 5 dataRows)
+            | (col, idx) <- zip columns [0 ..]
+            , isJust col.progress
+            ]
       V.forM_ dataRows \row -> do
         let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
             rowSubs = M.fromList [("row." <> c.field, getRowValue i row) | (c, i) <- zip columns [0 ..]]
@@ -1645,7 +1634,7 @@ renderTableWithDataAndParams widget dataRows params = do
           )
           $ ifor_ columns \idx col ->
             unless (or col.hidden)
-              $ td_ ([class_ $ cellClass col] <> foldMap (\t -> let tip = replacePlaceholders rowSubs t in [term "data-tippy-content" tip, term "aria-description" tip]) col.tooltip)
+              $ td_ ([class_ $ fromMaybe "" col.align <> memptyIfFalse (isNumericCol col) " monospace"] <> foldMap (\t -> let tip = replacePlaceholders rowSubs t in [term "data-tippy-content" tip, term "aria-description" tip]) col.tooltip)
               $ if isJust col.progress
                 then renderProgressCell col (getRowValue idx row) maxValues valueWidths
                 else renderLongTextOr widget cellLinkSubs col (getRowValue idx row)
@@ -1653,16 +1642,6 @@ renderTableWithDataAndParams widget dataRows params = do
 
 getRowValue :: Int -> V.Vector Text -> Text
 getRowValue idx row = fromMaybe "" $ row V.!? idx
-
-
--- Calculate max values for column percentage progress bars
-calculateMaxValues :: [TableColumn] -> V.Vector (V.Vector Text) -> M.Map Text Double
-calculateMaxValues columns dataRows =
-  M.fromList
-    [ (col.field, V.foldl' max 0 $ V.mapMaybe (\row -> row V.!? idx >>= readMaybe . toString) dataRows)
-    | (col, idx) <- zip columns [0 ..]
-    , col.progress == Just ColumnPercent
-    ]
 
 
 renderProgressCell :: TableColumn -> Text -> M.Map Text Double -> M.Map Text Int -> Html ()
@@ -1691,15 +1670,10 @@ isNumericCol :: TableColumn -> Bool
 isNumericCol col = col.columnType `elem` [Just CTNumber, Just CTDuration]
 
 
--- | @td@ classes: column alignment plus monospace for numeric/duration columns.
-cellClass :: TableColumn -> Text
-cellClass col = fromMaybe "" col.align <> memptyIfFalse (isNumericCol col) " monospace"
-
-
 formatColumnValue :: TableColumn -> Text -> Text
 formatColumnValue col value = case fromMaybe CTText col.columnType of
   CTNumber -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
-  CTDuration -> maybe (value <> unitSuffix) getDurationNSMS (readMaybe (toString value) >>= durationNanoseconds col.unit)
+  CTDuration -> maybe (value <> unitSuffix) getDurationNSMS (readMaybe (toString value) >>= \n -> round . (n *) <$> maybe (Just 1) unitNanos col.unit)
   CTText -> fromMaybe value (formatTimestampValue value) <> unitSuffix
   where
     unitSuffix = foldMap (" " <>) col.unit
@@ -1707,10 +1681,6 @@ formatColumnValue col value = case fromMaybe CTText col.columnType of
     fmtNumber n
       | n < 100, n /= fromIntegral (round n :: Int) = toText (printf "%.2g" n :: String)
       | otherwise = prettyPrintCount (round n)
-
-
-durationNanoseconds :: Maybe Text -> Double -> Maybe Integer
-durationNanoseconds unit value = round . (value *) <$> maybe (Just 1) unitNanos unit
 
 
 -- | Nanoseconds per duration unit; micro accepts both the micro sign and Greek mu.
