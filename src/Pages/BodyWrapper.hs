@@ -1338,8 +1338,10 @@ externalHeadScripts_ config = do
         if (window.posthog) posthog.capture(name);
       };
       document.addEventListener('adConversion', function(e) { e.detail.value.forEach(function(c) { adConversion(c.name, c.id); }); });
-      var signup = document.cookie.match(/(?:^|; )monoscope_signup=([^;]+)/);
-      if (signup) { document.cookie = 'monoscope_signup=; Max-Age=0; path=/; secure'; adConversion('signup', signup[1]); }
+      (function() {
+        var signup = document.cookie.match(/(?:^|; )monoscope_signup=([^;]+)/);
+        if (signup) { document.cookie = 'monoscope_signup=; Max-Age=0; path=/; secure'; adConversion('signup', signup[1]); }
+      })();
     |]
   -- Crisp chat. Unset or empty CRISP_WEBSITE_ID disables the widget.
   whenJust (mfilter (not . T.null) config.crispWebsiteId) $ \websiteId ->

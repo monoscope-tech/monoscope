@@ -1,5 +1,4 @@
 module Pkg.AdConversions (
-  Conversion (..),
   attributionMiddleware,
   attributionFromCookies,
   recordSignup,
@@ -52,7 +51,7 @@ attributionMiddleware app req respond = case [(k, BS.take 512 v) | (k, Just v) <
   [] -> app req respond
   params -> do
     now <- getPOSIXTime
-    let cookie = defaultSetCookie{setCookieName = attributionCookie, setCookieValue = urlEncode True $ renderSimpleQuery True (("clicked_at", show @ByteString @Int $ floor now) : params), setCookiePath = Just "/", setCookieMaxAge = Just (90 * 86400), setCookieHttpOnly = True, setCookieSecure = True, setCookieSameSite = Just sameSiteLax}
+    let cookie = defaultSetCookie{setCookieName = attributionCookie, setCookieValue = urlEncode True $ renderSimpleQuery False (("clicked_at", show @ByteString @Int $ floor now) : params), setCookiePath = Just "/", setCookieMaxAge = Just (90 * 86400), setCookieHttpOnly = True, setCookieSecure = True, setCookieSameSite = Just sameSiteLax}
     app req $ respond . mapResponseHeaders (("Set-Cookie", renderSetCookieBS cookie) :)
 
 
