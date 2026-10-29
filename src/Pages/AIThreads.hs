@@ -10,13 +10,13 @@ import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
 import Lucid hiding (for_)
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), emptyState_, kvList_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), emptyState_, iconBadge_, localTimeFmt_, tonePill_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (Config (..), EmptyStateAction (..), Features (..), Table (..), ZeroState (ZeroState), col, withAttrs)
@@ -24,7 +24,7 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
-import Utils (faSprite_)
+import Utils (faSprite_, renderMarkdownToc)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
 
@@ -151,7 +151,7 @@ routinesGetH pid = do
               time_ [datetime_ $ show run.scheduledAt, class_ "text-xs tabular-nums text-textWeak sm:text-right"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.scheduledAt
         section_ [Aria.label_ "Routine catalog"] do
           h2_ [class_ "text-sm font-semibold text-textStrong"] "Built-in routines"
-          p_ [class_ "mt-1 text-sm text-textWeak"] "Read-only by default. Results stay in Monoscope; AI usage is tracked and billed at your project rate."
+          p_ [class_ "mt-1 text-sm text-textWeak"] "Read-only by default. Times are in the project’s time zone. Results stay in Monoscope; AI usage is tracked and billed at your project rate."
           let categories = [minBound .. maxBound]
           nav_ [Aria.label_ "Routine categories", class_ "mt-4 flex gap-2 overflow-x-auto pb-1"] $ for_ categories \category ->
             a_ [href_ $ "#" <> categoryId category, class_ "shrink-0 rounded-md border border-strokeWeak bg-bgRaised px-3 py-1.5 text-xs font-medium text-textWeak hover:bg-fillHover hover:text-textStrong"] $ toHtml $ Issues.routineCategoryLabel category
@@ -160,29 +160,45 @@ routinesGetH pid = do
             div_ [class_ "grid gap-4 md:grid-cols-2 xl:grid-cols-3"] $ for_ (filter ((== category) . (.category)) Issues.routineTemplates) templateCard_
       where
         routineUrl routine = threadUrl pid routine.conversationId <> "/routine"
-        templateIcon = \case
-          Issues.CategoryReliability -> "shield-check"
-          Issues.CategoryTelemetryQuality -> "server"
-          Issues.CategoryDelivery -> "rocket"
-          Issues.CategoryIncidents -> "triangle-exclamation"
-          Issues.CategoryCost -> "chart-line"
-          Issues.CategorySecurity -> "lock"
         categoryId = ("routine-category-" <>) . T.toLower . T.replace " " "-" . Issues.routineCategoryLabel
         templateCard_ template = do
           let added = template.key `elem` mapMaybe (.templateKey) installedRoutines
-          article_ [class_ "flex min-h-56 flex-col rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
-            div_ [class_ "flex items-start gap-3"] do
-              span_ [class_ "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-fillWeak text-iconNeutral"] $ faSprite_ (templateIcon template.category) "regular" "h-4 w-4"
-              div_ [class_ "min-w-0 grow"] do
-                h4_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml template.title
-                p_ [class_ "mt-1 text-sm leading-5 text-textWeak"] $ toHtml template.description
-            kvList_ "mt-4 text-xs" [("Schedule", toHtml $ Issues.routineScheduleLabel template.schedule), ("Needs", toHtml $ T.intercalate ", " template.requirements), ("Reports", toHtml $ reportLabel template.reportWhen), ("Delivery", "Monoscope conversation")]
-            div_ [class_ "mt-auto pt-5"] do
+          article_ [class_ "flex flex-col rounded-xl border border-strokeWeak bg-bgRaised p-5 transition-[border-color,box-shadow] duration-150 hover:border-strokeStrong hover:shadow-md"] do
+            div_ [class_ "flex min-h-8 items-center justify-between gap-3"] do
+              span_ [class_ "whitespace-nowrap rounded-md bg-fillWeak px-2 py-0.5 font-mono text-xs text-textStrong"] $ toHtml $ Issues.routineScheduleLabel template.schedule
               if added
-                then span_ [class_ "inline-flex items-center gap-1.5 text-xs font-medium text-textSuccess"] $ faSprite_ "check" "solid" "h-3 w-3" >> "Added"
-                else form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/routines/install", hxSwap_ "none"] do
+                then span_ [class_ "inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-textSuccess"] $ faSprite_ "check" "solid" "h-3 w-3" >> "Added"
+                else form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/routines/install", hxSwap_ "none", class_ "shrink-0"] do
                   input_ [type_ "hidden", name_ "templateKey", value_ template.key]
-                  button_ [type_ "submit", class_ "btn btn-sm w-full active:scale-[0.96] transition-transform"] "Add routine"
+                  button_ [type_ "submit", class_ "btn btn-sm gap-1.5 hover:border-strokeBrand-strong hover:text-textBrand active:scale-[0.96] transition-[color,border-color,scale]"] $ faSprite_ "plus" "regular" "h-3 w-3" >> "Add routine"
+            div_ [class_ "mt-4 flex items-center gap-2"] do
+              let (tone, icon) = categoryBadge template.category
+              iconBadge_ IconXs tone icon
+              h4_ [class_ "text-sm font-medium text-textStrong"] $ toHtml template.title
+            p_ [class_ "mt-3 -indent-[0.4em] text-[0.9375rem] leading-6 text-textStrong text-pretty"] $ toHtml $ "“" <> template.ask <> "”"
+            p_ [class_ "mt-2 mb-5 text-sm text-textWeak"] case template.reportWhen of
+              Issues.ReportAlways -> "Then posts a report every run"
+              Issues.ReportFindings -> "Then reports only when it finds something"
+            ul_ [Aria.label_ "Uses", class_ "mt-auto flex flex-wrap gap-1.5 border-t border-strokeWeak pt-4"] $ for_ template.signals \signal -> do
+              let (icon, label, color) = signalChip signal
+              li_ [class_ "inline-flex items-center gap-1.5 rounded-md bg-fillWeak px-2 py-1 text-xs text-textWeak"] $ faSprite_ icon "regular" ("h-3 w-3 shrink-0 " <> color) >> label
+        signalChip = \case
+          Issues.SignalLogs -> ("file-lines", "Logs", "text-iconBrand")
+          Issues.SignalTraces -> ("list-tree", "Traces", "text-iconBrand")
+          Issues.SignalMetrics -> ("chart-line", "Metrics", "text-iconBrand")
+          Issues.SignalEndpoints -> ("diagram-project", "Endpoints", "text-iconBrand")
+          Issues.SignalVersions -> ("code-branch", "Versions", "text-iconBrand")
+          Issues.SignalIssues -> ("bug", "Issues", "text-iconError")
+          Issues.SignalIncidents -> ("triangle-exclamation", "Incidents", "text-iconError")
+          Issues.SignalSecurity -> ("lock", "Security logs", "text-iconError")
+          Issues.SignalMonitors -> ("bell", "Monitors", "text-iconWarning")
+        categoryBadge = \case
+          Issues.CategoryReliability -> (BrandBadge, "shield-check")
+          Issues.CategoryTelemetryQuality -> (SuccessBadge, "server")
+          Issues.CategoryDelivery -> (BrandBadge, "rocket")
+          Issues.CategoryIncidents -> (ErrorBadge, "triangle-exclamation")
+          Issues.CategoryCost -> (WarningBadge, "chart-line")
+          Issues.CategorySecurity -> (ErrorBadge, "lock")
         runStatus = \case
           Issues.RunRunning -> (BrandBadge, "Running")
           Issues.RunSucceeded -> (SuccessBadge, "Succeeded")
@@ -190,18 +206,20 @@ routinesGetH pid = do
           Issues.RunFailed -> (ErrorBadge, "Failed")
           Issues.RunTimedOut -> (WarningBadge, "Timed out")
           Issues.RunCancelled -> (NeutralBadge, "Cancelled")
-        reportLabel = \case Issues.ReportAlways -> "Every run"; Issues.ReportFindings -> "Only with findings"
 
 
-threadGetH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-threadGetH pid convId = do
+threadGetH :: Projects.ProjectId -> UUIDId "conversation" -> Maybe Issues.ArtifactKey -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+threadGetH pid convId docM = do
   (_, _, bw) <- mkAIPageCtx pid
-  (conversations, (conversationM, selectedMessages)) <-
+  (conversations, (conversationM, (selectedMessages, artifacts))) <-
     concurrently
       (Issues.listConversations pid)
-      $ concurrently (Issues.getConversation pid convId) (Issues.selectChatHistory pid convId)
+      $ concurrently (Issues.getConversation pid convId)
+      $ concurrently (Issues.selectChatHistory pid convId) (Issues.listArtifacts pid convId docM)
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
+      docs = bool [] artifacts (isJust conversationM)
+      openDoc = find (isJust . (.content)) docs
       routineM = conversationM >>= \conversation -> (conversation,) <$> conversation.routineInterval
       pageConfig =
         bw
@@ -216,7 +234,7 @@ threadGetH pid convId = do
                   span_ [class_ "max-md:hidden"] "View issue"
                 Nothing -> scheduleControl_ conversation.conversationId routineM <$ guard (conversation.conversationType == Issues.CTWeb)
           }
-  addRespHeaders $ PageCtx pageConfig $ threadPage_ pid activeId routineM messages
+  addRespHeaders $ PageCtx pageConfig $ threadPage_ pid activeId routineM messages docs openDoc
   where
     scheduleControl_ :: UUIDId "conversation" -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
     scheduleControl_ conversationId routineState = details_ [class_ "relative group/routine"] do
@@ -232,48 +250,90 @@ threadGetH pid convId = do
           button_ [type_ "submit", class_ "btn btn-sm btn-primary w-full active:scale-[0.96] transition-transform"] "Save routine"
         when (any ((.routineActive) . fst) routineState) $ form_ [class_ "mt-3 border-t border-strokeWeak pt-2", hxPost_ $ threadUrl pid conversationId <> "/routine/pause", hxSwap_ "none"] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost w-full active:scale-[0.96] transition-transform"] "Pause routine"
 
-    threadPage_ :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> [Issues.AIChatMessage] -> Html ()
-    threadPage_ projectId activeConversationIdM routineM messages = div_ [class_ "h-full flex flex-col bg-bgBase"] do
-      div_ [id_ "ai-thread-messages", class_ "min-h-0 grow overflow-y-auto"] do
-        div_ [class_ "max-w-3xl mx-auto px-5 py-8"] do
-          for_ routineM routineOverview_
-          if hasVisibleHistory messages
-            then do
-              when (isJust routineM) $ h2_ [class_ "mb-2 mt-6 text-xs font-medium uppercase tracking-wide text-textWeak"] "Recent results"
-              IssuePage.aiChatHistoryView_ projectId messages
-            else foldMap routineEmpty_ routineM
-      form_
-        [ class_ "shrink-0 border-t border-strokeWeak bg-bgBase p-4"
-        , hxPost_ $ "/p/" <> projectId.toText <> "/ai" <> foldMap (("/" <>) . (.toText)) activeConversationIdM
-        , hxTarget_ "this"
-        , hxSwap_ "none"
-        , hxIndicator_ "#ai-thread-loader"
-        ]
-        do
-          div_ [class_ "max-w-3xl mx-auto flex items-end gap-2 rounded-xl bg-bgRaised p-2 shadow-[0_0_0_1px_var(--color-strokeWeak),0_4px_12px_oklch(0_0_0/0.05)] focus-within:shadow-[0_0_0_2px_var(--color-strokeFocus)]"] do
-            textarea_
-              [ name_ "query"
-              , id_ "ai-thread-input"
-              , rows_ "1"
-              , maxlength_ "4000"
-              , required_ "required"
-              , autofocus_
-              , placeholder_ "Ask about your telemetry or delegate a task…"
-              , Aria.label_ "Message Monoscope AI"
-              , class_ "min-h-9 max-h-40 grow resize-none bg-transparent border-0 px-2 py-2 text-sm leading-5 focus:outline-none"
-              , [__|on keydown[key=='Enter' and not shiftKey]
+    threadPage_ :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
+    threadPage_ projectId activeConversationIdM routineM messages docs openDoc = div_ [class_ "h-full flex bg-bgBase"] do
+      div_ [class_ "min-w-0 grow flex flex-col"] do
+        div_ [id_ "ai-thread-messages", class_ "min-h-0 grow overflow-y-auto"] do
+          div_ [class_ "max-w-3xl mx-auto px-5 py-8"] do
+            unless (null docs) $ details_ [class_ "lg:hidden mb-6 rounded-xl border border-strokeWeak bg-bgRaised"] do
+              summary_ [class_ "flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium text-textStrong"] do
+                faSprite_ "file-lines" "regular" "h-3.5 w-3.5 text-iconBrand"
+                toHtml $ "Documents (" <> show @Text (length docs) <> ")"
+              div_ [class_ "border-t border-strokeWeak p-2"] documentsNav_
+            case openDoc of
+              Just doc -> documentView_ doc
+              Nothing -> do
+                for_ routineM routineOverview_
+                if hasVisibleHistory messages
+                  then do
+                    when (isJust routineM) $ h2_ [class_ "mb-2 mt-6 text-xs font-medium uppercase tracking-wide text-textWeak"] "Recent results"
+                    IssuePage.aiChatHistoryView_ projectId messages
+                  else foldMap routineEmpty_ routineM
+        form_
+          [ class_ "shrink-0 border-t border-strokeWeak bg-bgBase p-4"
+          , hxPost_ $ "/p/" <> projectId.toText <> "/ai" <> foldMap (("/" <>) . (.toText)) activeConversationIdM
+          , hxTarget_ "this"
+          , hxSwap_ "none"
+          , hxIndicator_ "#ai-thread-loader"
+          ]
+          do
+            div_ [class_ "max-w-3xl mx-auto flex items-end gap-2 rounded-xl bg-bgRaised p-2 shadow-[0_0_0_1px_var(--color-strokeWeak),0_4px_12px_oklch(0_0_0/0.05)] focus-within:shadow-[0_0_0_2px_var(--color-strokeFocus)]"] do
+              textarea_
+                [ name_ "query"
+                , id_ "ai-thread-input"
+                , rows_ "1"
+                , maxlength_ "4000"
+                , required_ "required"
+                , autofocus_
+                , placeholder_ "Ask about your telemetry or delegate a task…"
+                , Aria.label_ "Message Monoscope AI"
+                , class_ "min-h-9 max-h-40 grow resize-none bg-transparent border-0 px-2 py-2 text-sm leading-5 focus:outline-none"
+                , [__|on keydown[key=='Enter' and not shiftKey]
                       halt the event then call my form.requestSubmit()
                     end|]
-              ]
-              ""
-            input_ [type_ "hidden", name_ "mode", value_ "chat"]
-            button_ [type_ "submit", Aria.label_ "Send message", class_ "group/send w-9 h-9 shrink-0 rounded-lg bg-fillBrand-strong text-white flex items-center justify-center cursor-pointer active:scale-[0.96] transition-transform"] do
-              span_ [id_ "ai-thread-loader", class_ "htmx-indicator"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin"
-              span_ [class_ "inline-flex group-has-[.htmx-request]/send:hidden"] $ faSprite_ "arrow-up" "regular" "w-3.5 h-3.5"
-          p_ [class_ "max-w-3xl mx-auto mt-2 text-xs text-textWeak text-center"] "AI can use your project data and connected integrations. Review actions before relying on them."
+                ]
+                ""
+              input_ [type_ "hidden", name_ "mode", value_ "chat"]
+              button_ [type_ "submit", Aria.label_ "Send message", class_ "group/send w-9 h-9 shrink-0 rounded-lg bg-fillBrand-strong text-white flex items-center justify-center cursor-pointer active:scale-[0.96] transition-transform"] do
+                span_ [id_ "ai-thread-loader", class_ "htmx-indicator"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin"
+                span_ [class_ "inline-flex group-has-[.htmx-request]/send:hidden"] $ faSprite_ "arrow-up" "regular" "w-3.5 h-3.5"
+            p_ [class_ "max-w-3xl mx-auto mt-2 text-xs text-textWeak text-center"] "AI can use your project data and connected integrations. Review actions before relying on them."
+      unless (null docs) $ aside_ [class_ "hidden lg:block w-64 shrink-0 overflow-y-auto border-l border-strokeWeak p-3"] documentsNav_
       where
+        threadHref = foldMap (threadUrl projectId) activeConversationIdM
+        docHref doc = threadHref <> "?doc=" <> toText doc.key
+        isOpen doc = ((.key) <$> openDoc) == Just doc.key
+        (openBody, openToc) = maybe (mempty, []) renderMarkdownToc $ openDoc >>= (.content)
+        navLink_ active href = a_ ([href_ href, class_ $ "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-fillHover hover:text-textStrong " <> bool "text-textWeak" "bg-fillWeak font-medium text-textStrong" active] <> [term "aria-current" "page" | active] <> navTabAttrs)
+
+        documentsNav_ :: Html ()
+        documentsNav_ = nav_ [Aria.label_ "Documents", class_ "flex flex-col gap-0.5"] do
+          h2_ [class_ "px-2 pb-1 pt-1 text-xs font-medium uppercase tracking-wide text-textWeak"] "Documents"
+          navLink_ (isNothing openDoc) threadHref do
+            faSprite_ "comment" "regular" "h-3.5 w-3.5 shrink-0"
+            "Conversation"
+          for_ docs \doc -> do
+            navLink_ (isOpen doc) (docHref doc) do
+              faSprite_ "file-lines" "regular" "h-3.5 w-3.5 shrink-0 text-iconBrand"
+              span_ [class_ "min-w-0 grow truncate"] $ toHtml doc.title
+            when (isOpen doc) $ ul_ [class_ "mb-1 ms-4 border-s border-strokeWeak ps-2"] $ for_ openToc \(anchor, heading) ->
+              li_ $ a_ [href_ $ "#" <> anchor, class_ "block truncate rounded px-2 py-1 text-xs text-textWeak hover:bg-fillHover hover:text-textStrong"] $ toHtml heading
+
+        documentView_ :: Issues.AIArtifact -> Html ()
+        documentView_ doc =
+          article_
+            ( [id_ "ai-document", Aria.label_ doc.title]
+                -- Routines keep appending to today's document; keep an open one current.
+                <> concat [[hxGet_ $ docHref doc, hxTrigger_ "every 60s", hxSelect_ "#ai-document", hxTarget_ "this", hxSwap_ "outerMorph"] | any ((.routineActive) . fst) routineM]
+            )
+            do
+              p_ [class_ "font-mono text-xs text-textWeak"] $ toHtml $ toText doc.key
+              h1_ [class_ "mt-1 text-xl font-semibold text-textStrong text-balance"] $ toHtml doc.title
+              p_ [class_ "mt-1 text-xs text-textWeak"] $ "Updated " >> localTimeFmt_ "MMM d, HH:mm" doc.updatedAt
+              div_ [class_ "prose prose-sm mt-6 max-w-none [&_h2]:scroll-mt-4"] openBody
+
         hasVisibleHistory :: [Issues.AIChatMessage] -> Bool
-        hasVisibleHistory h = any ((== Issues.ChatExecutionEvent) . (.role)) h || or (zipWith (\u a -> u.role == Issues.ChatUser && a.role == Issues.ChatAssistant) h (drop 1 h))
+        hasVisibleHistory = any ((`elem` [Issues.ChatAssistant, Issues.ChatExecutionEvent]) . (.role))
 
         routineOverview_ :: (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
         routineOverview_ (conversation, interval) =

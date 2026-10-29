@@ -131,6 +131,7 @@ module Models.Apis.Issues (
   RoutineInterval,
   RoutineCategory (..),
   RoutineTemplate (..),
+  RoutineSignal (..),
   RoutineSchedule,
   RoutineReport (..),
   RoutineDestination (..),
@@ -169,6 +170,12 @@ module Models.Apis.Issues (
   routineCanAct,
   routineRunCancelled,
   insertChatMessage,
+  AIArtifact (..),
+  ArtifactKey,
+  ArtifactWrite (..),
+  mkArtifactKey,
+  saveArtifact,
+  listArtifacts,
   selectChatHistory,
   prepareSlackTurn,
   seedChatHistory,
@@ -249,6 +256,7 @@ import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Logging (logAttention)
 import System.Types (DB)
+import Text.Slugify (slugify)
 import Utils (toXXHash, truncateMiddle)
 
 
@@ -1560,35 +1568,39 @@ data RoutineTemplate = RoutineTemplate
   , version :: Int
   , category :: RoutineCategory
   , title :: Text
-  , description :: Text
+  , ask :: Text
   , prompt :: Text
   , schedule :: RoutineSchedule
   , reportWhen :: RoutineReport
-  , requirements :: [Text]
+  , signals :: [RoutineSignal]
   }
   deriving stock (Eq, Generic, Show)
 
 
+data RoutineSignal = SignalLogs | SignalTraces | SignalMetrics | SignalIssues | SignalIncidents | SignalMonitors | SignalEndpoints | SignalVersions | SignalSecurity
+  deriving stock (Bounded, Enum, Eq, Generic, Show)
+
+
 routineTemplates :: [RoutineTemplate]
 routineTemplates =
-  [ template "daily-operations-briefing" CategoryReliability "Daily operations briefing" "Start the day with overnight incidents, regressions, slow endpoints, traffic anomalies, and unresolved issues." "Review this project's telemetry, issues, incidents, and endpoints since the previous business day. Rank only observed operational changes by impact, cite the supporting queries or records, and state the next useful check." (Weekdays $ TimeOfDay 9 0 0) ReportAlways ["Logs or traces", "Issues"]
-  , template "weekly-reliability-review" CategoryReliability "Weekly reliability review" "Prioritize recurring failures, latency regressions, and reliability work from the last seven days." "Compare this project's last seven days with the preceding seven days. Report reliability changes, recurring failures, latency regressions, and three evidence-backed priorities." (Weekly Monday $ TimeOfDay 9 0 0) ReportAlways ["Logs or traces"]
-  , template "error-regression-radar" CategoryReliability "Error regression radar" "Find error groups that returned or materially increased after a quiet period." "Find error patterns that returned after a quiet period or increased materially against their recent baseline. Cite counts, services, and example evidence. If none qualify, say so briefly." (Every $ RoutineInterval 60) ReportFindings ["Logs"]
-  , template "slow-endpoint-watch" CategoryReliability "Slow endpoint watch" "Find endpoints whose tail latency became materially worse than their recent baseline." "Compare endpoint p95 and p99 latency in the latest hour with a representative recent baseline. Report only material degradations with enough traffic to be credible. If none qualify, say so briefly." (Every $ RoutineInterval 60) ReportFindings ["Traces"]
-  , template "telemetry-gap-detector" CategoryTelemetryQuality "Telemetry gap detector" "Find active services that unexpectedly stopped sending logs, traces, or metrics." "Find services that were active recently but unexpectedly stopped sending one or more telemetry signals. Distinguish missing evidence from healthy behavior. If no credible gaps exist, say so briefly." (Every $ RoutineInterval 60) ReportFindings ["Logs, traces, or metrics"]
-  , template "telemetry-quality-check" CategoryTelemetryQuality "Telemetry quality check" "Find missing or inconsistent service, environment, version, and trace attributes." "Audit recent telemetry for missing or inconsistent service names, environments, versions, trace correlation, and unstable high-cardinality attributes. Rank actionable instrumentation fixes. If no actionable defect exists, say so briefly." (Daily $ TimeOfDay 10 0 0) ReportFindings ["Logs or traces"]
-  , template "traffic-drop-watch" CategoryReliability "Traffic drop watch" "Detect services and endpoints whose request volume unexpectedly falls or disappears." "Compare traffic during the latest 30 minutes with matching recent periods. Report only credible service or endpoint drops, accounting for ordinary low-volume variation and time-of-day patterns." (Every $ RoutineInterval 30) ReportFindings ["Logs or traces"]
-  , template "dependency-degradation-digest" CategoryReliability "Dependency degradation digest" "Find downstream dependencies associated with new latency or error regressions." "Review outgoing spans and related errors from the latest hour. Report downstream dependencies with a material latency or error regression against their recent baseline, and name the affected callers." (Every $ RoutineInterval 60) ReportFindings ["Traces"]
-  , template "new-service-endpoint-digest" CategoryDelivery "New service and endpoint digest" "Summarize newly observed services, routes, operations, and environments." "Find services and endpoints first observed since the previous run. Separate confirmed endpoint records from names inferred only from telemetry, and report the owning service and environment when known." (Daily $ TimeOfDay 10 0 0) ReportFindings ["Traces", "Endpoints"]
-  , template "on-call-handoff" CategoryIncidents "On-call handoff" "Prepare a concise handoff of active issues, recoveries, regressions, and watch items." "Prepare an on-call handoff from this project's active issues, recent incident episodes, current telemetry regressions, and unresolved watch items. Cite records and evidence, and separate observed facts from recommended follow-up." (Weekdays $ TimeOfDay 17 0 0) ReportAlways ["Issues", "Incidents", "Logs or traces"]
-  , template "incident-follow-up-ledger" CategoryIncidents "Incident follow-up ledger" "Track recent incident follow-ups and verify whether production evidence improved." "Review recent incident episodes and their related issues. Report unresolved follow-up work, repeated symptoms, and cases where production telemetry has not demonstrably returned to its prior baseline." (Daily $ TimeOfDay 11 0 0) ReportFindings ["Incidents", "Issues"]
-  , template "alert-quality-review" CategoryIncidents "Alert quality review" "Find noisy, stale, duplicate, or unactionable monitors and missed symptoms." "Compare recent monitors, issues, and incident episodes. Identify noisy or duplicate alerts, monitors aimed at stale services or fields, and important incident symptoms that no monitor described. Support each recommendation with observed records." (Weekly Monday $ TimeOfDay 11 0 0) ReportFindings ["Monitors", "Issues", "Incidents"]
-  , template "deployment-regression-review" CategoryDelivery "Deployment regression review" "Find reliability changes associated with newly observed service versions." "Compare recent service-version changes with errors, latency, and incident timing. Report only evidence-backed regressions, state when deployment evidence is unavailable, and never treat temporal proximity alone as causation." (Daily $ TimeOfDay 14 0 0) ReportFindings ["Logs or traces", "Service versions"]
-  , template "noisy-log-sources" CategoryCost "Noisy log sources" "Find services and message patterns producing disproportionate log volume." "Rank services and recurring message shapes by recent log volume and estimated avoidable noise. Exclude high-volume signals that carry clear operational value, and recommend concrete sampling or log-level changes." (Daily $ TimeOfDay 12 0 0) ReportFindings ["Logs"]
-  , template "trace-correlation-audit" CategoryTelemetryQuality "Trace correlation audit" "Find logs and spans that cannot be joined because trace context is missing or inconsistent." "Audit recent logs and spans for missing trace identifiers, broken parent relationships, and inconsistent service identity. Rank fixes by the amount of investigation context they would restore." (Weekly Monday $ TimeOfDay 10 0 0) ReportFindings ["Logs", "Traces"]
-  , template "telemetry-cost-watch" CategoryCost "Telemetry cost watch" "Detect sudden volume and cardinality growth before it becomes an ingestion surprise." "Compare telemetry volume, attribute cardinality, and the noisiest sources with recent baselines. Report material cost-risk changes and identify the services, fields, or patterns responsible." (Daily $ TimeOfDay 13 0 0) ReportFindings ["Logs, traces, or metrics"]
-  , template "authentication-failure-digest" CategorySecurity "Authentication failure digest" "Summarize unusual authentication and authorization failures without replacing security alerting." "Review authentication failures, authorization denials, and administrative actions in recent telemetry. Report unusual changes with service, environment, source, and supporting counts. Do not claim compromise from failures alone." (Every $ RoutineInterval 60) ReportFindings ["Security logs"]
-  , template "weekly-slo-review" CategoryReliability "Weekly SLO review" "Review user-visible reliability signals and the work most likely to improve them." "Compare the last seven days of user-visible errors and latency with the preceding period. Summarize burn-like trends from available telemetry, clearly state when a formal SLO is unavailable, and recommend evidence-backed reliability priorities." (Weekly Monday $ TimeOfDay 9 30 0) ReportAlways ["Logs, traces, or metrics"]
+  [ template "daily-operations-briefing" CategoryReliability "Daily operations briefing" "Summarize what changed overnight: incidents, regressions, slow endpoints and open issues." "Review this project's telemetry, issues, incidents, and endpoints since the previous business day. Rank only observed operational changes by impact, cite the supporting queries or records, and state the next useful check." (Weekdays $ TimeOfDay 9 0 0) ReportAlways [SignalLogs, SignalTraces, SignalIssues]
+  , template "weekly-reliability-review" CategoryReliability "Weekly reliability review" "Compare this week with last week and name the three reliability fixes worth doing." "Compare this project's last seven days with the preceding seven days. Report reliability changes, recurring failures, latency regressions, and three evidence-backed priorities." (Weekly Monday $ TimeOfDay 9 0 0) ReportAlways [SignalLogs, SignalTraces]
+  , template "error-regression-radar" CategoryReliability "Error regression radar" "Find errors that came back or grew after a quiet period." "Find error patterns that returned after a quiet period or increased materially against their recent baseline. Cite counts, services, and example evidence. If none qualify, say so briefly." (Every $ RoutineInterval 60) ReportFindings [SignalLogs]
+  , template "slow-endpoint-watch" CategoryReliability "Slow endpoint watch" "Find endpoints whose p95 or p99 latency got materially worse than usual." "Compare endpoint p95 and p99 latency in the latest hour with a representative recent baseline. Report only material degradations with enough traffic to be credible. If none qualify, say so briefly." (Every $ RoutineInterval 60) ReportFindings [SignalTraces]
+  , template "telemetry-gap-detector" CategoryTelemetryQuality "Telemetry gap detector" "Find services that stopped sending logs, traces or metrics." "Find services that were active recently but unexpectedly stopped sending one or more telemetry signals. Distinguish missing evidence from healthy behavior. If no credible gaps exist, say so briefly." (Every $ RoutineInterval 60) ReportFindings [SignalLogs, SignalTraces, SignalMetrics]
+  , template "telemetry-quality-check" CategoryTelemetryQuality "Telemetry quality check" "Find missing or inconsistent service, environment and version attributes." "Audit recent telemetry for missing or inconsistent service names, environments, versions, trace correlation, and unstable high-cardinality attributes. Rank actionable instrumentation fixes. If no actionable defect exists, say so briefly." (Daily $ TimeOfDay 10 0 0) ReportFindings [SignalLogs, SignalTraces]
+  , template "traffic-drop-watch" CategoryReliability "Traffic drop watch" "Flag services and endpoints whose traffic dropped or disappeared." "Compare traffic during the latest 30 minutes with matching recent periods. Report only credible service or endpoint drops, accounting for ordinary low-volume variation and time-of-day patterns." (Every $ RoutineInterval 30) ReportFindings [SignalLogs, SignalTraces]
+  , template "dependency-degradation-digest" CategoryReliability "Dependency degradation digest" "Find downstream dependencies that got slower or started failing, and who calls them." "Review outgoing spans and related errors from the latest hour. Report downstream dependencies with a material latency or error regression against their recent baseline, and name the affected callers." (Every $ RoutineInterval 60) ReportFindings [SignalTraces]
+  , template "new-service-endpoint-digest" CategoryDelivery "New service and endpoint digest" "List the services, routes and environments seen for the first time." "Find services and endpoints first observed since the previous run. Separate confirmed endpoint records from names inferred only from telemetry, and report the owning service and environment when known." (Daily $ TimeOfDay 10 0 0) ReportFindings [SignalTraces, SignalEndpoints]
+  , template "on-call-handoff" CategoryIncidents "On-call handoff" "Write the on-call handoff: what’s open, what recovered and what to watch." "Prepare an on-call handoff from this project's active issues, recent incident episodes, current telemetry regressions, and unresolved watch items. Cite records and evidence, and separate observed facts from recommended follow-up." (Weekdays $ TimeOfDay 17 0 0) ReportAlways [SignalIssues, SignalIncidents, SignalLogs, SignalTraces]
+  , template "incident-follow-up-ledger" CategoryIncidents "Incident follow-up ledger" "Check whether recent incidents are actually fixed in production." "Review recent incident episodes and their related issues. Report unresolved follow-up work, repeated symptoms, and cases where production telemetry has not demonstrably returned to its prior baseline." (Daily $ TimeOfDay 11 0 0) ReportFindings [SignalIncidents, SignalIssues]
+  , template "alert-quality-review" CategoryIncidents "Alert quality review" "Find noisy, stale or duplicate monitors, and the symptoms no monitor caught." "Compare recent monitors, issues, and incident episodes. Identify noisy or duplicate alerts, monitors aimed at stale services or fields, and important incident symptoms that no monitor described. Support each recommendation with observed records." (Weekly Monday $ TimeOfDay 11 0 0) ReportFindings [SignalMonitors, SignalIssues, SignalIncidents]
+  , template "deployment-regression-review" CategoryDelivery "Deployment regression review" "Compare errors and latency before and after each new service version." "Compare recent service-version changes with errors, latency, and incident timing. Report only evidence-backed regressions, state when deployment evidence is unavailable, and never treat temporal proximity alone as causation." (Daily $ TimeOfDay 14 0 0) ReportFindings [SignalLogs, SignalTraces, SignalVersions]
+  , template "noisy-log-sources" CategoryCost "Noisy log sources" "Find the services and messages producing the most avoidable log volume." "Rank services and recurring message shapes by recent log volume and estimated avoidable noise. Exclude high-volume signals that carry clear operational value, and recommend concrete sampling or log-level changes." (Daily $ TimeOfDay 12 0 0) ReportFindings [SignalLogs]
+  , template "trace-correlation-audit" CategoryTelemetryQuality "Trace correlation audit" "Find logs and spans that can’t be joined because trace context is missing." "Audit recent logs and spans for missing trace identifiers, broken parent relationships, and inconsistent service identity. Rank fixes by the amount of investigation context they would restore." (Weekly Monday $ TimeOfDay 10 0 0) ReportFindings [SignalLogs, SignalTraces]
+  , template "telemetry-cost-watch" CategoryCost "Telemetry cost watch" "Catch sudden volume and cardinality growth before it shows up on the bill." "Compare telemetry volume, attribute cardinality, and the noisiest sources with recent baselines. Report material cost-risk changes and identify the services, fields, or patterns responsible." (Daily $ TimeOfDay 13 0 0) ReportFindings [SignalLogs, SignalTraces, SignalMetrics]
+  , template "authentication-failure-digest" CategorySecurity "Authentication failure digest" "Summarize unusual login and permission failures." "Review authentication failures, authorization denials, and administrative actions in recent telemetry. Report unusual changes with service, environment, source, and supporting counts. Do not claim compromise from failures alone." (Every $ RoutineInterval 60) ReportFindings [SignalSecurity]
+  , template "weekly-slo-review" CategoryReliability "Weekly SLO review" "Compare this week’s user-facing errors and latency with last week’s." "Compare the last seven days of user-visible errors and latency with the preceding period. Summarize burn-like trends from available telemetry, clearly state when a formal SLO is unavailable, and recommend evidence-backed reliability priorities." (Weekly Monday $ TimeOfDay 9 30 0) ReportAlways [SignalLogs, SignalTraces, SignalMetrics]
   ]
   where
     template key = RoutineTemplate key 1
@@ -1599,9 +1611,9 @@ routineScheduleLabel = \case
   Every interval -> routineCadence interval
   Daily time -> "Daily at " <> clock time
   Weekdays time -> "Weekdays at " <> clock time
-  Weekly weekday time -> "Every " <> show weekday <> " at " <> clock time
+  Weekly weekday time -> show weekday <> "s at " <> clock time
   where
-    clock time = toText (formatTime defaultTimeLocale "%H:%M" time) <> " project time"
+    clock = toText . formatTime defaultTimeLocale "%H:%M"
 
 
 data ScheduledRoutine = ScheduledRoutine
@@ -1620,6 +1632,7 @@ data ClaimedRoutine = ClaimedRoutine
   , allowActions :: Bool
   , reportWhen :: RoutineReport
   , destination :: RoutineDestination
+  , timezone :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -1793,7 +1806,7 @@ claimRoutine routineId scheduledAt =
         UPDATE apis.ai_routines SET running_since = now()
         WHERE id = #{routineId} AND active AND next_run_at = #{scheduledAt}
           AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
-        RETURNING project_id, conversation_id, running_since, allow_actions, report_when, destination
+        RETURNING project_id, conversation_id, running_since, allow_actions, report_when, destination, timezone
       ), run AS (
         INSERT INTO apis.ai_routine_runs (routine_id, project_id, conversation_id, scheduled_at, started_at, status)
         SELECT #{routineId}, project_id, conversation_id, #{scheduledAt}, running_since, 'running' FROM claimed
@@ -1802,7 +1815,7 @@ claimRoutine routineId scheduledAt =
           WHERE apis.ai_routine_runs.status = 'running'
         RETURNING id
       )
-      SELECT run.id, claimed.project_id, claimed.conversation_id, claimed.running_since, claimed.allow_actions, claimed.report_when, claimed.destination
+      SELECT run.id, claimed.project_id, claimed.conversation_id, claimed.running_since, claimed.allow_actions, claimed.report_when, claimed.destination, claimed.timezone
       FROM claimed CROSS JOIN run|]
 
 
@@ -1957,6 +1970,76 @@ insertChatMessageSql pid convId chatRole chatContent widgetsM metadataM =
             )
             UPDATE apis.ai_conversations SET updated_at = clock_timestamp()
             WHERE project_id = #{pid} AND conversation_id = #{convId} AND EXISTS (SELECT 1 FROM inserted) |]
+
+
+-- | A document the agent maintains inside a conversation, addressed by a stable key.
+data AIArtifact = AIArtifact
+  { key :: ArtifactKey
+  , title :: Text
+  , characters :: Int
+  , content :: Maybe Text
+  -- ^ Loaded only for the key 'listArtifacts' was asked for; documents run to 200k characters.
+  , updatedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | Lowercase slug, 1-64 characters of @[a-z0-9-]@, not starting with a hyphen.
+newtype ArtifactKey = ArtifactKey Text
+  deriving stock (Eq, Show)
+  deriving newtype (AE.ToJSON, HI.DecodeValue, HI.EncodeValue, ToText)
+
+
+instance FromHttpApiData ArtifactKey where
+  parseUrlPiece = mkArtifactKey
+
+
+-- | Normalises free text into a key; rejects input with no usable characters.
+--
+-- >>> mkArtifactKey " Daily Report: 2026-10-28 "
+-- Right (ArtifactKey "daily-report-2026-10-28")
+-- >>> mkArtifactKey "Checkout Review"
+-- Right (ArtifactKey "checkout-review")
+-- >>> mkArtifactKey "!!!"
+-- Left "Document key must contain letters or digits."
+-- >>> toText <$> mkArtifactKey (T.replicate 80 "a")
+-- Right "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+-- >>> T.length . toText <$> mkArtifactKey (T.replicate 63 "a" <> " b")
+-- Right 63
+mkArtifactKey :: Text -> Either Text ArtifactKey
+mkArtifactKey raw = case T.dropWhileEnd (== '-') $ T.take 64 $ slugify raw of
+  "" -> Left "Document key must contain letters or digits."
+  k -> Right $ ArtifactKey k
+
+
+data ArtifactWrite = ArtifactReplace | ArtifactAppend
+  deriving stock (Eq, Show)
+
+
+-- | Creates the document or rewrites/extends it; the title only changes when one is given.
+-- Nothing when an append would grow it past 200k characters.
+saveArtifact :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ArtifactKey -> Maybe Text -> Text -> ArtifactWrite -> Eff es (Maybe AIArtifact)
+saveArtifact pid convId key titleM body write =
+  Hasql.interpOne
+    [HI.sql| INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content, created_at, updated_at)
+             VALUES (#{pid}, #{convId}, #{key}, COALESCE(#{titleM}, #{key}), #{body}, app_now(), app_now())
+             ON CONFLICT (project_id, conversation_id, key) DO UPDATE
+               SET title = COALESCE(#{titleM}, ai_artifacts.title),
+                   content = CASE WHEN #{append} THEN ai_artifacts.content || E'\n\n' || EXCLUDED.content ELSE EXCLUDED.content END,
+                   updated_at = app_now()
+               WHERE NOT #{append} OR length(ai_artifacts.content) + length(EXCLUDED.content) <= 200000
+             RETURNING key, title, length(content)::bigint, NULL::text, updated_at |]
+  where
+    append = write == ArtifactAppend
+
+
+-- | Most recently updated first, with the full content of @openKey@ only.
+listArtifacts :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Maybe ArtifactKey -> Eff es [AIArtifact]
+listArtifacts pid convId openKey =
+  Hasql.interp
+    [HI.sql| SELECT key, title, length(content)::bigint, CASE WHEN key = #{openKey} THEN content END, updated_at FROM apis.ai_artifacts
+             WHERE project_id = #{pid} AND conversation_id = #{convId} ORDER BY updated_at DESC |]
 
 
 -- | Persist a Slack question once, and exclude that turn from the history passed

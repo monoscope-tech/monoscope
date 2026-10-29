@@ -10,6 +10,7 @@
 import '@lit-labs/virtualizer';
 import { LitElement, html, nothing, PropertyValues, TemplateResult } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
+import { guard } from 'lit/directives/guard.js';
 import { faSprite_ } from './assets';
 import { LiveStream, LiveState } from './live-stream';
 import { atBottom, classifyLevel, getStyleClass, parseSummaryElement, type LevelSeverity } from './log-list-utils';
@@ -30,7 +31,10 @@ type LiveRow = {
   truncated: boolean;
 };
 
-type PreparedRow = LiveRow & {
+// Parity is fixed on arrival so evicting the oldest rows cannot restripe every mounted one.
+type ArrivedRow = LiveRow & { odd: boolean };
+
+type PreparedRow = ArrivedRow & {
   displayFields: Record<string, FieldValue>;
   parsedBody: JsonValue | null;
   bodyPrefix: string;
@@ -39,6 +43,9 @@ type PreparedRow = LiveRow & {
 
 const MAX_ROWS = 1000;
 const MAX_MOUNTED_ROWS = 100;
+// The server drains every 250ms; publishing faster re-renders the list once per 100-row frame.
+const PUBLISH_MS = 250;
+const MAX_FIELD_OPTIONS = 200;
 const DEFAULT_FIELDS: Record<string, string[]> = {
   logs: ['level', 'body'],
   spans: ['summary'],
@@ -63,6 +70,8 @@ const STATE_LABEL: Record<LiveState, string> = {
 
 const displayFieldName = (name: string): string => name.replaceAll('___', '.');
 
+const rowKey = (row: ArrivedRow) => `${row.id}:${row.timestamp}`;
+
 const formatValue = (value: FieldValue): string => {
   if (value === undefined) return '—';
   if (typeof value === 'string') return JSON.stringify(value);
@@ -82,18 +91,24 @@ const findJson = (body: string): { value: JsonValue | null; prefix: string } => 
   return { value: null, prefix: '' };
 };
 
-const flattenJson = (value: JsonValue, prefix: string, out: Record<string, FieldValue>, depth = 0): Record<string, FieldValue> => {
-  if (Object.keys(out).length >= 100) return out;
-  if (value !== null && !Array.isArray(value) && typeof value === 'object' && depth < 5) {
-    for (const [key, child] of Object.entries(value)) flattenJson(child, prefix ? `${prefix}.${key}` : key, out, depth + 1);
-  } else {
-    out[prefix] = value;
-  }
+const isObject = (value: JsonValue | null): value is { [key: string]: JsonValue } =>
+  value !== null && !Array.isArray(value) && typeof value === 'object';
+
+const flattenJson = (value: JsonValue): Record<string, FieldValue> => {
+  const out: Record<string, FieldValue> = {};
+  let room = 100;
+  const walk = (node: JsonValue, path: string, depth: number) => {
+    if (!isObject(node) || depth >= 5) {
+      if (room-- > 0) out[path] = node;
+    } else for (const [key, child] of Object.entries(node)) if (room > 0) walk(child, path ? `${path}.${key}` : key, depth + 1);
+  };
+  walk(value, '', 0);
   return out;
 };
 
-const prepareRow = (row: LiveRow): PreparedRow => {
+const prepareRow = (row: ArrivedRow): PreparedRow => {
   const { value: parsedBody, prefix: bodyPrefix } = findJson(row.body);
+  const bodyFields = isObject(parsedBody) ? Object.entries(flattenJson(parsedBody)) : [];
   const displayFields: Record<string, FieldValue> = {
     timestamp: row.timestamp,
     level: row.level ?? undefined,
@@ -104,11 +119,8 @@ const prepareRow = (row: LiveRow): PreparedRow => {
     body: row.body,
     ...(row.fields ?? {}),
   };
-  if (parsedBody !== null) flattenJson(parsedBody, 'body', displayFields);
-  const bodyFields =
-    parsedBody !== null && !Array.isArray(parsedBody) && typeof parsedBody === 'object'
-      ? Object.entries(flattenJson(parsedBody, '', {}))
-      : [];
+  if (parsedBody !== null && !isObject(parsedBody)) displayFields.body = parsedBody;
+  for (const [key, value] of bodyFields) displayFields[`body.${key}`] = value;
   return { ...row, displayFields, parsedBody, bodyPrefix, bodyFields };
 };
 
@@ -179,7 +191,7 @@ const logBodyTemplate = (row: PreparedRow): TemplateResult => {
   if (row.body.length > BODY_PREVIEW_CHARS)
     return html`<span class="min-w-0 whitespace-pre-wrap break-words text-textStrong">${row.body.slice(0, BODY_PREVIEW_CHARS)}</span
       ><span class="text-textWeak">…</span>${truncated}`;
-  if (row.parsedBody !== null && !Array.isArray(row.parsedBody) && typeof row.parsedBody === 'object') {
+  if (isObject(row.parsedBody)) {
     return html`${row.bodyPrefix ? html`<span class="text-textWeak">${row.bodyPrefix}</span>` : nothing}${row.bodyFields.map(
       ([field, value]) =>
         html`<span class="min-w-0 break-words"><span class="text-textWeak">${field}=</span>${scalarTemplate(value)}</span>`
@@ -206,7 +218,7 @@ const logBodyTemplate = (row: PreparedRow): TemplateResult => {
 export class LiveTail extends LitElement {
   @state() private streamState: LiveState = 'idle';
   @state() private paused = false;
-  @state() private rows: PreparedRow[] = [];
+  @state() private rows: ArrivedRow[] = [];
   @state() private droppedServer = 0;
   @state() private droppedClient = 0;
   @state() private statusMessage = '';
@@ -215,6 +227,7 @@ export class LiveTail extends LitElement {
   @state() private schemaFields: string[] = [];
   @state() private selectedFields: string[] = DEFAULT_FIELDS.logs;
   @state() private fieldSearch = '';
+  @state() private fieldsOpen = false;
   @state() private selectedRow: PreparedRow | null = null;
   @state() private fullRecord: Record<string, JsonValue> | null = null;
   @state() private detailLoading = false;
@@ -230,8 +243,12 @@ export class LiveTail extends LitElement {
   private environment = '';
   private kind = 'logs';
   private query = '';
-  private buffer: PreparedRow[] = [];
-  private fieldCounts = new Map<string, number>();
+  private buffer: ArrivedRow[] = [];
+  // Prepared when first rendered, so only the mounted window is parsed until the field picker opens.
+  private prepared = new WeakMap<ArrivedRow, PreparedRow>();
+  private arrivals = 0;
+  // Snapshot taken while the picker is open, so arriving rows cannot churn the list under the cursor.
+  private fieldOptions: string[] = [];
   private stream: LiveStream | null = null;
   private projectId = '';
   private leaseSecs = 45;
@@ -239,7 +256,8 @@ export class LiveTail extends LitElement {
   private followFrame: number | null = null;
   private followPending = false;
   private followPinned = false;
-  private rowFrame: number | null = null;
+  private publishTimer: ReturnType<typeof setTimeout> | null = null;
+  private renderRow: (row: ArrivedRow) => unknown = () => nothing;
 
   createRenderRoot() {
     return this;
@@ -263,8 +281,8 @@ export class LiveTail extends LitElement {
   disconnectedCallback() {
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.teardown();
-    if (this.rowFrame !== null) cancelAnimationFrame(this.rowFrame);
-    this.rowFrame = null;
+    if (this.publishTimer !== null) clearTimeout(this.publishTimer);
+    this.publishTimer = null;
     super.disconnectedCallback();
   }
 
@@ -272,6 +290,16 @@ export class LiveTail extends LitElement {
     this.restart();
     void this.loadFacets();
     this.dispatchEvent(new CustomEvent('arm-deferred-components', { bubbles: true }));
+  }
+
+  willUpdate(changed: PropertyValues) {
+    // Stable between field changes so a publish re-renders only rows the guard has not seen;
+    // a new function is what tells the virtualizer its mounted rows are stale.
+    if (changed.has('selectedFields')) this.renderRow = (row) => guard([row, this.selectedFields], () => this.rowTemplate(row));
+    // Opening scans the buffer once; a toggle only re-sorts what is already listed.
+    if (this.fieldsOpen && (changed.has('fieldsOpen') || changed.has('schemaFields')))
+      this.fieldOptions = this.sortFields([...this.schemaFields, ...this.buffer.flatMap((row) => Object.keys(this.prepare(row).displayFields))]);
+    else if (this.fieldsOpen && changed.has('selectedFields')) this.fieldOptions = this.sortFields(this.fieldOptions);
   }
 
   updated(changed: PropertyValues) {
@@ -312,8 +340,8 @@ export class LiveTail extends LitElement {
     return this.streamState === 'live' || this.streamState === 'connecting' || this.streamState === 'reconnecting';
   }
 
-  private get availableFields(): string[] {
-    return [...new Set([...BASE_FIELDS, ...this.selectedFields, ...this.schemaFields, ...this.fieldCounts.keys()])]
+  private sortFields(fields: string[]): string[] {
+    return [...new Set([...BASE_FIELDS, ...this.selectedFields, ...fields])]
       .filter((field) => !PINNED_FIELDS.includes(field))
       .sort((a, b) => {
         const ai = this.selectedFields.indexOf(a);
@@ -324,7 +352,9 @@ export class LiveTail extends LitElement {
   }
 
   private onVisibility = () => {
-    if (!document.hidden && this.streamState === 'live') void this.stream?.renew();
+    if (document.hidden) return;
+    if (this.streamState === 'live') void this.stream?.renew();
+    if (!this.paused) this.publish();
   };
 
   private async loadFacets() {
@@ -351,7 +381,6 @@ export class LiveTail extends LitElement {
     if (clearRows) {
       this.buffer = [];
       this.rows = [];
-      this.fieldCounts.clear();
       this.droppedClient = 0;
       this.selectedRow = null;
     }
@@ -395,41 +424,37 @@ export class LiveTail extends LitElement {
     this.followPinned = false;
   }
 
+  private prepare(row: ArrivedRow): PreparedRow {
+    let prepared = this.prepared.get(row);
+    if (!prepared) this.prepared.set(row, (prepared = prepareRow(row)));
+    return prepared;
+  }
+
+  private publish() {
+    this.rows = [...this.buffer];
+  }
+
   private appendRows(batch: LiveRow[]) {
     if (!batch.length) return;
-    const prepared = batch.map(prepareRow);
-    prepared.forEach((row) =>
-      Object.keys(row.displayFields).forEach((field) => this.fieldCounts.set(field, (this.fieldCounts.get(field) ?? 0) + 1))
-    );
-    this.buffer.push(...prepared);
-    if (this.buffer.length > MAX_ROWS) {
-      const evicted = this.buffer.splice(0, this.buffer.length - MAX_ROWS);
-      this.droppedClient += evicted.length;
-      evicted.forEach((row) =>
-        Object.keys(row.displayFields).forEach((field) => {
-          const count = (this.fieldCounts.get(field) ?? 1) - 1;
-          if (count) this.fieldCounts.set(field, count);
-          else this.fieldCounts.delete(field);
-        })
-      );
-    }
+    this.buffer.push(...batch.map((row) => ({ ...row, odd: this.arrivals++ % 2 === 1 })));
+    if (this.buffer.length > MAX_ROWS) this.droppedClient += this.buffer.splice(0, this.buffer.length - MAX_ROWS).length;
     if (this.paused) return;
-    if (this.buffer.length < MAX_MOUNTED_ROWS) this.rows = [...this.buffer];
-    else if (this.rowFrame === null) {
-      this.rowFrame = requestAnimationFrame(() => {
-        this.rowFrame = null;
-        if (!this.paused) {
+    if (this.buffer.length < MAX_MOUNTED_ROWS) this.publish();
+    else if (this.publishTimer === null) {
+      this.publishTimer = setTimeout(() => {
+        this.publishTimer = null;
+        if (!this.paused && !document.hidden) {
           this.followPending = this.stickToBottom;
-          this.rows = [...this.buffer];
+          this.publish();
         }
-      });
+      }, PUBLISH_MS);
     }
   }
 
   private togglePause() {
     this.paused = !this.paused;
     if (!this.paused) {
-      this.rows = [...this.buffer];
+      this.publish();
       this.stickToBottom = true;
     }
   }
@@ -490,7 +515,8 @@ export class LiveTail extends LitElement {
     this.restart(false);
   }
 
-  private openDetails(row: PreparedRow) {
+  private openDetails(raw: ArrivedRow) {
+    const row = this.prepare(raw);
     this.copied = false;
     this.fullRecord = null;
     this.detailError = '';
@@ -553,7 +579,7 @@ export class LiveTail extends LitElement {
       const frame = this.followFrame;
       const list = this.querySelector<HTMLElement & { layoutComplete?: Promise<void> }>('[data-rows]');
       if (list?.layoutComplete) {
-        await Promise.race([list.layoutComplete, new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))]);
+        await Promise.race([list.layoutComplete.catch(() => {}), new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))]);
       }
       if (this.followFrame !== frame) return;
       if (this.followPinned && list?.isConnected) list.scrollTop = list.scrollHeight;
@@ -638,14 +664,14 @@ export class LiveTail extends LitElement {
               class="flex-1 min-h-0 overflow-y-auto c-scroll font-mono text-xs"
               data-rows
               .items=${this.rows}
-              .keyFunction=${(row: PreparedRow) => `${row.id}:${row.timestamp}`}
-              .renderItem=${(row: PreparedRow, index: number) => this.rowTemplate(row, index)}
+              .keyFunction=${rowKey}
+              .renderItem=${this.renderRow}
               .scroller=${true}
               @scroll=${this.trackScrollPosition}
             ></lit-virtualizer>`
           : html`<div class="flex-1 min-h-0 overflow-y-auto c-scroll font-mono text-xs" data-rows @scroll=${this.trackScrollPosition}>
               ${this.rows.length
-                ? this.rows.map((row, index) => this.rowTemplate(row, index))
+                ? this.rows.map(this.renderRow)
                 : html`<div class="min-h-48 flex flex-col items-center justify-center gap-1 px-6 text-center font-sans">
                     <span class="text-sm font-medium text-textStrong">
                       ${this.streamState === 'live' ? 'Waiting for matching records' : STATE_LABEL[this.streamState]}
@@ -663,8 +689,6 @@ export class LiveTail extends LitElement {
   }
 
   private toolbarTemplate(): TemplateResult {
-    const query = this.fieldSearch.trim().toLowerCase();
-    const fields = this.availableFields.filter((field) => displayFieldName(field).toLowerCase().includes(query));
     return html`
       <div class="flex flex-wrap items-center gap-2 px-4 py-1 border-b border-strokeWeak bg-bgRaised">
         <select
@@ -763,7 +787,7 @@ export class LiveTail extends LitElement {
             : nothing}
         </div>
 
-        <details class="relative group/fields">
+        <details class="relative group/fields" @toggle=${(event: Event) => (this.fieldsOpen = (event.currentTarget as HTMLDetailsElement).open)}>
           <summary
             class="list-none cursor-pointer inline-flex items-center gap-1.5 min-h-8 px-2.5 rounded-field border border-strokeWeak bg-bgBase text-xs font-medium hover:bg-fillWeaker active:scale-[0.96] transition-transform focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
           >
@@ -785,9 +809,17 @@ export class LiveTail extends LitElement {
               />
             </div>
             <div class="overflow-y-auto c-scroll p-1" aria-label="Visible live-tail fields">
-              ${fields.length
-                ? fields.map((field) => this.fieldToggleTemplate(field))
-                : html`<p class="px-2 py-4 text-center text-xs text-textWeak">No fields match “${this.fieldSearch}”.</p>`}
+              ${guard([this.fieldsOpen, this.fieldOptions, this.fieldSearch], () => {
+                if (!this.fieldsOpen) return nothing;
+                const query = this.fieldSearch.trim().toLowerCase();
+                const fields = this.fieldOptions.filter((field) => displayFieldName(field).toLowerCase().includes(query));
+                if (!fields.length) return html`<p class="px-2 py-4 text-center text-xs text-textWeak">No fields match “${this.fieldSearch}”.</p>`;
+                // Laying out thousands of labels stalls a weak machine for a second; search reaches the rest.
+                const hidden = fields.length - MAX_FIELD_OPTIONS;
+                return html`${fields.slice(0, MAX_FIELD_OPTIONS).map((field) => this.fieldToggleTemplate(field))}${hidden > 0
+                  ? html`<p class="px-2 py-2 text-xs text-textWeak">${hidden.toLocaleString()} more. Search to find the other fields.</p>`
+                  : nothing}`;
+              })}
             </div>
           </div>
         </details>
@@ -807,7 +839,6 @@ export class LiveTail extends LitElement {
           @click=${() => {
             this.buffer = [];
             this.rows = [];
-            this.fieldCounts.clear();
             this.droppedServer = 0;
             this.droppedClient = 0;
           }}
@@ -835,18 +866,17 @@ export class LiveTail extends LitElement {
     </label>`;
   }
 
-  private rowTemplate(row: PreparedRow, index: number): TemplateResult {
+  private rowTemplate(raw: ArrivedRow): TemplateResult {
+    const row = this.prepare(raw);
     return html`<button
       type="button"
       data-row
       aria-label=${`Inspect record from ${row.service ?? 'unknown service'} at ${row.timestamp}`}
       aria-haspopup="dialog"
-      class="group/row flex w-full cursor-pointer items-start gap-1.5 min-h-8 px-2 py-1.5 text-left border-b border-strokeWeak/50 ${index %
-        2 ===
-      0
-        ? 'bg-bgBase'
-        : 'bg-bgAlternate/50'} hover:bg-fillWeaker focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-strokeBrand-strong"
-      @click=${() => this.openDetails(row)}
+      class="group/row flex w-full cursor-pointer items-start gap-1.5 min-h-8 px-2 py-1.5 text-left border-b border-strokeWeak/50 ${row.odd
+        ? 'bg-bgAlternate/50'
+        : 'bg-bgBase'} hover:bg-fillWeaker focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-strokeBrand-strong"
+      @click=${() => this.openDetails(raw)}
     >
       <span
         aria-hidden="true"
@@ -911,7 +941,7 @@ export class LiveTail extends LitElement {
     const row = this.selectedRow;
     const detailFields: Record<string, FieldValue> = row
       ? this.fullRecord
-        ? { ...row.displayFields, ...flattenJson(this.fullRecord, '', {}) }
+        ? { ...row.displayFields, ...flattenJson(this.fullRecord) }
         : row.displayFields
       : {};
     const fields = Object.entries(detailFields).sort(([a], [b]) => {

@@ -82,6 +82,7 @@ module Utils (
   drawerLoadAttrs_,
   drawerRowAttrs_,
   renderMarkdown,
+  renderMarkdownToc,
   jsonToMap,
   fieldContextMenuItems_,
   fieldMenuActions,
@@ -141,6 +142,7 @@ import Relude hiding (notElem)
 import Relude.Extra.Tuple (toSnd)
 import Servant hiding ((:>))
 import Text.MMark qualified as MMark
+import Text.MMark.Extension qualified as MExt
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Web.FormUrlEncoded (Form (..), FromForm (..), defaultFormOptions, genericFromForm)
@@ -1621,9 +1623,19 @@ drawerLoadAttrs_ url =
 
 
 renderMarkdown :: Text -> Html ()
-renderMarkdown md = case MMark.parse "" md of
-  Left _ -> toHtml md
-  Right doc -> toHtmlRaw $ MMark.render doc
+renderMarkdown = fst . renderMarkdownToc
+
+
+-- | Rendered markdown plus its @##@ headings as (anchor id, text); MMark already gives each heading that id.
+renderMarkdownToc :: Text -> (Html (), [(Text, Text)])
+renderMarkdownToc md = case MMark.parse "" md of
+  Left _ -> (toHtml md, [])
+  Right doc ->
+    ( toHtmlRaw $ MMark.render doc
+    , reverse $ MMark.runScanner doc $ MExt.scanner [] \acc -> \case
+        MExt.Heading2 inlines -> (MExt.headerId inlines, MExt.asPlainText inlines) : acc
+        _ -> acc
+    )
 
 
 jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)

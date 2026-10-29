@@ -2010,7 +2010,7 @@ aiChatPostH :: Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (
 aiChatPostH pid issueId form = do
   _ <- Projects.sessionAndProject pid
   if T.length form.query > 4000
-    then addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
+    then addRespHeaders $ aiChatResponse_ pid (Just form.query) "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
     else do
       appCtx <- ask @AuthContext
       now <- Time.currentTime
@@ -2022,7 +2022,7 @@ aiChatPostH pid issueId form = do
     respond systemPromptM convId response widgets toolCalls includeUserMsg = do
       when includeUserMsg $ Issues.insertChatMessage pid convId Issues.ChatUser form.query Nothing Nothing
       Issues.insertChatMessage pid convId Issues.ChatAssistant response (AE.toJSON <$> widgets) (AE.toJSON <$> toolCalls)
-      addRespHeaders $ aiChatResponse_ pid form.query response widgets toolCalls systemPromptM
+      addRespHeaders $ aiChatResponse_ pid (Just form.query) response widgets toolCalls systemPromptM
 
     processIssue appCtx now convId issue = do
       fullSystemPrompt <- buildSystemPromptForIssue pid issue now
@@ -2232,18 +2232,23 @@ buildSystemPromptForIssue pid issue now = do
 
 
 -- | Render a single chat response (user question + AI answer)
-aiChatResponse_ :: Projects.ProjectId -> Text -> Text -> Maybe [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Maybe Text -> Html ()
+aiChatResponse_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Maybe Text -> Html ()
 aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
   div_ [class_ "animate-fade-in py-3 border-b border-strokeWeak last:border-b-0"] do
-    -- User question
-    div_ [class_ "flex items-start gap-2.5 mb-3"] do
+    -- User question; routine runs answer the conversation's standing task instead
+    whenJust userQuery \q -> div_ [class_ "flex items-start gap-2.5 mb-3"] do
       chatAvatar_ "bg-fillWeak" "user" "text-textWeak"
-      p_ [class_ "text-sm text-textStrong mt-0.5"] $ toHtml userQuery
+      p_ [class_ "text-sm text-textStrong mt-0.5"] $ toHtml q
     -- AI response
     div_ [class_ "flex items-start gap-2.5"] do
       chatAvatar_ "bg-fillBrand-weak" "sparkles" "text-fillBrand-strong"
       div_ [class_ "flex-1 min-w-0 mt-0.5"] do
         div_ [class_ "prose prose-sm text-textStrong max-w-none leading-relaxed"] $ renderMarkdown explanation
+        let savedDocs = ordNub [toText k | tc <- fold toolCallsM, tc.name == "save_artifact", Just (AE.String raw) <- [tc.rawData], Right k <- [Issues.mkArtifactKey raw]]
+        unless (null savedDocs) $ div_ [class_ "mt-3 flex flex-wrap gap-2"] $ forM_ savedDocs \k ->
+          a_ [href_ $ "?doc=" <> k, class_ "inline-flex items-center gap-1.5 rounded-md border border-strokeWeak px-2 py-1 text-xs font-medium text-textStrong hover:bg-fillHover"] do
+            faSprite_ "file-lines" "regular" "h-3 w-3 text-iconBrand"
+            toHtml k
         whenJust widgetsM \widgets -> do
           let processedWidgets = maybe widgets (`processWidgetsWithToolData` widgets) toolCallsM
           -- Model widgets carry no id, and the widget's element ids and hx-target/select derive from it.
@@ -2327,10 +2332,8 @@ unparsablePayload_ = span_ [class_ "text-xs italic text-textWeak"] "details unav
 aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
 aiChatHistoryView_ pid = render
   where
-    render (u : a : rest) | u.role == Issues.ChatUser && a.role == Issues.ChatAssistant = do
-      let (explanation, widgets) = parseStoredContent a.content a.widgets
-      aiChatResponse_ pid u.content explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
-      render rest
+    render (u : a : rest) | u.role == Issues.ChatUser && a.role == Issues.ChatAssistant = answer (Just u.content) a >> render rest
+    render (a : rest) | a.role == Issues.ChatAssistant = answer Nothing a >> render rest
     render (event : rest) | event.role == Issues.ChatExecutionEvent = do
       div_ [class_ "my-3 rounded-lg border border-strokeWeak bg-fillWeak px-3 py-2 text-xs text-textWeak"] do
         faSprite_ "circle-info" "regular" "mr-1.5 inline-block h-3.5 w-3.5"
@@ -2338,6 +2341,7 @@ aiChatHistoryView_ pid = render
       render rest
     render (_ : rest) = render rest
     render [] = pass
+    answer q a = let (explanation, widgets) = parseStoredContent a.content a.widgets in aiChatResponse_ pid q explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
     -- Stored content is JSON (code blocks stripped) where the LLM produced it, plain text otherwise.
     parseStoredContent content storedWidgets = case AI.parseLLMResponse content of
       Right aiResp ->
