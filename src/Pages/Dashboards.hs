@@ -259,8 +259,8 @@ actionPickerField_ label name placeholder value = label_ [Lucid.for_ name, class
   input_ [class_ "no-focus-ring h-10 w-full rounded-md border border-base-300 bg-transparent px-3 text-sm font-normal outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-textDisabled focus:border-strokeBrand-strong focus:ring-2 focus:ring-strokeBrand-weak", id_ name, name_ name, placeholder_ placeholder, value_ value]
 
 
-dashboardVariables_ :: Projects.ProjectId -> Dashboards.DashboardId -> Bool -> [Dashboards.Variable] -> [Attribute] -> Html ()
-dashboardVariables_ pid dashId hasTabs variables extraAttrs = div_ ([id_ "dashboard-variables", class_ "contents"] <> extraAttrs) do
+dashboardVariables_ :: Projects.ProjectId -> Dashboards.DashboardId -> [Dashboards.Variable] -> [Attribute] -> Html ()
+dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-variables", class_ "contents"] <> extraAttrs) do
   input_ [type_ "checkbox", class_ "hidden peer/vars", id_ "dash-vars-toggle"]
   label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeaker border border-strokeWeak rounded-lg px-2 py-1 flex items-center gap-1 peer-checked/vars:hidden"] do
     faSprite_ "filter" "regular" "w-3 h-3"
@@ -268,7 +268,7 @@ dashboardVariables_ pid dashId hasTabs variables extraAttrs = div_ ([id_ "dashbo
   label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeak border border-strokeWeak rounded-lg px-2 py-1 hidden peer-checked/vars:flex items-center gap-1"] do
     faSprite_ "filter" "regular" "w-3 h-3"
     "Hide Filters"
-  div_ [class_ $ "max-md:hidden max-md:peer-checked/vars:flex flex gap-2 flex-wrap max-md:w-full max-md:pt-1 " <> if hasTabs then "ml-auto max-md:ml-0" else ""] do
+  div_ [class_ "max-md:hidden max-md:peer-checked/vars:flex flex gap-2 flex-wrap max-md:w-full max-md:pt-1"] do
     forM_ variables \var -> fieldset_ ([class_ "dash-variable max-md:w-full pl-3 pr-2.5 border border-strokeWeak bg-bgRaised rounded-lg text-sm hover:border-strokeStrong focus-within:border-strokeFocus"] <> foldMap (pure . title_) var.helpText) do
       legend_ [class_ "ml-1 px-1 text-xs leading-none text-textWeak whitespace-nowrap cursor-pointer", [__|on click call (next .tagify__input).focus()|]] do
         toHtml $ fromMaybe var.key var.title
@@ -295,9 +295,9 @@ dashboardVariables_ pid dashId hasTabs variables extraAttrs = div_ ([id_ "dashbo
             , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
             , value_ $ maybeToMonoid var.value
             ]
-          -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
-          -- when present); a second data_ attr would be (<>)-merged by Lucid.
-          <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
+            -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
+            -- when present); a second data_ attr would be (<>)-merged by Lucid.
+            <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
         faSprite_ "chevron-down" "regular" "h-3 w-3 shrink-0 text-iconNeutral pointer-events-none"
 
 
@@ -335,30 +335,38 @@ variableValues dash params = Map.fromList [(v.key, fromMaybe (fromMaybe "" v.val
 
 dashboardViews_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> [Attribute] -> Html ()
 dashboardViews_ pid did dash vm params extraAttrs =
-  div_ ([id_ "dashboard-views", class_ "flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 text-sm"] <> extraAttrs) do
-    nav_ [Aria.label_ "Saved dashboard views", class_ "flex flex-wrap items-center gap-2"] do
-      span_ [class_ "text-textWeak"] "Views"
-      forM_ availableViews \(savedView, deletable) -> do
-        let viewParams = [("var-" <> k, Just v) | (k, v) <- Map.toList savedView.variables, k `elem` map (.key) (fold dash.variables)]
-            url = root <> tabPath <> queryStringFrom (context <> viewParams)
-        a_ ([href_ url, class_ $ "rounded px-2 py-1 hover:bg-fillWeak " <> if variableValues dash viewParams == variableValues dash params then "bg-fillBrand-weak text-textBrand font-semibold" else "text-textStrong"] <> dashboardContentNavAttrs navTarget url) $ toHtml savedView.name
+  div_ ([id_ "dashboard-views", class_ $ "flex items-center gap-2 " <> memptyIfFalse (isJust dash.tabs) "ml-auto max-md:ml-0"] <> extraAttrs) do
+    button_ ([type_ "button", class_ $ "inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer " <> maybe "text-textWeak hover:bg-fillWeak hover:text-textStrong" (const "bg-fillBrand-weak ring-1 ring-strokeBrand-weak text-textBrand font-medium") active, Aria.label_ $ "Saved views" <> foldMap (": " <>) active] <> popoverTrigger_ menuId) do
+      faSprite_ "bookmark" (maybe "regular" (const "solid") active) "w-3.5 h-3.5"
+      whenJust active $ span_ [class_ "max-w-40 truncate"] . toHtml
+      faSprite_ "chevron-down" "regular" "w-3 h-3"
+    div_ ([class_ "dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5"] <> popoverPanel_ menuId) do
+      p_ [class_ "px-2 pt-1 pb-0.5 text-xs text-textWeak"] "Saved views"
+      when (null availableViews) $ p_ [class_ "px-2 py-1 text-textWeak"] "None yet"
+      forM_ availableViews \(savedView, deletable) -> div_ [class_ "flex items-center rounded hover:bg-fillWeak"] do
+        let url = root <> tabPath <> queryStringFrom (context <> viewParams savedView)
+            isActive = active == Just savedView.name
+        a_ ([href_ url, class_ $ "flex-1 flex items-center gap-2 px-2 py-1.5 truncate " <> bool "text-textStrong" "text-textBrand font-medium" isActive] <> dashboardContentNavAttrs navTarget url) do
+          span_ [class_ "w-3.5 shrink-0"] $ when isActive $ faSprite_ "check" "regular" "w-3.5 h-3.5"
+          toHtml savedView.name
         when deletable $ button_ ([type_ "button", class_ "btn btn-ghost btn-xs", Aria.label_ $ "Delete view " <> savedView.name, hxConfirm_ ("Delete view " <> savedView.name <> "?"), hxDelete_ $ root <> "/views/" <> toUriStr savedView.name <> queryStringFrom [(activeTabSlugKey, tab)]] <> swapAttrs) $ faSprite_ "xmark" "regular" "h-3 w-3"
-    details_ [class_ "relative"] do
-      summary_ [class_ "cursor-pointer text-textBrand"] "Save view"
-      form_ ([class_ "absolute z-20 mt-2 p-3 w-64 rounded-lg border border-strokeWeak bg-bgRaised shadow-lg flex flex-col gap-3", hxPost_ $ root <> "/views"] <> swapAttrs) do
+      div_ [class_ "h-px bg-strokeWeak my-1"] ""
+      form_ ([class_ "flex gap-1.5 p-1", hxPost_ $ root <> "/views"] <> swapAttrs) do
         input_ [type_ "hidden", name_ activeTabSlugKey, value_ $ fromMaybe "" tab]
-        label_ [class_ "flex flex-col gap-1"] do
-          "View name"
-          input_ [name_ "name", required_ "", maxlength_ "100", class_ "input input-sm w-full", placeholder_ "Production API"]
+        input_ [name_ "name", required_ "", maxlength_ "100", class_ "input input-sm flex-1 min-w-0", placeholder_ "View name", Aria.label_ "View name"]
         button_ [type_ "submit", class_ "btn btn-primary btn-sm"] "Save view"
-    when (any (T.isPrefixOf "var-" . fst) params) do
-      let url = root <> tabPath <> queryStringFrom context
-      a_ ([href_ url, class_ "text-textWeak hover:underline"] <> dashboardContentNavAttrs navTarget url) "Clear filters"
+      when (any (\(k, v) -> "var-" `T.isPrefixOf` k && not (all T.null v)) params) do
+        let url = root <> tabPath <> queryStringFrom context
+        a_ ([href_ url, class_ "px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak"] <> dashboardContentNavAttrs navTarget url) "Clear filters"
+    span_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] ""
   where
     root = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
     tab = join (lookup activeTabSlugKey params) >>= \slug -> slug <$ findTabBySlug (fold dash.tabs) slug
     tabPath = foldMap ("/tab/" <>) tab
     navTarget = maybe WholePage (const TabPanel) tab
+    menuId = "dashboard-views-menu"
+    viewParams v = [("var-" <> k, Just x) | (k, x) <- Map.toList v.variables, k `elem` map (.key) (fold dash.variables)]
+    active = (.name) . fst <$> find ((== variableValues dash params) . variableValues dash . viewParams . fst) availableViews
     swapAttrs = [hxTarget_ "#dashboard-views", hxSwap_ "outerHTML", hxVals_ "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...getTimeRange()}"]
     context = filter (\(k, _) -> not (any (`T.isPrefixOf` k) ["var-", "const-"]) && k `notElem` [activeTabSlugKey, "name", "expand"]) params
     -- Saved views shadow same-named template views; only saved ones are deletable.
@@ -394,9 +402,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       let queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) allParams
       dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr []
 
-    -- Variables section (pushed to the right, collapsible on mobile)
-    whenJust dash.variables \_ -> dashboardVariables_ pid dashId (isJust dash.tabs) (Dashboards.variablesForTab dash renderTab) []
-  unless (null $ fold dash.variables) $ dashboardViews_ pid dashId dash dashVM allParams []
+    -- Views + variables, pushed to the right (variables collapsible on mobile)
+    unless (null $ fold dash.variables) $ dashboardViews_ pid dashId dash dashVM allParams []
+    whenJust dash.variables \_ -> dashboardVariables_ pid dashId (Dashboards.variablesForTab dash renderTab) []
   let widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
       constants = constantsJson allParams
 
@@ -837,9 +845,9 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
         -- an option list is never worth blocking the shell on.
         withRenderBudget ("variable:" <> variable.key) variable
           $ LogQueries.executeSecuredQuery useTf pid sqlQuery 1000
-          <&> \case
-            Right queryResults -> variable{Dashboards.options = Just $ queryRowsToText queryResults}
-            Left _ -> variable -- Return unchanged on error
+            <&> \case
+              Right queryResults -> variable{Dashboards.options = Just $ queryRowsToText queryResults}
+              Left _ -> variable -- Return unchanged on error
       _ -> pure variable
 
 
@@ -901,8 +909,8 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
             a_
               ( [ class_
                     $ "var-opt [&[hidden]]:hidden flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
-                    <> bool "" " active" (idx == 0)
-                    <> bool "" " var-opt-current" isCurrent
+                      <> bool "" " active" (idx == 0)
+                      <> bool "" " var-opt-current" isCurrent
                 , role_ "option"
                 , href_ optUrl
                 , name_ "dashboard-variable-option"
@@ -1082,9 +1090,9 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
     (issues, _) <- Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.period = "24h", Issues.hideLowSeverity = True, Issues.limit = 2}
     pure
       $ widget
-      & #html
-        ?~ renderText
-          (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
+        & #html
+          ?~ renderText
+            (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
   Widget.WTTable -> do
     let sortParam = join $ lookup "table-sort" allParams
         (query, sql) = Widget.tableQuery widget sortParam
@@ -1093,8 +1101,8 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
     -- Render the table with data server-side
     pure
       $ widget
-      & #html
-        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+        & #html
+          ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTServiceMap -> do
     let (fromM, toM, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
         endpointM = join $ lookup "var-endpointHash" allParams
@@ -1115,8 +1123,8 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
                   )
         pure
           $ widget
-          & #cta ?~ Widget.WidgetCta "Open Service Map" serviceMapUrl
-          & #html ?~ renderText (endpointDependencyMapPanel_ pid mapId graph serviceColors)
+            & #cta ?~ Widget.WidgetCta "Open Service Map" serviceMapUrl
+            & #html ?~ renderText (endpointDependencyMapPanel_ pid mapId graph serviceColors)
   -- Stat and chart widgets
   _ ->
     widgetMetrics pid timeRange allParams widget <&> \md ->
@@ -1252,10 +1260,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ fromMaybe def orig.layout
-              & #x .~ (item.x <|> (orig.layout >>= (.x)))
-              & #y .~ (item.y <|> (orig.layout >>= (.y)))
-              & #w .~ (item.w <|> (orig.layout >>= (.w)))
-              & #h .~ (item.h <|> (orig.layout >>= (.h)))
+                & #x .~ (item.x <|> (orig.layout >>= (.x)))
+                & #y .~ (item.y <|> (orig.layout >>= (.y)))
+                & #w .~ (item.w <|> (orig.layout >>= (.w)))
+                & #h .~ (item.h <|> (orig.layout >>= (.h)))
       pure
         orig
           { Widget.layout = newLayout
@@ -1493,7 +1501,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                         , id_ $ widPrefix <> "-tab-" <> T.toLower tabName
                         , name_ $ wid <> "-drawer-tab"
                         ]
-                      <> [checked_ | isActive]
+                        <> [checked_ | isActive]
                     toHtml tabName
               mkTab "Edit" (effectiveActiveTab /= "alerts")
               mkTab "Monitors" (effectiveActiveTab == "alerts")
@@ -1577,7 +1585,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
     div_
       [ class_
           $ "rounded-xl border border-strokeWeak bg-bgRaised p-4 [@media(max-height:48rem)]:p-3"
-          <> if isNewWidget then "" else " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"
+            <> if isNewWidget then "" else " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"
       ]
       do
         div_ [class_ "space-y-5 [@media(max-height:48rem)]:space-y-4"] do
@@ -1889,7 +1897,7 @@ renderDashboardListItem checked title value icon = label_
               set :name.dataset.templateTitle to :item.dataset.title
           |]
         ]
-      <> [checked_ | checked]
+        <> [checked_ | checked]
     span_ [class_ "flex size-7 shrink-0 items-center justify-center bg-fillWeak rounded-md group-has-[input:checked]/it:bg-fillBrand-weak group-has-[input:checked]/it:text-textBrand"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" $ if icon == Just "cloudflare" then "w-5 h-5" else "w-4 h-4"
     span_ [class_ "grow"] $ toHtml title
     span_ [class_ "px-2 p-1 invisible text-textBrand group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
@@ -1908,7 +1916,7 @@ starButton_ pid dashId isStarred =
     ]
     $ faSprite_ "star" (if isStarred then "solid" else "regular")
     $ "w-4 h-4 "
-    <> if isStarred then "text-iconWarning" else "text-iconNeutral"
+      <> if isStarred then "text-iconWarning" else "text-iconNeutral"
 
 
 data DashboardNew = DashboardNew
@@ -1971,12 +1979,12 @@ dashboardNewForm_ dg = form_
                   div_
                     [ class_
                         $ "col-span-6 flex min-h-28 min-w-0 flex-col rounded-lg border border-strokeWeak bg-bgRaised p-3 "
-                        <> ( case widget.layout >>= (.w) of
-                               Just w | w <= 3 -> "sm:col-span-3"
-                               Just w | w <= 4 -> "sm:col-span-4"
-                               Just w | w <= 6 -> "sm:col-span-6"
-                               _ -> "sm:col-span-12"
-                           )
+                          <> ( case widget.layout >>= (.w) of
+                                 Just w | w <= 3 -> "sm:col-span-3"
+                                 Just w | w <= 4 -> "sm:col-span-4"
+                                 Just w | w <= 6 -> "sm:col-span-6"
+                                 _ -> "sm:col-span-12"
+                             )
                     ]
                     do
                       p_ [class_ "truncate text-xs font-medium text-textStrong", title_ $ fromMaybe "Untitled widget" widget.title] $ toHtml $ fromMaybe "Untitled widget" widget.title
@@ -2869,7 +2877,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxTarget allP
           queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) paramsWithTab
           fragment = do
             dashboardTabStrip_ pid.toText dashId.toText activeTabIdx (fold dash''.tabs) queryStr [hxSwapOob_ "outerMorph"]
-            whenJust dash''.variables \_ -> dashboardVariables_ pid dashId True (Dashboards.variablesForTab dash'' (snd <$> activeTabInfo)) [hxSwapOob_ "true"]
+            whenJust dash''.variables \_ -> dashboardVariables_ pid dashId (Dashboards.variablesForTab dash'' (snd <$> activeTabInfo)) [hxSwapOob_ "true"]
             unless (null $ fold dash''.variables) $ dashboardViews_ pid dashId dash'' dashVM paramsWithTab [hxSwapOob_ "true"]
             div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content", data_ "constants" $ constantsJson paramsWithTab]
               $ case findVarToPrompt (snd <$> activeTabInfo) (fold dash''.variables) of
