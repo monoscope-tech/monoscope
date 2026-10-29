@@ -101,14 +101,31 @@ describe('Live Tail row buffer', () => {
 
     expect(el.rows).toHaveLength(1000);
     expect(el.querySelectorAll('[data-row]').length).toBeLessThan(100);
+  });
 
-    const list = el.querySelector('[data-rows]') as HTMLElement;
+  // Tall rows broke following for good: the virtualizer's remeasure scrolled the list short
+  // of the bottom, and that scroll read as the reader leaving. Pinning the last row keeps the
+  // bottom through remeasures, and the virtualizer itself reports a reader's scroll.
+  test('liveTail_virtualizedFollow_survivesRemeasureAndYieldsToTheReader', async () => {
+    const el = await mount();
+    el.appendRows(pushed(0, 200).map((r: any) => r.log));
+    await published();
+    await el.updateComplete;
+    const list = el.querySelector('lit-virtualizer') as any;
+    Object.defineProperty(list, 'clientHeight', { value: 400, configurable: true });
     Object.defineProperty(list, 'scrollHeight', { value: 4000, configurable: true });
-    // Render, virtualizer layout, then the follow-scroll frame.
-    await nextFrame();
-    await nextFrame();
-    await nextFrame();
-    expect(list.scrollTop).toBe(4000);
+    expect(list.layout).toEqual({ pin: { index: Number.MAX_SAFE_INTEGER, block: 'end' } });
+
+    // Handler called directly: in jsdom the virtualizer reads any dispatched scroll as the reader's.
+    list.scrollTop = 1000;
+    el.trackScrollPosition({ currentTarget: list });
+    await el.updateComplete;
+    expect(el.stickToBottom).toBe(true);
+
+    list.dispatchEvent(new Event('unpinned'));
+    await el.updateComplete;
+    expect(el.stickToBottom).toBe(false);
+    expect(list.layout).toEqual({});
   });
 
   // lit-virtualizer re-renders mounted rows only when handed a new items array or renderItem;
@@ -209,6 +226,29 @@ describe('Live Tail row buffer', () => {
     await el.updateComplete;
     expect(el.rows).toHaveLength(10);
     expect(el.rows[el.rows.length - 1].body).toBe('row 9');
+  });
+});
+
+describe('Live Tail query edits', () => {
+  // A restart clears the rows, so restarting on every typing pause wiped the stream while the
+  // reader was still mid-query. Only a submitted query (Enter, AI search, a facet) restarts.
+  test('liveTail_typingPause_doesNotRestartTheStream', async () => {
+    const el = await mount();
+    await settle();
+    el.appendRows(pushed(0, 5).map((r: any) => r.log));
+    const editor = el.querySelector('query-editor') as HTMLElement;
+    const registrations = posted.length;
+    const send = (detail: object) => editor.dispatchEvent(new CustomEvent('update-query', { detail, bubbles: true }));
+
+    send({ value: 'level == "err', source: 'typing' });
+    await settle();
+    expect(posted).toHaveLength(registrations);
+    expect(el.rows).toHaveLength(5);
+
+    send({ value: 'level == "error"' });
+    await settle();
+    expect(posted).toHaveLength(registrations + 1);
+    expect(posted.at(-1).query).toBe('level == "error"');
   });
 });
 

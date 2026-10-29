@@ -17,7 +17,8 @@ test("audience groups filter sessions, search users, and persist dashboard views
     page.on("console", message => { if (message.type() === "error" && /SyntaxError|parse error/i.test(message.text())) errors.push(message.text()); });
     await page.goto(`/p/${DEMO_PROJECT}/rum?tab=audience&var-app=${app}&since=1H`);
     const toolbar = page.locator("#dashboard-views");
-    await expect(toolbar.getByText("Views", { exact: true })).toBeVisible();
+    const views = toolbar.getByRole("button", { name: /^Saved views/ });
+    await expect(views).toBeVisible();
     const browsers = page.getByRole("table").filter({ has: page.getByRole("columnheader", { name: "Browser", exact: true }) });
     const systems = page.getByRole("table").filter({ has: page.getByRole("columnheader", { name: "Operating system", exact: true }) });
     await expect(browsers.getByText("Unknown", { exact: true })).toBeVisible();
@@ -45,12 +46,12 @@ test("audience groups filter sessions, search users, and persist dashboard views
     await safari.focus();
     await safari.press("Enter");
     await expect(page).toHaveURL(/var-browser=Safari/);
-    await toolbar.locator("summary").filter({ hasText: "Save view" }).click();
+    await views.click();
     await toolbar.getByLabel("View name").fill(segment);
     await toolbar.getByRole("button", { name: "Save view", exact: true }).click();
-    await expect(toolbar.getByRole("link", { name: segment, exact: true })).toBeVisible();
+    await expect(views).toHaveAccessibleName(`Saved views: ${segment}`);
     await page.reload();
-    await expect(toolbar.getByRole("link", { name: segment, exact: true })).toBeVisible();
+    await expect(views).toHaveAccessibleName(`Saved views: ${segment}`);
     await page.getByRole("tab", { name: "Errors", exact: true }).click();
     await expect(page).toHaveURL(/\/tab\/errors/);
     await expect(page).toHaveURL(/var-browser=Safari/);
@@ -79,17 +80,21 @@ test("saved views work on custom dashboards across tabs and retain the time rang
   try {
     const root = `/p/${DEMO_PROJECT}/dashboards/${id}`;
     const toolbar = page.locator("#dashboard-views");
+    const views = toolbar.getByRole("button", { name: /^Saved views/ });
     await page.goto(`${root}/tab/errors?var-service=worker&var-region=us&since=7D`);
-    await toolbar.locator("summary").filter({ hasText: "Save view" }).click();
+    await views.click();
     await toolbar.getByLabel("View name").fill("US worker");
     await toolbar.getByRole("button", { name: "Save view", exact: true }).click();
-    await expect(toolbar.getByRole("link", { name: "US worker", exact: true })).toBeVisible();
+    await expect(views).toHaveAccessibleName("Saved views: US worker");
     await page.reload();
-    await expect(toolbar.getByRole("link", { name: "US worker", exact: true })).toBeVisible();
+    await expect(views).toHaveAccessibleName("Saved views: US worker");
     await page.getByRole("tab", { name: "Overview", exact: true }).click();
     await expect(page.locator('#dashboard-variables [name="region"]')).toHaveCount(0);
+    await views.click();
     await toolbar.getByRole("link", { name: "Clear filters", exact: true }).click();
     await expect(page).not.toHaveURL(/var-service=/);
+    await expect(views).toHaveAccessibleName("Saved views");
+    await views.click();
     await toolbar.getByRole("link", { name: "US worker", exact: true }).click();
     await expect(page).toHaveURL(/\/tab\/overview.*var-service=worker/);
     expect(new URL(page.url()).searchParams.get("var-service")).toBe("worker");
@@ -98,6 +103,7 @@ test("saved views work on custom dashboards across tabs and retain the time rang
     await page.getByRole("tab", { name: "Errors", exact: true }).click();
     await expect(page.locator('#dashboard-variables [name="region"]')).toHaveCount(1);
     page.once("dialog", dialog => dialog.accept());
+    await views.click();
     await toolbar.getByRole("button", { name: "Delete view US worker", exact: true }).click();
     await expect(toolbar.getByRole("link", { name: "US worker", exact: true })).toHaveCount(0);
   } finally {

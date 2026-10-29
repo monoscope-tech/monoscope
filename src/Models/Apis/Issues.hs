@@ -173,6 +173,8 @@ module Models.Apis.Issues (
   AIArtifact (..),
   ArtifactKey,
   ArtifactWrite (..),
+  ArtifactRejection (..),
+  maxArtifactsPerConversation,
   mkArtifactKey,
   saveArtifact,
   listArtifacts,
@@ -2014,24 +2016,40 @@ mkArtifactKey raw = case T.dropWhileEnd (== '-') $ T.take 64 $ slugify raw of
 
 
 data ArtifactWrite = ArtifactReplace | ArtifactAppend
+  deriving stock (Eq, Read, Show)
+  deriving (AE.FromJSON) via WrappedEnumSC 'Nothing "Artifact" ArtifactWrite
+
+
+-- | Why a write did not land; each asks the agent for a different next step.
+data ArtifactRejection = ArtifactFull | ArtifactLimitReached
   deriving stock (Eq, Show)
 
 
+-- | Documents per conversation. Routines keep one per day, so this holds over a year of them
+-- while still stopping an agent that invents a new key every run.
+maxArtifactsPerConversation :: Int
+maxArtifactsPerConversation = 500
+
+
 -- | Creates the document or rewrites/extends it; the title only changes when one is given.
--- Nothing when an append would grow it past 200k characters.
-saveArtifact :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ArtifactKey -> Maybe Text -> Text -> ArtifactWrite -> Eff es (Maybe AIArtifact)
+-- The cap counts the conversation's other documents, so an existing one can always be updated;
+-- concurrent creates can overshoot it slightly, which is acceptable for a courtesy bound.
+saveArtifact :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ArtifactKey -> Maybe Text -> Text -> ArtifactWrite -> Eff es (Either ArtifactRejection AIArtifact)
 saveArtifact pid convId key titleM body write =
   Hasql.interpOne
     [HI.sql| INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content, created_at, updated_at)
-             VALUES (#{pid}, #{convId}, #{key}, COALESCE(#{titleM}, #{key}), #{body}, app_now(), app_now())
+             SELECT #{pid}, #{convId}, #{key}, COALESCE(#{titleM}, #{key}), #{body}, app_now(), app_now()
+             WHERE (SELECT count(*) FROM apis.ai_artifacts WHERE project_id = #{pid} AND conversation_id = #{convId} AND key <> #{key}) < #{maxArtifactsPerConversation}
              ON CONFLICT (project_id, conversation_id, key) DO UPDATE
                SET title = COALESCE(#{titleM}, ai_artifacts.title),
                    content = CASE WHEN #{append} THEN ai_artifacts.content || E'\n\n' || EXCLUDED.content ELSE EXCLUDED.content END,
                    updated_at = app_now()
                WHERE NOT #{append} OR length(ai_artifacts.content) + length(EXCLUDED.content) <= 200000
              RETURNING key, title, length(content)::bigint, NULL::text, updated_at |]
+    >>= maybe (Left . bool ArtifactLimitReached ArtifactFull <$> exists) (pure . Right)
   where
     append = write == ArtifactAppend
+    exists = fromMaybe False <$> Hasql.interpOne [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_artifacts WHERE project_id = #{pid} AND conversation_id = #{convId} AND key = #{key})::boolean|]
 
 
 -- | Most recently updated first, with the full content of @openKey@ only.

@@ -57,7 +57,7 @@ import Control.Lens ((.~), (^.), (^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.Lens (key, values, _Bool, _Number, _String)
-import Data.Aeson.Types (parseMaybe)
+import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Cache qualified as Cache
 import Data.Char (isAlphaNum, isHexDigit)
@@ -1079,18 +1079,15 @@ executeToolCall config tc = do
       key' <- maybeToRight (toolError "save_artifact" "missing 'key'" args) (getTextArg "key" args) >>= Issues.mkArtifactKey
       body <- maybeToRight (toolError "save_artifact" "missing 'content'" args) (getTextArg "content" args)
       when (T.length body > 100_000) $ Left "content must be at most 100000 characters per write."
-      write <- case getTextArg "mode" args of
-        Nothing -> Right Issues.ArtifactReplace
-        Just "replace" -> Right Issues.ArtifactReplace
-        Just "append" -> Right Issues.ArtifactAppend
-        Just _ -> Left "mode must be replace or append."
+      write <- maybe (Right Issues.ArtifactReplace) (first (const "mode must be replace or append.") . parseEither AE.parseJSON) (Map.lookup "mode" args)
       pure $ Issues.saveArtifact config.projectId convId key' (getTextArg "title" args) body write <&> \case
-        Just doc -> ToolResult ("Saved document '" <> toText doc.key <> "' (" <> doc.title <> ", " <> show doc.characters <> " characters).") (Just $ AE.toJSON doc.key)
-        Nothing -> noRaw $ "Document '" <> toText key' <> "' is full. Continue in a new document with a different key."
+        Right doc -> ToolResult ("Saved document '" <> toText doc.key <> "' (" <> doc.title <> ", " <> show doc.characters <> " characters).") (Just $ AE.toJSON doc.key)
+        Left Issues.ArtifactFull -> noRaw $ "Document '" <> toText key' <> "' is full. Continue in a new document with a different key."
+        Left Issues.ArtifactLimitReached -> noRaw $ "This conversation already holds " <> show Issues.maxArtifactsPerConversation <> " documents. Rewrite an existing one instead; read_artifact without a key lists them."
     "read_artifact" -> inConversation \convId ->
       noRaw <$> case getTextArg "key" args of
         Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]
-        Just k -> fromMaybe ("No document with key '" <> k <> "' in this conversation.") . asum . map (.content) <$> Issues.listArtifacts config.projectId convId (rightToMaybe $ Issues.mkArtifactKey k)
+        Just k -> maybe ("No document with key '" <> k <> "' in this conversation.") readable . asum . map (.content) <$> Issues.listArtifacts config.projectId convId (rightToMaybe $ Issues.mkArtifactKey k)
     "send_to_slack" -> do
       permitted <- case config.invocationMode of
         ScheduledRoutine routineId True -> Issues.routineCanAct routineId
@@ -1117,6 +1114,11 @@ executeToolCall config tc = do
   Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length result.formatted, "resultPreview" AE..= T.take 200 result.formatted])
   pure result
   where
+    -- Keeps both ends: routines append, so the newest sections are at the end of a long document.
+    readable content
+      | T.length content <= maxReadChars = content
+      | otherwise = T.take (maxReadChars `div` 2) content <> "\n\n[… " <> show (T.length content - maxReadChars) <> " of " <> show (T.length content) <> " characters omitted …]\n\n" <> T.takeEnd (maxReadChars `div` 2) content
+    maxReadChars = 40_000
     inConversation f = maybe (pure $ ToolResult "Documents are only available in Monoscope conversations." Nothing) f $ documentConversation config
     slackThread denied f = case config.access of
       SlackInvestigationAccess run -> f run

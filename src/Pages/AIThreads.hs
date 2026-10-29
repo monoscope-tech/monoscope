@@ -208,14 +208,17 @@ routinesGetH pid = do
           Issues.RunCancelled -> (NeutralBadge, "Cancelled")
 
 
-threadGetH :: Projects.ProjectId -> UUIDId "conversation" -> Maybe Issues.ArtifactKey -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-threadGetH pid convId docM = do
+threadGetH :: Projects.ProjectId -> UUIDId "conversation" -> Maybe Issues.ArtifactKey -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+threadGetH pid convId docM hxTarget = do
   (_, _, bw) <- mkAIPageCtx pid
+  -- The open document's refresh keeps only #ai-document (htmx 4 sends `tag#id`), so skip what it discards.
+  let unlessRefresh :: Applicative f => f [a] -> f [a]
+      unlessRefresh q = if any ("#ai-document" `T.isSuffixOf`) hxTarget then pure [] else q
   (conversations, (conversationM, (selectedMessages, artifacts))) <-
     concurrently
-      (Issues.listConversations pid)
+      (unlessRefresh $ Issues.listConversations pid)
       $ concurrently (Issues.getConversation pid convId)
-      $ concurrently (Issues.selectChatHistory pid convId) (Issues.listArtifacts pid convId docM)
+      $ concurrently (unlessRefresh $ Issues.selectChatHistory pid convId) (Issues.listArtifacts pid convId docM)
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
       docs = bool [] artifacts (isJust conversationM)
@@ -324,7 +327,7 @@ threadGetH pid convId docM = do
           article_
             ( [id_ "ai-document", Aria.label_ doc.title]
                 -- Routines keep appending to today's document; keep an open one current.
-                <> concat [[hxGet_ $ docHref doc, hxTrigger_ "every 60s", hxSelect_ "#ai-document", hxTarget_ "this", hxSwap_ "outerMorph"] | any ((.routineActive) . fst) routineM]
+                <> bool [] [hxGet_ $ docHref doc, hxTrigger_ "every 60s", hxSelect_ "#ai-document", hxTarget_ "this", hxSwap_ "outerMorph"] (any ((.routineActive) . fst) routineM)
             )
             do
               p_ [class_ "font-mono text-xs text-textWeak"] $ toHtml $ toText doc.key
