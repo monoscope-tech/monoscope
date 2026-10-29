@@ -76,6 +76,7 @@ data Layout = Layout
   , y :: Maybe Int
   , w :: Maybe Int
   , h :: Maybe Int
+  , minWidth :: Maybe Int
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -568,7 +569,7 @@ widget_ w' = case w.wType of
         input_ [type_ "checkbox", class_ "sr-only peer wgt-collapse"]
         Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform peer-checked:rotate-180"
     -- Nested grid: flex-1 fills remaining space
-    div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
+    div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : [data_ "stat-grid" "" | not (null normalizedChildren) && all (\child -> child.wType `elem` [WTStat, WTTimeseriesStat]) normalizedChildren] <> gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
   WTTable -> wgtCard_ $ renderTable w
   WTLogs -> wgtCard_ $ renderLogsWidget w
   WTServiceMap -> wgtCard_ $ withCardFrame True w (ctaAction w) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
@@ -618,7 +619,9 @@ gridStackAttrs widgets =
       <> "height:"
       <> gridRem rows
   ]
+    <> [data_ "min-width" (show minWidth) | minWidth > 0]
   where
+    minWidth = foldl' max 0 [pixels * 12 `div` max 1 (fromMaybe defaultWidgetWidth layout.w) | widget <- widgets, layout <- toList widget.layout, pixels <- toList layout.minWidth]
     rows = if null widgets then 2 else layoutRows widgets
 
 
@@ -633,22 +636,22 @@ gridStackAttrs widgets =
 --
 -- Missing positions, oversized widths, overlaps, and row packing:
 --
--- >>> let widgets = [testWidget WTList Layout{x = Just 0, y = Just 2, w = Just 20, h = Just 2}, testWidget WTList Layout{x = Just 0, y = Just 0, w = Just 6, h = Just 1}, testWidget WTList Layout{x = Nothing, y = Nothing, w = Just 6, h = Just 1}]
+-- >>> let widgets = [testWidget WTList (def :: Layout){x = Just 0, y = Just 2, w = Just 20, h = Just 2}, testWidget WTList (def :: Layout){x = Just 0, y = Just 0, w = Just 6, h = Just 1}, testWidget WTList (def :: Layout){w = Just 6, h = Just 1}]
 -- >>> map coordinates (normalizeWidgetLayouts widgets)
 -- [Just (Just 0,Just 0,Just 6,Just 1),Just (Just 6,Just 0,Just 6,Just 1),Just (Just 0,Just 1,Just 12,Just 2)]
 --
 -- Saved visual order wins over YAML array order, and a clamped full-width group
 -- derives its height from its children:
 --
--- >>> let lower = testWidget WTList Layout{x = Just 0, y = Just 4, w = Just 6, h = Just 2}
--- >>> let golden = (testWidget WTGroup Layout{x = Just 0, y = Just 0, w = Just 20, h = Just 10}){children = Just []}
+-- >>> let lower = testWidget WTList (def :: Layout){x = Just 0, y = Just 4, w = Just 6, h = Just 2}
+-- >>> let golden = (testWidget WTGroup (def :: Layout){x = Just 0, y = Just 0, w = Just 20, h = Just 10}){children = Just []}
 -- >>> map coordinates (normalizeWidgetLayouts [lower, golden])
 -- [Just (Just 0,Just 0,Just 12,Just 2),Just (Just 0,Just 2,Just 6,Just 2)]
 --
 -- Nested group children are normalized recursively:
 --
 -- >>> let child position = testWidget WTList position
--- >>> let groupWidget = (testWidget WTGroup Layout{x = Just 0, y = Just 0, w = Just 12, h = Just 1}){children = Just [child Layout{x = Just 0, y = Just 0, w = Just 8, h = Just 1}, child Layout{x = Just 0, y = Just 0, w = Just 8, h = Just 1}]}
+-- >>> let groupWidget = (testWidget WTGroup (def :: Layout){x = Just 0, y = Just 0, w = Just 12, h = Just 1}){children = Just [child (def :: Layout){x = Just 0, y = Just 0, w = Just 8, h = Just 1}, child (def :: Layout){x = Just 0, y = Just 0, w = Just 8, h = Just 1}]}
 -- >>> fmap coordinates (listToMaybe $ normalizeWidgetLayouts [groupWidget])
 -- Just (Just (Just 0,Just 0,Just 12,Just 3))
 -- >>> map coordinates (fold $ listToMaybe (normalizeWidgetLayouts [groupWidget]) >>= (.children))
@@ -656,8 +659,8 @@ gridStackAttrs widgets =
 --
 -- A saved four-stat row with shrunken cards still fills its group:
 --
--- >>> let stat x width height = testWidget WTStat Layout{x = Just x, y = Just 0, w = Just width, h = Just height}
--- >>> let overview = (testWidget WTGroup Layout{x = Just 0, y = Just 0, w = Just 12, h = Just 3}){children = Just [stat 0 3 2, stat 3 3 2, stat 6 2 1, stat 9 2 2]}
+-- >>> let stat x width height = testWidget WTStat (def :: Layout){x = Just x, y = Just 0, w = Just width, h = Just height}
+-- >>> let overview = (testWidget WTGroup (def :: Layout){x = Just 0, y = Just 0, w = Just 12, h = Just 3}){children = Just [stat 0 3 2, stat 3 3 2, stat 6 2 1, stat 9 2 2]}
 -- >>> map coordinates (fold $ listToMaybe (normalizeWidgetLayouts [overview]) >>= (.children))
 -- [Just (Just 0,Just 0,Just 3,Just 2),Just (Just 3,Just 0,Just 3,Just 2),Just (Just 6,Just 0,Just 3,Just 2),Just (Just 9,Just 0,Just 3,Just 2)]
 -- >>> let html = toStrict $ renderText $ widget_ overview
@@ -711,7 +714,7 @@ normalizeWidgetLayouts widgets =
               else [(y, x) | y <- [0 ..], x <- [0 .. 12 - width]]
           (placedY, placedX) = fromMaybe (requestedY, requestedX) $ find (isFree occupied width height) candidates
           rect = (placedX, placedY, width, height)
-          widget' = normalizedWidget{layout = Just Layout{x = Just placedX, y = Just placedY, w = Just width, h = Just height}}
+          widget' = normalizedWidget{layout = Just layout{x = Just placedX, y = Just placedY, w = Just width, h = Just height}}
        in (rect : occupied, (idx, widget') : acc)
 
     isFree occupied width height (y, x) = not (any (overlaps (x, y, width, height)) occupied)
@@ -1617,7 +1620,7 @@ renderTableWithDataAndParams widget dataRows params = do
           <> [term "hx-preload" "mousedown"]
           <> foldMap (\var -> [name_ "dashboard-variable-option", data_ "variable-key" var, data_ "variable-value" value, data_ "variable-label" value, term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)", term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"]) action.setVariable
 
-  table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
+  table_ [class_ "dashboard-table table table-zebra table-sm w-full relative", id_ tableId] do
     sortableTableHead_ widget (find ((== "table-sort") . fst) params >>= snd)
     tbody_ [] do
       let maxValues = calculateMaxValues columns dataRows

@@ -1528,6 +1528,7 @@ dashboardContentNavAttrs target url =
   , hxVals_ "js:{...getTimeRange()}"
   , hxSwap_ "outerMorph"
   , hxPushUrl_ "true"
+  , data_ "preserve-page-context" ""
   , [__|on click set my.preloadState to 'DONE'|]
   ]
     <> case target of

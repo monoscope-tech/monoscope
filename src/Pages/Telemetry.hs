@@ -773,7 +773,7 @@ metricWidget pid metricName metricType metricUnit source mLabel mTitle mId mExpa
     { Widget.wType = Widget.WTTimeseriesLine
     , Widget.title = if isDistribution then (<> " · mean") <$> mTitle else mTitle
     , Widget.query = Just metricQuery
-    , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+    , Widget.layout = Just $ (def :: Widget.Layout){Widget.x = Just 0, Widget.y = Just 0, Widget.w = Just 2, Widget.h = Just 1}
     , Widget.unit = Just metricUnit
     , Widget.eager = Just True
     , Widget.hideValue = Just True

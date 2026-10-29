@@ -30,6 +30,7 @@ import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
 import Database.PostgreSQL.Simple.Types (Query (..))
+import Effectful.Error.Static (catchError)
 import GHC.Clock (getMonotonicTime)
 import Lucid (renderText, toHtml)
 import Models.Apis.Endpoints qualified as Endpoints
@@ -37,6 +38,7 @@ import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashb
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.Projects (Session (..))
+import Models.Projects.Projects qualified as Projects
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (BWConfig (..), NavigationResponse (..), PageCtx (..))
@@ -45,7 +47,6 @@ import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as Issues
 import Pages.LogExplorer.Log qualified as Log
-import Pages.Rum qualified as Rum
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (browserKql, parseQueryToAST)
 import Pkg.QueryCache qualified as QueryCache
@@ -162,6 +163,67 @@ reorder wid x y w h = Map.singleton wid (def :: Dashboards.WidgetReorderItem){Da
 
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
+  describe "Shared dashboard views" do
+    it "savesArbitraryVariables_withoutFreezingTheTemplate_andKeepsTabAndWindow" \tr -> do
+      did <- newDashboard tr "rum.yaml" "Shared views"
+      let params = [("var-browser", Just "Safari"), ("since", Just "7D"), ("activeTabSlug", Just "errors")]
+          render = toStrict . renderText
+          root = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/errors"
+      form <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.DashboardViewForm "name=Mobile+Safari&var-browser=Safari&since=7D&activeTabSlug=errors"
+      (_, saved) <- testServant tr $ Dashboards.dashboardViewPostH testPid did form
+      linkParams root (render saved) `shouldSatisfy` any (\ps -> lookup "var-browser" ps == Just "Safari" && lookup "since" ps == Just "7D")
+      (vm, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
+      vm.schema `shouldSatisfy` isNothing
+      map (.name) (V.toList vm.savedViews) `shouldBe` ["Mobile Safari"]
+      (_, deleted) <- testServant tr $ Dashboards.dashboardViewDeleteH testPid did "Mobile Safari" params
+      render deleted `shouldNotSatisfy` T.isInfixOf ">Mobile Safari</a>"
+
+    it "rendersConfiguredViews_andTabScopedVariables_onAnyDashboard" \tr -> do
+      did <- newDashboard tr "overview.yaml" "Shared views"
+      _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid did $ Dashboards.YamlForm "title: Shared views\nwidgets: []\nvariables:\n  - {key: service, title: Service, type: values, options: [[api]]}\n  - {key: region, title: Region, type: values, options: [[eu]]}\nviews:\n  - {name: Europe API, variables: {service: api, region: eu}}\ntabs:\n  - {name: Overview, variables: [service], widgets: []}\n  - {name: Errors, variables: [service, region], widgets: []}\n"
+      (_, page) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "overview" Nothing Nothing Nothing (Just "24H") Nothing []
+      let html = toStrict $ renderText $ toHtml page
+      html `shouldSatisfy` T.isInfixOf ">Europe API</a>"
+      html `shouldSatisfy` T.isInfixOf "name=\"service\""
+      html `shouldNotSatisfy` T.isInfixOf "name=\"region\""
+      (_, errors) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "errors" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") []
+      toStrict (renderText $ toHtml errors) `shouldSatisfy` T.isInfixOf "name=\"region\""
+      form <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.DashboardViewForm "name=US+worker&var-service=worker&var-region=us&var-unknown=ignored&since=24H&activeTabSlug=errors"
+      _ <- testServant tr $ Dashboards.dashboardViewPostH testPid did form
+      (saved, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
+      map (.variables) (V.toList saved.savedViews) `shouldBe` [Map.fromList [("service", "worker"), ("region", "us")]]
+      (_, overridden) <- testServant tr $ Dashboards.dashboardViewPostH testPid did form{Dashboards.name = "Europe API"}
+      toStrict (renderText overridden) `shouldNotSatisfy` T.isInfixOf "var-region=eu"
+      (_, revealed) <- testServant tr $ Dashboards.dashboardViewDeleteH testPid did "Europe API" form.params
+      toStrict (renderText revealed) `shouldSatisfy` T.isInfixOf "var-region=eu"
+      (_, reloaded) <- testServant tr $ Dashboards.dashboardTabGetH testPid did "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") [("since", Just "24H")]
+      let root = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/overview"
+      linkParams root (toStrict $ renderText $ toHtml reloaded) `shouldSatisfy` any (\ps -> lookup "var-service" ps == Just "worker" && lookup "var-region" ps == Just "us" && lookup "since" ps == Just "24H")
+
+    it "rejectsInvalidNames_andCrossProjectChanges" \tr -> do
+      did <- newDashboard tr "rum.yaml" "Private views"
+      other <- createTestProject tr "Other saved views"
+      let save pid name = Dashboards.dashboardViewPostH pid did (Dashboards.DashboardViewForm name [])
+          status action = runAuthHandler tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
+      status (save testPid "  ") `shouldReturn` 400
+      status (save testPid $ T.replicate 101 "x") `shouldReturn` 400
+      status (save other "Wrong project") `shouldReturn` 404
+      status (Dashboards.dashboardViewDeleteH other did "Missing" []) `shouldReturn` 404
+      assertNonMemberDenied tr other (save other "Denied")
+      assertNonMemberDenied tr other (Dashboards.dashboardViewDeleteH other did "Denied" [])
+
+    it "migratesLegacySegments_evenWithoutAnExistingDashboard" \tr -> do
+      pid <- createTestProject tr "Unopened RUM dashboard"
+      did <- newDashboard tr "rum.yaml" "Existing RUM dashboard"
+      migration <- Query <$> readFileBS "static/migrations/0255_dashboard_saved_views.sql"
+      withResource tr.trPool \conn -> do
+        PG.execute_ conn "ALTER TABLE projects.dashboards DROP COLUMN saved_views" `shouldReturn` 0
+        _ <- PG.execute_ conn "CREATE TABLE projects.rum_segments (project_id uuid, name text, filters jsonb)"
+        _ <- PG.execute conn "INSERT INTO projects.rum_segments VALUES (?, 'Safari', '{\"browser\":\"Safari\",\"app\":null,\"errored\":true}'), (?, 'Safari', '{\"browser\":\"Safari\",\"errored\":false}')" (testPid, pid)
+        _ <- PG.execute_ conn migration
+        rows <- PG.query conn "SELECT project_id, saved_views[1]->>'name', saved_views[1]->'variables' FROM projects.dashboards WHERE id = ? OR project_id = ? ORDER BY project_id" (did, pid)
+        (rows :: [(Projects.ProjectId, Text, Aeson AE.Value)]) `shouldMatchList` [(testPid, "Safari", Aeson $ AE.object ["browser" AE..= ("Safari" :: Text), "errors" AE..= ("true" :: Text)]), (pid, "Safari", Aeson $ AE.object ["browser" AE..= ("Safari" :: Text), "errors" AE..= ("false" :: Text)])]
+
   describe "Widget PNG export" do
     it "tablePng_aggregateChangesAlterRenderedImage" \tr ->
       for_ [Nothing, Just Widget.PngSlack] \profile -> do
@@ -1024,7 +1086,7 @@ spec = sequential $ aroundAll withTestResources do
               , Endpoints.outgoing = True
               }
           filters hash = do
-            (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") Nothing [("var-host", Just "integrations.routelift.com"), ("var-endpointHash", Just hash)]
+            (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") [("var-host", Just "integrations.routelift.com"), ("var-endpointHash", Just hash)]
             let Dashboards.DashboardGet _ _ _ _ params = tabDashboard response
                 values = Map.fromList params
             pure (Map.lookup "const-endpointFilter" values, Map.lookup "const-endpointFilter-kql" values)
@@ -1069,7 +1131,6 @@ spec = sequential $ aroundAll withTestResources do
             Nothing
             (Just "3D")
             (Just "div#dashboard-tabs-content")
-            Nothing
             [ ("const-endpointFilter", Just "hashes @> ARRAY['']")
             , ("const-endpointFilter-kql", Just "hashes[*] in (\"\")")
             , ("var-endpointHash", Just "faa041ff")
@@ -1136,7 +1197,6 @@ spec = sequential $ aroundAll withTestResources do
                 Nothing
                 Nothing
                 (Just "24H")
-                Nothing
                 Nothing
                 [ ("var-host", Just "dellyman.com")
                 , ("var-endpointHash", Just "endpoint / hash")
@@ -1298,7 +1358,7 @@ spec = sequential $ aroundAll withTestResources do
       prefilled :: Widget.Widget -> Bool
       prefilled w = isJust w.html || isJust w.dataset
       openTab tr dashId params = do
-        (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing Nothing params)
+        (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing params)
 
     it "skips the widget phase whose results the picker would discard" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint Analytics"
@@ -1322,7 +1382,7 @@ spec = sequential $ aroundAll withTestResources do
           , Endpoints.host = "dellyman.com"
           , Endpoints.hash = "ba3431d5"
           }
-      let open params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") Nothing params)
+      let open params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#dashboard-tabs-content") params)
           partialHtml = \case
             NavigationPartial _ fragment -> pure $ toStrict $ renderText fragment
             NavigationFull _ -> expectationFailure "htmx picker navigation returned a full document" $> ""
@@ -1350,7 +1410,6 @@ spec = sequential $ aroundAll withTestResources do
             Nothing
             (Just "24H")
             (Just "div#dashboard-tabs-content")
-            (Just "dashboard-variable-option")
             [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
       case response of
         NavigationFull _ -> expectationFailure "htmx tab navigation returned a full document"
@@ -1368,7 +1427,7 @@ spec = sequential $ aroundAll withTestResources do
   describe "Dependent variable keeps a live template" do
     it "endpointHash_parentHostChanges_dropdownRefetchesForNewHost" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Dependent Vars"
-      dg <- (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing Nothing [("var-host", Just "dellyman.com")])
+      dg <- (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing [("var-host", Just "dellyman.com")])
       let html = toStrict $ renderText $ toHtml (dg :: Dashboards.DashboardGet)
       html `shouldSatisfy` T.isInfixOf "{{var-host}}"
       html `shouldNotSatisfy` T.isInfixOf "host=&#39;dellyman.com&#39;"
@@ -1377,7 +1436,7 @@ spec = sequential $ aroundAll withTestResources do
   -- themselves rather than blocking on the widget phase (measured 4.9s -> 1.2s).
   describe "Prefill on a full load, skeletons on a swap" do
     let openTab tr dashId hx = do
-          snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx Nothing [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")])
+          snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")])
         eagerOnes = filter (\w -> w.eager == Just True || isJust w.html || isJust w.dataset)
 
     it "keeps the server-side prefill for a full page load" \tr -> do
@@ -1397,7 +1456,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "dashboardTab_sidebarNavigationFromSessions_keepsMainContent" \tr -> do
       dashId <- newDashboard tr "rum.yaml" "RUM sidebar navigation"
-      (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#main-content") Nothing []
+      (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#main-content") []
       case response of
         NavigationFull page -> do
           let html = toStrict $ renderText $ toHtml page
@@ -1418,7 +1477,6 @@ spec = sequential $ aroundAll withTestResources do
             Nothing
             (Just "24H")
             (Just "div#dashboard-tabs-content")
-            Nothing
             [ ("var-host", Just "dellyman.com")
             , ("var-endpointHash", Just "ba3431d5")
             ]
@@ -1429,7 +1487,7 @@ spec = sequential $ aroundAll withTestResources do
           html `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-content\""
           html `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-container\""
           html `shouldSatisfy` T.isInfixOf "hx-swap-oob=\"outerMorph\""
-          html `shouldNotSatisfy` T.isInfixOf "id=\"dashboard-variables\""
+          html `shouldSatisfy` T.isInfixOf "id=\"dashboard-variables\""
           html `shouldSatisfy` T.isInfixOf "tab-active"
           html `shouldSatisfy` T.isInfixOf "hx-push-url=\"true\""
           html `shouldNotSatisfy` T.isInfixOf "<html"
@@ -1536,23 +1594,6 @@ spec = sequential $ aroundAll withTestResources do
       found <- readTable [("table-search", Just "ALICE")] "Identified users"
       map (V.toList . V.take 3) (V.toList found) `shouldBe` [["alice@example.com", "1", "1"]]
       readTable [("table-search", Just "missing-user")] "Identified users" `shouldReturn` V.empty
-
-    it "audienceSegments_persistFilters_keepTheWindow_andStayProjectScoped" \tr -> do
-      pid <- createTestProject tr "RUM segments"
-      otherPid <- createTestProject tr "Other RUM segments"
-      let params = [("var-app", Just "storefront"), ("var-browser", Just "Safari"), ("var-device", Just "Mobile"), ("since", Just "7D"), ("tab", Just "errors")]
-          root = "/p/" <> pid.toText <> "/rum"
-          render = toStrict . renderText
-      form <- either (fail . toString) pure $ urlDecodeAsForm @Rum.SegmentForm "name=Mobile+Safari&app=storefront&browser=Safari&device=Mobile&os=&errored=false"
-      (_, saved) <- testServant tr $ Rum.segmentsPostH pid params form
-      let links = linkParams root (render saved)
-      links `shouldSatisfy` any (\ps -> lookup "var-browser" ps == Just "Safari" && lookup "since" ps == Just "7D" && lookup "tab" ps == Just "errors")
-      (_, reloaded) <- testServant tr $ Rum.segmentsGetH pid []
-      render reloaded `shouldSatisfy` T.isInfixOf ">Mobile Safari</a>"
-      (_, other) <- testServant tr $ Rum.segmentsGetH otherPid []
-      render other `shouldNotSatisfy` T.isInfixOf ">Mobile Safari</a>"
-      (_, deleted) <- testServant tr $ Rum.segmentsDeleteH pid "Mobile Safari" []
-      render deleted `shouldNotSatisfy` T.isInfixOf ">Mobile Safari</a>"
 
     -- /rum and its older /rum/dashboard open the dashboard; /rum/sessions the Explorer. Links from
     -- emails and alerts carry a window, which both must keep.

@@ -15,7 +15,6 @@ import Lucid (renderText, toHtml)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
-import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.ProjectMembers (TeamVM (..))
 import Models.Projects.Projects qualified as Projects
@@ -82,24 +81,7 @@ spec = sequential $ aroundAll withTestResources do
               }
           chart = (def :: Widget.Widget){Widget.wType = Widget.WTTimeseriesLine}
           dash = (def :: DashboardModel.Dashboard){DashboardModel.variables = Just [mkVar "single" Nothing, mkVar "multi" (Just True)], DashboardModel.widgets = [chart]}
-          vm =
-            DashboardVM
-              { id = UUIDId UUID.nil
-              , projectId = testPid
-              , createdAt = frozenTime
-              , updatedAt = frozenTime
-              , createdBy = Projects.UserId UUID.nil
-              , baseTemplate = Nothing
-              , schema = Just dash
-              , starredSince = Nothing
-              , homepageSince = Nothing
-              , tags = V.empty
-              , title = "t"
-              , teams = V.empty
-              , filePath = Nothing
-              , gitSyncId = Nothing
-              , fileSha = Nothing
-              }
+          vm = (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = "t"}
           html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
       T.count "data-tagify-mode" html `shouldBe` 1
       html `shouldSatisfy` T.isInfixOf "data-tagify-mode=\"select\""
@@ -122,24 +104,7 @@ spec = sequential $ aroundAll withTestResources do
     it "dashboardTabs_useTheSharedNavigationContract_notAContentEndpoint" \_ -> do
       let mkTab n = (def :: DashboardModel.Tab){DashboardModel.name = n}
           dash = (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [mkTab "Overview", mkTab "Errors"]}
-          vm =
-            DashboardVM
-              { id = UUIDId UUID.nil
-              , projectId = testPid
-              , createdAt = frozenTime
-              , updatedAt = frozenTime
-              , createdBy = Projects.UserId UUID.nil
-              , baseTemplate = Nothing
-              , schema = Just dash
-              , starredSince = Nothing
-              , homepageSince = Nothing
-              , tags = V.empty
-              , title = "t"
-              , teams = V.empty
-              , filePath = Nothing
-              , gitSyncId = Nothing
-              , fileSha = Nothing
-              }
+          vm = (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = "t"}
           html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
       -- `morph`/`:morph` are htmx 2 + idiomorph names; htmx 4 calls them outerMorph/innerMorph
       -- and throws "Unknown swap style: morph" at swap time, so the names are asserted here.
@@ -151,25 +116,8 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` (not . T.isInfixOf "remove .tab-active")
 
     it "reports a bounded dashboard-settlement sample after initial and tab renders" \_ -> do
-      let dash = (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [(def :: DashboardModel.Tab){DashboardModel.name = "Overview"}]}
-          vm =
-            DashboardVM
-              { id = UUIDId UUID.nil
-              , projectId = testPid
-              , createdAt = frozenTime
-              , updatedAt = frozenTime
-              , createdBy = Projects.UserId UUID.nil
-              , baseTemplate = Nothing
-              , schema = Just dash
-              , starredSince = Nothing
-              , homepageSince = Nothing
-              , tags = V.empty
-              , title = "Performance sample"
-              , teams = V.empty
-              , filePath = Nothing
-              , gitSyncId = Nothing
-              , fileSha = Nothing
-              }
+      let dash = (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [((def :: DashboardModel.Tab){DashboardModel.name = "Overview"} :: DashboardModel.Tab)]}
+          vm = (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = "Performance sample"}
           html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
       html `shouldSatisfy` T.isInfixOf "/dashboards/00000000-0000-0000-0000-000000000000/settled"
       for_ ["duration_ms", "response_bytes", "htmx:before:request", "htmx:after:settle", "keepalive: true"] \needle ->

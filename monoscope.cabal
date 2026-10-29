@@ -271,6 +271,7 @@ extra-source-files:
     static/migrations/0254_ingest_sampling.sql
     static/migrations/0254_rum_segments.sql
     static/migrations/0255_api_change_recorded_service.sql
+    static/migrations/0255_dashboard_saved_views.sql
     test/fixtures/github-app-test.pem
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
@@ -382,7 +383,6 @@ library
       Pages.Projects
       Pages.Replay
       Pages.Reports
-      Pages.Rum
       Pages.ServiceMap
       Pages.Settings
       Pages.Share
@@ -1031,7 +1031,6 @@ test-suite test-dev
       Pages.Projects
       Pages.Replay
       Pages.Reports
-      Pages.Rum
       Pages.ServiceMap
       Pages.Settings
       Pages.Share
