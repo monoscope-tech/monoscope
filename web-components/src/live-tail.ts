@@ -70,6 +70,12 @@ const STATE_LABEL: Record<LiveState, string> = {
 
 const displayFieldName = (name: string): string => name.replaceAll('___', '.');
 
+// The pin index is clamped to the last row on every reflow, so it follows appends and holds
+// the bottom while rows remeasure; the virtualizer drops it on a reader's scroll.
+const PIN_TO_END = { pin: { index: Number.MAX_SAFE_INTEGER, block: 'end' as const } };
+const UNPINNED = {};
+const isVirtualized = (list: HTMLElement) => list.tagName === 'LIT-VIRTUALIZER';
+
 const rowKey = (row: ArrivedRow) => `${row.id}:${row.timestamp}`;
 
 const formatValue = (value: FieldValue): string => {
@@ -253,9 +259,6 @@ export class LiveTail extends LitElement {
   private projectId = '';
   private leaseSecs = 45;
   private detailRequestSeq = 0;
-  private followFrame: number | null = null;
-  private followPending = false;
-  private followPinned = false;
   private publishTimer: ReturnType<typeof setTimeout> | null = null;
   private renderRow: (row: ArrivedRow) => unknown = () => nothing;
 
@@ -306,11 +309,7 @@ export class LiveTail extends LitElement {
     this.dataset.state = this.streamState;
     this.dataset.paused = String(this.paused);
     const list = this.querySelector<HTMLElement>('[data-rows]');
-    if (list?.tagName === 'LIT-VIRTUALIZER') {
-      const follow = this.followPending || this.stickToBottom;
-      this.followPending = false;
-      if (follow) this.scheduleFollow();
-    } else if (this.stickToBottom && list) list.scrollTop = list.scrollHeight;
+    if (this.stickToBottom && list && !isVirtualized(list)) list.scrollTop = list.scrollHeight;
     if (changed.has('selectedRow') && this.selectedRow) {
       const dialog = this.querySelector<HTMLDialogElement>('[data-details]');
       if (dialog && !dialog.open) {
@@ -418,10 +417,6 @@ export class LiveTail extends LitElement {
   private teardown() {
     this.stream?.stop();
     this.stream = null;
-    if (this.followFrame !== null) cancelAnimationFrame(this.followFrame);
-    this.followFrame = null;
-    this.followPending = false;
-    this.followPinned = false;
   }
 
   private prepare(row: ArrivedRow): PreparedRow {
@@ -443,10 +438,7 @@ export class LiveTail extends LitElement {
     else if (this.publishTimer === null) {
       this.publishTimer = setTimeout(() => {
         this.publishTimer = null;
-        if (!this.paused && !document.hidden) {
-          this.followPending = this.stickToBottom;
-          this.publish();
-        }
+        if (!this.paused && !document.hidden) this.publish();
       }, PUBLISH_MS);
     }
   }
@@ -572,26 +564,12 @@ export class LiveTail extends LitElement {
     this.detailError = '';
   }
 
-  private scheduleFollow() {
-    this.followPinned = true;
-    if (this.followFrame !== null) return;
-    this.followFrame = requestAnimationFrame(async () => {
-      const frame = this.followFrame;
-      const list = this.querySelector<HTMLElement & { layoutComplete?: Promise<void> }>('[data-rows]');
-      if (list?.layoutComplete) {
-        await Promise.race([list.layoutComplete.catch(() => {}), new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))]);
-      }
-      if (this.followFrame !== frame) return;
-      if (this.followPinned && list?.isConnected) list.scrollTop = list.scrollHeight;
-      this.followFrame = null;
-      this.followPinned = false;
-    });
-  }
-
   private trackScrollPosition = (event: Event) => {
     const list = event.currentTarget as HTMLElement;
-    if (list.tagName === 'LIT-VIRTUALIZER' && this.followFrame !== null) return;
-    this.stickToBottom = atBottom(list, 40);
+    // The virtualizer scrolls itself while remeasuring rows, so only its `unpinned` event means
+    // the reader left the bottom; reaching the bottom again still re-engages following.
+    const bottom = atBottom(list, 40);
+    if (bottom || !isVirtualized(list)) this.stickToBottom = bottom;
   };
 
   private jumpToLive(event: MouseEvent) {
@@ -601,7 +579,7 @@ export class LiveTail extends LitElement {
     event.stopPropagation();
     this.stickToBottom = true;
     const list = this.querySelector<HTMLElement>('[data-rows]');
-    if (list) list.scrollTop = list.scrollHeight;
+    if (list && !isVirtualized(list)) list.scrollTop = list.scrollHeight;
   }
 
   private async copyRecord() {
@@ -667,6 +645,8 @@ export class LiveTail extends LitElement {
               .keyFunction=${rowKey}
               .renderItem=${this.renderRow}
               .scroller=${true}
+              .layout=${this.stickToBottom ? PIN_TO_END : UNPINNED}
+              @unpinned=${() => (this.stickToBottom = false)}
               @scroll=${this.trackScrollPosition}
             ></lit-virtualizer>`
           : html`<div class="flex-1 min-h-0 overflow-y-auto c-scroll font-mono text-xs" data-rows @scroll=${this.trackScrollPosition}>
