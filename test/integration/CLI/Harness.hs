@@ -7,6 +7,7 @@ module CLI.Harness (runCLILifecycle, runCLILifecycleLive, runCLILifecyclePicking
 import CLI.Core (runIngestion)
 import CLI.Main qualified as CLIMain
 import CLI.UI (Picker, runPicker, runPickerWith)
+import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.UUID qualified as UUID
 import Data.Version (makeVersion)
@@ -63,6 +64,7 @@ runCLILifecycleWith interpretHTTP interpretPicker args = do
           $ runEnvironment
           $ runFileSystem
           $ runIngestion
+          $ Workspace.runWorkspaceReal
           $ CLIMain.run testVersion global cmd
       pure (fromLeft ExitSuccess res, toText out)
   where

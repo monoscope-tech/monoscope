@@ -1,0 +1,23 @@
+{
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "repository": "../..",
+  "base": "a03232027f82b335093d9d250825cab63edb9821",
+  "head": "e958bdde317031e07397b8efec389a72bc61bfa9",
+  "provider": "openai",
+  "model": "gpt-5.6-luna",
+  "evidenceKind": "synthetic",
+  "evidence": [
+    {
+      "key": "telemetry-1",
+      "service": "ingestion",
+      "description": "SYNTHETIC evaluation fixture: 1000 events/second. A failing database pool acquisition takes 30 seconds before returning a transient connection error. Kafka stall monitoring warns after 300 seconds with unchanged nonzero in-flight bytes and no commits; max.poll.interval is 1800 seconds, as configured in this revision. These are not live production observations.",
+      "kind": "telemetry"
+    }
+  ],
+  "rubric": [
+    "Fixed-retry control: this revision replaces attempt counts with elapsed-time budgets. Do not repeat the first revision's roughly 23-minute attempt-count mechanism as an introduced defect.",
+    "For the supplied 30-second failures, trace the elapsed-time calculation and remaining retry backoff. Distinguish one in-flight attempt overshooting a deadline from the former unbounded aggregate attempt time.",
+    "Only flag an additional concrete introduced reliability mechanism supported by the changed code and fixture. High traffic or an intentional temporary delay alone is not a finding.",
+    "This is a control for a known mechanism, not a guarantee that the entire revision is bug-free. Validate changed-line citations and classify any new findings manually."
+  ]
+}

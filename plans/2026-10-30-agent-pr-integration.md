@@ -219,3 +219,15 @@ Refresh PR status before any merge decision. A draft or an old green check is no
 
 Run the required review loops, simplification, local signoff, and image checks only after implementation finishes.
 This review does not authorize posting PR comments, closing PRs, changing live Slack configuration, or production deployment.
+
+## Local consolidation progress
+
+- `39d50b1a1` integrates master through `c71ce414c`, including chart-route removal and the current shared-view changes.
+- The #693–#709 stack is combined locally. Source conflicts preserve routine runs, cancellation, instruction snapshots, and the current repository UI.
+- Browser and background members share one access constructor with an explicit origin. Only browser sessions retain demo/sudo behavior.
+- The imported memory-only invocation mode is removed. Wiki tools reuse the existing action mode until unified routine policies replace the legacy grants.
+- PR agent callbacks recheck event-run authorization. Review attempts and usage records remain linked to their existing domain run.
+- The server watcher compiles the combined sources. Application startup still fails against the existing configured database credentials.
+- CI self-tests pass. The integration watcher is rebuilding its changed module graph. Behavioral results remain pending.
+- A model-budget regression is present before its fix. It exercises the actual model loop and retains full MCP evidence.
+- #692, #661, #571, and #568 still require reconciliation. No PR was updated or closed.

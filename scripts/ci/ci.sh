@@ -400,8 +400,8 @@ run_body() { # <check>
       prepare_browser
       scripts/e2e.sh
       ;;
-    # The Slack installation regression also reads docs/slack/agent-manifest.json.
-    integration-tests) run_integration ;;
+    # Provisioned SDK guests run through the Haskell suite; its inputs include the worker.
+    integration-tests) test -x scripts/package-cli.sh && run_integration ;;
     *) die "no body for check '$1'" ;;
   esac
 }
@@ -418,7 +418,15 @@ run_integration() {
   # a dead host instead of taking TestUtils' Postgres-as-TimeFusion fallback. Only
   # reached under CI_ALLOW_DEGRADED — cmd_run refuses this check otherwise.
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
-  export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
+  export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn} HOST_URL=http://localhost:8080/
+  cabal build monoscope-cli:exe:monoscope -j $CABAL_FLAGS "$CABAL_OPTS"
+  MONOSCOPE_BIN=$(scripts/cli-bin.sh $CABAL_FLAGS "$CABAL_OPTS")
+  export MONOSCOPE_BIN
+  [ -x "$MONOSCOPE_BIN" ] || die "CLI binary was not built at $MONOSCOPE_BIN"
+  if ! command -v ffmpeg >/dev/null || ! command -v dot >/dev/null; then
+    apt-get update && apt-get install -y --no-install-recommends ffmpeg graphviz
+  fi
+  (cd impact-review-worker && npm ci --ignore-scripts --no-audit)
   prepare_web_deps
   prepare_browser
   # The checkout is bind-mounted from the host: building to ./chart-cli here would

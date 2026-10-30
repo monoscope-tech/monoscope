@@ -12,6 +12,7 @@ module Models.Projects.ProjectMembers (
   selectAllProjectMembers,
   getUserPermission,
   activeMembership,
+  getSessionPermission,
   sessionAndProjectAtLeast,
   updateProjectMembersPermissons,
   softDeleteProjectMembers,
@@ -221,6 +222,19 @@ getUserPermission pid uid =
     JOIN projects.projects project ON project.id = member.project_id
     WHERE member.project_id = #{pid} AND member.user_id = #{uid} |]
     <> activeMembership
+
+
+getSessionPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
+getSessionPermission pid user = do
+  member <- getUserPermission pid user
+  case member of
+    Just permission -> pure $ Just permission
+    Nothing -> do
+      principal <- Projects.userById user
+      project <- Projects.projectById pid
+      pure $ case principal of
+        Just account | account.active && isNothing account.deletedAt && account.isSudo && isJust project -> Just PAdmin
+        _ -> Nothing
 
 
 -- | 'Projects.sessionAndProject' (members only), then at least @perm@ on the project. A membership's

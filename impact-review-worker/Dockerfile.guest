@@ -1,0 +1,4 @@
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep ca-certificates && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent

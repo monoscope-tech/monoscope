@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-12T00:00:00Z",
+  "generatedAt": "2026-10-22T07:26:14.070Z",
   "title": "Design System: Monoscope",
   "extensions": {
     "colorMeta": {
@@ -8,8 +8,8 @@
       "error": { "role": "secondary", "displayName": "Semantic Error Red", "canonical": "oklch(51.3% 0.197 21)", "dark": "oklch(77.2% 0.126 21)", "tonalRamp": ["oklch(20% 0.10 21)", "oklch(30% 0.14 21)", "oklch(40% 0.18 21)", "oklch(51.3% 0.197 21)", "oklch(62% 0.18 21)", "oklch(72% 0.14 21)", "oklch(82% 0.09 21)", "oklch(92% 0.04 21)"] },
       "warning": { "role": "secondary", "displayName": "Semantic Warning Amber", "canonical": "oklch(54.7% 0.126 69)", "dark": "oklch(79.5% 0.106 92)", "tonalRamp": ["oklch(22% 0.06 69)", "oklch(32% 0.08 69)", "oklch(43% 0.11 69)", "oklch(54.7% 0.126 69)", "oklch(65% 0.12 69)", "oklch(75% 0.10 69)", "oklch(85% 0.07 69)", "oklch(93% 0.04 69)"] },
       "success": { "role": "secondary", "displayName": "Semantic Success Green", "canonical": "oklch(47.8% 0.130 162)", "dark": "oklch(75.3% 0.092 162)", "tonalRamp": ["oklch(20% 0.06 162)", "oklch(30% 0.09 162)", "oklch(40% 0.12 162)", "oklch(47.8% 0.130 162)", "oklch(60% 0.12 162)", "oklch(72% 0.09 162)", "oklch(83% 0.06 162)", "oklch(92% 0.03 162)"] },
-      "information": { "role": "tertiary", "displayName": "Information Blue", "canonical": "oklch(49.3% 0.088 241)", "dark": "oklch(78% 0.095 241)", "note": "Currently hue 241 - unintentional drift from brand hue 261. Target: migrate onto hue 261 at info weight so the system carries one blue. Treat 241 as legacy.", "tonalRamp": ["oklch(20% 0.05 241)", "oklch(30% 0.06 241)", "oklch(40% 0.075 241)", "oklch(49.3% 0.088 241)", "oklch(60% 0.09 241)", "oklch(72% 0.09 241)", "oklch(83% 0.06 241)", "oklch(92% 0.03 241)"] },
-      "bg-base": { "role": "neutral", "displayName": "Base Surface", "canonical": "oklch(99.1% 0.002 247)", "dark": "oklch(12.5% 0.004 260)", "tonalRamp": ["oklch(12.5% 0.004 260)", "oklch(18% 0.004 260)", "oklch(22% 0.004 260)", "oklch(40% 0.004 260)", "oklch(60% 0.004 260)", "oklch(85% 0.003 247)", "oklch(97.7% 0.006 247)", "oklch(99.1% 0.002 247)"] },
+      "information": {"role": "tertiary", "displayName": "Information Blue", "canonical": "oklch(53% 0.16 261)", "dark": "oklch(78% 0.095 241)"},
+      "bg-base": {"role": "neutral", "displayName": "Base Surface", "canonical": "oklch(98.5% 0.006 261)", "dark": "oklch(12.5% 0.004 260)"},
       "text-strong": { "role": "neutral", "displayName": "Ink", "canonical": "oklch(14.4% 0.069 263 / 0.9)", "dark": "oklch(90% 0.005 260)", "tonalRamp": ["oklch(14.4% 0.069 263)", "oklch(25% 0.10 263)", "oklch(40% 0.10 263)", "oklch(55% 0.08 263)", "oklch(67% 0.005 260)", "oklch(80% 0.005 260)", "oklch(90% 0.005 260)", "oklch(97% 0.003 247)"] }
     },
     "typographyMeta": {

@@ -1,0 +1,23 @@
+{
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "repository": "../..",
+  "base": "d6e51aa5a52f5ce78edb80d47117caf3261ff3f1",
+  "head": "42598e76ba93a10bc00dbac4f1df064a205cc582",
+  "provider": "openai",
+  "model": "gpt-5.6-luna",
+  "evidenceKind": "synthetic",
+  "evidence": [
+    {
+      "key": "telemetry-1",
+      "service": "ingestion",
+      "description": "SYNTHETIC evaluation fixture: 1000 events/second. A failing database pool acquisition takes 30 seconds before returning a transient connection error. Kafka stall monitoring warns after 300 seconds with unchanged nonzero in-flight bytes and no commits; max.poll.interval is 1800 seconds, as configured in this revision. These are not live production observations.",
+      "kind": "telemetry"
+    }
+  ],
+  "rubric": [
+    "PR #676 first revision: identify whether a retry attempt count actually bounds elapsed time when failed attempts themselves are slow.",
+    "Trace ingestion callers and dual-write completion before claiming the 300-second stall alarm can fire. Distinguish it from the configured 1800-second Kafka poll deadline; a 1441.3-second retry does not by itself exceed that deadline.",
+    "Separate fixture observations from inferred behavior; do not claim the proposed revision is deployed.",
+    "Judge changed-line citations, mechanism, evidence relevance, false positives and missed risks manually. The later deadline fix is reference evidence, not model input."
+  ]
+}

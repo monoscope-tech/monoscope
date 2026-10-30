@@ -218,9 +218,9 @@ processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid
           , AI.projectTools = projectTools
           , AI.maxIterations = case access of
               AI.SlackInvestigationAccess{} -> 12
+              AI.MemberAccess{} -> defaults.maxIterations
               AI.SlackAccess{} -> defaults.maxIterations
               AI.ServiceAccess -> defaults.maxIterations
-              AI.MemberAccess{} -> defaults.maxIterations
           }
   result <-
     AI.runAgenticChatWithHistory config userQuery model apiKey >>= either (pure . Left) \answer -> do

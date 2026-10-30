@@ -551,7 +551,7 @@ submitTurn projectTools allowActions pid convId prompt = do
   appCtx <- ask @AuthContext
   (sess, _) <- Projects.sessionAndProject pid
   let query = if allowActions then Bots.processActionableAIQueryWithTools else Bots.processAIQueryWithTools
-  result <- query (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools (AI.MemberAccess sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
+  result <- query (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools (AI.MemberAccess AI.WebSession sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
   case result of
     Left err -> Issues.insertChatMessage pid convId Issues.ChatAssistant ("I couldn't complete that request: " <> err) Nothing Nothing
     Right _ -> pass
@@ -629,6 +629,7 @@ routineDestinationPostH pid convId form = do
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
   Issues.setRoutineDestination sess.user.id pid convId form.destination
+  when (form.destination == Issues.DestinationSlack) $ void $ Issues.grantRoutineMemory pid convId sess.user.id
   redirect pid "/routines"
 
 

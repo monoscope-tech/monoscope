@@ -2029,7 +2029,7 @@ aiChatPostHWithTools projectTools pid issueId form = do
 
     processIssue userId appCtx now convId issue = do
       fullSystemPrompt <- buildSystemPromptForIssue pid issue now
-      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess userId, AI.projectTools = projectTools}
+      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.WebSession userId, AI.projectTools = projectTools}
       result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey
       either
         (\err -> respond (Just fullSystemPrompt) convId ("I encountered an error while analyzing this issue: " <> err) Nothing Nothing False)

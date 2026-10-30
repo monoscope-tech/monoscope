@@ -1,0 +1,23 @@
+{
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "repository": "../..",
+  "base": "3ee09d76c40aa6850053d5bb8bbedfc1f4b8cb26",
+  "head": "a95f00262bf652ea92db93a66085ed5c775ed92c",
+  "provider": "openai",
+  "model": "gpt-5.6-luna",
+  "evidenceKind": "synthetic",
+  "evidence": [
+    {
+      "key": "telemetry-1",
+      "service": "web",
+      "description": "SYNTHETIC evaluation fixture: RUM routes serve 100 requests per second, p95 response time is 350 ms, and error counts are stable. These are exposure measurements, not proof of any regression, and are not live production observations.",
+      "kind": "telemetry"
+    }
+  ],
+  "rubric": [
+    "Comment-only control: the two Haskell files change only ordinary line comments, with no pragmas, doctests, Template Haskell, literals, or executable code changes.",
+    "Expected introduced production findings: zero. Pre-existing cache or RUM behavior is not introduced by this revision.",
+    "Do not infer dependency or latency regressions from the presence of traffic. Do not claim the fixture is a live observation or that tests were executed.",
+    "Judge unnecessary tool/model spend as well as false positives. This control passes through the .hs review path rather than the existing documentation-file bypass."
+  ]
+}

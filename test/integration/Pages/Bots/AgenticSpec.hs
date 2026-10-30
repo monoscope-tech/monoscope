@@ -119,6 +119,12 @@ spec = around withTestResources do
         scheduledReadOnly <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) False}
         scheduledActionable <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) True}
         repositoryAware <- toolNames (AI.defaultAgenticConfig testPid){AI.sourceConfig = Just tr.trATCtx.config}
+        memoryWriter <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just $ UUIDId UUID.nil, AI.invocationMode = AI.InteractiveWithActions}
+        readonly `shouldContain` ["list_project_memory", "read_project_memory"]
+        readonly `shouldNotContain` ["write_project_memory"]
+        actionable `shouldNotContain` ["write_project_memory"]
+        memoryWriter `shouldContain` ["write_project_memory"]
+        memoryWriter `shouldNotContain` ["send_to_slack"]
         readonly `shouldNotContain` ["send_to_slack"]
         scheduledReadOnly `shouldNotContain` ["send_to_slack"]
         readonly `shouldSatisfy` (\names -> all (`elem` names) ["search_project_tools", "get_project_tool_schema", "list_metrics"])
@@ -126,6 +132,20 @@ spec = around withTestResources do
         repositoryAware `shouldContain` ["get_code_context", "list_runbooks", "read_runbook", "get_linked_repositories", "get_deployments"]
         actionable `shouldContain` ["send_to_slack"]
         scheduledActionable `shouldContain` ["send_to_slack"]
+
+      it "binds routine wiki grants to an editor and clears them when actions are reset" \tr -> do
+        let conversation = UUIDId UUID.nil
+            user = (getResponse tr.trSessAndHeader).user.id
+            destination = AIThreads.routineDestinationPostH testPid conversation . AIThreads.RoutineDestinationForm
+        void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+        Just routine <- runTestBg frozenTime tr $ Issues.upsertRoutine testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
+        runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` False)
+        void $ testServant tr $ destination Issues.DestinationSlack
+        runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` True)
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+        void $ testServant tr $ destination Issues.DestinationConversation
+        void $ testServant tr $ destination Issues.DestinationSlack
+        runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` False)
 
     describe "Web conversation persistence" do
       it "requires an explicit per-message grant for project changes" \tr -> do
@@ -273,10 +293,10 @@ spec = around withTestResources do
           runQueryEffect tr $ Hasql.interpExecute_ disable
           runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= (`shouldSatisfy` isNothing)
           runQueryEffect tr (Issues.eventRunActive testPid run.id) >>= (`shouldBe` False)
-          tryAny (runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess routine.requestedBy) testPid) >>= (`shouldSatisfy` isLeft)
+          tryAny (runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess AI.ProjectMember routine.requestedBy) testPid) >>= (`shouldSatisfy` isLeft)
           runQueryEffect tr $ Hasql.interpExecute_ restore
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = #{testPid}|]
-        tryAny (runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess actor.id) testPid) >>= (`shouldSatisfy` isLeft)
+        tryAny (runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess AI.ProjectMember actor.id) testPid) >>= (`shouldSatisfy` isLeft)
         runQueryEffect tr (Issues.eventRunActive testPid run.id) >>= (`shouldBe` False)
 
       it "routineResults_everyRunRendersNotJustTheFirst" \tr -> do
@@ -458,7 +478,7 @@ spec = around withTestResources do
       it "issueFollowup_readsTheRetainedInvestigationArtifactAsTheSignedInMember" \tr -> do
         let convId = UUIDId UUID.nil
             artifact = fromRightShow $ Issues.mkArtifactKey "issue-evidence"
-            config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly}
+            config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly}
         result <- runTestBg frozenTime tr do
           void $ Issues.getOrCreateConversation testPid convId Issues.CTAnomaly (AE.object [])
           void $ Issues.saveArtifact testPid convId artifact (Just "Investigation evidence") "Checkout recovered after the deployment." Issues.ArtifactReplace
@@ -542,7 +562,7 @@ spec = around withTestResources do
         let convId = UUIDId UUID.nil
             interval = fromRightShow $ Issues.mkRoutineInterval 15
             execute config = do
-              Eff.liftIO $ show config.access `shouldBe` show (AI.MemberAccess (getResponse tr.trSessAndHeader).user.id)
+              Eff.liftIO $ show config.access `shouldBe` show (AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id)
               Eff.liftIO $ IORef.modifyIORef' executions (<> [config.invocationMode])
               pure $ Right AI.AgenticChatResult{AI.response = "{\"explanation\":\"Routine completed\",\"widgets\":[]}", AI.toolCalls = []}
             enqueueNext routineId at = Eff.liftIO $ IORef.modifyIORef' successors (<> [(routineId, at)])

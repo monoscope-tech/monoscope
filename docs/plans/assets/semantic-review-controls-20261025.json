@@ -1,0 +1,453 @@
+{
+  "format": "monoscope-semantic-review-controls/v1",
+  "scope": "Four known synthetic calibration controls, not a held-out review-quality estimate. Original real-PR labels and terminal trials are unchanged.",
+  "source": {
+    "gitExport": "semantic-review-controls-20261025.gitexport",
+    "sha256": "d152c31f55dce18de96df99a8c2a495a0414bf4c87855c268e4423b772a9c580",
+    "base": "e23643c7ffcd8471051ef7515c99516ac066072e",
+    "head": "1e3d199c5e9330f97af7839d3aef49eb51351b86",
+    "runtimeImage": "python@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70"
+  },
+  "expected": {
+    "_guard.py": "novel_fp",
+    "_bridge.py": "novel_fp",
+    "release.py": "novel_fp",
+    "counter.py": "matched_tp"
+  },
+  "observed": {
+    "_guard.py": "novel_fp",
+    "_bridge.py": "novel_fp",
+    "release.py": "novel_fp",
+    "counter.py": "matched_tp"
+  },
+  "passed": true,
+  "runtimeEvidence": {
+    "python": "3.12.15 (main, Oct 21 2026, 01:08:07) [GCC 12.2.0]",
+    "results": [
+      {
+        "side": "base",
+        "command": [
+          "guard_cli.py"
+        ],
+        "stdin": "{\"approved\": false}",
+        "exit": 2,
+        "stdout": "BLOCK\n",
+        "stderr": ""
+      },
+      {
+        "side": "base",
+        "command": [
+          "guard_cli.py"
+        ],
+        "stdin": "{\"approved\": true}",
+        "exit": 0,
+        "stdout": "ALLOW\n",
+        "stderr": ""
+      },
+      {
+        "side": "base",
+        "command": [
+          "bridge_cli.py"
+        ],
+        "stdin": "{\"approved\": false}",
+        "exit": 2,
+        "stdout": "BLOCK\n",
+        "stderr": ""
+      },
+      {
+        "side": "base",
+        "command": [
+          "bridge_cli.py"
+        ],
+        "stdin": "{\"approved\": true}",
+        "exit": 0,
+        "stdout": "ALLOW\n",
+        "stderr": ""
+      },
+      {
+        "side": "base",
+        "command": [
+          "probe_guard.py"
+        ],
+        "stdin": null,
+        "exit": 0,
+        "stdout": "SKIPPED:private helper absent\n",
+        "stderr": ""
+      },
+      {
+        "side": "base",
+        "command": [
+          "count_cli.py"
+        ],
+        "stdin": "[1,2]",
+        "exit": 0,
+        "stdout": "2\n",
+        "stderr": ""
+      },
+      {
+        "side": "head",
+        "command": [
+          "guard_cli.py"
+        ],
+        "stdin": "{\"approved\": false}",
+        "exit": 2,
+        "stdout": "BLOCK\n",
+        "stderr": ""
+      },
+      {
+        "side": "head",
+        "command": [
+          "guard_cli.py"
+        ],
+        "stdin": "{\"approved\": true}",
+        "exit": 0,
+        "stdout": "ALLOW\n",
+        "stderr": ""
+      },
+      {
+        "side": "head",
+        "command": [
+          "bridge_cli.py"
+        ],
+        "stdin": "{\"approved\": false}",
+        "exit": 2,
+        "stdout": "BLOCK\n",
+        "stderr": ""
+      },
+      {
+        "side": "head",
+        "command": [
+          "bridge_cli.py"
+        ],
+        "stdin": "{\"approved\": true}",
+        "exit": 0,
+        "stdout": "ALLOW\n",
+        "stderr": ""
+      },
+      {
+        "side": "head",
+        "command": [
+          "probe_guard.py"
+        ],
+        "stdin": null,
+        "exit": 1,
+        "stdout": "REACHED:private helper\n",
+        "stderr": "Traceback (most recent call last):\n  File \"/tmp/head/probe_guard.py\", line 8, in <module>\n    assert should_block({'approved':False}), 'configured CLI must block unapproved input'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: configured CLI must block unapproved input\n"
+      },
+      {
+        "side": "head",
+        "command": [
+          "count_cli.py"
+        ],
+        "stdin": "[1,2]",
+        "exit": 1,
+        "stdout": "",
+        "stderr": "Traceback (most recent call last):\n  File \"/tmp/head/count_cli.py\", line 3, in <module>\n    print(count_items(json.load(sys.stdin)))\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/head/counter.py\", line 2, in count_items\n    return items.count()\n           ^^^^^^^^^^^^^\nTypeError: list.count() takes exactly one argument (0 given)\n"
+      },
+      {
+        "side": "head",
+        "command": [
+          "release.py",
+          "--version",
+          "0.6.0"
+        ],
+        "stdin": null,
+        "exit": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    ],
+    "releaseMetadata": "Name: review-fixture\nVersion: 0.6.0\n"
+  },
+  "grader": {
+    "upstreamRepository": "https://github.com/review-bench/ReviewBench",
+    "upstreamCommit": "4f04392d6bf4941ab6f8a3ea0c15b449f4458864",
+    "piVersion": "0.75.5",
+    "model": "gpt-6-astra",
+    "rubricChanged": false,
+    "details": [
+      {
+        "pr_key": "fixture_semantic-controls_1-1e3d199c",
+        "candidate_findings": [
+          {
+            "file": "_guard.py",
+            "start_line": 1,
+            "end_line": 2,
+            "message": "The new helper allows unapproved requests: should_block({'approved': False}) returns False. probe_guard.py passes on base and fails on head, proving that guard_cli.py regressed.",
+            "status": "novel_fp",
+            "covered_golden_indices": [],
+            "classifier_tp_fp": "fp",
+            "classifier_severity": "high",
+            "classifier_category": "correctness",
+            "matched_to_ground_truth": false,
+            "llm_judged_match": false,
+            "match_method": "none",
+            "llm_classification": "fp",
+            "result_severity": "high",
+            "result_category": "correctness"
+          },
+          {
+            "file": "_bridge.py",
+            "start_line": 2,
+            "end_line": 2,
+            "message": "The new helper reads argv instead of stdin, so bridge_cli.py no longer blocks unapproved requests when JSON is piped into its configured command.",
+            "status": "novel_fp",
+            "covered_golden_indices": [],
+            "classifier_tp_fp": "fp",
+            "classifier_severity": "high",
+            "classifier_category": "correctness",
+            "matched_to_ground_truth": false,
+            "llm_judged_match": false,
+            "match_method": "none",
+            "llm_classification": "fp",
+            "result_severity": "high",
+            "result_category": "correctness"
+          },
+          {
+            "file": "release.py",
+            "start_line": 4,
+            "end_line": 7,
+            "message": "Because pyproject.toml still declares 0.5.0, release.py --version 0.6.0 will package and silently publish version0.5.0 instead of0.6.0.",
+            "status": "novel_fp",
+            "covered_golden_indices": [],
+            "classifier_tp_fp": "fp",
+            "classifier_severity": "medium",
+            "classifier_category": "correctness",
+            "matched_to_ground_truth": false,
+            "llm_judged_match": false,
+            "match_method": "none",
+            "llm_classification": "fp",
+            "result_severity": "medium",
+            "result_category": "correctness"
+          },
+          {
+            "file": "counter.py",
+            "start_line": 2,
+            "end_line": 2,
+            "message": "count_cli.py now fails for JSON arrays: list.count() requires a value argument. Base returned len(items); the same input [1,2] now raises TypeError.",
+            "status": "matched_tp",
+            "matched_golden_index": 0,
+            "covered_golden_indices": [
+              0
+            ],
+            "golden_tp_fp": "tp",
+            "golden_severity": "medium",
+            "golden_category": "correctness",
+            "matched_to_ground_truth": true,
+            "llm_judged_match": true,
+            "match_method": "llm",
+            "matched_truth_label": "tp",
+            "result_severity": "medium",
+            "result_category": "correctness"
+          }
+        ]
+      }
+    ]
+  },
+  "accounting": {
+    "calls": 7,
+    "usage": 7,
+    "sdkEstimateNanousd": 134439500,
+    "perCall": [
+      {
+        "callId": "4f63dddb-2fab-403e-beb0-ae3196c8755e",
+        "model": "gpt-6-astra",
+        "inputTokens": 540,
+        "outputTokens": 59,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "costNanousd": 8350000,
+        "pricing": {
+          "input": 10,
+          "output": 50,
+          "cacheRead": 1,
+          "cacheWrite": 12.5
+        },
+        "succeeded": true
+      },
+      {
+        "callId": "c7e0ffa2-caaa-49aa-88f6-5e38ad72a1fe",
+        "model": "gpt-6-astra",
+        "inputTokens": 3,
+        "outputTokens": 14,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 3837,
+        "costNanousd": 48692500,
+        "pricing": {
+          "input": 10,
+          "output": 50,
+          "cacheRead": 1,
+          "cacheWrite": 12.5
+        },
+        "succeeded": true
+      },
+      {
+        "callId": "d400621c-8322-46a9-b6b7-0396bc8a4c32",
+        "model": "gpt-6-astra",
+        "inputTokens": 3,
+        "outputTokens": 168,
+        "cacheReadTokens": 3837,
+        "cacheWriteTokens": 62,
+        "costNanousd": 13042000,
+        "pricing": {
+          "input": 10,
+          "output": 50,
+          "cacheRead": 1,
+          "cacheWrite": 12.5
+        },
+        "succeeded": true
+      },
+      {
+        "callId": "8dadcc4c-87e1-4230-9aff-1a634091d377",
+        "model": "gpt-6-astra",
+        "inputTokens": 3,
+        "outputTokens": 31,
+        "cacheReadTokens": 3899,
+        "cacheWriteTokens": 805,
+        "costNanousd": 15541500,
+        "pricing": {
+          "input": 10,
+          "output": 50,
+          "cacheRead": 1,
+          "cacheWrite": 12.5
+        },
+        "succeeded": true
+      },
+      {
+        "callId": "53244ba6-492e-4cc0-a9e2-528b5a09b11f",
+        "model": "gpt-6-astra",
+        "inputTokens": 3,
+        "outputTokens": 148,
+        "cacheReadTokens": 4704,
+        "cacheWriteTokens": 205,
+        "costNanousd": 14696500,
+        "pricing": {
+          "input": 10,
+          "output": 50,
+          "cacheRead": 1,
+          "cacheWrite": 12.5
+        },
+        "succeeded": true
+      },
+      {
+        "callId": "185e41bc-6c37-4499-8256-51208dd649de",
+        "model": "gpt-6-astra",
+        "inputTokens": 3,
+        "outputTokens": 152,
+        "cacheReadTokens": 4909,
+        "cacheWriteTokens": 314,
+        "costNanousd": 16464000,
+        "pricing": {
+          "input": 10,
+          "output": 50,
+          "cacheRead": 1,
+          "cacheWrite": 12.5
+        },
+        "succeeded": true
+      },
+      {
+        "callId": "5cdc7a03-58c5-4c88-a5e3-452c7d35f7c9",
+        "model": "gpt-6-astra",
+        "inputTokens": 3,
+        "outputTokens": 165,
+        "cacheReadTokens": 5223,
+        "cacheWriteTokens": 332,
+        "costNanousd": 17653000,
+        "pricing": {
+          "input": 10,
+          "output": 50,
+          "cacheRead": 1,
+          "cacheWrite": 12.5
+        },
+        "succeeded": true
+      }
+    ],
+    "providerInvoice": "unreconciled",
+    "infrastructureCost": "unpriced",
+    "customerCharge": false,
+    "pricingUnit": "USD per million tokens",
+    "costUnit": "nanodollars",
+    "tokenBasis": "inputTokens excludes cache reads and writes, which have separate fields."
+  },
+  "protocolSha256": "87fadde08bd594541017f84f39850cd1d9da47ecf3a9dbac9075170ce2ff1bbe",
+  "limits": [
+    "These deliberately small controls show the grader can follow explicit counterexamples. They do not validate the disputed real-PR findings.",
+    "The positive control is a reference match; novel-positive classification was checked in the earlier distinct calibration.",
+    "One frozen attempt, no retry. Expected labels were outside grader mounts. No production code, model default or earlier reference changed."
+  ],
+  "inputs": {
+    "candidate": {
+      "pr": {
+        "repo": "https://github.com/fixture/semantic-controls",
+        "pr_number": 1,
+        "base": "e23643c7ffcd8471051ef7515c99516ac066072e",
+        "head": "1e3d199c5e9330f97af7839d3aef49eb51351b86"
+      },
+      "agent": "candidate",
+      "findings": [
+        {
+          "producer": "candidate",
+          "file": "_guard.py",
+          "start_line": 1,
+          "end_line": 2,
+          "message": "The new helper allows unapproved requests: should_block({'approved': False}) returns False. probe_guard.py passes on base and fails on head, proving that guard_cli.py regressed."
+        },
+        {
+          "producer": "candidate",
+          "file": "_bridge.py",
+          "start_line": 2,
+          "end_line": 2,
+          "message": "The new helper reads argv instead of stdin, so bridge_cli.py no longer blocks unapproved requests when JSON is piped into its configured command."
+        },
+        {
+          "producer": "candidate",
+          "file": "release.py",
+          "start_line": 4,
+          "end_line": 7,
+          "message": "Because pyproject.toml still declares 0.5.0, release.py --version 0.6.0 will package and silently publish version0.5.0 instead of0.6.0."
+        },
+        {
+          "producer": "candidate",
+          "file": "counter.py",
+          "start_line": 2,
+          "end_line": 2,
+          "message": "count_cli.py now fails for JSON arrays: list.count() requires a value argument. Base returned len(items); the same input [1,2] now raises TypeError."
+        }
+      ]
+    },
+    "manifest": [
+      {
+        "repo": "https://github.com/fixture/semantic-controls",
+        "pr_number": 1,
+        "base": "e23643c7ffcd8471051ef7515c99516ac066072e",
+        "head": "1e3d199c5e9330f97af7839d3aef49eb51351b86",
+        "nwo": "fixture/semantic-controls",
+        "pr_url": "https://github.com/fixture/semantic-controls/pull/1",
+        "title": "Extract CLI helpers and version release archives",
+        "body": "Preserve the public CLI input contracts while extracting private helpers; version the release archive explicitly."
+      }
+    ],
+    "golden": {
+      "pr_key": "fixture_semantic-controls_1-1e3d199c",
+      "pr": {
+        "repo": "https://github.com/fixture/semantic-controls",
+        "pr_number": 1,
+        "base": "e23643c7ffcd8471051ef7515c99516ac066072e",
+        "head": "1e3d199c5e9330f97af7839d3aef49eb51351b86"
+      },
+      "findings": [
+        {
+          "producer": "control-reference",
+          "file": "counter.py",
+          "start_line": 2,
+          "end_line": 2,
+          "message": "count_cli.py now fails for JSON arrays: list.count() requires a value argument. Base returned len(items); the same input [1,2] now raises TypeError.",
+          "tp_fp": "tp",
+          "severity": "medium",
+          "category": "correctness"
+        }
+      ]
+    }
+  },
+  "runtimeDriver": "import json,pathlib,shutil,subprocess,sys,zipfile\nfor side in ['base','head']:shutil.copytree('/'+side,'/tmp/'+side,ignore=shutil.ignore_patterns('.git'))\nrows=[]\ndef run(side,command,payload=None):\n result=subprocess.run([sys.executable,*command],cwd='/tmp/'+side,input=payload,text=True,capture_output=True,timeout=5)\n row={'side':side,'command':command,'stdin':payload,'exit':result.returncode,'stdout':result.stdout,'stderr':result.stderr};rows.append(row);return row\nfor side in ['base','head']:\n for entry in ['guard_cli.py','bridge_cli.py']:\n  for approved in [False,True]:\n   row=run(side,[entry],json.dumps({'approved':approved}));assert row['exit']==(0 if approved else 2) and row['stdout'].strip()==('ALLOW' if approved else 'BLOCK'),row\n row=run(side,['probe_guard.py']);assert row['exit']==(0 if side=='base' else 1),row\n assert ('SKIPPED:private helper absent' in row['stdout']) if side=='base' else ('configured CLI must block unapproved input' in row['stderr']),row\n row=run(side,['count_cli.py'],'[1,2]');assert (row['exit']==0 and row['stdout'].strip()=='2') if side=='base' else (row['exit']==1 and 'TypeError' in row['stderr'] and 'count' in row['stderr']),row\nrow=run('head',['release.py','--version','0.6.0']);assert row['exit']==0,row\nwith zipfile.ZipFile('/tmp/head/dist/review-fixture-0.6.0.zip') as package:metadata=package.read('PKG-INFO').decode();assert metadata.splitlines()==['Name: review-fixture','Version: 0.6.0']\nprint(json.dumps({'python':sys.version,'results':rows,'releaseMetadata':metadata}))\n"
+}
