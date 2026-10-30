@@ -16,6 +16,8 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Models.Apis.LogQueries qualified as LogQueries
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -46,7 +48,7 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as Issues
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (browserKql, parseQueryToAST)
+import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.TestClock (getTestTime, setTestTime)
 import Pkg.TestUtils
@@ -723,6 +725,64 @@ spec = sequential $ aroundAll withTestResources do
       scoped.error `shouldBe` Nothing
       scoped.dataText `shouldBe` V.singleton (V.singleton "checkout")
 
+    -- The SQL executor's tenant boundary was a check that `project_id='<pid>'` appeared somewhere
+    -- in the text, so `... OR TRUE` read every project. Each tenant table must reach the
+    -- statement already filtered to the project, on both stores; a statement that cannot be
+    -- scoped (it reuses a tenant table's name for its own CTE) may fail instead.
+    it "userSql_readsOnlyItsOwnProject_onPostgresAndTimefusion" \tr -> do
+      otherPid <- createTestProject tr "Other tenant"
+      mine <- createTestAPIKey tr testPid "tenant-scope-mine"
+      theirs <- createTestAPIKey tr otherPid "tenant-scope-theirs"
+      ingestTrace tr mine "GET /tenant-scope" frozenTime
+      ingestTrace tr theirs "GET /tenant-scope" frozenTime
+      let own = "project_id='" <> testPid.toText <> "'"
+          projects = fmap \rows -> ordNub [v | row <- V.toList rows, AE.String v <- V.toList row]
+          run source sql = projects <$> runQueryEffect tr (LogQueries.executeSecuredQuery True testPid (LogQueries.SecuredSql source sql) 100)
+      for_ ([LogQueries.SqlPostgres, LogQueries.SqlTimefusion] :: [LogQueries.SqlSource]) \source -> do
+        for_
+          [ "SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE"
+          , "SELECT p FROM (SELECT project_id::text AS p, project_id FROM otel_logs_and_spans) s WHERE " <> own <> " OR TRUE"
+          , "SELECT project_id::text FROM otel_logs_and_spans WHERE name = 'GET /tenant-scope' AND (" <> own <> " OR project_id IN (SELECT project_id FROM otel_logs_and_spans))"
+          ]
+          \sql -> run source sql `shouldReturn` Right [testPid.toText]
+        run source ("WITH otel_logs_and_spans AS (SELECT * FROM otel_logs_and_spans) SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE")
+          >>= (`shouldSatisfy` either (const True) (== [testPid.toText]))
+
+    -- Every statement a template ships must still scope, or its widget errors now that user
+    -- SQL is scoped; and on Postgres a tenant CTE read twice must inline, not materialize into
+    -- a full-project scan that the statement's time filter never reaches.
+    it "templateSql_allScope_andPostgresInlinesTheTenantCte" \tr -> do
+      templates <- DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+      let fill = fillQueryTemplate SqlTemplate (variablePresets def testPid.toText Nothing Nothing [] frozenTime <> Map.fromList [("query_ast_filters", "TRUE"), ("table_sort", "1")])
+          statements =
+            [ (fromMaybe "" d.file, s)
+            | d <- templates
+            , s <- mapMaybe (.sql) (DashboardModel.allWidgets d) <> [c.statement | v <- fold d.variables, Just c <- [v.sql]] <> [c.statement | k <- fold d.constants, Just c <- [k.sql]]
+            ]
+      statements `shouldSatisfy` (not . null)
+      for_ statements \(file, s) -> for_ [True, False] \postgres ->
+        (file, s, LogQueries.scopeUserSql postgres testPid (fill s)) `shouldSatisfy` \(_, _, r) -> isRight r
+      let twice = "SELECT count(*) FROM otel_logs_and_spans a WHERE timestamp > now() - interval '1 hour' AND EXISTS (SELECT 1 FROM otel_logs_and_spans b WHERE b.timestamp > now() - interval '1 hour')"
+      scoped <- either (fail . toString) pure $ LogQueries.scopeUserSql True testPid twice
+      plan <- withResource tr.trPool \conn -> PG.query_ conn (fromString $ toString $ "EXPLAIN " <> scoped) :: IO [PG.Only Text]
+      [l | PG.Only l <- plan, "CTE Scan" `T.isInfixOf` l] `shouldBe` []
+
+    -- /chart_data ran whatever SQL the browser sent, guarded only by a project_id substring,
+    -- so a viewer (or the anonymous demo guest) could hand it any statement. Only SQL the
+    -- server rendered may run for them; an editor can still preview their own.
+    it "chartData_clientSql_runsOnlyWhenSignedOrForEditors" \tr -> do
+      let sql = "SELECT 'x'::text FROM otel_logs_and_spans WHERE project_id='" <> testPid.toText <> "' LIMIT 1"
+          userId = (Servant.getResponse tr.trSessAndHeader).user.id
+          setPermission p = withResource tr.trPool \conn -> void $ PG.execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (p, testPid, userId)
+          chart source params = toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Routes.chartsDataGetH (Just source) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
+          signed = [("sql_sig", Just $ Widget.sqlSignature tr.trATCtx.env.apiKeyEncryptionSecretKey testPid (Just sql) Nothing)]
+      [PG.Only original] <- withResource tr.trPool \conn -> PG.query conn "SELECT permission FROM projects.project_members WHERE project_id = ? AND user_id = ?" (testPid, userId)
+      for_ [Hasql.SqlPostgres, Hasql.SqlTimefusion] \source -> do
+        (.error) <$> chart source [] `shouldReturn` Nothing
+        E.bracket_ (setPermission ProjectMembers.PView) (setPermission (original :: ProjectMembers.Permissions)) do
+          E.try @E.SomeException (chart source []) >>= (`shouldSatisfy` isLeft)
+          (.error) <$> chart source signed `shouldReturn` Nothing
+
     -- A dashboard supplies its own service variable, while non-dashboard charts still use
     -- the sticky selector. Both keep the authenticated environment boundary.
     it "uses sticky service scope outside dashboards but not inside them" \tr -> do
@@ -1187,10 +1247,12 @@ spec = sequential $ aroundAll withTestResources do
       (mapWidget >>= (.cta) <&> (.url)) `shouldBe` Just ("/p/" <> testPid.toText <> "/service_map?endpoint_hash=endpoint%20%2F%20hash&since=24H")
       (mapWidget >>= (.html)) `shouldSatisfy` maybe False (T.isInfixOf "No direct dependencies in this range" . toStrict)
 
+  -- The probe counts real executions (each run advances the sequence), so a cache hit shows as
+  -- a repeated value. It was a read of query_cache itself, which user SQL may no longer reach.
   describe "Endpoint Analytics complete-result SQL cache" do
     it "reuses a successful complete result and isolates endpoint keys" \tr -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe"
+      let sql = "SELECT (nextval('raw_cache_probe') - 1)::double precision"
           fetch endpoint =
             runQueryEffect tr
               $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just endpoint)]
@@ -1202,8 +1264,8 @@ spec = sequential $ aroundAll withTestResources do
       otherEndpoint.dataFloat `shouldBe` Just 1
 
     it "shares complete results between streaming and JSON requests" \tr -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe"
+      let sql = "SELECT (nextval('raw_cache_probe') - 1)::double precision"
           params = [("var-endpointHash", Just "stream-cache")]
           fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
           stream = completeFrame @Charts.MetricsData =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params)
@@ -1215,8 +1277,8 @@ spec = sequential $ aroundAll withTestResources do
       rows `shouldBe` [PG.Only 1]
 
     it "expires fixed-window results so late telemetry can replace a cached result" \tr -> E.bracket (getTestTime tr.trTestClock) (setTestTime tr.trTestClock) \_ -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") Nothing Nothing [("var-endpointHash", Just "expiry")]
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe"
+      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT (nextval('raw_cache_probe') - 1)::double precision") Nothing (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") Nothing Nothing [("var-endpointHash", Just "expiry")]
       initial <- fetch
       advanceTestTime tr 59
       fresh <- fetch
@@ -1227,8 +1289,8 @@ spec = sequential $ aroundAll withTestResources do
       runQueryEffect tr QueryCache.cleanupExpiredCache `shouldReturn` 1
 
     it "reuses the default live range when time parameters are omitted" \tr -> E.bracket (getTestTime tr.trTestClock) (setTestTime tr.trTestClock) \_ -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing Nothing Nothing Nothing Nothing [("var-endpointHash", Just "default-range")]
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe"
+      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT (nextval('raw_cache_probe') - 1)::double precision") Nothing Nothing Nothing Nothing Nothing [("var-endpointHash", Just "default-range")]
       -- Both snapshots are within the same fifteen-second cache boundary.
       initial <- fetch
       advanceTestTime tr 0.001
@@ -1303,7 +1365,7 @@ spec = sequential $ aroundAll withTestResources do
               )
 
     it "never stores failed endpoint SQL" \tr -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe"
       failed <-
         runQueryEffect tr
           $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT missing_cache_column::double precision") (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "endpoint-failure")]

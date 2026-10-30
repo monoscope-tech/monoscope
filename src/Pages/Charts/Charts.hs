@@ -37,6 +37,7 @@ import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import GHC.Clock (getMonotonicTimeNSec)
 import Log qualified
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Media ((//))
 import OpenTelemetry.Attributes qualified as OA
@@ -225,28 +226,31 @@ runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange prog
         M.fromList [("query_ast_filters", rawAstFilters cacheCfg components)]
           <> variablePresets cfg.binDensity cfg.pid.toText from to [(key, Just value) | (key, value) <- M.toList mapping, "var-" `T.isPrefixOf` key || key == "table-search"] cfg.currentTime
           <> mapping
-      sql = fillQueryTemplate SqlTemplate canonical template
-      fetch = liftIO $ fetchMetricsDataWithProgress progress decoder sql cfg.currentTime from to authCtx dbSource >>= either throwIO pure
-  case (endpoint, from, to) of
-    (Just endpointHash, Just start, Just end) ->
-      QC.cachedRawQuery
-        authCtx.rawQueryFlights
-        cfg.currentTime
-        QC.RawCacheKey
-          { projectId = cfg.pid
-          , endpointHash
-          , from = start
-          , to = end
-          , environment = cfg.environment
-          , service = cfg.service
-          , sqlQuery = sql
-          , kqlQuery = kql
-          , rollupInterval = M.findWithDefault "" "rollup_interval" canonical
-          , backend = bool SqlPostgres SqlTimefusion $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
-          , decoder
-          }
-        fetch
-    _ -> fetch
+  -- The template names tenant tables; scoping makes each the project's slice before it runs.
+  case LogQueries.scopeUserSql (not $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource) cfg.pid (fillQueryTemplate SqlTemplate canonical template) of
+    Left err -> pure (emptyMetricsFor cfg.currentTime from to){error = Just err}
+    Right sql -> do
+      let fetch = liftIO $ fetchMetricsDataWithProgress progress decoder sql cfg.currentTime from to authCtx dbSource >>= either throwIO pure
+      case (endpoint, from, to) of
+        (Just endpointHash, Just start, Just end) ->
+          QC.cachedRawQuery
+            authCtx.rawQueryFlights
+            cfg.currentTime
+            QC.RawCacheKey
+              { projectId = cfg.pid
+              , endpointHash
+              , from = start
+              , to = end
+              , environment = cfg.environment
+              , service = cfg.service
+              , sqlQuery = sql
+              , kqlQuery = kql
+              , rollupInterval = M.findWithDefault "" "rollup_interval" canonical
+              , backend = bool SqlPostgres SqlTimefusion $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+              , decoder
+              }
+            fetch
+        _ -> fetch
 
 
 -- | A raw template cannot be safely amended at an arbitrary position. When the

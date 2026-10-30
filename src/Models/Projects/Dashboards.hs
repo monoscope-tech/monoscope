@@ -169,6 +169,7 @@ data Variable = Variable
   , options :: Maybe [[Text]]
   , value :: Maybe Text
   , dependsOn :: Maybe Text -- Variable this one depends on
+  , sqlSig :: Maybe Text -- runtime: 'Widget.sqlSignature' of sql, so a viewer's option refresh may run it
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (NFData)

@@ -1,4 +1,5 @@
 module Pages.Dashboards (
+  authorizeClientSql,
   dashboardGetH,
   DashboardViewForm (..),
   dashboardViewPostH,
@@ -294,6 +295,7 @@ dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-vari
             , data_ "tagify-enforce-whitelist" ""
             , data_ "tagify-text-prop" "name"
             , data_ "tagify-query-sql" $ foldMap (.statement) var.sql
+            , data_ "tagify-sql-sig" $ fold var.sqlSig
             , -- Which store the statement belongs to. Without it the client-side
               -- refresh below re-runs a postgres-only statement (apis.endpoints)
               -- against TimeFusion and the variable silently stops updating.
@@ -809,11 +811,13 @@ queryRowsToText = map (map valueToText . V.toList) . V.toList
 -- Process a single dashboard variable recursively.
 processVariable :: WidgetData es => Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Variable -> Eff es Dashboards.Variable
 processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
+  secret <- (.env.apiKeyEncryptionSecretKey) <$> ask @AuthContext
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       paramsMap = Map.fromList allParams
       variable' = Dashboards.replaceDashboardVariables pid fromD toD allParams now variableBase
       variable = variable'{Dashboards.value = maybe variable'.value nonEmptyT $ Map.lookup ("var-" <> variable'.key) paramsMap}
-      withTemplateStatement v = v & #sql .~ variableBase.sql & #query .~ variableBase.query
+      template = (.statement) <$> variableBase.sql
+      withTemplateStatement v = v & #sql .~ variableBase.sql & #query .~ variableBase.query & #sqlSig .~ (Widget.sqlSignature secret pid template Nothing <$ template)
 
   -- Prefer the precomputed facet catalog (a single indexed jsonb read) over a
   -- live DISTINCT scan of the day partition — the latter blocks page render for
@@ -1011,8 +1015,18 @@ prefillFor hxRequest = if isJust hxRequest then WidgetsFetchThemselves else Pref
 
 -- | Process a widget and its children. Keeps sql/query @{{var-*}}@ templates intact so
 -- they are interpolated at fetch time with the current URL params.
+-- | SQL from the browser runs only when the server signed it for this project, or for an
+-- editor previewing their own: otherwise a viewer, or the anonymous demo guest, could hand
+-- the executor any statement and only a @project_id@ substring check stood in the way.
+authorizeClientSql :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx ()
+authorizeClientSql pid sql rollup sig = when (isJust $ nonEmptyT sql <|> nonEmptyT rollup) do
+  secret <- (.env.apiKeyEncryptionSecretKey) <$> ask @AuthContext
+  unless (Widget.verifySqlSignature secret pid sql rollup sig) $ void $ ManageMembers.sessionAndProjectAtLeast ManageMembers.PEdit pid
+
+
 processWidget :: Prefill -> Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processWidget prefill pid now timeRange allParams widgetBase = do
+  secret <- (.env.apiKeyEncryptionSecretKey) <$> ask @AuthContext
   let (sinceStr, fromDStr, toDStr) = timeRange
       (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       -- A logs widget bakes its query into <log-list>'s fetch URL, and
@@ -1022,7 +1036,7 @@ processWidget prefill pid now timeRange allParams widgetBase = do
       resolveLogsQuery
         | widgetBase.wType == Widget.WTLogs = fmap (fillQueryTemplate KqlTemplate (variablePresetsKQL def pid.toText fromD toD allParams now))
         | otherwise = Relude.id
-      widget = widgetBase & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ resolveLogsQuery
+      widget = Widget.signWidgetSql secret pid $ widgetBase & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ resolveLogsQuery
 
   -- The prefill is best-effort: past the budget we hand back the widget with no
   -- html/dataset and no `eager` flag, which is precisely the shape whose renderer
