@@ -314,8 +314,17 @@ The API issue response includes typed activity records so agent issue reads reta
 Resource reads use canonical API pagination and response shapes.
 Query-only contexts retain the smaller telemetry tool set without a second resource API.
 Bounded model results preserve both ends of large evidence, including the latest investigation status.
-All 150 bot integration examples and all 75 API v1 examples pass after this consolidation.
-Agent-only capability descriptors and operation retry metadata remain in progress; slice 1 is not complete.
+API tools and 23 typed agent-only operations now use one descriptor structure and one model adapter.
+The separate OpenAI schema builders no longer exist.
+Discovery, schema access, and dispatch use the same catalog.
+A common role gate applies before each operation. Conversation documents retain their existing write behavior in Observe mode.
+An unclassified API entry blocks a local operation with the same name.
+All 151 bot integration examples and all 75 API v1 examples pass after this consolidation.
+Operation retry metadata and recoverable action execution remain incomplete. Slice 1 is not complete.
+
+The existing durable chat checkpoints cover Slack investigation turns.
+Web requests and scheduled work do not yet use that checkpoint path.
+The common run ledger and operation recovery must cover these entry points before autonomous writes reach release.
 
 ## External references
 

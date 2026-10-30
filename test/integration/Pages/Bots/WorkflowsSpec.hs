@@ -2089,20 +2089,49 @@ spec = around withTestResources do
         discovered `shouldSatisfy` elem "list_issues"
         ((AE.decode @AE.Value . encodeUtf8 =<< listToMaybe (drop 1 toolResults)) >>= (^? key "input_schema" . key "properties" . key "status" . key "type" . _String)) `shouldBe` Just "string"
 
+      it "agentOnlyOperations_shareDiscoverySchemaPolicyAndDispatch" \tr -> do
+        let conversation = UUIDId UUID.nil
+            user = (getResponse tr.trSessAndHeader).user.id
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.conversationType = Just Issues.CTWeb}
+            calls = [Chat.ToolFunction "search_project_tools" (one ("query", AE.String "read_artifact")), Chat.ToolFunction "get_project_tool_schema" (one ("name", AE.String "read_artifact")), Chat.ToolFunction "save_artifact" (fromList [("key", AE.String "catalog-review"), ("title", AE.String "Catalog review"), ("content", AE.String "Catalog evidence.")]), Chat.ToolFunction "read_artifact" (one ("key", AE.String "catalog-review"))]
+        void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+        withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?" (testPid, user)
+        seen <- newIORef []
+        let provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                writeIORef seen results
+                pure $ Right $ maybe (Chat.Message Chat.Assistant "Done" Chat.defaultMessageData) (\fn -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall (show $ length results) "function" fn]}) $ viaNonEmpty head $ drop (length results) calls
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        outcome <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Retain this investigation evidence." "model" "key"
+        outcome `shouldSatisfy` isRight
+        readIORef seen >>= \case
+          [search, schema, _, document] -> do
+            let names = maybe [] (^.. key "tools" . _Array . traverse . key "name" . _String) $ AE.decode @AE.Value $ encodeUtf8 search
+                definition = AE.decode @AE.Value $ encodeUtf8 schema
+            names `shouldSatisfy` elem "read_artifact"
+            (definition >>= (^? key "minimum_permission" . _String)) `shouldBe` Just "view"
+            (definition >>= (^? key "action" . _String)) `shouldBe` Just "ReadOnly"
+            (definition >>= (^? key "input_schema" . key "properties" . key "key" . key "type" . _String)) `shouldBe` Just "string"
+            document `shouldBe` "Catalog evidence."
+          _ -> expectationFailure "Expected discovery, schema, document write, and document read"
+
       it "discovers an MCP operation and checks policy before executing it" \tr -> do
         invoked <- newIORef ([] :: [Text])
         seen <- newIORef ([] :: [Text])
-        let tool name policy = MCP.Tool name ("Project " <> name) (AE.object ["type" AE..= ("object" :: Text)]) (Just policy) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+        let blocked name = MCP.Tool name "Unclassified operation" (AE.object []) Nothing (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+            tool name policy = MCP.Tool name ("Project " <> name) (AE.object ["type" AE..= ("object" :: Text)]) (Just policy) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
             backend =
               AI.ProjectTools
-                { AI.catalog = Map.insert "get_project" (MCP.Tool "get_project" "Unclassified project operation" (AE.object []) Nothing (MCP.ViaComposite $ \_ _ -> pure AE.Null)) $ Map.fromList [(name, tool name policy) | (name, policy) <- [("get_dashboard_data", MCP.AgentPolicy PM.PView MCP.ReadOnly), ("create_monitor", MCP.AgentPolicy PM.PEdit MCP.RequestedWrite)]]
+                { AI.catalog = Map.fromList [(name, blocked name) | name <- ["get_project", "read_artifact"]] <> Map.fromList [(name, tool name policy) | (name, policy) <- [("get_dashboard_data", MCP.AgentPolicy PM.PView MCP.ReadOnly), ("create_monitor", MCP.AgentPolicy PM.PEdit MCP.RequestedWrite)]]
                 , AI.invoke = \_ pid name _ -> liftIO $ do
                     pid `shouldBe` testPid
                     modifyIORef' invoked (<> [name])
                     pure $ AE.object ["isError" AE..= False, "structuredContent" AE..= AE.object ["title" AE..= ("Dashboard" :: Text)]]
                 }
-            config = (agentConfig testPid){AI.projectTools = Just backend, AI.maxIterations = 7}
-            calls = [Chat.ToolFunction "search_project_tools" $ one ("query", AE.String "show dashboard data"), Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String "get_dashboard_data"), Chat.ToolFunction "get_dashboard_data" mempty, Chat.ToolFunction "create_monitor" mempty, Chat.ToolFunction "get_project_tool_schema" (one ("name", AE.String "get_project")), Chat.ToolFunction "get_project" mempty]
+            config = (agentConfig testPid){AI.projectTools = Just backend, AI.maxIterations = 8}
+            calls = [Chat.ToolFunction "search_project_tools" $ one ("query", AE.String "show dashboard data"), Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String "get_dashboard_data"), Chat.ToolFunction "get_dashboard_data" mempty, Chat.ToolFunction "create_monitor" mempty, Chat.ToolFunction "get_project_tool_schema" (one ("name", AE.String "get_project")), Chat.ToolFunction "get_project" mempty, Chat.ToolFunction "read_artifact" mempty]
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> do
                 let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
@@ -2118,7 +2147,7 @@ spec = around withTestResources do
         ((AE.decode @AE.Value . encodeUtf8 =<< listToMaybe (drop 1 results)) >>= (^? key "minimum_permission" . _String)) `shouldBe` Just "view"
         results `shouldSatisfy` any (T.isInfixOf "requires an explicit request")
         results `shouldSatisfy` any (T.isInfixOf "unknown project operation")
-        results `shouldSatisfy` any (T.isInfixOf "no Agent policy")
+        viaNonEmpty last results `shouldBe` Just "This project operation has no Agent policy."
         writeIORef invoked []
         allowed <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config{AI.invocationMode = AI.InteractiveWithActions} "Create a monitor" "model" "key"
         allowed `shouldSatisfy` isRight

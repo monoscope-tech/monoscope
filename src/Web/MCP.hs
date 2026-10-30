@@ -75,13 +75,14 @@ maxToolBodyChars :: Int
 maxToolBodyChars = 64 * 1024
 
 
-data Tool = Tool
+data Tool operation = Tool
   { name :: !Text
   , description :: !Text
   , inputSchema :: !AE.Value
   , agentPolicy :: !(Maybe AgentPolicy)
-  , dispatch :: !Dispatch
+  , dispatch :: !operation
   }
+  deriving stock (Functor)
 
 
 data Dispatch
@@ -111,7 +112,7 @@ data AgentPolicy = AgentPolicy
   deriving stock (Eq, Show)
 
 
-data AgentAction = ReadOnly | RequestedWrite | ConfirmedWrite
+data AgentAction = ReadOnly | ConversationWrite | RequestedWrite | ConfirmedWrite
   deriving stock (Eq, Show)
 
 
@@ -127,12 +128,12 @@ agentExclusions = one ("submit_rrweb_event", "Browser session telemetry ingestio
 -- | The full tool registry: every OpenAPI operation plus the composite tools.
 -- @Map (<>)@ is left-biased, so listing composites first means a composite
 -- always wins on a name collision (none expected today, but cheap to enforce).
-allTools :: OpenApi -> (Projects.ProjectId -> Maybe Text -> Text -> ATBaseCtx (Either Text AE.Value)) -> Map Text Tool
+allTools :: OpenApi -> (Projects.ProjectId -> Maybe Text -> Text -> ATBaseCtx (Either Text AE.Value)) -> Map Text (Tool Dispatch)
 allTools spec nlSearch =
   Map.fromList [(t.name, t) | t <- compositeTools nlSearch] <> mkToolsFromOpenApi spec
 
 
-mkToolsFromOpenApi :: OpenApi -> Map Text Tool
+mkToolsFromOpenApi :: OpenApi -> Map Text (Tool Dispatch)
 mkToolsFromOpenApi spec =
   Map.fromList
     [ (t.name, t)
@@ -158,7 +159,7 @@ mkToolsFromOpenApi spec =
         ]
 
 
-openApiTool :: Text -> ByteString -> OA.Operation -> Tool
+openApiTool :: Text -> ByteString -> OA.Operation -> Tool Dispatch
 openApiTool p m op =
   Tool
     { name = maybe derivedName fst operation
@@ -292,7 +293,7 @@ apiOperations =
 
 -- | Top-level dispatcher. Handles JSON-RPC requests for the MCP protocol:
 -- @initialize@, @notifications/*@, @tools/list@, @tools/call@.
-handleJsonRpc :: Map Text Tool -> Servant.Application -> Projects.ProjectId -> AE.Value -> ATBaseCtx AE.Value
+handleJsonRpc :: Map Text (Tool Dispatch) -> Servant.Application -> Projects.ProjectId -> AE.Value -> ATBaseCtx AE.Value
 handleJsonRpc reg app pid req = case parseRpcReq req of
   Nothing -> pure $ rpcError AE.Null (-32600) "Invalid Request"
   Just (mid, m, params)
@@ -330,7 +331,7 @@ handleJsonRpc reg app pid req = case parseRpcReq req of
         ]
 
 
-runTool :: Servant.Application -> Projects.ProjectId -> Tool -> AE.Object -> ATBaseCtx AE.Value
+runTool :: Servant.Application -> Projects.ProjectId -> Tool Dispatch -> AE.Object -> ATBaseCtx AE.Value
 runTool app pid t args = do
   let action = case t.dispatch of
         ViaOpenApi b -> liftIO $ callOpenApi app b args
@@ -389,12 +390,12 @@ callOpenApi app b args = do
 
 -- | Bundled, agent-friendly tools that combine several internal calls: one
 -- verb the agent calls in place of an ad-hoc multi-step plan.
-compositeTools :: (Projects.ProjectId -> Maybe Text -> Text -> ATBaseCtx (Either Text AE.Value)) -> [Tool]
+compositeTools :: (Projects.ProjectId -> Maybe Text -> Text -> ATBaseCtx (Either Text AE.Value)) -> [Tool Dispatch]
 compositeTools nlSearch = [findErrorPatterns, searchEventsNL nlSearch, analyzeIssue]
 
 
 -- | Top log/error patterns ranked by current-hour volume.
-findErrorPatterns :: Tool
+findErrorPatterns :: Tool Dispatch
 findErrorPatterns =
   composite
     "find_error_patterns"
@@ -411,7 +412,7 @@ findErrorPatterns =
 -- | Translate a natural-language description into a KQL query. Mirrors the
 -- existing aiSearch handler but returns the query string for the agent to
 -- run separately via @search_events@.
-searchEventsNL :: (Projects.ProjectId -> Maybe Text -> Text -> ATBaseCtx (Either Text AE.Value)) -> Tool
+searchEventsNL :: (Projects.ProjectId -> Maybe Text -> Text -> ATBaseCtx (Either Text AE.Value)) -> Tool Dispatch
 searchEventsNL nlSearch =
   composite
     "search_events_nl"
@@ -432,7 +433,7 @@ searchEventsNL nlSearch =
 
 
 -- | Fetch an issue and ask the LLM to diagnose it.
-analyzeIssue :: Tool
+analyzeIssue :: Tool Dispatch
 analyzeIssue =
   composite
     "analyze_issue"
@@ -474,7 +475,7 @@ analyzeIssue =
           Right analysis -> pure $ okResult $ AE.object ["issue" AE..= issue, "analysis" AE..= analysis]
 
 
-composite :: Text -> Text -> AE.Value -> (Projects.ProjectId -> AE.Object -> ATBaseCtx AE.Value) -> Tool
+composite :: Text -> Text -> AE.Value -> (Projects.ProjectId -> AE.Object -> ATBaseCtx AE.Value) -> Tool Dispatch
 composite n d schema run = Tool n d schema (Just $ AgentPolicy ProjectMembers.PView ReadOnly) (ViaComposite run)
 
 

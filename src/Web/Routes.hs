@@ -710,7 +710,7 @@ apiV1App run actor principal =
 -- | MCP tool registry — REST tools (from OpenAPI) + composite workflow tools,
 -- built once at startup.
 {-# NOINLINE mcpToolRegistry #-}
-mcpToolRegistry :: Map Text MCP.Tool
+mcpToolRegistry :: Map Text (MCP.Tool MCP.Dispatch)
 mcpToolRegistry = MCP.allTools apiV1OpenApiSpec $ \pid tz input -> do
   authCtx <- Reader.ask @AuthContext
   AI.runNlSearch pid authCtx.env tz input
