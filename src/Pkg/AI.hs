@@ -46,6 +46,7 @@ module Pkg.AI (
   runAgenticChatWithHistory,
   defaultAgenticConfig,
   executeToolCall,
+  OperationPolicy (..),
   defaultLimits,
 
   -- * Message Conversion
@@ -71,6 +72,7 @@ import Data.Char (isAlphaNum, isHexDigit)
 import Data.Default (def)
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.Wreq qualified as W
@@ -87,6 +89,8 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
@@ -107,7 +111,7 @@ import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
 import Pkg.Components.TimePicker (TimePicker)
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), encodeEnumSC, idFromText)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC, idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude
@@ -1129,8 +1133,12 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
       tool : remaining -> do
         Log.logTrace "AI requesting tool" (AE.object ["iteration" AE..= step.iteration, "tool" AE..= LLM.toolFunctionName (LLM.toolCallFunction tool)])
         record $ Investigations.ToolStarted step.iteration tool
-        result <- executeToolCall config{timeRange = step.timeRange} tool
-        let next = Investigations.ToolsPending step message (completed <> [(tool, result)]) remaining
+        outcome <- executeToolAt turn config{timeRange = step.timeRange} tool
+        let result = operationResponse config.projectId outcome
+            attempted = completed <> [(tool, result)]
+            next = case outcome of
+              Investigations.RecordedResult{} -> Investigations.ToolsPending step message attempted remaining
+              Investigations.UncertainResult{} -> Investigations.AnswerReady $ AgenticChatResult result.formatted (step.toolCalls <> map (uncurry mkToolCallInfo) attempted)
         updated <-
           Investigations.commitProgress turn journal next
             $ Just
@@ -1239,34 +1247,65 @@ pricedUsage config inputTokens outputTokens =
         charge cfg = (toInteger tokens * toInteger (Config.aiPriceMicrousd $ rate cfg) + 999_999) `div` 1_000_000
 
 
+data OperationPolicy = OperationPolicy
+  { capability :: MCP.AgentPolicy
+  , execution :: Issues.ExecutionPolicy
+  , permission :: ProjectMembers.Permissions
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+operationResponse :: Projects.ProjectId -> Investigations.OperationResult -> ToolResult
+operationResponse project = \case
+  Investigations.RecordedResult result -> result
+  Investigations.UncertainResult identifier run ->
+    ToolResult
+      ("This request has an action with an uncertain outcome. It may still complete. Further changes were not executed. [View action history](/p/" <> project.toText <> "/ai/runs/" <> run.toText <> "#operation-" <> identifier.toText <> ") before making another request.")
+      (Just $ AE.object ["operation_id" AE..= identifier, "run_id" AE..= run, "outcome" AE..= Investigations.OperationUnknown])
+
+
+data ToolRecovery = ReplayReads | AtomicInRun | RetainInRun
+  deriving stock (Generic, Show)
+  deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" ToolRecovery
+
+
+data ToolExecution es = EffectfulTool (Eff es ToolResult) | AtomicTool (Tx.Transaction ToolResult)
+
+
 data ToolDenial = RoleRequired ProjectMembers.Permissions | ActionGrantRequired | ActionRecoveryRequired | WikiGrantRequired
 
 
 executeToolCall :: ProjectToolCtx es => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
-executeToolCall config tc = do
+executeToolCall config call = operationResponse config.projectId <$> executeToolAt Nothing config call
+
+
+executeToolAt :: ProjectToolCtx es => Maybe Investigations.CheckpointCursor -> AgenticConfig -> LLM.ToolCall -> Eff es Investigations.OperationResult
+executeToolAt cursor config tc = do
   requireConfigAccess config
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
       args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
   Log.logTrace "AI executing tool" (AE.object ["tool" AE..= funcName, "args" AE..= args])
   result <- case Map.lookup funcName (agentCatalog config) of
-    Nothing -> pure $ noRaw $ "Unknown tool: " <> funcName
+    Nothing -> pure $ Investigations.RecordedResult $ noRaw $ "Unknown tool: " <> funcName
     Just tool -> case tool.agentPolicy of
-      Nothing -> pure $ noRaw "This project operation has no Agent policy."
+      Nothing -> pure $ Investigations.RecordedResult $ noRaw "This project operation has no Agent policy."
       Just policy ->
         authorize policy >>= \case
-          Left denial -> pure $ noRaw $ case denial of
+          Left denial -> pure $ Investigations.RecordedResult $ noRaw $ case denial of
             RoleRequired permission -> "Your project role does not meet the required " <> toText (encodeEnumSC @"P" permission) <> " permission."
             ActionGrantRequired -> "Project changes require an Autonomous execution policy."
             ActionRecoveryRequired -> "Administrative operations are unavailable until durable action recovery is enabled."
             WikiGrantRequired -> "Wiki writes require a project conversation and current edit permission or an active routine action grant."
-          Right () -> case tool.dispatch of
-            ProjectOperation backend -> runProjectTool backend funcName args
+          Right snapshot -> recorded snapshot $ case tool.dispatch of
+            ProjectOperation backend -> EffectfulTool $ runProjectTool backend funcName args
             LocalOperation operation -> executeLocal operation args
   requireConfigAccess config
-  Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length result.formatted, "resultPreview" AE..= T.take 200 result.formatted])
+  let response = operationResponse config.projectId result
+  Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length response.formatted, "resultPreview" AE..= T.take 200 response.formatted])
   pure result
   where
-    authorize :: (DB es, IOE :> es) => MCP.AgentPolicy -> Eff es (Either ToolDenial ())
+    authorize :: (DB es, IOE :> es) => MCP.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
     authorize policy = Except.runExceptT do
       authority <- lift $ agentAuthority config.access config.projectId
       let permission = case authority of ServiceAuthority -> ProjectMembers.PView; MemberAuthority role -> role
@@ -1284,6 +1323,7 @@ executeToolCall config tc = do
               permitted <- lift $ maybe (pure False) (\conversation -> Issues.routineRunCanWriteMemory config.projectId conversation run) config.conversationId
               unless permitted $ Except.throwError WikiGrantRequired
             _ -> pass
+      pure $ OperationPolicy policy (invocationPolicy config.invocationMode) permission
       where
         requireActions = do
           permitted <- lift $ case config.invocationMode of
@@ -1291,9 +1331,29 @@ executeToolCall config tc = do
             mode -> pure $ invocationPolicy mode == Issues.Autonomous
           unless permitted $ Except.throwError ActionGrantRequired
 
+    recorded snapshot execution = case (snapshot.capability, cursor, invocationRun config.invocationMode, accessMember config.access, config.conversationId) of
+      (MCP.ReadOnly{}, _, _, _, _) -> Investigations.RecordedResult <$> perform execution
+      (_, Just position, Just run, Just user, Just conversation) -> do
+        let turn = Investigations.RunTurn config.projectId conversation user run
+            proposal = Investigations.ToolProposal tc snapshot
+        case execution of
+          AtomicTool action -> Investigations.atomicOperation turn position proposal action
+          EffectfulTool action ->
+            Investigations.beginOperation turn position proposal >>= \case
+              Investigations.RetainedOperation retained -> pure retained
+              Investigations.ExecuteOperation claim -> do
+                result <- action
+                Investigations.completeOperation claim result
+                pure $ Investigations.RecordedResult result
+      (_, Nothing, _, _, _) -> Investigations.RecordedResult <$> perform execution
+      _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable run."
+    perform = \case
+      EffectfulTool action -> action
+      AtomicTool action -> Hasql.transaction TxS.ReadCommitted TxS.Write action
+
     noRaw t = ToolResult t Nothing
     executeLocal operation args = case operation of
-      SearchProjectTools -> pure $ noRaw $ decodeUtf8 $ AE.encode $ case getTextArg "query" args of
+      SearchProjectTools -> EffectfulTool $ pure $ noRaw $ decodeUtf8 $ AE.encode $ case getTextArg "query" args of
         Nothing -> AE.object ["error" AE..= ("query is required" :: Text)]
         Just query ->
           let summaries = [(tool.name, tool.description) | tool <- Map.elems $ discoverableCatalog config]
@@ -1301,82 +1361,96 @@ executeToolCall config tc = do
               score (name, description) = sum [4 | term <- terms, term `T.isInfixOf` T.toCaseFold name] + sum [1 | term <- terms, term `T.isInfixOf` T.toCaseFold description]
               matches = sortWith (Down . fst) [(score tool, tool) | tool <- summaries, score tool > 0]
            in AE.object ["tools" AE..= map (\(_, (name, description)) -> AE.object ["name" AE..= name, "description" AE..= description]) (take 12 matches), "total" AE..= length matches, "has_more" AE..= (length matches > 12)]
-      GetProjectToolSchema -> pure $ noRaw $ encodeText $ case getTextArg "name" args >>= (\name -> Map.lookup name $ discoverableCatalog config) of
+      GetProjectToolSchema -> EffectfulTool $ pure $ noRaw $ encodeText $ case getTextArg "name" args >>= (\name -> Map.lookup name $ discoverableCatalog config) of
         Nothing -> AE.object ["error" AE..= ("unknown project operation" :: Text)]
         Just tool ->
           AE.object
-            $ ["name" AE..= tool.name, "description" AE..= tool.description, "input_schema" AE..= tool.inputSchema]
+            $ ["name" AE..= tool.name, "description" AE..= tool.description, "input_schema" AE..= tool.inputSchema, "agent_recovery" AE..= recovery tool]
             <> maybe [] (\policy -> ["minimum_permission" AE..= MCP.minimumPermission policy, "action" AE..= MCP.actionName policy]) tool.agentPolicy
-      ListProjectMemory -> noRaw . encodeText . map Memory.summarize <$> Memory.latestPages config.projectId
-      ReadProjectMemory -> noRaw <$> readMemory args
-      WriteProjectMemory -> noRaw <$> writeMemory args
-      GetInvestigationHistory -> noRaw <$> slackThread "Investigation history requires an authorized Slack investigation." \run -> encodeText <$> Investigations.recentEvents config.projectId run.teamId run.channelId run.threadTs
-      GetIncidentContext -> noRaw <$> slackThread "Incident context requires an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackInvestigationContext config.projectId run.teamId run.channelId run.threadTs
-      GetRelatedIncidents -> noRaw <$> slackThread "Related incidents require an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackRelatedIncidents config.projectId run.teamId run.channelId run.threadTs
-      GetLinkedRepositories -> noRaw . encodeText <$> CodeContext.getLinkedRepositories config.projectId (getTextArg "service" args)
+      ListProjectMemory -> EffectfulTool $ noRaw . encodeText . map Memory.summarize <$> Memory.latestPages config.projectId
+      ReadProjectMemory -> EffectfulTool $ noRaw <$> readMemory args
+      WriteProjectMemory -> EffectfulTool $ noRaw <$> writeMemory args
+      GetInvestigationHistory -> EffectfulTool $ noRaw <$> slackThread "Investigation history requires an authorized Slack investigation." \run -> encodeText <$> Investigations.recentEvents config.projectId run.teamId run.channelId run.threadTs
+      GetIncidentContext -> EffectfulTool $ noRaw <$> slackThread "Incident context requires an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackInvestigationContext config.projectId run.teamId run.channelId run.threadTs
+      GetRelatedIncidents -> EffectfulTool $ noRaw <$> slackThread "Related incidents require an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackRelatedIncidents config.projectId run.teamId run.channelId run.threadTs
+      GetLinkedRepositories -> EffectfulTool $ noRaw . encodeText <$> CodeContext.getLinkedRepositories config.projectId (getTextArg "service" args)
       GetDeployments ->
-        noRaw <$> case config.sourceConfig of
-          Just cfg ->
-            withArg "get_deployments" "mapping_id" args
-              $ maybe
-                (pure "Invalid repository mapping ID.")
-                (\mappingId -> encodeText <$> CodeContext.fetchDeployments cfg config.projectId mappingId (getTextArg "environment" args))
-              . idFromText
-          _ -> pure "Deployment evidence is unavailable for this conversation."
+        EffectfulTool
+          $ noRaw
+          <$> case config.sourceConfig of
+            Just cfg ->
+              withArg "get_deployments" "mapping_id" args
+                $ maybe
+                  (pure "Invalid repository mapping ID.")
+                  (\mappingId -> encodeText <$> CodeContext.fetchDeployments cfg config.projectId mappingId (getTextArg "environment" args))
+                . idFromText
+            _ -> pure "Deployment evidence is unavailable for this conversation."
       ListRunbooks ->
-        noRaw <$> case (config.sourceConfig, parseMaybe AE.parseJSON $ AE.toJSON args) of
-          (Just cfg, Just query) -> encodeText <$> CodeContext.listRunbooks cfg config.projectId query
-          _ -> pure "Runbook discovery requires a repository mapping ID and a full commit hash."
+        EffectfulTool
+          $ noRaw
+          <$> case (config.sourceConfig, parseMaybe AE.parseJSON $ AE.toJSON args) of
+            (Just cfg, Just query) -> encodeText <$> CodeContext.listRunbooks cfg config.projectId query
+            _ -> pure "Runbook discovery requires a repository mapping ID and a full commit hash."
       ReadRunbook ->
-        noRaw <$> case (config.sourceConfig, parseMaybe AE.parseJSON $ AE.toJSON args) of
-          (Just cfg, Just query) -> encodeText <$> CodeContext.readRunbook cfg config.projectId query
-          _ -> pure "Runbook reads require a repository mapping ID, full commit hash and document path."
-      GetCodeContext -> noRaw <$> executeGetCodeContext config args
-      GetFieldValues -> noRaw <$> executeGetFieldValues config args
-      GetServices -> noRaw <$> executeGetServices config
-      CountQuery -> noRaw <$> executeCountQuery config args
-      SampleLogs -> noRaw <$> executeSampleLogs config args
-      GetFacets -> pure $ noRaw $ executeGetFacets config
-      RunQuery -> executeRunQuery config args
-      RunSqlQuery -> noRaw <$> executeSqlQuery config args
+        EffectfulTool
+          $ noRaw
+          <$> case (config.sourceConfig, parseMaybe AE.parseJSON $ AE.toJSON args) of
+            (Just cfg, Just query) -> encodeText <$> CodeContext.readRunbook cfg config.projectId query
+            _ -> pure "Runbook reads require a repository mapping ID, full commit hash and document path."
+      GetCodeContext -> EffectfulTool $ noRaw <$> executeGetCodeContext config args
+      GetFieldValues -> EffectfulTool $ noRaw <$> executeGetFieldValues config args
+      GetServices -> EffectfulTool $ noRaw <$> executeGetServices config
+      CountQuery -> EffectfulTool $ noRaw <$> executeCountQuery config args
+      SampleLogs -> EffectfulTool $ noRaw <$> executeSampleLogs config args
+      GetFacets -> EffectfulTool $ pure $ noRaw $ executeGetFacets config
+      RunQuery -> EffectfulTool $ executeRunQuery config args
+      RunSqlQuery -> EffectfulTool $ noRaw <$> executeSqlQuery config args
       -- A successful save carries its key as rawData, so renderers need not parse the message.
-      SaveArtifact -> inConversation \convId -> either (pure . noRaw) Relude.id do
+      SaveArtifact -> AtomicTool $ inConversation \convId -> either (pure . noRaw) Relude.id do
         key' <- maybeToRight (toolError "save_artifact" "missing 'key'" args) (getTextArg "key" args) >>= Issues.mkArtifactKey
         body <- maybeToRight (toolError "save_artifact" "missing 'content'" args) (getTextArg "content" args)
         when (T.length body > 100_000) $ Left "content must be at most 100000 characters per write."
         write <- maybe (Right Issues.ArtifactReplace) (first (const "mode must be replace or append.") . parseEither AE.parseJSON) (Map.lookup "mode" args)
         pure
-          $ Issues.saveArtifact config.projectId convId key' (getTextArg "title" args) body write
+          $ Issues.saveArtifactTx config.projectId convId key' (getTextArg "title" args) body write
           <&> \case
             Right doc -> ToolResult ("Saved document '" <> toText doc.key <> "' (" <> doc.title <> ", " <> show doc.characters <> " characters).") (Just $ AE.toJSON doc.key)
             Left Issues.ArtifactFull -> noRaw $ "Document '" <> toText key' <> "' is full. Continue in a new document with a different key."
             Left Issues.ArtifactLimitReached -> noRaw $ "This conversation already holds " <> show Issues.maxArtifactsPerConversation <> " documents. Rewrite an existing one instead; read_artifact without a key lists them."
-      ReadArtifact -> inConversation \convId ->
+      ReadArtifact -> EffectfulTool $ inConversation \convId ->
         noRaw <$> case getTextArg "key" args of
           Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]
           Just k -> maybe ("No document with key '" <> k <> "' in this conversation.") readable . asum . map (.content) <$> Issues.listArtifacts config.projectId convId (rightToMaybe $ Issues.mkArtifactKey k)
-      SendToSlack ->
-        noRaw <$> case getTextArg "message" args of
-          Just message
-            | not (T.null $ T.strip message) && T.length message <= 4000 ->
-                Integrations.getProjectSlackData config.projectId
-                  >>= maybe
-                    (pure "Slack is not configured for this project.")
-                    ( \slack -> do
-                        let opts = W.defaults & W.header "Content-Type" .~ ["application/json"] & W.header "Authorization" .~ [encodeUtf8 $ "Bearer " <> slack.botToken]
-                        response <- W.postWith opts "https://slack.com/api/chat.postMessage" $ AE.object ["channel" AE..= slack.channelId, "text" AE..= message]
-                        let body = AE.decode @AE.Value $ response ^. W.responseBody
-                        pure
-                          $ if fromMaybe False (body >>= (^? key "ok" . _Bool))
-                            then "Slack message sent."
-                            else "Slack rejected the message: " <> fromMaybe "unknown error" (body >>= (^? key "error" . _String))
-                    )
-          _ -> pure "Slack message must contain between 1 and 4000 characters."
+      SendToSlack -> EffectfulTool $ case getTextArg "message" args of
+        Just message
+          | not (T.null $ T.strip message) && T.length message <= 4000 ->
+              Integrations.getProjectSlackData config.projectId
+                >>= maybe
+                  (pure $ noRaw "Slack is not configured for this project.")
+                  ( \slack -> do
+                      let opts = W.defaults & W.header "Content-Type" .~ ["application/json"] & W.header "Authorization" .~ [encodeUtf8 $ "Bearer " <> slack.botToken]
+                      response <- W.postWith opts "https://slack.com/api/chat.postMessage" $ AE.object ["channel" AE..= slack.channelId, "text" AE..= message]
+                      let body = AE.decode @AE.Value $ response ^. W.responseBody
+                          result =
+                            if fromMaybe False (body >>= (^? key "ok" . _Bool))
+                              then "Slack message sent."
+                              else "Slack rejected the message: " <> fromMaybe "unknown error" (body >>= (^? key "error" . _String))
+                      pure $ ToolResult result $ Just $ AE.object ["channel" AE..= slack.channelId, "response" AE..= body]
+                  )
+        _ -> pure $ noRaw "Slack message must contain between 1 and 4000 characters."
+    recovery tool = case tool.agentPolicy of
+      Just MCP.ReadOnly{} -> ReplayReads
+      _ -> case tool.dispatch of
+        ProjectOperation{} -> RetainInRun
+        LocalOperation operation -> case executeLocal operation mempty of
+          AtomicTool{} -> AtomicInRun
+          EffectfulTool{} -> RetainInRun
     -- Keeps both ends: routines append, so the newest sections are at the end of a long document.
     readable content
       | T.length content <= maxReadChars = content
       | otherwise = T.take (maxReadChars `div` 2) content <> "\n\n[… " <> show (T.length content - maxReadChars) <> " of " <> show (T.length content) <> " characters omitted …]\n\n" <> T.takeEnd (maxReadChars `div` 2) content
     maxReadChars = 40_000
+    inConversation :: Applicative m => (UUIDId "conversation" -> m ToolResult) -> m ToolResult
     inConversation f = maybe (pure $ ToolResult "Documents are only available in Monoscope conversations." Nothing) f $ documentConversation config
     readMemory arguments = case getTextArg "pageId" arguments >>= idFromText of
       Nothing -> pure $ toolError "read_project_memory" "invalid or missing 'pageId'" arguments

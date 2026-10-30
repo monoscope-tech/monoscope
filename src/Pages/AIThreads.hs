@@ -13,11 +13,13 @@ import Data.UUID.V5 qualified as UUID5
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
+import Langchain.LLM.Core qualified as LLM
 import Lucid hiding (for_)
 import Lucid qualified
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -27,7 +29,7 @@ import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (Config (..), EmptyStateAction (..), Features (..), Table (..), ZeroState (ZeroState), col, withAttrs)
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC)
 import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -35,6 +37,7 @@ import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redi
 import Utils (faSprite_, renderMarkdownToc)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
+import Web.MCP qualified as MCP
 
 
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
@@ -247,7 +250,7 @@ threadPageGetH :: Projects.ProjectId -> UUIDId "conversation" -> Maybe Issues.Ar
 threadPageGetH pid convId docM runM hxTarget = do
   requestId <- UUIDId <$> UUID.genUUID
   canEdit <- canEditRoutines pid
-  (_, _, bw) <- mkAIPageCtx pid
+  (viewer, _, bw) <- mkAIPageCtx pid
   -- The open document's refresh keeps only #ai-document (htmx 4 sends `tag#id`), so skip what it discards.
   let unlessRefresh :: Applicative f => f [a] -> f [a]
       unlessRefresh q = if any ("#ai-document" `T.isSuffixOf`) hxTarget then pure [] else q
@@ -262,7 +265,9 @@ threadPageGetH pid convId docM runM hxTarget = do
     evidence <- Issues.getRoutineRunEvidence pid run.id >>= maybe (throwError Servant.err404) pure
     requestedBy <- maybe (pure Nothing) Projects.userById evidence.requestedBy
     runArtifacts <- Issues.listRunArtifacts pid run.id
-    pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts
+    operations <- Investigations.listOperations @AI.OperationPolicy pid run.id
+    viewerPermission <- fromMaybe ProjectMembers.PView <$> ProjectMembers.getSessionPermission pid viewer.user.id
+    pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts viewerPermission operations
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
       docs = bool [] artifacts (isJust conversationM)
@@ -286,8 +291,8 @@ threadPageGetH pid convId docM runM hxTarget = do
     runStatusId :: Issues.RoutineRun -> Text
     runStatusId run = "routine-run-status-" <> run.id.toText
 
-    runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> Html ()
-    runView_ retained run evidence requestedBy artifacts =
+    runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Html ()
+    runView_ retained run evidence requestedBy artifacts viewerPermission operations =
       section_
         ([id_ "routine-run", class_ "space-y-5"] <> [attribute | run.status == Issues.RunRunning, attribute <- [hxGet_ $ runUrl pid run.id <> "?conversation=" <> convId.toText, hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxTarget_ "this", hxSwap_ "outerMorph", term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]])
         do
@@ -315,6 +320,31 @@ threadPageGetH pid convId docM runM hxTarget = do
             summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Instructions used for this run"
             p_ [class_ "mt-3 whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "This run predates instruction snapshots." evidence.instructions
             whenJust evidence.templateVersion $ \version -> p_ [class_ "mt-2 text-xs text-textWeak"] $ toHtml $ "Template version " <> show @Text version
+          unless (null operations) $ section_ [Aria.label_ "Action history", class_ "space-y-3"] do
+            div_ [class_ "flex items-center justify-between gap-3"] do
+              h2_ [class_ "text-sm font-semibold text-textStrong"] "Action history"
+              let refresh = runUrl pid run.id <> "?conversation=" <> convId.toText
+              a_ [href_ refresh, hxGet_ refresh, hxSelect_ "#routine-run", hxTarget_ "#routine-run", hxSwap_ "outerMorph", term "hx-preload" "false", class_ "btn btn-xs btn-ghost"] "Refresh actions"
+            p_ [class_ "text-xs text-textWeak"] "Most recent 200 actions, including earlier attempts for this request. A saved response can contain a tool error."
+            for_ operations \operation -> article_ [id_ $ "operation-" <> operation.id.toText, class_ "space-y-2 rounded-lg border border-strokeWeak p-3"] do
+              div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
+                code_ [class_ "min-w-0 break-all text-sm text-textStrong"] $ toHtml $ T.replace "_" " " $ LLM.toolFunctionName operation.proposal.call.toolCallFunction
+                uncurry tonePill_ $ case operation.outcome of
+                  Investigations.OperationRunning -> (BrandBadge, "Awaiting outcome")
+                  Investigations.OperationUnknown -> (WarningBadge, "Outcome uncertain")
+                  Investigations.OperationReturned{} -> (NeutralBadge, "Response saved")
+              when (case operation.outcome of Investigations.OperationUnknown -> True; _ -> False)
+                $ p_ [class_ "text-sm text-textWeak"] "No result was retained. This action was not repeated. It may still complete."
+              let required = MCP.minimumPermission operation.proposal.policy.capability
+              if viewerPermission >= required
+                then details_ [class_ "text-sm text-textWeak"] do
+                  summary_ [class_ "cursor-pointer font-medium text-textStrong"] "Proposal and outcome"
+                  pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.proposal
+                  pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.outcome
+                else p_ [class_ "text-xs text-textWeak"] $ toHtml $ "Action details require " <> toText (encodeEnumSC @"P" required) <> " permission."
+              time_ [datetime_ $ show operation.createdAt, class_ "text-xs text-textWeak"] $ localTimeFmt_ "MMM d, HH:mm" operation.createdAt
+              when (operation.runId /= run.id)
+                $ a_ [href_ $ runUrl pid operation.runId, class_ "ms-3 text-xs text-textBrand hover:underline"] "View original attempt"
           section_ [Aria.label_ "Run artifacts", class_ "space-y-4"] do
             h2_ [class_ "text-sm font-semibold text-textStrong"] "Artifacts"
             if null artifacts
@@ -327,6 +357,10 @@ threadPageGetH pid convId docM runM hxTarget = do
               summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ toHtml @Text title
               pre_ [class_ "mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs text-textWeak"] $ toHtml @Text $ decodeUtf8 $ AE.encode body
           when retained $ p_ [class_ "text-sm text-textWeak"] "This conversation was deleted. Its run and artifacts are retained here."
+      where
+        preview value =
+          let text = decodeUtf8 @Text $ AE.encode value
+           in if T.length text <= 8192 then text else T.take 4000 text <> "\n[… preview truncated; full evidence is retained …]\n" <> T.takeEnd 4000 text
 
     scheduleControl_ :: UUIDId "conversation" -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
     scheduleControl_ conversationId routineState = details_ [class_ "relative group/routine"] do

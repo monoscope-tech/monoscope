@@ -36,6 +36,17 @@ module Models.Apis.Investigations (
   Entry (..),
   History (..),
   ToolResult (..),
+  ToolProposal (..),
+  OperationClaim,
+  OperationDecision (..),
+  OperationResult (..),
+  OperationOutcome (..),
+  OperationConflict (..),
+  OperationEntry (..),
+  beginOperation,
+  completeOperation,
+  atomicOperation,
+  listOperations,
   recordEvent,
   recentEvents,
   ProgressTarget (..),
@@ -52,21 +63,24 @@ module Models.Apis.Investigations (
 ) where
 
 import Data.Aeson qualified as AE
+import Data.ByteString qualified as BS
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM ()
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
+import Data.UUID.V5 qualified as UUID5
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff)
 import Effectful.Exception (throwIO)
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
 import Models.Apis.Integrations qualified as Integrations
 import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
-import Pkg.DeriveUtils (UUIDId)
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.Types (DB)
 
@@ -87,6 +101,49 @@ data Scope = Scope
 data ToolResult = ToolResult {formatted :: Text, rawData :: Maybe AE.Value}
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | The proposal is immutable. Its policy is a typed caller-supplied audit snapshot.
+data ToolProposal policy = ToolProposal {call :: LLM.ToolCall, policy :: policy}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson (ToolProposal policy)
+
+
+newtype OperationClaim = OperationClaim (UUIDId "agent_operation")
+  deriving stock (Show)
+
+
+data OperationResult = RecordedResult ToolResult | UncertainResult (UUIDId "agent_operation") (UUIDId "ai_routine_run")
+  deriving stock (Show)
+
+
+data OperationDecision = ExecuteOperation OperationClaim | RetainedOperation OperationResult
+  deriving stock (Show)
+
+
+-- Returning a tool response does not assert that the domain operation succeeded.
+data OperationOutcome = OperationRunning | OperationUnknown | OperationReturned ToolResult
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson OperationOutcome
+
+
+data OperationConflict = OperationScopeMismatch | OperationStepMoved | OperationProposalChanged | OperationOutcomeChanged
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
+data OperationEntry policy = OperationEntry
+  { id :: UUIDId "agent_operation"
+  , runId :: UUIDId "ai_routine_run"
+  , requestedBy :: Projects.UserId
+  , proposal :: ToolProposal policy
+  , outcome :: OperationOutcome
+  , createdAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
 
 
 data ModelOutcome = ModelAnswered LLM.Message | ModelRequestFailed
@@ -455,6 +512,117 @@ checkpointSql target =
    in [HI.sql|SELECT revision, checkpoint FROM apis.slack_turn_checkpoints
       WHERE project_id = #{project} AND conversation_id = #{conversation} AND user_id = #{user}
         AND message_ts IS NOT DISTINCT FROM #{message} AND run_id IS NOT DISTINCT FROM #{run}|]
+
+
+-- | A checkpoint revision identifies one pending tool position. An interrupted
+-- retained invocation becomes explicitly uncertain; it is never claimed twice.
+beginOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunTurn -> CheckpointCursor -> ToolProposal policy -> Eff es OperationDecision
+beginOperation turn cursor proposal = Hasql.transaction TxS.ReadCommitted TxS.Write (beginOperationTx turn cursor proposal) >>= either throwIO pure
+
+
+beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => RunTurn -> CheckpointCursor -> ToolProposal policy -> Tx.Transaction (Either OperationConflict OperationDecision)
+beginOperationTx turn cursor proposal = runExceptT do
+  let (project, conversation, user, message, checkpointRun) = checkpointIdentity cursor.target
+      identifier = UUIDId $ UUID5.generateNamed UUID5.namespaceOID $ BS.unpack $ toStrict $ AE.encode (checkpointIdentity cursor.target, cursor.revision)
+      matchingScope = project == turn.projectId && conversation == turn.conversationId && user == turn.userId && all (== turn.runId) checkpointRun
+  unless matchingScope $ hoistEither $ Left OperationScopeMismatch
+  runs <-
+    lift
+      $ Hasql.queryTx @[UUIDId "ai_routine_run"]
+        [HI.sql|SELECT id FROM apis.ai_routine_runs WHERE id = #{turn.runId} AND project_id = #{project}
+      AND conversation_id = #{conversation} AND requested_by = #{user} AND status = 'running' FOR UPDATE|]
+  when (null runs) $ hoistEither $ Left OperationScopeMismatch
+  checkpoints <-
+    lift
+      $ Hasql.queryTx @[HI.OneColumn Checkpoint]
+        [HI.sql|SELECT checkpoint FROM apis.slack_turn_checkpoints
+      WHERE project_id = #{project} AND conversation_id = #{conversation} AND user_id = #{user}
+      AND message_ts IS NOT DISTINCT FROM #{message} AND run_id IS NOT DISTINCT FROM #{checkpointRun}
+      AND revision = #{cursor.revision} FOR UPDATE|]
+  when (null checkpoints) $ hoistEither $ Left OperationStepMoved
+  unless (case checkpoints of [HI.OneColumn (ToolsPending _ _ _ (expected : _))] -> expected == proposal.call; _ -> False) $ hoistEither $ Left OperationProposalChanged
+  prior <-
+    lift
+      $ Hasql.queryTx @[OperationEntry policy]
+      $ operationsSql project turn.runId
+      <> [HI.sql| AND (operation.id = #{identifier} OR operation.requested_by <> #{user}
+        OR operation.outcome->>'tag' IN ('OperationRunning', 'OperationUnknown')
+        OR operation.proposal->'call'->'function' = #{Aeson $ LLM.toolCallFunction proposal.call})
+        ORDER BY operation.created_at, operation.id FOR UPDATE OF operation|]
+  when (any ((/= user) . (.requestedBy)) prior) $ hoistEither $ Left OperationScopeMismatch
+  case find ((== identifier) . (.id)) prior of
+    Just entry -> do
+      unless (entry.proposal.call == proposal.call) $ hoistEither $ Left OperationProposalChanged
+      reuse entry
+    Nothing -> case find unresolved prior <|> find ((== LLM.toolCallFunction proposal.call) . LLM.toolCallFunction . (.call) . (.proposal)) prior of
+      Just entry -> reuse entry
+      Nothing -> do
+        inserted <-
+          lift
+            $ Hasql.queryTx @[UUIDId "agent_operation"]
+              [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
+            VALUES (#{identifier}, #{project}, #{turn.runId}, #{user}, #{cursor.revision}, #{Aeson proposal}, #{Aeson OperationRunning})
+            ON CONFLICT DO NOTHING RETURNING id|]
+        case inserted of
+          [_] -> pure $ ExecuteOperation $ OperationClaim identifier
+          _ -> hoistEither $ Left OperationProposalChanged
+  where
+    unresolved entry = case entry.outcome of OperationRunning -> True; OperationUnknown -> True; OperationReturned{} -> False
+    reuse :: OperationEntry policy -> ExceptT OperationConflict Tx.Transaction OperationDecision
+    reuse entry = case entry.outcome of
+      OperationReturned response -> pure $ RetainedOperation $ RecordedResult response
+      OperationRunning -> do
+        lift $ Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET outcome = #{Aeson OperationUnknown}, updated_at = clock_timestamp() WHERE id = #{entry.id}|]
+        pure $ RetainedOperation $ UncertainResult entry.id entry.runId
+      OperationUnknown -> pure $ RetainedOperation $ UncertainResult entry.id entry.runId
+
+
+-- | The mutation and its retained outcome commit together. A failed transaction
+-- leaves no claimed operation, so a later worker can safely execute it.
+atomicOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunTurn -> CheckpointCursor -> ToolProposal policy -> Tx.Transaction ToolResult -> Eff es OperationResult
+atomicOperation turn cursor proposal action = do
+  result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    outcome <-
+      beginOperationTx turn cursor proposal >>= \case
+        Left conflict -> pure $ Left conflict
+        Right (RetainedOperation retained) -> pure $ Right retained
+        Right (ExecuteOperation claim) -> do
+          response <- action
+          fmap (RecordedResult response <$) $ completeOperationTx claim response
+    when (isLeft outcome) Tx.condemn
+    pure outcome
+  either throwIO pure result
+
+
+completeOperation :: DB es => OperationClaim -> ToolResult -> Eff es ()
+completeOperation claim result = Hasql.transaction TxS.ReadCommitted TxS.Write (completeOperationTx claim result) >>= either throwIO pure
+
+
+completeOperationTx :: OperationClaim -> ToolResult -> Tx.Transaction (Either OperationConflict ())
+completeOperationTx (OperationClaim identifier) result = do
+  changed <-
+    Hasql.queryTx @[UUIDId "agent_operation"]
+      [HI.sql|UPDATE apis.ai_agent_operations SET outcome = #{Aeson $ OperationReturned result}, updated_at = clock_timestamp()
+      WHERE id = #{identifier} AND outcome->>'tag' IN ('OperationRunning', 'OperationUnknown') RETURNING id|]
+  if not (null changed)
+    then pure $ Right ()
+    else do
+      same <- Hasql.queryTx @[Bool] [HI.sql|SELECT outcome = #{Aeson $ OperationReturned result} FROM apis.ai_agent_operations WHERE id = #{identifier}|]
+      pure $ if same == [True] then Right () else Left OperationOutcomeChanged
+
+
+listOperations :: (AE.FromJSON policy, DB es) => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es [OperationEntry policy]
+listOperations project run = Hasql.interp $ operationsSql project run <> [HI.sql| ORDER BY operation.created_at DESC, operation.id DESC LIMIT 200|]
+
+
+operationsSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql
+operationsSql project run =
+  [HI.sql|SELECT operation.id, operation.run_id, operation.requested_by, operation.proposal, operation.outcome, operation.created_at
+    FROM apis.ai_agent_operations operation
+    JOIN apis.ai_routine_runs origin ON origin.id = operation.run_id
+    JOIN apis.ai_routine_runs selected ON selected.id = #{run} AND selected.project_id = #{project}
+    WHERE operation.project_id = #{project} AND (origin.id = selected.id
+      OR (selected.source->>'tag' = 'TriggeredRun' AND origin.source = selected.source))|]
 
 
 loadCheckpoint :: DB es => Turn -> Eff es (Maybe SavedCheckpoint)

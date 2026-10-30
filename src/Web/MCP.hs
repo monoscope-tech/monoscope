@@ -113,7 +113,8 @@ data AgentPolicy
   | ProjectWrite
   | ExternalPublication
   | Administration
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- | Mutation classes fix their minimum roles; callers cannot choose a weaker one.

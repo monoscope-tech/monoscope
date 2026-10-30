@@ -147,3 +147,55 @@ test('routine detail panels preserve conversation drafts, run history, and artif
     sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
   }
 });
+
+test('action history refresh preserves drafts and checks current roles', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID(), run = randomUUID(), operation = randomUUID();
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Operation acceptance');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
+       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, title)
+         VALUES ('${pid}', '${conversation}', 'web', 'Operation acceptance');
+       INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content)
+         VALUES ('${pid}', '${conversation}', 'assistant', 'The action outcome is uncertain.');
+       INSERT INTO apis.ai_routine_runs (id, project_id, conversation_id, scheduled_at, started_at, finished_at, status, source, requested_by, input, policy)
+         VALUES ('${run}', '${pid}', '${conversation}', now(), now(), now(), 'succeeded',
+           '{"tag":"InteractiveRun","contents":{"tag":"WebMessage"}}', '${uid}', 'Create a dashboard', 'autonomous');
+       INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
+         VALUES ('${operation}', '${pid}', '${run}', '${uid}', 1,
+           '{"call":{"id":"create","type":"function","function":{"name":"create_dashboard","arguments":{"body":{"title":"Browser action proposal"}}}},"policy":{"capability":{"tag":"ProjectWrite"},"execution":"autonomous","permission":"admin"}}',
+           '{"tag":"OperationUnknown"}');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    await page.goto(`/p/${pid}/ai/${conversation}`);
+    const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
+    await composer.fill('Keep this follow-up draft.');
+    await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().click();
+    const history = page.getByRole('region', { name: 'Action history', exact: true });
+    await expect(history.getByText('Outcome uncertain', { exact: true })).toBeVisible();
+    await history.getByText('Proposal and outcome', { exact: true }).click();
+    await expect(history.getByText(/Browser action proposal/)).toBeVisible();
+    sql(`UPDATE apis.ai_agent_operations SET outcome = '{"tag":"OperationReturned","contents":{"formatted":"Dashboard created.","rawData":null}}' WHERE id = '${operation}';`);
+    await Promise.all([
+      page.waitForResponse(response => response.url().includes(`/ai/runs/${run}?conversation=`) && response.request().method() === 'GET'),
+      history.getByRole('link', { name: 'Refresh actions', exact: true }).click(),
+    ]);
+    await expect(history.getByRole('link', { name: 'Refresh actions', exact: true })).not.toHaveClass(/htmx-request/);
+    await expect(history.getByText('Response saved', { exact: true })).toBeVisible();
+    await expect(composer).toHaveValue('Keep this follow-up draft.');
+    await expect(page).toHaveURL(`/p/${pid}/ai/${conversation}`);
+    sql(`UPDATE projects.project_members SET permission = 'view' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
+    await Promise.all([
+      page.waitForResponse(response => response.url().includes(`/ai/runs/${run}?conversation=`) && response.request().method() === 'GET'),
+      history.getByRole('link', { name: 'Refresh actions', exact: true }).click(),
+    ]);
+    await expect(history.getByRole('link', { name: 'Refresh actions', exact: true })).not.toHaveClass(/htmx-request/);
+    await expect(history.getByText('Action details require edit permission.', { exact: true })).toBeVisible();
+    await expect(history.getByText('Proposal and outcome', { exact: true })).toHaveCount(0);
+    await expect(history.getByText(/Browser action proposal/)).toHaveCount(0);
+    await expect(composer).toHaveValue('Keep this follow-up draft.');
+    await page.screenshot({ path: testInfo.outputPath('action-history.png') });
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});

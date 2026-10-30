@@ -210,6 +210,7 @@ module Models.Apis.Issues (
   maxArtifactsPerConversation,
   mkArtifactKey,
   saveArtifact,
+  saveArtifactTx,
   listArtifacts,
   selectChatHistory,
   prepareSlackTurn,
@@ -1604,7 +1605,7 @@ data RoutineRunSource = ScheduledRun | TriggeredRun RoutineEventSource | Interac
 -- | The run retains its original authority. Current member permissions still apply.
 data ExecutionPolicy = Observe | Autonomous
   deriving stock (Eq, Generic, Read, Show)
-  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" ExecutionPolicy
+  deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" ExecutionPolicy
 
 
 data RunContinuation = StartRun | ContinueRun | RestartRun
@@ -2520,8 +2521,12 @@ maxArtifactsPerConversation = 500
 -- The cap counts the conversation's other documents, so an existing one can always be updated;
 -- concurrent creates can overshoot it slightly, which is acceptable for a courtesy bound.
 saveArtifact :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ArtifactKey -> Maybe Text -> Text -> ArtifactWrite -> Eff es (Either ArtifactRejection AIArtifact)
-saveArtifact pid convId key titleM body write =
-  Hasql.interpOne
+saveArtifact pid convId key titleM body write = Hasql.transaction TxS.ReadCommitted TxS.Write $ saveArtifactTx pid convId key titleM body write
+
+
+saveArtifactTx :: Projects.ProjectId -> UUIDId "conversation" -> ArtifactKey -> Maybe Text -> Text -> ArtifactWrite -> Tx.Transaction (Either ArtifactRejection AIArtifact)
+saveArtifactTx pid convId key titleM body write =
+  Hasql.queryTx @(Maybe AIArtifact)
     [HI.sql| INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content, created_at, updated_at)
              SELECT #{pid}, #{convId}, #{key}, COALESCE(#{titleM}, #{key}), #{body}, app_now(), app_now()
              WHERE (SELECT count(*) FROM apis.ai_artifacts WHERE project_id = #{pid} AND conversation_id = #{convId} AND key <> #{key}) < #{maxArtifactsPerConversation}
@@ -2534,7 +2539,7 @@ saveArtifact pid convId key titleM body write =
     >>= maybe (Left . bool ArtifactLimitReached ArtifactFull <$> exists) (pure . Right)
   where
     append = write == ArtifactAppend
-    exists = fromMaybe False <$> Hasql.interpOne [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_artifacts WHERE project_id = #{pid} AND conversation_id = #{convId} AND key = #{key})::boolean|]
+    exists = fromMaybe False <$> Hasql.queryTx @(Maybe Bool) [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_artifacts WHERE project_id = #{pid} AND conversation_id = #{convId} AND key = #{key})::boolean|]
 
 
 -- | Most recently updated first, with the full content of @openKey@ only.

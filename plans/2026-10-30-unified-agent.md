@@ -410,6 +410,47 @@ Administrator writes retain the existing unavailable behavior until operation re
 A checkpoint does not establish exactly-once mutation or external publication.
 Operation identities and safe write recovery remain necessary before autonomous writes reach release.
 
+
+### Durable operation recovery (current implementation slice)
+
+Mutating capabilities now use one typed operation ledger under the existing run.
+A pending checkpoint supplies the stable operation position; the model does not supply its identity.
+The proposal retains the original tool call, authorizing role, execution policy, and capability policy.
+Current authority is checked again before accessing a retained result or starting a change.
+The shared executor distinguishes a retained response from an uncertain outcome in its result type.
+An uncertain outcome ends the model turn and suppresses subsequent mutations.
+Identical function-and-argument mutations within one source request reuse the original response, even when the model changes the tool-call ID.
+A new user request can intentionally perform the same operation again.
+
+Artifact writes compose their existing transaction with the operation claim and outcome.
+A failed outcome write rolls back the artifact change and claim together.
+Opaque API and external writes retain the claim before execution and the response afterward.
+Recovery does not repeat a claim whose response is missing; a legitimate late response can improve the retained record.
+This is an explicit uncertain result, not a claim of universal exactly-once execution.
+Slack publication retains the native response and configured channel without retaining authorization headers.
+Tool schema discovery derives the recovery contract from the actual execution representation.
+There is no second retry-policy registry or approval executor.
+
+Run details show action status and bounded proposal/outcome previews using native details and HTMX refresh.
+Preview disclosure checks the viewer's current role against the catalog policy.
+Older chat findings and tool-result views still need a complete disclosure audit before sensitive administrator operations are enabled.
+Legacy calls without a durable cursor remain a compatibility path and must be retired before broad autonomous activation.
+Event attempt/root continuity and cross-attempt concurrency still require explicit integration before event writes are enabled.
+Terminal cleanup of unfinished operation records remains pending; recovery currently changes an unfinished record to uncertain when it is encountered.
+
+One migration, `0261_agent_operations.sql`, contains this slice's operation schema.
+Previously applied migration files remain unchanged because migration history is checksummed.
+Eight new handler/DB regressions cover checkpoint failure, uncertain responses, repeated model proposals, atomic rollback, Slack publication, concurrent recovery, and recovery discovery.
+All eight focused regressions pass. The final focused suites pass: 178 bot examples, 75 API v1 examples, and 45 issue examples.
+A real Chrome test against the current WAI application and an isolated test database passes.
+It covers uncertain-to-retained outcome refresh, a current-role downgrade, unchanged conversation URL, and preserved follow-up draft.
+The test first exposed stale disclosure after refresh; disabling link prefetch fixes the issue without extra browser code.
+The permanent end-to-end regression remains in `e2e/tests/routines.spec.ts`; the temporary browser-launch bridge was removed from the integration suite.
+Slack recovery tests use the HTTP interpreter, not a controlled live workspace.
+No Slack connector is exposed in this session, so live Slack acceptance remains unverified.
+The formatter and diff checks pass. Repeated slice reviews found no remaining material distillation, type-evasion, or client-behavior findings.
+Final whole-branch review, doctests, release signoff, and PR update remain pending.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
