@@ -1,5 +1,9 @@
 # Slack Agent consolidation plan
 
+Superseded for future work by the [unified agent plan](2026-10-30-unified-agent.md).
+Retain this document as historical implementation and verification evidence.
+The unified plan replaces the earlier per-message permission direction with autonomous execution under routine policy.
+
 Status: resumed on 2026-10-30; rebased onto master `864403cd3`. Implementation in progress. Interactive project writes require an in-app, per-message grant; confirmed writes remain unavailable. The native Slack Agent has not passed sandbox acceptance or gone live.
 
 This plan narrows the [Slack Agent roadmap](2026-09-08-slack-agent.md) to the unfinished conversation and tool experience. The [implementation log](2026-09-08-slack-agent-implementation.md) records earlier work. Current code, tests, and live behavior take precedence over old status notes in that log.
