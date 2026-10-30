@@ -472,7 +472,7 @@ integrationsPage pid apikey =
           div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
             span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "1"
             span_ "Install & authenticate (if you haven't)"
-          copyField_ "install-cmd" "curl https://monoscope.tech/install.sh | sh && monoscope auth login"
+          copyField_ "install-cmd" "curl https://monoscopehq.com/install.sh | sh && monoscope auth login"
 
         div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
           div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do

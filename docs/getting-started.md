@@ -210,7 +210,7 @@ For production environments:
 The `monoscope` CLI lets you manage your project from the terminal — query logs, manage monitors, dashboards, API keys, and more.
 
 ```bash
-curl https://monoscope.tech/install.sh | sh
+curl https://monoscopehq.com/install.sh | sh
 ```
 
 Then authenticate:
