@@ -1586,7 +1586,7 @@ data RoutineEventSource = SlackMessage (UUIDId "slack_event") | SlackCommand (UU
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data InteractiveOrigin = WebMessage | WebConversation | WebRoutine RoutineInterval
+data InteractiveOrigin = WebMessage | WebConversation | WebRoutine RoutineInterval | WebIssue IssueId
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -2032,23 +2032,24 @@ data InteractiveStart = ConflictingRequest | AcceptedRequest (Maybe ScheduledRou
 startInteractiveRun :: (DB es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
 startInteractiveRun pid conversation user runId input policy origin = do
   now <- Time.currentTime
-  let newConversation = case origin of
-        WebMessage -> False
-        WebConversation -> True
-        WebRoutine{} -> True
+  let initialConversation = case origin of
+        WebMessage -> Nothing
+        WebConversation -> Just (CTWeb, AE.object [])
+        WebRoutine{} -> Just (CTWeb, AE.object [])
+        WebIssue issue -> Just (CTAnomaly, AE.object ["issue_id" AE..= issue])
   Hasql.transaction TxS.ReadCommitted TxS.Write do
     inserted <-
       Hasql.queryTx @[UUIDId "ai_routine_run"]
         [HI.sql|INSERT INTO apis.ai_routine_runs
         (id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status)
         SELECT #{runId}, #{pid}, #{conversation}, #{user}, #{input}, #{policy}, #{InteractiveRun origin}, #{now}, #{now}, 'running'
-        WHERE #{newConversation} OR EXISTS
+        WHERE #{isJust initialConversation} OR EXISTS
           (SELECT 1 FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{conversation} FOR KEY SHARE)
         ON CONFLICT (id) DO NOTHING RETURNING id|]
-    when (newConversation && not (null inserted))
-      $ Hasql.executeTx
+    unless (null inserted) $ for_ initialConversation $ \(conversationType, context) ->
+      Hasql.executeTx
         [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
-        VALUES (#{pid}, #{conversation}, #{CTWeb}, '{}'::jsonb) ON CONFLICT (project_id, conversation_id) DO NOTHING|]
+        VALUES (#{pid}, #{conversation}, #{conversationType}, #{Aeson context}) ON CONFLICT (project_id, conversation_id) DO NOTHING|]
     matching <-
       Hasql.queryTx @[UUIDId "ai_routine_run"]
         [HI.sql|SELECT run.id FROM apis.ai_routine_runs run JOIN apis.ai_conversations c

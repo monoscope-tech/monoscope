@@ -431,7 +431,7 @@ spec = sequential $ aroundAll withTestResources do
     it "aiChatPostH_nonMember_cannotChat" \tr -> do
       victim <- createTestProject tr "victim"
       iid <- UUIDId <$> UUID.nextRandom
-      assertNonMemberDenied tr victim $ IssuesPage.aiChatPostHWithTools Nothing victim iid (IssuesPage.AIChatForm "summarise this")
+      assertNonMemberDenied tr victim $ IssuesPage.aiChatPostHWithTools Nothing victim iid (IssuesPage.AIChatForm "summarise this" Nothing)
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.ai_chat_messages WHERE project_id=? |] (Only victim) >>= (`shouldBe` 0)
 
     -- The sweep narrows on LEFT(target_hash, 8) to reach migration 0130's index, which is only

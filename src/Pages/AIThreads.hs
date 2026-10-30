@@ -534,7 +534,7 @@ threadPostHWithTools projectTools pid convId form = do
         Nothing -> addRespHeaders mempty
         Just conversation -> do
           case Issues.conversationIssueId conversation of
-            Just issueId -> void $ IssuePage.aiChatPostHWithTools projectTools pid issueId (IssuePage.AIChatForm prompt)
+            Just issueId -> void $ IssuePage.aiChatPostHWithTools projectTools pid issueId (IssuePage.AIChatForm prompt $ Just requestId)
             Nothing -> submitTurn projectTools Issues.WebMessage requestId (form.allowActions == Just True) pid convId prompt
           redirectToThread pid convId
 

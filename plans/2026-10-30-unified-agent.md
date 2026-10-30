@@ -352,7 +352,19 @@ They cover completion rollback, retained reads, one answer, immutable input and 
 All 156 bot integration examples and all 75 API v1 examples pass after these changes.
 New interval JSON doctests remain part of the final doctest verification.
 
-Issue chat still needs durable request identities and the shared completion path.
+Issue chat and its global conversation route now retain the same request identity.
+Both routes use the shared checkpoint executor and completion function in `Pkg.AI`.
+The issue adapter retains its issue prompt and read-only policy.
+Its separate answer parser and message-save path no longer exist.
+The panel renders canonical stored history and returns a fresh form after success.
+A failed request retains its current form and request identity.
+
+Five handler regressions cover general chat, new conversations, new routines, issue chat, and the issue conversation route.
+The issue cases first failed because retries repeated a completed project read.
+The regressions also cover completion rollback, issue context, fresh form identities, deletion, and revoked access.
+All 158 bot examples, all 45 issue examples, and all 75 API v1 examples pass.
+The focused doctest attempt did not execute examples because the local package database lacks the `monoscope` library registration.
+Final doctest verification remains pending.
 The authority evaluator still needs to replace the legacy invocation predicates and routine action flags.
 A checkpoint does not establish exactly-once mutation or external publication.
 Operation identities and safe write recovery remain necessary before autonomous writes reach release.

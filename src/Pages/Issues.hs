@@ -56,6 +56,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Char (isHexDigit)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.UUID qualified as UUIDEff
 import Data.Generics.Product.Fields qualified as Optics
 import Data.Generics.Sum.Constructors (_Ctor)
 import Data.HashMap.Strict qualified as HM
@@ -127,7 +128,7 @@ import Pkg.SchemaLearning.Catalog qualified as Catalog
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (minimum1)
-import Servant (Header, Headers, NoContent (..), addHeader, err403)
+import Servant (Header, Headers, NoContent (..), ServerError (errBody), addHeader, err400, err403, err404, err409, err502)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
@@ -406,6 +407,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
           "Issue not found"
           "This issue may have been resolved, merged, or the link may be outdated."
     Just issue -> do
+      requestId <- UUIDId <$> UUIDEff.genUUID
       -- The default window is anchored on the issue's own last activity rather than
       -- on @now@, and is kept narrow. Both halves are load-bearing, and the width is
       -- measured rather than guessed.
@@ -546,6 +548,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       addRespHeaders
         $ PageCtx bwconf
         $ issueDetailPage
+          requestId
           IssueView{pid, issue, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom}
   where
     -- A lookup that only decides whether an optional panel renders: a throw or a 10s stall
@@ -971,8 +974,8 @@ issueEventsQuery v = case schemaSubjectFor v of
 -- workflow bar under it, then the evidence column beside a rail. In the evidence
 -- column the aggregate band (range, chart, context) comes first, then one event card
 -- whose navigator stays pinned while its sections scroll under it.
-issueDetailPage :: IssueView -> Html ()
-issueDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
+issueDetailPage :: UUIDId "ai_routine_run" -> IssueView -> Html ()
+issueDetailPage requestId v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
   div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto"] do
     issueHeader_ v
     div_ [class_ "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]"] do
@@ -1021,7 +1024,7 @@ issueDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden rela
         whenJust errM \errL ->
           div_ [hxGet_ $ "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText errL.base.id.unErrorPatternId <> "/group_members", hxTrigger_ "load, issuePatternGroupChanged from:body", hxSwap_ "innerHTML"] pass
         activityPanel_ pid issue.id.toText traceRef
-  aiSidePanel_ pid issue.id
+  aiSidePanel_ pid issue.id requestId
 
 
 -- | Title, culprit, the state line, the Events figure, then the workflow bar — the
@@ -1749,8 +1752,8 @@ aiPanelOpenerAttrs = aiPanelToggleAttrs <> [[__|on click set #ai-panel-toggle's 
 
 -- | Collapsible AI chat, open-state in localStorage and driven by a checkbox +
 -- group-has variants so it survives htmx swaps.
-aiSidePanel_ :: Projects.ProjectId -> Issues.IssueId -> Html ()
-aiSidePanel_ pid issueId = do
+aiSidePanel_ :: Projects.ProjectId -> Issues.IssueId -> UUIDId "ai_routine_run" -> Html ()
+aiSidePanel_ pid issueId requestId = do
   input_
     [ type_ "checkbox"
     , id_ "ai-panel-toggle"
@@ -1799,23 +1802,7 @@ aiSidePanel_ pid issueId = do
       ]
       ""
     div_ [class_ "shrink-0 border-t border-strokeWeak p-3 flex flex-col gap-2"] do
-      form_
-        [ hxPost_ $ baseUrl <> "/ai_chat"
-        , hxTarget_ "#ai-response-container"
-        , hxSwap_ "beforeend"
-        , hxIndicator_ "#ai-chat-loader"
-        , term "hx-on::after:request" "this.reset()"
-        ]
-        $ div_ [class_ "flex items-center gap-2 bg-fillWeaker rounded-lg px-3 py-2 has-[:focus]:ring-1 has-[:focus]:ring-strokeBrand-weak transition-shadow"] do
-          input_
-            [ class_ "flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm"
-            , placeholder_ "Ask about this issue..."
-            , name_ "query"
-            , id_ "ai-chat-input"
-            , autocomplete_ "off"
-            ]
-          span_ [class_ "htmx-indicator", id_ "ai-chat-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin text-iconBrand"
-          button_ [type_ "submit", class_ "p-1.5 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 transition-opacity tap-target cursor-pointer", Aria.label_ "Send message"] $ faSprite_ "arrow-right" "regular" "w-3.5 h-3.5"
+      aiChatForm_ pid issueId requestId []
       div_ [class_ "flex gap-1.5 flex-wrap"] $ forM_ ["What could cause this?", "Show related logs", "Suggest a fix"] \txt ->
         button_
           [ type_ "button"
@@ -1827,6 +1814,31 @@ aiSidePanel_ pid issueId = do
           , [__|on click set #ai-chat-input.value to my @data-q then call #ai-chat-input.form.requestSubmit()|]
           ]
           $ toHtml @Text txt
+
+
+-- | A successful reply replaces this form and gives the next turn a fresh identity.
+aiChatForm_ :: Projects.ProjectId -> Issues.IssueId -> UUIDId "ai_routine_run" -> [Attribute] -> Html ()
+aiChatForm_ pid issueId requestId attributes =
+  form_
+    ( [ id_ "issue-ai-form"
+      , hxPost_ $ "/p/" <> pid.toText <> "/issues/" <> issueId.toText <> "/ai_chat"
+      , hxTarget_ "#ai-response-container"
+      , hxSwap_ "innerHTML"
+      , hxIndicator_ "#ai-chat-loader"
+      ]
+        <> attributes
+    )
+    $ div_ [class_ "flex items-center gap-2 bg-fillWeaker rounded-lg px-3 py-2 has-[:focus]:ring-1 has-[:focus]:ring-strokeBrand-weak transition-shadow"] do
+      input_ [type_ "hidden", name_ "requestId", value_ requestId.toText]
+      input_
+        [ class_ "flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm"
+        , placeholder_ "Ask about this issue..."
+        , name_ "query"
+        , id_ "ai-chat-input"
+        , autocomplete_ "off"
+        ]
+      span_ [class_ "htmx-indicator", id_ "ai-chat-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin text-iconBrand"
+      button_ [type_ "submit", class_ "p-1.5 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 transition-opacity tap-target cursor-pointer", Aria.label_ "Send message"] $ faSprite_ "arrow-right" "regular" "w-3.5 h-3.5"
 
 
 -- | Resolve control; @errState@ is passed separately because the handler renders the
@@ -1961,7 +1973,7 @@ errorSubscriptionPostH pid errUuid form = do
 
 
 -- | Form for AI chat input
-newtype AIChatForm = AIChatForm {query :: Text}
+data AIChatForm = AIChatForm {query :: Text, requestId :: Maybe (UUIDId "ai_routine_run")}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
@@ -2009,43 +2021,27 @@ issueSystemPrompt now =
 -- Designed to power the AI chat in the anomalies page. The chat thread is loaded via htmx and theres an input which when submitted gets sent here.
 aiChatPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
 aiChatPostHWithTools projectTools pid issueId form = do
-  _ <- Projects.sessionAndProject pid
-  if T.length form.query > 4000
-    then addRespHeaders $ aiChatResponse_ (pure . href_) pid (Just form.query) "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
-    else do
-      appCtx <- ask @AuthContext
-      (sess, _) <- Projects.sessionAndProject pid
-      unlessM (isJust <$> ProjectMembers.getUserPermission pid sess.user.id) $ throwError err403
-      now <- Time.currentTime
-      let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
-      void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
-      issueM <- Issues.selectIssueById pid issueId
-      maybe (respond Nothing convId "Issue not found. Unable to analyze." Nothing Nothing True) (processIssue sess.user.id appCtx now convId) issueM
-  where
-    respond systemPromptM convId response widgets toolCalls includeUserMsg = do
-      when includeUserMsg $ Issues.insertChatMessage pid convId Issues.ChatUser form.query Nothing Nothing
-      Issues.insertChatMessage pid convId Issues.ChatAssistant response (AE.toJSON <$> widgets) (AE.toJSON <$> toolCalls)
-      addRespHeaders $ aiChatResponse_ (pure . href_) pid (Just form.query) response widgets toolCalls systemPromptM
-
-    processIssue userId appCtx now convId issue = do
-      fullSystemPrompt <- buildSystemPromptForIssue pid issue now
-      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.WebSession userId, AI.projectTools = projectTools}
-      result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey
-      either
-        (\err -> respond (Just fullSystemPrompt) convId ("I encountered an error while analyzing this issue: " <> err) Nothing Nothing False)
-        (handleChatResult appCtx (Just fullSystemPrompt) convId)
-        result
-
-    handleChatResult appCtx systemPromptM convId chatResult = do
-      AI.ensureConversationTitle (Just appCtx.config) pid convId form.query chatResult.response appCtx.config.openaiSmallModel appCtx.config.openaiApiKey
-      either
-        (\_ -> respond systemPromptM convId chatResult.response Nothing (Just chatResult.toolCalls) False)
-        ( \aiResp ->
-            let ws = guarded (not . null) $ take 10 $ AI.responseWidgets aiResp
-                txt = fromMaybe (bool chatResult.response "Here are the requested visualizations:" $ isJust ws) $ mfilter (not . T.null) aiResp.explanation
-             in respond systemPromptM convId txt ws (Just chatResult.toolCalls) False
-        )
-        (AI.parseAgenticResponse chatResult)
+  (sess, _) <- Projects.sessionAndProject pid
+  unlessM (isJust <$> ProjectMembers.getUserPermission pid sess.user.id) $ throwError err403
+  when (T.length form.query > 4000) $ throwError err400{errBody = "Query too long. Maximum 4000 characters allowed."}
+  issue <- Issues.selectIssueById pid issueId >>= maybe (throwError err404) pure
+  appCtx <- ask @AuthContext
+  now <- Time.currentTime
+  requestId <- maybe (UUIDId <$> UUIDEff.genUUID) pure form.requestId
+  let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
+  Issues.startInteractiveRun pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
+    Issues.ConflictingRequest -> throwError err409{errBody = "Request ID already belongs to another request"}
+    Issues.AcceptedRequest _ -> pass
+  fullSystemPrompt <- buildSystemPromptForIssue pid issue now
+  let access = AI.MemberAccess AI.WebSession sess.user.id
+      config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = access, AI.projectTools = projectTools, AI.invocationMode = AI.InteractiveRun requestId Issues.Observe}
+  answer <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey >>= either (\err -> throwError err502{errBody = encodeUtf8 err}) pure
+  void $ AI.completeAgenticResponse config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey answer
+  messages <- Issues.selectChatHistory pid convId
+  nextRequestId <- UUIDId <$> UUIDEff.genUUID
+  addRespHeaders do
+    issueChatHistory_ pid fullSystemPrompt messages
+    aiChatForm_ pid issueId nextRequestId [term "hx-swap-oob" "outerHTML"]
 
 
 -- | Handle AI chat history GET request
@@ -2058,11 +2054,15 @@ aiChatHistoryGetH pid issueId = do
     Just issue -> do
       systemPrompt <- buildSystemPromptForIssue pid issue now
       messages <- Issues.selectChatHistory pid (UUIDId issueId.unUUIDId :: UUIDId "conversation")
-      addRespHeaders do
-        disclosure_ [class_ "my-2 border border-strokeWeak rounded-lg"] "px-2.5 py-1.5 text-xs text-textWeak hover:bg-fillWeaker" (faSprite_ "file-lines" "regular" "w-3 h-3" >> "System Prompt")
-          $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
-          $ toHtml systemPrompt
-        aiChatHistoryView_ (pure . href_) pid messages
+      addRespHeaders $ issueChatHistory_ pid systemPrompt messages
+
+
+issueChatHistory_ :: Projects.ProjectId -> Text -> [Issues.AIChatMessage] -> Html ()
+issueChatHistory_ pid systemPrompt messages = do
+  disclosure_ [class_ "my-2 border border-strokeWeak rounded-lg"] "px-2.5 py-1.5 text-xs text-textWeak hover:bg-fillWeaker" (faSprite_ "file-lines" "regular" "w-3 h-3" >> "System Prompt")
+    $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
+    $ toHtml systemPrompt
+  aiChatHistoryView_ (pure . href_) pid messages
 
 
 -- | Build complete system prompt for an issue (shared between POST and GET)
