@@ -198,6 +198,13 @@ spec = around withTestResources do
         emptyResult <- runQueryEffect tr $ resolveApiKeyProject "" Nothing
         emptyResult `shouldBe` Nothing
 
+      -- /chart_data_shot was a leftover from before signed PNG export: it sat outside every
+      -- auth layer and ran the caller's KQL or raw SQL against whatever pid it was given.
+      it "chartDataShot_isNotServed" \tr -> do
+        let req = WT.setPath Wai.defaultRequest ("/chart_data_shot?data_type=text&pid=" <> encodeUtf8 testPid.toText <> "&query=summarize%20count()")
+        resp <- WT.runSession (WT.srequest (WT.SRequest req "")) (topApp tr)
+        H.statusCode (WT.simpleStatus resp) `shouldBe` 404
+
       it "rejects API requests with no auth and no demo project header" $ \tr -> do
         let req = WT.setPath Wai.defaultRequest "/api/v1/schema"
         resp <- WT.runSession (WT.srequest (WT.SRequest req "")) (topApp tr)
