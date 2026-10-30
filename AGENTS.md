@@ -202,6 +202,21 @@ Not every finding has to be taken: if one is wrong or the cost outweighs it, say
 so explicitly and move on. What is not acceptable is updating the pull request
 without having run them.
 
+### Build production images on this Mac
+
+**Generate production images on this Mac with OrbStack.** Use `linux/amd64`
+emulation through Rosetta. Do not use production servers, SSH builders, or
+GitHub runners to generate these images.
+
+A command started on this Mac can still compile on a remote host. Inspect the
+Docker context and builder endpoint before an image build. The endpoint must
+use the local `orbstack` context, whose Docker socket is local to this Mac.
+
+Set `DOCKER_CONTEXT=orbstack` and `MONOSCOPE_BUILDER=monoscope-local-amd64`
+explicitly for `ci-signoff`, `deploy-image`, and `ship`. An omitted builder can
+select the legacy SSH builder. Do not run `BUILD_HOST=… make builder-setup`.
+Create the local builder with the procedure in `docs/local-ci.md`.
+
 ### Sign off locally before updating the pull request — never push and wait on CI
 
 **Run sign-off only at the end, after all requested work, reviews, and focused
@@ -218,8 +233,8 @@ attestations, which CI's gate then reuses — a signed-off pull-request update c
 reuse those results instead of re-running everything.
 
 ```bash
-make ci-signoff                     # everything, attesting each pass
-make ci-signoff CHECKS="fmt lint"   # scoped to a limited change
+DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make ci-signoff
+DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make ci-signoff CHECKS="fmt lint"
 ```
 
 This is a rule, not a preference: on 2026-09-08 five consecutive deploys failed,
@@ -240,7 +255,7 @@ their callees dead, so the weeder check recompiles any tracked module missing on
 so the slow half stops being a queue you wait on:
 
 ```bash
-make ship          # checks → image → push → deploy, stopping at the first failure
+DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make ship
 make deploy-status # what production is running right now
 ```
 
@@ -248,19 +263,17 @@ It refuses to deploy a commit `origin/master` does not contain, and refuses when
 any deploy-path check (`build doctests unit-tests cli-tests integration-tests
 e2e`) lacks an attestation for that exact tree. CI still runs, but the gate skips
 every attested check, the image is already in the registry, and the deploy job
-asks `ci.sh deployed <sha>` and skips too. Do this **once per machine** so the
-amd64 image build is native instead of emulated:
-
-```bash
-BUILD_HOST=ubuntu@your-amd64-box make builder-setup
-```
+asks `ci.sh deployed <sha>` and skips too. Use the local OrbStack builder for
+image generation, as required above. Production hosts receive completed images
+only when deployment is authorized.
 
 Two things this does **not** cover, so check them yourself:
 
 - **The image build is outside the fingerprinted checks** (it produces an
   artifact, not a verdict), so `ci-signoff` cannot prove it. When a change
   touches the `Dockerfile`, `static/`, or the web-components build, run
-  `make deploy-image` locally first — that is the only local proof of the stage
+  `DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make deploy-image`
+  first — that is the only local proof of the stage
   that has failed most often.
 - **If a check genuinely cannot run here** (missing service or tool), say so in
   the PR/commit and let CI run that one. Never publish an attestation for a check
