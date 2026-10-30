@@ -62,7 +62,7 @@ import System.Timeout (timeout)
 import System.Types (addRespHeaders)
 import Test.Hspec
 import Text.Slugify (slugify)
-import UnliftIO.Async (wait, withAsync)
+import UnliftIO.Async (mapConcurrently_, wait, withAsync)
 import Utils qualified
 import Web.ApiHandlers qualified as Api
 import Web.ApiTypes qualified as ApiTypes
@@ -248,6 +248,30 @@ spec = sequential $ aroundAll withTestResources do
       status (Dashboards.dashboardViewDeleteH other did "Missing" []) `shouldReturn` 404
       assertNonMemberDenied tr other (save other "Denied")
       assertNonMemberDenied tr other (Dashboards.dashboardViewDeleteH other did "Denied" [])
+
+    it "overviewTemplate_scopesFiltersByTab_andRestoresAllServices" \tr -> do
+      did <- newDashboard tr "_overview.yaml" "Overview views"
+      for_ ([("overview", ["service", "resource"]), ("service", ["service", "resource"]), ("logs", ["service"]), ("databases", ["database"]), ("infra", [])] :: [(Text, [Text])]) \(slug, keys) -> do
+        html <- renderT <$> getTab tr did slug Nothing [("var-service", Just "api"), ("var-database", Just "postgresql")]
+        for_ ["service", "resource", "database"] \key ->
+          ("name=\"" <> key <> "\"") `T.isInfixOf` html `shouldBe` (key `elem` keys)
+        let root = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/" <> slug
+        linkParams root html `shouldSatisfy` any (\ps -> lookup "var-service" ps == Just "" && lookup "var-database" ps == Just "")
+      form <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.DashboardViewForm "name=API&var-service=api&since=7D&activeTabSlug=logs"
+      (_, saved) <- testServant tr $ Dashboards.dashboardViewPostH testPid did form
+      renderT saved `shouldSatisfy` T.isInfixOf "Saved views: API"
+
+    it "concurrentSaves_keepOtherViews_andReplaceTheSameNameOnce" \tr -> do
+      did <- newDashboard tr "rum.yaml" "Concurrent views"
+      let names = ["View " <> show i | i <- [1 .. 8 :: Int]]
+          save name browser = void $ testServant tr $ Dashboards.dashboardViewPostH testPid did (Dashboards.DashboardViewForm name [("var-browser", Just browser)])
+      mapConcurrently_ (`save` "Safari") names
+      (saved, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
+      map (.name) (toList saved.savedViews) `shouldMatchList` names
+      mapConcurrently_ (save "View 1") ["Chrome", "Firefox"]
+      (updated, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
+      map (.name) (toList updated.savedViews) `shouldMatchList` names
+      [Map.lookup "browser" v.variables | v <- toList updated.savedViews, v.name == "View 1"] `shouldSatisfy` (`elem` ([[Just "Chrome"], [Just "Firefox"]] :: [[Maybe Text]]))
 
     it "migratesLegacySegments_evenWithoutAnExistingDashboard" \tr -> do
       pid <- createTestProject tr "Unopened RUM dashboard"

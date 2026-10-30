@@ -372,7 +372,7 @@ dashboardViews_ pid did dash vm params extraAttrs =
     matched = find ((== variableValues dash params) . variableValues dash . viewParams . fst) availableViews
     -- The view last picked from the menu; it reads as edited once the variables drift from it.
     applied = join (lookup "view" params) >>= (`Map.lookup` availableViews)
-    swapVals = [hxVals_ "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...getTimeRange()}"]
+    swapVals = [hxVals_ "js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) => key !== 'name')), ...getTimeRange()}"]
     swapAttrs = [hxTarget_ "#dashboard-views", hxSwap_ "outerHTML"] <> swapVals
     context = filter (\(k, _) -> not (any (`T.isPrefixOf` k) ["var-", "const-"]) && k `notElem` [activeTabSlugKey, "name", "expand", "view"]) params
     -- Saved views shadow same-named template views; only saved ones are deletable.

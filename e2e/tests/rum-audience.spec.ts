@@ -81,7 +81,7 @@ test("saved views work on custom dashboards across tabs and retain the time rang
     const root = `/p/${DEMO_PROJECT}/dashboards/${id}`;
     const toolbar = page.locator("#dashboard-views");
     const views = toolbar.getByRole("button", { name: /^Saved views/ });
-    await page.goto(`${root}/tab/errors?var-service=worker&var-region=us&since=7D`);
+    await page.goto(`${root}/tab/errors?var-service=worker&var-region=us&since=7D&name=URL+name&name=Another+URL+name`);
     await views.click();
     await toolbar.getByLabel("View name").fill("US worker");
     await toolbar.getByRole("button", { name: "Save view", exact: true }).click();
@@ -110,6 +110,39 @@ test("saved views work on custom dashboards across tabs and retain the time rang
     await views.click();
     await toolbar.getByRole("button", { name: "Delete view US worker", exact: true }).click();
     await expect(toolbar.getByRole("link", { name: "US worker", exact: true })).toHaveCount(0);
+  } finally {
+    sql(`DELETE FROM projects.dashboards WHERE id='${id}';`);
+  }
+});
+
+test("overview template scopes filters by tab and shares saved views", async ({ page }) => {
+  const id = crypto.randomUUID();
+  sql(`INSERT INTO projects.dashboards (id,project_id,created_by,title,base_template) VALUES ('${id}','${DEMO_PROJECT}','00000000-0000-0000-0000-000000000000','Overview view adoption','_overview.yaml');`);
+  try {
+    const root = `/p/${DEMO_PROJECT}/dashboards/${id}`;
+    const toolbar = page.locator("#dashboard-views");
+    const views = toolbar.getByRole("button", { name: /^Saved views/ });
+    await page.goto(`${root}/tab/logs?var-service=api&since=7D`);
+    await expect(page.locator('#dashboard-variables input[name="service"]')).toHaveCount(1);
+    await expect(page.locator('#dashboard-variables input[name="resource"], #dashboard-variables input[name="database"]')).toHaveCount(0);
+    await views.click();
+    await toolbar.getByLabel("View name").fill("API logs");
+    await toolbar.getByRole("button", { name: "Save view", exact: true }).click();
+    await expect(views).toHaveAccessibleName("Saved views: API logs");
+    await page.reload();
+    await expect(views).toHaveAccessibleName("Saved views: API logs");
+    await views.click();
+    await toolbar.getByRole("link", { name: "All services", exact: true }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("var-service")).toBe("");
+    expect(new URL(page.url()).searchParams.get("since")).toBe("7D");
+    await page.getByRole("tab", { name: "Infra", exact: true }).click();
+    await expect(page.locator('#dashboard-variables input[name="service"], #dashboard-variables input[name="resource"], #dashboard-variables input[name="database"]')).toHaveCount(0);
+    await views.click();
+    await toolbar.getByRole("link", { name: "API logs", exact: true }).click();
+    await expect(page).toHaveURL(/var-service=api/);
+    await page.getByRole("tab", { name: "Service", exact: true }).click();
+    await expect(page.locator('#dashboard-variables input[name="service"], #dashboard-variables input[name="resource"]')).toHaveCount(2);
+    expect(new URL(page.url()).searchParams.get("var-service")).toBe("api");
   } finally {
     sql(`DELETE FROM projects.dashboards WHERE id='${id}';`);
   }
