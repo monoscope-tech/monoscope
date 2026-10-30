@@ -878,11 +878,13 @@ spec = sequential $ aroundAll withTestResources do
     it "category views, filter chips and saved views on the issue list" \tr -> do
       let list types = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] types)
       html <- list ["runtime_exception"]
-      html `shouldContainAll` ["&amp;type=log_pattern&amp;type=log_pattern_rate_change", "Remove filter Type: runtime_exception", "Save view", "class=\"dropdown dropdown-start", "id=\"save-view-pop\""]
-      _ <- testServant tr $ IssuesPage.saveViewPostH testPid (IssuesPage.SaveViewForm "My errors" "filter=Inbox&type=runtime_exception")
+      html `shouldContainAll` ["&amp;type=log_pattern&amp;type=log_pattern_rate_change", "Remove filter Type: runtime_exception", "Save view", "aria-label=\"Saved views\"", "id=\"issue-views-menu\""]
+      _ <- testServant tr $ IssuesPage.saveViewPostH testPid (IssuesPage.SaveViewForm "My errors" "filter=Inbox&sort=-created_at&period=24h&type=runtime_exception")
       views <- runTestBg frozenTime tr (Issues.selectIssueViews testPid)
       map (.name) views `shouldBe` ["My errors"]
-      (`shouldContainAll` ["My errors", "issues?filter=Inbox&amp;type=runtime_exception"]) =<< list []
+      (`shouldContainAll` ["My errors", "issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception"]) =<< list []
+      -- The list it was saved from now names it on the bookmark button.
+      (`shouldContainAll` ["aria-label=\"Saved views: My errors\""]) =<< list ["runtime_exception"]
       forM_ views \v -> testServant tr $ IssuesPage.deleteViewPostH testPid v.id
       (null <$> runTestBg frozenTime tr (Issues.selectIssueViews testPid)) `shouldReturn` True
 
