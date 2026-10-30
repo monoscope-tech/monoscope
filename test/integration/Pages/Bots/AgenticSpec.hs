@@ -119,14 +119,16 @@ spec = around withTestResources do
               (_, _, params) <- Eff.runEff $ Time.runTime $ AI.agenticSetup config{AI.projectTools = Just Routes.mcpProjectTools} "any query" "model"
               pure $ AE.toJSON params ^.. key "tools" . values . key "function" . key "name" . _String
         readonly <- toolNames $ AI.defaultAgenticConfig testPid
-        actionable <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.InteractiveWithActions}
+        actionable <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.invocationMode = AI.InteractiveWithActions}
+        serviceActions <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.InteractiveWithActions}
         scheduledReadOnly <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) Issues.Observe}
-        scheduledActionable <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) Issues.Autonomous}
+        scheduledActionable <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) Issues.Autonomous}
         repositoryAware <- toolNames (AI.defaultAgenticConfig testPid){AI.sourceConfig = Just tr.trATCtx.config}
         memoryWriter <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just $ UUIDId UUID.nil, AI.invocationMode = AI.InteractiveWithActions}
         readonly `shouldContain` ["list_project_memory", "read_project_memory"]
         readonly `shouldNotContain` ["write_project_memory"]
         actionable `shouldNotContain` ["write_project_memory"]
+        serviceActions `shouldNotContain` ["write_project_memory", "send_to_slack"]
         memoryWriter `shouldContain` ["write_project_memory", "send_to_slack"]
         readonly `shouldNotContain` ["send_to_slack"]
         scheduledReadOnly `shouldNotContain` ["send_to_slack"]

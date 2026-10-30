@@ -10,7 +10,8 @@ module Web.MCP (
   Dispatch (..),
   OpenApiBinding (..),
   AgentPolicy (..),
-  AgentAction (..),
+  minimumPermission,
+  actionName,
   agentExclusions,
   allTools,
   handleJsonRpc,
@@ -105,15 +106,40 @@ data OpenApiBinding = OpenApiBinding
 
 -- | The Agent adapter must deny operations without a policy. The registry
 -- coverage test makes each new MCP operation an explicit decision.
-data AgentPolicy = AgentPolicy
-  { minimumPermission :: !ProjectMembers.Permissions
-  , action :: !AgentAction
-  }
+data AgentPolicy
+  = ReadOnly ProjectMembers.Permissions
+  | ConversationWrite
+  | ProjectMemoryWrite
+  | ProjectWrite
+  | ExternalPublication
+  | Administration
   deriving stock (Eq, Show)
 
 
-data AgentAction = ReadOnly | ConversationWrite | RequestedWrite | ConfirmedWrite
-  deriving stock (Eq, Show)
+-- | Mutation classes fix their minimum roles; callers cannot choose a weaker one.
+--
+-- >>> map minimumPermission [ConversationWrite, ProjectMemoryWrite, ProjectWrite, ExternalPublication, Administration]
+-- [PView,PEdit,PEdit,PEdit,PAdmin]
+-- >>> minimumPermission (ReadOnly (minimumPermission Administration))
+-- PAdmin
+minimumPermission :: AgentPolicy -> ProjectMembers.Permissions
+minimumPermission = \case
+  ReadOnly permission -> permission
+  ConversationWrite -> ProjectMembers.PView
+  ProjectMemoryWrite -> ProjectMembers.PEdit
+  ProjectWrite -> ProjectMembers.PEdit
+  ExternalPublication -> ProjectMembers.PEdit
+  Administration -> ProjectMembers.PAdmin
+
+
+actionName :: AgentPolicy -> Text
+actionName = \case
+  ReadOnly{} -> "ReadOnly"
+  ConversationWrite -> "ConversationWrite"
+  ProjectMemoryWrite -> "ProjectMemoryWrite"
+  ProjectWrite -> "ProjectWrite"
+  ExternalPublication -> "ExternalPublication"
+  Administration -> "Administration"
 
 
 -- | Ingestion belongs to the telemetry client, not a conversational action.
@@ -285,10 +311,10 @@ apiOperations =
       (("POST", "/share"), admin "create_share_link")
     ]
   where
-    view name = (name, Just $ AgentPolicy ProjectMembers.PView ReadOnly)
-    adminRead name = (name, Just $ AgentPolicy ProjectMembers.PAdmin ReadOnly)
-    edit name = (name, Just $ AgentPolicy ProjectMembers.PEdit RequestedWrite)
-    admin name = (name, Just $ AgentPolicy ProjectMembers.PAdmin ConfirmedWrite)
+    view name = (name, Just $ ReadOnly ProjectMembers.PView)
+    adminRead name = (name, Just $ ReadOnly ProjectMembers.PAdmin)
+    edit name = (name, Just $ ProjectWrite)
+    admin name = (name, Just $ Administration)
 
 
 -- | Top-level dispatcher. Handles JSON-RPC requests for the MCP protocol:
@@ -313,7 +339,7 @@ handleJsonRpc reg app pid req = case parseRpcReq req of
     describeTool t =
       AE.object
         $ ["name" AE..= t.name, "description" AE..= t.description, "inputSchema" AE..= t.inputSchema]
-        <> maybe [] (\policy -> ["annotations" AE..= AE.object ["readOnlyHint" AE..= (policy.action == ReadOnly)]]) t.agentPolicy
+        <> maybe [] (\policy -> ["annotations" AE..= AE.object ["readOnlyHint" AE..= (case policy of ReadOnly{} -> True; _ -> False)]]) t.agentPolicy
     parseRpcReq = \case
       AE.Object o -> (fromMaybe AE.Null (KM.lookup "id" o),,fromMaybe (AE.object []) (KM.lookup "params" o)) <$> textArg "method" o
       _ -> Nothing
@@ -476,7 +502,7 @@ analyzeIssue =
 
 
 composite :: Text -> Text -> AE.Value -> (Projects.ProjectId -> AE.Object -> ATBaseCtx AE.Value) -> Tool Dispatch
-composite n d schema run = Tool n d schema (Just $ AgentPolicy ProjectMembers.PView ReadOnly) (ViaComposite run)
+composite n d schema run = Tool n d schema (Just $ ReadOnly ProjectMembers.PView) (ViaComposite run)
 
 
 objSchema :: [(Text, AE.Value)] -> [Text] -> AE.Value

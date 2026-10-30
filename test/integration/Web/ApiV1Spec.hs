@@ -788,10 +788,10 @@ spec = around withTestResources do
             covered = Map.keysSet policies `S.union` Map.keysSet MCP.agentExclusions
         Map.keysSet reg `shouldBe` covered
         Map.keysSet policies `S.intersection` Map.keysSet MCP.agentExclusions `shouldBe` S.empty
-        Map.lookup "list_metrics" policies `shouldBe` Just (MCP.AgentPolicy PM.PView MCP.ReadOnly)
-        Map.lookup "create_monitor" policies `shouldBe` Just (MCP.AgentPolicy PM.PEdit MCP.RequestedWrite)
-        Map.lookup "bulk_monitors" policies `shouldBe` Just (MCP.AgentPolicy PM.PAdmin MCP.ConfirmedWrite)
-        Map.lookup "remove_member" policies `shouldBe` Just (MCP.AgentPolicy PM.PAdmin MCP.ConfirmedWrite)
+        Map.lookup "list_metrics" policies `shouldBe` Just (MCP.ReadOnly PM.PView)
+        Map.lookup "create_monitor" policies `shouldBe` Just (MCP.ProjectWrite)
+        Map.lookup "bulk_monitors" policies `shouldBe` Just (MCP.Administration)
+        Map.lookup "remove_member" policies `shouldBe` Just (MCP.Administration)
 
       it "does not expose the MCP endpoint as its own tool" $ \_tr -> do
         Map.member "post_mcp" reg `shouldBe` False

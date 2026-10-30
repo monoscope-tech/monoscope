@@ -2035,6 +2035,56 @@ spec = around withTestResources do
         networkResult `shouldSatisfy` isRight
         map fst networkRequests `shouldSatisfy` elem "https://slack.com/api/chat.postMessage"
 
+      it "sharedAuthority_serviceAccessCannotReadAdministratorResources" \tr -> do
+        invoked <- newIORef False
+        let backend = Routes.mcpProjectTools{AI.invoke = \_ _ _ _ -> writeIORef invoked True $> AE.object []}
+            config = (AI.defaultAgenticConfig testPid){AI.projectTools = Just backend}
+            call = Chat.ToolCall "private-read" "function" $ Chat.ToolFunction "get_ingestion_key" mempty
+        result <- runTestBg frozenTime tr $ AI.executeToolCall config call
+        readIORef invoked >>= (`shouldBe` False)
+        result.formatted `shouldSatisfy` T.isInfixOf "admin permission"
+        void $ runTestBg frozenTime tr $ AI.executeToolCall config $ Chat.ToolCall "public-read" "function" $ Chat.ToolFunction "get_project" mempty
+        readIORef invoked >>= (`shouldBe` True)
+        writeIORef invoked False
+        void $ runTestBg frozenTime tr $ AI.executeToolCall config{AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id} call
+        readIORef invoked >>= (`shouldBe` True)
+
+      for_ (["interactive", "scheduled", "event"] :: [Text]) \origin -> for_ (["actor", "conversation"] :: [Text]) \changed ->
+        it ("sharedAuthority_rejectsChanged" <> toString changed <> "In" <> toString origin <> "Work") \tr -> do
+          let user = (getResponse tr.trSessAndHeader).user.id
+              otherUser = UUIDId $ UUID.fromWords 0 0 97 1
+              conversation = UUIDId UUID.nil
+              otherConversation = UUIDId $ UUID.fromWords 0 0 97 2
+          runQueryEffect tr do
+            Hasql.interpExecute_ [HI.sql|INSERT INTO users.users (id, email) VALUES (#{otherUser}, 'other-agent-actor@example.test')|]
+            Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{otherUser}, 'admin')|]
+            for_ ([conversation, otherConversation] :: [UUIDId "conversation"]) \conv -> void $ Issues.getOrCreateConversation testPid conv Issues.CTWeb (AE.object [])
+          mode <-
+            runTestBg frozenTime tr
+              $ if origin == "interactive"
+                then do
+                  let request = UUIDId $ UUID.fromWords 0 0 97 3
+                  void $ Issues.startInteractiveRun testPid conversation user request "Read project evidence" Issues.Observe Issues.WebMessage
+                  pure $ AI.InteractiveRun request Issues.Observe
+                else
+                  if origin == "event"
+                    then do
+                      template <- maybe (liftIO $ throwIO $ ErrorCall "Missing Slack template") pure $ find ((== "slack-investigation") . (.key)) Issues.routineTemplates
+                      void $ Issues.installRoutineTemplate user testPid conversation "UTC" template
+                      routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (liftIO $ throwIO $ ErrorCall "Missing installed routine") pure
+                      execution <- Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.StartRun conversation user "Read project evidence" >>= maybe (liftIO $ throwIO $ ErrorCall "Missing event run") pure
+                      pure $ AI.RoutineEventRun execution.id
+                    else do
+                      slot <- Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (liftIO $ throwIO $ ErrorCall "Missing scheduled instant") pure
+                      execution <- Issues.claimRoutine slot.id slot.scheduledAt >>= maybe (liftIO $ throwIO $ ErrorCall "Missing claimed run") pure
+                      pure $ AI.ScheduledRoutine execution.runId execution.policy
+          let config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode}
+              call = Chat.ToolCall "project-read" "function" $ Chat.ToolFunction "get_project" mempty
+              mismatch = if changed == "actor" then config{AI.access = AI.MemberAccess AI.ProjectMember otherUser} else config{AI.conversationId = Just otherConversation}
+          runTestBg frozenTime tr (AI.executeToolCall mismatch call) `shouldThrow` (\AI.AgentStopped -> True)
+          result <- runTestBg frozenTime tr $ AI.executeToolCall config call
+          result.formatted `shouldSatisfy` T.isInfixOf testPid.toText
+
       it "projectAdapter_routineRechecksAuthorizingMember" \tr -> do
         let userId = (getResponse tr.trSessAndHeader).user.id
             convId = UUIDId UUID.nil
@@ -2188,13 +2238,13 @@ spec = around withTestResources do
             tool name policy = MCP.Tool name ("Project " <> name) (AE.object ["type" AE..= ("object" :: Text)]) (Just policy) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
             backend =
               AI.ProjectTools
-                { AI.catalog = Map.fromList [(name, blocked name) | name <- ["get_project", "read_artifact"]] <> Map.fromList [(name, tool name policy) | (name, policy) <- [("get_dashboard_data", MCP.AgentPolicy PM.PView MCP.ReadOnly), ("create_monitor", MCP.AgentPolicy PM.PEdit MCP.RequestedWrite)]]
+                { AI.catalog = Map.fromList [(name, blocked name) | name <- ["get_project", "read_artifact"]] <> Map.fromList [(name, tool name policy) | (name, policy) <- [("get_dashboard_data", MCP.ReadOnly PM.PView), ("create_monitor", MCP.ProjectWrite)]]
                 , AI.invoke = \_ pid name _ -> liftIO $ do
                     pid `shouldBe` testPid
                     modifyIORef' invoked (<> [name])
                     pure $ AE.object ["isError" AE..= False, "structuredContent" AE..= AE.object ["title" AE..= ("Dashboard" :: Text)]]
                 }
-            config = (agentConfig testPid){AI.projectTools = Just backend, AI.maxIterations = 8}
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.projectTools = Just backend, AI.maxIterations = 8}
             calls = [Chat.ToolFunction "search_project_tools" $ one ("query", AE.String "show dashboard data"), Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String "get_dashboard_data"), Chat.ToolFunction "get_dashboard_data" mempty, Chat.ToolFunction "create_monitor" mempty, Chat.ToolFunction "get_project_tool_schema" (one ("name", AE.String "get_project")), Chat.ToolFunction "get_project" mempty, Chat.ToolFunction "read_artifact" mempty]
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> do
@@ -2209,7 +2259,7 @@ spec = around withTestResources do
         results <- readIORef seen
         ((AE.decode @AE.Value . encodeUtf8 =<< listToMaybe results) >>= (^? key "tools" . _Array . ix 0 . key "name" . _String)) `shouldBe` Just "get_dashboard_data"
         ((AE.decode @AE.Value . encodeUtf8 =<< listToMaybe (drop 1 results)) >>= (^? key "minimum_permission" . _String)) `shouldBe` Just "view"
-        results `shouldSatisfy` any (T.isInfixOf "requires an explicit request")
+        results `shouldSatisfy` any (T.isInfixOf "execution policy")
         results `shouldSatisfy` any (T.isInfixOf "unknown project operation")
         viaNonEmpty last results `shouldBe` Just "This project operation has no Agent policy."
         writeIORef invoked []
@@ -2222,7 +2272,7 @@ spec = around withTestResources do
             envelope = AE.object ["isError" AE..= False, "content" AE..= ([AE.object ["type" AE..= ("text" :: Text), "text" AE..= full]] :: [AE.Value]), "structuredContent" AE..= AE.object ["evidence" AE..= full]]
             backend =
               AI.ProjectTools
-                { AI.catalog = Map.singleton "get_project" $ MCP.Tool "get_project" "Read project" (AE.object []) (Just $ MCP.AgentPolicy PM.PView MCP.ReadOnly) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+                { AI.catalog = Map.singleton "get_project" $ MCP.Tool "get_project" "Read project" (AE.object []) (Just $ MCP.ReadOnly PM.PView) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
                 , AI.invoke = \_ _ _ _ -> pure envelope
                 }
             config = (agentConfig testPid){AI.projectTools = Just backend, AI.limits = AI.defaultLimits{AI.maxTokenBuffer = 1_000_000}}
@@ -2270,7 +2320,7 @@ spec = around withTestResources do
         invoked <- newIORef False
         let backend =
               AI.ProjectTools
-                { AI.catalog = Map.singleton "get_api_key" $ MCP.Tool "get_api_key" "Read an API key" (AE.object []) (Just $ MCP.AgentPolicy PM.PAdmin MCP.ReadOnly) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+                { AI.catalog = Map.singleton "get_api_key" $ MCP.Tool "get_api_key" "Read an API key" (AE.object []) (Just $ MCP.ReadOnly PM.PAdmin) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
                 , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
                 }
             userId = (getResponse tr.trSessAndHeader).user.id
@@ -2300,7 +2350,7 @@ spec = around withTestResources do
         invoked <- newIORef False
         let backend =
               AI.ProjectTools
-                { AI.catalog = Map.singleton "create_monitor" $ MCP.Tool "create_monitor" "Create a monitor" (AE.object []) (Just $ MCP.AgentPolicy PM.PEdit MCP.RequestedWrite) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+                { AI.catalog = Map.singleton "create_monitor" $ MCP.Tool "create_monitor" "Create a monitor" (AE.object []) (Just $ MCP.ProjectWrite) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
                 , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
                 }
             config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember userId, AI.projectTools = Just backend, AI.invocationMode = AI.InteractiveWithActions}

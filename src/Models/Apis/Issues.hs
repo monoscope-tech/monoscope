@@ -143,6 +143,7 @@ module Models.Apis.Issues (
   getEventRoutine,
   startEventRun,
   routineRunActive,
+  routineRunActiveFor,
   ExecutionPolicy (..),
   InteractiveOrigin (..),
   startInteractiveRun,
@@ -2071,14 +2072,15 @@ startInteractiveRun pid conversation user runId input policy origin = do
           _ -> pure Nothing
 
 
-interactiveRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Projects.UserId -> ExecutionPolicy -> Eff es Bool
-interactiveRunActive pid runId user policy =
+interactiveRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Projects.UserId -> UUIDId "conversation" -> ExecutionPolicy -> Eff es Bool
+interactiveRunActive pid runId user conversation policy =
   fromMaybe False
     <$> Hasql.interpOne
       [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_routine_runs run
       JOIN apis.ai_conversations c ON c.project_id = run.project_id AND c.conversation_id = run.conversation_id
       WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.requested_by = #{user}
-        AND run.source->>'tag' = 'InteractiveRun' AND run.policy = #{policy} AND run.status IN ('running', 'succeeded'))|]
+        AND run.conversation_id = #{conversation} AND run.source->>'tag' = 'InteractiveRun'
+        AND run.policy = #{policy} AND run.status IN ('running', 'succeeded'))|]
 
 
 data CompletionTarget
@@ -2144,7 +2146,7 @@ completeRun target proposed = do
             outcome <- case target of
               InteractiveTarget{} -> pure proposed
               ScheduledTarget{} -> do
-                active <- Hasql.oneTx @Bool $ routineRunActiveSql pid runId
+                active <- Hasql.oneTx @Bool $ routineRunActiveSql pid runId mempty
                 pure $ if active then proposed else CancelledResult
             let (status, response, failure, notice) = case outcome of
                   PublishedResult answer -> (CompletedSucceeded, Just answer, Nothing, Nothing)
@@ -2179,11 +2181,16 @@ completeRun target proposed = do
 
 
 routineRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
-routineRunActive pid runId = fromMaybe False <$> Hasql.interpOne (routineRunActiveSql pid runId)
+routineRunActive pid runId = fromMaybe False <$> Hasql.interpOne (routineRunActiveSql pid runId mempty)
 
 
-routineRunActiveSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql
-routineRunActiveSql pid runId =
+routineRunActiveFor :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Projects.UserId -> UUIDId "conversation" -> Eff es Bool
+routineRunActiveFor pid runId user conversation =
+  fromMaybe False <$> Hasql.interpOne (routineRunActiveSql pid runId [HI.sql| AND run.requested_by = #{user} AND run.conversation_id = #{conversation}|])
+
+
+routineRunActiveSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql -> HI.Sql
+routineRunActiveSql pid runId scope =
   ( [HI.sql|WITH eligible_members AS (
       SELECT member.project_id, member.user_id, member.permission FROM projects.project_members member
       JOIN users.users account ON account.id = member.user_id
@@ -2196,7 +2203,9 @@ routineRunActiveSql pid runId =
       JOIN eligible_members actor ON actor.project_id = run.project_id AND actor.user_id = run.requested_by
       WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running' AND r.active
         AND (r.cancelled_at IS NULL OR r.cancelled_at < run.started_at)
-        AND owner.permission IN ('admin', 'edit'))|]
+        AND owner.permission IN ('admin', 'edit')|]
+      <> scope
+      <> [HI.sql|)|]
   )
 
 

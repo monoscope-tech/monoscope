@@ -388,7 +388,25 @@ The formatter and diff checks pass. Scope reviews found no remaining material di
 Event-specific completion and legacy stranded leases still require consolidation and recovery checks.
 This transaction does not make external actions or project mutations exactly-once.
 
-The authority evaluator still needs to replace the legacy invocation predicates and routine action flags.
+The catalog now supplies one interpreter for minimum roles, project writes, and wiki write grants.
+Typed denial reasons are rendered at the dispatcher boundary; the wiki handler no longer checks roles separately.
+The policy sum describes reads, conversation evidence, project knowledge, project changes, external publication, and administration.
+Read capabilities can require a privileged role. Write capabilities have intrinsic editor or administrator minimum roles.
+The old independent role/action record and separate action enum no longer exist.
+A reader-level project-write descriptor cannot be constructed.
+The boolean `actionsAllowed` predicate and its discovery-specific member exceptions have been removed.
+Service invocations retain viewer reads and conversation evidence, but cannot acquire administrator reads or project-write authority.
+Every interactive, scheduled, and event tool boundary binds the current member and conversation to the stored run.
+The scoped background check reuses the same SQL as cancellation and completion checks.
+
+Seven new regressions first exposed service-role bypass and missing actor or conversation binding.
+They now pass, including valid reads after each rejected mismatch and ordinary service reads after denied privileged access.
+All 170 bot examples, all 75 API examples, and all 45 issue examples pass with the final policy sum.
+The formatter and diff checks pass. The repeated scope reviews found no material distillation, type-evasion, or client-behavior finding.
+The two new policy-floor doctests remain part of final doctest verification.
+The shared evaluator still interprets legacy routine action and wiki-grant fields.
+Persisted installation policies, conservative adoption, default autonomous activation, and selected review remain unfinished.
+Administrator writes retain the existing unavailable behavior until operation recovery is implemented; no new approval prompts were added.
 A checkpoint does not establish exactly-once mutation or external publication.
 Operation identities and safe write recovery remain necessary before autonomous writes reach release.
 
