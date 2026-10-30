@@ -238,3 +238,18 @@ This review does not authorize posting PR comments, closing PRs, changing live S
 - The impact-review watcher is focused on the full review suite. Guest-dependent cases require a prepared guest image; no replacement evidence is claimed.
 - The pinned Pi/Gondolin packages install, and both SDK imports pass under the available Node 25 runtime.
 - No PR was updated or closed. Full signoff and live acceptance remain outstanding.
+
+### Canonical pull request
+
+Keep draft [#619](https://github.com/monoscope-tech/monoscope/pull/619) as the single integration PR.
+Its published tip is `0b5dc1b5c`; the local Slack implementation was rebased before this integration.
+`git range-diff` matches the published plan and four implementation commits to `217eff334`, `4df0e0077`, `0b509d469`, `fe3cd1967`, and `a348ea767`.
+The remaining published commit only formats that older tree.
+The combined branch retains the later shared tools, current authority checks, routines, and their regressions.
+A history-only merge records the published branch as integrated without restoring its older source tree.
+This allows a later fast-forward update of #619 after review and local signoff, without force-pushing the rebased branch.
+No remote PR state has changed.
+
+All twenty selected incoming agent PR heads are now ancestors of this branch: the sixteen-PR stack, #692, #661, #571, and #568.
+The server watcher compiles the reconciled native runtime. Startup still fails against the existing configured production database credentials.
+All five VM identity and cleanup regressions pass without a guest image. The complete impact-review suite is still running.
