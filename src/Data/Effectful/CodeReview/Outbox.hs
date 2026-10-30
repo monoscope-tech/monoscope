@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, withOutbox, replay, acknowledge, retain, deliver, deliverPhase) where
+module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, checksPath, withOutbox, replay, acknowledge, retain, deliver, deliverPhase) where
 
 import Control.Monad (foldM)
 import Data.Aeson qualified as AE
@@ -34,6 +34,10 @@ outboxPath :: Outbox -> FilePath
 outboxPath = (.path)
 
 
+checksPath :: Outbox -> FilePath
+checksPath outbox = outbox.path </> "checks"
+
+
 withOutbox :: ArtifactStore -> Scope -> (Outbox -> IO a) -> IO a
 withOutbox store scope action = do
   root <- canonicalizePath store.usageDir
@@ -54,7 +58,13 @@ withOutbox store scope action = do
       )
       root
       parts
-  withFileLock (directory </> ".native.lock") Exclusive $ const $ action $ Outbox directory scope
+  let outbox = Outbox directory scope
+      checks = checksPath outbox
+  createDirectoryIfMissing False checks
+  canonicalizePath checks >>= ensure . (== checks)
+  Posix.setFileMode checks 0o700
+  sync directory
+  withFileLock (directory </> ".native.lock") Exclusive $ const $ action outbox
 
 
 -- Decode the whole run before any callback; malformed entries stay available for repair.

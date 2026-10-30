@@ -349,11 +349,12 @@ runCodeReviewWith artifactStore host executable = interpret \env -> \case
                     readGuest path = active $ \session ->
                       session.output (Workspace.agentCommand ["/usr/bin/head", "-c", "262145", "--", path]) 262145 <&> \case
                         (Workspace.Exited 0, bytes, False) -> Right $ decodeUtf8 bytes
-                        _ -> Left "Regression patch file exceeds its limit or could not be read"
+                        (Workspace.Exited 0, _, True) -> Left "Regression patch file exceeds its 256 KiB limit"
+                        _ -> Left "Regression patch file could not be read"
                     protectWorkspace = for_ (["/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path] | path <- ["/workspace", "/workspace/.git"]] <> ["/bin/chown" :| ["-hR", "0:0", "/workspace"], "/bin/chmod" :| ["-R", "u+rwX,go+rX,go-w", "/workspace"], "/usr/bin/git" :| ["update-index", "--refresh"]] :: [NonEmpty Text]) $ void . ExceptT . execute Supervisor
                     regression :: Request run -> Workspace.Baseline -> UUID.UUID -> AE.Value -> [(Text, Text)] -> Outbox.Outbox -> IO (Either Text RegressionWire)
                     regression pinned baseline sessionId artifact revisions outbox = active $ \session -> do
-                      let options = session.verifier (Outbox.outboxPath outbox </> "checks")
+                      let options = session.verifier (Outbox.checksPath outbox)
                       case Workspace.mkRegressionRequest pinned.projectId pinned.runId pinned.attemptId sessionId pinned.base session.imageBuildId baseline artifact revisions of
                         Left _ -> pure $ Left "Regression arguments do not match the host contract"
                         Right request -> do
@@ -386,7 +387,7 @@ runCodeReviewWith artifactStore host executable = interpret \env -> \case
                             spend 1
                             liftIO (Outbox.deliverPhase outbox request.request.attemptId step record) >>= either fatal pure
                           root arguments = void $ io $ execute Supervisor arguments
-                          checks = Outbox.outboxPath outbox </> "checks"
+                          checks = Outbox.checksPath outbox
                           assertWorkspace captured = do
                             patch <- io $ capturePatch request.request.base
                             unless (Native.candidateMatchesPatch captured (Native.candidateIdentity captured) patch) $ reject "Workspace changed; propose and verify a new candidate"
@@ -590,7 +591,7 @@ runCodeReviewWith artifactStore host executable = interpret \env -> \case
                               admitted <- callbacks.admit artifact
                               saved <- case (task, admitted) of
                                 (FixTask request, Right rationale)
-                                  | not (T.null $ T.strip rationale) -> for_ journal (\outbox -> Native.retainAdmission (Outbox.outboxPath outbox <> "/checks") request artifact rationale) $> admitted
+                                  | not (T.null $ T.strip rationale) -> for_ journal (\outbox -> Native.retainAdmission (Outbox.checksPath outbox) request artifact rationale) $> admitted
                                   | otherwise -> pure $ Left "Host admission requires a recorded rationale"
                                 _ -> pure admitted
                               writeMessage saved
@@ -606,9 +607,9 @@ runCodeReviewWith artifactStore host executable = interpret \env -> \case
                           , Just outbox <- journal
                           , Just (FixReady session) <- guestSession
                           , submissions > 0 ->
-                              case AE.fromJSON draft of
-                                AE.Error _ -> writeMessage (Left "Fix summary does not match the host contract" :: Either Text AE.Value) >> receive supplied guestSession remaining (submissions - 1) Nothing
-                                AE.Success summary -> do
+                              case AET.parseEither (AE.withObject "Fix summary" (AE..: "summary")) draft of
+                                Left _ -> writeMessage (Left "Fix summary does not match the host contract" :: Either Text AE.Value) >> receive supplied guestSession remaining (submissions - 1) Nothing
+                                Right summary -> do
                                   (outcome, current) <- State.runStateT (runExceptT $ (workflow request checkout outbox session).finish summary) (FlowState session.progress remaining)
                                   checked <- case outcome of
                                     Left (ToolRejected failure) -> pure $ Left failure

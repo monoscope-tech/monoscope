@@ -272,3 +272,9 @@ A missing SDK export first failed a VM-free bridge regression; the corrected bri
 The real SDK admission regression also passes after restoring shared artifact bounds at the admission boundary.
 Admission setup hides its unchecked constructor and accepts artifacts through the same validator used by regression decoding.
 These checks use macOS/libkrun. They do not claim provisioned Linux/KVM coverage or final signoff.
+
+The real SDK fix-flow regression now passes, including frozen reproduction, candidate verification, independent review, retained artifacts, and cancellation.
+The removed Node wrapper had initialized the private checks directory. `Outbox.withOutbox` now creates and verifies that directory once for all native callers.
+The submit adapter extracts the existing summary field and uses the existing visual-summary validator.
+Oversized patch files retain the explicit 256 KiB error; unreadable files remain a separate failure.
+Full combined VM-suite verification remains in progress. No PR update, closure, signoff, or deployment has run.
