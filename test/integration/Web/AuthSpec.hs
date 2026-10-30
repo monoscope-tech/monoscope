@@ -15,6 +15,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, status200)
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
+import Pages.BodyWrapper qualified as BodyWrapper
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.TestUtils
 import Relude
@@ -168,6 +169,13 @@ spec = aroundAll withTestResources do
       runQueryEffect tr (AdConversions.recordSignup uid [("CF-IPCountry", "DE")]) >>= (`shouldSatisfy` isNothing)
       sendQueued tr >>= (`shouldBe` ([], []))
 
+    it "loads every ad and analytics tag behind the browser consent check" \tr -> do
+      let cfg = tr.trATCtx.config{Config.googleAdsConversionId = Just "AW-1", Config.facebookPixelId1 = Just "fb1", Config.googleTagManagerId = Just "GTM-1", Config.linkedInPartnerId = Just "li1", Config.postHogApiKey = Just "ph1"}
+          html = toStrict $ Lucid.renderText $ BodyWrapper.externalHeadScripts_ cfg
+      html `shouldNotSatisfy` T.isInfixOf "<noscript"
+      html `shouldNotSatisfy` T.isInfixOf "src=\""
+      length (filter (T.isPrefixOf "if (window.msConsent)") $ T.splitOn "<script>" html) `shouldBe` 6
+
     it "reports a recent project's first ingest once from the hourly job, credited to its consenting creator" \tr -> do
       now <- getCurrentTime
       Just (owner :: Projects.UserId) <- runQueryEffect tr $ Hasql.interpOne [HI.sql| SELECT user_id FROM projects.project_members WHERE project_id = #{testPid} ORDER BY created_at, id LIMIT 1 |]
@@ -214,7 +222,7 @@ spec = aroundAll withTestResources do
       let bound = runQueryEffect tr (Hasql.interp [HI.sql| SELECT session_id IS NOT NULL FROM users.device_auth_codes WHERE user_code = #{code} |])
       runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| INSERT INTO users.device_auth_codes (id, device_code, user_code, expires_at) VALUES (gen_random_uuid(), gen_random_uuid()::text, #{code}, now() + interval '5 minutes') |]
       (_, prompt) <- testServant tr $ Auth.deviceApproveH False (Just code)
-      toStrict (Lucid.renderText prompt) `shouldSatisfy` T.isInfixOf "method=\"POST\""
+      renderT prompt `shouldSatisfy` T.isInfixOf "method=\"POST\""
       bound `shouldReturn` V.singleton False
       _ <- testServant tr $ Auth.deviceApproveH True (Just code)
       bound `shouldReturn` V.singleton True

@@ -12,7 +12,6 @@ import Data.Effectful.LLM qualified as ELLM
 import Data.IORef qualified as IORef
 import Data.Map qualified as Map
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -24,7 +23,6 @@ import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Langchain.LLM.Core qualified as LLM
-import Lucid qualified
 import Models.Apis.Investigations (ToolCallInfo (..), ToolResult (..))
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
@@ -136,13 +134,13 @@ spec = around withTestResources do
         fmap (.allowActions) absent `shouldBe` Right Nothing
         fmap (.allowActions) granted `shouldBe` Right (Just True)
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid (UUIDId UUID.nil) Nothing Nothing
-        (LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage) `shouldSatisfy` T.isInfixOf "name=\"allowActions\""
+        (renderT threadPage) `shouldSatisfy` T.isInfixOf "name=\"allowActions\""
 
       it "assistantPages_defaultToAssistant" \tr -> do
         let convId = UUIDId UUID.nil
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
+        let html = renderT threadPage
         html `shouldSatisfy` T.isInfixOf "id=\"nav-view-ai\" class=\"sr-only\" checked"
 
       it "issueConversation_linksBackToItsIssue" \tr -> do
@@ -150,7 +148,7 @@ spec = around withTestResources do
             convId = UUIDId issueId.unUUIDId
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTAnomaly})|]
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
+        let html = renderT threadPage
         html `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/issues/" <> issueId.toText <> "\"")
 
       it "assistantSectionHeadings_linkAndBackdropCoversViewport" \tr -> do
@@ -159,7 +157,7 @@ spec = around withTestResources do
         (_, conversationPage) <- testServant tr $ AIThreads.threadsGetH testPid
         (_, routinesPage) <- testServant tr $ AIThreads.routinesGetH testPid
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        let render = LT.toStrict . Lucid.renderText . Lucid.toHtml
+        let render = renderT
             conversationHtml = render conversationPage
         all (`T.isInfixOf` conversationHtml) ["href=\"/p/" <> testPid.toText <> "/ai/routines\"", "Routines", "href=\"/p/" <> testPid.toText <> "/ai\"", "Conversations"] `shouldBe` True
         all (`T.isInfixOf` conversationHtml) ["id=\"ai-composer-modal\"", "backdrop:backdrop-blur-sm"] `shouldBe` True
@@ -170,11 +168,11 @@ spec = around withTestResources do
         conversations <- runTestBg frozenTime tr $ Issues.listConversations testPid
         conversation <- maybe (fail "Missing Slack routine") pure $ find ((== Just "slack-investigation") . (.templateKey)) conversations
         (_, page) <- testServant tr $ AIThreads.routinesGetH testPid
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+        let html = renderT page
         html `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/ai/" <> conversation.conversationId.toText <> "\"")
         html `shouldSatisfy` T.isInfixOf "1 routine"
         (_, thread) <- testServant tr $ AIThreads.threadGetH testPid conversation.conversationId Nothing Nothing
-        (LT.toStrict $ Lucid.renderText $ Lucid.toHtml thread) `shouldSatisfy` T.isInfixOf "Routine instructions"
+        (renderT thread) `shouldSatisfy` T.isInfixOf "Routine instructions"
 
         void $ testServant tr $ AIThreads.routinePostH testPid conversation.conversationId (AIThreads.RoutineForm $ fromRightShow $ Issues.mkRoutineInterval 15)
         unchanged <- runQueryEffect tr $ Issues.getConversation testPid conversation.conversationId
@@ -214,7 +212,7 @@ spec = around withTestResources do
         map (.attempt) runs `shouldBe` [2, 1]
         fmap (.id) duplicate `shouldBe` Just retry.id
         (_, page) <- testServant tr $ AIThreads.routineRunGetH testPid run.id Nothing
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+        let html = renderT page
         for_ ["Original evidence", "Cancelled", "Investigate checkout", "Instructions used for this run"] $ \text -> html `shouldSatisfy` T.isInfixOf text
         html `shouldSatisfy` (not . T.isInfixOf "Revised evidence")
         failed <- runTestBg frozenTime tr do
@@ -237,11 +235,11 @@ spec = around withTestResources do
         retainedArtifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid pending.id
         map (.content) retainedArtifacts `shouldBe` [Just "The published result survives conversation deletion."]
         (_, retained) <- testServant tr $ AIThreads.routineRunGetH testPid run.id Nothing
-        let retainedHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml retained
+        let retainedHtml = renderT retained
         retainedHtml `shouldSatisfy` T.isInfixOf "Original evidence"
         retainedHtml `shouldSatisfy` (not . T.isInfixOf "Open conversation and follow up")
         (_, recent) <- testServant tr $ AIThreads.routinesGetH testPid
-        (LT.toStrict $ Lucid.renderText $ Lucid.toHtml recent) `shouldSatisfy` T.isInfixOf ("/ai/runs/" <> run.id.toText)
+        (renderT recent) `shouldSatisfy` T.isInfixOf ("/ai/runs/" <> run.id.toText)
 
       it "eventRoutinePermissions_readersInspectButCannotActivateOrEdit" \tr -> do
         void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
@@ -251,7 +249,7 @@ spec = around withTestResources do
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid}|]
         (_, page) <- testServant tr $ AIThreads.routinesGetH testPid
         (_, thread) <- testServant tr $ AIThreads.threadGetH testPid conversation.conversationId Nothing Nothing
-        let render = LT.toStrict . Lucid.renderText . Lucid.toHtml
+        let render = renderT
         render page `shouldSatisfy` T.isInfixOf "1 routine"
         render page `shouldSatisfy` (not . T.isInfixOf "Add routine")
         render thread `shouldSatisfy` T.isInfixOf "Routine instructions"
@@ -288,7 +286,7 @@ spec = around withTestResources do
           Issues.insertChatMessage testPid convId Issues.ChatUser "Watch checkout latency" Nothing Nothing
           for_ ["First run result", "Second run result"] \r -> Issues.insertChatMessage testPid convId Issues.ChatAssistant r Nothing Nothing
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
+        let html = renderT threadPage
         filter (not . (`T.isInfixOf` html)) ["First run result", "Second run result"] `shouldBe` []
 
       it "agentDocuments_savedAppendedAndListedBesideTheConversation" \tr -> do
@@ -315,9 +313,9 @@ spec = around withTestResources do
         -- frozenTime is 2025-01-01T00:00Z, still New Year's Eve in New York.
         routinePrompt `shouldSatisfy` T.isInfixOf "key \"2024-12-31\""
         (_, chatPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        LT.toStrict (Lucid.renderText $ Lucid.toHtml chatPage) `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/ai/" <> convId.toText <> "?doc=checkout-review\"")
+        renderT chatPage `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/ai/" <> convId.toText <> "?doc=checkout-review\"")
         (_, docPage) <- testServant tr $ AIThreads.threadGetH testPid convId (rightToMaybe $ Issues.mkArtifactKey "checkout-review") Nothing
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml docPage
+        let html = renderT docPage
         filter (not . (`T.isInfixOf` html)) ["?doc=checkout-review", "<h2 id=\"followup\">", "href=\"#followup\"", "Latency recovered."] `shouldBe` []
 
       it "agentDocuments_boundedPerDocumentPerConversationAndPerRead" \tr -> do

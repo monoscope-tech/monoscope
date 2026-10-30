@@ -7,7 +7,6 @@ import Data.Effectful.Notify (Notification (..), SlackData (..))
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as TL
 import Data.Time (NominalDiffTime, addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -17,7 +16,6 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Reader.Static qualified as Reader
-import Lucid (renderText, toHtml)
 import Models.Apis.ErrorPatterns (ErrorState (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
@@ -49,7 +47,7 @@ issueOf tr h = runTestBg frozenTime tr (Issues.selectIssueByHash pid h Issues.An
 
 
 issuePageText :: TestResources -> Issues.IssueId -> IO Text
-issuePageText tr iid = TL.toStrict . renderText . toHtml . snd <$> testServant tr (Pages.Issues.issueDetailGetH pid iid Nothing Nothing Nothing Nothing Nothing)
+issuePageText tr iid = renderT . snd <$> testServant tr (Pages.Issues.issueDetailGetH pid iid Nothing Nothing Nothing Nothing Nothing)
 
 
 countIssues :: TestResources -> Issues.IssueType -> IO Int
@@ -234,7 +232,7 @@ spec = sequential $ aroundAll withTestResources do
       traceIdText <- maybe (fail "the ingested exception has no trace") pure patternWithTrace.firstTraceId
       issue <- maybe (fail "the runtime issue was not listed") pure $ find ((== patternWithTrace.hash) . (.targetHash)) issues
       (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
-      let html = TL.toStrict $ renderText $ toHtml page
+      let html = renderT page
           titleHtml = renderT issue.title
       html `shouldSatisfy` T.isInfixOf titleHtml
       -- The header once read "New Error: Error - <message cut at 80 chars>", under a
@@ -248,7 +246,7 @@ spec = sequential $ aroundAll withTestResources do
 
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
       (_, otherPage) <- testServant tr $ Pages.Issues.issueDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing Nothing
-      let otherHtml = TL.toStrict $ renderText $ toHtml otherPage
+      let otherHtml = renderT otherPage
       otherHtml `shouldSatisfy` T.isInfixOf "Issue not found"
       otherHtml `shouldSatisfy` not . T.isInfixOf titleHtml
 
@@ -634,7 +632,7 @@ spec = sequential $ aroundAll withTestResources do
           fmap (.state) resolvedPat `shouldBe` Just ESResolved
           issue <- maybe (fail "resolved error has no customer issue") pure =<< runTestBg frozenTime tr (Issues.selectIssueByHash pid pat.hash Issues.AnyIssue)
           (_, issueList) <- testServant tr $ Pages.Issues.issueListGetH pid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] []
-          let listHtml = TL.toStrict $ renderText $ toHtml issueList
+          let listHtml = renderT issueList
           listHtml `shouldSatisfy` T.isInfixOf issue.title
           listHtml `shouldSatisfy` T.isInfixOf "RESOLVED"
 

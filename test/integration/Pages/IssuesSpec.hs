@@ -8,7 +8,6 @@ import Data.Effectful.Hasql qualified as EHasql
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Text.Lazy qualified as TL
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as DataUUID
 import Data.UUID.V4 qualified as UUID
@@ -17,7 +16,7 @@ import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
-import Lucid (ToHtml, renderText, toHtml)
+import Lucid (ToHtml)
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
@@ -55,7 +54,7 @@ spec = sequential $ aroundAll withTestResources do
     -- hover. They are POSTs, which preload never fetches; no control may regress to GET.
     it "does not preload issue acknowledge or archive actions" \_ -> do
       issueId <- UUIDId <$> UUID.nextRandom
-      let html = TL.toStrict $ renderText do
+      let html = renderT do
             IssuesPage.issueAcknowledgeButton testPid issueId frozenTime Nothing
             IssuesPage.issueArchiveButton testPid issueId False
       T.count "hx-post=" html `shouldSatisfy` (> 2) -- ack, its duration options, archive
@@ -611,21 +610,21 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "id=\"issue-sample\""
       html `shouldSatisfy` T.isInfixOf "saved occurrence"
       (_, sample) <- testServant tr $ IssuesPage.issueSampleGetH testPid (UUIDId issueId) Nothing (Just from) (Just to)
-      let sampleHtml = TL.toStrict $ renderText sample
+      let sampleHtml = renderT sample
       sampleHtml `shouldSatisfy` T.isInfixOf "selected occurrence"
       sampleHtml `shouldSatisfy` not . T.isInfixOf "outside occurrence"
       sampleHtml `shouldSatisfy` not . T.isInfixOf "saved occurrence"
       sampleHtml `shouldSatisfy` T.isInfixOf "Latest event in range"
       sampleHtml `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText <> "?timestamp=")
       (_, emptySample) <- testServant tr $ IssuesPage.issueSampleGetH testPid (UUIDId issueId) Nothing (Just $ iso $ addUTCTime 3600 frozenTime) (Just $ iso $ addUTCTime 3660 frozenTime)
-      let emptyHtml = TL.toStrict $ renderText emptySample
+      let emptyHtml = renderT emptySample
       emptyHtml `shouldSatisfy` T.isInfixOf "No occurrences in this range."
       emptyHtml `shouldSatisfy` T.isInfixOf "Stored sample"
       emptyHtml `shouldSatisfy` T.isInfixOf "saved occurrence"
       emptyHtml `shouldSatisfy` T.isInfixOf "independently of the date filter and raw-event retention"
       let otherPid = UUIDId $ DataUUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
       (_, otherProjectSample) <- testServant tr $ IssuesPage.issueSampleGetH otherPid (UUIDId issueId) Nothing (Just from) (Just to)
-      TL.toStrict (renderText otherProjectSample) `shouldSatisfy` not . T.isInfixOf "occurrence"
+      renderT otherProjectSample `shouldSatisfy` not . T.isInfixOf "occurrence"
       html `shouldSatisfy` not . T.isInfixOf "first_occurrence=true"
       -- A log pattern has no trace, so its event card offers the pattern, sample and
       -- logs sections and no Trace section.
@@ -711,7 +710,7 @@ spec = sequential $ aroundAll withTestResources do
       void $ runTestBg frozenTime tr $ Incidents.recordIncidentEvent $ update frozenTime Incidents.IncidentAlert
       void $ runTestBg frozenTime tr $ Incidents.recordIncidentEvent $ update (addUTCTime 60 frozenTime) Incidents.IncidentRecovered
       (_, timeline) <- testServant tr $ IssuesPage.issueActivityGetH testPid (UUIDId issueId) Nothing Nothing
-      let html = TL.toStrict $ renderText timeline
+      let html = renderT timeline
       html `shouldSatisfy` T.isInfixOf "Acknowledged"
       html `shouldSatisfy` T.isInfixOf "Recovered"
 
@@ -878,11 +877,13 @@ spec = sequential $ aroundAll withTestResources do
     it "category views, filter chips and saved views on the issue list" \tr -> do
       let list types = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] types)
       html <- list ["runtime_exception"]
-      html `shouldContainAll` ["&amp;type=log_pattern&amp;type=log_pattern_rate_change", "Remove filter Type: runtime_exception", "Save view", "class=\"dropdown dropdown-start", "id=\"save-view-pop\""]
-      _ <- testServant tr $ IssuesPage.saveViewPostH testPid (IssuesPage.SaveViewForm "My errors" "filter=Inbox&type=runtime_exception")
+      html `shouldContainAll` ["&amp;type=log_pattern&amp;type=log_pattern_rate_change", "Remove filter Type: runtime_exception", "Save view", "aria-label=\"Saved views\"", "id=\"issue-views-menu\""]
+      _ <- testServant tr $ IssuesPage.saveViewPostH testPid (IssuesPage.SaveViewForm "My errors" "filter=Inbox&sort=-created_at&period=24h&type=runtime_exception")
       views <- runTestBg frozenTime tr (Issues.selectIssueViews testPid)
       map (.name) views `shouldBe` ["My errors"]
-      (`shouldContainAll` ["My errors", "issues?filter=Inbox&amp;type=runtime_exception"]) =<< list []
+      (`shouldContainAll` ["My errors", "issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception"]) =<< list []
+      -- The list it was saved from now names it on the bookmark button.
+      (`shouldContainAll` ["aria-label=\"Saved views: My errors\""]) =<< list ["runtime_exception"]
       forM_ views \v -> testServant tr $ IssuesPage.deleteViewPostH testPid v.id
       (null <$> runTestBg frozenTime tr (Issues.selectIssueViews testPid)) `shouldReturn` True
 
@@ -1332,7 +1333,7 @@ spec = sequential $ aroundAll withTestResources do
 
       -- Acting as testPid, ask for the other project's group members.
       (_, html) <- testServant tr $ IssuesPage.errorGroupMembersGetH testPid canonicalId
-      let rendered = TL.toStrict $ renderText $ toHtml html
+      let rendered = renderT html
       rendered `shouldSatisfy` not . T.isInfixOf "victim-only-message"
       rendered `shouldSatisfy` not . T.isInfixOf "SecretTypeError"
 
@@ -1416,7 +1417,7 @@ listAnomalies tr filterT = do
 
 
 renderPage :: ToHtml a => a -> Text
-renderPage = TL.toStrict . renderText . toHtml
+renderPage = renderT
 
 
 seedIssue :: TestResources -> Issues.IssueType -> Text -> Text -> IO Issues.IssueId

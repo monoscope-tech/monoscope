@@ -29,7 +29,6 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
-import Lucid (renderText)
 import Models.Apis.SchemaCatalog qualified as SC
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -39,7 +38,7 @@ import Pkg.Parser.Expr qualified as PE
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils (TestResources (..), frozenTime, toBaseServantResponse, runHasqlEffect, withTestResources)
+import Pkg.TestUtils (renderT, TestResources (..), frozenTime, toBaseServantResponse, runHasqlEffect, withTestResources)
 import ProcessMessage qualified
 import Relude
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
@@ -349,7 +348,7 @@ spec = around withTestResources
                 , tableName = "otel_logs_and_spans"
                 , facetJson = Catalog.FacetData m
                 }
-            html = toText $ renderText (LogPage.renderFacets summary)
+            html = renderT (LogPage.renderFacets summary)
         T.isInfixOf "data-field=\"attributes.http.request.method\"" html `shouldBe` True
         T.isInfixOf "data-field=\"resource.service.name\"" html `shouldBe` True
         T.isInfixOf "data-field=\"level\"" html `shouldBe` True
@@ -391,7 +390,7 @@ spec = around withTestResources
                 , tableName = "otel_logs_and_spans"
                 , facetJson = Catalog.FacetData $ HM.singleton "resource.service.name" values
                 }
-            html = toText $ renderText (LogPage.renderFacets summary)
+            html = renderT (LogPage.renderFacets summary)
         T.isInfixOf "hx-get=\"/p/00000000-0000-0000-0000-000000000000/log_explorer/facets?field=resource.service.name\"" html `shouldBe` True
         T.isInfixOf ">+ More (1)</button>" html `shouldBe` True
         T.isInfixOf "hx-target=\"closest .facet-tail\"" html `shouldBe` True

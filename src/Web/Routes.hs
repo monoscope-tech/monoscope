@@ -280,7 +280,6 @@ data Routes mode = Routes
           :> Header "X-Event-Key" Text -- Bitbucket
           :> ReqBody '[RawJSON] BS.ByteString
           :> Post '[JSON] AE.Value
-  , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> RawM
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[PNG] (Headers '[Header "Cache-Control" Text] LBS.ByteString)
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders (Html ()))
@@ -305,6 +304,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
   , dashboardViewPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardViewForm :> Post '[HTML] (RespHeaders (Html ()))
   , dashboardViewDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> Capture "name" Text :> AllQueryParams :> Delete '[HTML] (RespHeaders (Html ()))
+  , dashboardViewsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> AllQueryParams :> Get '[HTML] (RespHeaders (Html ()))
   , rumRedirect :: mode :- "p" :> ProjectId :> "rum" :> CaptureAll "view" Text :> AllQueryParams :> LocationRedirect NoContent
   , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders Dashboards.DashboardNew)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
@@ -661,7 +661,6 @@ server logger env tp otlpTraces otlpLogs =
                 , gitlabTimestamp = glTs
                 , body = body
                 }
-        , chartsDataShot = Charts.queryMetrics Nothing
         , avatarGet = avatarGetH
         , widgetPngGet = widgetPngGetH
         , proxyLanding = \path ->
@@ -740,6 +739,7 @@ cookieProtectedServer projectTools =
     , rumRedirect = Dashboards.rumRedirectH
     , dashboardViewPost = Dashboards.dashboardViewPostH
     , dashboardViewDelete = Dashboards.dashboardViewDeleteH
+    , dashboardViewsGet = Dashboards.dashboardViewsGetH
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardNewGet = Dashboards.dashboardNewGetH
     , dashboardsGetList = Dashboards.dashboardsGetH
@@ -1240,7 +1240,7 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
             ]
 
   pngBytes <-
-    liftIO (timeout 30000000 $ readProcess $ setStdin (byteStringInput input) $ proc "./chart-cli" []) >>= \case
+    liftIO (timeout 30000000 $ readProcess $ setStdin (byteStringInput input) $ proc (maybe "./chart-cli" toString ctx.env.chartCliPath) []) >>= \case
       Nothing -> Log.logAttention "widgetPngGetH: chart render timed out" (AE.object ["widgetId" AE..= widget.id, "width" AE..= width, "height" AE..= height]) *> Error.throwError err504{errBody = "Chart rendering timed out"}
       Just (ExitSuccess, bytes, _) -> pure bytes
       Just (ExitFailure code, _, errOut) -> Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= widget.id]) *> Error.throwError err500{errBody = "Chart rendering failed"}
@@ -1261,7 +1261,7 @@ emailTemplates =
   [ ("project-invite", pure ET.sampleProjectInvite)
   , ("project-created", pure ET.sampleProjectCreated)
   , ("project-deleted", pure ET.sampleProjectDeleted)
-  , ("weekly-report", pure $ ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart")
+  , ("weekly-report", pure $ ET.sampleWeeklyReport (Just "https://placehold.co/600x200?text=Events+Chart") (Just "https://placehold.co/600x200?text=Errors+Chart"))
   ,
     ( "runtime-errors"
     , do

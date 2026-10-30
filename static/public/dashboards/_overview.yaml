@@ -78,10 +78,15 @@ variables:
     default: ''
     multi: false
 
+views:
+  - name: All services
+    variables: { service: '', resource: '', database: '' }
+
 widgets: [] # Empty widgets array for backward compatibility
 
 tabs:
   - name: Overview
+    variables: [service, resource]
     icon: grid
     widgets:
       # Golden Signals - The 4 key metrics for any APM
@@ -367,6 +372,7 @@ tabs:
         layout: { w: 12, h: 4 }
 
   - name: Service
+    variables: [service, resource]
     icon: server
     requires: service
     widgets:
@@ -704,6 +710,7 @@ tabs:
         default_sort: "COUNT(*) DESC"
 
   - name: Logs
+    variables: [service]
     icon: file-text
     widgets:
       # 1. Situation at a glance
@@ -799,6 +806,7 @@ tabs:
           body != null
 
   - name: Databases
+    variables: [database]
     icon: database
     requires: database
     widgets:
@@ -1140,6 +1148,7 @@ tabs:
         layout: { w: 6, h: 4 }
 
   - name: Infra
+    variables: []
     icon: server
     widgets:
       # Infrastructure Overview Stats

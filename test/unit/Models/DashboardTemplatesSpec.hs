@@ -6,7 +6,7 @@ import Data.Text qualified as T
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (BinDensity (BarDensity), browserKql, fillQueryTemplate, fixedUTCTime, parseQueryToAST, variablePresets)
+import Pkg.Parser (BinDensity (BarDensity), TemplateLang (..), browserKql, fillQueryTemplate, fixedUTCTime, parseQueryToAST, variablePresets)
 import Relude
 import System.Directory (listDirectory)
 import Test.Hspec (Spec, describe, expectationFailure, it, runIO, shouldBe, shouldSatisfy)
@@ -76,7 +76,7 @@ spec = describe "dashboard templates" do
       Nothing -> expectationFailure "missing template: rum.yaml"
       Just d -> do
         let sqlWidgets = [w | w <- Dashboards.allWidgets d, isJust w.sql]
-            expand = fillQueryTemplate $ variablePresets BarDensity "project" Nothing Nothing [] fixedUTCTime
+            expand = fillQueryTemplate SqlTemplate $ variablePresets BarDensity "project" Nothing Nothing [] fixedUTCTime
         sqlWidgets `shouldSatisfy` (not . null)
         forM_ sqlWidgets \w -> (w.title, any (T.isInfixOf "{{query_ast_filters}}" . expand) w.sql, any (T.isInfixOf "{{var-app}}") w.query) `shouldBe` (w.title, True, True)
 

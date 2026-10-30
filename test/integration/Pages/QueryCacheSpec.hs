@@ -24,7 +24,6 @@ import Pkg.QueryCache qualified as QC
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Servant.Types.SourceT qualified as Source
 import System.Config (AuthContext (..))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy)
 import Text.Read (read)
@@ -161,7 +160,7 @@ spec = around withTestResources do
             withResource tr.trPool $ \control -> void (PG.query control "SELECT pg_terminate_backend(?, 5000)" (PG.Only backend) :: IO [PG.Only Bool])
         let resources = tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}
         response <- runQueryEffect resources $ Charts.queryMetricsStream (Just Hasql.SqlTimefusion) (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin(timestamp, 1h)") Nothing Nothing (Just $ timeAt 0) (Just $ timeAt 259200) (Just "spans") Nothing []
-        frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
+        frames <- streamFrames response >>= either fail pure
         case viaNonEmpty last frames of
           Just (AE.Object obj) -> do
             KM.lookup "type" obj `shouldBe` Just (AE.String "complete")
@@ -179,14 +178,14 @@ spec = around withTestResources do
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       clearCache tr
       response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin(timestamp, 10m)") Nothing Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []
-      frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
+      frames <- streamFrames response >>= either fail pure
       let dataFrames = [kind | AE.Object o <- frames, Just kind <- [KM.lookup "type" o], Just (AE.Object d) <- [KM.lookup "data" o], Just (AE.Array ds) <- [KM.lookup "dataset" d], not (null ds)]
       dataFrames `shouldBe` [AE.String "complete"]
 
     it "keeps a slow query's response active until completion" $ \tr -> do
       let slowSql = "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM pg_sleep(6)"
       response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just pid) Nothing (Just slowSql) Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []
-      values <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+      values <- streamFrames response
       frames <- either fail pure values
       let kind = \case AE.Object obj -> KM.lookup "type" obj; _ -> Nothing
       fmap kind (listToMaybe frames) `shouldBe` Just (Just $ AE.String "partial")
@@ -201,7 +200,7 @@ spec = around withTestResources do
       let q = "summarize count(*) by bin(timestamp, 1h)"
           runStream = do
             response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just $ timeAt 17) (Just $ timeAt 259200) (Just "spans") Nothing []
-            values <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+            values <- streamFrames response
             either fail pure values
           final :: [AE.Value] -> IO Charts.MetricsData
           final values = case viaNonEmpty last values of

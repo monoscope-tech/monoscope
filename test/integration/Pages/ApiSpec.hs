@@ -2,11 +2,9 @@ module Pages.ApiSpec (spec) where
 
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Error.Static (catchError)
-import Lucid qualified
 import Models.Projects.ProjectApiKeys (ProjectApiKey (..))
 import Models.Projects.ProjectApiKeys qualified as Keys
 import Models.Projects.Projects qualified as Projects
@@ -48,7 +46,7 @@ spec = sequential $ aroundAll withTestResources do
       ingest keyText "accepted after activation"
 
       (_, page) <- testServant tr $ Api.apiGetH testPid
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       let missing = filter (\action -> not $ ("aria-label=\"" <> action <> "\"") `T.isInfixOf` html) ["Show value for Test", "Copy Test", "Revoke Test"]
       missing `shouldBe` []
       html `shouldSatisfy` T.isInfixOf "for=\"api-key-title\""
@@ -61,7 +59,7 @@ spec = sequential $ aroundAll withTestResources do
           setPermission permission = void $ withResource tr.trPool \conn -> PG.execute conn [sql|UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?|] (permission :: Text, testPid, uid)
       bracket_ (setPermission "view") (setPermission "admin") do
         (_, viewerPage) <- testServant tr $ Api.apiGetH testPid
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml viewerPage
+        let html = renderT viewerPage
             leaked = filter (`T.isInfixOf` html) (["New Key", "aria-label=\"Revoke ", "aria-label=\"Activate ", "aria-label=\"Show value for ", "aria-label=\"Copy "] <> map (.keyPrefix) initial)
         statuses <- forM
           [ void $ Api.apiPostH testPid (Api.GenerateAPIKeyForm "Forbidden" Nothing)

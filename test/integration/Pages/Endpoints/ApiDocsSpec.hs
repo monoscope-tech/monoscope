@@ -20,7 +20,6 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Lucid (renderText, toHtml)
 import Models.Projects.Projects qualified as Projects
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.DeriveUtils (UUIDId (..))
@@ -28,7 +27,7 @@ import Pkg.OpenApi qualified as OpenApi
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils (TestResources (..), frozenTime, runHasqlEffect, testServant, withTestResources)
+import Pkg.TestUtils (renderT, TestResources (..), frozenTime, runHasqlEffect, testServant, withTestResources)
 import Relude
 import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldMatchList, shouldSatisfy)
 import Utils (toXXHash)
@@ -186,7 +185,7 @@ spec = sequential $ aroundAll withTestResources $ describe "API catalog – lear
   it "renders the docs page with a Swagger UI mount pointed at the spec route" \tr -> do
     seed tr
     (_, page) <- testServant tr (ApiCatalog.apiDocsH pid (Just host) (Just "Incoming") (Just seededHash))
-    let html = toStrict $ renderText $ toHtml page
+    let html = renderT page
     forM_
       [ "id=\"swagger-ui\""
       , "swagger-ui/swagger-ui-bundle."

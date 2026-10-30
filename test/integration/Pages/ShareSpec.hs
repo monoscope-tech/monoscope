@@ -3,12 +3,10 @@ module Pages.ShareSpec (spec) where
 import Control.Exception (try)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as TL
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Lucid (renderText, toHtml)
 import Models.Apis.ShareEvents qualified as ShareEvents
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
@@ -51,19 +49,19 @@ spec = around withTestResources do
       (_, Share.ShareLinkPost shareIdText) <- testServant tr $ Share.shareLinkPostH testPid eventId eventTime (Just ShareEvents.ShareRequest)
       shareId <- maybe (fail "the share ID was invalid") pure $ UUID.fromText shareIdText
       live <- toBaseServantResponse tr $ Share.shareLinkGetH shareId
-      let liveHtml = TL.toStrict $ renderText $ toHtml live
+      let liveHtml = renderT live
       liveHtml `shouldSatisfy` T.isInfixOf "shared-checkout"
       liveHtml `shouldSatisfy` T.isInfixOf "Expires in"
 
       apiShare <- toBaseServantResponse tr $ ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = eventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just ShareEvents.ShareLog}
       apiLive <- toBaseServantResponse tr $ Share.shareLinkGetH apiShare.id
-      TL.toStrict (renderText $ toHtml apiLive) `shouldSatisfy` T.isInfixOf "shared-checkout"
+      renderT apiLive `shouldSatisfy` T.isInfixOf "shared-checkout"
 
       void $ withResource tr.trPool \conn ->
         PGS.execute conn [sql|UPDATE apis.share_events SET created_at = ? WHERE id = ?|] (frozenTime, shareId)
       advanceDays tr 3
       expired <- toBaseServantResponse tr $ Share.shareLinkGetH shareId
-      let expiredHtml = TL.toStrict $ renderText $ toHtml expired
+      let expiredHtml = renderT expired
       expiredHtml `shouldSatisfy` T.isInfixOf "Link expired"
       expiredHtml `shouldSatisfy` not . T.isInfixOf "shared-checkout"
 

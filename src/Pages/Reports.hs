@@ -231,9 +231,9 @@ renderWeeklyEmail reportType reportUrl project userName startTime endTime fullRe
       stmTxt = formatUTCMicros startTime
       endTxt = formatUTCMicros endTime
       savedTrends = case evidence of ET.SystemEvidence snapshot -> snapshot.trends; ET.HistoricalEvidence _ -> Nothing
-      pngUrl w = fold <$> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just stmTxt) (Just endTxt)
+      pngUrl w = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just stmTxt) (Just endTxt)
       chartUrl label value widget = case savedTrends of
-        Just Report.Unavailable -> pure ""
+        Just Report.Unavailable -> pure Nothing
         Nothing -> pngUrl widget
         Just (Report.Available points) ->
           pngUrl
