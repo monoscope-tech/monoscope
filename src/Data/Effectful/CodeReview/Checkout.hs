@@ -3,6 +3,7 @@ module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), Envelope 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Char (isAlphaNum, isAscii)
+import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), artifactCheckout, peerPreparation, sha256, withVerifiedArtifacts)
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, TestArtifact, mkRevision, revisionText)
@@ -44,7 +45,7 @@ instance AE.ToJSON Envelope where
   toJSON (Result result) = AE.object ["result" AE..= result]
 
 
-data Prepared = Prepared {guest :: Maybe FilePath, envelope :: Maybe Envelope, directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, policy :: Policy.Policy}
+data Prepared = Prepared {cache :: Maybe Guest.CacheReport, guest :: Maybe FilePath, envelope :: Maybe Envelope, directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, policy :: Policy.Policy}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -101,7 +102,7 @@ withCheckout store source action = do
         writeFileBS destination =<< content blob
       instructions <- maybe (pure "") instruction $ asum $ map (`lookup` files) instructionNames
       duration <- elapsed started
-      action (Prepared Nothing Nothing directory metadata instructions project repository baseRevision headRevision status duration (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions)) evidence
+      action (Prepared Nothing Nothing Nothing directory metadata instructions project repository baseRevision headRevision status duration (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions)) evidence
     prepare :: FilePath -> Request run -> IO (FilePath, Revision, Revision, CacheStatus)
     prepare temporary request = do
       baseRevision <- either (const invalid) pure $ mkRevision request.base

@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Data.Effectful.AgentWorkspace.Guest (Host (..), Workspace (..), Lease (..), Setup (Explore, ReviewEvidence, LockForReproduction), admissionSetup, Exec (..), Operation (..), Session (..), withGuest, runSession) where
+module Data.Effectful.AgentWorkspace.Guest (Host (..), Workspace (..), Lease (..), Setup (Explore, ReviewEvidence, LockForReproduction), admissionSetup, Exec (..), Operation (..), Session (..), CacheReport, withGuest, runSession) where
 
 import Conduit (await, leftover, runConduit, (.|))
 import Control.Exception (AsyncException (UserInterrupt))
@@ -73,10 +73,20 @@ data Operation = Run Exec | Read Text | Access Text | Writable Text | Write Text
   deriving anyclass (AE.FromJSON)
 
 
+data CacheState = Disabled | Miss | Hit AgentWorkspace.CheckpointSummary
+  deriving stock (Generic)
+  deriving anyclass (AE.ToJSON)
+
+
+data CacheReport = CacheReport {state :: CacheState, durationMs :: Word64}
+  deriving stock (Generic)
+  deriving anyclass (AE.ToJSON)
+
+
 -- | A running agent VM: Pi's file and shell calls, root copies into the guest, and verifier settings for fresh VMs.
 -- @output@ runs a command in /workspace and returns its exit status, retained bytes and whether the limit truncated them;
 -- @root@ and @place@ change the workspace or /run as root and throw on failure.
-data Session = Session {prepared :: Maybe AgentWorkspace.Leased, skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions, output :: NonEmpty Text -> Word32 -> IO (LogExit, ByteString, Bool), root :: NonEmpty Text -> IO (), place :: Text -> ByteString -> IO ()}
+data Session = Session {cache :: CacheReport, prepared :: Maybe AgentWorkspace.Leased, skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions, output :: NonEmpty Text -> Word32 -> IO (LogExit, ByteString, Bool), root :: NonEmpty Text -> IO (), place :: Text -> ByteString -> IO ()}
 
 
 -- | Owns the agent VM for the action's lifetime and records its allocation however it ends: @allocate@ after a
@@ -125,15 +135,25 @@ withGuest host expected checkout revision setup lease attempt allocate retain ac
         encoded = extractBase64 . Base64.encodeBase64
         operate = \case
           Run exec -> do
-            let limited = maybe [] (\seconds -> ["/usr/bin/timeout", "--kill-after=5", show (ceiling seconds :: Word32)]) exec.timeout
-            (path, exit, truncated) <- logged (agentCommand $ limited <> ["/bin/bash", "-lc", exec.command]) exec.cwd (64 * 1048576)
+            (path, exit, truncated, deadlineSent) <- case exec.timeout of
+              Nothing -> do
+                (path, exit, truncated) <- logged (agentCommand ["/bin/bash", "-lc", exec.command]) exec.cwd (64 * 1048576)
+                pure (path, exit, truncated, False)
+              Just seconds -> do
+                metadata <- ("/run/monoscope-deadline-" <>) . UUID.toText <$> UUID4.nextRandom
+                -- Only the supervisor writes this file. Child stderr joins stdout before the model command runs.
+                let supervisor = "/bin/sh" :| (["-c", "umask 077; metadata=$1; shift; \"$@\" 2>\"$metadata\"; status=$?; /bin/cat -- \"$metadata\" >&2; exit \"$status\"", "monoscope-deadline", metadata, "/usr/bin/env", "LC_ALL=C", "/usr/bin/timeout", "--verbose", "--kill-after=5", show (ceiling seconds :: Word32)] <> toList (agentCommand ["/bin/sh", "-c", "exec /bin/bash -lc \"$1\" 2>&1", "monoscope-command", exec.command]))
+                (path, exit, truncated) <- logged supervisor exec.cwd (64 * 1048576)
+                observed <- execute "/" $ "/usr/bin/test" :| ["-s", metadata]
+                void $ run "/" $ "/bin/rm" :| ["-f", "--", metadata]
+                pure (path, exit, truncated, observed.exitCode == 0)
             let guestLog = "/run/monoscope-review-output/" <> toText (takeFileName path)
             copyIn path guestLog
             retained <- BS.takeEnd 1048576 <$> readFileBS path
             removeFile path
             pure $ case exit of
               LogLimit -> Left "Command output could not be retained"
-              Exited code -> Right $ AE.toJSON $ Ran code (isJust exec.timeout && code == 124) truncated guestLog (encoded retained)
+              Exited code -> Right $ AE.toJSON $ Ran code (deadlineSent && code `elem` [124, 137]) truncated guestLog (encoded retained)
           Read path ->
             output (agentCommand ["/usr/bin/head", "-c", "8388609", "--", path]) (8 * 1048576 + 1) <&> \case
               (Exited 0, bytes, False) -> Right $ AE.String $ encoded bytes
@@ -178,8 +198,10 @@ withGuest host expected checkout revision setup lease attempt allocate retain ac
           lock
           for_ (Map.toList files) \(destination, bytes) -> upload destination bytes >> workspace ["/bin/chmod", "0444", destination]
       pure image.buildId
-    whenRight (Left "Agent sandbox could not be prepared") prepared \imageBuildId ->
-      Right <$> action (Session leased skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn (\artifacts -> RegressionOptions artifacts checkout host.image host.bridge) output (void . workspace . toList) upload)
+    whenRight (Left "Agent sandbox could not be prepared") prepared \imageBuildId -> do
+      ready <- getMonotonicTimeNSec
+      let cache = CacheReport (maybe (if isJust host.workspace then Miss else Disabled) (Hit . AgentWorkspace.checkpointSummary) leased) ((ready - started) `div` 1000000)
+      Right <$> action (Session cache leased skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn (\artifacts -> RegressionOptions artifacts checkout host.image host.bridge) output (void . workspace . toList) upload)
   receipt <- measured
   case outcome of
     Left failed -> void (tryAny $ traverse_ allocate receipt) >> throwIO failed
@@ -217,7 +239,7 @@ runSession path = do
             send value = putLBS (AE.encode value <> "\n") >> hFlush Relude.stdout
             record receipt = send $ AE.object ["event" AE..= ("agent_allocation" :: Text), "receipt" AE..= receipt]
         result <- withGuest request.host request.expectedImageBuildId request.checkout request.head (if request.readOnly then LockForReproduction else Explore) request.lease request.attemptId record record $ \session -> do
-          send $ Right @Text $ AE.object ["skills" AE..= session.skills, "prepared" AE..= session.prepared]
+          send $ Right @Text $ AE.object ["skills" AE..= session.skills, "prepared" AE..= session.prepared, "cache" AE..= session.cache]
           let line size chunks =
                 await >>= \case
                   Nothing -> if size == 0 then pure Nothing else fail "Incomplete native session message"

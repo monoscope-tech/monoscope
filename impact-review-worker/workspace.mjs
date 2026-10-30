@@ -75,3 +75,10 @@ export const withNativeSession = (request, { signal, script, onEvent }, action) 
     } finally { signal?.removeEventListener('abort', abort); clearTimeout(forced); }
   }
 });
+
+// Both research and production report the host's measured preparation and checkpoint facts.
+export const workspaceEvent = ({ state, durationMs }) => ({
+  type: 'workspace_cache', status: state.tag.toLowerCase(),
+  sha256: state.tag === 'Hit' ? state.contents.sha256 : null,
+  checkpointBytes: state.tag === 'Hit' ? state.contents.bytes : 0, durationMs,
+});

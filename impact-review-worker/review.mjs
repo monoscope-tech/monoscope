@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
 import { hostTools, runPi } from './pi-host.mjs';
-import { withNativeSession } from './workspace.mjs';
+import { withNativeSession, workspaceEvent } from './workspace.mjs';
 export { modelUsage } from './pi-host.mjs';
 
 const exec = promisify(execFile);
@@ -34,15 +34,13 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, work
   preparedCheckout = { ...preparedCheckout, policy: { ...preparedCheckout.policy, tools: preparedCheckout.policy.tools.filter((tool) => tool.name === 'run_regression' || tool.name.startsWith('submit_')) } };
   const root = await mkdtemp(join(tmpdir(), 'monoscope-review-'));
   try {
-    const started = performance.now();
     return await withNativeSession({
       host: { image: image.assetDir, bridge: fileURLToPath(new URL('./sandbox.mjs', import.meta.url)), skills: [...skillPaths, fileURLToPath(new URL('./skills/superpowers', import.meta.url))], workspace: workspaceCache ? { dependencyArchive: workspaceCache.dependencyArchive ?? null } : null },
       expectedImageBuildId: image.buildId, checkout, base: request.base, head: request.head, readOnly,
       lease: workspaceCache ? { cacheDir: workspaceCache.cacheDir, request: { projectId: request.projectId, repository: request.repository, base: request.base, expectedImageBuildId: image.buildId } } : null,
       projectId: request.projectId, runId: z.uuid().parse(input.runId), attemptId, artifactDir,
     }, { signal, script: workspaceCache?.script, onEvent }, async (ready, rpc) => {
-      const manifest = ready.prepared?.prepared.manifest;
-      onEvent({ type: 'workspace_cache', status: manifest ? 'hit' : workspaceCache ? 'miss' : 'disabled', sha256: manifest?.sha256 ?? null, checkpointBytes: manifest?.bytes ?? 0, durationMs: performance.now() - started });
+      onEvent(workspaceEvent(ready.cache));
       const optionsTool = async (invocation) => {
         if (invocation.name !== 'run_regression') return { Left: 'This research runner has no production query capability' };
         const result = await rpc('Check', invocation.arguments);

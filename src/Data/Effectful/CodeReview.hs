@@ -171,12 +171,12 @@ data Callbacks format result = Callbacks
   }
 
 
-runCodeReviewReal :: IOE :> es => Maybe ArtifactStore -> Maybe Guest.Host -> Maybe FilePath -> [FilePath] -> Eff (CodeReview ': es) a -> Eff es a
+runCodeReviewReal :: IOE :> es => Maybe ArtifactStore -> Either Text (Maybe Guest.Host) -> Maybe FilePath -> [FilePath] -> Eff (CodeReview ': es) a -> Eff es a
 runCodeReviewReal artifactStore host executable skills = runCodeReviewWith artifactStore host ((\command environment -> setEnv environment $ setStderr nullStream $ proc command skills) <$> executable)
 
 
-runCodeReviewWith :: IOE :> es => Maybe ArtifactStore -> Maybe Guest.Host -> Maybe ([(String, String)] -> ProcessConfig () () ()) -> Eff (CodeReview ': es) a -> Eff es a
-runCodeReviewWith artifactStore host executable = interpret \env -> \case
+runCodeReviewWith :: IOE :> es => Maybe ArtifactStore -> Either Text (Maybe Guest.Host) -> Maybe ([(String, String)] -> ProcessConfig () () ()) -> Eff (CodeReview ': es) a -> Eff es a
+runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
   ReviewRepository request respond knowledge recordCall recordUsage recordAllocation recordCheck check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
@@ -292,9 +292,10 @@ runCodeReviewWith artifactStore host executable = interpret \env -> \case
         pure $ rendered >>= \explanation -> if validExplanation result explanation then Right $ ExplainedFix result explanation else Left "Explanation must bind the verified candidate and complete media manifest"
   where
     launch :: forall format result. Task format -> Callbacks format result -> IO (Either Text result)
-    launch task callbacks = case executable of
-      Nothing -> pure $ Left "Checkout-backed review agent is not configured"
-      Just command -> do
+    launch task callbacks = case (hostConfig, executable) of
+      (Left failure, _) -> pure $ Left failure
+      (_, Nothing) -> pure $ Left "Checkout-backed review agent is not configured"
+      (Right host, Just command) -> do
         verifierSession <- UUID4.nextRandom
         let tagged :: AE.ToJSON value => Text -> value -> AE.Value
             tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
@@ -531,7 +532,7 @@ runCodeReviewWith artifactStore host executable = interpret \env -> \case
                                           SourceTask{} -> pure $ Right $ Just SourceReady
                                           AdmissionTask{} -> pure $ Right $ Just AdmissionReady
                                           _ -> pure $ Right Nothing
-                                        either (pure . Left) (deliver checkout{Checkout.guest = Just session.skills, Checkout.envelope = envelope}) initialized
+                                        either (pure . Left) (deliver checkout{Checkout.cache = Just session.cache, Checkout.guest = Just session.skills, Checkout.envelope = envelope}) initialized
                               case host of
                                 Nothing -> deliver checkout guestSession
                                 Just worker -> case task of
@@ -702,5 +703,7 @@ reviewOutcome request verified decision = do
     ReviewBlocked values -> concerns ReviewUnavailable values
 
 
-workerHost :: [FilePath] -> Maybe FilePath -> Maybe FilePath -> Text -> FilePath -> Guest.Host
-workerHost skills script archive image agent = Guest.Host image (takeDirectory agent </> "sandbox.mjs") (skills <> [takeDirectory agent </> "skills" </> "superpowers"]) ((`Guest.Workspace` archive) <$> script)
+workerHost :: [FilePath] -> Maybe FilePath -> Maybe FilePath -> Text -> FilePath -> Either Text Guest.Host
+workerHost skills script archive image agent = do
+  when (isNothing script && isJust archive) $ Left "A dependency archive requires a trusted preparation script"
+  pure $ Guest.Host image (takeDirectory agent </> "sandbox.mjs") (skills <> [takeDirectory agent </> "skills" </> "superpowers"]) ((`Guest.Workspace` archive) <$> script)

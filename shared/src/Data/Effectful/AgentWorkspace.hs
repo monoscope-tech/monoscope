@@ -1,4 +1,4 @@
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -338,6 +338,15 @@ instance AE.FromJSON Manifest where
 data Prepared = Prepared {manifest :: Manifest, path :: FilePath}
   deriving stock (Generic)
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] Prepared
+
+
+data CheckpointSummary = CheckpointSummary {sha256 :: Fingerprint, bytes :: Word64}
+  deriving stock (Generic)
+  deriving anyclass (AE.ToJSON)
+
+
+checkpointSummary :: Leased -> CheckpointSummary
+checkpointSummary leased = CheckpointSummary leased.prepared.manifest.sha256 leased.prepared.manifest.bytes
 
 
 data Leased = Leased {prepared :: Prepared, resumePath :: FilePath}

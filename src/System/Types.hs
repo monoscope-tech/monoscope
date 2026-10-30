@@ -275,7 +275,7 @@ runBackground logger appCtx tp process =
     & runSleep
     & runHTTPWreq
     & ELLM.runLLMReal
-    & CodeReview.runCodeReviewReal (CodeReview.ArtifactStore <$> appCtx.config.impactReviewUsageDir <*> appCtx.config.impactReviewCacheDir) (CodeReview.workerHost (map toString appCtx.config.impactReviewSkills) appCtx.config.impactReviewPrepareScript appCtx.config.impactReviewDependencyArchive <$> appCtx.config.impactReviewGuestImage <*> appCtx.config.impactReviewAgent) appCtx.config.impactReviewAgent (map toString appCtx.config.impactReviewSkills)
+    & CodeReview.runCodeReviewReal (CodeReview.ArtifactStore <$> appCtx.config.impactReviewUsageDir <*> appCtx.config.impactReviewCacheDir) (sequenceA $ CodeReview.workerHost (map toString appCtx.config.impactReviewSkills) appCtx.config.impactReviewPrepareScript appCtx.config.impactReviewDependencyArchive <$> appCtx.config.impactReviewGuestImage <*> appCtx.config.impactReviewAgent) appCtx.config.impactReviewAgent (map toString appCtx.config.impactReviewSkills)
     & Workspace.runWorkspaceReal
     & Artifacts.runAgentArtifactsReal appCtx
     & runConcurrent

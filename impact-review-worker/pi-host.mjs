@@ -17,9 +17,10 @@ import { Assert } from 'typebox/value';
 import writeFileAtomic from 'write-file-atomic';
 import { z } from 'zod';
 import { jsonLines } from './jsonl.mjs';
+import { workspaceEvent } from './workspace.mjs';
 
 export const cwd = '/workspace';
-export const checkoutSchema = z.object({ guest: z.string().nullable(), envelope: z.record(z.string(), z.unknown()).nullable(), directory: z.string().min(1), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()), builtins: z.array(z.string()) }).strict() }).strict();
+export const checkoutSchema = z.object({ cache: z.object({ state: z.record(z.string(), z.unknown()), durationMs: z.number().nonnegative() }).nullable(), guest: z.string().nullable(), envelope: z.record(z.string(), z.unknown()).nullable(), directory: z.string().min(1), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()), builtins: z.array(z.string()) }).strict() }).strict();
 
 export function parseSubmission(checkout, name, draft) {
   const schema = checkout.policy.tools.find((tool) => tool.name === name)?.parameters;
@@ -138,7 +139,7 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
       cwd: root, agentDir: join(root, 'agent'), settingsManager,
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
       skillsOverride: () => ({ skills, diagnostics: loaded.diagnostics }),
-      systemPrompt: preparedCheckout.policy.instructions,
+      appendSystemPrompt: [preparedCheckout.policy.instructions],
     });
     await loader.reload();
     const model = modelRuntime.getModel(request.provider, request.model);
@@ -175,9 +176,9 @@ export function hostTools(preparedCheckout, root, guestOperation) {
   const tools = [bashTool(async (command, cwd, { onData, timeout }) => {
     const ran = await guest('Run', { command, cwd, timeout: timeout ?? null });
     guestLog = ran.log;
-    if (ran.timedOut) throw new Error(`timeout:${timeout}`);
     onData(Buffer.from(ran.output, 'base64'));
     if (ran.truncated) onData(Buffer.from('\n[Output beyond 64 MiB was discarded]\n'));
+    if (ran.timedOut) throw new Error(`timeout:${timeout}`);
     return { exitCode: ran.exitCode };
   }, async () => guestLog), createReadToolDefinition(cwd, { operations: {
     access: (path) => guest('Access', path),
@@ -246,6 +247,7 @@ async function main() {
     const checkoutReply = await exchange('Checkout', []);
     if (Object.hasOwn(checkoutReply, 'Left')) throw new Error('Host checkout was rejected');
     const preparedCheckout = (isPatch ? checkoutSchema : checkoutSchema.extend({ guest: z.string() })).parse(checkoutReply.Right);
+    if (preparedCheckout.cache) process.stderr.write(JSON.stringify(workspaceEvent(preparedCheckout.cache)) + '\n');
     // Receipts are durable before transmission so a lost host can replay them.
     const persistReceipt = (tag, receipt) => {
       writeFileAtomic.sync(join(outbox, `${receipt.id}.json`), JSON.stringify(tag === 'Usage' ? receipt : { tag, contents: receipt }) + '\n', { mode: 0o600 });

@@ -1,6 +1,7 @@
 # Open PR integration for the unified agent
 
-Status: integration in progress, 2026-10-30. The user resumed work with one combined branch and PR.
+Status: twenty related PR heads consolidated locally, 2026-10-30. Draft #619 is the canonical integration PR.
+The remote branch has not been updated. Combined verification and unified-plan implementation remain in progress.
 This review covers all 28 open PRs returned by GitHub at the review snapshot.
 It maps dependencies and inspects relevant source changes. It is not a merge approval or full correctness review.
 
@@ -36,7 +37,7 @@ The review also uses `git merge-tree` previews against the pinned local HEAD.
 These previews create Git objects but do not change the branch, index, or worktree.
 They exclude uncommitted plan files and do not establish runtime compatibility.
 
-No application code changed. No tests, signoff, PR updates, merges, or deployments ran for this review.
+The initial review was read-only. The local integration and verification that followed are recorded below.
 
 ## Existing impact-agent stack
 
@@ -49,7 +50,7 @@ Git ancestry establishes this exact parent-to-child chain:
 
 The tip includes all parent changes. It is not sixteen independent implementations.
 Use the stack tip for combined integration testing.
-For publication, preserve the PR dependency order unless the maintainers explicitly consolidate the stack.
+The user chose consolidation. Incorporate the stack tip once into #619; do not land its sixteen drafts separately.
 
 | PR | Contribution | Treatment |
 | --- | --- | --- |
@@ -278,3 +279,18 @@ The removed Node wrapper had initialized the private checks directory. `Outbox.w
 The submit adapter extracts the existing summary field and uses the existing visual-summary validator.
 Oversized patch files retain the explicit 256 KiB error; unreadable files remain a separate failure.
 Full combined VM-suite verification remains in progress. No PR update, closure, signoff, or deployment has run.
+
+
+### Combined-runtime regression fixes
+
+The full VM suite ran all 33 examples, with no pending cases, and exposed three integration regressions.
+All three now pass individually:
+
+- Invalid dependency-archive configuration fails before a model call instead of silently dropping the archive.
+- Shell deadlines preserve the workspace and distinguish real supervisor timeouts from a command returning exit code 137. Retained output includes the supervisor diagnostic.
+- Production and research callers report the same host-measured workspace checkpoint facts.
+
+The SDK exploration regression also verifies native tool guidance and screenshot bytes.
+The host now appends its policy to the SDK prompt instead of replacing the SDK guidance.
+The fifteen worker tests pass under Node 25. The complete VM suite also passes: 33 examples, zero failures, no pending cases (321.4 seconds).
+These are local macOS/libkrun checks. Final reviews, signoff, publication, and Linux/KVM coverage remain outstanding.
