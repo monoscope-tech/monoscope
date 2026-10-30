@@ -544,7 +544,7 @@ The existing wiki conflict case uses a distinct stale proposal, since an identic
 Event actions retain the existing conservative Observe ceiling in the common authority evaluator, including historical Autonomous snapshots.
 Fresh event runs persist that ceiling; recovery still retains the original snapshot.
 Enabling event autonomy remains dependent on the planned role/scope and publication audience work.
-Old read-only chat adapters can still save conversation documents without a run; that compatibility path remains to be retired.
+At this snapshot, old read-only chat adapters could still save conversation documents without a run. The following slice removes that compatibility path.
 Native adapter completion and sensitive history disclosure are also unfinished.
 
 No migration or new Haskell module was needed for this slice.
@@ -552,6 +552,24 @@ Applied migration files remain immutable, including those already used in local 
 SQL consolidation uses shared query fragments and the existing run/checkpoint/operation tables instead of adding another ledger.
 
 The final focused suites pass: 184 bot examples, 75 API v1 examples, and 45 issue examples. The native review publication/recovery/retry case passes. Both permanent Chrome scenarios pass against the current WAI application and an isolated test database, including the full routine lifecycle and the policy/action-history flow. They completed in 107 seconds under the existing 180-second local browser budget; the repository CI timeout is unchanged. The temporary browser-launch bridge was removed. Formatter and diff checks pass. Repeated slice reviews found and fixed the missing publication guard and redundant context reconstruction, with no remaining material slice findings. Whole-branch review, doctests, controlled live Slack acceptance, release signoff, and PR update remain pending.
+
+### Durable document writes (31 October)
+
+Every catalogued write, including conversation artifacts, now requires both a stored run context and a durable checkpoint position.
+The last uncheckpointed `ConversationWrite` fallback is removed.
+Read-only compatibility adapters retain document reads, but no longer advertise document writes or receive write instructions in their model prompt.
+Stored Observe runs can still retain conversation evidence through the normal checkpoint and atomic operation transaction; no extra approval is introduced.
+
+The regression first reproduced a document saved through a direct uncheckpointed tool call.
+It now checks both the legacy adapter and a stored run without a checkpoint, verifies the unchanged artifact list, and checks discovery and prompt behavior.
+Existing document append, capacity, truncation, and rendering tests now execute writes through the real shared loop.
+Their fixture reads the full response from the operation ledger and requires exactly one returned operation per request.
+The legacy Slack-only artifact restriction was removed from that fixture; authenticated Slack artifact recovery is covered by the event-artifact integration case.
+
+No schema changes or new Haskell modules were required.
+Native enrichment and review still have specialized mutation and completion paths outside this dispatcher; those remain the next consolidation boundary.
+The trace identifies separate artifact, chat, and finish calls in Slack, enrichment, and impact review. Their replacement must preserve the distinction between a completed computation and confirmed transport delivery.
+The suites pass: 185 bot examples, 75 API v1 examples, and 45 issue examples, plus the native review publication/recovery case. The final prompt distillation also passes all three document regressions. Formatter and diff checks pass. Repeated slice reviews found no remaining material distillation, type-evasion, or client-behavior findings. The previous slice's browser acceptance remains the latest browser run; final release checks and live Slack acceptance remain pending.
 
 ## External references
 

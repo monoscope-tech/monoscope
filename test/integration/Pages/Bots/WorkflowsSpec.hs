@@ -2260,11 +2260,11 @@ spec = around withTestResources do
         ((AE.decode @AE.Value . encodeUtf8 =<< listToMaybe (drop 1 toolResults)) >>= (^? key "input_schema" . key "properties" . key "status" . key "type" . _String)) `shouldBe` Just "string"
 
       it "agentOnlyOperations_shareDiscoverySchemaPolicyAndDispatch" \tr -> do
+        mode <- interactiveInvocation tr testPid (UUIDId UUID.nil) "Retain this investigation evidence." Issues.Observe
         let conversation = UUIDId UUID.nil
             user = (getResponse tr.trSessAndHeader).user.id
-            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.conversationType = Just Issues.CTWeb}
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.conversationType = Just Issues.CTWeb, AI.invocationMode = mode}
             calls = [Chat.ToolFunction "search_project_tools" (one ("query", AE.String "read_artifact")), Chat.ToolFunction "get_project_tool_schema" (one ("name", AE.String "read_artifact")), Chat.ToolFunction "save_artifact" (fromList [("key", AE.String "catalog-review"), ("title", AE.String "Catalog review"), ("content", AE.String "Catalog evidence.")]), Chat.ToolFunction "read_artifact" (one ("key", AE.String "catalog-review"))]
-        void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
         withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?" (testPid, user)
         seen <- newIORef []
         let provider = interpose @ELLM.LLM \_ -> \case

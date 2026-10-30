@@ -52,6 +52,25 @@ import Web.FormUrlEncoded (urlDecodeAsForm)
 import Web.Routes qualified as Routes
 
 
+saveConversationArtifact :: TestResources -> UUIDId "conversation" -> [(Text, AE.Value)] -> IO ToolResult
+saveConversationArtifact tr conversation args = do
+  mode <- interactiveInvocation tr testPid conversation "Retain this finding" Issues.Observe
+  let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just conversation, AI.invocationMode = mode}
+      provider = interpose @ELLM.LLM \_ -> \case
+        ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+          [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "save" "function" $ LLM.ToolFunction "save_artifact" $ Map.fromList args]}
+          _ -> LLM.Message LLM.Assistant "Saved." LLM.defaultMessageData
+        ELLM.CallLLM{} -> pure $ Left "Unexpected title request"
+        ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+  result <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Retain this finding" "model" "key"
+  case (mode, result) of
+    (AI.DurableRun context, Right _) ->
+      runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid context.id) >>= \case
+        [entry] | Investigations.OperationReturned response <- entry.outcome -> pure response
+        _ -> fail "Expected one retained artifact response"
+    _ -> fail "Expected a successful durable invocation"
+
+
 spec :: Spec
 spec = around withTestResources do
   describe "Agentic Query Processing" do
@@ -624,28 +643,40 @@ spec = around withTestResources do
         let html = renderT threadPage
         filter (not . (`T.isInfixOf` html)) ["First run result", "Second run result"] `shouldBe` []
 
+      it "agentDocuments_uncheckpointedWritesCannotMutateConversationState" \tr -> do
+        let conversation = UUIDId UUID.nil
+            user = (getResponse tr.trSessAndHeader).user.id
+        mode <- interactiveInvocation tr testPid conversation "Retain this finding" Issues.Observe
+        let base = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation}
+            call = LLM.ToolCall "uncheckpointed" "function" $ LLM.ToolFunction "save_artifact" $ Map.fromList [("key", "must-not-exist"), ("content", "This write has no retained operation.")]
+        for_ [(base, False), (base{AI.invocationMode = mode}, True)] $ \(config, writable) -> do
+          (system, _, params) <- Eff.runEff $ Time.runTime $ AI.agenticSetup config "Retain this finding" "model"
+          let tools = AE.toJSON params ^.. key "tools" . values . key "function" . key "name" . _String
+          ("save_artifact" `elem` tools) `shouldBe` writable
+          T.isInfixOf "save_artifact" system.content `shouldBe` writable
+          result <- runTestBg frozenTime tr $ AI.executeToolCall config call
+          result.formatted `shouldBe` "This change requires a durable checkpoint."
+          runQueryEffect tr (Issues.listArtifacts testPid conversation Nothing) >>= (`shouldSatisfy` null)
+
       it "agentDocuments_savedAppendedAndListedBesideTheConversation" \tr -> do
         let convId = UUIDId UUID.nil
         mode <- scheduledInvocation tr convId Issues.Observe
         let web = (AI.defaultAgenticConfig testPid){AI.conversationId = Just convId, AI.conversationType = Just Issues.CTWeb}
             routine = web{AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.invocationMode = mode, AI.timezone = Just "America/New_York"}
             call cfg name args = AI.executeToolCall cfg (LLM.ToolCall "call" "function" $ LLM.ToolFunction name $ Map.fromList args)
-        (saved, appended, listed, readBack, slack, routinePrompt) <- runTestBg frozenTime tr do
-          void $ Issues.getOrCreateConversation testPid convId Issues.CTWeb (AE.object [])
-          saved <- call web "save_artifact" [("key", "Checkout Review"), ("title", "Checkout review"), ("content", "## Summary\nAll good.")]
-          appended <- call web "save_artifact" [("key", "checkout-review"), ("mode", "append"), ("content", "## Follow-up\nLatency recovered.")]
+        saved <- saveConversationArtifact tr convId [("key", "Checkout Review"), ("title", "Checkout review"), ("content", "## Summary\nAll good.")]
+        appended <- saveConversationArtifact tr convId [("key", "checkout-review"), ("mode", "append"), ("content", "## Follow-up\nLatency recovered.")]
+        (listed, readBack, routinePrompt) <- runTestBg frozenTime tr do
           listed <- call web "read_artifact" []
           readBack <- call web "read_artifact" [("key", "checkout-review")]
-          slack <- call web{AI.conversationType = Just Issues.CTSlackThread} "save_artifact" [("key", "x"), ("content", "y")]
           Issues.insertChatMessage testPid convId Issues.ChatAssistant "Saved." Nothing $ Just $ AE.toJSON ([ToolCallInfo "save_artifact" mempty "" saved.rawData] :: [ToolCallInfo])
           (system, _, _) <- AI.agenticSetup routine "run" "model"
-          pure (saved, appended, listed, readBack, slack, system.content)
+          pure (listed, readBack, system.content)
         saved.formatted `shouldSatisfy` T.isPrefixOf "Saved document 'checkout-review'"
         saved.rawData `shouldBe` Just "checkout-review"
         appended.formatted `shouldSatisfy` T.isInfixOf "Checkout review"
         listed.formatted `shouldSatisfy` T.isInfixOf "\"key\":\"checkout-review\""
         readBack.formatted `shouldBe` "## Summary\nAll good.\n\n## Follow-up\nLatency recovered."
-        slack.formatted `shouldSatisfy` T.isPrefixOf "Documents are only available"
         -- frozenTime is 2025-01-01T00:00Z, still New Year's Eve in New York.
         routinePrompt `shouldSatisfy` T.isInfixOf "key \"2024-12-31\""
         (_, chatPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
@@ -657,19 +688,16 @@ spec = around withTestResources do
       it "agentDocuments_boundedPerDocumentPerConversationAndPerRead" \tr -> do
         let convId = UUIDId UUID.nil
             web = (AI.defaultAgenticConfig testPid){AI.conversationId = Just convId, AI.conversationType = Just Issues.CTWeb}
-            call name args = (.formatted) <$> AI.executeToolCall web (LLM.ToolCall "call" "function" $ LLM.ToolFunction name $ Map.fromList args)
+            save args = (.formatted) <$> saveConversationArtifact tr convId args
             big = AE.String $ T.replicate 90_000 "x"
-        (badMode, longRead, overflow, overCap, existing) <- runTestBg frozenTime tr do
-          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-          badMode <- call "save_artifact" [("key", "a"), ("content", "y"), ("mode", "merge")]
-          void $ call "save_artifact" [("key", "log"), ("content", big)]
-          void $ call "save_artifact" [("key", "log"), ("mode", "append"), ("content", big)]
-          longRead <- call "read_artifact" [("key", "log")]
-          overflow <- call "save_artifact" [("key", "log"), ("mode", "append"), ("content", big)]
-          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content) SELECT #{testPid}, #{convId}, 'doc-' || n, 'Doc', '' FROM generate_series(1, #{Issues.maxArtifactsPerConversation - 1}) n|]
-          overCap <- call "save_artifact" [("key", "one-too-many"), ("content", "y")]
-          existing <- call "save_artifact" [("key", "log"), ("content", "rewritten")]
-          pure (badMode, longRead, overflow, overCap, existing)
+        badMode <- save [("key", "a"), ("content", "y"), ("mode", "merge")]
+        void $ save [("key", "log"), ("content", big)]
+        void $ save [("key", "log"), ("mode", "append"), ("content", big)]
+        longRead <- runTestBg frozenTime tr $ (.formatted) <$> AI.executeToolCall web (LLM.ToolCall "read" "function" $ LLM.ToolFunction "read_artifact" $ one ("key", "log"))
+        overflow <- save [("key", "log"), ("mode", "append"), ("content", big)]
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content) SELECT #{testPid}, #{convId}, 'doc-' || n, 'Doc', '' FROM generate_series(1, #{Issues.maxArtifactsPerConversation - 1}) n|]
+        overCap <- save [("key", "one-too-many"), ("content", "y")]
+        existing <- save [("key", "log"), ("content", "rewritten")]
         badMode `shouldBe` "mode must be replace or append."
         T.length longRead `shouldSatisfy` (< 41_000)
         longRead `shouldSatisfy` T.isInfixOf "140002 of 180002 characters omitted"

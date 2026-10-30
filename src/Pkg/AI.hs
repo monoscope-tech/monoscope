@@ -859,7 +859,8 @@ initialLocalOperations config =
     <> [SendToSlack | writes]
     <> [operation | SlackInvestigationAccess{} <- [config.access], operation <- [GetInvestigationHistory, GetRelatedIncidents, GetIncidentContext]]
     <> [operation | isJust config.sourceConfig, operation <- [GetCodeContext, ListRunbooks, ReadRunbook, GetLinkedRepositories, GetDeployments]]
-    <> [operation | isJust $ documentConversation config, operation <- [SaveArtifact, ReadArtifact]]
+    <> [SaveArtifact | isJust $ documentConversation config, isJust $ invocationContext config.invocationMode]
+    <> [ReadArtifact | isJust $ documentConversation config]
   where
     writes = invocationPolicy config.invocationMode == Issues.Autonomous && isJust (accessMember config.access)
 
@@ -918,8 +919,11 @@ buildSystemPrompt config now =
       documentsGuide =
         unlines
           $ [ "\nDOCUMENTS"
-            , "save_artifact keeps a markdown document in this conversation; read_artifact reads one, or lists them all when called without a key. Documents are listed beside the conversation, so the user can return to them."
-            , "Write a document when the result is worth keeping: a report, investigation write-up, runbook, or a running log. Use ## headings for sections, cite the queries and records behind each claim, and keep your chat answer to a short summary that names the document."
+            , "read_artifact reads a markdown document from this conversation, or lists every document when called without a key. Documents are listed beside the conversation, so the user can return to them."
+            ]
+          <> memptyIfFalse
+            (isJust $ invocationContext config.invocationMode)
+            [ "save_artifact keeps a markdown document in this conversation. Write one when the result is worth keeping: a report, investigation write-up, runbook, or a running log. Use ## headings for sections, cite the queries and records behind each claim, and keep your chat answer to a short summary that names the document."
             , "Rewrite an existing document (mode replace) instead of creating a near-duplicate under a new key."
             ]
           <> case config.invocationMode of
@@ -1323,7 +1327,6 @@ executeToolAt cursor config tc = do
                 result <- action
                 Investigations.completeOperation claim result
                 pure $ Investigations.RecordedResult result
-      (MCP.ConversationWrite, Nothing, Nothing) -> Investigations.RecordedResult <$> perform execution
       _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable checkpoint."
     perform = \case
       EffectfulTool action -> action
