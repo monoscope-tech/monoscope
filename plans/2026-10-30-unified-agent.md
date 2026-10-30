@@ -435,13 +435,13 @@ Run details show action status and bounded proposal/outcome previews using nativ
 Preview disclosure checks the viewer's current role against the catalog policy.
 Older chat findings and tool-result views still need a complete disclosure audit before sensitive administrator operations are enabled.
 Legacy calls without a durable cursor remain a compatibility path and must be retired before broad autonomous activation.
-Event attempt/root continuity and cross-attempt concurrency still require explicit integration before event writes are enabled.
-Terminal cleanup of unfinished operation records remains pending; recovery currently changes an unfinished record to uncertain when it is encountered.
+Event attempt/root continuity, indexed root lookup, and cross-attempt concurrency still require explicit integration before event writes are enabled.
+Run completion converts outstanding operation records to uncertain in the same fenced SQL statement. A stale worker cannot change an operation; an original worker can still retain a legitimate late response. No cleanup worker or additional migration is required.
 
 One migration, `0261_agent_operations.sql`, contains this slice's operation schema.
 Previously applied migration files remain unchanged because migration history is checksummed.
-Eight new handler/DB regressions cover checkpoint failure, uncertain responses, repeated model proposals, atomic rollback, Slack publication, concurrent recovery, and recovery discovery.
-All eight focused regressions pass. The final focused suites pass: 178 bot examples, 75 API v1 examples, and 45 issue examples.
+Nine new handler/DB regressions cover checkpoint failure, uncertain responses, repeated model proposals, atomic rollback, Slack publication, concurrent recovery, terminal run state, and recovery discovery.
+All nine recovery regressions pass. The expanded focused suites pass after the terminal-state fix: 179 bot examples, 75 API v1 examples, and 45 issue examples. The timeout regression first failed on a retained OperationRunning state, then passed with the shared completion change.
 A real Chrome test against the current WAI application and an isolated test database passes.
 It covers uncertain-to-retained outcome refresh, a current-role downgrade, unchanged conversation URL, and preserved follow-up draft.
 The test first exposed stale disclosure after refresh; disabling link prefetch fixes the issue without extra browser code.

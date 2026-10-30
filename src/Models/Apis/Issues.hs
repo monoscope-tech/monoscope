@@ -282,6 +282,7 @@ import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ApiChanges (PayloadChange)
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
@@ -1984,6 +1985,10 @@ finishRoutineRunSql runId startedAt status findings actions err =
       SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{err}
       WHERE id = #{runId} AND started_at = #{startedAt} AND status = 'running'
       RETURNING id, project_id, conversation_id, started_at
+    ), uncertain AS (
+      UPDATE apis.ai_agent_operations operation
+      SET outcome = #{Aeson Investigations.OperationUnknown}, updated_at = clock_timestamp()
+      FROM finished run WHERE operation.run_id = run.id AND operation.outcome = #{Aeson Investigations.OperationRunning}
     ) INSERT INTO apis.ai_routine_run_artifacts (run_id, key, title, content)
       SELECT run.id, a.key, a.title, a.content FROM finished run
       JOIN apis.ai_artifacts a ON a.project_id = run.project_id AND a.conversation_id = run.conversation_id

@@ -290,42 +290,54 @@ spec = around withTestResources do
               _ -> expectationFailure "Expected the retained Slack acknowledgement or an explicit uncertain outcome"
             _ -> expectationFailure "Expected one publication operation"
 
-      it "agentOperation_concurrentRetryRetainsLateOutcomeWithoutRepeatingMutation" \tr -> do
-        entered <- newEmptyMVar
-        release <- newEmptyMVar
-        calls <- IORef.newIORef (0 :: Int)
-        let request = UUIDId $ UUID.fromWords 0 0 0 202
-            form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm "query=Create+a+dashboard+once&mode=chat&allowActions=true&requestId=00000000-0000-0000-0000-0000000000ca"
-            original = Routes.mcpProjectTools
-            backend =
-              original
-                { AI.invoke = \principal pid name args -> do
-                    liftIO $ IORef.modifyIORef' calls (+ 1)
-                    result <- AI.invoke original principal pid name args
-                    liftIO $ putMVar entered () >> takeMVar release
-                    pure result
-                }
-            provider :: ATAuthCtx a -> ATAuthCtx a
-            provider = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
-                [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "create" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Concurrent durable action" :: Text)])]}
-                evidence -> LLM.Message LLM.Assistant (T.intercalate "\n" evidence) LLM.defaultMessageData
-              ELLM.CallLLM{} -> pure $ Right "Concurrent action"
-              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
-            execute = tryAny $ void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just backend) testPid form
-        Async.withAsync execute \worker -> do
-          Timeout.timeout 30_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
-          bracket_ (pure ()) (putMVar release ()) do
-            Timeout.timeout 30_000_000 execute >>= (`shouldSatisfy` maybe False isRight)
-            IORef.readIORef calls >>= (`shouldBe` 1)
-            runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= \case
-              [entry] -> entry.outcome `shouldSatisfy` \case Investigations.OperationUnknown -> True; _ -> False
-              _ -> expectationFailure "Expected one in-flight operation with an uncertain outcome"
-          Timeout.timeout 30_000_000 (Async.wait worker) >>= (`shouldSatisfy` maybe False isLeft)
-        runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Concurrent durable action'|]) >>= (`shouldBe` 1)
-        runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= \case
-          [entry] -> entry.outcome `shouldSatisfy` \case Investigations.OperationReturned{} -> True; _ -> False
-          _ -> expectationFailure "Expected the original worker's late response to improve retained evidence"
+      for_ (["retry", "timeout"] :: [Text]) \boundary ->
+        it ("agentOperation_concurrentRecoveryRetainsLateOutcomeWithoutRepeatingMutationFor" <> toString boundary) \tr -> do
+          entered <- newEmptyMVar
+          release <- newEmptyMVar
+          calls <- IORef.newIORef (0 :: Int)
+          let request = UUIDId $ UUID.fromWords 0 0 0 202
+              form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm "query=Create+a+dashboard+once&mode=chat&allowActions=true&requestId=00000000-0000-0000-0000-0000000000ca"
+              original = Routes.mcpProjectTools
+              backend =
+                original
+                  { AI.invoke = \principal pid name args -> do
+                      liftIO $ IORef.modifyIORef' calls (+ 1)
+                      result <- AI.invoke original principal pid name args
+                      liftIO $ putMVar entered () >> takeMVar release
+                      pure result
+                  }
+              provider :: ATAuthCtx a -> ATAuthCtx a
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                  [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "create" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Concurrent durable action" :: Text)])]}
+                  evidence -> LLM.Message LLM.Assistant (T.intercalate "\n" evidence) LLM.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Right "Concurrent action"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
+              execute = tryAny $ void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just backend) testPid form
+          Async.withAsync execute \worker -> do
+            Timeout.timeout 30_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
+            bracket_ (pure ()) (putMVar release ()) do
+              case boundary of
+                "retry" -> Timeout.timeout 30_000_000 execute >>= (`shouldSatisfy` maybe False isRight)
+                _ -> do
+                  Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
+                  runQueryEffect tr $ Issues.finishRoutineRun request (addUTCTime 1 run.startedAt) Issues.CompletedTimedOut Nothing Nothing Nothing
+                  runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= \case
+                    [entry] -> entry.outcome `shouldSatisfy` \case Investigations.OperationRunning -> True; _ -> False
+                    _ -> expectationFailure "A stale completion must not change the outstanding operation"
+                  let user = (getResponse tr.trSessAndHeader).user.id
+                  runTestBg frozenTime tr (Issues.completeRun (Issues.InteractiveTarget testPid request user Issues.Autonomous) Issues.TimedOutResult) >>= \case
+                    Issues.RunCompleted{} -> pass
+                    _ -> expectationFailure "Expected the current run to time out"
+              IORef.readIORef calls >>= (`shouldBe` 1)
+              runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= \case
+                [entry] -> entry.outcome `shouldSatisfy` \case Investigations.OperationUnknown -> True; _ -> False
+                _ -> expectationFailure "Expected one in-flight operation with an uncertain outcome"
+            Timeout.timeout 30_000_000 (Async.wait worker) >>= (`shouldSatisfy` maybe False isLeft)
+          runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Concurrent durable action'|]) >>= (`shouldBe` 1)
+          runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= \case
+            [entry] -> entry.outcome `shouldSatisfy` \case Investigations.OperationReturned{} -> True; _ -> False
+            _ -> expectationFailure "Expected the original worker's late response to improve retained evidence"
 
       it "agentOperation_catalogExposesTheExecutionRecoveryContract" \tr -> do
         let conversation = UUIDId UUID.nil
