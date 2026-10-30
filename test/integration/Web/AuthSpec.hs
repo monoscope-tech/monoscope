@@ -10,10 +10,12 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Hasql.Interpolate qualified as HI
+import Lucid qualified
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, status200)
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
+import Pages.BodyWrapper qualified as BodyWrapper
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.TestUtils
 import Relude
@@ -166,6 +168,13 @@ spec = aroundAll withTestResources do
       callback cookie >>= (`shouldBe` 1) . length
       runQueryEffect tr (AdConversions.recordSignup uid [("CF-IPCountry", "DE")]) >>= (`shouldSatisfy` isNothing)
       sendQueued tr >>= (`shouldBe` ([], []))
+
+    it "loads every ad and analytics tag behind the browser consent check" \tr -> do
+      let cfg = tr.trATCtx.config{Config.googleAdsConversionId = Just "AW-1", Config.facebookPixelId1 = Just "fb1", Config.googleTagManagerId = Just "GTM-1", Config.linkedInPartnerId = Just "li1", Config.postHogApiKey = Just "ph1"}
+          html = toStrict $ Lucid.renderText $ BodyWrapper.externalHeadScripts_ cfg
+      html `shouldNotSatisfy` T.isInfixOf "<noscript"
+      html `shouldNotSatisfy` T.isInfixOf "src=\""
+      length (filter (T.isPrefixOf "if (window.msConsent)") $ T.splitOn "<script>" html) `shouldBe` 6
 
     it "reports a recent project's first ingest once from the hourly job, credited to its consenting creator" \tr -> do
       now <- getCurrentTime
