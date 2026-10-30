@@ -331,7 +331,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               h2_ [class_ "text-sm font-semibold text-textStrong"] "Action history"
               let refresh = runUrl pid run.id <> "?conversation=" <> convId.toText
               a_ [href_ refresh, hxGet_ refresh, hxSelect_ "#routine-run", hxTarget_ "#routine-run", hxSwap_ "outerMorph", term "hx-preload" "false", class_ "btn btn-xs btn-ghost"] "Refresh actions"
-            p_ [class_ "text-xs text-textWeak"] "Most recent 200 actions, including earlier attempts for this request. A saved response can contain a tool error."
+            p_ [class_ "text-xs text-textWeak"] "Most recent 200 actions for this request, including unresolved earlier actions. A saved response can contain a tool error."
             for_ operations \operation -> article_ [id_ $ "operation-" <> operation.id.toText, class_ "space-y-2 rounded-lg border border-strokeWeak p-3"] do
               div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
                 code_ [class_ "min-w-0 break-all text-sm text-textStrong"] $ toHtml $ T.replace "_" " " $ LLM.toolFunctionName operation.proposal.call.toolCallFunction

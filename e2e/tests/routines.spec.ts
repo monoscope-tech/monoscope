@@ -24,8 +24,8 @@ test('routine detail panels preserve conversation drafts, run history, and artif
     ]);
     await page.waitForLoadState('networkidle');
     const [routine, conversation] = sql(`SELECT id, conversation_id FROM apis.ai_routines WHERE project_id = '${pid}';`).toString().trim().split('|');
-    sql(`INSERT INTO apis.ai_routine_runs (id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, source, requested_by, input, instructions, template_version)
-         SELECT '${run}', id, project_id, conversation_id, now(), now(), 'running',
+    sql(`INSERT INTO apis.ai_routine_runs (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, source, requested_by, input, instructions, template_version)
+         SELECT '${run}', '${run}', id, project_id, conversation_id, now(), now(), 'running',
            '{"tag":"TriggeredRun","contents":{"tag":"SlackCommand","contents":"${conversation}"}}', '${uid}', 'Investigate checkout', instructions, template_version
          FROM apis.ai_routines WHERE id = '${routine}';
          INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content) VALUES ('${pid}', '${conversation}', 'checkout', 'Checkout evidence', 'Later conversation edit.');
@@ -33,8 +33,8 @@ test('routine detail panels preserve conversation drafts, run history, and artif
          VALUES ('${pid}', '${conversation}', 'assistant', 'I saved the checkout evidence. Continue the investigation here.',
            '[{"name":"save_artifact","args":{},"result_preview":"Saved checkout evidence","raw_data":"checkout"}]', now());
          INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES ('${pid}', '${archivedConversation}', 'web');
-         INSERT INTO apis.ai_routine_runs (id, routine_id, project_id, conversation_id, scheduled_at, started_at, finished_at, status, source, requested_by, input, instructions, template_version)
-         SELECT '${archivedRun}', id, project_id, '${archivedConversation}', now() - interval '1 day', now() - interval '1 day', now() - interval '1 day', 'succeeded',
+         INSERT INTO apis.ai_routine_runs (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, finished_at, status, source, requested_by, input, instructions, template_version)
+         SELECT '${archivedRun}', '${archivedRun}', id, project_id, '${archivedConversation}', now() - interval '1 day', now() - interval '1 day', now() - interval '1 day', 'succeeded',
            '{"tag":"TriggeredRun","contents":{"tag":"SlackCommand","contents":"${archivedConversation}"}}', '${uid}', 'Earlier investigation', instructions, template_version
          FROM apis.ai_routines WHERE id = '${routine}';
          INSERT INTO apis.ai_routine_run_artifacts (run_id, key, title, content) VALUES ('${archivedRun}', 'retained', 'Earlier evidence', 'Retained evidence from a deleted source conversation.');
@@ -160,8 +160,8 @@ test('action history and policy controls preserve drafts and check current roles
          VALUES ('${pid}', '${conversation}', '${uid}', 15);
        INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content)
          VALUES ('${pid}', '${conversation}', 'assistant', 'The action outcome is uncertain.');
-       INSERT INTO apis.ai_routine_runs (id, project_id, conversation_id, scheduled_at, started_at, finished_at, status, source, requested_by, input, policy)
-         VALUES ('${run}', '${pid}', '${conversation}', now(), now(), now(), 'succeeded',
+       INSERT INTO apis.ai_routine_runs (id, root_run_id, project_id, conversation_id, scheduled_at, started_at, finished_at, status, source, requested_by, input, policy)
+         VALUES ('${run}', '${run}', '${pid}', '${conversation}', now(), now(), now(), 'succeeded',
            '{"tag":"InteractiveRun","contents":{"tag":"WebMessage"}}', '${uid}', 'Create a dashboard', 'autonomous');
        INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
          VALUES ('${operation}', '${pid}', '${run}', '${uid}', 1,

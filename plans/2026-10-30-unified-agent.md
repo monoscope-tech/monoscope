@@ -1,6 +1,6 @@
 # Unified Monoscope agent
 
-Status: implementation in progress, 2026-10-30. Open-PR reconciliation is the first milestone.
+Status: implementation in progress, 2026-10-31. Open-PR reconciliation is the first milestone.
 This document controls future agent work on this branch.
 It combines the Slack consolidation work and the Slack coworker proposal.
 It incorporates the requested default of autonomous background work without repeated permission prompts.
@@ -481,6 +481,45 @@ The final focused suites pass: 180 bot examples, 75 API v1 examples, and 45 issu
 Event execution still uses its conservative Observe ceiling until stable request-root continuity and event authority are integrated.
 Legacy invocation constructors, administrator capability enablement and disclosure, and selected action review remain unfinished.
 This slice does not claim that the entire authority milestone is complete.
+
+
+### Request roots and event recovery (31 October)
+
+Each run now has a non-null `root_run_id` referencing the existing run ledger.
+Interactive requests and scheduled instants start as their own roots.
+An event recovery creates another attempt under the original request root.
+An explicit restart creates a new root and captures the current instructions, input, and authority.
+No request table, scheduler, or second checkpoint store was added.
+
+Event initialization locks the installation only while creating or resolving the attempt.
+Concurrent duplicate workers receive the same attempt. After failure, concurrent recovery workers receive one new attempt under the same root.
+Recovery keeps the original actor, conversation, input, instructions, policy, and authority revision.
+A different actor or conversation cannot silently take over the request.
+The shared executor loads retained event input before constructing the model request.
+It resolves run checkpoints through the scoped root lookup while retaining each attempt's separate history.
+
+Operation identities follow the root checkpoint position; operation evidence still names the attempt that executed it.
+Known responses are reused within the request. Unresolved actions from the same source also block blind repetition after an explicit restart.
+Historical attempts migrate as their own roots, preserving existing checkpoint keys.
+The root foreign key, non-null constraint, and root/source indexes are in one coherent migration, `0263_agent_request_roots.sql`.
+Applied migrations remain unchanged.
+
+The regression first exposed a repeated project read after a failed event attempt.
+Recovery now reuses the original model request and completed reads across attempts.
+A second case interrupts an artifact append after commit but before checkpoint advancement; recovery retains the single append and response.
+The cases also verify original input despite changed worker arguments, unchanged instructions and actor, sticky policy restriction, and foreign actor/conversation rejection.
+A concurrent initialization case verifies one initial attempt, one recovery attempt, and the shared root.
+The existing explicit-restart regression verifies a fresh root and retained prior artifacts.
+
+The focused suites pass: 183 bot examples, 75 API v1 examples, and 45 issue examples.
+The native review publication/recovery/retry integration case also passes.
+An isolated old-schema migration check verifies retained checkpoint identity, null/unknown root rejection, and project cleanup with child attempts.
+Both permanent browser scenarios pass against the current WAI application and an isolated database: policy/action history and the full routine lifecycle, including mobile themes, deleted conversations, and repository settings. The longer lifecycle capture needed a 180-second local test budget; it completed in 78 seconds with no product-code change. The repository CI timeout remains unchanged. The temporary browser launcher was removed. The formatter and diff checks pass; repeated slice reviews found no material distillation, type-evasion, or client-behavior findings. Final whole-branch review, doctests, live Slack acceptance, release signoff, and PR update remain pending.
+
+Event actions still use the conservative Observe ceiling until invocation authority, role/scope ceilings, and publication audience controls are complete.
+Service recovery adapters must retain the request's original authorizing member when installation ownership changes.
+Scheduled worker lease fencing at operation boundaries, sensitive history disclosure, and native completion consolidation remain release work.
+This slice establishes request continuity; it does not claim the full unified agent is complete.
 
 ## External references
 

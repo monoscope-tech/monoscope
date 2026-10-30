@@ -1955,15 +1955,15 @@ nextRoutineAt schedule timezone scheduledAt now = case schedule of
 claimRoutine :: DB es => UUIDId "ai_routine" -> UTCTime -> Eff es (Maybe ClaimedRoutine)
 claimRoutine routineId scheduledAt =
   Hasql.interpOne
-    [HI.sql|WITH claimed AS (
+    [HI.sql|WITH identity AS (SELECT gen_random_uuid() AS id), claimed AS (
         UPDATE apis.ai_routines SET running_since = now()
         WHERE id = #{routineId} AND active AND requested_by IS NOT NULL AND next_run_at = #{scheduledAt}
           AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
         RETURNING requested_by, project_id, conversation_id, running_since, policy, authority_version, report_when, destination, timezone, instructions, template_version
       ), run AS (
-        INSERT INTO apis.ai_routine_runs (routine_id, project_id, conversation_id, scheduled_at, started_at, status, requested_by, instructions, template_version, input, policy, authority_version)
-        SELECT #{routineId}, claimed.project_id, claimed.conversation_id, #{scheduledAt}, running_since, 'running', requested_by,
-          COALESCE(instructions, task.content), template_version, task.content, claimed.policy, claimed.authority_version FROM claimed
+        INSERT INTO apis.ai_routine_runs (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, requested_by, instructions, template_version, input, policy, authority_version)
+        SELECT identity.id, identity.id, #{routineId}, claimed.project_id, claimed.conversation_id, #{scheduledAt}, running_since, 'running', requested_by,
+          COALESCE(instructions, task.content), template_version, task.content, claimed.policy, claimed.authority_version FROM claimed CROSS JOIN identity
         LEFT JOIN LATERAL (SELECT content FROM apis.ai_chat_messages
           WHERE project_id = claimed.project_id AND conversation_id = claimed.conversation_id AND role = 'user'
           ORDER BY created_at, id LIMIT 1) task ON TRUE
@@ -2008,8 +2008,8 @@ getEventRoutine pid event =
     <> ProjectMembers.activeMembership
 
 
--- Source workers hold their Slack-thread, PR, or issue lease. Replays resume
--- an unfinished attempt; an explicit retry keeps earlier attempts and artifacts.
+-- | Recovery retains one request's actor, instructions, input, and authority.
+-- An explicit restart starts a new request while retaining earlier attempts.
 startEventRun :: (DB es, Time :> es) => EventRoutine -> RoutineEventSource -> RunContinuation -> UUIDId "conversation" -> Projects.UserId -> Text -> Eff es (Maybe EventRun)
 startEventRun routine event continuation convId requestedBy input = do
   now <- Time.currentTime
@@ -2017,24 +2017,43 @@ startEventRun routine event continuation convId requestedBy input = do
       restart = continuation == RestartRun
       resume = continuation /= StartRun
       kind = case event of SlackMessage{} -> EventSlackMessage; SlackCommand{} -> EventSlackMessage; PullRequestReview{} -> EventPullRequest; IssueEnrichment{} -> EventIssueEnrichment
-  Hasql.interpOne
-    [HI.sql|WITH previous AS (
-        SELECT * FROM apis.ai_routine_runs WHERE routine_id = #{routine.id} AND source = #{source}
-        ORDER BY attempt DESC LIMIT 1
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    installation <-
+      Hasql.queryTx @[UUIDId "ai_routine"]
+        [HI.sql|SELECT id FROM apis.ai_routines WHERE id = #{routine.id} AND project_id = #{routine.projectId} AND active FOR UPDATE|]
+    if null installation
+      then pure Nothing
+      else
+        Hasql.queryTx
+          [HI.sql|WITH identity AS (SELECT gen_random_uuid() AS id), previous AS (
+        SELECT * FROM apis.ai_routine_runs WHERE project_id = #{routine.projectId} AND source = #{source}
+        ORDER BY started_at DESC, id DESC LIMIT 1
+      ), original AS (
+        SELECT root.* FROM previous JOIN apis.ai_routine_runs root ON root.id = previous.root_run_id
       ), inserted AS (
         INSERT INTO apis.ai_routine_runs
-          (routine_id, project_id, conversation_id, scheduled_at, started_at, status, source, attempt, requested_by, input, instructions, template_version)
-        SELECT r.id, r.project_id, #{convId}, #{now}, clock_timestamp(), 'running', #{source},
-          COALESCE((SELECT attempt + 1 FROM previous), 1), #{requestedBy}, #{input}, r.instructions, r.template_version
-        FROM apis.ai_routines r
+          (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, source, attempt,
+           requested_by, input, instructions, template_version, policy, authority_version)
+        SELECT identity.id, CASE WHEN #{restart} OR original.id IS NULL THEN identity.id ELSE original.id END,
+          r.id, r.project_id, #{convId}, #{now}, clock_timestamp(), 'running', #{source},
+          COALESCE((SELECT attempt + 1 FROM previous), 1), #{requestedBy},
+          CASE WHEN #{restart} OR original.id IS NULL THEN #{input} ELSE original.input END,
+          CASE WHEN #{restart} OR original.id IS NULL THEN r.instructions ELSE original.instructions END,
+          CASE WHEN #{restart} OR original.id IS NULL THEN r.template_version ELSE original.template_version END,
+          CASE WHEN #{restart} OR original.id IS NULL THEN r.policy ELSE original.policy END,
+          CASE WHEN #{restart} OR original.id IS NULL THEN r.authority_version ELSE original.authority_version END
+        FROM apis.ai_routines r CROSS JOIN identity LEFT JOIN original ON TRUE
         WHERE r.id = #{routine.id} AND r.project_id = #{routine.projectId} AND r.schedule_kind = #{kind} AND r.active
           AND EXISTS (SELECT 1 FROM apis.ai_conversations WHERE project_id = r.project_id AND conversation_id = #{convId})
-          AND NOT EXISTS (SELECT 1 FROM previous WHERE status = 'running' OR (NOT #{restart} AND status IN ('succeeded', 'no_findings', 'cancelled')))
+          AND (#{restart} OR original.id IS NULL OR (original.routine_id = r.id AND original.requested_by = #{requestedBy}
+            AND original.conversation_id = #{convId} AND original.input IS NOT NULL AND original.instructions IS NOT NULL))
+          AND NOT EXISTS (SELECT 1 FROM previous WHERE (status = 'running' AND routine_id = #{routine.id}) OR (NOT #{restart} AND status IN ('succeeded', 'no_findings', 'cancelled')))
         ON CONFLICT DO NOTHING
         RETURNING id, started_at, status, requested_by, instructions
       ) SELECT id, started_at, status, requested_by, instructions FROM inserted
         UNION ALL SELECT id, started_at, status, requested_by, instructions FROM previous
-          WHERE #{resume} AND NOT EXISTS (SELECT 1 FROM inserted) AND requested_by IS NOT NULL LIMIT 1|]
+          WHERE #{resume} AND NOT EXISTS (SELECT 1 FROM inserted) AND requested_by = #{requestedBy}
+            AND conversation_id = #{convId} AND routine_id = #{routine.id} LIMIT 1|]
 
 
 data InteractiveStart = ConflictingRequest | AcceptedRequest (Maybe ScheduledRoutine)
@@ -2053,8 +2072,8 @@ startInteractiveRun pid conversation user runId input policy origin = do
     inserted <-
       Hasql.queryTx @[UUIDId "ai_routine_run"]
         [HI.sql|INSERT INTO apis.ai_routine_runs
-        (id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status)
-        SELECT #{runId}, #{pid}, #{conversation}, #{user}, #{input}, #{policy}, #{InteractiveRun origin}, #{now}, #{now}, 'running'
+        (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status)
+        SELECT #{runId}, #{runId}, #{pid}, #{conversation}, #{user}, #{input}, #{policy}, #{InteractiveRun origin}, #{now}, #{now}, 'running'
         WHERE #{isJust initialConversation} OR EXISTS
           (SELECT 1 FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{conversation} FOR KEY SHARE)
         ON CONFLICT (id) DO NOTHING RETURNING id|]

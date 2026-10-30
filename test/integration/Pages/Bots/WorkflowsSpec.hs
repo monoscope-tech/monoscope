@@ -1047,14 +1047,16 @@ spec = around withTestResources do
         (replayed, _) <- work receipt
         replayed `shouldBe` []
 
-      for_ (["event", "scheduled"] :: [Text]) \origin ->
+      for_ (["event", "scheduled", "event-recovery", "event-artifact-recovery"] :: [Text]) \origin ->
         it ("routineCheckpoint_resumesCompletedReadsWithoutRepeatingTheModel: " <> toString origin) \tr -> do
           setupSlackAgent tr testPid "T_RUN_CHECKPOINT"
-          let conversation = UUIDId $ UUID.fromWords 0 0 91 1
+          let recovery = origin `elem` ["event-recovery", "event-artifact-recovery"]
+              artifact = origin == "event-artifact-recovery"
+              conversation = UUIDId $ UUID.fromWords 0 0 91 1
               user = (getResponse tr.trSessAndHeader).user.id
           void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
           (runId, mode) <-
-            if origin == "event"
+            if origin /= "scheduled"
               then do
                 routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected an installed routine") pure
                 execution <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.StartRun conversation user "Inspect the project") >>= maybe (fail "Expected a routine run") pure
@@ -1066,7 +1068,7 @@ spec = around withTestResources do
                 pure (execution.runId, AI.ScheduledRoutine execution.runId Issues.Observe)
           calls <- newIORef ([] :: [Text])
           models <- newIORef ([] :: [Maybe Text])
-          interrupt <- newIORef True
+          interrupt <- newIORef (not artifact)
           let original = Routes.mcpProjectTools
               backend =
                 original
@@ -1080,32 +1082,69 @@ spec = around withTestResources do
               config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.conversationType = Just Issues.CTWeb, AI.invocationMode = mode, AI.projectTools = Just backend}
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history request _ -> do
+                  liftIO $ viaNonEmpty last [Chat.content message | message <- toList history, Chat.role message == Chat.User] `shouldBe` Just "Inspect the project"
                   liftIO $ modifyIORef' models (<> [AE.toJSON request ^? key "model" . _String])
                   let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
                   case results of
-                    [] -> pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall name "function" (Chat.ToolFunction name mempty) | name <- ["get_project", "get_schema"]]}
+                    [] -> do
+                      let operation = if artifact then Chat.ToolFunction "save_artifact" $ fromList [("key", AE.String "event-evidence"), ("mode", AE.String "append"), ("content", AE.String "Retained finding")] else Chat.ToolFunction "get_project" mempty
+                      pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "first" "function" operation, Chat.ToolCall "schema" "function" $ Chat.ToolFunction "get_schema" mempty]}
                     [project, schema] -> do
-                      liftIO $ project `shouldSatisfy` T.isInfixOf testPid.toText
+                      liftIO $ project `shouldSatisfy` T.isInfixOf (if artifact then "event-evidence" else testPid.toText)
                       liftIO $ schema `shouldSatisfy` T.isInfixOf "context.trace_id"
                       pure $ Right $ Chat.Message Chat.Assistant "The project evidence is retained." Chat.defaultMessageData
                     _ -> liftIO $ fail "Expected both retained tool results"
                 ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
                 ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-              execute model = runTestBg frozenTime tr $ provider $ tryAny $ AI.runAgenticChatWithHistory config "Inspect the project" model "not-a-real-key"
+              execute invocation query model = runTestBg frozenTime tr $ provider $ tryAny $ AI.runAgenticChatWithHistory config{AI.invocationMode = invocation} query model "not-a-real-key"
           let foreignConversation = UUIDId $ UUID.fromWords 0 0 91 2
               foreignTarget = Investigations.RunCheckpoint $ Investigations.RunTurn testPid foreignConversation user runId
           void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid foreignConversation Issues.CTWeb (AE.object [])
           runQueryEffect tr (Investigations.startCheckpointFor foreignTarget $ Investigations.AnswerReady $ Investigations.AgenticChatResult "Do not attach another conversation" [])
             `shouldThrow` (\Investigations.CheckpointAccessDenied -> True)
-          execute "original-model" >>= (`shouldSatisfy` isLeft)
-          execute "changed-model" >>= (`shouldSatisfy` isRight)
-          readIORef calls >>= (`shouldBe` ["get_project", "get_schema", "get_schema"])
+          let firstAttempt = execute mode (if recovery then "Changed worker input" else "Inspect the project") "original-model" >>= (`shouldSatisfy` isLeft)
+              ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+          if artifact
+            then bracket_ (ddl "ALTER TABLE apis.slack_turn_checkpoints ADD CONSTRAINT reject_event_artifact_checkpoint CHECK (NOT (checkpoint->>'tag' = 'ToolsPending' AND jsonb_array_length(checkpoint->'contents'->2) > 0)) NOT VALID") (ddl "ALTER TABLE apis.slack_turn_checkpoints DROP CONSTRAINT reject_event_artifact_checkpoint") firstAttempt
+            else firstAttempt
+          resumedMode <-
+            if recovery
+              then do
+                Just previous <- runQueryEffect tr $ Issues.getRoutineRun testPid runId
+                runQueryEffect tr $ Issues.finishRoutineRun previous.id previous.startedAt Issues.CompletedFailed Nothing Nothing (Just "Worker interrupted")
+                routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected an installed routine") pure
+                replacement <- runTestBg frozenTime tr do
+                  actor <- Projects.createUser "Different" "Actor" "" "other-event-actor@example.test"
+                  Projects.insertUser actor
+                  Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{actor.id}, 'edit')|]
+                  pure actor
+                for_ [(conversation, replacement.id), (foreignConversation, user)] \(target, actor) ->
+                  runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.ContinueRun target actor "Changed retry input") >>= \result -> fmap (.id) result `shouldBe` Nothing
+                runQueryEffect tr do
+                  Issues.setRoutineInstructions testPid routine.conversationId "New instructions apply to future requests."
+                  Issues.setRoutinePolicy user testPid routine.conversationId Issues.Observe
+                  Issues.setRoutinePolicy user testPid routine.conversationId Issues.Autonomous
+                recovered <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.ContinueRun conversation user "Changed retry input") >>= maybe (fail "Expected a recovery attempt") pure
+                recovered.id `shouldSatisfy` (/= runId)
+                recovered.instructions `shouldBe` routine.instructions
+                evidence <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid recovered.id
+                (evidence >>= (.input)) `shouldBe` Just "Inspect the project"
+                (evidence >>= (.requestedBy)) `shouldBe` Just user
+                runQueryEffect tr (Hasql.interpScalar @(UUIDId "ai_routine_run") [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{recovered.id}|]) >>= (`shouldBe` runId)
+                runQueryEffect tr (Issues.routineRunPolicyFor testPid recovered.id user conversation) >>= (`shouldBe` Just Issues.Observe)
+                pure $ AI.RoutineEventRun recovered.id
+              else pure mode
+          execute resumedMode "Changed retry input" "changed-model" >>= (`shouldSatisfy` isRight)
+          readIORef calls >>= (`shouldBe` (if artifact then ["get_schema"] else ["get_project", "get_schema", "get_schema"]))
           readIORef models >>= (`shouldBe` [Just "original-model", Just "original-model"])
-          execute "another-model" >>= (`shouldSatisfy` isRight)
-          readIORef calls >>= (`shouldBe` ["get_project", "get_schema", "get_schema"])
+          execute resumedMode "Changed finished input" "another-model" >>= (`shouldSatisfy` isRight)
+          readIORef calls >>= (`shouldBe` (if artifact then ["get_schema"] else ["get_project", "get_schema", "get_schema"]))
           readIORef models >>= (`shouldBe` [Just "original-model", Just "original-model"])
           history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
           [entry.content | entry <- history, entry.role == Issues.ChatUser] `shouldBe` ["Inspect the project"]
+          when artifact do
+            documents <- runQueryEffect tr $ Issues.listArtifacts testPid conversation $ Just $ fromRightShow $ Issues.mkArtifactKey "event-evidence"
+            map (.content) documents `shouldBe` [Just "Retained finding"]
 
       it "resumes between tool reads with the original model context and remaining iteration budget" \tr -> do
         setupSlackAgent tr testPid "T_CHECKPOINT"

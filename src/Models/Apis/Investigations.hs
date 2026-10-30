@@ -7,6 +7,7 @@ module Models.Apis.Investigations (
   loadCheckpointFor,
   CheckpointTarget (..),
   RunTurn (..),
+  runCheckpointTarget,
   CheckpointAccessDenied (..),
   SavedCheckpoint (..),
   CheckpointCursor (..),
@@ -482,6 +483,16 @@ data RunTurn = RunTurn
   deriving stock (Show)
 
 
+runCheckpointTarget :: DB es => RunTurn -> Eff es CheckpointTarget
+runCheckpointTarget turn = do
+  root <-
+    Hasql.interpOne @(HI.OneColumn (UUIDId "ai_routine_run"))
+      [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{turn.runId} AND project_id = #{turn.projectId}
+      AND conversation_id = #{turn.conversationId} AND requested_by = #{turn.userId}|]
+      >>= maybe (throwIO CheckpointAccessDenied) pure
+  pure $ RunCheckpoint turn{runId = HI.getOneColumn root}
+
+
 data CheckpointTarget = SlackCheckpoint Turn | RunCheckpoint RunTurn
   deriving stock (Show)
 
@@ -524,14 +535,14 @@ beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => Run
 beginOperationTx turn cursor proposal = runExceptT do
   let (project, conversation, user, message, checkpointRun) = checkpointIdentity cursor.target
       identifier = UUIDId $ UUID5.generateNamed UUID5.namespaceOID $ BS.unpack $ toStrict $ AE.encode (checkpointIdentity cursor.target, cursor.revision)
-      matchingScope = project == turn.projectId && conversation == turn.conversationId && user == turn.userId && all (== turn.runId) checkpointRun
+      matchingScope = project == turn.projectId && conversation == turn.conversationId && user == turn.userId
   unless matchingScope $ hoistEither $ Left OperationScopeMismatch
   runs <-
     lift
-      $ Hasql.queryTx @[UUIDId "ai_routine_run"]
-        [HI.sql|SELECT id FROM apis.ai_routine_runs WHERE id = #{turn.runId} AND project_id = #{project}
+      $ Hasql.queryTx @[HI.OneColumn (UUIDId "ai_routine_run")]
+        [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{turn.runId} AND project_id = #{project}
       AND conversation_id = #{conversation} AND requested_by = #{user} AND status = 'running' FOR UPDATE|]
-  when (null runs) $ hoistEither $ Left OperationScopeMismatch
+  unless (case runs of [HI.OneColumn root] -> all (== root) checkpointRun; _ -> False) $ hoistEither $ Left OperationScopeMismatch
   checkpoints <-
     lift
       $ Hasql.queryTx @[HI.OneColumn Checkpoint]
@@ -545,11 +556,10 @@ beginOperationTx turn cursor proposal = runExceptT do
     lift
       $ Hasql.queryTx @[OperationEntry policy]
       $ operationsSql project turn.runId
-      <> [HI.sql| AND (operation.id = #{identifier} OR operation.requested_by <> #{user}
+      <> [HI.sql| AND (operation.id = #{identifier}
         OR operation.outcome->>'tag' IN ('OperationRunning', 'OperationUnknown')
         OR operation.proposal->'call'->'function' = #{Aeson $ LLM.toolCallFunction proposal.call})
         ORDER BY operation.created_at, operation.id FOR UPDATE OF operation|]
-  when (any ((/= user) . (.requestedBy)) prior) $ hoistEither $ Left OperationScopeMismatch
   case find ((== identifier) . (.id)) prior of
     Just entry -> do
       unless (entry.proposal.call == proposal.call) $ hoistEither $ Left OperationProposalChanged
@@ -621,8 +631,9 @@ operationsSql project run =
     FROM apis.ai_agent_operations operation
     JOIN apis.ai_routine_runs origin ON origin.id = operation.run_id
     JOIN apis.ai_routine_runs selected ON selected.id = #{run} AND selected.project_id = #{project}
-    WHERE operation.project_id = #{project} AND (origin.id = selected.id
-      OR (selected.source->>'tag' = 'TriggeredRun' AND origin.source = selected.source))|]
+    WHERE operation.project_id = #{project} AND (origin.root_run_id = selected.root_run_id
+      OR (selected.source->>'tag' = 'TriggeredRun' AND origin.source = selected.source
+        AND operation.outcome->>'tag' IN ('OperationRunning', 'OperationUnknown')))|]
 
 
 loadCheckpoint :: DB es => Turn -> Eff es (Maybe SavedCheckpoint)
@@ -638,7 +649,7 @@ startCheckpoint = startCheckpointFor . SlackCheckpoint
 
 
 -- | The run lock serializes initialization only. Model calls never hold it.
--- Event input and the initial checkpoint commit together, once per run.
+-- Event input and the initial checkpoint commit together, once per request.
 startCheckpointFor :: DB es => CheckpointTarget -> Checkpoint -> Eff es SavedCheckpoint
 startCheckpointFor target checkpoint = do
   let (project, conversation, user, message, run) = checkpointIdentity target

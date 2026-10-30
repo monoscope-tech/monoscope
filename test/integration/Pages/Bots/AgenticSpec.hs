@@ -495,6 +495,21 @@ spec = around withTestResources do
         unchanged <- runQueryEffect tr $ Issues.getConversation testPid conversation.conversationId
         (unchanged >>= (.routineKind)) `shouldBe` Just Issues.ScheduleSlackMessage
 
+      it "eventRequestRoot_duplicateWorkersShareOneAttemptAndRecoveryRoot" \tr -> do
+        void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
+        routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected a Slack routine") pure
+        let user = (getResponse tr.trSessAndHeader).user.id
+            start = runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackCommand routine.conversationId) Issues.ContinueRun routine.conversationId user "One concurrent request"
+        (Just initial, Just duplicate) <- Async.concurrently start start
+        duplicate.id `shouldBe` initial.id
+        runQueryEffect tr $ Issues.finishRoutineRun initial.id initial.startedAt Issues.CompletedFailed Nothing Nothing (Just "Interrupted worker")
+        (Just recovered, Just replay) <- Async.concurrently start start
+        replay.id `shouldBe` recovered.id
+        recovered.id `shouldSatisfy` (/= initial.id)
+        runQueryEffect tr (Hasql.interpScalar @(UUIDId "ai_routine_run") [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{recovered.id}|]) >>= (`shouldBe` initial.id)
+        runs <- runQueryEffect tr $ Issues.listConversationRuns testPid routine.conversationId 10
+        map (.attempt) runs `shouldBe` [2, 1]
+
       it "eventRoutineCancellation_stopsActiveRunAndRetainsSnapshotsAcrossRetry" \tr -> do
         void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
         (routine, run) <- runTestBg frozenTime tr do
@@ -527,6 +542,7 @@ spec = around withTestResources do
         (oldInstructions >>= (.instructions)) `shouldBe` Just routine.instructions
         (newInstructions >>= (.instructions)) `shouldBe` Just "Check the new deployment first."
         map (.attempt) runs `shouldBe` [2, 1]
+        runQueryEffect tr (Hasql.interpScalar @(UUIDId "ai_routine_run") [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{retry.id}|]) >>= (`shouldBe` retry.id)
         fmap (.id) duplicate `shouldBe` Just retry.id
         (_, page) <- testServant tr $ AIThreads.routineRunGetH testPid run.id Nothing
         let html = renderT page

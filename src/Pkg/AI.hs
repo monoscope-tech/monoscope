@@ -1008,16 +1008,17 @@ runAgenticChatWithHistory
   -> Text
   -> Text
   -> Eff es (Either Text AgenticChatResult)
-runAgenticChatWithHistory initialConfig userQuery model apiKey = do
+runAgenticChatWithHistory initialConfig requestedInput model apiKey = do
   requireConfigAccess initialConfig
-  instructions <- case initialConfig.invocationMode of
+  (userQuery, instructions) <- case initialConfig.invocationMode of
     RoutineEventRun runId -> do
       evidence <- Issues.getRoutineRunEvidence initialConfig.projectId runId >>= maybe (throwIO AgentStopped) pure
-      pure evidence.instructions
-    InteractiveReadOnly -> pure Nothing
-    InteractiveWithActions -> pure Nothing
-    InteractiveRun{} -> pure Nothing
-    ScheduledRoutine{} -> pure Nothing
+      input <- maybe (throwIO AgentStopped) pure evidence.input
+      pure (input, evidence.instructions)
+    InteractiveReadOnly -> pure (requestedInput, Nothing)
+    InteractiveWithActions -> pure (requestedInput, Nothing)
+    InteractiveRun{} -> pure (requestedInput, Nothing)
+    ScheduledRoutine{} -> pure (requestedInput, Nothing)
   let config = initialConfig{customContext = instructions <> initialConfig.customContext}
   requireConfigAccess config
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
@@ -1045,7 +1046,7 @@ runAgenticChatWithHistory initialConfig userQuery model apiKey = do
     (access, Just convId)
       | Just runId <- invocationRun config.invocationMode
       , Just user <- accessMember access -> do
-          let target = Investigations.RunCheckpoint $ Investigations.RunTurn config.projectId convId user runId
+          target <- Investigations.runCheckpointTarget $ Investigations.RunTurn config.projectId convId user runId
           checkpoint <-
             Investigations.loadCheckpointFor target
               >>= maybe
