@@ -5,6 +5,8 @@ module Pages.Bots.BotTestHelpers (
   setupSlackData,
   setupLinkedSlackData,
   setupSlackAgent,
+  scheduledInvocation,
+  interactiveInvocation,
   withHTTPResponses,
   withSlackReplyResponses,
   receiveSlackEvent,
@@ -70,6 +72,7 @@ import Data.Aeson.Lens (key, _Array, _Number, _String)
 import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
+import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as HTTP
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -82,6 +85,7 @@ import Effectful (Eff, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Slack
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (RequestBody (..), defaultRequest, requestBody)
@@ -90,7 +94,8 @@ import Network.Wreq.Types qualified as WreqTypes
 import Pages.AIThreads qualified as AIThreads
 import Pages.Bots.BotFixtures (slackCallbackEnvelope)
 import Pages.Bots.Slack qualified as SlackEvents
-import Pkg.DeriveUtils (UUIDId)
+import Pkg.AI qualified as AI
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Servant.API.ResponseHeaders (getResponse)
@@ -102,6 +107,28 @@ import "cryptonite" Crypto.Error qualified as Crypto
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
+
+
+interactiveInvocation :: TestResources -> Projects.ProjectId -> UUIDId "conversation" -> Text -> Issues.ExecutionPolicy -> IO AI.InvocationMode
+interactiveInvocation tr project conversation input policy = runTestBg frozenTime tr do
+  request <- UUIDId <$> UUID.genUUID
+  let user = (getResponse tr.trSessAndHeader).user.id
+  Issues.startInteractiveRun project conversation user request input policy Issues.WebConversation >>= \case
+    Issues.ConflictingRequest -> liftIO $ fail "Expected a fresh interactive request"
+    Issues.AcceptedRequest{} -> AI.invocationFor project user conversation $ Issues.InteractiveClaim request
+
+
+scheduledInvocation :: TestResources -> UUIDId "conversation" -> Issues.ExecutionPolicy -> IO AI.InvocationMode
+scheduledInvocation tr conversation policy = do
+  let user = (getResponse tr.trSessAndHeader).user.id
+  slot <- runTestBg frozenTime tr do
+    void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+    scheduled <- Issues.upsertRoutine user testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
+    Issues.setRoutinePolicy user testPid conversation policy
+    pure scheduled
+  schedule <- maybe (fail "Expected a scheduled instant") pure slot
+  claimed <- runQueryEffect tr (Issues.claimRoutine schedule.id schedule.scheduledAt) >>= maybe (fail "Expected a claimed run") pure
+  runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim claimed.runId claimed.claimedAt
 
 
 -- * Config Helpers

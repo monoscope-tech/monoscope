@@ -2033,8 +2033,9 @@ aiChatPostHWithTools projectTools pid issueId form = do
     Issues.ConflictingRequest -> throwError err409{errBody = "Request ID already belongs to another request"}
     Issues.AcceptedRequest _ -> pass
   fullSystemPrompt <- buildSystemPromptForIssue pid issue now
+  mode <- AI.invocationFor pid sess.user.id convId $ Issues.InteractiveClaim requestId
   let access = AI.MemberAccess AI.WebSession sess.user.id
-      config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = access, AI.projectTools = projectTools, AI.invocationMode = AI.InteractiveRun requestId Issues.Observe}
+      config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = access, AI.projectTools = projectTools, AI.invocationMode = mode}
   answer <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey >>= either (\err -> throwError err502{errBody = encodeUtf8 err}) pure
   void $ AI.completeAgenticResponse config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey answer
   messages <- Issues.selectChatHistory pid convId

@@ -275,12 +275,13 @@ slackInteractionsHWithTools projectTools interaction = do
                     runLink = "<" <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/runs/" <> execution.id.toText <> "|View run and artifacts>"
                 ( do
                     replies <- newIORef []
+                    mode <- AI.invocationFor principal.projectId principal.userId convId $ Issues.BackgroundClaim execution.id execution.startedAt
                     result <- tryAny do
                       requireRun
                       outcome <-
                         runBotQueryWithTools
                           projectTools
-                          (AI.RoutineEventRun execution.id)
+                          mode
                           Slack
                           ( \reply -> do
                               requireRun
@@ -956,7 +957,8 @@ processSlackEventWithTools projectTools receiptId =
                     >>= maybe
                       ( do
                           rendered <- newIORef []
-                          void $ runBotQueryWithTools projectTools (AI.RoutineEventRun run.id) Slack (\reply -> modifyIORef' rendered (<> [botReplyPayload reply])) envCfg access slackData.projectId event.text resolveThread
+                          mode <- AI.invocationFor slackData.projectId principal.userId convId $ Issues.BackgroundClaim run.id run.startedAt
+                          void $ runBotQueryWithTools projectTools mode Slack (\reply -> modifyIORef' rendered (<> [botReplyPayload reply])) envCfg access slackData.projectId event.text resolveThread
                           replies <- readIORef rendered >>= maybe (throwIO $ ErrorCall "Slack query produced no reply") pure . nonEmpty
                           let link = "<" <> envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/ai/" <> convId.toText <> "|View runs and artifacts>"
                               linked reply = case reply ^? key "blocks" . _Array of

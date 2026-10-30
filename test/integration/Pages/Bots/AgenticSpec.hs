@@ -30,7 +30,7 @@ import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Pages.AIThreads qualified as AIThreads
-import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, getOpenAIModel, setupSlackData, withHTTPResponses)
+import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, getOpenAIModel, interactiveInvocation, scheduledInvocation, setupSlackData, withHTTPResponses)
 import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
 import Pages.Bots.Utils (processAIQuery)
 import Pages.Issues qualified as IssuePage
@@ -122,17 +122,18 @@ spec = around withTestResources do
               (_, _, params) <- Eff.runEff $ Time.runTime $ AI.agenticSetup config{AI.projectTools = Just Routes.mcpProjectTools} "any query" "model"
               pure $ AE.toJSON params ^.. key "tools" . values . key "function" . key "name" . _String
         readonly <- toolNames $ AI.defaultAgenticConfig testPid
-        actionable <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.invocationMode = AI.InteractiveWithActions}
-        serviceActions <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.InteractiveWithActions}
-        scheduledReadOnly <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) Issues.Observe}
-        scheduledActionable <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) Issues.Autonomous}
+        mode <- interactiveInvocation tr testPid (UUIDId UUID.nil) "any query" Issues.Autonomous
+        actionable <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just $ UUIDId UUID.nil, AI.invocationMode = mode}
+        serviceActions <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = mode}
+        observed <- scheduledInvocation tr (UUIDId $ UUID.fromWords 0 0 99 1) Issues.Observe
+        autonomous <- scheduledInvocation tr (UUIDId $ UUID.fromWords 0 0 99 2) Issues.Autonomous
+        scheduledReadOnly <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = observed}
+        scheduledActionable <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.invocationMode = autonomous}
         repositoryAware <- toolNames (AI.defaultAgenticConfig testPid){AI.sourceConfig = Just tr.trATCtx.config}
-        memoryWriter <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just $ UUIDId UUID.nil, AI.invocationMode = AI.InteractiveWithActions}
         readonly `shouldContain` ["list_project_memory", "read_project_memory"]
         readonly `shouldNotContain` ["write_project_memory"]
-        actionable `shouldNotContain` ["write_project_memory"]
+        actionable `shouldContain` ["write_project_memory"]
         serviceActions `shouldNotContain` ["write_project_memory", "send_to_slack"]
-        memoryWriter `shouldContain` ["write_project_memory", "send_to_slack"]
         readonly `shouldNotContain` ["send_to_slack"]
         scheduledReadOnly `shouldNotContain` ["send_to_slack"]
         readonly `shouldSatisfy` (\names -> all (`elem` names) ["search_project_tools", "get_project_tool_schema", "list_metrics"])
@@ -340,8 +341,9 @@ spec = around withTestResources do
             _ -> expectationFailure "Expected the original worker's late response to improve retained evidence"
 
       it "agentOperation_catalogExposesTheExecutionRecoveryContract" \tr -> do
+        mode <- interactiveInvocation tr testPid (UUIDId UUID.nil) "Inspect tool recovery" Issues.Autonomous
         let conversation = UUIDId UUID.nil
-            config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just conversation, AI.invocationMode = AI.InteractiveWithActions, AI.projectTools = Just Routes.mcpProjectTools}
+            config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.projectTools = Just Routes.mcpProjectTools}
         void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
         for_ ([("get_project", "replay_reads"), ("save_artifact", "atomic_in_run"), ("send_to_slack", "retain_in_run")] :: [(Text, Text)]) \(name, expected) -> do
           result <- runTestBg frozenTime tr $ AI.executeToolCall config $ LLM.ToolCall "schema" "function" $ LLM.ToolFunction "get_project_tool_schema" $ one ("name", AE.String name)
@@ -624,11 +626,12 @@ spec = around withTestResources do
 
       it "agentDocuments_savedAppendedAndListedBesideTheConversation" \tr -> do
         let convId = UUIDId UUID.nil
-            web = (AI.defaultAgenticConfig testPid){AI.conversationId = Just convId, AI.conversationType = Just Issues.CTWeb}
-            routine = web{AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) Issues.Observe, AI.timezone = Just "America/New_York"}
+        mode <- scheduledInvocation tr convId Issues.Observe
+        let web = (AI.defaultAgenticConfig testPid){AI.conversationId = Just convId, AI.conversationType = Just Issues.CTWeb}
+            routine = web{AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.invocationMode = mode, AI.timezone = Just "America/New_York"}
             call cfg name args = AI.executeToolCall cfg (LLM.ToolCall "call" "function" $ LLM.ToolFunction name $ Map.fromList args)
         (saved, appended, listed, readBack, slack, routinePrompt) <- runTestBg frozenTime tr do
-          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
+          void $ Issues.getOrCreateConversation testPid convId Issues.CTWeb (AE.object [])
           saved <- call web "save_artifact" [("key", "Checkout Review"), ("title", "Checkout review"), ("content", "## Summary\nAll good.")]
           appended <- call web "save_artifact" [("key", "checkout-review"), ("mode", "append"), ("content", "## Follow-up\nLatency recovered.")]
           listed <- call web "read_artifact" []
@@ -837,6 +840,40 @@ spec = around withTestResources do
             Issues.resumeRoutine uid testPid convId
           fmap (.scheduledAt) scheduled `shouldBe` Just expected
 
+      it "runContext_recoveredLeaseStopsTheOldWorkerBeforeMutation" \tr -> do
+        let conversation = UUIDId UUID.nil
+            user = (getResponse tr.trSessAndHeader).user.id
+        Just slot <- runTestBg frozenTime tr do
+          void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+          Issues.insertChatMessage testPid conversation Issues.ChatUser "Create a dashboard" Nothing Nothing
+          Issues.upsertRoutine user testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
+        Just original <- runQueryEffect tr $ Issues.claimRoutine slot.id slot.scheduledAt
+        originalMode <- runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim original.runId original.claimedAt
+        let config mode = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.projectTools = Just Routes.mcpProjectTools}
+            provider :: ATBackgroundCtx a -> ATBackgroundCtx a
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "create" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Lease-fenced dashboard" :: Text)])]}
+                _ -> LLM.Message LLM.Assistant "Created." LLM.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected title request"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+            execute mode = runTestBg frozenTime tr $ provider $ tryAny $ AI.runAgenticChatWithHistory (config mode) "Create a dashboard" "model" "key"
+            count = runQueryEffect tr $ Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Lease-fenced dashboard'|]
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET running_since = now() - interval '31 minutes' WHERE id = #{slot.id}|]
+        Just recovered <- runQueryEffect tr $ Issues.claimRoutine slot.id slot.scheduledAt
+        recovered.claimedAt `shouldSatisfy` (/= original.claimedAt)
+        for_ [Issues.InteractiveClaim original.runId, Issues.BackgroundClaim original.runId original.claimedAt] $ \claim ->
+          runQueryEffect tr (Issues.runContextFor testPid user conversation claim) >>= (`shouldBe` Nothing)
+        stale <- execute originalMode
+        count >>= (`shouldBe` 0)
+        stale `shouldSatisfy` isLeft
+        recoveredMode <- runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim recovered.runId recovered.claimedAt
+        direct <- runTestBg frozenTime tr $ AI.executeToolCall (config recoveredMode) $ LLM.ToolCall "uncheckpointed" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Lease-fenced dashboard" :: Text)])
+        direct.formatted `shouldBe` "This change requires a durable checkpoint."
+        count >>= (`shouldBe` 0)
+        execute recoveredMode >>= (`shouldSatisfy` either (const False) isRight)
+        count >>= (`shouldBe` 1)
+
       it "routineAuthority_newActivationIsAutonomousAndDestinationDoesNotGrantOrRevokeWrites" \tr -> do
         let conversation = UUIDId UUID.nil
             user = (getResponse tr.trSessAndHeader).user.id
@@ -847,7 +884,8 @@ spec = around withTestResources do
         slot <- maybe (fail "Expected an installed schedule") pure scheduled
         run <- runQueryEffect tr (Issues.claimRoutine slot.id slot.scheduledAt) >>= maybe (fail "Expected a claimed run") pure
         run.policy `shouldBe` Issues.Autonomous
-        let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = AI.ScheduledRoutine run.runId run.policy, AI.projectTools = Just Routes.mcpProjectTools}
+        mode <- runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim run.runId run.claimedAt
+        let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.projectTools = Just Routes.mcpProjectTools}
             provider :: ATBackgroundCtx a -> ATBackgroundCtx a
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
@@ -947,7 +985,7 @@ spec = around withTestResources do
             <*> Issues.getConversation testPid convId
             <*> Hasql.interpOne @(Text, Bool, Bool, Maybe Text) [HI.sql|SELECT status, findings IS NOT NULL, actions IS NOT NULL, error FROM apis.ai_routine_runs WHERE routine_id = #{scheduled.id}|]
             <*> Issues.listRoutineRuns testPid 10
-        IORef.readIORef executions >>= (`shouldSatisfy` \case [AI.ScheduledRoutine _ Issues.Autonomous] -> True; _ -> False)
+        IORef.readIORef executions >>= (`shouldSatisfy` \case [AI.DurableRun context] -> context.policy == Issues.Autonomous; _ -> False)
         IORef.readIORef successors >>= (\items -> length items `shouldBe` 1)
         map (\message -> (message.role, message.content)) history
           `shouldBe` [(Issues.ChatUser, "Send a daily reliability brief to Slack"), (Issues.ChatAssistant, "Routine completed")]
@@ -984,7 +1022,7 @@ spec = around withTestResources do
               execute config = do
                 Eff.liftIO $ show config.access `shouldBe` show (AI.MemberAccess AI.ProjectMember user)
                 case config.invocationMode of
-                  AI.ScheduledRoutine _ allowed -> Eff.liftIO $ IORef.modifyIORef' grants (<> [allowed])
+                  AI.DurableRun context -> Eff.liftIO $ IORef.modifyIORef' grants (<> [context.policy])
                   _ -> Eff.liftIO $ expectationFailure "Expected a scheduled invocation"
                 AI.runAgenticChatWithHistory config "Summarize the project" "model" "key"
               enqueueNext _ at = Eff.liftIO $ IORef.modifyIORef' successors (<> [at])

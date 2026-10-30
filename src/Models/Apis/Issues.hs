@@ -143,12 +143,14 @@ module Models.Apis.Issues (
   getEventRoutine,
   startEventRun,
   routineRunActive,
-  routineRunActiveFor,
   ExecutionPolicy (..),
+  RunClaim (..),
+  RunContext,
+  runContextFor,
+  runContextPolicy,
   InteractiveOrigin (..),
   startInteractiveRun,
   InteractiveStart (..),
-  interactiveRunActive,
   completeRun,
   CompletionTarget (..),
   RunAnswer (..),
@@ -245,6 +247,7 @@ module Models.Apis.Issues (
   getLatestReportByType,
 ) where
 
+import Control.Lens (view)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
@@ -252,6 +255,7 @@ import Data.Char (isAscii, isPrint)
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
+import Data.Generics.Product.Fields qualified as Fields
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
@@ -274,7 +278,7 @@ import Effectful (Eff, IOE, type (:>))
 import Effectful.Log (Log)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
-import GHC.Records (HasField)
+import GHC.Records (HasField (..))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
@@ -1609,6 +1613,65 @@ data ExecutionPolicy = Observe | Autonomous
   deriving (AE.FromJSON, AE.ToJSON, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" ExecutionPolicy
 
 
+data RunClaim = InteractiveClaim (UUIDId "ai_routine_run") | BackgroundClaim (UUIDId "ai_routine_run") UTCTime
+
+
+newtype RunContext = RunContext RunContextRow
+  deriving newtype (Eq, Show)
+
+
+instance Fields.HasField' field RunContextRow value => HasField field RunContext value where
+  getField (RunContext row) = view (Fields.field' @field) row
+
+
+data RunContextRow = RunContextRow
+  { id :: UUIDId "ai_routine_run"
+  , rootId :: UUIDId "ai_routine_run"
+  , projectId :: Projects.ProjectId
+  , conversationId :: UUIDId "conversation"
+  , requestedBy :: Projects.UserId
+  , startedAt :: UTCTime
+  , source :: RoutineRunSource
+  , policy :: ExecutionPolicy
+  , input :: Maybe Text
+  , instructions :: Maybe Text
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+runContextFor :: DB es => Projects.ProjectId -> Projects.UserId -> UUIDId "conversation" -> RunClaim -> Eff es (Maybe RunContext)
+runContextFor pid user conversation claim =
+  let (run, scope) = case claim of
+        InteractiveClaim identifier -> (identifier, [HI.sql| AND source->>'tag' = 'InteractiveRun'|])
+        BackgroundClaim identifier at -> (identifier, [HI.sql| AND source->>'tag' <> 'InteractiveRun' AND started_at = #{at}|])
+   in fmap RunContext
+        <$> Hasql.interpOne
+          ( [HI.sql|SELECT id, root_run_id, project_id, conversation_id, requested_by, started_at, source, policy, input, instructions
+      FROM apis.ai_routine_runs WHERE id = #{run} AND project_id = #{pid} AND requested_by = #{user} AND conversation_id = #{conversation}|]
+              <> scope
+          )
+
+
+runContextPolicy :: DB es => RunContext -> Eff es (Maybe ExecutionPolicy)
+runContextPolicy context = fmap effective <$> Hasql.interpOne query
+  where
+    effective (HI.OneColumn policy) = case context.source of
+      TriggeredRun{} -> Observe
+      _ -> policy
+    scope =
+      [HI.sql| AND run.requested_by = #{context.requestedBy} AND run.conversation_id = #{context.conversationId}
+      AND run.started_at = #{context.startedAt} AND run.source = #{context.source} AND run.policy = #{context.policy}|]
+    query = case context.source of
+      InteractiveRun{} ->
+        [HI.sql|SELECT run.policy FROM apis.ai_routine_runs run
+          JOIN apis.ai_conversations conversation ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
+          WHERE run.id = #{context.id} AND run.project_id = #{context.projectId} AND run.status IN ('running', 'succeeded')|]
+          <> scope
+      ScheduledRun -> routineRunPolicySql context.projectId context.id scope
+      TriggeredRun{} -> routineRunPolicySql context.projectId context.id scope
+
+
 data RunContinuation = StartRun | ContinueRun | RestartRun
   deriving stock (Eq)
 
@@ -2040,7 +2103,7 @@ startEventRun routine event continuation convId requestedBy input = do
           CASE WHEN #{restart} OR original.id IS NULL THEN #{input} ELSE original.input END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.instructions ELSE original.instructions END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.template_version ELSE original.template_version END,
-          CASE WHEN #{restart} OR original.id IS NULL THEN r.policy ELSE original.policy END,
+          CASE WHEN #{restart} OR original.id IS NULL THEN #{Observe} ELSE original.policy END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.authority_version ELSE original.authority_version END
         FROM apis.ai_routines r CROSS JOIN identity LEFT JOIN original ON TRUE
         WHERE r.id = #{routine.id} AND r.project_id = #{routine.projectId} AND r.schedule_kind = #{kind} AND r.active
@@ -2097,17 +2160,6 @@ startInteractiveRun pid conversation user runId input policy origin = do
             Hasql.executeTx [HI.sql|UPDATE apis.ai_routines SET instructions = #{input} WHERE id = #{scheduled.id}|]
             pure $ Just scheduled
           _ -> pure Nothing
-
-
-interactiveRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Projects.UserId -> UUIDId "conversation" -> ExecutionPolicy -> Eff es Bool
-interactiveRunActive pid runId user conversation policy =
-  fromMaybe False
-    <$> Hasql.interpOne
-      [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_routine_runs run
-      JOIN apis.ai_conversations c ON c.project_id = run.project_id AND c.conversation_id = run.conversation_id
-      WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.requested_by = #{user}
-        AND run.conversation_id = #{conversation} AND run.source->>'tag' = 'InteractiveRun'
-        AND run.policy = #{policy} AND run.status IN ('running', 'succeeded'))|]
 
 
 data CompletionTarget
@@ -2209,11 +2261,6 @@ completeRun target proposed = do
 
 routineRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
 routineRunActive pid runId = fromMaybe False <$> Hasql.interpOne (routineRunActiveSql pid runId mempty)
-
-
-routineRunActiveFor :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Projects.UserId -> UUIDId "conversation" -> Eff es Bool
-routineRunActiveFor pid runId user conversation =
-  fromMaybe False <$> Hasql.interpOne (routineRunActiveSql pid runId [HI.sql| AND run.requested_by = #{user} AND run.conversation_id = #{conversation}|])
 
 
 routineRunActiveSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql -> HI.Sql

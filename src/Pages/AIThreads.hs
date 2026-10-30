@@ -612,7 +612,8 @@ submitTurn projectTools origin requestId allowActions pid convId prompt = do
   Issues.startInteractiveRun pid convId sess.user.id requestId prompt policy origin >>= \case
     Issues.ConflictingRequest -> throwError Servant.err409{Servant.errBody = "Request ID already belongs to another request"}
     Issues.AcceptedRequest scheduled -> for_ scheduled $ \routine -> BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
-  result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools (AI.InteractiveRun requestId policy) (AI.MemberAccess AI.WebSession sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
+  mode <- AI.invocationFor pid sess.user.id convId $ Issues.InteractiveClaim requestId
+  result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools mode (AI.MemberAccess AI.WebSession sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
   case result of
     Left err -> throwError Servant.err502{Servant.errBody = encodeUtf8 err}
     Right _ -> pass

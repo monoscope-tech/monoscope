@@ -80,14 +80,15 @@ spec = around withTestResources do
     describe "project wiki tools" do
       it "shares versioned wiki context with chat and attributes assistant revisions" \tr -> do
         otherProject <- createTestProject tr "Private wiki"
+        mode <- interactiveInvocation tr testPid (UUIDId UUID.nil) "Remember our retry behavior" Issues.Autonomous
         let conversation = UUIDId UUID.nil
             page = UUIDId UUID.nil
             privatePage = UUIDId $ UUID.fromWords 1 2 3 4
             user = (getResponse tr.trSessAndHeader).user.id
             document = AE.object ["title" AE..= ("Payments" :: Text), "body" AE..= ("Retries need an idempotency key." :: Text)]
-            write version = Chat.ToolCall (show version) "function" $ Chat.ToolFunction "write_project_memory" $ fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (version :: Int)), ("document", document)]
-            calls = [write 0, Chat.ToolCall "read" "function" $ Chat.ToolFunction "read_project_memory" $ fromList [("pageId", AE.toJSON page)], Chat.ToolCall "list" "function" $ Chat.ToolFunction "list_project_memory" mempty, Chat.ToolCall "foreign" "function" $ Chat.ToolFunction "read_project_memory" $ fromList [("pageId", AE.toJSON privatePage)], write 0]
-            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = AI.InteractiveWithActions, AI.maxIterations = 6}
+            write version content = Chat.ToolCall (show version) "function" $ Chat.ToolFunction "write_project_memory" $ fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (version :: Int)), ("document", content)]
+            calls = [write 0 document, Chat.ToolCall "read" "function" $ Chat.ToolFunction "read_project_memory" $ fromList [("pageId", AE.toJSON page)], Chat.ToolCall "list" "function" $ Chat.ToolFunction "list_project_memory" mempty, Chat.ToolCall "foreign" "function" $ Chat.ToolFunction "read_project_memory" $ fromList [("pageId", AE.toJSON privatePage)], write 0 (document & key "body" . _String .~ "A stale edit must not replace the observation.")]
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.maxIterations = 6}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> do
                 let evidence = [message.content | message <- toList history, message.role == Chat.Tool]
@@ -118,13 +119,15 @@ spec = around withTestResources do
         it ("denies wiki mutation for " <> toString scenario) \tr -> do
           project <- if scenario == "inactive" then createTestProject tr "Revoked private access" else pure testPid
           when (scenario == "inactive") $ withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE users.users SET is_sudo = FALSE WHERE id = ?" (PGS.Only (getResponse tr.trSessAndHeader).user.id)
+          mode <- interactiveInvocation tr project (UUIDId UUID.nil) "Remember this" Issues.Autonomous
           let conversation = UUIDId UUID.nil
               page = UUIDId UUID.nil
               user = (getResponse tr.trSessAndHeader).user.id
-              base = (agentConfig project){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = AI.InteractiveWithActions}
+              base = (agentConfig project){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode}
               config = case scenario of
                 "readonly" -> base{AI.invocationMode = AI.InteractiveReadOnly}
                 "service" -> base{AI.access = AI.ServiceAccess}
+                "foreign-conversation" -> base{AI.conversationId = Just $ UUIDId $ UUID.fromWords 0 0 99 3}
                 _ -> base
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> do
@@ -142,7 +145,7 @@ spec = around withTestResources do
           owner <- if scenario == "foreign-conversation" then createTestProject tr "Other conversation owner" else pure project
           void $ toBaseServantResponse tr $ Issues.getOrCreateConversation owner conversation Issues.CTWeb (AE.object [])
           result <- runTestBg frozenTime tr $ provider $ tryAny $ AI.runAgenticChatWithHistory config "Remember this" "model" "key"
-          if scenario == "inactive" then result `shouldSatisfy` isLeft else result `shouldSatisfy` isRight
+          if scenario `elem` ["inactive", "service", "foreign-conversation"] then result `shouldSatisfy` isLeft else result `shouldSatisfy` isRight
           runQueryEffect tr (Memory.pageHistory project page) >>= (`shouldSatisfy` null)
 
       for_ ["demo", "sudo"] \scope ->
@@ -182,7 +185,8 @@ spec = around withTestResources do
             pure scheduled
           claimed <- runQueryEffect tr (Issues.claimRoutine routine.id routine.scheduledAt) >>= maybe (fail "Expected a claimed routine run") pure
           let user = (getResponse tr.trSessAndHeader).user.id
-              config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just $ if scenario == "wrong-conversation" then other else conversation, AI.invocationMode = AI.ScheduledRoutine claimed.runId Issues.Autonomous}
+          mode <- runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim claimed.runId claimed.claimedAt
+          let config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just $ if scenario == "wrong-conversation" then other else conversation, AI.invocationMode = mode}
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> do
                   let evidence = [message.content | message <- toList history, message.role == Chat.Tool]
@@ -1060,12 +1064,20 @@ spec = around withTestResources do
               then do
                 routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected an installed routine") pure
                 execution <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.StartRun conversation user "Inspect the project") >>= maybe (fail "Expected a routine run") pure
-                pure (execution.id, AI.RoutineEventRun execution.id)
+                when (origin == "event") $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET policy = #{Issues.Autonomous} WHERE id = #{execution.id}|]
+                invocation <- runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim execution.id execution.startedAt
+                when (origin == "event") do
+                  let legacy = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = invocation}
+                  denied <- runTestBg frozenTime tr $ AI.executeToolCall legacy $ Chat.ToolCall "legacy-event-write" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Must remain Observe" :: Text)])
+                  denied.formatted `shouldSatisfy` T.isInfixOf "execution policy"
+                pure (execution.id, invocation)
               else runTestBg frozenTime tr do
                 Issues.insertChatMessage testPid conversation Issues.ChatUser "Inspect the project" Nothing Nothing
                 scheduled <- Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (liftIO $ fail "Expected a scheduled routine") pure
+                Issues.setRoutinePolicy user testPid conversation Issues.Observe
                 execution <- Issues.claimRoutine scheduled.id scheduled.scheduledAt >>= maybe (liftIO $ fail "Expected a claimed run") pure
-                pure (execution.runId, AI.ScheduledRoutine execution.runId Issues.Observe)
+                invocation <- AI.invocationFor testPid user conversation $ Issues.BackgroundClaim execution.runId execution.claimedAt
+                pure (execution.runId, invocation)
           calls <- newIORef ([] :: [Text])
           models <- newIORef ([] :: [Maybe Text])
           interrupt <- newIORef (not artifact)
@@ -1132,7 +1144,7 @@ spec = around withTestResources do
                 (evidence >>= (.requestedBy)) `shouldBe` Just user
                 runQueryEffect tr (Hasql.interpScalar @(UUIDId "ai_routine_run") [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{recovered.id}|]) >>= (`shouldBe` runId)
                 runQueryEffect tr (Issues.routineRunPolicyFor testPid recovered.id user conversation) >>= (`shouldBe` Just Issues.Observe)
-                pure $ AI.RoutineEventRun recovered.id
+                runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim recovered.id recovered.startedAt
               else pure mode
           execute resumedMode "Changed retry input" "changed-model" >>= (`shouldSatisfy` isRight)
           readIORef calls >>= (`shouldBe` (if artifact then ["get_schema"] else ["get_project", "get_schema", "get_schema"]))
@@ -2104,7 +2116,7 @@ spec = around withTestResources do
                 then do
                   let request = UUIDId $ UUID.fromWords 0 0 97 3
                   void $ Issues.startInteractiveRun testPid conversation user request "Read project evidence" Issues.Observe Issues.WebMessage
-                  pure $ AI.InteractiveRun request Issues.Observe
+                  AI.invocationFor testPid user conversation $ Issues.InteractiveClaim request
                 else
                   if origin == "event"
                     then do
@@ -2112,14 +2124,19 @@ spec = around withTestResources do
                       void $ Issues.installRoutineTemplate user testPid conversation "UTC" template
                       routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (liftIO $ throwIO $ ErrorCall "Missing installed routine") pure
                       execution <- Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.StartRun conversation user "Read project evidence" >>= maybe (liftIO $ throwIO $ ErrorCall "Missing event run") pure
-                      pure $ AI.RoutineEventRun execution.id
+                      AI.invocationFor testPid user conversation $ Issues.BackgroundClaim execution.id execution.startedAt
                     else do
                       slot <- Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (liftIO $ throwIO $ ErrorCall "Missing scheduled instant") pure
                       execution <- Issues.claimRoutine slot.id slot.scheduledAt >>= maybe (liftIO $ throwIO $ ErrorCall "Missing claimed run") pure
-                      pure $ AI.ScheduledRoutine execution.runId execution.policy
+                      AI.invocationFor testPid user conversation $ Issues.BackgroundClaim execution.runId execution.claimedAt
           let config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode}
               call = Chat.ToolCall "project-read" "function" $ Chat.ToolFunction "get_project" mempty
               mismatch = if changed == "actor" then config{AI.access = AI.MemberAccess AI.ProjectMember otherUser} else config{AI.conversationId = Just otherConversation}
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_conversations SET title = 'Context binding' WHERE project_id = #{testPid}|]
+          runTestBg frozenTime tr (AI.completeAgenticResponse mismatch "Read project evidence" "model" "key" $ AI.AgenticChatResult "Must not be published" []) `shouldThrow` (\AI.AgentStopped -> True)
+          for_ [conversation, otherConversation] $ \conv -> do
+            messages <- runQueryEffect tr $ Issues.selectChatHistory testPid conv
+            filter ((== Issues.ChatAssistant) . (.role)) messages `shouldSatisfy` null
           runTestBg frozenTime tr (AI.executeToolCall mismatch call) `shouldThrow` (\AI.AgentStopped -> True)
           result <- runTestBg frozenTime tr $ AI.executeToolCall config call
           result.formatted `shouldSatisfy` T.isInfixOf testPid.toText
@@ -2302,7 +2319,8 @@ spec = around withTestResources do
         results `shouldSatisfy` any (T.isInfixOf "unknown project operation")
         viaNonEmpty last results `shouldBe` Just "This project operation has no Agent policy."
         writeIORef invoked []
-        allowed <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config{AI.invocationMode = AI.InteractiveWithActions} "Create a monitor" "model" "key"
+        mode <- interactiveInvocation tr testPid (UUIDId UUID.nil) "Create a monitor" Issues.Autonomous
+        allowed <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config{AI.conversationId = Just $ UUIDId UUID.nil, AI.invocationMode = mode} "Create a monitor" "model" "key"
         allowed `shouldSatisfy` isRight
         readIORef invoked >>= (`shouldBe` ["get_dashboard_data", "create_monitor"])
 
@@ -2384,6 +2402,7 @@ spec = around withTestResources do
         tryAny check >>= (`shouldSatisfy` isLeft)
 
       it "denies an in-app write when the signed-in member is view-only" \tr -> do
+        mode <- interactiveInvocation tr testPid (UUIDId UUID.nil) "Create a monitor" Issues.Autonomous
         let userId = (getResponse tr.trSessAndHeader).user.id
         withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?|] (testPid, userId)
         invoked <- newIORef False
@@ -2392,7 +2411,7 @@ spec = around withTestResources do
                 { AI.catalog = Map.singleton "create_monitor" $ MCP.Tool "create_monitor" "Create a monitor" (AE.object []) (Just $ MCP.ProjectWrite) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
                 , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
                 }
-            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember userId, AI.projectTools = Just backend, AI.invocationMode = AI.InteractiveWithActions}
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember userId, AI.projectTools = Just backend, AI.conversationId = Just $ UUIDId UUID.nil, AI.invocationMode = mode}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
                 [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "write" "function" (Chat.ToolFunction "create_monitor" mempty)]}
@@ -2412,9 +2431,10 @@ spec = around withTestResources do
             [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, service, environment)
                 VALUES (?, 'runtime_exception'::apis.issue_type, gen_random_uuid()::text, 'checkout', 'production') RETURNING id|]
             (PGS.Only testPid)
+        mode <- interactiveInvocation tr testPid (UUIDId UUID.nil) "Acknowledge this issue" Issues.Autonomous
         let userId = (getResponse tr.trSessAndHeader).user.id
             backend = Routes.mcpProjectTools
-            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember userId, AI.projectTools = Just backend, AI.invocationMode = AI.InteractiveWithActions}
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember userId, AI.projectTools = Just backend, AI.conversationId = Just $ UUIDId UUID.nil, AI.invocationMode = mode}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
                 [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "ack" "function" (Chat.ToolFunction "ack_issue" $ one ("issue_id", AE.toJSON issueId)), Chat.ToolCall "dashboard" "function" (Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Agent attribution regression" :: Text)]))]}
@@ -2437,9 +2457,10 @@ spec = around withTestResources do
 
       it "blocks a view-only Slack member from sending through an action tool" \tr -> do
         setupSlackAgent tr testPid "T_VIEW_ACTION"
+        mode <- interactiveInvocation tr testPid (UUIDId UUID.nil) "Send this to Slack" Issues.Autonomous
         withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ?|] (PGS.Only testPid)
         let userId = (getResponse tr.trSessAndHeader).user.id
-            config = (agentConfig testPid){AI.access = AI.SlackAccess "T_VIEW_ACTION" "U0123ABCDEF" userId, AI.invocationMode = AI.InteractiveWithActions}
+            config = (agentConfig testPid){AI.access = AI.SlackAccess "T_VIEW_ACTION" "U0123ABCDEF" userId, AI.conversationId = Just $ UUIDId UUID.nil, AI.invocationMode = mode}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
                 [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "send" "function" (Chat.ToolFunction "send_to_slack" $ one ("message", AE.String "Do not send"))]}
@@ -2452,7 +2473,8 @@ spec = around withTestResources do
           Right answer -> T.isInfixOf "edit permission" answer.response
           _ -> False
         withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = ?|] (PGS.Only testPid)
-        (allowedRequests, allowed) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true}") $ provider $ AI.runAgenticChatWithHistory config "Send this to Slack" "model" "api-key-never-store"
+        resumed <- interactiveInvocation tr testPid (UUIDId UUID.nil) "Send this to Slack" Issues.Autonomous
+        (allowedRequests, allowed) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true}") $ provider $ AI.runAgenticChatWithHistory config{AI.invocationMode = resumed} "Send this to Slack" "model" "api-key-never-store"
         map fst allowedRequests `shouldBe` ["https://slack.com/api/chat.postMessage"]
         allowed `shouldSatisfy` \case
           Right answer -> T.isInfixOf "Slack message sent" answer.response

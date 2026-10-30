@@ -518,8 +518,40 @@ Both permanent browser scenarios pass against the current WAI application and an
 
 Event actions still use the conservative Observe ceiling until invocation authority, role/scope ceilings, and publication audience controls are complete.
 Service recovery adapters must retain the request's original authorizing member when installation ownership changes.
-Scheduled worker lease fencing at operation boundaries, sensitive history disclosure, and native completion consolidation remain release work.
+The next slice addresses scheduled worker lease fencing. Sensitive history disclosure and native completion consolidation remain release work.
 This slice establishes request continuity; it does not claim the full unified agent is complete.
+
+### One stored invocation context and worker lease (31 October)
+
+Web, issue chat, Slack commands, Slack events, and scheduled jobs now load the same opaque `RunContext` from the existing run ledger.
+It retains the original actor, project, conversation, source, policy, input, instructions, request root, and worker start time.
+The public type has read-only field access, with no exported constructor, record updates, generic reconstruction, or decoder.
+Callers can no longer assemble an interactive, scheduled, or event invocation from independent IDs and policy values.
+The legacy `InteractiveWithActions` constructor is removed; the remaining modes are the read-only compatibility adapter and a stored run.
+
+One context check now guards model boundaries, tool execution, and answer publication.
+Interactive claims cannot load a background run. Background claims must provide their actual start time.
+The same worker start time is checked under the run-row lock when claiming a mutation.
+A recovered scheduler worker can retain the same run ID and checkpoint without granting its predecessor a fresh lease.
+Already claimed external actions may still return late and improve the operation evidence; recovery never blindly repeats them.
+
+The scheduled-worker regression first reproduced a real dashboard creation by the old worker after lease recovery.
+It now checks rejection of stale and wrongly classified claims, no old-worker mutation, rejection of a direct uncheckpointed write, and one dashboard from the recovered worker.
+The actor/conversation matrix also reproduced five missing publication checks across interactive, scheduled, and event runs.
+The common context guard now rejects all six combinations before publishing an assistant message.
+The existing wiki conflict case uses a distinct stale proposal, since an identical proposal correctly reuses its retained response within a request.
+
+Event actions retain the existing conservative Observe ceiling in the common authority evaluator, including historical Autonomous snapshots.
+Fresh event runs persist that ceiling; recovery still retains the original snapshot.
+Enabling event autonomy remains dependent on the planned role/scope and publication audience work.
+Old read-only chat adapters can still save conversation documents without a run; that compatibility path remains to be retired.
+Native adapter completion and sensitive history disclosure are also unfinished.
+
+No migration or new Haskell module was needed for this slice.
+Applied migration files remain immutable, including those already used in local development.
+SQL consolidation uses shared query fragments and the existing run/checkpoint/operation tables instead of adding another ledger.
+
+The final focused suites pass: 184 bot examples, 75 API v1 examples, and 45 issue examples. The native review publication/recovery/retry case passes. Both permanent Chrome scenarios pass against the current WAI application and an isolated test database, including the full routine lifecycle and the policy/action-history flow. They completed in 107 seconds under the existing 180-second local browser budget; the repository CI timeout is unchanged. The temporary browser-launch bridge was removed. Formatter and diff checks pass. Repeated slice reviews found and fixed the missing publication guard and redundant context reconstruction, with no remaining material slice findings. Whole-branch review, doctests, controlled live Slack acceptance, release signoff, and PR update remain pending.
 
 ## External references
 

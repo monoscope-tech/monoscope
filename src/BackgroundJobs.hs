@@ -415,12 +415,13 @@ runAIRoutineWith
   -> UTCTime
   -> ATBackgroundCtx ()
 runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt = whenJustM (Issues.claimRoutine routineId scheduledAt) \routine -> do
+  mode <- AI.invocationFor routine.projectId routine.requestedBy routine.conversationId $ Issues.BackgroundClaim routine.runId routine.claimedAt
   conversationM <- Issues.getConversation routine.projectId routine.conversationId
   let conversationType = maybe Issues.CTWeb (.conversationType) conversationM
       deliveryContext = case routine.destination of
         Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
         Issues.DestinationConversation -> Nothing
-      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = routine.instructions <> deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.ScheduledRoutine routine.runId routine.policy}
+      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = mode}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
     AI.requireAgentAccess config.access routine.projectId

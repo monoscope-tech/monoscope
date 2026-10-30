@@ -46,6 +46,7 @@ module Pkg.AI (
   runAgenticChatWithHistory,
   defaultAgenticConfig,
   executeToolCall,
+  invocationFor,
   OperationPolicy (..),
   defaultLimits,
 
@@ -224,18 +225,19 @@ ensureConversationTitle config pid convId question answer model apiKey =
 
 completeAgenticResponse :: (DB es, ELLM.LLM :> es, IOE :> es, Time.Time :> es) => AgenticConfig -> Text -> Text -> Text -> AgenticChatResult -> Eff es (Either Text LLMResponse)
 completeAgenticResponse config userQuery model apiKey answer = do
+  void $ requireConfigAccess config
   case (config.access, config.conversationId) of
     (SlackInvestigationAccess{}, _) -> pass -- Saved atomically with the replayable answer.
     (_, Nothing) -> pass
     (_, Just convId) -> do
-      requireAgentAccess config.access config.projectId
       let message = prepareRunAnswer answer
       case (config.invocationMode, config.access) of
-        (InteractiveRun runId policy, MemberAccess _ user) ->
-          Issues.completeRun (Issues.InteractiveTarget config.projectId runId user policy) (Issues.PublishedResult message) >>= \case
-            Issues.CompletionRejected -> throwIO AgentStopped
-            Issues.RunCompleted _ -> pass
-        (InteractiveRun{}, _) -> throwIO AgentAccessDenied
+        (DurableRun context, MemberAccess _ user)
+          | Issues.InteractiveRun{} <- context.source ->
+              Issues.completeRun (Issues.InteractiveTarget config.projectId context.id user context.policy) (Issues.PublishedResult message) >>= \case
+                Issues.CompletionRejected -> throwIO AgentStopped
+                Issues.RunCompleted _ -> pass
+        (DurableRun context, _) | Issues.InteractiveRun{} <- context.source -> throwIO AgentAccessDenied
         _ -> Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just message.tools)
   whenJust config.conversationId \convId ->
     ensureConversationTitle config.sourceConfig config.projectId convId userQuery answer.response (maybe model (.openaiSmallModel) config.sourceConfig) apiKey
@@ -589,28 +591,26 @@ data AgenticConfig = AgenticConfig
   }
 
 
--- | Background invocations carry the run whose installation grants authority.
--- A scheduled prompt alone can never grant it.
-data InvocationMode = InteractiveReadOnly | InteractiveWithActions | InteractiveRun (UUIDId "ai_routine_run") Issues.ExecutionPolicy | ScheduledRoutine (UUIDId "ai_routine_run") Issues.ExecutionPolicy | RoutineEventRun (UUIDId "ai_routine_run")
+-- | Writable invocations load their authority and worker lease from the run ledger.
+data InvocationMode = InteractiveReadOnly | DurableRun Issues.RunContext
   deriving stock (Eq, Generic, Show)
 
 
-invocationRun :: InvocationMode -> Maybe (UUIDId "ai_routine_run")
-invocationRun = \case
-  InteractiveRun run _ -> Just run
-  ScheduledRoutine run _ -> Just run
-  RoutineEventRun run -> Just run
+invocationFor :: (DB es, IOE :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "conversation" -> Issues.RunClaim -> Eff es InvocationMode
+invocationFor project user conversation claim =
+  DurableRun <$> (Issues.runContextFor project user conversation claim >>= maybe (throwIO AgentStopped) pure)
+
+
+invocationContext :: InvocationMode -> Maybe Issues.RunContext
+invocationContext = \case
+  DurableRun context -> Just context
   InteractiveReadOnly -> Nothing
-  InteractiveWithActions -> Nothing
 
 
 invocationPolicy :: InvocationMode -> Issues.ExecutionPolicy
 invocationPolicy = \case
   InteractiveReadOnly -> Issues.Observe
-  InteractiveWithActions -> Issues.Autonomous
-  InteractiveRun _ policy -> policy
-  ScheduledRoutine _ policy -> policy
-  RoutineEventRun{} -> Issues.Observe
+  DurableRun context -> context.policy
 
 
 -- | Documents live beside conversations, including linked Slack investigations.
@@ -622,25 +622,14 @@ documentConversation config = case config.access of
   SlackInvestigationAccess{} -> config.conversationId
 
 
-userMessagePersistence :: InvocationMode -> Bool
-userMessagePersistence = \case
-  InteractiveReadOnly -> True
-  InteractiveWithActions -> True
-  InteractiveRun{} -> False
-  ScheduledRoutine{} -> False
-  RoutineEventRun{} -> True
-
-
-requireConfigAccess :: (DB es, IOE :> es) => AgenticConfig -> Eff es ()
+requireConfigAccess :: (DB es, IOE :> es) => AgenticConfig -> Eff es Issues.ExecutionPolicy
 requireConfigAccess config = do
   requireAgentAccess config.access config.projectId
-  for_ (invocationRun config.invocationMode) $ \runId -> do
-    active <- case (accessMember config.access, config.conversationId) of
-      (Just user, Just conversation) -> case config.invocationMode of
-        InteractiveRun _ policy -> Issues.interactiveRunActive config.projectId runId user conversation policy
-        _ -> Issues.routineRunActiveFor config.projectId runId user conversation
-      _ -> pure False
-    unless active $ throwIO AgentStopped
+  case invocationContext config.invocationMode of
+    Nothing -> pure $ invocationPolicy config.invocationMode
+    Just context -> do
+      unless (context.projectId == config.projectId && Just context.requestedBy == accessMember config.access && Just context.conversationId == config.conversationId) $ throwIO AgentStopped
+      Issues.runContextPolicy context >>= maybe (throwIO AgentStopped) pure
 
 
 -- | Default agentic configuration with reasonable defaults (maxIterations=5, facetContext=Nothing)
@@ -934,10 +923,11 @@ buildSystemPrompt config now =
             , "Rewrite an existing document (mode replace) instead of creating a near-duplicate under a new key."
             ]
           <> case config.invocationMode of
-            ScheduledRoutine{} ->
-              [ "This is a scheduled run. Keep ONE document per day: key \"" <> localNow "%Y-%m-%d" <> "\", a title naming the routine's subject and the date, mode append."
-              , "Append one \"## " <> localNow "%H:%M" <> "\" section with what this run observed. When nothing changed, append a single line saying so rather than repeating earlier sections."
-              ]
+            DurableRun context
+              | context.source == Issues.ScheduledRun ->
+                  [ "This is a scheduled run. Keep ONE document per day: key \"" <> localNow "%Y-%m-%d" <> "\", a title naming the routine's subject and the date, mode append."
+                  , "Append one \"## " <> localNow "%H:%M" <> "\" section with what this run observed. When nothing changed, append a single line saying so rather than repeating earlier sections."
+                  ]
             _ -> []
       actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ invocationPolicy config.invocationMode == Issues.Autonomous
    in basePrompt <> timezoneSection <> facetSection <> customSection <> projectSection <> investigationSection <> documentsSection <> actionsSection
@@ -1009,18 +999,17 @@ runAgenticChatWithHistory
   -> Text
   -> Eff es (Either Text AgenticChatResult)
 runAgenticChatWithHistory initialConfig requestedInput model apiKey = do
-  requireConfigAccess initialConfig
+  void $ requireConfigAccess initialConfig
   (userQuery, instructions) <- case initialConfig.invocationMode of
-    RoutineEventRun runId -> do
-      evidence <- Issues.getRoutineRunEvidence initialConfig.projectId runId >>= maybe (throwIO AgentStopped) pure
-      input <- maybe (throwIO AgentStopped) pure evidence.input
-      pure (input, evidence.instructions)
+    DurableRun context ->
+      let retained = (,context.instructions) <$> maybe (throwIO AgentStopped) pure context.input
+       in case context.source of
+            Issues.ScheduledRun -> pure (requestedInput, context.instructions)
+            Issues.TriggeredRun{} -> retained
+            Issues.InteractiveRun{} -> retained
     InteractiveReadOnly -> pure (requestedInput, Nothing)
-    InteractiveWithActions -> pure (requestedInput, Nothing)
-    InteractiveRun{} -> pure (requestedInput, Nothing)
-    ScheduledRoutine{} -> pure (requestedInput, Nothing)
   let config = initialConfig{customContext = instructions <> initialConfig.customContext}
-  requireConfigAccess config
+  void $ requireConfigAccess config
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
   let initial history = Investigations.ModelPending $ Investigations.Step (systemMsg :| (mapMaybe dbMessageToLLMMessage history <> [userMsg])) params 0 config.timeRange []
       run turn checkpoint = withInvestigationJournal config userQuery model $ \journal -> runAgenticLoopRaw turn journal config apiKey checkpoint
@@ -1041,12 +1030,12 @@ runAgenticChatWithHistory initialConfig requestedInput model apiKey = do
                 )
                 pure
           result <- run (Just $ Investigations.CheckpointCursor (Investigations.SlackCheckpoint turn) checkpoint.revision) checkpoint.checkpoint
-          requireConfigAccess config
+          void $ requireConfigAccess config
           traverse (Investigations.saveAnswer turn) result
     (access, Just convId)
-      | Just runId <- invocationRun config.invocationMode
+      | Just context <- invocationContext config.invocationMode
       , Just user <- accessMember access -> do
-          target <- Investigations.runCheckpointTarget $ Investigations.RunTurn config.projectId convId user runId
+          let target = Investigations.RunCheckpoint $ Investigations.RunTurn config.projectId convId user context.rootId
           checkpoint <-
             Investigations.loadCheckpointFor target
               >>= maybe
@@ -1056,11 +1045,11 @@ runAgenticChatWithHistory initialConfig requestedInput model apiKey = do
                 )
                 pure
           run (Just $ Investigations.CheckpointCursor target checkpoint.revision) checkpoint.checkpoint
-    _ | isJust $ invocationRun config.invocationMode -> throwIO AgentAccessDenied
+    _ | isJust $ invocationContext config.invocationMode -> throwIO AgentAccessDenied
     _ -> do
       history <-
         config.conversationId & maybe (pure []) \convId ->
-          Issues.selectChatHistory config.projectId convId <* when (userMessagePersistence config.invocationMode) (Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing)
+          Issues.selectChatHistory config.projectId convId <* Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing
       run Nothing $ initial history
 
 
@@ -1068,7 +1057,7 @@ runAgenticChatWithHistory initialConfig requestedInput model apiKey = do
 -- Persisted Slack turns resume their checkpoint while each worker attempt retains its own activity log.
 withInvestigationJournal :: (DB es, IOE :> es, UUIDEff :> es) => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
 withInvestigationJournal config userQuery model action = do
-  requireConfigAccess config
+  void $ requireConfigAccess config
   case config.access of
     SlackInvestigationAccess run -> do
       runId <- UUIDId <$> genUUID
@@ -1086,7 +1075,7 @@ withInvestigationJournal config userQuery model action = do
 -- run again after an interrupted call; completed tools and model responses replay.
 runAgenticLoopRaw :: ProjectToolCtx es => Maybe Investigations.CheckpointCursor -> Maybe Investigations.Scope -> AgenticConfig -> Text -> Investigations.Checkpoint -> Eff es (Either Text AgenticChatResult)
 runAgenticLoopRaw turn journal config apiKey checkpoint = do
-  requireConfigAccess config
+  void $ requireConfigAccess config
   case checkpoint of
     Investigations.AnswerReady answer -> do
       Log.logTrace "AI final response" (AE.object ["responseLength" AE..= T.length answer.response, "toolCount" AE..= length answer.toolCalls])
@@ -1101,7 +1090,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
               request = if finalRound then step.request{OpenAIV1.tools = Nothing} else step.request
           Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= step.iteration, "historySize" AE..= length step.history, "finalRound" AE..= finalRound])
           response <- ELLM.callAgenticChat step.history request apiKey
-          requireConfigAccess config
+          void $ requireConfigAccess config
           case response of
             Left err -> do
               record $ Investigations.ModelReturned step.iteration Investigations.ModelRequestFailed
@@ -1109,8 +1098,8 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
               pure $ Left "LLM service temporarily unavailable"
             Right message -> do
               let source = case (config.invocationMode, config.access) of
-                    (ScheduledRoutine{}, _) -> Projects.UsageRoutine
-                    (RoutineEventRun{}, _) -> Projects.UsageRoutine
+                    (DurableRun context, _) | context.source == Issues.ScheduledRun -> Projects.UsageRoutine
+                    (DurableRun context, _) | Issues.TriggeredRun{} <- context.source -> Projects.UsageRoutine
                     (_, SlackInvestigationAccess{}) -> Projects.UsageSlackInvestigation
                     _ -> Projects.UsageInteractive
               Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (estimatedTokens (step.history, request)) (estimatedTokens message)
@@ -1153,7 +1142,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
         candidates <- Investigations.pendingFollowups scope
         authorized <- filterM (\followup -> isJust <$> Integrations.resolveSlackPrincipal scope.teamId followup.slackUserId (Just scope.projectId)) candidates
         forM (nonEmpty authorized) $ \followups -> do
-          requireConfigAccess config
+          void $ requireConfigAccess config
           let followupMessages = map (\followup -> LLM.Message LLM.User ("Slack reply from <@" <> followup.slackUserId <> "> at " <> followup.messageTs <> ":\n" <> followup.text) LLM.defaultMessageData) $ toList followups
           history <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer step.history followupMessages
           let next = Investigations.ModelPending step{Investigations.history = history, Investigations.iteration = step.iteration + 1}
@@ -1283,7 +1272,7 @@ executeToolCall config call = operationResponse config.projectId <$> executeTool
 
 executeToolAt :: ProjectToolCtx es => Maybe Investigations.CheckpointCursor -> AgenticConfig -> LLM.ToolCall -> Eff es Investigations.OperationResult
 executeToolAt cursor config tc = do
-  requireConfigAccess config
+  execution <- requireConfigAccess config
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
       args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
   Log.logTrace "AI executing tool" (AE.object ["tool" AE..= funcName, "args" AE..= args])
@@ -1292,7 +1281,7 @@ executeToolAt cursor config tc = do
     Just tool -> case tool.agentPolicy of
       Nothing -> pure $ Investigations.RecordedResult $ noRaw "This project operation has no Agent policy."
       Just policy ->
-        authorize policy >>= \case
+        authorize execution policy >>= \case
           Left denial -> pure $ Investigations.RecordedResult $ noRaw $ case denial of
             RoleRequired permission -> "Your project role does not meet the required " <> toText (encodeEnumSC @"P" permission) <> " permission."
             ActionGrantRequired -> "Project changes require an Autonomous execution policy."
@@ -1300,19 +1289,14 @@ executeToolAt cursor config tc = do
           Right snapshot -> recorded snapshot $ case tool.dispatch of
             ProjectOperation backend -> EffectfulTool $ runProjectTool backend funcName args
             LocalOperation operation -> executeLocal operation args
-  requireConfigAccess config
+  void $ requireConfigAccess config
   let response = operationResponse config.projectId result
   Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length response.formatted, "resultPreview" AE..= T.take 200 response.formatted])
   pure result
   where
-    authorize :: (DB es, IOE :> es) => MCP.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
-    authorize policy = Except.runExceptT do
+    authorize :: (DB es, IOE :> es) => Issues.ExecutionPolicy -> MCP.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
+    authorize execution policy = Except.runExceptT do
       authority <- lift $ agentAuthority config.access config.projectId
-      execution <- lift $ case (config.invocationMode, accessMember config.access, config.conversationId) of
-        (ScheduledRoutine run original, Just user, Just conversation) -> do
-          current <- Issues.routineRunPolicyFor config.projectId run user conversation >>= maybe (throwIO AgentStopped) pure
-          pure $ if original == Issues.Observe then Issues.Observe else current
-        _ -> pure $ invocationPolicy config.invocationMode
       let requireActions = unless (execution == Issues.Autonomous) $ Except.throwError ActionGrantRequired
           permission = case authority of ServiceAuthority -> ProjectMembers.PView; MemberAuthority role -> role
       unless (permission >= MCP.minimumPermission policy) $ Except.throwError $ RoleRequired (MCP.minimumPermission policy)
@@ -1325,22 +1309,22 @@ executeToolAt cursor config tc = do
         MCP.ProjectMemoryWrite -> requireActions
       pure $ OperationPolicy policy execution permission
 
-    recorded snapshot execution = case (snapshot.capability, cursor, invocationRun config.invocationMode, accessMember config.access, config.conversationId) of
-      (MCP.ReadOnly{}, _, _, _, _) -> Investigations.RecordedResult <$> perform execution
-      (_, Just position, Just run, Just user, Just conversation) -> do
-        let turn = Investigations.RunTurn config.projectId conversation user run
+    recorded snapshot execution = case (snapshot.capability, cursor, invocationContext config.invocationMode) of
+      (MCP.ReadOnly{}, _, _) -> Investigations.RecordedResult <$> perform execution
+      (_, Just position, Just context) -> do
+        let lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
             proposal = Investigations.ToolProposal tc snapshot
         case execution of
-          AtomicTool action -> Investigations.atomicOperation turn position proposal action
+          AtomicTool action -> Investigations.atomicOperation lease position proposal action
           EffectfulTool action ->
-            Investigations.beginOperation turn position proposal >>= \case
+            Investigations.beginOperation lease position proposal >>= \case
               Investigations.RetainedOperation retained -> pure retained
               Investigations.ExecuteOperation claim -> do
                 result <- action
                 Investigations.completeOperation claim result
                 pure $ Investigations.RecordedResult result
-      (_, Nothing, _, _, _) -> Investigations.RecordedResult <$> perform execution
-      _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable run."
+      (MCP.ConversationWrite, Nothing, Nothing) -> Investigations.RecordedResult <$> perform execution
+      _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable checkpoint."
     perform = \case
       EffectfulTool action -> action
       AtomicTool action -> Hasql.transaction TxS.ReadCommitted TxS.Write action

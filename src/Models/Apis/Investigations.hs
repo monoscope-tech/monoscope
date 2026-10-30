@@ -7,7 +7,7 @@ module Models.Apis.Investigations (
   loadCheckpointFor,
   CheckpointTarget (..),
   RunTurn (..),
-  runCheckpointTarget,
+  RunLease (..),
   CheckpointAccessDenied (..),
   SavedCheckpoint (..),
   CheckpointCursor (..),
@@ -483,14 +483,7 @@ data RunTurn = RunTurn
   deriving stock (Show)
 
 
-runCheckpointTarget :: DB es => RunTurn -> Eff es CheckpointTarget
-runCheckpointTarget turn = do
-  root <-
-    Hasql.interpOne @(HI.OneColumn (UUIDId "ai_routine_run"))
-      [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{turn.runId} AND project_id = #{turn.projectId}
-      AND conversation_id = #{turn.conversationId} AND requested_by = #{turn.userId}|]
-      >>= maybe (throwIO CheckpointAccessDenied) pure
-  pure $ RunCheckpoint turn{runId = HI.getOneColumn root}
+data RunLease = RunLease {turn :: RunTurn, startedAt :: UTCTime}
 
 
 data CheckpointTarget = SlackCheckpoint Turn | RunCheckpoint RunTurn
@@ -527,13 +520,14 @@ checkpointSql target =
 
 -- | A checkpoint revision identifies one pending tool position. An interrupted
 -- retained invocation becomes explicitly uncertain; it is never claimed twice.
-beginOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunTurn -> CheckpointCursor -> ToolProposal policy -> Eff es OperationDecision
-beginOperation turn cursor proposal = Hasql.transaction TxS.ReadCommitted TxS.Write (beginOperationTx turn cursor proposal) >>= either throwIO pure
+beginOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunLease -> CheckpointCursor -> ToolProposal policy -> Eff es OperationDecision
+beginOperation lease cursor proposal = Hasql.transaction TxS.ReadCommitted TxS.Write (beginOperationTx lease cursor proposal) >>= either throwIO pure
 
 
-beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => RunTurn -> CheckpointCursor -> ToolProposal policy -> Tx.Transaction (Either OperationConflict OperationDecision)
-beginOperationTx turn cursor proposal = runExceptT do
-  let (project, conversation, user, message, checkpointRun) = checkpointIdentity cursor.target
+beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => RunLease -> CheckpointCursor -> ToolProposal policy -> Tx.Transaction (Either OperationConflict OperationDecision)
+beginOperationTx lease cursor proposal = runExceptT do
+  let turn = lease.turn
+      (project, conversation, user, message, checkpointRun) = checkpointIdentity cursor.target
       identifier = UUIDId $ UUID5.generateNamed UUID5.namespaceOID $ BS.unpack $ toStrict $ AE.encode (checkpointIdentity cursor.target, cursor.revision)
       matchingScope = project == turn.projectId && conversation == turn.conversationId && user == turn.userId
   unless matchingScope $ hoistEither $ Left OperationScopeMismatch
@@ -541,7 +535,7 @@ beginOperationTx turn cursor proposal = runExceptT do
     lift
       $ Hasql.queryTx @[HI.OneColumn (UUIDId "ai_routine_run")]
         [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{turn.runId} AND project_id = #{project}
-      AND conversation_id = #{conversation} AND requested_by = #{user} AND status = 'running' FOR UPDATE|]
+      AND conversation_id = #{conversation} AND requested_by = #{user} AND started_at = #{lease.startedAt} AND status = 'running' FOR UPDATE|]
   unless (case runs of [HI.OneColumn root] -> all (== root) checkpointRun; _ -> False) $ hoistEither $ Left OperationScopeMismatch
   checkpoints <-
     lift
@@ -589,11 +583,11 @@ beginOperationTx turn cursor proposal = runExceptT do
 
 -- | The mutation and its retained outcome commit together. A failed transaction
 -- leaves no claimed operation, so a later worker can safely execute it.
-atomicOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunTurn -> CheckpointCursor -> ToolProposal policy -> Tx.Transaction ToolResult -> Eff es OperationResult
-atomicOperation turn cursor proposal action = do
+atomicOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunLease -> CheckpointCursor -> ToolProposal policy -> Tx.Transaction ToolResult -> Eff es OperationResult
+atomicOperation lease cursor proposal action = do
   result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
     outcome <-
-      beginOperationTx turn cursor proposal >>= \case
+      beginOperationTx lease cursor proposal >>= \case
         Left conflict -> pure $ Left conflict
         Right (RetainedOperation retained) -> pure $ Right retained
         Right (ExecuteOperation claim) -> do
