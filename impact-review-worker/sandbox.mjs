@@ -3,8 +3,7 @@
 import { jsonLines } from './jsonl.mjs';
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
-import { guestTmpfs } from './workspace.mjs';
+import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
 let vm;
 const controller = new AbortController();
 const abort = () => { controller.abort(); void vm?.close().catch(() => {}); process.stdin.destroy(); };
@@ -29,7 +28,7 @@ try {
           if (vm || config.isolation !== 'offline_cow') throw new Error('Invalid sandbox transition');
           const options = { sessionLabel: 'monoscope-native-workspace', cpus: config.cpus, memory: `${config.memoryMiB}M`,
             sandbox: { imagePath: config.imagePath, netEnabled: false }, rootfs: { mode: 'cow' },
-            tmpfs: guestTmpfs,
+            tmpfs: Object.fromEntries(Object.entries(DEFAULT_GUEST_TMPFS).filter(([path]) => path !== '/root')),
             vfs: { mounts: Object.fromEntries(Object.entries(config.mounts).map(([guest, host]) => [guest, new ReadonlyProvider(new RealFSProvider(host))])) } };
           vm = snapshot ? await VmCheckpoint.load(snapshot).resume(options) : await VM.create(options);
           controller.signal.throwIfAborted();

@@ -172,3 +172,11 @@ finish('eof');
     await rm(root, { recursive: true, force: true });
   }
 });
+
+
+test('sandbox bridge loads its real SDK imports and answers without creating a VM', async () => {
+  const bridge = exec(process.execPath, [fileURLToPath(new URL('./sandbox.mjs', import.meta.url))], { timeout: 10000 });
+  bridge.child.stdin.end(JSON.stringify({ tag: 'Resolve', contents: '/nonexistent-monoscope-guest' }) + '\n');
+  const { stdout } = await bridge;
+  assert.equal(typeof JSON.parse(stdout).Left, 'string');
+});
