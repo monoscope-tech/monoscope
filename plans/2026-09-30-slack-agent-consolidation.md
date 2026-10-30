@@ -1,6 +1,6 @@
 # Slack Agent consolidation plan
 
-Status: resumed on 2026-10-29; rebased onto master `a8517cd54`. Implementation in progress. Interactive project writes require an in-app, per-message grant; confirmed writes remain unavailable. The native Slack Agent has not passed sandbox acceptance or gone live.
+Status: resumed on 2026-10-30; rebased onto master `917172cda`. Implementation in progress. Interactive project writes require an in-app, per-message grant; confirmed writes remain unavailable. The native Slack Agent has not passed sandbox acceptance or gone live.
 
 This plan narrows the [Slack Agent roadmap](2026-09-08-slack-agent.md) to the unfinished conversation and tool experience. The [implementation log](2026-09-08-slack-agent-implementation.md) records earlier work. Current code, tests, and live behavior take precedence over old status notes in that log.
 
@@ -406,3 +406,21 @@ routine browser flow passes in 22 seconds at desktop and 320px, in both themes.
 All 34 Agentic examples pass. Formatting and focused HLint pass. Repeated Haskell
 and interface reviews found no further material change; final simplification kept
 the fallback local to its element. The earlier image was stopped before this fix.
+
+### Integration with the October 30 chart delivery fix
+
+The prior corrected tree passed every local check and its native AMD64 image
+was published. Master then advanced to `917172cda`, fixing missing chart images
+in Slack and Discord, metric time ranges, and dashboard tag removal. The branch
+was rebased onto that commit.
+
+The report adapter preserves optional PNG URLs through payload construction,
+while retaining the routine worker's explicit success result. Shared Discord
+gallery rendering and the missing-chart regression remain intact. The combined
+tree requires focused bot verification and a fresh final signoff before publication.
+
+On the combined tree, the server compiles and all 133 bot, 15 telemetry, and
+28 dashboard examples pass. Formatting and focused HLint pass. Repeated
+distillation, evasion, and locality reviews found no material issue in the
+resolutions. Final simplification retains the typed optional-image path and
+shared gallery renderer. Final local signoff and image verification remain.
