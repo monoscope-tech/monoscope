@@ -100,6 +100,10 @@ test("saved views work on custom dashboards across tabs and retain the time rang
     expect(new URL(page.url()).searchParams.get("var-service")).toBe("worker");
     expect(new URL(page.url()).searchParams.get("var-region")).toBe("us");
     expect(new URL(page.url()).searchParams.get("since")).toBe("7D");
+    // A variable edited after picking a view marks it as edited, without a page load.
+    await expect(views).toHaveAccessibleName("Saved views: US worker");
+    await page.evaluate(() => { const u = new URL(location.href); u.searchParams.set("var-service", "api"); history.pushState({}, "", u); window.dispatchEvent(new Event("update-query")); });
+    await expect(views).toHaveAccessibleName("Saved views: US worker (edited)");
     await page.getByRole("tab", { name: "Errors", exact: true }).click();
     await expect(page.locator('#dashboard-variables [name="region"]')).toHaveCount(1);
     page.once("dialog", dialog => dialog.accept());

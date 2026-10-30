@@ -3,6 +3,7 @@ module Pages.Dashboards (
   DashboardViewForm (..),
   dashboardViewPostH,
   dashboardViewDeleteH,
+  dashboardViewsGetH,
   dashboardTabGetH,
   dashboardSettledPostH,
   dashboardTabRenamePatchH,
@@ -268,8 +269,14 @@ dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-vari
   label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeak border border-strokeWeak rounded-lg px-2 py-1 hidden peer-checked/vars:flex items-center gap-1"] do
     faSprite_ "filter" "regular" "w-3 h-3"
     "Hide Filters"
-  div_ [class_ "max-md:hidden max-md:peer-checked/vars:flex flex gap-2 flex-wrap max-md:w-full max-md:pt-1"] do
-    forM_ variables \var -> fieldset_ ([class_ "dash-variable max-md:w-full pl-3 pr-2.5 border border-strokeWeak bg-bgRaised rounded-lg text-sm hover:border-strokeStrong focus-within:border-strokeFocus"] <> foldMap (pure . title_) var.helpText) do
+  div_ [class_ "max-md:hidden max-md:peer-checked/vars:flex flex gap-2 flex-wrap md:flex-nowrap md:shrink-0 md:has-[#dash-vars-more:checked]:flex-wrap md:has-[#dash-vars-more:checked]:shrink max-md:w-full max-md:pt-1"] do
+    -- Past four variables, unset ones after the third fold behind "+N" so the tab row keeps one line.
+    let folds i var = length variables > 4 && i >= 3 && all T.null var.value
+        hidden = length [() | (i, var) <- zip [0 :: Int ..] variables, folds i var]
+    when (hidden > 0) do
+      input_ [type_ "checkbox", class_ "hidden peer/more", id_ "dash-vars-more"]
+      label_ [Lucid.for_ "dash-vars-more", class_ "order-last self-end h-9 px-3 inline-flex items-center rounded-lg border border-strokeWeak bg-bgRaised text-sm text-textWeak cursor-pointer hover:border-strokeStrong hover:text-textStrong peer-checked/more:hidden", Aria.label_ $ "Show " <> show hidden <> " more filters"] $ toHtml $ "+" <> show @Text hidden
+    forM_ (zip [0 :: Int ..] variables) \(i, var) -> fieldset_ ([class_ $ "dash-variable max-md:w-full pl-3 pr-2.5 border border-strokeWeak bg-bgRaised rounded-lg text-sm hover:border-strokeStrong focus-within:border-strokeFocus" <> memptyIfFalse (folds i var) " hidden peer-checked/more:block"] <> foldMap (pure . title_) var.helpText) do
       legend_ [class_ "ml-1 px-1 text-xs leading-none text-textWeak whitespace-nowrap cursor-pointer", [__|on click call (next .tagify__input).focus()|]] do
         toHtml $ fromMaybe var.key var.title
         when (var.required == Just True) $ span_ [class_ "text-textError"] (span_ [Aria.hidden_ "true"] " *" >> span_ [class_ "sr-only"] " (required)")
@@ -310,21 +317,25 @@ instance FromForm DashboardViewForm where
 
 
 dashboardViewPostH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardViewForm -> ATAuthCtx (RespHeaders (Html ()))
-dashboardViewPostH pid did form = savedViewH pid did form.params \dash -> do
+dashboardViewPostH pid did form = savedViewH pid did form.params \_ dash -> do
   let name = T.strip form.name
   when (T.null name || T.length name > 100) $ throwError err400{errBody = "View name must contain 1–100 characters."}
   Dashboards.setSavedView pid did name $ Just $ variableValues dash form.params
 
 
 dashboardViewDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
-dashboardViewDeleteH pid did name params = savedViewH pid did params $ const $ Dashboards.setSavedView pid did name Nothing
+dashboardViewDeleteH pid did name params = savedViewH pid did params \_ _ -> Dashboards.setSavedView pid did name Nothing
 
 
-savedViewH :: Projects.ProjectId -> Dashboards.DashboardId -> [(Text, Maybe Text)] -> (Dashboards.Dashboard -> ATAuthCtx (Maybe (V.Vector Dashboards.DashboardView))) -> ATAuthCtx (RespHeaders (Html ()))
+dashboardViewsGetH :: Projects.ProjectId -> Dashboards.DashboardId -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
+dashboardViewsGetH pid did params = savedViewH pid did params \vm _ -> pure $ Just vm.savedViews
+
+
+savedViewH :: Projects.ProjectId -> Dashboards.DashboardId -> [(Text, Maybe Text)] -> (Dashboards.DashboardVM -> Dashboards.Dashboard -> ATAuthCtx (Maybe (V.Vector Dashboards.DashboardView))) -> ATAuthCtx (RespHeaders (Html ()))
 savedViewH pid did params change = do
   _ <- Projects.sessionAndProject pid
   (vm, dash) <- getDashAndVM pid did Nothing
-  savedViews <- change dash `whenNothingM` throwError err404{errBody = "Dashboard with ID not found. ID:" <> encodeUtf8 did.toText}
+  savedViews <- change vm dash `whenNothingM` throwError err404{errBody = "Dashboard with ID not found. ID:" <> encodeUtf8 did.toText}
   addRespHeaders $ dashboardViews_ pid did dash vm{Dashboards.savedViews = savedViews} params []
 
 
@@ -335,40 +346,35 @@ variableValues dash params = Map.fromList [(v.key, fold $ join (lookup ("var-" <
 
 dashboardViews_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> [Attribute] -> Html ()
 dashboardViews_ pid did dash vm params extraAttrs =
-  div_ ([id_ "dashboard-views", class_ $ "flex items-center gap-2 " <> memptyIfFalse (isJust dash.tabs) "ml-auto max-md:ml-0"] <> extraAttrs) do
-    button_ ([type_ "button", class_ $ "inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer " <> maybe "text-textWeak hover:bg-fillWeak hover:text-textStrong" (const "bg-fillBrand-weak ring-1 ring-strokeBrand-weak text-textBrand font-medium") active, Aria.label_ $ "Saved views" <> foldMap (": " <>) active] <> popoverTrigger_ menuId) do
-      faSprite_ "bookmark" (maybe "regular" (const "solid") active) "w-3.5 h-3.5"
-      whenJust active $ span_ [class_ "max-w-40 truncate"] . toHtml
-      faSprite_ "chevron-down" "regular" "w-3 h-3"
-    div_ ([class_ "dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5"] <> popoverPanel_ menuId) do
-      p_ [class_ "px-2 pt-1 pb-0.5 text-xs text-textWeak"] "Saved views"
-      when (null availableViews) $ p_ [class_ "px-2 py-1 text-textWeak"] "None yet"
-      forM_ availableViews \(savedView, deletable) -> div_ [class_ "flex items-center rounded hover:bg-fillWeak"] do
-        let url = root <> tabPath <> queryStringFrom (context <> viewParams savedView)
-            isActive = active == Just savedView.name
-        a_ ([href_ url, class_ $ "flex-1 flex items-center gap-2 px-2 py-1.5 truncate " <> bool "text-textStrong" "text-textBrand font-medium" isActive] <> dashboardContentNavAttrs navTarget url) do
-          span_ [class_ "w-3.5 shrink-0"] $ when isActive $ faSprite_ "check" "regular" "w-3.5 h-3.5"
-          toHtml savedView.name
-        when deletable $ button_ ([type_ "button", class_ "btn btn-ghost btn-xs", Aria.label_ $ "Delete view " <> savedView.name, hxConfirm_ ("Delete view " <> savedView.name <> "?"), hxDelete_ $ root <> "/views/" <> toUriStr savedView.name <> queryStringFrom [(activeTabSlugKey, tab)]] <> swapAttrs) $ faSprite_ "xmark" "regular" "h-3 w-3"
-      div_ [class_ "h-px bg-strokeWeak my-1"] ""
-      form_ ([class_ "flex gap-1.5 p-1", hxPost_ $ root <> "/views"] <> swapAttrs) do
-        input_ [type_ "hidden", name_ activeTabSlugKey, value_ $ fromMaybe "" tab]
-        input_ [name_ "name", required_ "", maxlength_ "100", class_ "input input-sm flex-1 min-w-0", placeholder_ "View name", Aria.label_ "View name"]
-        button_ [type_ "submit", class_ "btn btn-primary btn-sm"] "Save view"
-      when (any (\(k, v) -> "var-" `T.isPrefixOf` k && not (all T.null v)) params) do
-        let url = root <> tabPath <> queryStringFrom context
-        a_ ([href_ url, class_ "px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak"] <> dashboardContentNavAttrs navTarget url) "Clear filters"
+  -- Variable edits only rewrite the URL client-side, so re-render to keep the active/edited state honest.
+  div_ ([id_ "dashboard-views", class_ $ "flex items-center gap-2 shrink-0 " <> memptyIfFalse (isJust dash.tabs) "ml-auto max-md:ml-0", hxGet_ $ root <> "/views", hxTrigger_ "update-query[!event.detail?.source] from:window", hxSwap_ "outerMorph"] <> swapVals <> extraAttrs) do
+    Components.savedViewsMenu_
+      Components.SavedViewsMenu
+        { menuId = "dashboard-views-menu"
+        , active = (.name) . fst <$> (matched <|> applied)
+        , edited = isNothing matched && isJust applied
+        , views =
+            [ Components.SavedView v.name (link $ context <> viewParams v <> [("view", Just v.name)]) (memptyIfFalse deletable $ Just ([hxConfirm_ ("Delete view " <> v.name <> "?"), hxDelete_ $ root <> "/views/" <> toUriStr v.name <> queryStringFrom [(activeTabSlugKey, tab)]] <> swapAttrs))
+            | (v, deletable) <- toList availableViews
+            ]
+        , save = hxPost_ (root <> "/views") : swapAttrs
+        , saveFields = input_ [type_ "hidden", name_ activeTabSlugKey, value_ $ fromMaybe "" tab]
+        , clear = link context <$ find (\(k, v) -> "var-" `T.isPrefixOf` k && not (all T.null v)) params
+        }
     span_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] ""
   where
     root = dashboardUrl pid did
     tab = join (lookup activeTabSlugKey params) >>= \slug -> slug <$ findTabBySlug (fold dash.tabs) slug
     tabPath = foldMap ("/tab/" <>) tab
     navTarget = maybe WholePage (const TabPanel) tab
-    menuId = "dashboard-views-menu"
+    link ps = let url = root <> tabPath <> queryStringFrom ps in href_ url : dashboardContentNavAttrs navTarget url
     viewParams v = [("var-" <> k, Just x) | (k, x) <- Map.toList v.variables, k `elem` map (.key) (fold dash.variables)]
-    active = (.name) . fst <$> find ((== variableValues dash params) . variableValues dash . viewParams . fst) availableViews
-    swapAttrs = [hxTarget_ "#dashboard-views", hxSwap_ "outerHTML", hxVals_ "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...getTimeRange()}"]
-    context = filter (\(k, _) -> not (any (`T.isPrefixOf` k) ["var-", "const-"]) && k `notElem` [activeTabSlugKey, "name", "expand"]) params
+    matched = find ((== variableValues dash params) . variableValues dash . viewParams . fst) availableViews
+    -- The view last picked from the menu; it reads as edited once the variables drift from it.
+    applied = join (lookup "view" params) >>= (`Map.lookup` availableViews)
+    swapVals = [hxVals_ "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...getTimeRange()}"]
+    swapAttrs = [hxTarget_ "#dashboard-views", hxSwap_ "outerHTML"] <> swapVals
+    context = filter (\(k, _) -> not (any (`T.isPrefixOf` k) ["var-", "const-"]) && k `notElem` [activeTabSlugKey, "name", "expand", "view"]) params
     -- Saved views shadow same-named template views; only saved ones are deletable.
     availableViews = Map.fromList [(v.name, (v, saved)) | (saved, vs) <- [(False, fold dash.views), (True, toList vm.savedViews)], v <- vs]
 
@@ -393,7 +399,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     $ div_ [class_ "p-3"]
     $ actionPickerField_ "Tab name" "newName" "Enter tab name" (maybe "" ((.name) . snd) activeTabInfo)
 
-  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 max-md:py-0.5 gap-4 max-md:gap-2 items-center flex-wrap sticky top-0 z-10"] do
+  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 max-md:py-0.5 gap-4 max-md:gap-2 items-center flex-wrap md:flex-nowrap sticky top-0 z-10"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
     whenJust dash.tabs \tabs -> dashboardTabStrip_ pid dashId activeTabIdx tabs allParams []
 
@@ -2918,7 +2924,7 @@ dashboardTabStrip_ :: Projects.ProjectId -> Dashboards.DashboardId -> Int -> [Da
 dashboardTabStrip_ pid dashId activeTabIdx tabs params extraAttrs =
   div_
     ( [ role_ "tablist"
-      , class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]"
+      , class_ "tabs tabs-box tabs-outline flex-nowrap overflow-x-auto scrollbar-none min-w-0 max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]"
       , id_ "dashboard-tabs-container"
       , term "hx-preload:inherited" "mouseover"
       ]
@@ -2929,7 +2935,7 @@ dashboardTabStrip_ pid dashId activeTabIdx tabs params extraAttrs =
       a_
         ( [ role_ "tab"
           , href_ tabUrl
-          , class_ $ "tab group/tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
+          , class_ $ "tab group/tab flex items-center gap-2 whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
           ]
             <> dashboardContentNavAttrs TabPanel tabUrl
         )

@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -16,7 +16,7 @@ import Pkg.StackTrace qualified as StackTrace
 import PyF qualified
 import Relude
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, formatUTC, formatWithCommas, loadingIndicator_, navTabAttrs, popoverPanel_, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, formatUTC, formatWithCommas, loadingIndicator_, navTabAttrs, popoverPanel_, popoverTrigger_, toUriStr)
 
 
 data EmptyStateSize = ESFull | ESCompact
@@ -1195,6 +1195,39 @@ copySourceAttr_ el = copyToClipboardAttr_ ("(" <> el <> ").innerText") "Value co
 -- | Clear a form once its request succeeds.
 resetFormOnSuccessAttr_ :: Attribute
 resetFormOnSuccessAttr_ = term "hx-on:htmx:after:request" "if (event.detail.ctx.response.status < 400) this.reset()"
+
+
+data SavedView = SavedView {name :: Text, link :: [Attribute], delete :: Maybe [Attribute]}
+
+
+-- | A bookmark button whose popover lists saved views, saves the current one and clears filters.
+-- @edited@: the applied view no longer matches the current filters.
+data SavedViewsMenu = SavedViewsMenu {menuId :: Text, active :: Maybe Text, edited :: Bool, views :: [SavedView], save :: [Attribute], saveFields :: Html (), clear :: Maybe [Attribute]}
+
+
+savedViewsMenu_ :: SavedViewsMenu -> Html ()
+savedViewsMenu_ m = do
+  button_ ([type_ "button", class_ $ "inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer " <> maybe "text-textWeak hover:bg-fillWeak hover:text-textStrong" (const "bg-fillBrand-weak ring-1 ring-strokeBrand-weak text-textBrand font-medium") m.active, Aria.label_ $ "Saved views" <> foldMap (": " <>) m.active <> memptyIfFalse m.edited " (edited)"] <> popoverTrigger_ m.menuId) do
+    faSprite_ "bookmark" (maybe "regular" (const "solid") m.active) "w-3.5 h-3.5"
+    whenJust m.active $ span_ [class_ "max-w-40 truncate"] . toHtml
+    when m.edited $ span_ [class_ "size-1.5 rounded-full bg-fillWarning-strong", title_ "Filters changed since this view was applied"] ""
+    faSprite_ "chevron-down" "regular" "w-3 h-3"
+  div_ ([class_ "dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5"] <> popoverPanel_ m.menuId) do
+    p_ [class_ "px-2 pt-1 pb-0.5 text-xs text-textWeak"] "Saved views"
+    when (null m.views) $ p_ [class_ "px-2 py-1 text-textWeak"] "None yet"
+    forM_ m.views \v -> div_ [class_ "flex items-center rounded hover:bg-fillWeak"] do
+      let isActive = m.active == Just v.name
+      a_ ([class_ $ "flex-1 flex items-center gap-2 px-2 py-1.5 truncate " <> bool "text-textStrong" "text-textBrand font-medium" isActive] <> v.link) do
+        span_ [class_ "w-3.5 shrink-0"] $ when isActive $ faSprite_ "check" "regular" "w-3.5 h-3.5"
+        toHtml v.name
+        when (isActive && m.edited) $ span_ [class_ "ml-auto text-xs px-1.5 rounded bg-fillWarning-weak text-textWarning"] "edited"
+      whenJust v.delete \attrs -> button_ ([type_ "button", class_ "btn btn-ghost btn-xs", Aria.label_ $ "Delete view " <> v.name] <> attrs) $ faSprite_ "xmark" "regular" "h-3 w-3"
+    div_ [class_ "h-px bg-strokeWeak my-1"] ""
+    form_ ([class_ "flex gap-1.5 p-1"] <> m.save) do
+      m.saveFields
+      input_ [name_ "name", required_ "", maxlength_ "100", class_ "input input-sm flex-1 min-w-0", placeholder_ "View name", Aria.label_ "View name"]
+      button_ [type_ "submit", class_ "btn btn-primary btn-sm"] "Save view"
+    whenJust m.clear \attrs -> a_ ([class_ "px-2 py-1.5 rounded text-textWeak hover:bg-fillWeak"] <> attrs) "Clear filters"
 
 
 -- | Save button that activates when its parent form changes.
