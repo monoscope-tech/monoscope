@@ -735,9 +735,9 @@ spec = sequential $ aroundAll withTestResources do
       ingestTrace tr mine "GET /tenant-scope" frozenTime
       ingestTrace tr theirs "GET /tenant-scope" frozenTime
       let own = "project_id='" <> testPid.toText <> "'"
-          projects = fmap \rows -> nubOrd [v | row <- V.toList rows, AE.String v <- V.toList row]
+          projects = fmap \rows -> ordNub [v | row <- V.toList rows, AE.String v <- V.toList row]
           run source sql = projects <$> runQueryEffect tr (LogQueries.executeSecuredQuery True testPid (LogQueries.SecuredSql source sql) 100)
-      for_ [LogQueries.SqlPostgres, LogQueries.SqlTimefusion] \source -> do
+      for_ ([LogQueries.SqlPostgres, LogQueries.SqlTimefusion] :: [LogQueries.SqlSource]) \source -> do
         for_
           [ "SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE"
           , "SELECT p FROM (SELECT project_id::text AS p, project_id FROM otel_logs_and_spans) s WHERE " <> own <> " OR TRUE"
