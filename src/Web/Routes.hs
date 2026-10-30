@@ -473,6 +473,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
   , dashboardViewPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardViewForm :> Post '[HTML] (RespHeaders (Html ()))
   , dashboardViewDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> Capture "name" Text :> AllQueryParams :> Delete '[HTML] (RespHeaders (Html ()))
+  , dashboardViewsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> AllQueryParams :> Get '[HTML] (RespHeaders (Html ()))
   , rumRedirect :: mode :- "p" :> ProjectId :> "rum" :> CaptureAll "view" Text :> AllQueryParams :> LocationRedirect NoContent
   , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders Dashboards.DashboardNew)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
@@ -978,6 +979,7 @@ cookieProtectedServer =
     , rumRedirect = Dashboards.rumRedirectH
     , dashboardViewPost = Dashboards.dashboardViewPostH
     , dashboardViewDelete = Dashboards.dashboardViewDeleteH
+    , dashboardViewsGet = Dashboards.dashboardViewsGetH
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardNewGet = Dashboards.dashboardNewGetH
     , dashboardsGetList = Dashboards.dashboardsGetH

@@ -152,7 +152,8 @@ describe('LogList — LOWER', () => {
     container.id = 'logs_list_container_inner';
     el.appendChild(container);
     Object.defineProperty(el, 'logsContainer', { value: container, configurable: true });
-    await new Promise((resolve) => setTimeout(resolve, 50)); // drain the mount-time double-rAF health check
+    // Drain the mount-time double-rAF health check; frames run in order, so a fixed sleep raced it under load.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const heal = vi.spyOn(el as any, 'healBlankVirtualizer').mockImplementation(() => {});
     (el as any).handleListScroll();
     (el as any).handleListScroll();

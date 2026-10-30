@@ -108,7 +108,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), TraceFrame (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, durationQuery, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resizer_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), TraceFrame (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, durationQuery, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Replay qualified as Replay
 import Pages.Telemetry (traceFragmentUrl)
@@ -2505,18 +2505,18 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
                 $ faSprite_ "circle-info" "regular" "h-4 w-4 text-iconNeutral"
               -- Category views are presets of the type filter; saved views are stored query strings.
               span_ [class_ "w-px h-4 bg-strokeWeak mx-1"] ""
-              let viewLink active href lbl = a_ [href_ href, class_ $ "px-2 py-1 rounded text-xs whitespace-nowrap " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" active] $ toHtml lbl
               forM_ ([("All", []), ("Errors", ["runtime_exception"]), ("Alerts", ["query_alert"]), ("Log patterns", ["log_pattern", "log_pattern_rate_change"]), ("API changes", ["api_change"]), ("Feedback", ["feedback"])] :: [(Text, [Text])]) \(lbl, types) ->
-                viewLink (sortNub typeFilters == sortNub types) (listUrl types) lbl
-              forM_ savedViews \v -> span_ [class_ "inline-flex items-center"] do
-                viewLink (listQuery typeFilters == v.query) ("/p/" <> pid.toText <> "/issues?" <> v.query) v.name
-                button_ [type_ "button", class_ "p-0.5 rounded text-textWeak hover:text-textStrong", Aria.label_ ("Delete view " <> v.name), hxPost_ ("/p/" <> pid.toText <> "/issues/views/" <> UUID.toText v.id <> "/delete"), hxSwap_ "none"]
-                  $ faSprite_ "xmark" "regular" "w-2.5 h-2.5"
-              button_ ([type_ "button", class_ "px-2 py-1 rounded text-xs text-textBrand hover:bg-fillWeaker whitespace-nowrap"] <> popoverTrigger_ "save-view-pop") "Save view"
-              form_ ([class_ "dropdown dropdown-start bg-bgRaised p-3 border border-strokeWeak rounded-md shadow-lg flex gap-2", hxPost_ ("/p/" <> pid.toText <> "/issues/views"), hxSwap_ "none"] <> popoverPanel_ "save-view-pop") do
-                input_ [type_ "hidden", name_ "query", value_ $ listQuery typeFilters]
-                input_ [type_ "text", name_ "name", required_ "", placeholder_ "View name", Aria.label_ "View name", class_ "input input-sm w-44"]
-                button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save"
+                a_ [href_ $ listUrl types, class_ $ "px-2 py-1 rounded text-xs whitespace-nowrap " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" (sortNub typeFilters == sortNub types)] $ toHtml lbl
+              savedViewsMenu_
+                SavedViewsMenu
+                  { menuId = "issue-views-menu"
+                  , active = (.name) <$> find ((== listQuery typeFilters) . (.query)) savedViews
+                  , edited = False
+                  , views = [SavedView v.name [href_ $ "/p/" <> pid.toText <> "/issues?" <> v.query] (Just [hxPost_ ("/p/" <> pid.toText <> "/issues/views/" <> UUID.toText v.id <> "/delete"), hxSwap_ "none"]) | v <- savedViews]
+                  , save = [hxPost_ ("/p/" <> pid.toText <> "/issues/views"), hxSwap_ "none"]
+                  , saveFields = input_ [type_ "hidden", name_ "query", value_ $ listQuery typeFilters]
+                  , clear = Nothing
+                  }
           }
   addRespHeaders
     $ if loadM == Just "true"
