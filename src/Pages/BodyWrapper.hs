@@ -531,13 +531,10 @@ bodyWrapper bcfg child = do
 
       when isProd $ externalHeadScripts_ bcfg.config
       globalTemplates_
-      when isProd $ script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_
         [text|
           window.dataLayer = window.dataLayer || [];
           function gtag(){dataLayer.push(arguments);}
-          gtag('js', new Date());
-          gtag('config', 'AW-11285541899');
 
           // These two stay inline rather than moving to the bundle with the rest of the page
           // chrome: the theme block below calls getCookie while the document is still
@@ -1332,6 +1329,7 @@ externalHeadScripts_ config = do
   let sendTo labelM = fromMaybe "" $ (\aw label -> aw <> "/" <> label) <$> config.googleAdsConversionId <*> labelM
       signupTo = sendTo config.googleAdsSignupLabel
       activatedTo = sendTo config.googleAdsActivationLabel
+      purchaseTo = sendTo config.googleAdsPurchaseLabel
   script_
     [text|
       window.adConversion = function(name, id) {
@@ -1340,6 +1338,7 @@ externalHeadScripts_ config = do
         if (window.fbq) name === 'signup' ? fbq('track', 'CompleteRegistration', {}, {eventID: eventId}) : fbq('trackCustom', 'Activated', {}, {eventID: eventId});
         if (window.posthog) posthog.capture(name);
       };
+      window.adPurchaseSendTo = '${purchaseTo}';
       document.addEventListener('adConversion', function(e) { e.detail.value.forEach(function(c) { adConversion(c.name, c.id); }); });
       (function() {
         var signup = document.cookie.match(/(?:^|; )monoscope_signup=([^;]+)/);

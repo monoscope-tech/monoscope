@@ -206,6 +206,7 @@ data EnvConfig = EnvConfig
   , googleAdsConversionId :: Maybe Text
   , googleAdsSignupLabel :: Maybe Text
   , googleAdsActivationLabel :: Maybe Text
+  , googleAdsPurchaseLabel :: Maybe Text
   , facebookPixelId1 :: Maybe Text
   , facebookPixelId2 :: Maybe Text
   , metaCapiPixelId :: Maybe Text
