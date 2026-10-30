@@ -123,8 +123,7 @@ spec = around withTestResources do
         readonly `shouldContain` ["list_project_memory", "read_project_memory"]
         readonly `shouldNotContain` ["write_project_memory"]
         actionable `shouldNotContain` ["write_project_memory"]
-        memoryWriter `shouldContain` ["write_project_memory"]
-        memoryWriter `shouldNotContain` ["send_to_slack"]
+        memoryWriter `shouldContain` ["write_project_memory", "send_to_slack"]
         readonly `shouldNotContain` ["send_to_slack"]
         scheduledReadOnly `shouldNotContain` ["send_to_slack"]
         readonly `shouldSatisfy` (\names -> all (`elem` names) ["search_project_tools", "get_project_tool_schema", "list_metrics"])

@@ -1981,7 +1981,7 @@ spec = around withTestResources do
           scheduled <- Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid convId interval >>= maybe (liftIO $ throwIO $ ErrorCall "routine not scheduled") pure
           Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET active = false WHERE project_id = #{testPid}|]
           Jobs.runAIRoutineWith 1_000_000 execute (\_ _ -> pass) tr.trATCtx scheduled.id scheduled.scheduledAt
-        readIORef checked >>= (`shouldBe` Just (show (AI.MemberAccess AI.WebSession userId), False))
+        readIORef checked >>= (`shouldBe` Just (show (AI.MemberAccess AI.ProjectMember userId), False))
 
       it "projectAdapter_preservesLLMInterpreter_forNestedTranslation" \tr -> do
         let provider = interpose @ELLM.LLM \_ -> \case
