@@ -2087,17 +2087,17 @@ spec = around withTestResources do
       it "discovers an MCP operation and checks policy before executing it" \tr -> do
         invoked <- newIORef ([] :: [Text])
         seen <- newIORef ([] :: [Text])
-        let tool name = MCP.Tool name ("Project " <> name) (AE.object ["type" AE..= ("object" :: Text)]) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+        let tool name policy = MCP.Tool name ("Project " <> name) (AE.object ["type" AE..= ("object" :: Text)]) (Just policy) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
             backend =
               AI.ProjectTools
-                { AI.catalog = Map.fromList [(name, tool name) | name <- ["get_dashboard_data", "create_monitor"]]
+                { AI.catalog = Map.insert "get_project" (MCP.Tool "get_project" "Unclassified project operation" (AE.object []) Nothing (MCP.ViaComposite $ \_ _ -> pure AE.Null)) $ Map.fromList [(name, tool name policy) | (name, policy) <- [("get_dashboard_data", MCP.AgentPolicy PM.PView MCP.ReadOnly), ("create_monitor", MCP.AgentPolicy PM.PEdit MCP.RequestedWrite)]]
                 , AI.invoke = \_ pid name _ -> liftIO $ do
                     pid `shouldBe` testPid
                     modifyIORef' invoked (<> [name])
                     pure $ AE.object ["isError" AE..= False, "structuredContent" AE..= AE.object ["title" AE..= ("Dashboard" :: Text)]]
                 }
-            config = (AI.defaultAgenticConfig testPid){AI.projectTools = Just backend}
-            calls = [Chat.ToolFunction "search_project_tools" $ one ("query", AE.String "show dashboard data"), Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String "get_dashboard_data"), Chat.ToolFunction "get_dashboard_data" mempty, Chat.ToolFunction "create_monitor" mempty]
+            config = (AI.defaultAgenticConfig testPid){AI.projectTools = Just backend, AI.maxIterations = 7}
+            calls = [Chat.ToolFunction "search_project_tools" $ one ("query", AE.String "show dashboard data"), Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String "get_dashboard_data"), Chat.ToolFunction "get_dashboard_data" mempty, Chat.ToolFunction "create_monitor" mempty, Chat.ToolFunction "get_project_tool_schema" (one ("name", AE.String "get_project")), Chat.ToolFunction "get_project" mempty]
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> do
                 let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
@@ -2112,6 +2112,8 @@ spec = around withTestResources do
         ((AE.decode @AE.Value . encodeUtf8 =<< listToMaybe results) >>= (^? key "tools" . _Array . ix 0 . key "name" . _String)) `shouldBe` Just "get_dashboard_data"
         ((AE.decode @AE.Value . encodeUtf8 =<< listToMaybe (drop 1 results)) >>= (^? key "minimum_permission" . _String)) `shouldBe` Just "view"
         results `shouldSatisfy` any (T.isInfixOf "requires an explicit request")
+        results `shouldSatisfy` any (T.isInfixOf "unknown project operation")
+        results `shouldSatisfy` any (T.isInfixOf "no Agent policy")
         writeIORef invoked []
         allowed <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config{AI.invocationMode = AI.InteractiveWithActions} "Create a monitor" "model" "key"
         allowed `shouldSatisfy` isRight
@@ -2122,7 +2124,7 @@ spec = around withTestResources do
             envelope = AE.object ["isError" AE..= False, "content" AE..= ([AE.object ["type" AE..= ("text" :: Text), "text" AE..= full]] :: [AE.Value]), "structuredContent" AE..= AE.object ["evidence" AE..= full]]
             backend =
               AI.ProjectTools
-                { AI.catalog = Map.singleton "get_project" $ MCP.Tool "get_project" "Read project" (AE.object []) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+                { AI.catalog = Map.singleton "get_project" $ MCP.Tool "get_project" "Read project" (AE.object []) (Just $ MCP.AgentPolicy PM.PView MCP.ReadOnly) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
                 , AI.invoke = \_ _ _ _ -> pure envelope
                 }
             config = (AI.defaultAgenticConfig testPid){AI.projectTools = Just backend, AI.limits = AI.defaultLimits{AI.maxTokenBuffer = 1_000_000}}
@@ -2147,7 +2149,7 @@ spec = around withTestResources do
         invoked <- newIORef False
         let backend =
               AI.ProjectTools
-                { AI.catalog = Map.singleton "get_api_key" $ MCP.Tool "get_api_key" "Read an API key" (AE.object []) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+                { AI.catalog = Map.singleton "get_api_key" $ MCP.Tool "get_api_key" "Read an API key" (AE.object []) (Just $ MCP.AgentPolicy PM.PAdmin MCP.ReadOnly) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
                 , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
                 }
             userId = (getResponse tr.trSessAndHeader).user.id
@@ -2177,7 +2179,7 @@ spec = around withTestResources do
         invoked <- newIORef False
         let backend =
               AI.ProjectTools
-                { AI.catalog = Map.singleton "create_monitor" $ MCP.Tool "create_monitor" "Create a monitor" (AE.object []) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+                { AI.catalog = Map.singleton "create_monitor" $ MCP.Tool "create_monitor" "Create a monitor" (AE.object []) (Just $ MCP.AgentPolicy PM.PEdit MCP.RequestedWrite) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
                 , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
                 }
             config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember userId, AI.projectTools = Just backend, AI.invocationMode = AI.InteractiveWithActions}

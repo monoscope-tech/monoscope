@@ -901,7 +901,7 @@ agenticSetup config userQuery model =
         <> filter (maybe False (`elem` ["get_field_values", "get_services", "get_facets", "run_query", "count_query", "sample_logs"]) . toolName) allToolDefs
         <> case config.projectTools of
           Nothing -> filter ((== Just "list_metrics") . toolName) allToolDefs
-          Just backend -> map mcpToolDef $ mapMaybe (`Map.lookup` backend.catalog) ["get_schema", "list_metrics", "query_metrics"]
+          Just backend -> map mcpToolDef $ filter (isJust . (.agentPolicy)) $ mapMaybe (`Map.lookup` backend.catalog) ["get_schema", "list_metrics", "query_metrics"]
     repositoryToolDefs :: [OAITool.Tool]
     memoryToolDefs =
       [ OAITool.Tool_Function OAITool.Function{OAITool.name = name, OAITool.description = Just tool.description, OAITool.parameters = Just $ AE.toJSON tool.parameters, OAITool.strict = Just False}
@@ -1099,8 +1099,7 @@ mcpToolDef tool =
 
 projectToolDef :: AgenticConfig -> Text -> Maybe OAITool.Tool
 projectToolDef config name = case config.projectTools of
-  Just backend | Map.member name MCP.agentPolicies -> mcpToolDef <$> Map.lookup name backend.catalog
-  Just backend | Map.member name backend.catalog -> Nothing
+  Just backend | Just tool <- Map.lookup name backend.catalog -> mcpToolDef tool <$ tool.agentPolicy
   _ -> find ((== Just name) . toolName) allToolDefs
 
 
@@ -1179,7 +1178,7 @@ executeToolCall config tc = do
       Just query ->
         let summaries = case config.projectTools of
               Just backend ->
-                [(tool.name, tool.description) | tool <- Map.elems backend.catalog, Map.member tool.name MCP.agentPolicies]
+                [(tool.name, tool.description) | tool <- Map.elems backend.catalog, isJust tool.agentPolicy]
                   <> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction allToolDefs, Map.notMember fn.name backend.catalog]
               Nothing -> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction allToolDefs]
             terms = words $ T.toCaseFold $ T.map (\c -> if isAlphaNum c then c else ' ') query
@@ -1191,11 +1190,11 @@ executeToolCall config tc = do
       Just fn ->
         AE.object
           $ ["name" AE..= fn.name, "description" AE..= fn.description, "input_schema" AE..= fn.parameters]
-          <> maybe [] (\policy -> ["minimum_permission" AE..= policy.minimumPermission, "action" AE..= show @Text policy.action]) (Map.lookup fn.name MCP.agentPolicies)
+          <> maybe [] (\policy -> ["minimum_permission" AE..= policy.minimumPermission, "action" AE..= show @Text policy.action]) (config.projectTools >>= \backend -> Map.lookup fn.name backend.catalog >>= (.agentPolicy))
     name
       | Just backend <- config.projectTools
-      , Just _ <- Map.lookup name backend.catalog ->
-          case Map.lookup name MCP.agentPolicies of
+      , Just tool <- Map.lookup name backend.catalog ->
+          case tool.agentPolicy of
             Nothing -> pure $ noRaw "This project operation has no Agent policy."
             Just policy -> do
               authority <- agentAuthority config.access config.projectId

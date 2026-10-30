@@ -784,13 +784,14 @@ spec = around withTestResources do
         Map.member "get_incident" reg `shouldBe` True
 
       it "requires an explicit Agent policy or exclusion for every MCP operation" $ \_tr -> do
-        let covered = Map.keysSet MCP.agentPolicies `S.union` Map.keysSet MCP.agentExclusions
+        let policies = Map.mapMaybe (.agentPolicy) reg
+            covered = Map.keysSet policies `S.union` Map.keysSet MCP.agentExclusions
         Map.keysSet reg `shouldBe` covered
-        Map.keysSet MCP.agentPolicies `S.intersection` Map.keysSet MCP.agentExclusions `shouldBe` S.empty
-        Map.lookup "list_metrics" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PView MCP.ReadOnly)
-        Map.lookup "create_monitor" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PEdit MCP.RequestedWrite)
-        Map.lookup "bulk_monitors" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PAdmin MCP.ConfirmedWrite)
-        Map.lookup "remove_member" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PAdmin MCP.ConfirmedWrite)
+        Map.keysSet policies `S.intersection` Map.keysSet MCP.agentExclusions `shouldBe` S.empty
+        Map.lookup "list_metrics" policies `shouldBe` Just (MCP.AgentPolicy PM.PView MCP.ReadOnly)
+        Map.lookup "create_monitor" policies `shouldBe` Just (MCP.AgentPolicy PM.PEdit MCP.RequestedWrite)
+        Map.lookup "bulk_monitors" policies `shouldBe` Just (MCP.AgentPolicy PM.PAdmin MCP.ConfirmedWrite)
+        Map.lookup "remove_member" policies `shouldBe` Just (MCP.AgentPolicy PM.PAdmin MCP.ConfirmedWrite)
 
       it "does not expose the MCP endpoint as its own tool" $ \_tr -> do
         Map.member "post_mcp" reg `shouldBe` False
@@ -810,6 +811,15 @@ spec = around withTestResources do
           (t : _) -> for_ ["name", "description", "inputSchema"] $ \k ->
             (t ^? key (AEK.fromText k)) `shouldSatisfy` isJust
           [] -> expectationFailure "expected at least one tool"
+
+      it "tools/list derives read hints from operation policy, including POST queries and privileged reads" $ \tr -> do
+        let req = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (1 :: Int), "method" AE..= ("tools/list" :: Text)]
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        let tools = resp ^.. key "result" . key "tools" . _Array . traverse
+            hint name = find (\tool -> (tool ^? key "name" . _String) == Just name) tools >>= (^? key "annotations" . key "readOnlyHint")
+        for_ ([("search_events", True), ("get_api_key", True), ("analyze_issue", True), ("create_monitor", False), ("delete_dashboard", False)] :: [(Text, Bool)]) $ \(name, readOnly) ->
+          hint name `shouldBe` Just (AE.Bool readOnly)
+        hint "submit_rrweb_event" `shouldBe` Nothing
 
       it "initialize returns protocolVersion + serverInfo" $ \tr -> do
         let req =

@@ -11,7 +11,6 @@ module Web.MCP (
   OpenApiBinding (..),
   AgentPolicy (..),
   AgentAction (..),
-  agentPolicies,
   agentExclusions,
   allTools,
   handleJsonRpc,
@@ -80,6 +79,7 @@ data Tool = Tool
   { name :: !Text
   , description :: !Text
   , inputSchema :: !AE.Value
+  , agentPolicy :: !(Maybe AgentPolicy)
   , dispatch :: !Dispatch
   }
 
@@ -113,97 +113,6 @@ data AgentPolicy = AgentPolicy
 
 data AgentAction = ReadOnly | RequestedWrite | ConfirmedWrite
   deriving stock (Eq, Show)
-
-
-agentPolicies :: Map Text AgentPolicy
-agentPolicies =
-  Map.fromList
-    $ [(name, AgentPolicy ProjectMembers.PView ReadOnly) | name <- readTools]
-    <> [(name, AgentPolicy ProjectMembers.PAdmin ReadOnly) | name <- adminReadTools]
-    <> [(name, AgentPolicy ProjectMembers.PEdit RequestedWrite) | name <- editTools]
-    <> [(name, AgentPolicy ProjectMembers.PAdmin ConfirmedWrite) | name <- adminTools]
-  where
-    readTools =
-      [ "list_events"
-      , "get_event_context"
-      , "search_events"
-      , "query_metrics"
-      , "list_metrics"
-      , "get_schema"
-      , "list_facets"
-      , "list_monitors"
-      , "get_monitor"
-      , "get_monitor_yaml"
-      , "list_dashboards"
-      , "get_dashboard"
-      , "get_dashboard_yaml"
-      , "get_dashboard_data"
-      , "whoami"
-      , "get_project"
-      , "list_endpoints"
-      , "get_endpoint"
-      , "list_log_patterns"
-      , "get_log_pattern"
-      , "list_issues"
-      , "get_issue"
-      , "list_incidents"
-      , "get_incident"
-      , "list_teams"
-      , "get_team"
-      , "list_members"
-      , "get_member"
-      , "find_error_patterns"
-      , "search_events_nl"
-      , "analyze_issue"
-      ]
-    adminReadTools = ["list_api_keys", "get_api_key", "get_ingestion_key"]
-    editTools =
-      [ "create_monitor"
-      , "update_monitor"
-      , "patch_monitor"
-      , "mute_monitor"
-      , "unmute_monitor"
-      , "resolve_monitor"
-      , "toggle_monitor_active"
-      , "apply_monitor"
-      , "create_dashboard"
-      , "apply_dashboard"
-      , "update_dashboard"
-      , "patch_dashboard"
-      , "duplicate_dashboard"
-      , "star_dashboard"
-      , "unstar_dashboard"
-      , "upsert_dashboard_widget"
-      , "reorder_dashboard_widgets"
-      , "ack_log_pattern"
-      , "bulk_log_patterns"
-      , "ack_issue"
-      , "unack_issue"
-      , "archive_issue"
-      , "unarchive_issue"
-      , "bulk_issues"
-      ]
-    adminTools =
-      [ "delete_monitor"
-      , "bulk_monitors"
-      , "delete_dashboard"
-      , "delete_dashboard_widget"
-      , "bulk_dashboards"
-      , "create_api_key"
-      , "activate_api_key"
-      , "deactivate_api_key"
-      , "delete_api_key"
-      , "patch_project"
-      , "create_team"
-      , "update_team"
-      , "patch_team"
-      , "delete_team"
-      , "bulk_teams"
-      , "add_member"
-      , "patch_member"
-      , "remove_member"
-      , "create_share_link"
-      ]
 
 
 -- | Ingestion belongs to the telemetry client, not a conversational action.
@@ -252,12 +161,14 @@ mkToolsFromOpenApi spec =
 openApiTool :: Text -> ByteString -> OA.Operation -> Tool
 openApiTool p m op =
   Tool
-    { name = fromMaybe derivedName (Map.lookup (m, p) toolNameOverrides)
+    { name = maybe derivedName fst operation
     , description = fromMaybe (decodeUtf8 m <> " " <> p) ((op ^. OA.summary) <|> (op ^. OA.description))
     , inputSchema = schemaObject (maybe id (KM.insert "body") bodySchema $ KM.fromList [(AK.fromText (q ^. OA.name), paramSchemaJson q) | q <- params]) requireds
+    , agentPolicy = operation >>= snd
     , dispatch = ViaOpenApi OpenApiBinding{method = m, path = p, pathParams = namesIn OA.ParamPath, queryParams = namesIn OA.ParamQuery, bodyRequired = bodyReq}
     }
   where
+    operation = Map.lookup (m, p) apiOperations
     params = mapMaybe (preview OA._Inline) (op ^. OA.parameters)
     namesIn loc = [q ^. OA.name | q <- params, q ^. OA.in_ == loc]
     mrb = op ^. OA.requestBody >>= preview OA._Inline
@@ -280,100 +191,103 @@ openApiTool p m op =
        in (find (("application/json" `T.isPrefixOf`) . show . fst) entries <|> listToMaybe entries) >>= fmap AE.toJSON . (^. OA.schema) . snd
 
 
--- | Canonical verb-first names for every API v1 operation. Industry-standard
--- naming: @list_X@, @get_X@, @create_X@, @update_X@, @<action>_<resource>@.
--- New routes get a path-derived fallback; to give them a canonical name, add
--- an entry here.
-toolNameOverrides :: Map (ByteString, Text) Text
-toolNameOverrides =
+-- | Canonical API names and agent policy. Unclassified routes retain a fallback
+-- MCP name but remain unavailable to the agent until explicitly classified.
+apiOperations :: Map (ByteString, Text) (Text, Maybe AgentPolicy)
+apiOperations =
   Map.fromList
-    [ (("GET", "/ingestion-key"), "get_ingestion_key")
-    , (("GET", "/events"), "list_events")
-    , (("GET", "/events/{event_id}/time/{timestamp}"), "get_event_context")
-    , (("POST", "/events/query"), "search_events")
-    , (("GET", "/metrics"), "query_metrics")
-    , (("GET", "/metrics/catalog"), "list_metrics")
-    , (("GET", "/schema"), "get_schema")
-    , (("GET", "/facets"), "list_facets")
-    , (("POST", "/rrweb"), "submit_rrweb_event")
+    [ (("GET", "/ingestion-key"), adminRead "get_ingestion_key")
+    , (("GET", "/events"), view "list_events")
+    , (("GET", "/events/{event_id}/time/{timestamp}"), view "get_event_context")
+    , (("POST", "/events/query"), view "search_events")
+    , (("GET", "/metrics"), view "query_metrics")
+    , (("GET", "/metrics/catalog"), view "list_metrics")
+    , (("GET", "/schema"), view "get_schema")
+    , (("GET", "/facets"), view "list_facets")
+    , (("POST", "/rrweb"), ("submit_rrweb_event", Nothing))
     , -- Monitors
-      (("GET", "/monitors"), "list_monitors")
-    , (("POST", "/monitors"), "create_monitor")
-    , (("GET", "/monitors/{monitor_id}"), "get_monitor")
-    , (("GET", "/monitors/{monitor_id}/yaml"), "get_monitor_yaml")
-    , (("POST", "/monitors/apply"), "apply_monitor")
-    , (("PUT", "/monitors/{monitor_id}"), "update_monitor")
-    , (("PATCH", "/monitors/{monitor_id}"), "patch_monitor")
-    , (("DELETE", "/monitors/{monitor_id}"), "delete_monitor")
-    , (("POST", "/monitors/{monitor_id}/mute"), "mute_monitor")
-    , (("POST", "/monitors/{monitor_id}/unmute"), "unmute_monitor")
-    , (("POST", "/monitors/{monitor_id}/resolve"), "resolve_monitor")
-    , (("POST", "/monitors/{monitor_id}/toggle_active"), "toggle_monitor_active")
-    , (("POST", "/monitors/bulk"), "bulk_monitors")
+      (("GET", "/monitors"), view "list_monitors")
+    , (("POST", "/monitors"), edit "create_monitor")
+    , (("GET", "/monitors/{monitor_id}"), view "get_monitor")
+    , (("GET", "/monitors/{monitor_id}/yaml"), view "get_monitor_yaml")
+    , (("POST", "/monitors/apply"), edit "apply_monitor")
+    , (("PUT", "/monitors/{monitor_id}"), edit "update_monitor")
+    , (("PATCH", "/monitors/{monitor_id}"), edit "patch_monitor")
+    , (("DELETE", "/monitors/{monitor_id}"), admin "delete_monitor")
+    , (("POST", "/monitors/{monitor_id}/mute"), edit "mute_monitor")
+    , (("POST", "/monitors/{monitor_id}/unmute"), edit "unmute_monitor")
+    , (("POST", "/monitors/{monitor_id}/resolve"), edit "resolve_monitor")
+    , (("POST", "/monitors/{monitor_id}/toggle_active"), edit "toggle_monitor_active")
+    , (("POST", "/monitors/bulk"), admin "bulk_monitors")
     , -- Dashboards
-      (("GET", "/dashboards"), "list_dashboards")
-    , (("POST", "/dashboards"), "create_dashboard")
-    , (("POST", "/dashboards/apply"), "apply_dashboard")
-    , (("GET", "/dashboards/{dashboard_id}"), "get_dashboard")
-    , (("GET", "/dashboards/{dashboard_id}/data"), "get_dashboard_data")
-    , (("PUT", "/dashboards/{dashboard_id}"), "update_dashboard")
-    , (("PATCH", "/dashboards/{dashboard_id}"), "patch_dashboard")
-    , (("DELETE", "/dashboards/{dashboard_id}"), "delete_dashboard")
-    , (("POST", "/dashboards/{dashboard_id}/duplicate"), "duplicate_dashboard")
-    , (("POST", "/dashboards/{dashboard_id}/star"), "star_dashboard")
-    , (("DELETE", "/dashboards/{dashboard_id}/star"), "unstar_dashboard")
-    , (("GET", "/dashboards/{dashboard_id}/yaml"), "get_dashboard_yaml")
-    , (("PUT", "/dashboards/{dashboard_id}/widgets"), "upsert_dashboard_widget")
-    , (("DELETE", "/dashboards/{dashboard_id}/widgets/{widget_id}"), "delete_dashboard_widget")
-    , (("PATCH", "/dashboards/{dashboard_id}/widgets/order"), "reorder_dashboard_widgets")
-    , (("POST", "/dashboards/bulk"), "bulk_dashboards")
+      (("GET", "/dashboards"), view "list_dashboards")
+    , (("POST", "/dashboards"), edit "create_dashboard")
+    , (("POST", "/dashboards/apply"), edit "apply_dashboard")
+    , (("GET", "/dashboards/{dashboard_id}"), view "get_dashboard")
+    , (("GET", "/dashboards/{dashboard_id}/data"), view "get_dashboard_data")
+    , (("PUT", "/dashboards/{dashboard_id}"), edit "update_dashboard")
+    , (("PATCH", "/dashboards/{dashboard_id}"), edit "patch_dashboard")
+    , (("DELETE", "/dashboards/{dashboard_id}"), admin "delete_dashboard")
+    , (("POST", "/dashboards/{dashboard_id}/duplicate"), edit "duplicate_dashboard")
+    , (("POST", "/dashboards/{dashboard_id}/star"), edit "star_dashboard")
+    , (("DELETE", "/dashboards/{dashboard_id}/star"), edit "unstar_dashboard")
+    , (("GET", "/dashboards/{dashboard_id}/yaml"), view "get_dashboard_yaml")
+    , (("PUT", "/dashboards/{dashboard_id}/widgets"), edit "upsert_dashboard_widget")
+    , (("DELETE", "/dashboards/{dashboard_id}/widgets/{widget_id}"), admin "delete_dashboard_widget")
+    , (("PATCH", "/dashboards/{dashboard_id}/widgets/order"), edit "reorder_dashboard_widgets")
+    , (("POST", "/dashboards/bulk"), admin "bulk_dashboards")
     , -- API keys
-      (("GET", "/api_keys"), "list_api_keys")
-    , (("POST", "/api_keys"), "create_api_key")
-    , (("GET", "/api_keys/{key_id}"), "get_api_key")
-    , (("DELETE", "/api_keys/{key_id}"), "delete_api_key")
-    , (("POST", "/api_keys/{key_id}/activate"), "activate_api_key")
-    , (("POST", "/api_keys/{key_id}/deactivate"), "deactivate_api_key")
+      (("GET", "/api_keys"), adminRead "list_api_keys")
+    , (("POST", "/api_keys"), admin "create_api_key")
+    , (("GET", "/api_keys/{key_id}"), adminRead "get_api_key")
+    , (("DELETE", "/api_keys/{key_id}"), admin "delete_api_key")
+    , (("POST", "/api_keys/{key_id}/activate"), admin "activate_api_key")
+    , (("POST", "/api_keys/{key_id}/deactivate"), admin "deactivate_api_key")
     , -- /me + project
-      (("GET", "/me"), "whoami")
-    , (("GET", "/project"), "get_project")
-    , (("PATCH", "/project"), "patch_project")
+      (("GET", "/me"), view "whoami")
+    , (("GET", "/project"), view "get_project")
+    , (("PATCH", "/project"), admin "patch_project")
     , -- Endpoints
-      (("GET", "/endpoints"), "list_endpoints")
-    , (("GET", "/endpoints/{endpoint_id}"), "get_endpoint")
+      (("GET", "/endpoints"), view "list_endpoints")
+    , (("GET", "/endpoints/{endpoint_id}"), view "get_endpoint")
     , -- Log patterns
-      (("GET", "/log_patterns"), "list_log_patterns")
-    , (("GET", "/log_patterns/{pattern_id}"), "get_log_pattern")
-    , (("POST", "/log_patterns/{pattern_id}/ack"), "ack_log_pattern")
-    , (("POST", "/log_patterns/bulk"), "bulk_log_patterns")
+      (("GET", "/log_patterns"), view "list_log_patterns")
+    , (("GET", "/log_patterns/{pattern_id}"), view "get_log_pattern")
+    , (("POST", "/log_patterns/{pattern_id}/ack"), edit "ack_log_pattern")
+    , (("POST", "/log_patterns/bulk"), edit "bulk_log_patterns")
     , -- Issues
-      (("GET", "/issues"), "list_issues")
-    , (("GET", "/issues/{issue_id}"), "get_issue")
-    , (("POST", "/issues/{issue_id}/ack"), "ack_issue")
-    , (("POST", "/issues/{issue_id}/unack"), "unack_issue")
-    , (("POST", "/issues/{issue_id}/archive"), "archive_issue")
-    , (("POST", "/issues/{issue_id}/unarchive"), "unarchive_issue")
-    , (("POST", "/issues/bulk"), "bulk_issues")
+      (("GET", "/issues"), view "list_issues")
+    , (("GET", "/issues/{issue_id}"), view "get_issue")
+    , (("POST", "/issues/{issue_id}/ack"), edit "ack_issue")
+    , (("POST", "/issues/{issue_id}/unack"), edit "unack_issue")
+    , (("POST", "/issues/{issue_id}/archive"), edit "archive_issue")
+    , (("POST", "/issues/{issue_id}/unarchive"), edit "unarchive_issue")
+    , (("POST", "/issues/bulk"), edit "bulk_issues")
     , -- Incidents
-      (("GET", "/incidents"), "list_incidents")
-    , (("GET", "/incidents/{incident_id}"), "get_incident")
+      (("GET", "/incidents"), view "list_incidents")
+    , (("GET", "/incidents/{incident_id}"), view "get_incident")
     , -- Teams
-      (("GET", "/teams"), "list_teams")
-    , (("POST", "/teams"), "create_team")
-    , (("GET", "/teams/{team_id}"), "get_team")
-    , (("PUT", "/teams/{team_id}"), "update_team")
-    , (("PATCH", "/teams/{team_id}"), "patch_team")
-    , (("DELETE", "/teams/{team_id}"), "delete_team")
-    , (("POST", "/teams/bulk"), "bulk_teams")
+      (("GET", "/teams"), view "list_teams")
+    , (("POST", "/teams"), admin "create_team")
+    , (("GET", "/teams/{team_id}"), view "get_team")
+    , (("PUT", "/teams/{team_id}"), admin "update_team")
+    , (("PATCH", "/teams/{team_id}"), admin "patch_team")
+    , (("DELETE", "/teams/{team_id}"), admin "delete_team")
+    , (("POST", "/teams/bulk"), admin "bulk_teams")
     , -- Members
-      (("GET", "/members"), "list_members")
-    , (("POST", "/members"), "add_member")
-    , (("GET", "/members/{user_id}"), "get_member")
-    , (("PATCH", "/members/{user_id}"), "patch_member")
-    , (("DELETE", "/members/{user_id}"), "remove_member")
+      (("GET", "/members"), view "list_members")
+    , (("POST", "/members"), admin "add_member")
+    , (("GET", "/members/{user_id}"), view "get_member")
+    , (("PATCH", "/members/{user_id}"), admin "patch_member")
+    , (("DELETE", "/members/{user_id}"), admin "remove_member")
     , -- Misc
-      (("POST", "/share"), "create_share_link")
+      (("POST", "/share"), admin "create_share_link")
     ]
+  where
+    view name = (name, Just $ AgentPolicy ProjectMembers.PView ReadOnly)
+    adminRead name = (name, Just $ AgentPolicy ProjectMembers.PAdmin ReadOnly)
+    edit name = (name, Just $ AgentPolicy ProjectMembers.PEdit RequestedWrite)
+    admin name = (name, Just $ AgentPolicy ProjectMembers.PAdmin ConfirmedWrite)
 
 
 -- | Top-level dispatcher. Handles JSON-RPC requests for the MCP protocol:
@@ -387,7 +301,7 @@ handleJsonRpc reg app pid req = case parseRpcReq req of
     -- return @null@; clients ignore the result. Revisit if/when we add SSE.
     | "notifications/" `T.isPrefixOf` m -> pure AE.Null
     | m == "initialize" -> pure $ rpcOk mid initializeResult
-    | m == "tools/list" -> pure $ rpcOk mid $ AE.object ["tools" AE..= [AE.object ["name" AE..= t.name, "description" AE..= t.description, "inputSchema" AE..= t.inputSchema] | t <- Map.elems reg]]
+    | m == "tools/list" -> pure $ rpcOk mid $ AE.object ["tools" AE..= map describeTool (Map.elems reg)]
     | m == "tools/call" -> case parseToolCall params of
         Nothing -> pure $ rpcError mid (-32602) "Invalid params"
         Just (toolName, args) -> case Map.lookup toolName reg of
@@ -395,6 +309,10 @@ handleJsonRpc reg app pid req = case parseRpcReq req of
           Just t -> rpcOk mid <$> runTool app pid t args
     | otherwise -> pure $ rpcError mid (-32601) ("Method not found: " <> m)
   where
+    describeTool t =
+      AE.object
+        $ ["name" AE..= t.name, "description" AE..= t.description, "inputSchema" AE..= t.inputSchema]
+        <> maybe [] (\policy -> ["annotations" AE..= AE.object ["readOnlyHint" AE..= (policy.action == ReadOnly)]]) t.agentPolicy
     parseRpcReq = \case
       AE.Object o -> (fromMaybe AE.Null (KM.lookup "id" o),,fromMaybe (AE.object []) (KM.lookup "params" o)) <$> textArg "method" o
       _ -> Nothing
@@ -557,7 +475,7 @@ analyzeIssue =
 
 
 composite :: Text -> Text -> AE.Value -> (Projects.ProjectId -> AE.Object -> ATBaseCtx AE.Value) -> Tool
-composite n d schema run = Tool n d schema (ViaComposite run)
+composite n d schema run = Tool n d schema (Just $ AgentPolicy ProjectMembers.PView ReadOnly) (ViaComposite run)
 
 
 objSchema :: [(Text, AE.Value)] -> [Text] -> AE.Value

@@ -296,6 +296,16 @@ Record actual grants, subscriptions, app eligibility, session behavior, and publ
 - New features reuse existing state before introducing another store or worker.
 - Each slice records the duplicate implementations it removed.
 
+## Implementation evidence
+
+The related PR runtime integration passes 33 review integration examples and fifteen worker examples.
+Operation names and agent permission policies now live together in the API tool catalog.
+MCP read hints, schema discovery, and agent execution use each tool's policy.
+The separate name-indexed agent policy registry has been removed.
+Twenty MCP examples pass, including POST-read annotations and privileged reads.
+The agent regression also denies an unclassified operation with a previously known name.
+The fallback read handlers and agent-only capability consolidation remain in progress; slice 1 is not complete.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
