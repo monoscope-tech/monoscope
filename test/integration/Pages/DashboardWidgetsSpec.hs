@@ -253,6 +253,7 @@ spec = sequential $ aroundAll withTestResources do
       did <- newDashboard tr "_overview.yaml" "Overview views"
       for_ ([("overview", ["service", "resource"]), ("service", ["service", "resource"]), ("logs", ["service"]), ("databases", ["database"]), ("infra", [])] :: [(Text, [Text])]) \(slug, keys) -> do
         html <- renderT <$> getTab tr did slug Nothing [("var-service", Just "api"), ("var-database", Just "postgresql")]
+        ("id=\"dash-vars-toggle\"" `T.isInfixOf` html) `shouldBe` not (null keys)
         for_ ["service", "resource", "database"] \key ->
           ("name=\"" <> key <> "\"") `T.isInfixOf` html `shouldBe` (key `elem` keys)
         let root = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/" <> slug

@@ -261,7 +261,7 @@ actionPickerField_ label name placeholder value = label_ [Lucid.for_ name, class
 
 
 dashboardVariables_ :: Projects.ProjectId -> Dashboards.DashboardId -> [Dashboards.Variable] -> [Attribute] -> Html ()
-dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-variables", class_ "contents"] <> extraAttrs) do
+dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-variables", class_ "contents"] <> extraAttrs) $ unless (null variables) do
   input_ [type_ "checkbox", class_ "hidden peer/vars", id_ "dash-vars-toggle"]
   label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeaker border border-strokeWeak rounded-lg px-2 py-1 flex items-center gap-1 peer-checked/vars:hidden"] do
     faSprite_ "filter" "regular" "w-3 h-3"

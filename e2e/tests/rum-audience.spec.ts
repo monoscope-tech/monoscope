@@ -135,8 +135,11 @@ test("overview template scopes filters by tab and shares saved views", async ({ 
     await toolbar.getByRole("link", { name: "All services", exact: true }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("var-service")).toBe("");
     expect(new URL(page.url()).searchParams.get("since")).toBe("7D");
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole("tab", { name: "Infra", exact: true }).click();
     await expect(page.locator('#dashboard-variables input[name="service"], #dashboard-variables input[name="resource"], #dashboard-variables input[name="database"]')).toHaveCount(0);
+    await expect(page.locator("#dashboard-variables")).toBeEmpty();
+    await page.setViewportSize({ width: 1280, height: 1000 });
     await views.click();
     await toolbar.getByRole("link", { name: "API logs", exact: true }).click();
     await expect(page).toHaveURL(/var-service=api/);

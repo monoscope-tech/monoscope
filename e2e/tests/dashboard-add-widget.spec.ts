@@ -186,6 +186,7 @@ test.describe("adding widgets to a dashboard", () => {
   });
 
   test("a new widget saves its monitor from the same form", async ({ page }) => {
+    test.slow(); // Monitor retry, reopen, and UI teardown share the same deadline.
     const dash = await makeDashboard(page, `E2E New Widget Monitor ${Date.now()}`);
     try {
       await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`);
