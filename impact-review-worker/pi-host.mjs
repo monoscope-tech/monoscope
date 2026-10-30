@@ -19,7 +19,7 @@ import { z } from 'zod';
 import { jsonLines } from './jsonl.mjs';
 
 export const cwd = '/workspace';
-export const checkoutSchema = z.object({ guest: z.string().nullable(), envelope: z.record(z.string(), z.unknown()).nullable(), directory: z.string().min(1), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()), fileTools: z.enum(['inspect_files', 'modify_files']).optional(), builtins: z.array(z.string()) }).strict() }).strict();
+export const checkoutSchema = z.object({ guest: z.string().nullable(), envelope: z.record(z.string(), z.unknown()).nullable(), directory: z.string().min(1), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()), builtins: z.array(z.string()) }).strict() }).strict();
 
 export function parseSubmission(checkout, name, draft) {
   const schema = checkout.policy.tools.find((tool) => tool.name === name)?.parameters;

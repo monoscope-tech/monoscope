@@ -2952,7 +2952,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           (Just "2024-12-25T00:00:00Z")
           (Just "2025-01-01T00:00:00Z")
     map (.chartUrl) (filter (isNothing . (.queryResult)) measured) `shouldBe` [expectedChart]
-    length (filter (isJust . (.queryResult)) measured) `shouldBe` 7
+    length (filter (isJust . (.queryResult)) measured) `shouldBe` 8
     -- A worker can stop after recording the GitHub publication but before
     -- finishing its routine ledger. A replay must repair that ledger locally.
     withResource tr.trPool \conn -> do

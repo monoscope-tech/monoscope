@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Data.Effectful.CodeReview.Policy (Role (..), ToolName (..), Tool (..), Invocation (..), Policy (..), FileTools (..), policy, toolsForRole, toolDefinition, toolSchema, sourceReviewSchema) where
+module Data.Effectful.CodeReview.Policy (Role (..), ToolName (..), Tool (..), Invocation (..), Policy (..), policy, toolsForRole, toolDefinition, toolSchema, sourceReviewSchema) where
 
 import Control.Lens ((.~), (?~))
 import Data.Aeson qualified as AE
@@ -30,12 +30,7 @@ data Invocation = Invocation {name :: ToolName, arguments :: AE.Value}
   deriving anyclass (AE.FromJSON)
 
 
-data FileTools = InspectFiles | ModifyFiles
-  deriving stock (Show)
-  deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" FileTools
-
-
-data Policy = Policy {instructions :: Text, tools :: [Tool], fileTools :: FileTools, builtins :: [Text]}
+data Policy = Policy {instructions :: Text, tools :: [Tool], builtins :: [Text]}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -63,11 +58,8 @@ toolDefinition role name = Tool name (toolDescription name) (schema role name) (
 
 
 policy :: Role -> Text -> Text -> Text -> Policy
-policy role base headRevision rootInstructions = Policy instructions (map (toolDefinition role) (toolsForRole role)) fileTools (case role of (Patch; SourcePatch) -> []; (Advisory; Fix) -> ["bash", "read", "edit", "write"]; _ -> ["bash", "read"])
+policy role base headRevision rootInstructions = Policy instructions (map (toolDefinition role) (toolsForRole role)) (case role of (Patch; SourcePatch) -> []; (Advisory; Fix) -> ["bash", "read", "edit", "write"]; _ -> ["bash", "read"])
   where
-    fileTools = case role of
-      (Advisory; Fix) -> ModifyFiles
-      (Patch; SourcePatch; Source; Admission; Peer) -> InspectFiles
     grounding = "Ground external API compatibility claims in the specified library/runtime version and its actual signature or implementation. For claims about changed incidental behavior, establish user impact through a concrete caller or documented contract. Do not turn an unverified contract assumption into a finding."
     findingGrounding = "Trace each newly added or newly reachable user action through its existing callees and side effects. An unchanged callee can become a new regression when a new caller exposes behavior inconsistent with an established contract. Establish that contract from existing callers, tests or documentation; a missing enhancement alone is not a bug. Existing tests passing is not evidence that a changed path was exercised. Test the specific failure hypothesis when possible.\nBefore submitting a finding, re-read the cited code in its enclosing control flow and ownership context, then try to disprove its triggering conditions. Verify each required premise against the actual repository. A generic language or framework pitfall is insufficient when the surrounding code prevents it."
     instructions = case role of

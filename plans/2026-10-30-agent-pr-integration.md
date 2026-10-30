@@ -253,3 +253,9 @@ No remote PR state has changed.
 All twenty selected incoming agent PR heads are now ancestors of this branch: the sixteen-PR stack, #692, #661, #571, and #568.
 The server watcher compiles the reconciled native runtime. Startup still fails against the existing configured production database credentials.
 All five VM identity and cleanup regressions pass without a guest image. The complete impact-review suite is still running.
+
+The 33-example review run completed with one count assertion to update for the new eighth evidence query and eleven image-dependent examples pending.
+The corrected end-to-end publication, isolation, matching/total count, and recovery regression passes.
+The worker suite still passes all fourteen cases after removing the obsolete file-tool mode from the protocol; builtin tool selection now has one policy field.
+Prepared guest assets were subsequently found in the `monoscope-impact-worker-floor` worktree.
+Ignored local asset directories reference those cached files for a focused VM rerun; no guest asset or image was added to Git.
