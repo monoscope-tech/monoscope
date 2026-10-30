@@ -245,14 +245,14 @@ data SqlTok = SqlLit Text | SqlName [Text] Text | SqlOther Char
 -- >>> scopeUserSql True pid "SELECT 1 FROM otel_metrics"
 -- Right "WITH otel_metrics AS NOT MATERIALIZED (SELECT * FROM otel_metrics WHERE project_id = '00000000-0000-0000-0000-000000000000') SELECT 1 FROM otel_metrics"
 -- >>> scopeUserSql False pid "SELECT 1 -- FROM users.users\nFROM otel_metrics /* x */"
--- Right "WITH otel_metrics AS (SELECT * FROM otel_metrics WHERE project_id = '00000000-0000-0000-0000-000000000000') SELECT 1 \nFROM otel_metrics  "
+-- Right "WITH otel_metrics AS (SELECT * FROM otel_metrics WHERE project_id = '00000000-0000-0000-0000-000000000000') SELECT 1  \nFROM otel_metrics  "
 -- >>> either (const "refused") id . scopeUserSql False pid <$> ["SELECT * FROM users.users", "SELECT * FROM \"public\".otel_logs_and_spans", "SELECT * FROM datafusion.public.otel_logs_and_spans", "SELECT * FROM background_jobs", "WITH RECURSIVE r AS (SELECT 1) SELECT * FROM r", "SELECT 1 FROM users/**/.users"]
 -- ["refused","refused","refused","refused","refused","refused"]
 scopeUserSql :: Bool -> Projects.ProjectId -> Text -> Either Text Text
 scopeUserSql postgres pid sql = do
   let toks = tokenizeSql sql
       names = [ps | SqlName ps _ <- toks]
-  Relude.when (any (== ["with", "recursive"]) (zipWith (\a b -> a <> b) names (drop 1 names))) $ Left "Recursive queries are not supported"
+  Relude.when (["with", "recursive"] `elem` zipWith (<>) names (drop 1 names)) $ Left "Recursive queries are not supported"
   whenJust (find disallowed names) \ps -> Left $ T.intercalate "." ps <> " is not available to queries"
   let used = filter (\t -> any ((== t) . T.intercalate ".") names) tenantTables
       cte t = alias t <> bool " AS (" " AS NOT MATERIALIZED (" postgres <> "SELECT * FROM " <> t <> " WHERE project_id = '" <> pid.toText <> "')"
@@ -293,7 +293,7 @@ tokenizeSql t = case T.uncons t of
     closeAt q s = case T.break (== q) s of
       (_, r)
         | T.null r -> ""
-        | T.pack [q, q] `T.isPrefixOf` r -> closeAt q (T.drop 2 r)
+        | T.replicate 2 (one q) `T.isPrefixOf` r -> closeAt q (T.drop 2 r)
         | otherwise -> T.drop 1 r
     part s = case T.uncons s of
       Just ('"', _) -> let (lit, r) = quoted '"' s in Just (T.toLower $ T.dropEnd 1 $ T.drop 1 lit, r)
