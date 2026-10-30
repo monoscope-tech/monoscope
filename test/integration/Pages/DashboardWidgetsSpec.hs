@@ -16,6 +16,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Models.Apis.LogQueries qualified as LogQueries
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -722,6 +723,29 @@ spec = sequential $ aroundAll withTestResources do
       scoped <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just testPid) Nothing (Just raw) (Just "24H") Nothing Nothing Nothing Nothing scope
       scoped.error `shouldBe` Nothing
       scoped.dataText `shouldBe` V.singleton (V.singleton "checkout")
+
+    -- The SQL executor's tenant boundary was a check that `project_id='<pid>'` appeared somewhere
+    -- in the text, so `... OR TRUE` read every project. Each tenant table must reach the
+    -- statement already filtered to the project, on both stores; a statement that cannot be
+    -- scoped (it reuses a tenant table's name for its own CTE) may fail instead.
+    it "userSql_readsOnlyItsOwnProject_onPostgresAndTimefusion" \tr -> do
+      otherPid <- createTestProject tr "Other tenant"
+      mine <- createTestAPIKey tr testPid "tenant-scope-mine"
+      theirs <- createTestAPIKey tr otherPid "tenant-scope-theirs"
+      ingestTrace tr mine "GET /tenant-scope" frozenTime
+      ingestTrace tr theirs "GET /tenant-scope" frozenTime
+      let own = "project_id='" <> testPid.toText <> "'"
+          projects = fmap \rows -> nubOrd [v | row <- V.toList rows, AE.String v <- V.toList row]
+          run source sql = projects <$> runQueryEffect tr (LogQueries.executeSecuredQuery True testPid (LogQueries.SecuredSql source sql) 100)
+      for_ [LogQueries.SqlPostgres, LogQueries.SqlTimefusion] \source -> do
+        for_
+          [ "SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE"
+          , "SELECT p FROM (SELECT project_id::text AS p, project_id FROM otel_logs_and_spans) s WHERE " <> own <> " OR TRUE"
+          , "SELECT project_id::text FROM otel_logs_and_spans WHERE name = 'GET /tenant-scope' AND (" <> own <> " OR project_id IN (SELECT project_id FROM otel_logs_and_spans))"
+          ]
+          \sql -> run source sql `shouldReturn` Right [testPid.toText]
+        run source ("WITH otel_logs_and_spans AS (SELECT * FROM otel_logs_and_spans) SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE")
+          >>= (`shouldSatisfy` either (const True) (== [testPid.toText]))
 
     -- A dashboard supplies its own service variable, while non-dashboard charts still use
     -- the sticky selector. Both keep the authenticated environment boundary.
