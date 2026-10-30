@@ -2970,14 +2970,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     retried <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     retried.state `shouldBe` Reviews.Completed
     retried.error `shouldBe` Nothing
-    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     let rejectedPublication = withHTTPResponses \_ endpoint ->
           if "/issues/comments/99" `T.isSuffixOf` toText endpoint
             then throwIO $ userError "Publication transport interrupted"
             else pure Nothing
     rejected <- tryAny $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ rejectedPublication $ transport True $ fakeAgent result $ Impact.reviewPullRequest run.id
     rejected `shouldSatisfy` isLeft
-    rejectedRun <- runQueryEffect tr $ Issues.getEventRun testPid (Issues.PullRequestReview run.id)
+    rejectedRun <- runQueryEffect tr $ Issues.getEventRun reviewPid (Issues.PullRequestReview run.id)
     fmap (.status) rejectedRun `shouldBe` Just Issues.RunFailed
     for_ rejectedRun \visible -> runQueryEffect tr (Issues.listRunArtifacts reviewPid visible.id) >>= (`shouldSatisfy` (not . null))
 
