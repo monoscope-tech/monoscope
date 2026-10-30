@@ -298,6 +298,9 @@ Record actual grants, subscriptions, app eligibility, session behavior, and publ
 
 ## Implementation evidence
 
+The [visual review](../docs/reviews/2026-10-30-unified-agent.html) shows the architecture, request flows, source excerpts, and remaining work.
+It describes code snapshot `3685db582`.
+
 The related PR runtime integration passes 33 review integration examples and fifteen worker examples.
 Operation names and agent permission policies now live together in the API tool catalog.
 MCP read hints, schema discovery, and agent execution use each tool's policy.
