@@ -1285,6 +1285,7 @@ issueRollupSql IssueView{..} = case Issues.issuePayload issue of
     -- Counting that began within the hour of the first event leaves nothing uncounted.
     coveredFrom firstEvent countedFrom = bool countedFrom (POSIX.posixSecondsToUTCTime 0) (countedFrom <= addUTCTime 3600 firstEvent)
 
+
 -- | One card for everything about the sampled event. Its navigator is the only sticky
 -- element in the column: it names the occurrence being shown and links to every
 -- section, and stays pinned while the sections scroll under it. The card clips

@@ -101,7 +101,6 @@ import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
 import Control.Exception (ErrorCall (..), bracket, finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((%~), (.~), (^.), (^..))
-import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
