@@ -271,7 +271,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
                       input.value = data.order.data.id
                      }
                      LemonSqueezy.Url.Close()
-                     gtag('event', 'conversion', {
+                     window.gtag && gtag('event', 'conversion', {
                          'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
                          'value': 20.0,
                          'currency': 'EUR',
