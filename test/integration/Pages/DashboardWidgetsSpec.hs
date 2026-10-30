@@ -1247,10 +1247,12 @@ spec = sequential $ aroundAll withTestResources do
       (mapWidget >>= (.cta) <&> (.url)) `shouldBe` Just ("/p/" <> testPid.toText <> "/service_map?endpoint_hash=endpoint%20%2F%20hash&since=24H")
       (mapWidget >>= (.html)) `shouldSatisfy` maybe False (T.isInfixOf "No direct dependencies in this range" . toStrict)
 
+  -- The probe counts real executions (each run advances the sequence), so a cache hit shows as
+  -- a repeated value. It was a read of query_cache itself, which user SQL may no longer reach.
   describe "Endpoint Analytics complete-result SQL cache" do
     it "reuses a successful complete result and isolates endpoint keys" \tr -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe"
+      let sql = "SELECT (nextval('raw_cache_probe') - 1)::double precision"
           fetch endpoint =
             runQueryEffect tr
               $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just endpoint)]
@@ -1262,8 +1264,8 @@ spec = sequential $ aroundAll withTestResources do
       otherEndpoint.dataFloat `shouldBe` Just 1
 
     it "shares complete results between streaming and JSON requests" \tr -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe"
+      let sql = "SELECT (nextval('raw_cache_probe') - 1)::double precision"
           params = [("var-endpointHash", Just "stream-cache")]
           fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
           stream = completeFrame @Charts.MetricsData =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params)
@@ -1275,8 +1277,8 @@ spec = sequential $ aroundAll withTestResources do
       rows `shouldBe` [PG.Only 1]
 
     it "expires fixed-window results so late telemetry can replace a cached result" \tr -> E.bracket (getTestTime tr.trTestClock) (setTestTime tr.trTestClock) \_ -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") Nothing Nothing [("var-endpointHash", Just "expiry")]
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe"
+      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT (nextval('raw_cache_probe') - 1)::double precision") Nothing (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") Nothing Nothing [("var-endpointHash", Just "expiry")]
       initial <- fetch
       advanceTestTime tr 59
       fresh <- fetch
@@ -1287,8 +1289,8 @@ spec = sequential $ aroundAll withTestResources do
       runQueryEffect tr QueryCache.cleanupExpiredCache `shouldReturn` 1
 
     it "reuses the default live range when time parameters are omitted" \tr -> E.bracket (getTestTime tr.trTestClock) (setTestTime tr.trTestClock) \_ -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing Nothing Nothing Nothing Nothing [("var-endpointHash", Just "default-range")]
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe"
+      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT (nextval('raw_cache_probe') - 1)::double precision") Nothing Nothing Nothing Nothing Nothing [("var-endpointHash", Just "default-range")]
       -- Both snapshots are within the same fifteen-second cache boundary.
       initial <- fetch
       advanceTestTime tr 0.001
@@ -1363,7 +1365,7 @@ spec = sequential $ aroundAll withTestResources do
               )
 
     it "never stores failed endpoint SQL" \tr -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe"
       failed <-
         runQueryEffect tr
           $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT missing_cache_column::double precision") (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "endpoint-failure")]
