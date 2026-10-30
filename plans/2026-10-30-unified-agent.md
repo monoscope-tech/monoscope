@@ -451,6 +451,37 @@ No Slack connector is exposed in this session, so live Slack acceptance remains 
 The formatter and diff checks pass. Repeated slice reviews found no remaining material distillation, type-evasion, or client-behavior findings.
 Final whole-branch review, doctests, release signoff, and PR update remain pending.
 
+
+### Persisted routine authority (current implementation slice)
+
+Scheduled installations now have one typed `ExecutionPolicy` shared with their run snapshots, form decoder, database codec, and operation audit.
+The legacy `allow_actions` and `memory_granted_by` columns, wiki-specific grant functions, denial reason, and boolean action wrapper are removed.
+Project knowledge writes use the same Autonomous policy and current role check as other project changes.
+Destination changes only select delivery; they do not grant authority or transfer the authorizing member.
+
+New scheduled activations default to Autonomous, with disclosure in the routine catalog, schedule control, and new-routine composer.
+Existing installations migrate to Observe, including previously enabled legacy action grants, until an editor explicitly adopts the unified policy.
+Rescheduling and resuming preserve the stored policy.
+The conversation has a typed Observe/Autonomous control guarded by current editor membership.
+Saving it updates in place with a success toast and preserves the follow-up draft.
+
+An authority revision fences withdrawn grants without rewriting the run's original policy or actor.
+Reducing Autonomous to Observe advances that revision. Changing the authorizing member also advances it.
+Runs retain the revision they started with, including through scheduler recovery.
+Restoring Autonomous does not restore writes to an already restricted run; future runs capture the new authority.
+The active-run and completion predicates reuse the same member-scoped policy query.
+
+Eight focused authority cases pass, including automatic dashboard creation through the real shared operation, policy reduction/restoration, future-run authority, reader denial, pause, project knowledge, and actor/conversation binding. Rescheduling or resuming the active routine cannot restore withdrawn writes.
+A standalone migration check passed on an isolated old-schema clone with both legacy Observe and legacy action-enabled routines.
+It verifies conservative adoption, retained historical run policy, old-run restriction, removed legacy columns, and the new Autonomous default.
+The browser regression first reproduced draft loss on policy save, then passed after the handler returned an in-place result.
+The permanent browser case also retains the earlier action-history refresh and role-restriction checks.
+The final focused suites pass: 180 bot examples, 75 API v1 examples, and 45 issue examples. The formatter and diff checks pass. Repeated slice reviews found no material distillation, type-evasion, or client-behavior findings. The production Haskell change adds eight net lines, including the policy UI, while removing the separate grant paths. Whole-branch review, doctests, live Slack acceptance, release signoff, and PR update remain pending.
+
+Event execution still uses its conservative Observe ceiling until stable request-root continuity and event authority are integrated.
+Legacy invocation constructors, administrator capability enablement and disclosure, and selected action review remain unfinished.
+This slice does not claim that the entire authority milestone is complete.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

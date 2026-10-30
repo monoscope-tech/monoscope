@@ -141,21 +141,21 @@ spec = around withTestResources do
         actionable `shouldContain` ["send_to_slack"]
         scheduledActionable `shouldContain` ["send_to_slack"]
 
-      it "binds routine wiki grants to an editor and clears them when actions are reset" \tr -> do
+      it "routineAuthority_destinationIsIndependentAndRevokedEditorsCannotChangeSettings" \tr -> do
         let conversation = UUIDId UUID.nil
             user = (getResponse tr.trSessAndHeader).user.id
             destination = AIThreads.routineDestinationPostH testPid conversation . AIThreads.RoutineDestinationForm
         void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
         Just routine <- runTestBg frozenTime tr $ Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
         execution <- runQueryEffect tr (Issues.claimRoutine routine.id routine.scheduledAt) >>= maybe (fail "Expected a claimed run") pure
-        runQueryEffect tr (Issues.routineRunCanWriteMemory testPid conversation execution.runId) >>= (`shouldBe` False)
+        runQueryEffect tr (Issues.routineRunPolicyFor testPid execution.runId user conversation) >>= (`shouldBe` Just Issues.Autonomous)
         void $ testServant tr $ destination Issues.DestinationSlack
-        runQueryEffect tr (Issues.routineRunCanWriteMemory testPid conversation execution.runId) >>= (`shouldBe` True)
+        runQueryEffect tr (Issues.routineRunPolicyFor testPid execution.runId user conversation) >>= (`shouldBe` Just Issues.Autonomous)
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
         for_ [Issues.DestinationConversation, Issues.DestinationSlack] \target -> do
           status <- runAuthHandler tr $ (destination target $> 200) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
           status `shouldBe` 403
-        runQueryEffect tr (Issues.routineRunCanWriteMemory testPid conversation execution.runId) >>= (`shouldBe` False)
+        runQueryEffect tr (Issues.routineRunPolicyFor testPid execution.runId user conversation) >>= (`shouldBe` Nothing)
 
     describe "Web conversation persistence" do
       for_ (["checkpoint", "uncertain", "repeat"] :: [Text]) \boundary ->
@@ -821,6 +821,48 @@ spec = around withTestResources do
             Issues.resumeRoutine uid testPid convId
           fmap (.scheduledAt) scheduled `shouldBe` Just expected
 
+      it "routineAuthority_newActivationIsAutonomousAndDestinationDoesNotGrantOrRevokeWrites" \tr -> do
+        let conversation = UUIDId UUID.nil
+            user = (getResponse tr.trSessAndHeader).user.id
+        template <- maybe (fail "Expected a built-in routine") pure $ find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates
+        scheduled <- runTestBg frozenTime tr do
+          void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+          Issues.installRoutineTemplate user testPid conversation "UTC" template
+        slot <- maybe (fail "Expected an installed schedule") pure scheduled
+        run <- runQueryEffect tr (Issues.claimRoutine slot.id slot.scheduledAt) >>= maybe (fail "Expected a claimed run") pure
+        run.policy `shouldBe` Issues.Autonomous
+        let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = AI.ScheduledRoutine run.runId run.policy, AI.projectTools = Just Routes.mcpProjectTools}
+            provider :: ATBackgroundCtx a -> ATBackgroundCtx a
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "create" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Autonomous activation" :: Text)])]}
+                _ -> LLM.Message LLM.Assistant "Created the requested dashboard." LLM.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected title request"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+        runTestBg frozenTime tr (provider $ AI.runAgenticChatWithHistory config "Create a dashboard" "model" "key") >>= (`shouldSatisfy` isRight)
+        runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Autonomous activation'|]) >>= (`shouldBe` 1)
+        for_ [Issues.DestinationSlack, Issues.DestinationConversation] \destination -> do
+          runQueryEffect tr $ Issues.setRoutineDestination testPid conversation destination
+          runQueryEffect tr (Issues.routineRunPolicyFor testPid run.runId user conversation) >>= (`shouldBe` Just Issues.Autonomous)
+        for_ [Issues.Observe, Issues.Autonomous] \policy -> do
+          void $ testServant tr $ AIThreads.routinePolicyPostH testPid conversation $ AIThreads.RoutinePolicyForm policy
+          runQueryEffect tr (Issues.routineRunPolicyFor testPid run.runId user conversation) >>= (`shouldBe` Just Issues.Observe)
+        for_ [void $ Issues.upsertRoutine user testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15, void $ Issues.resumeRoutine user testPid conversation] \reschedule -> do
+          runTestBg frozenTime tr reschedule
+          runQueryEffect tr (Issues.routineRunPolicyFor testPid run.runId user conversation) >>= (`shouldBe` Just Issues.Observe)
+        runTestBg slot.scheduledAt tr (Issues.completeRun (Issues.ScheduledTarget slot run) $ Issues.QuietResult $ AI.prepareRunAnswer $ AI.AgenticChatResult "No findings" []) >>= \case
+          Issues.RunCompleted (Just next) -> do
+            future <- runQueryEffect tr (Issues.claimRoutine next.id next.scheduledAt) >>= maybe (fail "Expected a future run") pure
+            future.policy `shouldBe` Issues.Autonomous
+            runQueryEffect tr (Issues.routineRunPolicyFor testPid future.runId user conversation) >>= (`shouldBe` Just Issues.Autonomous)
+          _ -> expectationFailure "Expected a completed run and the next schedule"
+        (_, page) <- testServant tr $ AIThreads.threadGetH testPid conversation Nothing Nothing
+        renderT page `shouldSatisfy` T.isInfixOf "Execution policy"
+        renderT page `shouldSatisfy` T.isInfixOf "Greater authority applies to future runs."
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+        status <- runAuthHandler tr $ (AIThreads.routinePolicyPostH testPid conversation (AIThreads.RoutinePolicyForm Issues.Observe) $> 200) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+        status `shouldBe` 403
+
       it "installs a built-in routine on project time and applies greater authority only to future runs" \tr -> do
         length Issues.routineTemplates `shouldSatisfy` (>= 15)
         case find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates of
@@ -830,18 +872,20 @@ spec = around withTestResources do
             (scheduled, installed, canAct, activeRunCanAct, firstRun) <- runTestBg frozenTime tr do
               void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
               scheduled <- Issues.installRoutineTemplate (getResponse tr.trSessAndHeader).user.id testPid convId "Europe/Berlin" template
+              Issues.setRoutinePolicy (getResponse tr.trSessAndHeader).user.id testPid convId Issues.Observe
               execution <- traverse (\routine -> Issues.claimRoutine routine.id routine.scheduledAt) scheduled
-              let canAct = maybe (pure False) (Issues.routineRunCanAct testPid . (.runId)) $ join execution
+              let canAct = maybe (pure Nothing) (\run -> Issues.routineRunPolicyFor testPid run.runId (getResponse tr.trSessAndHeader).user.id convId) $ join execution
               initialCanAct <- canAct
-              Issues.setRoutineDestination (getResponse tr.trSessAndHeader).user.id testPid convId Issues.DestinationSlack
+              Issues.setRoutineDestination testPid convId Issues.DestinationSlack
+              Issues.setRoutinePolicy (getResponse tr.trSessAndHeader).user.id testPid convId Issues.Autonomous
               activeRunCanAct <- canAct
               installed <- Issues.getConversation testPid convId
               pure (scheduled, installed, initialCanAct, activeRunCanAct, join execution)
             (.scheduledAt) <$> scheduled `shouldBe` Just (addUTCTime (8 * 3600) frozenTime)
             ((.templateKey) =<< installed) `shouldBe` Just template.key
-            canAct `shouldBe` False
+            canAct `shouldBe` Just Issues.Observe
             ((.routineDestination) =<< installed) `shouldBe` Just Issues.DestinationSlack
-            activeRunCanAct `shouldBe` False
+            activeRunCanAct `shouldBe` Just Issues.Observe
             (slot, lease) <- maybe (fail "Expected the initial scheduled run") pure $ (,) <$> scheduled <*> firstRun
             next <-
               runTestBg slot.scheduledAt tr (Issues.completeRun (Issues.ScheduledTarget slot lease) $ Issues.QuietResult $ AI.prepareRunAnswer $ AI.AgenticChatResult "No findings" []) >>= \case
@@ -849,7 +893,7 @@ spec = around withTestResources do
                 _ -> fail "Expected the next scheduled instant"
             future <- runQueryEffect tr (Issues.claimRoutine next.id next.scheduledAt) >>= maybe (fail "Expected a future run") pure
             future.policy `shouldBe` Issues.Autonomous
-            runQueryEffect tr (Issues.routineRunCanAct testPid future.runId) >>= (`shouldBe` True)
+            runQueryEffect tr (Issues.routineRunPolicyFor testPid future.runId (getResponse tr.trSessAndHeader).user.id convId) >>= (`shouldBe` Just Issues.Autonomous)
 
       it "rescheduling a template as an interval keeps that schedule after resume" \tr -> do
         case find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates of
@@ -908,7 +952,8 @@ spec = around withTestResources do
             void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
             Issues.insertChatMessage testPid conversation Issues.ChatUser "Summarize the project" Nothing Nothing
             scheduled <- Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (throwIO $ ErrorCall "Missing routine") pure
-            Issues.setRoutineDestination user testPid conversation Issues.DestinationConversation
+            Issues.setRoutineDestination testPid conversation Issues.DestinationConversation
+            Issues.setRoutinePolicy user testPid conversation Issues.Observe
             pure scheduled
           grants <- IORef.newIORef ([] :: [Issues.ExecutionPolicy])
           models <- IORef.newIORef (0 :: Int)
@@ -949,9 +994,10 @@ spec = around withTestResources do
             replacement <- Projects.createUser "Replacement" "Owner" "" "replacement-owner@example.test"
             Projects.insertUser replacement
             Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{replacement.id}, 'edit')|]
-            Issues.setRoutineDestination replacement.id testPid conversation Issues.DestinationSlack
+            Issues.setRoutineDestination testPid conversation Issues.DestinationSlack
+            Issues.setRoutinePolicy replacement.id testPid conversation Issues.Autonomous
           retainedRuns <- runQueryEffect tr $ Issues.listConversationRuns testPid conversation 10
-          for_ retainedRuns $ \retained -> runQueryEffect tr (Issues.routineRunCanAct testPid retained.id) >>= (`shouldBe` False)
+          for_ retainedRuns $ \retained -> runQueryEffect tr (Issues.routineRunPolicyFor testPid retained.id user conversation) >>= (`shouldBe` Just Issues.Observe)
           runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET running_since = now() - interval '31 minutes' WHERE id = #{scheduled.id}|]
           run >>= (`shouldSatisfy` isRight)
           run >>= (`shouldSatisfy` isRight)

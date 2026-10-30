@@ -1,4 +1,4 @@
-module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routineDeleteH, aiSearchH) where
+module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
@@ -33,7 +33,7 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC)
 import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (faSprite_, renderMarkdownToc)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
@@ -90,6 +90,11 @@ newtype RoutineInstructionsForm = RoutineInstructionsForm {instructions :: Text}
 
 
 newtype RoutineDestinationForm = RoutineDestinationForm {destination :: Issues.RoutineDestination}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+newtype RoutinePolicyForm = RoutinePolicyForm {policy :: Issues.ExecutionPolicy}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
@@ -193,6 +198,7 @@ routinesGetH pid = do
         section_ [Aria.label_ "Routine catalog"] do
           h2_ [class_ "text-sm font-semibold text-textStrong"] "Built-in routines"
           p_ [class_ "mt-1 text-sm text-textWeak"] "Times use the project’s time zone. Runs and artifacts are saved here; Slack and PR reviews also post replies. AI usage is billed at your project rate."
+          p_ [class_ "mt-2 text-sm text-textStrong"] "New routines use Autonomous: they can change project resources, update project knowledge, and publish requested results within your current role. They run without per-action approval. Existing routines stay in Observe until an editor adopts Autonomous. Change the policy or pause work from the conversation."
           let categories = [minBound .. maxBound]
           nav_ [Aria.label_ "Routine categories", class_ "mt-4 flex gap-2 overflow-x-auto pb-1"] $ for_ categories \category ->
             a_ [href_ $ "#" <> categoryId category, class_ "shrink-0 rounded-md border border-strokeWeak bg-bgRaised px-3 py-1.5 text-xs font-medium text-textWeak hover:bg-fillHover hover:text-textStrong"] $ toHtml $ Issues.routineCategoryLabel category
@@ -373,6 +379,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           div_ [class_ "flex items-center gap-2"] do
             input_ [type_ "number", name_ "intervalMinutes", min_ "5", max_ "10080", value_ $ maybe "1440" (show . Issues.routineIntervalMinutes . snd) routineState, class_ "input input-sm min-w-0 grow", Aria.label_ "Routine interval in minutes"]
             span_ [class_ "text-xs text-textWeak"] "minutes"
+          p_ [class_ "text-xs text-textWeak"] "New routines act automatically within your current role. Existing routine policies stay unchanged."
           button_ [type_ "submit", class_ "btn btn-sm btn-primary w-full active:scale-[0.96] transition-transform"] "Save routine"
         when (any ((.routineActive) . fst) routineState) $ form_ [class_ "mt-3 border-t border-strokeWeak pt-2", hxPost_ $ threadUrl pid conversationId <> "/routine/pause", hxSwap_ "none"] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost w-full active:scale-[0.96] transition-transform"] "Pause routine"
 
@@ -385,6 +392,17 @@ threadPageGetH pid convId docM runM hxTarget = do
             for_ routineM routineOverview_
             when (any (isJust . (.routineKind)) conversationM) $ section_ [class_ "mb-6 space-y-4", Aria.label_ "Routine configuration"] do
               when (isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] $ toHtml $ foldMap (\c -> maybe "" Issues.routineKindLabel c.routineKind <> " · " <> bool "Paused" "Active" c.routineActive) conversationM
+              for_ (conversationM >>= (.routinePolicy)) \policy -> do
+                if canEdit
+                  then form_ [hxPost_ $ threadHref <> "/routine/policy", hxSwap_ "none", class_ "space-y-2 rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
+                    label_ [Lucid.for_ "routine-policy", class_ "block text-sm font-medium text-textStrong"] "Execution policy"
+                    select_ [id_ "routine-policy", name_ "policy", class_ "select select-sm w-full"] do
+                      option_ ([value_ "observe"] <> [selected_ "selected" | policy == Issues.Observe]) "Observe"
+                      option_ ([value_ "autonomous"] <> [selected_ "selected" | policy == Issues.Autonomous]) "Autonomous"
+                    p_ [class_ "text-sm text-textWeak"] "Observe reads evidence and saves results. Autonomous also changes project resources, updates project knowledge, and publishes requested results within the authorizing member's current role, without per-action approval."
+                    p_ [class_ "text-xs text-textWeak"] "Restrictions apply immediately. Greater authority applies to future runs."
+                    button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save policy"
+                  else p_ [class_ "text-sm text-textWeak"] $ toHtml $ "Execution policy: " <> show @Text policy
               details_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
                 summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Routine instructions"
                 p_ [class_ "my-3 text-sm text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
@@ -670,10 +688,16 @@ routineDeleteH pid convId = void (ProjectMembers.sessionAndProjectAtLeast Projec
 routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (RespHeaders (Html ()))
 routineDestinationPostH pid convId form = do
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
-  (sess, _) <- Projects.sessionAndProject pid
-  Issues.setRoutineDestination sess.user.id pid convId form.destination
-  when (form.destination == Issues.DestinationSlack) $ void $ Issues.grantRoutineMemory pid convId sess.user.id
+  Issues.setRoutineDestination pid convId form.destination
   redirect pid "/routines"
+
+
+routinePolicyPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutinePolicyForm -> ATAuthCtx (RespHeaders (Html ()))
+routinePolicyPostH pid conversation form = do
+  (session, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  Issues.setRoutinePolicy session.user.id pid conversation form.policy
+  addSuccessToast "Execution policy saved." Nothing
+  addRespHeaders mempty
 
 
 runStatus :: Issues.RoutineRunStatus -> (BadgeColor, Text)

@@ -148,7 +148,7 @@ test('routine detail panels preserve conversation drafts, run history, and artif
   }
 });
 
-test('action history refresh preserves drafts and checks current roles', async ({ page, baseURL }, testInfo) => {
+test('action history and policy controls preserve drafts and check current roles', async ({ page, baseURL }, testInfo) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID(), run = randomUUID(), operation = randomUUID();
   sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
        INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
@@ -156,6 +156,8 @@ test('action history refresh preserves drafts and checks current roles', async (
        INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
        INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, title)
          VALUES ('${pid}', '${conversation}', 'web', 'Operation acceptance');
+       INSERT INTO apis.ai_routines (project_id, conversation_id, requested_by, interval_minutes)
+         VALUES ('${pid}', '${conversation}', '${uid}', 15);
        INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content)
          VALUES ('${pid}', '${conversation}', 'assistant', 'The action outcome is uncertain.');
        INSERT INTO apis.ai_routine_runs (id, project_id, conversation_id, scheduled_at, started_at, finished_at, status, source, requested_by, input, policy)
@@ -170,6 +172,18 @@ test('action history refresh preserves drafts and checks current roles', async (
     await page.goto(`/p/${pid}/ai/${conversation}`);
     const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
     await composer.fill('Keep this follow-up draft.');
+    const policy = page.getByRole('combobox', { name: 'Execution policy', exact: true });
+    await expect(policy).toHaveValue('autonomous');
+    for (const value of ['observe', 'autonomous']) {
+      await policy.selectOption(value);
+      await Promise.all([
+        page.waitForResponse(response => response.url().endsWith('/routine/policy') && response.request().method() === 'POST'),
+        page.getByRole('button', { name: 'Save policy', exact: true }).click(),
+      ]);
+      await expect(composer).toHaveValue('Keep this follow-up draft.');
+      await expect(page).toHaveURL(`/p/${pid}/ai/${conversation}`);
+      expect(sql(`SELECT policy FROM apis.ai_routines WHERE project_id = '${pid}' AND conversation_id = '${conversation}'`).toString().trim()).toBe(value);
+    }
     await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().click();
     const history = page.getByRole('region', { name: 'Action history', exact: true });
     await expect(history.getByText('Outcome uncertain', { exact: true })).toBeVisible();

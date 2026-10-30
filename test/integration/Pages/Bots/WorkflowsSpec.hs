@@ -169,16 +169,16 @@ spec = around withTestResources do
             withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE users.users SET is_sudo = FALSE WHERE id = ?" (PGS.Only user)
             runTestBg frozenTime tr (provider $ AI.runAgenticChatWithHistory config "Read the project" "model" "key") `shouldThrow` (\AI.AgentAccessDenied -> True)
 
-      for_ ["active", "paused", "wrong-conversation", "revoked", "unattributed", "grantor-downgraded"] \scenario ->
-        it ("checks the persisted routine wiki grant for " <> toString scenario) \tr -> do
+      for_ ["active", "paused", "wrong-conversation", "revoked", "observe", "owner-downgraded"] \scenario ->
+        it ("routineAuthority_projectKnowledgeUsesTheSharedPolicyFor" <> toString scenario) \tr -> do
           let conversation = UUIDId UUID.nil
               other = UUIDId $ UUID.fromWords 1 2 3 4
               page = UUIDId UUID.nil
           for_ ([conversation, other] :: [UUIDId "conversation"]) \conv -> void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conv Issues.CTWeb (AE.object [])
           Just routine <- runTestBg frozenTime tr do
             scheduled <- Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
-            Issues.setRoutineDestination (getResponse tr.trSessAndHeader).user.id testPid conversation Issues.DestinationSlack
-            unless (scenario == "unattributed") $ void $ Issues.grantRoutineMemory testPid conversation (getResponse tr.trSessAndHeader).user.id
+            Issues.setRoutineDestination testPid conversation Issues.DestinationSlack
+            when (scenario == "observe") $ Issues.setRoutinePolicy (getResponse tr.trSessAndHeader).user.id testPid conversation Issues.Observe
             pure scheduled
           claimed <- runQueryEffect tr (Issues.claimRoutine routine.id routine.scheduledAt) >>= maybe (fail "Expected a claimed routine run") pure
           let user = (getResponse tr.trSessAndHeader).user.id
@@ -189,14 +189,14 @@ spec = around withTestResources do
                   if null evidence
                     then do
                       when (scenario == "paused") $ Issues.pauseRoutine testPid conversation
-                      when (scenario == "revoked") $ Issues.setRoutineDestination (getResponse tr.trSessAndHeader).user.id testPid conversation Issues.DestinationConversation
-                      when (scenario == "grantor-downgraded") $ liftIO $ withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?" (testPid, (getResponse tr.trSessAndHeader).user.id)
+                      when (scenario == "revoked") $ Issues.setRoutinePolicy (getResponse tr.trSessAndHeader).user.id testPid conversation Issues.Observe
+                      when (scenario == "owner-downgraded") $ liftIO $ withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?" (testPid, (getResponse tr.trSessAndHeader).user.id)
                       pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "write" "function" $ Chat.ToolFunction "write_project_memory" $ fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (0 :: Int)), ("document", AE.object ["title" AE..= ("Routine observation" :: Text), "body" AE..= ("Dated context from this routine." :: Text)])]]}
                     else pure $ Right $ Chat.Message Chat.Assistant "Finished." Chat.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
                 ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
           result <- runTestBg frozenTime tr $ provider $ tryAny $ AI.runAgenticChatWithHistory config "Save the routine observation" "model" "key"
-          if scenario `elem` ["paused", "wrong-conversation", "grantor-downgraded"]
+          if scenario `elem` ["paused", "wrong-conversation", "owner-downgraded"]
             then result `shouldSatisfy` isLeft
             else result `shouldSatisfy` either (const False) isRight
           pages <- runQueryEffect tr $ Memory.pageHistory testPid page

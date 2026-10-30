@@ -1273,7 +1273,7 @@ data ToolRecovery = ReplayReads | AtomicInRun | RetainInRun
 data ToolExecution es = EffectfulTool (Eff es ToolResult) | AtomicTool (Tx.Transaction ToolResult)
 
 
-data ToolDenial = RoleRequired ProjectMembers.Permissions | ActionGrantRequired | ActionRecoveryRequired | WikiGrantRequired
+data ToolDenial = RoleRequired ProjectMembers.Permissions | ActionGrantRequired | ActionRecoveryRequired
 
 
 executeToolCall :: ProjectToolCtx es => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
@@ -1296,7 +1296,6 @@ executeToolAt cursor config tc = do
             RoleRequired permission -> "Your project role does not meet the required " <> toText (encodeEnumSC @"P" permission) <> " permission."
             ActionGrantRequired -> "Project changes require an Autonomous execution policy."
             ActionRecoveryRequired -> "Administrative operations are unavailable until durable action recovery is enabled."
-            WikiGrantRequired -> "Wiki writes require a project conversation and current edit permission or an active routine action grant."
           Right snapshot -> recorded snapshot $ case tool.dispatch of
             ProjectOperation backend -> EffectfulTool $ runProjectTool backend funcName args
             LocalOperation operation -> executeLocal operation args
@@ -1308,7 +1307,13 @@ executeToolAt cursor config tc = do
     authorize :: (DB es, IOE :> es) => MCP.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
     authorize policy = Except.runExceptT do
       authority <- lift $ agentAuthority config.access config.projectId
-      let permission = case authority of ServiceAuthority -> ProjectMembers.PView; MemberAuthority role -> role
+      execution <- lift $ case (config.invocationMode, accessMember config.access, config.conversationId) of
+        (ScheduledRoutine run original, Just user, Just conversation) -> do
+          current <- Issues.routineRunPolicyFor config.projectId run user conversation >>= maybe (throwIO AgentStopped) pure
+          pure $ if original == Issues.Observe then Issues.Observe else current
+        _ -> pure $ invocationPolicy config.invocationMode
+      let requireActions = unless (execution == Issues.Autonomous) $ Except.throwError ActionGrantRequired
+          permission = case authority of ServiceAuthority -> ProjectMembers.PView; MemberAuthority role -> role
       unless (permission >= MCP.minimumPermission policy) $ Except.throwError $ RoleRequired (MCP.minimumPermission policy)
       case policy of
         MCP.ReadOnly{} -> pass
@@ -1316,20 +1321,8 @@ executeToolAt cursor config tc = do
         MCP.Administration -> Except.throwError ActionRecoveryRequired
         MCP.ProjectWrite -> requireActions
         MCP.ExternalPublication -> requireActions
-        MCP.ProjectMemoryWrite -> do
-          requireActions
-          case config.invocationMode of
-            ScheduledRoutine run _ -> do
-              permitted <- lift $ maybe (pure False) (\conversation -> Issues.routineRunCanWriteMemory config.projectId conversation run) config.conversationId
-              unless permitted $ Except.throwError WikiGrantRequired
-            _ -> pass
-      pure $ OperationPolicy policy (invocationPolicy config.invocationMode) permission
-      where
-        requireActions = do
-          permitted <- lift $ case config.invocationMode of
-            ScheduledRoutine run Issues.Autonomous -> Issues.routineRunCanAct config.projectId run
-            mode -> pure $ invocationPolicy mode == Issues.Autonomous
-          unless permitted $ Except.throwError ActionGrantRequired
+        MCP.ProjectMemoryWrite -> requireActions
+      pure $ OperationPolicy policy execution permission
 
     recorded snapshot execution = case (snapshot.capability, cursor, invocationRun config.invocationMode, accessMember config.access, config.conversationId) of
       (MCP.ReadOnly{}, _, _, _, _) -> Investigations.RecordedResult <$> perform execution

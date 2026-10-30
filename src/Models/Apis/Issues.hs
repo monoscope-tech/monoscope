@@ -199,9 +199,8 @@ module Models.Apis.Issues (
   resumeRoutine,
   deleteRoutine,
   setRoutineDestination,
-  routineRunCanAct,
-  routineRunCanWriteMemory,
-  grantRoutineMemory,
+  routineRunPolicyFor,
+  setRoutinePolicy,
   insertChatMessage,
   AIArtifact (..),
   ArtifactKey,
@@ -1517,6 +1516,7 @@ data ConversationSummary = ConversationSummary
   , routineRunningSince :: Maybe UTCTime
   , routineDestination :: Maybe RoutineDestination
   , routineKind :: Maybe RoutineScheduleKind
+  , routinePolicy :: Maybe ExecutionPolicy
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow)
@@ -1606,7 +1606,7 @@ data RoutineRunSource = ScheduledRun | TriggeredRun RoutineEventSource | Interac
 -- | The run retains its original authority. Current member permissions still apply.
 data ExecutionPolicy = Observe | Autonomous
   deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" ExecutionPolicy
+  deriving (AE.FromJSON, AE.ToJSON, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" ExecutionPolicy
 
 
 data RunContinuation = StartRun | ContinueRun | RestartRun
@@ -1820,7 +1820,7 @@ conversationSummarySql fallback filters =
       c.conversation_type, c.updated_at, r.template_key,
       COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at,
       COALESCE(r.running_since, (SELECT min(started_at) FROM apis.ai_routine_runs WHERE routine_id = r.id AND status = 'running')),
-      r.destination, r.schedule_kind
+      r.destination, r.schedule_kind, r.policy
       FROM apis.ai_conversations c
       LEFT JOIN apis.issues i ON i.project_id = c.project_id AND i.id = c.conversation_id
       LEFT JOIN apis.ai_routines r ON r.project_id = c.project_id AND r.conversation_id = c.conversation_id
@@ -1880,14 +1880,15 @@ upsertRoutineSql :: Projects.UserId -> Projects.ProjectId -> UUIDId "conversatio
 upsertRoutineSql requestedBy pid convId interval now =
   let intervalMinutes = routineIntervalMinutes interval
    in [HI.sql|WITH saved AS (
-        INSERT INTO apis.ai_routines AS routine (requested_by, project_id, conversation_id, interval_minutes, next_run_at, allow_actions)
-        SELECT #{requestedBy}, #{pid}, #{convId}, #{intervalMinutes}, #{addUTCTime (fromIntegral $ intervalMinutes * 60) now}, TRUE
+        INSERT INTO apis.ai_routines AS routine (requested_by, project_id, conversation_id, interval_minutes, next_run_at, policy)
+        SELECT #{requestedBy}, #{pid}, #{convId}, #{intervalMinutes}, #{addUTCTime (fromIntegral $ intervalMinutes * 60) now}, #{Autonomous}
         FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
         ON CONFLICT (project_id, conversation_id) DO UPDATE SET
+          authority_version = routine.authority_version + CASE WHEN routine.requested_by IS DISTINCT FROM EXCLUDED.requested_by THEN 1 ELSE 0 END,
           requested_by = EXCLUDED.requested_by, interval_minutes = EXCLUDED.interval_minutes, active = TRUE,
           next_run_at = CASE WHEN routine.running_since IS NULL THEN EXCLUDED.next_run_at ELSE routine.next_run_at END,
           schedule_kind = #{ScheduleInterval}, schedule_hour = NULL, schedule_minute = NULL, schedule_weekday = NULL,
-          allow_actions = TRUE, cancelled_at = NULL
+          cancelled_at = NULL
         WHERE routine.schedule_kind NOT IN ('slack_message', 'pull_request', 'issue_enrichment')
         RETURNING id, next_run_at, running_since
       ) SELECT id, next_run_at FROM saved WHERE running_since IS NULL|]
@@ -1902,17 +1903,18 @@ installRoutineTemplate requestedBy pid convId timezone template = do
   Hasql.interpOne
     [HI.sql|WITH installed AS (INSERT INTO apis.ai_routines AS routine
       (requested_by, project_id, conversation_id, interval_minutes, timezone, next_run_at, template_key, template_version,
-       schedule_kind, schedule_hour, schedule_minute, schedule_weekday, report_when, destination, allow_actions, instructions)
+       schedule_kind, schedule_hour, schedule_minute, schedule_weekday, report_when, destination, policy, instructions)
       SELECT #{requestedBy}, #{pid}, #{convId}, #{intervalMinutes}, #{zone}, #{nextRunAt}, #{template.key}, #{template.version},
-             #{kind}, #{hour}, #{minute}, #{weekday}, #{template.reportWhen}, #{DestinationConversation}, FALSE, #{template.prompt}
+             #{kind}, #{hour}, #{minute}, #{weekday}, #{template.reportWhen}, #{DestinationConversation}, #{Autonomous}, #{template.prompt}
       FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
       ON CONFLICT (project_id, conversation_id) DO UPDATE SET
+        authority_version = routine.authority_version + CASE WHEN routine.requested_by IS DISTINCT FROM EXCLUDED.requested_by THEN 1 ELSE 0 END,
         requested_by = EXCLUDED.requested_by, interval_minutes = EXCLUDED.interval_minutes, timezone = EXCLUDED.timezone, active = TRUE,
         next_run_at = EXCLUDED.next_run_at, template_key = EXCLUDED.template_key,
         template_version = EXCLUDED.template_version, schedule_kind = EXCLUDED.schedule_kind,
         schedule_hour = EXCLUDED.schedule_hour, schedule_minute = EXCLUDED.schedule_minute,
         schedule_weekday = EXCLUDED.schedule_weekday, report_when = EXCLUDED.report_when,
-        destination = EXCLUDED.destination, allow_actions = FALSE, cancelled_at = NULL, instructions = EXCLUDED.instructions
+        destination = EXCLUDED.destination, cancelled_at = NULL, instructions = EXCLUDED.instructions
       RETURNING id, next_run_at) SELECT id, next_run_at FROM installed WHERE next_run_at IS NOT NULL|]
   where
     scheduleColumns :: RoutineSchedule -> (RoutineScheduleKind, Maybe Int, Maybe Int, Maybe Int, Maybe Int)
@@ -1957,11 +1959,11 @@ claimRoutine routineId scheduledAt =
         UPDATE apis.ai_routines SET running_since = now()
         WHERE id = #{routineId} AND active AND requested_by IS NOT NULL AND next_run_at = #{scheduledAt}
           AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
-        RETURNING requested_by, project_id, conversation_id, running_since, allow_actions, report_when, destination, timezone, instructions, template_version
+        RETURNING requested_by, project_id, conversation_id, running_since, policy, authority_version, report_when, destination, timezone, instructions, template_version
       ), run AS (
-        INSERT INTO apis.ai_routine_runs (routine_id, project_id, conversation_id, scheduled_at, started_at, status, requested_by, instructions, template_version, input, policy)
+        INSERT INTO apis.ai_routine_runs (routine_id, project_id, conversation_id, scheduled_at, started_at, status, requested_by, instructions, template_version, input, policy, authority_version)
         SELECT #{routineId}, claimed.project_id, claimed.conversation_id, #{scheduledAt}, running_since, 'running', requested_by,
-          COALESCE(instructions, task.content), template_version, task.content, CASE WHEN claimed.allow_actions THEN #{Autonomous} ELSE #{Observe} END FROM claimed
+          COALESCE(instructions, task.content), template_version, task.content, claimed.policy, claimed.authority_version FROM claimed
         LEFT JOIN LATERAL (SELECT content FROM apis.ai_chat_messages
           WHERE project_id = claimed.project_id AND conversation_id = claimed.conversation_id AND role = 'user'
           ORDER BY created_at, id LIMIT 1) task ON TRUE
@@ -2196,22 +2198,25 @@ routineRunActiveFor pid runId user conversation =
 
 
 routineRunActiveSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql -> HI.Sql
-routineRunActiveSql pid runId scope =
+routineRunActiveSql pid runId scope = [HI.sql|SELECT EXISTS (|] <> routineRunPolicySql pid runId scope <> [HI.sql|)|]
+
+
+routineRunPolicySql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql -> HI.Sql
+routineRunPolicySql pid runId scope =
   ( [HI.sql|WITH eligible_members AS (
       SELECT member.project_id, member.user_id, member.permission FROM projects.project_members member
       JOIN users.users account ON account.id = member.user_id
       JOIN projects.projects project ON project.id = member.project_id
       WHERE member.project_id = #{pid} |]
       <> ProjectMembers.activeMembership
-      <> [HI.sql|) SELECT EXISTS (
-      SELECT 1 FROM apis.ai_routine_runs run JOIN apis.ai_routines r ON r.id = run.routine_id
+      <> [HI.sql|) SELECT CASE WHEN run.policy = #{Autonomous} AND r.policy = #{Autonomous} AND run.authority_version = r.authority_version THEN #{Autonomous} ELSE #{Observe} END
+      FROM apis.ai_routine_runs run JOIN apis.ai_routines r ON r.id = run.routine_id
       JOIN eligible_members owner ON owner.project_id = r.project_id AND owner.user_id = r.requested_by
       JOIN eligible_members actor ON actor.project_id = run.project_id AND actor.user_id = run.requested_by
       WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running' AND r.active
         AND (r.cancelled_at IS NULL OR r.cancelled_at < run.started_at)
         AND owner.permission IN ('admin', 'edit')|]
       <> scope
-      <> [HI.sql|)|]
   )
 
 
@@ -2358,7 +2363,9 @@ resumeRoutine requestedBy pid convId = do
       let nextRunAt = nextRoutineAt schedule timezone now now
       Hasql.interpOne
         [HI.sql|WITH resumed AS (
-            UPDATE apis.ai_routines SET requested_by = #{requestedBy}, active = TRUE, cancelled_at = NULL,
+            UPDATE apis.ai_routines SET
+              authority_version = authority_version + CASE WHEN requested_by IS DISTINCT FROM #{requestedBy} THEN 1 ELSE 0 END,
+              requested_by = #{requestedBy}, active = TRUE, cancelled_at = NULL,
               next_run_at = CASE WHEN running_since IS NULL THEN #{nextRunAt} ELSE next_run_at END
             WHERE project_id = #{pid} AND conversation_id = #{convId}
             RETURNING id, next_run_at, running_since
@@ -2371,44 +2378,25 @@ deleteRoutine pid convId =
     [HI.sql|DELETE FROM apis.ai_routines WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
 
-setRoutineDestination :: DB es => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> RoutineDestination -> Eff es ()
-setRoutineDestination requestedBy pid convId destination =
+setRoutineDestination :: DB es => Projects.ProjectId -> UUIDId "conversation" -> RoutineDestination -> Eff es ()
+setRoutineDestination pid convId destination =
   Hasql.interpExecute_
-    [HI.sql|UPDATE apis.ai_routines
-      SET requested_by = #{requestedBy}, destination = #{destination}, allow_actions = #{destination == DestinationSlack}, memory_granted_by = NULL
+    [HI.sql|UPDATE apis.ai_routines SET destination = #{destination}
       WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
 
-routineRunCanAct :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
-routineRunCanAct pid runId =
-  fromMaybe False
-    <$> Hasql.interpOne
-      [HI.sql|SELECT r.active AND r.allow_actions AND r.cancelled_at IS NULL
-      FROM apis.ai_routine_runs run JOIN apis.ai_routines r ON r.id = run.routine_id
-      WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running' AND run.policy = #{Autonomous}|]
+setRoutinePolicy :: DB es => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> ExecutionPolicy -> Eff es ()
+setRoutinePolicy user pid conversation policy =
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.ai_routines SET
+      authority_version = authority_version + CASE WHEN (policy = #{Autonomous} AND #{policy} = #{Observe}) OR requested_by IS DISTINCT FROM #{user} THEN 1 ELSE 0 END,
+      requested_by = #{user}, policy = #{policy}
+      WHERE project_id = #{pid} AND conversation_id = #{conversation}|]
 
 
-grantRoutineMemory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> Eff es Bool
-grantRoutineMemory pid conversation user = do
-  permitted <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid user
-  if permitted
-    then
-      fromMaybe False
-        <$> Hasql.interpOne
-          [HI.sql|UPDATE apis.ai_routines SET memory_granted_by = #{user}
-        WHERE project_id = #{pid} AND conversation_id = #{conversation} AND allow_actions RETURNING TRUE|]
-    else pure False
-
-
-routineRunCanWriteMemory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> UUIDId "ai_routine_run" -> Eff es Bool
-routineRunCanWriteMemory pid conversation runId = do
-  grant <-
-    Hasql.interpOne @(HI.OneColumn Projects.UserId)
-      [HI.sql|SELECT r.memory_granted_by FROM apis.ai_routine_runs run JOIN apis.ai_routines r ON r.id = run.routine_id
-      WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.conversation_id = #{conversation}
-        AND r.project_id = #{pid} AND r.conversation_id = #{conversation} AND run.status = 'running' AND run.policy = #{Autonomous}
-        AND r.active AND r.allow_actions AND r.cancelled_at IS NULL AND r.memory_granted_by IS NOT NULL|]
-  maybe (pure False) (fmap (maybe False (>= ProjectMembers.PEdit)) . ProjectMembers.getUserPermission pid . HI.getOneColumn) grant
+routineRunPolicyFor :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Projects.UserId -> UUIDId "conversation" -> Eff es (Maybe ExecutionPolicy)
+routineRunPolicyFor pid run user conversation =
+  fmap HI.getOneColumn <$> Hasql.interpOne (routineRunPolicySql pid run [HI.sql| AND run.requested_by = #{user} AND run.conversation_id = #{conversation}|])
 
 
 -- | Inverse of 'fromEnum' on 'DayOfWeek' as stored in @schedule_weekday@ (Monday=1 … Sunday=7).

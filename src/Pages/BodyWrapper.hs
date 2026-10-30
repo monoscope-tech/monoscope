@@ -664,6 +664,7 @@ bodyWrapper bcfg child = do
               option_ [value_ "60", class_ "bg-bgRaised text-textStrong"] "Hour"
               option_ [value_ "1440", selected_ "selected", class_ "bg-bgRaised text-textStrong"] "Day"
               option_ [value_ "10080", class_ "bg-bgRaised text-textStrong"] "Week"
+          p_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:block px-4 py-3 text-xs text-textWeak"] "New routines act automatically within your current role, including requested project changes, knowledge updates, and publications. You can switch to Observe or pause the routine from its conversation."
         do
           span_ [class_ "group-has-[#ai-composer-routine:checked]/dialog:hidden"] "Start chat"
           span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:inline"] "Start routine"

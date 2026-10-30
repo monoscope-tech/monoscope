@@ -436,6 +436,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , aiRoutinePausePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "pause" :> Post '[HTML] (RespHeaders (Html ()))
   , aiRoutineCancelPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "cancel" :> Post '[HTML] (RespHeaders (Html ()))
   , aiRoutineResumePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "resume" :> Post '[HTML] (RespHeaders (Html ()))
+  , aiRoutinePolicyPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "policy" :> ReqBody '[FormUrlEncoded] AIThreads.RoutinePolicyForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineDestinationForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiRoutineDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> Delete '[HTML] (RespHeaders (Html ()))
   , -- Device auth
@@ -867,6 +868,7 @@ cookieProtectedServer projectTools =
     , aiRoutinePausePost = AIThreads.routinePausePostH
     , aiRoutineCancelPost = AIThreads.routineCancelPostH
     , aiRoutineResumePost = AIThreads.routineResumePostH
+    , aiRoutinePolicyPost = AIThreads.routinePolicyPostH
     , aiRoutineDestinationPost = AIThreads.routineDestinationPostH
     , aiRoutineDelete = AIThreads.routineDeleteH
     , -- Device auth
