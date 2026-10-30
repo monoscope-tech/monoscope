@@ -86,7 +86,8 @@ test('opening another log detail does not refetch the Explorer widgets', async (
   history.replaceState({}, '', '/log_explorer?since=1H');
   document.body.innerHTML = shell() + '<aside id="log_details_container"></aside>';
   document.dispatchEvent(new CustomEvent('htmx:after:swap'));
-  await vi.waitFor(() => expect(byEl.size).toBe(2));
+  // Visible charts initialize one per animation frame, including under full-suite contention.
+  await vi.waitFor(() => expect(byEl.size).toBe(2), { timeout: 5000 });
   (globalThis as any).triggerIntersection();
   await vi.waitFor(() => expect([...byEl.values()].every(c => c.hideLoading.mock.calls.length === 1)).toBe(true));
   vi.mocked(fetch).mockClear();

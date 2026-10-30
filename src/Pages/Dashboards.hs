@@ -261,7 +261,7 @@ actionPickerField_ label name placeholder value = label_ [Lucid.for_ name, class
 
 
 dashboardVariables_ :: Projects.ProjectId -> Dashboards.DashboardId -> [Dashboards.Variable] -> [Attribute] -> Html ()
-dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-variables", class_ "contents"] <> extraAttrs) do
+dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-variables", class_ "contents"] <> extraAttrs) $ unless (null variables) do
   input_ [type_ "checkbox", class_ "hidden peer/vars", id_ "dash-vars-toggle"]
   label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeaker border border-strokeWeak rounded-lg px-2 py-1 flex items-center gap-1 peer-checked/vars:hidden"] do
     faSprite_ "filter" "regular" "w-3 h-3"
@@ -372,7 +372,7 @@ dashboardViews_ pid did dash vm params extraAttrs =
     matched = find ((== variableValues dash params) . variableValues dash . viewParams . fst) availableViews
     -- The view last picked from the menu; it reads as edited once the variables drift from it.
     applied = join (lookup "view" params) >>= (`Map.lookup` availableViews)
-    swapVals = [hxVals_ "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...getTimeRange()}"]
+    swapVals = [hxVals_ "js:{...Object.fromEntries(Array.from(new URLSearchParams(location.search)).filter(([key]) => key !== 'name')), ...getTimeRange()}"]
     swapAttrs = [hxTarget_ "#dashboard-views", hxSwap_ "outerHTML"] <> swapVals
     context = filter (\(k, _) -> not (any (`T.isPrefixOf` k) ["var-", "const-"]) && k `notElem` [activeTabSlugKey, "name", "expand", "view"]) params
     -- Saved views shadow same-named template views; only saved ones are deletable.
