@@ -246,8 +246,8 @@ data SqlTok = SqlLit Text | SqlName [Text] Text | SqlOther Char
 -- Right "WITH otel_metrics AS NOT MATERIALIZED (SELECT * FROM otel_metrics WHERE project_id = '00000000-0000-0000-0000-000000000000') SELECT 1 FROM otel_metrics"
 -- >>> scopeUserSql False pid "SELECT 1 -- FROM users.users\nFROM otel_metrics /* x */"
 -- Right "WITH otel_metrics AS (SELECT * FROM otel_metrics WHERE project_id = '00000000-0000-0000-0000-000000000000') SELECT 1  \nFROM otel_metrics  "
--- >>> either (const "refused") id . scopeUserSql False pid <$> ["SELECT * FROM users.users", "SELECT * FROM \"public\".otel_logs_and_spans", "SELECT * FROM datafusion.public.otel_logs_and_spans", "SELECT * FROM background_jobs", "WITH RECURSIVE r AS (SELECT 1) SELECT * FROM r", "SELECT 1 FROM users/**/.users"]
--- ["refused","refused","refused","refused","refused","refused"]
+-- >>> map (isLeft . scopeUserSql False pid) (["SELECT * FROM users.users", "SELECT * FROM \"public\".otel_logs_and_spans", "SELECT * FROM datafusion.public.otel_logs_and_spans", "SELECT * FROM background_jobs", "WITH RECURSIVE r AS (SELECT 1) SELECT * FROM r", "SELECT 1 FROM users/**/.users"] :: [Text])
+-- [True,True,True,True,True,True]
 scopeUserSql :: Bool -> Projects.ProjectId -> Text -> Either Text Text
 scopeUserSql postgres pid sql = do
   let toks = tokenizeSql sql
@@ -301,9 +301,16 @@ tokenizeSql t = case T.uncons t of
       _ -> Nothing
     dotted s = case part s of
       Nothing -> ([], s)
-      Just (p, r) -> case T.stripPrefix "." (T.stripStart r) of
-        Just afterDot | Just _ <- part (T.stripStart afterDot) -> first (p :) (dotted (T.stripStart afterDot))
+      Just (p, r) -> case T.stripPrefix "." (gap r) of
+        Just afterDot | Just _ <- part (gap afterDot) -> first (p :) (dotted (gap afterDot))
         _ -> ([p], r)
+    -- What SQL treats as whitespace around a dot: spaces and comments alike.
+    gap s
+      | Just c <- T.stripPrefix "--" s' = gap (T.dropWhile (/= '\n') c)
+      | Just c <- T.stripPrefix "/*" s' = gap (T.drop 2 $ snd $ T.breakOn "*/" c)
+      | otherwise = s'
+      where
+        s' = T.stripStart s
 
 
 -- | Each query path projects a single jsonb-array column per row (via
