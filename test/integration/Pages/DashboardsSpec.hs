@@ -212,6 +212,16 @@ spec = sequential $ aroundAll withTestResources do
       (recovered.error :: Maybe Text) `shouldBe` Nothing
       V.length recovered.dataset `shouldSatisfy` (> 0)
 
+    -- Dashboard variables reached widget SQL verbatim, so a quote in a URL value ended the
+    -- string literal and the rest ran as SQL; and request params were merged after the
+    -- server presets, so `project_id` itself could be re-pointed at another tenant.
+    it "dashboardSql_escapesVariables_andKeepsServerPresets" \tr -> do
+      let otherPid = "11111111-1111-1111-1111-111111111111"
+          widget = (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.sql = Just "SELECT v, project_id FROM (SELECT '{{var-service}}'::text AS v, '{{project_id}}'::text AS project_id) t WHERE project_id='{{project_id}}'"}
+      md <- runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid (Just "24h", Nothing, Nothing) [("var-service", Just "a' OR 'x'='x"), ("project_id", Just otherPid)] widget
+      (md.error :: Maybe Text) `shouldBe` Nothing
+      md.dataText `shouldBe` [["a' OR 'x'='x", testPid.toText]]
+
     it "does not cache query failures as successful empty PNGs" \tr -> do
       let render query appearance = do
             let widget = (def :: Widget.Widget){Widget.query = Just query, Widget.pngProfile = Just Widget.PngSlack}

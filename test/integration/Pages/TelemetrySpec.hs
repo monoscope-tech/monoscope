@@ -2,7 +2,6 @@ module Pages.TelemetrySpec (spec) where
 
 import Data.Map qualified as Map
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
@@ -11,7 +10,6 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
-import Lucid qualified
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Numeric (showHex)
 import Pages.BodyWrapper (PageCtx (..))
@@ -59,8 +57,8 @@ spec = do
         _ -> expectationFailure "expected the datapoints overview"
 
       (_, expanded) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing (Just "datapoint.current") Nothing Nothing Nothing
-      let overviewHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml overview
-          drawerMarkup = T.take 200 $ snd $ T.breakOn "id=\"global-data-drawer\"" $ LT.toStrict $ Lucid.renderText $ Lucid.toHtml expanded
+      let overviewHtml = renderT overview
+          drawerMarkup = T.take 200 $ snd $ T.breakOn "id=\"global-data-drawer\"" $ renderT expanded
       T.count "placeholder=\"Search metrics\"" overviewHtml `shouldBe` 1
       overviewHtml `shouldSatisfy` not . T.isInfixOf "placeholder=\"Search\""
       overviewHtml `shouldSatisfy` T.isInfixOf "border-b border-strokeWeak"
@@ -70,13 +68,13 @@ spec = do
       drawerMarkup `shouldSatisfy` T.isInfixOf "checked"
 
       (_, countCells) <- testServant tr $ Trace.dataPointCountsGetH testPid Nothing Nothing Nothing
-      let countsHtml = LT.toStrict $ Lucid.renderText countCells
+      let countsHtml = renderT countCells
       for_ ["metric-datapoint-count-datapoint.current", "metric-datapoint-count-datapoint.stale", "hx-swap-oob", ">1<", ">0<"] \text -> countsHtml `shouldSatisfy` T.isInfixOf text
 
       -- A cleared picker submits since=&from=&to=; that must read as "no range" and take the
       -- default window, not collapse to now..now and report every metric as empty.
       (_, blankCells) <- testServant tr $ Trace.dataPointCountsGetH testPid (Just "") (Just "") (Just "")
-      LT.toStrict (Lucid.renderText blankCells) `shouldBe` countsHtml
+      renderT blankCells `shouldBe` countsHtml
       (_, blankOverview) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") (Just "") (Just "") (Just "") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case blankOverview of
         Trace.MetricsOVDataPointMain (PageCtx _ (_, _, _, countUrl, _, pageUrl, _)) -> do
@@ -99,7 +97,7 @@ spec = do
       for_ ["source-1", "source-2", "source-3", "source-4"] seedSvc
 
       (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let pageHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let pageHtml = renderT page
       for_ ["source-1", "source-2", "source-3", "View 1 more source in details", metricDetailUrl testPid "source.overflow" "all" Nothing] \text -> pageHtml `shouldSatisfy` T.isInfixOf text
       pageHtml `shouldSatisfy` not . T.isInfixOf "source-4"
 
@@ -118,7 +116,7 @@ spec = do
       for_ ([1 .. 30] :: [Int]) seed
 
       (_, firstPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let firstHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml firstPage
+      let firstHtml = renderT firstPage
       firstHtml `shouldSatisfy` not . T.isInfixOf "page.metric.30"
       -- `&amp;`, not `&`: this is the pager's rendered href, and Lucid escapes the
       -- separator. The closing quote pins it to the next-page link rather than matching
@@ -126,7 +124,7 @@ spec = do
       firstHtml `shouldSatisfy` T.isInfixOf "&amp;cursor=1\""
 
       (_, secondPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing (Just 1) Nothing Nothing Nothing Nothing
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml secondPage) `shouldSatisfy` T.isInfixOf "page.metric.30"
+      renderT secondPage `shouldSatisfy` T.isInfixOf "page.metric.30"
 
   around withTestResources $ describe "metric details" do
     it "metricDetails_defersRelatedMetricsUntilTheirTabIsOpened" \tr -> do
@@ -145,12 +143,12 @@ spec = do
       seed "process.cpu.time" ["state"]
 
       (_, detail) <- testServant tr $ Trace.metricDetailsGetH testPid "process.cpu.usage" Nothing Nothing Nothing Nothing Nothing
-      let detailHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml detail
+      let detailHtml = renderT detail
       detailHtml `shouldSatisfy` T.isInfixOf "metric-related-content"
       detailHtml `shouldSatisfy` not . T.isInfixOf "process.cpu.time"
 
       (_, related) <- testServant tr $ Trace.metricRelatedGetH testPid "process.cpu.usage" Nothing
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml related) `shouldSatisfy` T.isInfixOf "process.cpu.time"
+      renderT related `shouldSatisfy` T.isInfixOf "process.cpu.time"
 
   -- Regression guard: the trace-overlay projection selected neither `kind` nor
   -- `status_code`, and 'traceSpanRecord' hard-coded both to Nothing. That silently pinned
@@ -182,7 +180,7 @@ spec = do
 
       -- The page still renders end-to-end with the widened projection.
       (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       for_ ["Waterfall", "GET /checkout", "pg.query", ">Errors</", ">1<"] \text ->
         html `shouldSatisfy` T.isInfixOf text
       for_ ["<template data-trace-tooltip", "Span information", "Error span", "No error message available in this preview."] \text ->
@@ -221,7 +219,7 @@ spec = do
         _ -> expectationFailure "expected a paged trace view"
 
       -- The count on screen advertises itself as partial, and the control is there to act on.
-      let firstHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml firstPage
+      let firstHtml = renderT firstPage
       firstHtml `shouldSatisfy` T.isInfixOf ">50+<"
       firstHtml `shouldSatisfy` T.isInfixOf "Load more spans"
 
@@ -232,7 +230,7 @@ spec = do
           V.length spans `shouldBe` 60
           moreUrl `shouldBe` Nothing
         _ -> expectationFailure "expected the full trace on the larger page"
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml fullPage) `shouldSatisfy` not . T.isInfixOf "Load more spans"
+      renderT fullPage `shouldSatisfy` not . T.isInfixOf "Load more spans"
 
       -- A span past the first page is still findable: nav looks a span up by id,
       -- so capping it at the render page would anchor the panel on the root.
@@ -243,7 +241,7 @@ spec = do
 
       -- ...and a Load more pull doesn't re-arm the auto-open marker, which would
       -- drag the detail panel back to the first span on every click.
-      let embeddedHtml p' = LT.toStrict $ Lucid.renderText $ Lucid.toHtml p'
+      let embeddedHtml p' = renderT p'
       (_, firstEmbedded) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing (Just "true") Nothing
       embeddedHtml firstEmbedded `shouldSatisfy` T.isInfixOf "load[document.getElementById(&#39;trace_span_container&#39;).clientWidth"
       (_, moreEmbedded) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing (Just "true") (Just 100)
@@ -348,7 +346,7 @@ spec = do
       groups <- runTestBg frozenTime tr $ Telemetry.getMetricGroups testPid
       groups `shouldContain` ["runtime."]
       (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "charts") Nothing Nothing (Just "6H") Nothing Nothing Nothing Nothing Nothing (Just "%_&+") Nothing
-      let markup = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let markup = renderT page
       markup `shouldSatisfy` T.isInfixOf "q=%25_%26%2B"
       markup `shouldSatisfy` not . T.isInfixOf "a.unrelated"
 
@@ -379,7 +377,7 @@ spec = do
           $ void
           $ DBT.execute [sql| UPDATE otel_metrics_meta SET metric_labels = ? WHERE project_id = ? AND metric_name = 'request.duration' |] (PGArray labels, testPid)
         (_, card) <- testServant tr $ Trace.metricCardGetH testPid "request.duration" requested (Just "checkout")
-        let markup = LT.toStrict $ Lucid.renderText card
+        let markup = renderT card
         for_ ["sum(distribution_sum) / sum(distribution_count)", "distribution_count &gt; 0", "resource.service.name", "checkout", "&quot;hideValue&quot;:true"] \text ->
           markup `shouldSatisfy` T.isInfixOf text
         case expected of
@@ -406,7 +404,7 @@ spec = do
           VALUES (?,'victim.secret','GAUGE','1','','checkout','test','{attributes.region}',now(),now(),now(),now()) |]
           (Only victim)
       (_, card) <- testServant tr $ Trace.metricCardGetH victim "victim.secret" Nothing Nothing
-      LT.toStrict (Lucid.renderText card) `shouldSatisfy` T.isInfixOf "victim.secret"
+      renderT card `shouldSatisfy` T.isInfixOf "victim.secret"
       assertNonMemberDenied tr victim $ Trace.metricCardGetH victim "victim.secret" Nothing Nothing
       assertNonMemberDenied tr victim $ Trace.metricBreakdownGetH victim "victim.secret" Nothing
 
@@ -435,13 +433,13 @@ spec = do
       matched `shouldBe` ["billing-api"]
 
       (_, opts) <- testServant tr $ Trace.metricServicesGetH testPid (Just "billing") Nothing
-      let optsHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml opts
+      let optsHtml = renderT opts
       optsHtml `shouldSatisfy` T.isInfixOf "billing-api"
       optsHtml `shouldSatisfy` T.isInfixOf "All Services"
 
       -- The page itself ships the picker, not the services.
       (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let pageHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let pageHtml = renderT page
       pageHtml `shouldSatisfy` T.isInfixOf "/metrics/services"
       pageHtml `shouldSatisfy` T.isInfixOf "gap-x-4 gap-y-5 pb-4"
       pageHtml `shouldSatisfy` T.isInfixOf "h-60"

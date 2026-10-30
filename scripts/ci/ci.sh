@@ -420,7 +420,10 @@ run_integration() {
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
   prepare_web_deps
   prepare_browser
-  make build-chart-cli
+  # The checkout is bind-mounted from the host: building to ./chart-cli here would
+  # replace the developer's native binary with a Linux one and break their PNG tests.
+  export CHART_CLI_PATH=/tmp/ci-chart-cli
+  (cd web-components && bun build --compile src/chart-cli.ts --outfile "$CHART_CLI_PATH")
   [ -n "${CI_INTEGRATION_BIN:-}" ] || cabal build integration-tests -j $CABAL_FLAGS "$CABAL_OPTS"
   # Same flags as the build above: list-bin resolves against a plan, and a
   # different one points at a path the build never wrote.
@@ -428,7 +431,10 @@ run_integration() {
   rm -f build-shard-*.log
   for i in $(seq 0 $((shards - 1))); do
     ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=$shards "$bin" +RTS -N1 -RTS --color > "build-shard-$i.log" 2>&1
-      echo "[shard-time] $(( $(date +%s) - start ))s" >> "build-shard-$i.log" ) &
+      rc=$?
+      echo "[shard-time] $(( $(date +%s) - start ))s" >> "build-shard-$i.log"
+      echo "[shard-exit] $rc" >> "build-shard-$i.log"
+      exit "$rc" ) &
     shard_pids+=("$!")
   done
   for i in "${shard_pids[@]}"; do wait "$i" || shard_rc=1; done
@@ -443,8 +449,11 @@ run_integration() {
   if [ "$shard_rc" -ne 0 ] || [ "$green" -ne "$shards" ] || grep -qE "[1-9][0-9]* failures?|Interrupted" build-shard-*.log; then
     echo "SHARDED RUN FAILED ($green/$shards green):"
     for f in build-shard-*.log; do
-      grep -qE "examples?, 0 failures" "$f" && continue
-      echo "### $f"
+      rc=$(sed -n 's/^\[shard-exit\] //p' "$f" | tail -1)
+      # A shard can print a clean summary and still die on the way out (one segfaulted
+      # at shutdown on 2026-10-29); skipping it on "0 failures" hid the only evidence.
+      grep -qE "examples?, 0 failures" "$f" && [ "${rc:-0}" -eq 0 ] && continue
+      echo "### $f (exit ${rc:-?}$( [ "${rc:-0}" -gt 128 ] && echo ", signal $(( rc - 128 ))"))"
       # The whole Failures section, not a fixed tail: hspec spends ~8 lines per
       # failure, so `tail -40` hides every failure after the first.
       sed -n '/^Failures:/,$p' "$f"

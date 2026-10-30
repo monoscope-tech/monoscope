@@ -18,7 +18,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Lucid (renderText, toHtml)
 import Models.Apis.Issues (ReportListItem (..))
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
@@ -86,7 +85,7 @@ spec = around withTestResources do
       reportId <- case reportsPage of
         Reports.ReportsGetMain (PageCtx _ (_, reports, _)) -> do
           V.length reports `shouldBe` 3
-          let pageHtml = toText $ renderText $ toHtml reportsPage
+          let pageHtml = renderT reportsPage
               latestUrl = "/p/" <> testPid.toText <> "/reports/" <> maybe "" ((.toText) . (.id)) (reports V.!? 0)
           pageHtml `shouldContainAll` ["Generate live report", "hx-get=\"" <> latestUrl <> "\""]
           find (\tag -> T.isPrefixOf "a " tag && T.isInfixOf "/reports/live" tag) (T.splitOn "<" pageHtml)
@@ -313,12 +312,12 @@ spec = around withTestResources do
         [owner] -> pure owner
         _ -> fail "preview generation was not claimed exactly once"
       (_, pendingPage) <- testServant tr $ Reports.reportsLiveGetH testPid (Just "true")
-      toText (renderText $ toHtml pendingPage) `shouldContainAll` ["Preparing your system report", "every 2s", "live-report-preview"]
+      (renderT pendingPage) `shouldContainAll` ["Preparing your system report", "every 2s", "live-report-preview"]
       runTestBg frozenTime tr $ Report.finishPreview testPid token (Report.PreviewReady snapshot)
       runTestBg frozenTime tr (Report.getPreview testPid) >>= (`shouldBe` Just (Report.PreviewReady snapshot))
       runTestBg frozenTime tr (Report.getPreview $ UUIDId $ UUID.fromWords 9 8 7 6) >>= (`shouldBe` Nothing)
       (_, readyPage) <- testServant tr $ Reports.reportsLiveGetH testPid (Just "true")
-      let readyHtml = toText $ renderText $ toHtml readyPage
+      let readyHtml = renderT readyPage
       readyHtml `shouldContainAll` ["live-report-preview", "srcdoc", "Infrastructure", "Monitors"]
       readyHtml `shouldSatisfy` (not . T.isInfixOf "every 2s")
       void $ withResource tr.trPool $ \conn -> PGS.execute conn [sql|UPDATE apis.report_previews SET expires_at = now() - interval '1 second' WHERE project_id = ?|] (PGS.Only testPid)
@@ -328,7 +327,7 @@ spec = around withTestResources do
       runTestBg frozenTime tr (Report.getPreview testPid) >>= (`shouldBe` Just Report.PreviewBuilding)
       runTestBg frozenTime tr $ Report.finishPreview testPid retryToken Report.PreviewFailed
       (_, failedPage) <- testServant tr $ Reports.reportsLiveGetH testPid (Just "true")
-      toText (renderText $ toHtml failedPage) `shouldContainAll` ["The report could not be prepared", "every 60s", "View saved reports"]
+      (renderT failedPage) `shouldContainAll` ["The report could not be prepared", "every 60s", "View saved reports"]
       (_, _, email) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot
       (_, _, full) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" True snapshot
       charts <- forM (drop 1 $ T.splitOn "widgetZ=" email) $ \suffix -> do
@@ -436,7 +435,7 @@ spec = around withTestResources do
       (find ((== "Not evaluated") . (.status)) monitors.observations >>= (.value)) `shouldBe` Nothing
 
     it "renders system evidence and correct duration units without image-only metrics" \_ -> do
-      let (subject, body) = Email.sampleWeeklyReport "" ""
+      let (subject, body) = Email.sampleWeeklyReport Nothing Nothing
           html = Email.renderEmail subject body
       html `shouldContainAll` ["Services", "Infrastructure", "Issues to review", "Monitors", "checkout-api", "Not ready", "1250.0 ms", "3,400", "CPU / capacity", "No previous data"]
       traverse parseQueryToAST Reports.errorsWidget.query `shouldSatisfy` isRight

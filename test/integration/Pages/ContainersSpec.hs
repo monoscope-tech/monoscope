@@ -9,7 +9,6 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, addUTCTime)
 import Data.Vector qualified as V
-import Lucid qualified
 import Models.Telemetry.Containers (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
@@ -167,11 +166,11 @@ spec = sequential $ aroundAll withTfChartResources do
       conf.pageTitle `shouldBe` "Infrastructure"
       conf.prePageTitle `shouldBe` Nothing
       V.length table.rows `shouldBe` 0
-      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       html `shouldContainAll` ["No containers reporting"]
 
       (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
-      toText (Lucid.renderText $ Lucid.toHtml hostMap)
+      (renderT hostMap)
         `shouldContainAll` ["No hosts reporting", "Set up host monitoring"]
 
     it "kubernetesAndDockerContainers_landInOneListWithNormalisedCpuAndMemory" \tr -> do
@@ -274,7 +273,7 @@ spec = sequential $ aroundAll withTfChartResources do
       let Containers.ContainersPage (PageCtx _ body) = page
       table <- deferredBody body
       V.length table.rows `shouldBe` 8
-      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
           cacheKey = (testPid, Nothing, Nothing, Just "5M") :: ContainerSnapshotKey
       cached <- Cache.lookup tr.trATCtx.infrastructureCache cacheKey :: IO (Maybe (V.Vector ContainerRow))
       V.length <$> cached `shouldBe` Just 8
@@ -307,7 +306,7 @@ spec = sequential $ aroundAll withTfChartResources do
                            , "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range."
                            ]
 
-      let render features = toText $ Lucid.renderText $ Lucid.toHtml table{features}
+      let render features = renderT table{features}
           customizeOnly = render table.features{resultSummary = Nothing, exportName = Nothing, customizeColumns = True}
           exportOnly = render table.features{resultSummary = Nothing, exportName = Just "containers", customizeColumns = False}
       render table.features `shouldContainAll` ["type=\"radio\"", "id=\"containersContainer-facets\"", "name=\"containersContainer_filter_namespace\""]
@@ -340,10 +339,10 @@ spec = sequential $ aroundAll withTfChartResources do
       V.null hostsBW.serviceOptions `shouldBe` True
       hostsBW.pageTitle `shouldBe` "Infrastructure"
       hostsBW.prePageTitle `shouldBe` Nothing
-      let hostsHtml = toText $ Lucid.renderText $ Lucid.toHtml hosts
+      let hostsHtml = renderT hosts
       table <- deferredBody body
       V.length table.rows `shouldBe` 3
-      let tableHtml = toText $ Lucid.renderText $ Lucid.toHtml table
+      let tableHtml = renderT table
       hostsHtml `shouldContainAll` ["data-table-group=\"Docker\"", "data-table-group=\"Kubernetes\"", "data-table-group=\"OpenTelemetry\"", "data-hx-trigger=\"change\"", "name=\"group\"", "data-column-key=\"CPU\""]
       T.count "role=\"button\"" tableHtml `shouldBe` 3
       T.count "<table" tableHtml `shouldBe` 1
@@ -357,23 +356,23 @@ spec = sequential $ aroundAll withTfChartResources do
       Icons.lookupIcon "regular" "cube" `shouldSatisfy` isJust
 
       (_, images) <- testServant tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "1")
-      toText (Lucid.renderText $ Lucid.toHtml images)
+      (renderT images)
         `shouldContainAll` ["Images", "ghcr.io/open-telemetry/demo", "docker.redpanda.com/redpandadata/redpanda", "SBOM unavailable", "/infrastructure/images/detail", "role=\"button\""]
 
       (_, kubernetes) <- testServant tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       -- A cluster known only by uid renders as a compact label, never 36 hex characters
       -- repeated down the column; the full uid stays in the tooltip for filtering fidelity.
-      toText (Lucid.renderText $ Lucid.toHtml kubernetes)
+      (renderT kubernetes)
         `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "CPU limit used", "Memory limit used", "whitespace-nowrap", "Showing ", " resources", "/infrastructure/kubernetes/detail", "cluster-9b1deb4d", "data-tippy-content=\"" <> clusterUid <> "\""]
 
       (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
-      let hostMapHtml = toText $ Lucid.renderText $ Lucid.toHtml hostMap
+      let hostMapHtml = renderT hostMap
       hostMapHtml
         `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "name=\"fill\"", "data-hx-trigger=\"change\"", "data-component=\"facet-rail\"", "Provider", "Region", "OS"]
       hostMapHtml `shouldNotSatisfy` T.isInfixOf ">Apply</button>"
 
       (_, hostDetail) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") Nothing Nothing Nothing
-      toText (Lucid.renderText $ Lucid.toHtml hostDetail)
+      (renderT hostDetail)
         `shouldContainAll` [ "Host summary"
                            , "CPU usage"
                            , "Memory usage"
@@ -388,11 +387,11 @@ spec = sequential $ aroundAll withTfChartResources do
                            ]
 
       (_, imageDetail) <- testServant tr $ Infrastructure.imageDetailGetH testPid (Just "ghcr.io/open-telemetry/demo") Nothing Nothing Nothing
-      toText (Lucid.renderText $ Lucid.toHtml imageDetail)
+      (renderT imageDetail)
         `shouldContainAll` ["Image summary", "Running containers", "Security coverage", "View containers"]
 
       (_, kubeDetail) <- testServant tr $ Infrastructure.kubernetesDetailGetH testPid (Just "pods") (Just "checkout-7fb5b4f859-nlcjs") (Just "otel-demo") (Just "default") Nothing Nothing Nothing
-      toText (Lucid.renderText $ Lucid.toHtml kubeDetail)
+      (renderT kubeDetail)
         `shouldContainAll` ["Pod summary", "CPU / limit", "View containers", "View logs", "View metrics"]
 
     it "hostCpuChart_normalizesAcrossLogicalCoresAndRepeatedSamples" \tr -> do
@@ -550,7 +549,7 @@ spec = sequential $ aroundAll withTfChartResources do
           (_, page@(Containers.ContainersPage (PageCtx _ result))) <- testServant tr $ Containers.containersGetH testPid Nothing (Just "summary-window") Nothing Nothing Nothing from to since (Just "1")
           table <- deferredBody result
           V.toList ((.containerName) . (.row) <$> table.rows) `shouldMatchList` expected
-          toText (Lucid.renderText $ Lucid.toHtml page)
+          (renderT page)
             `shouldContainAll` ["containers reporting in the final " <> duration <> " of this range"]
   where
     -- The drawer's first log link, counted through the chart pipeline.

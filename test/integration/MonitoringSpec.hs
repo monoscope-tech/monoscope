@@ -22,7 +22,6 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Lucid (renderText, toHtml)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
@@ -210,7 +209,7 @@ spec = sequential $ aroundAll withTestResources do
       ((.alertConfig.title) <$> createdMonitor) `shouldBe` Just "Checkout errors · Widget Monitor Lifecycle"
       ((.alertConfig.emailAll) <$> createdMonitor) `shouldBe` Just True
       (_, overview) <- testServant tr $ unifiedMonitorOverviewH testPid (maybe "" (.id.toText) createdMonitor)
-      (toStrict $ renderText $ toHtml overview) `shouldSatisfy` T.isInfixOf ("href=\"" <> widgetUrl <> "\"")
+      (renderT overview) `shouldSatisfy` T.isInfixOf ("href=\"" <> widgetUrl <> "\"")
       setupSlackData tr testPid "T_MONITOR_SIM"
       setupDiscordData tr testPid "G_MONITOR_SIM"
       void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.title = Just "Checkout failures", Widget.alertThreshold = Just 1, Widget.unit = Just "events"}

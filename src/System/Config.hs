@@ -59,6 +59,7 @@ data EnvConfig = EnvConfig
   , port :: Int
   , grpcPort :: Int -- "GRPC_PORT"
   , migrationsDir :: Text -- "MIGRATIONS_DIR"
+  , chartCliPath :: Maybe Text -- "CHART_CLI_PATH"; unset means ./chart-cli. Local CI points it inside its container so its Linux build never replaces the host binary.
   , auth0ClientId :: Text
   , auth0Secret :: Text
   , auth0Domain :: Text

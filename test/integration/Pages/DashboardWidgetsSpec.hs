@@ -11,7 +11,6 @@ module Pages.DashboardWidgetsSpec (spec) where
 import Control.Concurrent (threadDelay)
 import Control.Exception qualified as E
 import Control.Lens ((.~))
-import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
@@ -57,7 +56,6 @@ import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Relude
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
-import Servant.Types.SourceT qualified as Source
 import System.Config qualified as Config
 import System.IO.Error (userError)
 import System.Timeout (timeout)
@@ -124,23 +122,9 @@ checkoutSession tr =
     s = Servant.getResponse tr.trSessAndHeader
 
 
-streamFrames :: Servant.Headers hs (Servant.SourceIO AE.Value) -> IO (Either String [AE.Value])
-streamFrames = runExceptT . Source.runSourceT . Servant.getResponse
-
-
 -- A stream's last frame carries the same result the JSON endpoint returns.
 completesWith :: Servant.Headers hs (Servant.SourceIO AE.Value) -> Charts.MetricsData -> Expectation
 completesWith response md = (fmap (viaNonEmpty last) <$> streamFrames response) `shouldReturn` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= md])
-
-
-completeFrame :: Servant.Headers hs (Servant.SourceIO AE.Value) -> IO Charts.MetricsData
-completeFrame response = do
-  frames <- streamFrames response >>= either fail pure
-  case [v | AE.Object frame <- frames, KM.lookup "type" frame == Just (AE.String "complete"), Just v <- [KM.lookup "data" frame]] of
-    [value] -> case AE.fromJSON value of
-      AE.Success metrics -> pure metrics
-      AE.Error err -> fail err
-    _ -> fail $ "missing stream completion: " <> show frames
 
 
 allWidgetTypes :: [Widget.WidgetType]
@@ -1197,7 +1181,7 @@ spec = sequential $ aroundAll withTestResources do
       let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
           params = [("var-endpointHash", Just "stream-cache")]
           fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
-          stream = completeFrame =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params)
+          stream = completeFrame @Charts.MetricsData =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params)
       initialStream <- stream
       cachedJson <- fetch
       repeatedStream <- stream
@@ -1261,7 +1245,7 @@ spec = sequential $ aroundAll withTestResources do
           params = [("var-endpointHash", Just "benchmark")]
           fetch window streaming =
             if streaming
-              then completeFrame =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params)
+              then completeFrame @Charts.MetricsData =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params)
               else runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params
           measured action = do
             start <- getMonotonicTime

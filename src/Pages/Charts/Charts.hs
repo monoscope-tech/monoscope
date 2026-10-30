@@ -44,7 +44,7 @@ import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), RangeEnd (..), SqlQueryCfg (..), applyScopedQuery, buildDateRange, buildEnvFilter, buildServiceFilter, defSqlQueryCfg, fillQueryTemplate, mkScopedQuery, pSource, queryASTToComponents, variablePresets, variablePresetsKQL)
+import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), RangeEnd (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, buildDateRange, buildEnvFilter, buildServiceFilter, defSqlQueryCfg, fillQueryTemplate, mkScopedQuery, pSource, queryASTToComponents, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), parseQueryDiagnosed, queryErrorText)
 import Pkg.QueryCache qualified as QC
@@ -163,7 +163,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   -- Validated against `source`, not blind: a widget can carry `source=metrics` in the
   -- request rather than in the query text, and checking those fields against
   -- otel_logs_and_spans rejects the metrics table's own columns (`metric_name`, `value`).
-  case first queryErrorText $ parseQueryDiagnosed source $ fillQueryTemplate mappngKQL $ maybeToMonoid queryM of
+  case first queryErrorText $ parseQueryDiagnosed source $ fillQueryTemplate KqlTemplate mappngKQL $ maybeToMonoid queryM of
     Left err -> pure (emptyMetricsFor now fromD toD){error = Just err}
     Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density environment service (maybe False (T.null . snd) currentRange) queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
 
@@ -183,11 +183,11 @@ runQueryAST authCtx dbSource respDataType pid source binDensity environment serv
 
   case querySQLM of
     Just querySQL
-      | Just message <- rawSqlScopeError environment service (fillQueryTemplate mappngSQL querySQL) ->
+      | Just message <- rawSqlScopeError environment service (fillQueryTemplate SqlTemplate mappngSQL querySQL) ->
           pure (emptyMetricsFor now fromD toD){error = Just message}
     Just querySQL -> do
       let tbl = sourceTable source
-          sqlQuery = fillQueryTemplate mappngSQL querySQL
+          sqlQuery = fillQueryTemplate SqlTemplate mappngSQL querySQL
       convertTimestampsToMs
         <$> withChartSpan
           tbl
@@ -225,7 +225,7 @@ runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange prog
         M.fromList [("query_ast_filters", rawAstFilters cacheCfg components)]
           <> variablePresets cfg.binDensity cfg.pid.toText from to [(key, Just value) | (key, value) <- M.toList mapping, "var-" `T.isPrefixOf` key || key == "table-search"] cfg.currentTime
           <> mapping
-      sql = fillQueryTemplate canonical template
+      sql = fillQueryTemplate SqlTemplate canonical template
       fetch = liftIO $ fetchMetricsDataWithProgress progress decoder sql cfg.currentTime from to authCtx dbSource >>= either throwIO pure
   case (endpoint, from, to) of
     (Just endpointHash, Just start, Just end) ->
@@ -753,9 +753,9 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
       raw = Utils.nonEmptyT querySQLM
       parsed =
         maybe
-          (first queryErrorText $ parseQueryDiagnosed source $ fillQueryTemplate mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM)
+          (first queryErrorText $ parseQueryDiagnosed source $ fillQueryTemplate KqlTemplate mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM)
           Left
-          (raw >>= rawSqlScopeError environment service . fillQueryTemplate mapping)
+          (raw >>= rawSqlScopeError environment service . fillQueryTemplate SqlTemplate mapping)
       scope = mkScopedQuery pid (fromD, toD) environment service
       cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source Nothing){binDensity = density, targetsTimefusion = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource}
       run emit = case parsed of

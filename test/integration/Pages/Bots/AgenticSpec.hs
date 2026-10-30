@@ -11,14 +11,12 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.IORef qualified as IORef
 import Data.Map qualified as Map
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Effectful qualified as Eff
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Langchain.LLM.Core qualified as LLM
-import Lucid qualified
 import Models.Apis.Investigations (ToolCallInfo (..), ToolResult (..))
 import Models.Apis.Issues qualified as Issues
 import Pages.AIThreads qualified as AIThreads
@@ -122,7 +120,7 @@ spec = around withTestResources do
         let convId = UUIDId UUID.nil
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
+        let html = renderT threadPage
         html `shouldSatisfy` T.isInfixOf "id=\"nav-view-ai\" class=\"sr-only\" checked"
 
       it "issueConversation_linksBackToItsIssue" \tr -> do
@@ -130,7 +128,7 @@ spec = around withTestResources do
             convId = UUIDId issueId.unUUIDId
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTAnomaly})|]
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
+        let html = renderT threadPage
         html `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/issues/" <> issueId.toText <> "\"")
 
       it "assistantSectionHeadings_linkAndBackdropCoversViewport" \tr -> do
@@ -139,7 +137,7 @@ spec = around withTestResources do
         (_, conversationPage) <- testServant tr $ AIThreads.threadsGetH testPid
         (_, routinesPage) <- testServant tr $ AIThreads.routinesGetH testPid
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        let render = LT.toStrict . Lucid.renderText . Lucid.toHtml
+        let render = renderT
             conversationHtml = render conversationPage
         all (`T.isInfixOf` conversationHtml) ["href=\"/p/" <> testPid.toText <> "/ai/routines\"", "Routines", "href=\"/p/" <> testPid.toText <> "/ai\"", "Conversations"] `shouldBe` True
         all (`T.isInfixOf` conversationHtml) ["id=\"ai-composer-modal\"", "backdrop:backdrop-blur-sm"] `shouldBe` True
@@ -152,7 +150,7 @@ spec = around withTestResources do
           Issues.insertChatMessage testPid convId Issues.ChatUser "Watch checkout latency" Nothing Nothing
           for_ ["First run result", "Second run result"] \r -> Issues.insertChatMessage testPid convId Issues.ChatAssistant r Nothing Nothing
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage
+        let html = renderT threadPage
         filter (not . (`T.isInfixOf` html)) ["First run result", "Second run result"] `shouldBe` []
 
       it "agentDocuments_savedAppendedAndListedBesideTheConversation" \tr -> do
@@ -179,9 +177,9 @@ spec = around withTestResources do
         -- frozenTime is 2025-01-01T00:00Z, still New Year's Eve in New York.
         routinePrompt `shouldSatisfy` T.isInfixOf "key \"2024-12-31\""
         (_, chatPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        LT.toStrict (Lucid.renderText $ Lucid.toHtml chatPage) `shouldSatisfy` T.isInfixOf "href=\"?doc=checkout-review\""
+        renderT chatPage `shouldSatisfy` T.isInfixOf "href=\"?doc=checkout-review\""
         (_, docPage) <- testServant tr $ AIThreads.threadGetH testPid convId (rightToMaybe $ Issues.mkArtifactKey "checkout-review") Nothing
-        let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml docPage
+        let html = renderT docPage
         filter (not . (`T.isInfixOf` html)) ["?doc=checkout-review", "<h2 id=\"followup\">", "href=\"#followup\"", "Latency recovered."] `shouldBe` []
 
       it "agentDocuments_boundedPerDocumentPerConversationAndPerRead" \tr -> do
