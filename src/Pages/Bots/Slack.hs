@@ -10,7 +10,6 @@ import Data.Aeson.Key qualified as KEM
 import Data.Aeson.Lens (key, _Bool, _String)
 import Data.Aeson.Types qualified as AE
 import Data.ByteArray qualified as BA
-import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (def))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUID
@@ -31,6 +30,7 @@ import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Lucid qualified as H
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "cryptonite" Crypto.Hash (Digest, SHA256, hashlazy)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 

@@ -105,7 +105,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue (..))
-import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
 import Data.Default (def)
@@ -225,6 +224,7 @@ import Web.ApiHandlers qualified as ApiH
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.I18n qualified as I18n
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 
 
 migrationsDirr :: FilePath

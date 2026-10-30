@@ -3,7 +3,6 @@ module Web.Routes (server, genAuthServerContext, KeepPrefixExp, LogDataFieldExp,
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Builder (Builder)
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
@@ -115,6 +114,7 @@ import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.MCP qualified as MCP
 import Web.Wire qualified as Wire
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 
