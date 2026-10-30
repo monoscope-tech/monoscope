@@ -412,7 +412,7 @@ data Routes mode = Routes
   , toLogin :: mode :- "to_login" :> QPT "redirect_to" :> SessionRedirect NoContent
   , logout :: mode :- "logout" :> SessionRedirect NoContent
   , setLanguage :: mode :- "set_language" :> Capture "lang" Text :> QPT "redirect_to" :> SessionRedirect NoContent
-  , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> Header "Cookie" Text :> Header "User-Agent" Text :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] (Html ()))
+  , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> Header "Cookie" ByteString :> Header "User-Agent" ByteString :> Header "CF-IPCountry" ByteString :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] (Html ()))
   , -- OTLP/HTTP ingestion (protobuf) — collector-less SDK exporters
     otlpTracesPost :: mode :- "v1" :> "traces" :> Header "x-api-key" Text :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
   , otlpLogsPost :: mode :- "v1" :> "logs" :> Header "x-api-key" Text :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString

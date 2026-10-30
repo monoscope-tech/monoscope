@@ -1793,22 +1793,18 @@ mkSpanRequest trId spanId parentSpanIdM spanName events statusM attrs resource t
       otelSpan =
         defMessage
           & PTF.traceId
-          .~ hexPad 32 trId
-            & PTF.spanId
+          .~ hexPad 32 trId & PTF.spanId
           .~ hexPad 16 spanId
             & PTF.parentSpanId
           .~ maybe "" (hexPad 16) parentSpanIdM
             & PTF.name
-          .~ spanName
-            & PTF.kind
+          .~ spanName & PTF.kind
           .~ PT.Span'SPAN_KIND_SERVER
             & PTF.startTimeUnixNano
-          .~ startTime
-            & PTF.endTimeUnixNano
+          .~ startTime & PTF.endTimeUnixNano
           .~ endTime
             & PTF.attributes
-          .~ attrs
-            & PTF.events
+          .~ attrs & PTF.events
           .~ events
             & maybe id (PTF.status .~) statusM
       scopeSpan = defMessage & PTF.spans .~ [otelSpan]

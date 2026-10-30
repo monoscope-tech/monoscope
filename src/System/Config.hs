@@ -212,7 +212,7 @@ data EnvConfig = EnvConfig
   -- browser and server events dedupe. Server-side sending needs this and 'metaCapiAccessToken'.
   , metaCapiAccessToken :: Maybe Text
   , metaCapiTestEventCode :: Maybe Text
-  , redditAdAccountId :: Maybe Text
+  , redditPixelId :: Maybe Text
   , redditConversionsToken :: Maybe Text
   , linkedInPartnerId :: Maybe Text
   , postHogApiKey :: Maybe Text
@@ -601,12 +601,10 @@ configToEnv config = do
   liftIO $ introspectAndCacheOtelColumns pool
   -- A missing or corrupt GeoIP file must not stop the server booting; errors just go unplaced.
   geoDb <-
-    liftIO
-      $ join
-      <$> forM (guarded (not . T.null) config.geoipDbPath) \path ->
-        Safe.try (GeoIP2.openGeoDB (toString path)) >>= \case
-          Right db -> pure (Just db)
-          Left (e :: SomeException) -> Nothing <$ blueMessage ("GeoIP disabled, cannot open " <> path <> ": " <> show e)
+    liftIO $ join <$> forM (guarded (not . T.null) config.geoipDbPath) \path ->
+      Safe.try (GeoIP2.openGeoDB (toString path)) >>= \case
+        Right db -> pure (Just db)
+        Left (e :: SomeException) -> Nothing <$ blueMessage ("GeoIP disabled, cannot open " <> path <> ": " <> show e)
   pure
     AuthContext
       { pool

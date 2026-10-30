@@ -1,0 +1,8 @@
+{
+  "statusCode": 200,
+  "statusMessage": "OK",
+  "respBody": "{\"access_token\":\"test-access-token\",\"token_type\":\"Bearer\"}",
+  "responseHeaders": [],
+  "originalRequest": "",
+  "responseEarlyHints": []
+}

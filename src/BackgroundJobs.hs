@@ -35,7 +35,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (..), addDays, addUTCTime, dayOfWeek, formatTime)
-import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
+import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime, nominalDay)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (utc, utcToZonedTime)
@@ -347,6 +347,7 @@ processBackgroundJob authCtx bgJob =
       when (moved >= cap) $ Time.currentTime >>= \t -> enqueueAt authCtx t [Jobs.ReplayParkedMessages cap]
     MonoscopeAdminDaily -> runMonoscopeAdminDaily authCtx
     UsageAuditReport -> runUsageAuditReport authCtx
+    AdConversion conv -> AdConversions.sendConversion authCtx conv
   where
     analyzeRepository :: Projects.ProjectId -> GitSync.RepositoryId -> ATBackgroundCtx ()
     analyzeRepository pid rid = whenJustM (GitSync.getRepository pid rid) \repository -> do
@@ -1395,10 +1396,11 @@ runHourlyJob scheduledTime hour = do
   let activeProjects = ordNub $ mapMaybe Projects.projectIdFromText spanProjects <> metricProjects
 
   Log.logTrace "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
-  -- Projects that never run the onboarding check activate here, at most an hour after their first data.
+  -- Projects that never run the onboarding check activate here. The milestone is recorded first, so a
+  -- failed enqueue is not retried.
   tryStep "ad-activations"
-    $ Activation.recordActivationMilestones Activation.IngestVerified (Just $ addUTCTime (-(30 * 86400)) scheduledTime) (V.fromList activeProjects)
-    >>= AdConversions.sendActivations ctx.config
+    $ Activation.recordActivationMilestones Activation.IngestVerified (Just $ addUTCTime (-(30 * nominalDay)) scheduledTime) (V.fromList activeProjects)
+    >>= traverse_ (Jobs.insertJob . AdConversion . Jobs.Activated)
   let projectBatches = chunksOf 10 activeProjects
 
   enqueueJobs ctx
