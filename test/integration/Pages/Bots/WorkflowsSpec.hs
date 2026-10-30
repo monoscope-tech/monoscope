@@ -182,7 +182,7 @@ spec = around withTestResources do
             pure scheduled
           claimed <- runQueryEffect tr (Issues.claimRoutine routine.id routine.scheduledAt) >>= maybe (fail "Expected a claimed routine run") pure
           let user = (getResponse tr.trSessAndHeader).user.id
-              config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just $ if scenario == "wrong-conversation" then other else conversation, AI.invocationMode = AI.ScheduledRoutine claimed.runId True}
+              config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just $ if scenario == "wrong-conversation" then other else conversation, AI.invocationMode = AI.ScheduledRoutine claimed.runId Issues.Autonomous}
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> do
                   let evidence = [message.content | message <- toList history, message.role == Chat.Tool]
@@ -1063,7 +1063,7 @@ spec = around withTestResources do
                 Issues.insertChatMessage testPid conversation Issues.ChatUser "Inspect the project" Nothing Nothing
                 scheduled <- Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (liftIO $ fail "Expected a scheduled routine") pure
                 execution <- Issues.claimRoutine scheduled.id scheduled.scheduledAt >>= maybe (liftIO $ fail "Expected a claimed run") pure
-                pure (execution.runId, AI.ScheduledRoutine execution.runId False)
+                pure (execution.runId, AI.ScheduledRoutine execution.runId Issues.Observe)
           calls <- newIORef ([] :: [Text])
           models <- newIORef ([] :: [Maybe Text])
           interrupt <- newIORef True

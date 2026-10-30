@@ -277,6 +277,10 @@ Before each release boundary:
 Use the local OrbStack builder as repository instructions require.
 Keep applied migration filenames and contents unchanged.
 Choose new migration filenames after inspecting current master.
+Group related, unapplied schema changes into one migration per coherent implementation slice.
+Do not squash imported PR migrations without evidence that no supported database has applied them.
+The local migration ledger confirms that agent migrations `0257`–`0260` have already run.
+Their filenames and checksums must remain stable. Fewer migrations are a goal for new work, not a reason to break upgrades.
 Report unavailable checks without claiming that they passed.
 No production deployment or live app configuration change is authorized by this plan.
 
@@ -367,6 +371,23 @@ The regressions also cover completion rollback, issue context, fresh form identi
 All 158 bot examples, all 45 issue examples, and all 75 API v1 examples pass.
 The focused doctest attempt did not execute examples because the local package database lacks the `monoscope` library registration.
 Final doctest verification remains pending.
+Web, issue chat, and scheduled results now share `completeRun` and one answer normalizer.
+Typed completion outcomes distinguish publication, quiet evidence, failure, timeout, and cancellation.
+The old interactive completion, scheduler cleanup, cancellation query, and response-target wrapper have been removed.
+Scheduled publication, retained report, run status, artifact snapshots, and lease advancement commit in one transaction.
+A failed database write rolls them all back; recovery reuses the checkpointed model answer.
+Lease checks reject an older worker before it writes any result.
+Cancellation, pause, and withdrawn owner access suppress publication at completion.
+Scheduled recovery retains the original authorizing member, instructions, and typed execution policy.
+Increasing installation authority affects future runs; it does not elevate an in-flight run.
+
+The regression first exposed publication and scheduler advancement after a failed run-status write.
+Six completion cases cover run-status failure, scheduler-lease failure, stale workers, cancellation, pause, and revoked access.
+All 163 bot examples, all 45 issue examples, and all 75 API v1 examples pass after this consolidation.
+The formatter and diff checks pass. Scope reviews found no remaining material distillation, type-evasion, or client-behavior issue in this slice.
+Event-specific completion and legacy stranded leases still require consolidation and recovery checks.
+This transaction does not make external actions or project mutations exactly-once.
+
 The authority evaluator still needs to replace the legacy invocation predicates and routine action flags.
 A checkpoint does not establish exactly-once mutation or external publication.
 Operation identities and safe write recovery remain necessary before autonomous writes reach release.

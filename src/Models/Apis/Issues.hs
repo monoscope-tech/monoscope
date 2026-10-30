@@ -148,7 +148,12 @@ module Models.Apis.Issues (
   startInteractiveRun,
   InteractiveStart (..),
   interactiveRunActive,
-  finishInteractiveRun,
+  completeRun,
+  CompletionTarget (..),
+  RunAnswer (..),
+  RunFailure (..),
+  RunCompletion (..),
+  CompletionResult (..),
   saveRunResult,
   listRunArtifacts,
   getRoutineRun,
@@ -187,7 +192,6 @@ module Models.Apis.Issues (
   claimRoutine,
   finishRoutineRun,
   listRoutineRuns,
-  completeRoutine,
   listDueRoutines,
   pauseRoutine,
   cancelRoutineRun,
@@ -197,7 +201,6 @@ module Models.Apis.Issues (
   routineRunCanAct,
   routineRunCanWriteMemory,
   grantRoutineMemory,
-  routineRunCancelled,
   insertChatMessage,
   AIArtifact (..),
   ArtifactKey,
@@ -1749,7 +1752,7 @@ data ClaimedRoutine = ClaimedRoutine
   , projectId :: Projects.ProjectId
   , conversationId :: UUIDId "conversation"
   , claimedAt :: UTCTime
-  , allowActions :: Bool
+  , policy :: ExecutionPolicy
   , reportWhen :: RoutineReport
   , destination :: RoutineDestination
   , timezone :: Text
@@ -1953,18 +1956,18 @@ claimRoutine routineId scheduledAt =
           AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
         RETURNING requested_by, project_id, conversation_id, running_since, allow_actions, report_when, destination, timezone, instructions, template_version
       ), run AS (
-        INSERT INTO apis.ai_routine_runs (routine_id, project_id, conversation_id, scheduled_at, started_at, status, requested_by, instructions, template_version, input)
+        INSERT INTO apis.ai_routine_runs (routine_id, project_id, conversation_id, scheduled_at, started_at, status, requested_by, instructions, template_version, input, policy)
         SELECT #{routineId}, claimed.project_id, claimed.conversation_id, #{scheduledAt}, running_since, 'running', requested_by,
-          COALESCE(instructions, task.content), template_version, task.content FROM claimed
+          COALESCE(instructions, task.content), template_version, task.content, CASE WHEN claimed.allow_actions THEN #{Autonomous} ELSE #{Observe} END FROM claimed
         LEFT JOIN LATERAL (SELECT content FROM apis.ai_chat_messages
           WHERE project_id = claimed.project_id AND conversation_id = claimed.conversation_id AND role = 'user'
           ORDER BY created_at, id LIMIT 1) task ON TRUE
         ON CONFLICT (routine_id, scheduled_at) WHERE source = '{"tag":"ScheduledRun"}'  DO UPDATE SET
           started_at = EXCLUDED.started_at, finished_at = NULL, status = 'running', findings = NULL, actions = NULL, error = NULL
-          WHERE apis.ai_routine_runs.status = 'running'
-        RETURNING id, instructions
+          WHERE apis.ai_routine_runs.status = 'running' AND apis.ai_routine_runs.requested_by IS NOT NULL
+        RETURNING id, instructions, requested_by, policy
       )
-      SELECT run.id, claimed.requested_by, claimed.project_id, claimed.conversation_id, claimed.running_since, claimed.allow_actions, claimed.report_when, claimed.destination, claimed.timezone, run.instructions
+      SELECT run.id, run.requested_by, claimed.project_id, claimed.conversation_id, claimed.running_since, COALESCE(run.policy, #{Observe}), claimed.report_when, claimed.destination, claimed.timezone, run.instructions
       FROM claimed CROSS JOIN run|]
 
 
@@ -2078,42 +2081,123 @@ interactiveRunActive pid runId user policy =
         AND run.source->>'tag' = 'InteractiveRun' AND run.policy = #{policy} AND run.status IN ('running', 'succeeded'))|]
 
 
--- | Publish the normalized message and finish its run in the same transaction.
-finishInteractiveRun :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Projects.UserId -> ExecutionPolicy -> Text -> Maybe AE.Value -> AE.Value -> AE.Value -> Eff es Bool
-finishInteractiveRun pid runId user policy body widgets answer tools =
+data CompletionTarget
+  = InteractiveTarget Projects.ProjectId (UUIDId "ai_routine_run") Projects.UserId ExecutionPolicy
+  | ScheduledTarget ScheduledRoutine ClaimedRoutine
+
+
+data RunAnswer = RunAnswer
+  { content :: Text
+  , widgets :: Maybe AE.Value
+  , report :: Text
+  , answer :: AE.Value
+  , tools :: AE.Value
+  }
+
+
+data RunFailure = RunFailure {reason :: Text, notice :: Text}
+
+
+data RunCompletion
+  = PublishedResult RunAnswer
+  | QuietResult RunAnswer
+  | FailedResult RunFailure
+  | TimedOutResult
+  | CancelledResult
+
+
+data CompletionResult = CompletionRejected | RunCompleted (Maybe ScheduledRoutine)
+  deriving stock (Show)
+
+
+-- | Publication, retained evidence, status, and the scheduled lease commit together.
+-- The scheduler and run locks fence workers whose lease another worker recovered.
+completeRun :: (DB es, Time :> es) => CompletionTarget -> RunCompletion -> Eff es CompletionResult
+completeRun target proposed = do
+  now <- Time.currentTime
+  let (pid, runId) = case target of
+        InteractiveTarget project identifier _ _ -> (project, identifier)
+        ScheduledTarget _ claim -> (claim.projectId, claim.runId)
   Hasql.transaction TxS.ReadCommitted TxS.Write do
-    runs <-
-      Hasql.queryTx @[(UTCTime, RoutineRunStatus)]
-        [HI.sql|SELECT started_at, status FROM apis.ai_routine_runs WHERE id = #{runId}
-        AND project_id = #{pid} AND requested_by = #{user} AND policy = #{policy}
-        AND source->>'tag' = 'InteractiveRun' FOR UPDATE|]
-    case runs of
-      [(startedAt, RunRunning)] -> do
-        Hasql.executeTx $ runResultMessageSql pid runId body widgets (Just tools)
-        Hasql.executeTx $ finishRoutineRunSql runId startedAt CompletedSucceeded (Just answer) (Just tools) Nothing
-        pure True
-      [(_, RunSucceeded)] -> pure True
-      _ -> pure False
+    ownsLease <- case target of
+      InteractiveTarget{} -> pure True
+      ScheduledTarget slot claim ->
+        not
+          . null
+          <$> Hasql.queryTx @[UUIDId "ai_routine"]
+            [HI.sql|SELECT id FROM apis.ai_routines WHERE id = #{slot.id} AND project_id = #{pid}
+            AND conversation_id = #{claim.conversationId} AND next_run_at = #{slot.scheduledAt}
+            AND running_since = #{claim.claimedAt} FOR UPDATE|]
+    if not ownsLease
+      then pure CompletionRejected
+      else do
+        let scope = case target of
+              InteractiveTarget _ _ user policy -> [HI.sql|AND requested_by = #{user} AND policy = #{policy} AND source->>'tag' = 'InteractiveRun'|]
+              ScheduledTarget slot claim ->
+                [HI.sql|AND routine_id = #{slot.id} AND scheduled_at = #{slot.scheduledAt}
+                AND started_at = #{claim.claimedAt} AND conversation_id = #{claim.conversationId} AND requested_by = #{claim.requestedBy}|]
+        runs <-
+          Hasql.queryTx @[(UTCTime, RoutineRunStatus)]
+            ([HI.sql|SELECT started_at, status FROM apis.ai_routine_runs WHERE id = #{runId} AND project_id = #{pid} |] <> scope <> [HI.sql| FOR UPDATE|])
+        case runs of
+          [(startedAt, RunRunning)] -> do
+            outcome <- case target of
+              InteractiveTarget{} -> pure proposed
+              ScheduledTarget{} -> do
+                active <- Hasql.oneTx @Bool $ routineRunActiveSql pid runId
+                pure $ if active then proposed else CancelledResult
+            let (status, response, failure, notice) = case outcome of
+                  PublishedResult answer -> (CompletedSucceeded, Just answer, Nothing, Nothing)
+                  QuietResult answer -> (CompletedNoFindings, Just answer, Nothing, Nothing)
+                  FailedResult err -> (CompletedFailed, Nothing, Just err.reason, Just err.notice)
+                  TimedOutResult -> (CompletedTimedOut, Nothing, Just "Routine execution timed out", Just "Routine timed out. It will run again at the next interval.")
+                  CancelledResult -> (CompletedCancelled, Nothing, Nothing, Nothing)
+            for_ response $ \answer -> do
+              case target of
+                ScheduledTarget{} -> Hasql.executeTx $ saveRunResultSql pid runId "Routine result" answer.report
+                InteractiveTarget{} -> pass
+              case outcome of
+                PublishedResult{} -> Hasql.executeTx $ runMessageSql pid runId ChatAssistant answer.content answer.widgets (Just answer.tools)
+                _ -> pass
+            for_ notice $ \body -> Hasql.executeTx $ runMessageSql pid runId ChatExecutionEvent body Nothing Nothing
+            Hasql.executeTx $ finishRoutineRunSql runId startedAt status ((.answer) <$> response) ((.tools) <$> response) failure
+            next <- case target of
+              InteractiveTarget{} -> pure Nothing
+              ScheduledTarget slot claim -> do
+                timing <- decodeRoutineTiming <$> Hasql.oneTx (routineTimingSql [HI.sql|id = #{slot.id}|])
+                let nextAt = timing >>= \(schedule, zone) -> nextRoutineAt schedule zone slot.scheduledAt now
+                at <-
+                  Hasql.oneTx @(HI.OneColumn (Maybe UTCTime))
+                    [HI.sql|UPDATE apis.ai_routines SET last_run_at = #{now}, running_since = NULL, cancelled_at = NULL,
+                    next_run_at = CASE WHEN active THEN #{nextAt} END
+                    WHERE id = #{slot.id} AND next_run_at = #{slot.scheduledAt} AND running_since = #{claim.claimedAt}
+                    RETURNING CASE WHEN active THEN next_run_at END|]
+                pure $ ScheduledRoutine slot.id <$> HI.getOneColumn at
+            pure $ RunCompleted next
+          [(_, RunSucceeded)] | InteractiveTarget{} <- target -> pure $ RunCompleted Nothing
+          _ -> pure CompletionRejected
 
 
 routineRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
-routineRunActive pid runId =
-  fromMaybe False
-    <$> Hasql.interpOne
-      ( [HI.sql|WITH eligible_members AS (
+routineRunActive pid runId = fromMaybe False <$> Hasql.interpOne (routineRunActiveSql pid runId)
+
+
+routineRunActiveSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql
+routineRunActiveSql pid runId =
+  ( [HI.sql|WITH eligible_members AS (
       SELECT member.project_id, member.user_id, member.permission FROM projects.project_members member
       JOIN users.users account ON account.id = member.user_id
       JOIN projects.projects project ON project.id = member.project_id
       WHERE member.project_id = #{pid} |]
-          <> ProjectMembers.activeMembership
-          <> [HI.sql|) SELECT EXISTS (
+      <> ProjectMembers.activeMembership
+      <> [HI.sql|) SELECT EXISTS (
       SELECT 1 FROM apis.ai_routine_runs run JOIN apis.ai_routines r ON r.id = run.routine_id
       JOIN eligible_members owner ON owner.project_id = r.project_id AND owner.user_id = r.requested_by
       JOIN eligible_members actor ON actor.project_id = run.project_id AND actor.user_id = run.requested_by
       WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running' AND r.active
         AND (r.cancelled_at IS NULL OR r.cancelled_at < run.started_at)
         AND owner.permission IN ('admin', 'edit'))|]
-      )
+  )
 
 
 getRoutineInstructions :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe Text)
@@ -2129,9 +2213,12 @@ setRoutineInstructions pid convId instructions =
 
 
 saveRunResult :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Text -> Text -> Eff es ()
-saveRunResult pid runId title body =
-  Hasql.interpExecute_
-    [HI.sql|WITH running AS (
+saveRunResult pid runId title body = Hasql.interpExecute_ $ saveRunResultSql pid runId title body
+
+
+saveRunResultSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Text -> Text -> HI.Sql
+saveRunResultSql pid runId title body =
+  [HI.sql|WITH running AS (
       SELECT id, project_id, conversation_id FROM apis.ai_routine_runs
       WHERE id = #{runId} AND project_id = #{pid} AND status = 'running' FOR UPDATE
     ), document AS (
@@ -2176,16 +2263,16 @@ getEventRun pid event =
 
 -- | A run owns one assistant result message, including across worker recovery.
 insertRunResultMessage :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Text -> Eff es ()
-insertRunResultMessage pid runId body = Hasql.interpExecute_ $ runResultMessageSql pid runId body Nothing Nothing
+insertRunResultMessage pid runId body = Hasql.interpExecute_ $ runMessageSql pid runId ChatAssistant body Nothing Nothing
 
 
-runResultMessageSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Text -> Maybe AE.Value -> Maybe AE.Value -> HI.Sql
-runResultMessageSql pid runId body widgets metadata =
+runMessageSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ChatMessageKind -> Text -> Maybe AE.Value -> Maybe AE.Value -> HI.Sql
+runMessageSql pid runId role body widgets metadata =
   let messageId :: UUIDId "ai_chat"
       messageId = UUIDId $ UUID5.generateNamed runId.unUUIDId $ BS.unpack "routine-result"
    in [HI.sql|WITH inserted AS (
       INSERT INTO apis.ai_chat_messages (id, project_id, conversation_id, role, content, widgets, metadata, created_at)
-      SELECT #{messageId}, run.project_id, run.conversation_id, 'assistant', #{body}, #{Aeson <$> widgets}, #{Aeson <$> metadata}, clock_timestamp()
+      SELECT #{messageId}, run.project_id, run.conversation_id, #{role}, #{body}, #{Aeson <$> widgets}, #{Aeson <$> metadata}, clock_timestamp()
       FROM apis.ai_routine_runs run JOIN apis.ai_conversations c ON c.project_id = run.project_id AND c.conversation_id = run.conversation_id
       WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running' FOR KEY SHARE OF c
       ON CONFLICT (id) DO NOTHING RETURNING project_id, conversation_id
@@ -2217,22 +2304,6 @@ routineRunsSql pid =
       LEFT JOIN apis.ai_routines routine ON routine.id = run.routine_id
       LEFT JOIN apis.ai_conversations installation ON installation.project_id = routine.project_id AND installation.conversation_id = routine.conversation_id
       WHERE run.project_id = #{pid} |]
-
-
--- | Finish only the lease this worker owns, then schedule from its intended time so a
--- slow run never overlaps its successor or triggers a catch-up burst. Pausing keeps
--- the lease until this cleanup, but suppresses the successor.
-completeRoutine :: (DB es, Time :> es) => UUIDId "ai_routine" -> UTCTime -> UTCTime -> Eff es (Maybe UTCTime)
-completeRoutine routineId scheduledAt claimedAt = do
-  now <- Time.currentTime
-  timing <- routineTiming [HI.sql|id = #{routineId}|]
-  let nextRunAt = timing >>= \(schedule, timezone) -> nextRoutineAt schedule timezone scheduledAt now
-  join
-    <$> Hasql.interpOne
-      [HI.sql|UPDATE apis.ai_routines SET last_run_at = #{now}, running_since = NULL, cancelled_at = NULL,
-        next_run_at = CASE WHEN active THEN #{nextRunAt} END
-        WHERE id = #{routineId} AND next_run_at = #{scheduledAt} AND running_since = #{claimedAt}
-        RETURNING CASE WHEN active THEN next_run_at END|]
 
 
 -- | Recovery source for a queue insertion lost to a crash. Duplicate enqueues are safe:
@@ -2299,7 +2370,7 @@ routineRunCanAct pid runId =
     <$> Hasql.interpOne
       [HI.sql|SELECT r.active AND r.allow_actions AND r.cancelled_at IS NULL
       FROM apis.ai_routine_runs run JOIN apis.ai_routines r ON r.id = run.routine_id
-      WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running'|]
+      WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running' AND run.policy = #{Autonomous}|]
 
 
 grantRoutineMemory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> Eff es Bool
@@ -2320,17 +2391,9 @@ routineRunCanWriteMemory pid conversation runId = do
     Hasql.interpOne @(HI.OneColumn Projects.UserId)
       [HI.sql|SELECT r.memory_granted_by FROM apis.ai_routine_runs run JOIN apis.ai_routines r ON r.id = run.routine_id
       WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.conversation_id = #{conversation}
-        AND r.project_id = #{pid} AND r.conversation_id = #{conversation} AND run.status = 'running'
+        AND r.project_id = #{pid} AND r.conversation_id = #{conversation} AND run.status = 'running' AND run.policy = #{Autonomous}
         AND r.active AND r.allow_actions AND r.cancelled_at IS NULL AND r.memory_granted_by IS NOT NULL|]
   maybe (pure False) (fmap (maybe False (>= ProjectMembers.PEdit)) . ProjectMembers.getUserPermission pid . HI.getOneColumn) grant
-
-
-routineRunCancelled :: DB es => UUIDId "ai_routine" -> UTCTime -> Eff es Bool
-routineRunCancelled routineId claimedAt =
-  fromMaybe False
-    <$> Hasql.interpOne
-      [HI.sql|SELECT COALESCE(cancelled_at >= #{claimedAt}, FALSE)
-        FROM apis.ai_routines WHERE id = #{routineId}|]
 
 
 -- | Inverse of 'fromEnum' on 'DayOfWeek' as stored in @schedule_weekday@ (Monday=1 … Sunday=7).
@@ -2345,23 +2408,29 @@ isoWeekday :: Int -> Maybe DayOfWeek
 isoWeekday d = [Monday .. Sunday] !!? (d - 1)
 
 
+type RoutineTimingRow = (RoutineScheduleKind, Maybe RoutineInterval, Text, Maybe Int, Maybe Int, Maybe Int)
+
+
 routineTiming :: DB es => HI.Sql -> Eff es (Maybe (RoutineSchedule, Text))
-routineTiming predicate =
-  (decode =<<)
-    <$> Hasql.interpOne
-      ([HI.sql|SELECT schedule_kind, interval_minutes, timezone, schedule_hour::bigint, schedule_minute::bigint, schedule_weekday::bigint FROM apis.ai_routines WHERE |] <> predicate)
-  where
-    decode (kind :: RoutineScheduleKind, interval :: Maybe RoutineInterval, timezone :: Text, hour :: Maybe Int, minute :: Maybe Int, weekday :: Maybe Int) = do
-      schedule <- case kind of
-        ScheduleInterval -> Every <$> interval
-        ScheduleDaily -> Daily <$> timeOfDay hour minute
-        ScheduleWeekdays -> Weekdays <$> timeOfDay hour minute
-        ScheduleWeekly -> Weekly <$> (weekday >>= isoWeekday) <*> timeOfDay hour minute
-        ScheduleSlackMessage -> Just $ OnEvent EventSlackMessage
-        SchedulePullRequest -> Just $ OnEvent EventPullRequest
-        ScheduleIssueEnrichment -> Just $ OnEvent EventIssueEnrichment
-      pure (schedule, timezone)
-    timeOfDay hour minute = TimeOfDay <$> hour <*> minute <*> pure 0
+routineTiming predicate = (decodeRoutineTiming =<<) <$> Hasql.interpOne (routineTimingSql predicate)
+
+
+routineTimingSql :: HI.Sql -> HI.Sql
+routineTimingSql predicate = [HI.sql|SELECT schedule_kind, interval_minutes, timezone, schedule_hour::bigint, schedule_minute::bigint, schedule_weekday::bigint FROM apis.ai_routines WHERE |] <> predicate
+
+
+decodeRoutineTiming :: RoutineTimingRow -> Maybe (RoutineSchedule, Text)
+decodeRoutineTiming (kind, interval, timezone, hour, minute, weekday) = do
+  let timeOfDay = TimeOfDay <$> hour <*> minute <*> pure 0
+  schedule <- case kind of
+    ScheduleInterval -> Every <$> interval
+    ScheduleDaily -> Daily <$> timeOfDay
+    ScheduleWeekdays -> Weekdays <$> timeOfDay
+    ScheduleWeekly -> Weekly <$> (weekday >>= isoWeekday) <*> timeOfDay
+    ScheduleSlackMessage -> Just $ OnEvent EventSlackMessage
+    SchedulePullRequest -> Just $ OnEvent EventPullRequest
+    ScheduleIssueEnrichment -> Just $ OnEvent EventIssueEnrichment
+  pure (schedule, timezone)
 
 
 -- | Insert a new chat message

@@ -420,43 +420,24 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       deliveryContext = case routine.destination of
         Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
         Issues.DestinationConversation -> Nothing
-      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = routine.instructions <> deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.ScheduledRoutine routine.runId routine.allowActions}
+      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = routine.instructions <> deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.ScheduledRoutine routine.runId routine.policy}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
     AI.requireAgentAccess config.access routine.projectId
-    Issues.routineRunCancelled routineId routine.claimedAt >>= \case
-      True -> pure (Issues.CompletedCancelled, Nothing, Nothing, Nothing)
-      False -> case result of
-        Left err -> do
-          Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent ("Routine failed: " <> err) Nothing Nothing
-          pure (Issues.CompletedFailed, Nothing, Nothing, Just err)
-        Right answer -> do
-          let report = either (const answer.response) (fromMaybe answer.response . (.explanation)) $ AI.parseAgenticResponse answer
-          Issues.saveRunResult routine.projectId routine.runId "Routine result" report
-          if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer)
-            then pure (Issues.CompletedNoFindings, Just $ AE.toJSON answer, Just $ AE.toJSON answer.toolCalls, Nothing)
-            else do
-              void $ AI.storeAgenticResponse (AI.ConversationResponse routine.projectId routine.conversationId) answer
-              pure (Issues.CompletedSucceeded, Just $ AE.toJSON answer, Just $ AE.toJSON answer.toolCalls, Nothing)
-
-  case outcome of
+    pure $ case result of
+      Left err -> Issues.FailedResult $ Issues.RunFailure err ("Routine failed: " <> err)
+      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.QuietResult else Issues.PublishedResult) $ AI.prepareRunAnswer answer
+  completion <- case outcome of
     Nothing -> do
-      ifM
-        (Issues.routineRunCancelled routineId routine.claimedAt)
-        (recordRun routine Issues.CompletedCancelled Nothing Nothing Nothing)
-        do
-          Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
-          noteFailure "AI routine timeout event was not recorded" $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine timed out. It will run again at the next interval." Nothing Nothing
-          recordRun routine Issues.CompletedTimedOut Nothing Nothing (Just "Routine execution timed out")
+      Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
+      pure Issues.TimedOutResult
     Just (Left err) -> do
       Log.logAttention "AI routine run failed" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text err]
-      noteFailure "AI routine failure event was not recorded" $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine failed unexpectedly. It will run again at the next interval." Nothing Nothing
-      recordRun routine Issues.CompletedFailed Nothing Nothing (Just $ show @Text err)
-    Just (Right (status, findings, actions, err)) -> recordRun routine status findings actions err
-  whenJustM (Issues.completeRoutine routineId scheduledAt routine.claimedAt) $ enqueueNext routineId
-  where
-    recordRun routine status findings actions err = noteFailure "AI routine run result was not recorded" $ Issues.finishRoutineRun routine.runId routine.claimedAt status findings actions err
-    noteFailure msg action = whenLeftM_ (tryAny action) \e -> Log.logAttention msg $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text e]
+      pure $ Issues.FailedResult $ Issues.RunFailure (show @Text err) "Routine failed unexpectedly. It will run again at the next interval."
+    Just (Right result) -> pure result
+  Issues.completeRun (Issues.ScheduledTarget (Issues.ScheduledRoutine routineId scheduledAt) routine) completion >>= \case
+    Issues.CompletionRejected -> pass
+    Issues.RunCompleted next -> for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.

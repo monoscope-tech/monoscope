@@ -54,8 +54,7 @@ module Pkg.AI (
   -- * Utilities
   ensureConversationTitle,
   completeAgenticResponse,
-  storeAgenticResponse,
-  ResponseTarget (..),
+  prepareRunAnswer,
   callRoutineLLM,
   stripCodeBlock,
 ) where
@@ -83,7 +82,6 @@ import Data.Time.Zones.All qualified as TZ
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
-import Effectful.Exception qualified as Exception
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
@@ -221,38 +219,30 @@ ensureConversationTitle config pid convId question answer model apiKey =
 
 completeAgenticResponse :: (DB es, ELLM.LLM :> es, IOE :> es, Time.Time :> es) => AgenticConfig -> Text -> Text -> Text -> AgenticChatResult -> Eff es (Either Text LLMResponse)
 completeAgenticResponse config userQuery model apiKey answer = do
-  parsed <- case (config.access, config.conversationId) of
-    (SlackInvestigationAccess{}, _) -> pure $ parseAgenticResponse answer -- Saved atomically with the replayable answer.
-    (_, Nothing) -> pure $ parseAgenticResponse answer
+  case (config.access, config.conversationId) of
+    (SlackInvestigationAccess{}, _) -> pass -- Saved atomically with the replayable answer.
+    (_, Nothing) -> pass
     (_, Just convId) -> do
       requireAgentAccess config.access config.projectId
-      target <- case (config.invocationMode, config.access) of
-        (InteractiveRun runId policy, MemberAccess _ user) -> pure $ RunResponse config.projectId runId user policy
+      let message = prepareRunAnswer answer
+      case (config.invocationMode, config.access) of
+        (InteractiveRun runId policy, MemberAccess _ user) ->
+          Issues.completeRun (Issues.InteractiveTarget config.projectId runId user policy) (Issues.PublishedResult message) >>= \case
+            Issues.CompletionRejected -> throwIO AgentStopped
+            Issues.RunCompleted _ -> pass
         (InteractiveRun{}, _) -> throwIO AgentAccessDenied
-        _ -> pure $ ConversationResponse config.projectId convId
-      storeAgenticResponse target answer
+        _ -> Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just message.tools)
   whenJust config.conversationId \convId ->
     ensureConversationTitle config.sourceConfig config.projectId convId userQuery answer.response (maybe model (.openaiSmallModel) config.sourceConfig) apiKey
-  pure parsed
+  pure $ parseAgenticResponse answer
 
 
--- | Persist the normalized answer shape consumed by issue chat and the global thread
--- view. Keeping this here prevents routines and interactive chats from drifting.
-data ResponseTarget
-  = ConversationResponse Projects.ProjectId (UUIDId "conversation")
-  | RunResponse Projects.ProjectId (UUIDId "ai_routine_run") Projects.UserId Issues.ExecutionPolicy
-
-
-storeAgenticResponse :: DB es => ResponseTarget -> AgenticChatResult -> Eff es (Either Text LLMResponse)
-storeAgenticResponse target answer =
-  parsed <$ case target of
-    ConversationResponse pid convId -> Issues.insertChatMessage pid convId Issues.ChatAssistant msg (AE.toJSON <$> widgets) (Just $ AE.toJSON answer.toolCalls)
-    RunResponse pid runId user policy -> do
-      published <- Issues.finishInteractiveRun pid runId user policy msg (AE.toJSON <$> widgets) (AE.toJSON answer) (AE.toJSON answer.toolCalls)
-      unless published $ Exception.throwIO AgentStopped
+prepareRunAnswer :: AgenticChatResult -> Issues.RunAnswer
+prepareRunAnswer answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, answer = AE.toJSON answer, tools = AE.toJSON answer.toolCalls}
   where
     parsed = parseAgenticResponse answer
     widgets = guarded (not . null) . take 10 . responseWidgets =<< rightToMaybe parsed
+    report = fromMaybe answer.response $ (.explanation) =<< rightToMaybe parsed
     msg = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) (nonEmptyT . (.explanation) =<< rightToMaybe parsed)
 
 
@@ -596,7 +586,7 @@ data AgenticConfig = AgenticConfig
 
 -- | Background invocations carry the run whose installation grants authority.
 -- A scheduled prompt alone can never grant it.
-data InvocationMode = InteractiveReadOnly | InteractiveWithActions | InteractiveRun (UUIDId "ai_routine_run") Issues.ExecutionPolicy | ScheduledRoutine (UUIDId "ai_routine_run") Bool | RoutineEventRun (UUIDId "ai_routine_run")
+data InvocationMode = InteractiveReadOnly | InteractiveWithActions | InteractiveRun (UUIDId "ai_routine_run") Issues.ExecutionPolicy | ScheduledRoutine (UUIDId "ai_routine_run") Issues.ExecutionPolicy | RoutineEventRun (UUIDId "ai_routine_run")
   deriving stock (Eq, Generic, Show)
 
 
@@ -614,7 +604,7 @@ actionsAllowed = \case
   InteractiveReadOnly -> False
   InteractiveWithActions -> True
   InteractiveRun _ policy -> policy == Issues.Autonomous
-  ScheduledRoutine _ allowed -> allowed
+  ScheduledRoutine _ policy -> policy == Issues.Autonomous
   RoutineEventRun{} -> False
 
 
@@ -877,7 +867,7 @@ initialLocalOperations config =
     <> [operation | isJust $ documentConversation config, operation <- [SaveArtifact, ReadArtifact]]
   where
     hasWriter = case (config.access, config.invocationMode) of
-      (_, ScheduledRoutine _ True) -> True
+      (_, ScheduledRoutine _ Issues.Autonomous) -> True
       (ServiceAccess, _) -> False
       (MemberAccess{}, _) -> True
       (SlackAccess{}, _) -> True
@@ -1378,8 +1368,8 @@ executeToolCall config tc = do
         exists <- isJust <$> Issues.getConversation config.projectId conversation
         allowed <- case config.invocationMode of
           InteractiveReadOnly -> pure False
-          ScheduledRoutine runId True -> Issues.routineRunCanWriteMemory config.projectId conversation runId
-          ScheduledRoutine _ False -> pure False
+          ScheduledRoutine runId Issues.Autonomous -> Issues.routineRunCanWriteMemory config.projectId conversation runId
+          ScheduledRoutine _ Issues.Observe -> pure False
           InteractiveWithActions -> editorAccess
           InteractiveRun _ policy -> if policy == Issues.Autonomous then editorAccess else pure False
           RoutineEventRun{} -> pure False
@@ -1404,7 +1394,7 @@ executeToolCall config tc = do
       ServiceAccess -> pure denied
       SlackAccess{} -> pure denied
     actionAuthorized = case config.invocationMode of
-      ScheduledRoutine runId True -> Issues.routineRunCanAct config.projectId runId
+      ScheduledRoutine runId Issues.Autonomous -> Issues.routineRunCanAct config.projectId runId
       mode -> pure $ actionsAllowed mode
     runProjectTool backend name args = do
       let principal = maybe ApiKeyPrincipal MemberPrincipal $ accessMember config.access

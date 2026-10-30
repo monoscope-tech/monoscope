@@ -120,8 +120,8 @@ spec = around withTestResources do
               pure $ AE.toJSON params ^.. key "tools" . values . key "function" . key "name" . _String
         readonly <- toolNames $ AI.defaultAgenticConfig testPid
         actionable <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.InteractiveWithActions}
-        scheduledReadOnly <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) False}
-        scheduledActionable <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) True}
+        scheduledReadOnly <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) Issues.Observe}
+        scheduledActionable <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) Issues.Autonomous}
         repositoryAware <- toolNames (AI.defaultAgenticConfig testPid){AI.sourceConfig = Just tr.trATCtx.config}
         memoryWriter <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just $ UUIDId UUID.nil, AI.invocationMode = AI.InteractiveWithActions}
         readonly `shouldContain` ["list_project_memory", "read_project_memory"]
@@ -415,7 +415,7 @@ spec = around withTestResources do
       it "agentDocuments_savedAppendedAndListedBesideTheConversation" \tr -> do
         let convId = UUIDId UUID.nil
             web = (AI.defaultAgenticConfig testPid){AI.conversationId = Just convId, AI.conversationType = Just Issues.CTWeb}
-            routine = web{AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) False, AI.timezone = Just "America/New_York"}
+            routine = web{AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) Issues.Observe, AI.timezone = Just "America/New_York"}
             call cfg name args = AI.executeToolCall cfg (LLM.ToolCall "call" "function" $ LLM.ToolFunction name $ Map.fromList args)
         (saved, appended, listed, readBack, slack, routinePrompt) <- runTestBg frozenTime tr do
           void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
@@ -627,25 +627,35 @@ spec = around withTestResources do
             Issues.resumeRoutine uid testPid convId
           fmap (.scheduledAt) scheduled `shouldBe` Just expected
 
-      it "installs a built-in routine at the next project-local wall-clock time" \tr -> do
+      it "installs a built-in routine on project time and applies greater authority only to future runs" \tr -> do
         length Issues.routineTemplates `shouldSatisfy` (>= 15)
         case find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates of
           Nothing -> expectationFailure "routine catalog must not be empty"
           Just template -> do
             let convId = UUIDId UUID.nil
-            (scheduled, installed, canAct, slackEnabled) <- runTestBg frozenTime tr do
+            (scheduled, installed, canAct, activeRunCanAct, firstRun) <- runTestBg frozenTime tr do
               void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
               scheduled <- Issues.installRoutineTemplate (getResponse tr.trSessAndHeader).user.id testPid convId "Europe/Berlin" template
               execution <- traverse (\routine -> Issues.claimRoutine routine.id routine.scheduledAt) scheduled
               let canAct = maybe (pure False) (Issues.routineRunCanAct testPid . (.runId)) $ join execution
               initialCanAct <- canAct
               Issues.setRoutineDestination (getResponse tr.trSessAndHeader).user.id testPid convId Issues.DestinationSlack
-              (scheduled,,initialCanAct,) <$> Issues.getConversation testPid convId <*> canAct
+              activeRunCanAct <- canAct
+              installed <- Issues.getConversation testPid convId
+              pure (scheduled, installed, initialCanAct, activeRunCanAct, join execution)
             (.scheduledAt) <$> scheduled `shouldBe` Just (addUTCTime (8 * 3600) frozenTime)
             ((.templateKey) =<< installed) `shouldBe` Just template.key
             canAct `shouldBe` False
             ((.routineDestination) =<< installed) `shouldBe` Just Issues.DestinationSlack
-            slackEnabled `shouldBe` True
+            activeRunCanAct `shouldBe` False
+            (slot, lease) <- maybe (fail "Expected the initial scheduled run") pure $ (,) <$> scheduled <*> firstRun
+            next <-
+              runTestBg slot.scheduledAt tr (Issues.completeRun (Issues.ScheduledTarget slot lease) $ Issues.QuietResult $ AI.prepareRunAnswer $ AI.AgenticChatResult "No findings" []) >>= \case
+                Issues.RunCompleted (Just value) -> pure value
+                _ -> fail "Expected the next scheduled instant"
+            future <- runQueryEffect tr (Issues.claimRoutine next.id next.scheduledAt) >>= maybe (fail "Expected a future run") pure
+            future.policy `shouldBe` Issues.Autonomous
+            runQueryEffect tr (Issues.routineRunCanAct testPid future.runId) >>= (`shouldBe` True)
 
       it "rescheduling a template as an interval keeps that schedule after resume" \tr -> do
         case find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates of
@@ -683,7 +693,7 @@ spec = around withTestResources do
             <*> Issues.getConversation testPid convId
             <*> Hasql.interpOne @(Text, Bool, Bool, Maybe Text) [HI.sql|SELECT status, findings IS NOT NULL, actions IS NOT NULL, error FROM apis.ai_routine_runs WHERE routine_id = #{scheduled.id}|]
             <*> Issues.listRoutineRuns testPid 10
-        IORef.readIORef executions >>= (`shouldSatisfy` \case [AI.ScheduledRoutine _ True] -> True; _ -> False)
+        IORef.readIORef executions >>= (`shouldSatisfy` \case [AI.ScheduledRoutine _ Issues.Autonomous] -> True; _ -> False)
         IORef.readIORef successors >>= (\items -> length items `shouldBe` 1)
         map (\message -> (message.role, message.content)) history
           `shouldBe` [(Issues.ChatUser, "Send a daily reliability brief to Slack"), (Issues.ChatAssistant, "Routine completed")]
@@ -695,6 +705,97 @@ spec = around withTestResources do
           evidence <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid run.id
           (evidence >>= (.input)) `shouldBe` Just "Send a daily reliability brief to Slack"
           (evidence >>= (.instructions)) `shouldBe` Just "Send a daily reliability brief to Slack"
+
+      for_ (["run-status", "scheduler-lease"] :: [Text]) \boundary ->
+        it ("scheduledCompletion_rollsBackPublicationAndLease_thenRetriesTheSavedAnswer: " <> toString boundary) \tr -> do
+          let conversation = UUIDId UUID.nil
+              user = (getResponse tr.trSessAndHeader).user.id
+          scheduled <- runTestBg frozenTime tr do
+            void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+            Issues.insertChatMessage testPid conversation Issues.ChatUser "Summarize the project" Nothing Nothing
+            scheduled <- Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (throwIO $ ErrorCall "Missing routine") pure
+            Issues.setRoutineDestination user testPid conversation Issues.DestinationConversation
+            pure scheduled
+          grants <- IORef.newIORef ([] :: [Issues.ExecutionPolicy])
+          models <- IORef.newIORef (0 :: Int)
+          successors <- IORef.newIORef ([] :: [UTCTime])
+          let provider :: ATBackgroundCtx a -> ATBackgroundCtx a
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat{} -> do
+                  Eff.liftIO $ IORef.modifyIORef' models (+ 1)
+                  pure $ Right $ LLM.Message LLM.Assistant "Retained scheduled report" LLM.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "Unexpected title request"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+              execute config = do
+                Eff.liftIO $ show config.access `shouldBe` show (AI.MemberAccess AI.ProjectMember user)
+                case config.invocationMode of
+                  AI.ScheduledRoutine _ allowed -> Eff.liftIO $ IORef.modifyIORef' grants (<> [allowed])
+                  _ -> Eff.liftIO $ expectationFailure "Expected a scheduled invocation"
+                AI.runAgenticChatWithHistory config "Summarize the project" "model" "key"
+              enqueueNext _ at = Eff.liftIO $ IORef.modifyIORef' successors (<> [at])
+              run = tryAny $ runTestBg frozenTime tr $ provider $ BackgroundJobs.runAIRoutineWith 5_000_000 execute enqueueNext tr.trATCtx scheduled.id scheduled.scheduledAt
+              ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+          let (reject, restore) =
+                if boundary == "run-status"
+                  then ("ALTER TABLE apis.ai_routine_runs ADD CONSTRAINT scheduled_completion_regression CHECK (status <> 'succeeded')", "ALTER TABLE apis.ai_routine_runs DROP CONSTRAINT scheduled_completion_regression")
+                  else ("ALTER TABLE apis.ai_routines ADD CONSTRAINT scheduled_lease_regression CHECK (running_since IS NOT NULL) NOT VALID", "ALTER TABLE apis.ai_routines DROP CONSTRAINT scheduled_lease_regression")
+          bracket_ (ddl reject) (ddl restore) do
+            result <- run
+            history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+            [message.content | message <- history, message.role == Issues.ChatAssistant] `shouldBe` []
+            result `shouldSatisfy` isLeft
+            pending <- runQueryEffect tr $ Issues.listConversationRuns testPid conversation 10
+            map (.status) pending `shouldBe` [Issues.RunRunning]
+            saved <- runQueryEffect tr $ Issues.getConversation testPid conversation
+            ((.routineRunningSince) =<< saved) `shouldSatisfy` isJust
+            ((.routineNextRunAt) =<< saved) `shouldBe` Just scheduled.scheduledAt
+            runQueryEffect tr (Issues.listArtifacts testPid conversation Nothing) >>= (`shouldSatisfy` null)
+            IORef.readIORef successors >>= (`shouldBe` [])
+          runTestBg frozenTime tr do
+            replacement <- Projects.createUser "Replacement" "Owner" "" "replacement-owner@example.test"
+            Projects.insertUser replacement
+            Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{replacement.id}, 'edit')|]
+            Issues.setRoutineDestination replacement.id testPid conversation Issues.DestinationSlack
+          retainedRuns <- runQueryEffect tr $ Issues.listConversationRuns testPid conversation 10
+          for_ retainedRuns $ \retained -> runQueryEffect tr (Issues.routineRunCanAct testPid retained.id) >>= (`shouldBe` False)
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET running_since = now() - interval '31 minutes' WHERE id = #{scheduled.id}|]
+          run >>= (`shouldSatisfy` isRight)
+          run >>= (`shouldSatisfy` isRight)
+          IORef.readIORef models >>= (`shouldBe` 1)
+          IORef.readIORef grants >>= (`shouldBe` [Issues.Observe, Issues.Observe])
+          IORef.readIORef successors >>= (\items -> length items `shouldBe` 1)
+          history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+          [message.content | message <- history, message.role == Issues.ChatAssistant] `shouldBe` ["Retained scheduled report"]
+          runs <- runQueryEffect tr $ Issues.listConversationRuns testPid conversation 10
+          map (.status) runs `shouldBe` [Issues.RunSucceeded]
+          for_ runs \completed -> do
+            artifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid completed.id
+            [(artifact.key, artifact.content) | artifact <- artifacts] `shouldBe` [(fromRightShow $ Issues.mkArtifactKey "latest-result", Just "Retained scheduled report")]
+
+      it "scheduledCompletion_rejectsAnOlderLeaseBeforeWritingAnyResult" \tr -> do
+        let conversation = UUIDId UUID.nil
+            user = (getResponse tr.trSessAndHeader).user.id
+        scheduled <- runTestBg frozenTime tr do
+          void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+          Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (throwIO $ ErrorCall "Missing routine") pure
+        recovered <- IORef.newIORef Nothing
+        successors <- IORef.newIORef ([] :: [UTCTime])
+        let execute _ = do
+              Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET running_since = now() - interval '31 minutes' WHERE id = #{scheduled.id}|]
+              lease <- Issues.claimRoutine scheduled.id scheduled.scheduledAt
+              Eff.liftIO $ IORef.writeIORef recovered lease
+              pure $ Right $ AI.AgenticChatResult "Stale report" []
+            enqueueNext _ at = Eff.liftIO $ IORef.modifyIORef' successors (<> [at])
+        runTestBg frozenTime tr $ BackgroundJobs.runAIRoutineWith 5_000_000 execute enqueueNext tr.trATCtx scheduled.id scheduled.scheduledAt
+        history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+        history `shouldSatisfy` null
+        runQueryEffect tr (Issues.listArtifacts testPid conversation Nothing) >>= (`shouldSatisfy` null)
+        IORef.readIORef successors >>= (`shouldBe` [])
+        lease <- IORef.readIORef recovered >>= maybe (fail "Expected the replacement lease") pure
+        result <- runTestBg frozenTime tr $ Issues.completeRun (Issues.ScheduledTarget scheduled lease) $ Issues.PublishedResult $ AI.prepareRunAnswer $ AI.AgenticChatResult "Current report" []
+        result `shouldSatisfy` (\case Issues.RunCompleted (Just _) -> True; _ -> False)
+        historyAfter <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+        [message.content | message <- historyAfter, message.role == Issues.ChatAssistant] `shouldBe` ["Current report"]
 
       it "suppresses a findings-only routine answer when the agent reports no findings" \tr -> do
         case find ((== "error-regression-radar") . (.key)) Issues.routineTemplates of
@@ -713,21 +814,27 @@ spec = around withTestResources do
             map (.role) history `shouldBe` [Issues.ChatUser]
             runStatus `shouldBe` Just "no_findings"
 
-      it "cancels an executing routine before its answer is published" \tr -> do
-        let convId = UUIDId UUID.nil
-            interval = fromRightShow $ Issues.mkRoutineInterval 15
-            execute _ = do
-              Issues.cancelRoutineRun testPid convId
-              pure $ Right AI.AgenticChatResult{AI.response = "{\"explanation\":\"Do not publish\",\"has_findings\":true}", AI.toolCalls = []}
-        (history, runStatus) <- runTestBg frozenTime tr do
-          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-          scheduled <- Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid convId interval >>= maybe (throwIO $ ErrorCall "routine was not scheduled") pure
-          BackgroundJobs.runAIRoutineWith 1_000_000 execute (\_ _ -> pass) tr.trATCtx scheduled.id scheduled.scheduledAt
-          (,)
-            <$> Issues.selectChatHistory testPid convId
-            <*> (fmap fst <$> Hasql.interpOne @(Text, Bool) [HI.sql|SELECT status, TRUE FROM apis.ai_routine_runs WHERE routine_id = #{scheduled.id}|])
-        history `shouldSatisfy` null
-        runStatus `shouldBe` Just "cancelled"
+      for_ (["cancel", "pause", "revoke"] :: [Text]) \action ->
+        it ("scheduledCompletion_withdrawnAuthorityPreventsPublication: " <> toString action) \tr -> do
+          let convId = UUIDId UUID.nil
+              interval = fromRightShow $ Issues.mkRoutineInterval 15
+              execute _ = do
+                case action of
+                  "cancel" -> Issues.cancelRoutineRun testPid convId
+                  "pause" -> Issues.pauseRoutine testPid convId
+                  _ -> do
+                    let user = (getResponse tr.trSessAndHeader).user.id
+                    Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+                pure $ Right AI.AgenticChatResult{AI.response = "{\"explanation\":\"Do not publish\",\"has_findings\":true}", AI.toolCalls = []}
+          (history, runStatus) <- runTestBg frozenTime tr do
+            void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
+            scheduled <- Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid convId interval >>= maybe (throwIO $ ErrorCall "routine was not scheduled") pure
+            BackgroundJobs.runAIRoutineWith 1_000_000 execute (\_ _ -> pass) tr.trATCtx scheduled.id scheduled.scheduledAt
+            (,)
+              <$> Issues.selectChatHistory testPid convId
+              <*> (fmap fst <$> Hasql.interpOne @(Text, Bool) [HI.sql|SELECT status, TRUE FROM apis.ai_routine_runs WHERE routine_id = #{scheduled.id}|])
+          history `shouldSatisfy` null
+          runStatus `shouldBe` Just "cancelled"
 
       it "records a routine timeout as an execution event and completes the lease" \tr -> do
         successors <- IORef.newIORef ([] :: [UTCTime])
