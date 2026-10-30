@@ -4,7 +4,6 @@ import Control.Exception (evaluate)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
@@ -13,7 +12,6 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
-import Lucid qualified
 import Models.Telemetry.ServiceGraph (Collapse (..), EdgeSample (..), EndpointRollupEdge (..), MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), buildServiceGraph, drawnEdges, drawnNodes, endpointDependencyGraphForRange, projectsWithSpansInRange, rollupEndpointDependencyEdges, rollupServiceEdges, serviceGraphForRange, serviceMapFanout, serviceMapNodeCap, singletonLatency, upsertEndpointDependencyEdges, upsertServiceDependencyEdges)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.ServiceMap qualified as ServiceMap
@@ -225,7 +223,7 @@ spec = around withTestResources do
       -- relative to now, and a bucket sitting exactly at now falls outside a half-open range.
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
       (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") (Just "prod") Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       html `shouldContainAll` ["?env=prod", "?env=staging", ">All<"]
 
     -- An empty project must produce an empty graph with no error. The `error` field exists
@@ -316,13 +314,13 @@ spec = around withTestResources do
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
       (_, scopedPage) <- testServant tr $ ServiceMap.serviceMapGetH pid Nothing Nothing (Just "1H") Nothing (Just endpointHash)
       let ServiceMap.ServiceMapPage (PageCtx scopedConf scoped) = scopedPage
-          scopedHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml scopedPage
+          scopedHtml = renderT scopedPage
       scopedConf.pageTitle `shouldBe` "Endpoint Dependency Map"
       edgePairs scoped.graph `shouldBe` [("endpoint:" <> endpointHash, "checkout")]
       scopedHtml `shouldContainAll` ["endpoint-service-map-data", "Selected endpoint", "checkout", "Dependencies (1)"]
 
       (_, emptyPage) <- testServant tr $ ServiceMap.serviceMapGetH pid Nothing Nothing (Just "1H") Nothing (Just "no-such-endpoint")
-      let emptyHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml emptyPage
+      let emptyHtml = renderT emptyPage
       emptyHtml `shouldSatisfy` T.isInfixOf "No direct dependencies in this range"
 
     -- The hourly catch-up pass and DLQ replays re-roll buckets that already exist, so the
@@ -381,7 +379,7 @@ spec = around withTestResources do
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
       (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing Nothing
       let ServiceMap.ServiceMapPage (PageCtx conf pd) = page
-          html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+          html = renderT page
       conf.pageTitle `shouldBe` "Explorer"
       conf.prePageTitle `shouldBe` Nothing
 
@@ -409,7 +407,7 @@ spec = around withTestResources do
     -- dashed send can sneak back in.
     it "serviceMapFilter_wiresTheInputWithoutADashedSend" \tr -> do
       (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       html `shouldContainAll` ["window.serviceMapFilter(this.value)", "aria-label=\"Filter services\""]
       T.isInfixOf "service-map-filter&quot;(" html `shouldBe` False
 
@@ -429,7 +427,7 @@ spec = around withTestResources do
       span' dbSid (Just coSid) "pg.query" PT.Span'SPAN_KIND_CLIENT (svc "checkout") [mkAttr "db.system.name" "postgresql", mkAttr "db.namespace" "orders"]
 
       (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
 
       -- The tab sits beside the existing three and must stay wired to the panel it reveals.
       -- That wiring has broken before, so assert both ends of it rather than just the label:

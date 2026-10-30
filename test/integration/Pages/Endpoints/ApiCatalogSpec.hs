@@ -14,7 +14,6 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Lucid (renderText, toHtml)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
@@ -59,7 +58,7 @@ getEndpointsHtml tr testPid filterParam = do
     testServant tr
       $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
   case resp of
-    Table.TablePage (PageCtx _ tbl) -> pure $ toStrict $ renderText $ toHtml tbl
+    Table.TablePage (PageCtx _ tbl) -> pure $ renderT tbl
     _ -> error "Unexpected response from endpointListGetH"
 
 

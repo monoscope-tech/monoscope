@@ -5,7 +5,6 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -14,7 +13,6 @@ import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PGT
 import Effectful.Error.Static (catchError)
-import Lucid (renderText, toHtml)
 import Models.Apis.Integrations qualified as Integrations
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -51,7 +49,7 @@ spec = sequential $ aroundAll withTestResources do
       invitee <- maybe (fail "Invitee missing") pure $ V.find ((== "permission-guard@example.com") . (.email)) members
       forM_ ["view", "edit"] \permission -> bracket_ (setPermission permission) (setPermission "admin") do
         (_, page) <- testServant tr $ ManageMembers.manageMembersGetH testPid
-        let html = LT.toStrict $ renderText $ toHtml page
+        let html = renderT page
             controls = filter (`T.isInfixOf` html) ["id=\"new-member-email\"", "id=\"saveMembersBtn\"", "aria-label=\"Remove member\""]
         statuses <- forM
           [ void $ ManageMembers.manageMembersPostH testPid Nothing (form [ProjectMembers.PAdmin, ProjectMembers.PAdmin])
@@ -83,7 +81,7 @@ spec = sequential $ aroundAll withTestResources do
       let appCtx = tr.trATCtx
           inviteeResources = tr{trATCtx = appCtx{Config.env = appCtx.env{Config.showDemoProject = True}}, trSessAndHeader = tr.trSessAndHeader <&> \s -> s{Projects.user = session.user.getUser, Projects.persistentSession = session}}
       (_, restrictedPage) <- testServant inviteeResources ManageMembers.listProjectsGetH
-      LT.toStrict (renderText $ toHtml restrictedPage) `shouldSatisfy` T.isInfixOf "Only the project owner can access it. Ask the owner to upgrade to enable team access."
+      renderT restrictedPage `shouldSatisfy` T.isInfixOf "Only the project owner can access it. Ask the owner to upgrade to enable team access."
       (_, withoutDemo) <- testServant inviteeResources{trATCtx = appCtx} ManageMembers.listProjectsGetH
       withoutDemo.restrictedProjectTitles `shouldBe` restrictedPage.restrictedProjectTitles
       void $ withPool tr.trPool $ PGT.execute [sql|INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token) VALUES (?, 'T_FREE', 'C_FREE', 'Free project', 'test-token') ON CONFLICT (project_id) DO UPDATE SET team_id = 'T_FREE'|] (Only testPid)
@@ -99,11 +97,11 @@ spec = sequential $ aroundAll withTestResources do
       upgradedUsers <- runQueryEffect tr $ Projects.usersByProjectId testPid
       map (.email) upgradedUsers `shouldContain` ["free-invitee@example.com"]
       (_, upgradedPage) <- testServant inviteeResources ManageMembers.listProjectsGetH
-      LT.toStrict (renderText $ toHtml upgradedPage) `shouldNotSatisfy` T.isInfixOf "Only the project owner can access it."
+      renderT upgradedPage `shouldNotSatisfy` T.isInfixOf "Only the project owner can access it."
 
     it "invite form posts to the project members endpoint" \tr -> do
       (_, page) <- testServant tr $ ManageMembers.manageMembersGetH testPid
-      LT.toStrict (renderText $ toHtml page) `shouldSatisfy` T.isInfixOf ("hx-post=\"/p/" <> testPid.toText <> "/manage_members\"")
+      renderT page `shouldSatisfy` T.isInfixOf ("hx-post=\"/p/" <> testPid.toText <> "/manage_members\"")
 
     it "creates, updates, gets, deletes, and re-adds a member" \tr -> do
       void $ withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)

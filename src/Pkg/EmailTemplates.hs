@@ -680,8 +680,8 @@ data WeeklyReportData = WeeklyReportData
   , projectUrl :: Text
   , startDate :: Text
   , endDate :: Text
-  , eventsChartUrl :: Text
-  , errorsChartUrl :: Text
+  , eventsChartUrl :: Maybe Text
+  , errorsChartUrl :: Maybe Text
   , evidence :: ReportEvidence
   , fullReport :: Bool
   , timeZone :: Text
@@ -851,8 +851,8 @@ weeklyReportEmail d =
             reportViewAll (d.projectUrl <> "/log_explorer" <> windowQuery) "log patterns"
         reportSection "Activity trends" "Charts are supplemental; the measured totals are above." do
           forM_ systemSnapshot $ \snapshot -> when (snapshot.trends == Just Report.Unavailable) $ reportNotice "Activity trends unavailable" "This section could not be loaded for the report."
-          unless (T.null d.eventsChartUrl) $ chartBlock "Telemetry events" d.eventsChartUrl
-          unless (T.null d.errorsChartUrl) $ chartBlock "Error events" d.errorsChartUrl
+          whenJust d.eventsChartUrl $ chartBlock "Telemetry events"
+          whenJust d.errorsChartUrl $ chartBlock "Error events"
         reportSection "Coverage and next steps" "This report describes the telemetry Monoscope received." do
           reportNote "Missing telemetry does not mean a service was healthy. Server request metrics require server spans; infrastructure usage requires metrics and a reported capacity."
           p_ [style_ "font-size:14px;line-height:1.7;"] do
@@ -1063,7 +1063,7 @@ sampleIssueAssigned :: (Text, Html ())
 sampleIssueAssigned = issueAssignedEmail "Jane Doe" "My API Project" "TypeError: Cannot read property 'map' of undefined" "https://app.monoscope.tech/p/sample-id/issues/by_hash/abc123" "TypeError" "Cannot read property 'map' of undefined"
 
 
-sampleWeeklyReport :: Text -> Text -> (Text, Html ())
+sampleWeeklyReport :: Maybe Text -> Maybe Text -> (Text, Html ())
 sampleWeeklyReport eventsChart errorsChart =
   weeklyReportEmail
     WeeklyReportData

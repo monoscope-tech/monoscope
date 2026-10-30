@@ -39,6 +39,11 @@ psql -h "$PGHOST" -p "$PGPORT" -U postgres -tAc \
 
 BIN=${E2E_SERVER_BIN:-$(cabal list-bin monoscope-server 2>/dev/null || true)}
 [ -x "$BIN" ] || { echo "monoscope-server not built. Run: cabal build monoscope-server" >&2; exit 1; }
+# Nothing here rebuilds the server, so a binary older than the source silently tests old
+# code. An explicit E2E_SERVER_BIN is taken as-is.
+if [ -z "${E2E_SERVER_BIN:-}" ] && stale=$(find "$ROOT/src" "$ROOT/app" "$ROOT/shared/src" -name '*.hs' -newer "$BIN" -print -quit 2>/dev/null) && [ -n "$stale" ]; then
+  echo "monoscope-server is older than $stale. Run: cabal build monoscope-server" >&2; exit 1
+fi
 
 # The server's working directory. Built from .env.example so no real credential is ever
 # copied here; the overrides below are what make it an e2e box rather than a dev one.

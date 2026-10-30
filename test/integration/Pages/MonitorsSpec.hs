@@ -5,13 +5,11 @@ import Models.Apis.Monitors
 import Test.Hspec
 
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Lucid qualified
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 
@@ -109,7 +107,7 @@ spec = sequential $ aroundAll withTestResources do
     it "monitorRowActions_haveAccessibleNames" \tr -> do
       _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm
       (_, page) <- testServant tr $ Alerts.unifiedMonitorsGetH testPid Nothing Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       for_ ["Deactivate", "Mute", "Delete"] \action ->
         html `shouldSatisfy` T.isInfixOf ("aria-label=\"" <> action <> "\"")
       html `shouldSatisfy` T.isInfixOf ("id=\"mute-pop-" <> UUID.toText alertId <> "-desktop\"")
@@ -123,7 +121,7 @@ spec = sequential $ aroundAll withTestResources do
     it "healthyMonitor_statusBadgeMatchesItsGreenDot" \tr -> do
       _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm
       (_, page) <- testServant tr $ Alerts.unifiedMonitorOverviewH testPid (UUID.toText alertId)
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       html `shouldSatisfy` T.isInfixOf "Normal"
       html `shouldContainAll` ["Environment: production", "Service: checkout"]
       html `shouldSatisfy` T.isInfixOf "badge-success"

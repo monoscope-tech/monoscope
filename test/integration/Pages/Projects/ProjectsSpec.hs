@@ -7,13 +7,11 @@ import Data.Generics.Labels ()
 import Data.Generics.Product.Fields (field)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Error.Static (catchError)
-import Lucid qualified
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.CommandPalette qualified as CommandPalette
@@ -100,7 +98,7 @@ spec = around withTestResources do
       assertNonMemberDenied tr victim $ CommandPalette.commandPaletteItemsH victim
       assertNonMemberDenied tr victim $ CommandPalette.commandPaletteRecentPostH victim (CommandPalette.RecentForm "planted" "/evil" "page")
       (_, items) <- testServant tr $ CommandPalette.commandPaletteItemsH victim
-      LT.toStrict (Lucid.renderText items) `shouldSatisfy` (not . T.isInfixOf "/evil")
+      renderT items `shouldSatisfy` (not . T.isInfixOf "/evil")
 
     it "Non empty project list" \tr -> do
       (_, pg) <-
@@ -110,7 +108,7 @@ spec = around withTestResources do
       length projects `shouldBe` 2
       let projectIds = map (.id.toText) (V.toList projects)
       projectIds `shouldContain` [testPid.toText] -- test project from testSessionHeader
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml pg
+      let html = renderT pg
       html `shouldSatisfy` (not . T.isInfixOf "id=\"mobile-nav-toggle\"")
       html `shouldSatisfy` (not . T.isInfixOf "for=\"mobile-nav-toggle\"")
     it "Should update project with new details and verify in list" \tr -> do

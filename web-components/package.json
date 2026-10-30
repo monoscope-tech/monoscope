@@ -68,7 +68,8 @@
     "vitest-canvas-mock": "^1.2.0"
   },
   "overrides": {
-    "dompurify": "^3.3.2",
+    "micromark-extension-math": { "katex": "^0.19.1" },
+    "dompurify": "^3.4.17",
     "underscore": "^1.13.8"
   }
 }

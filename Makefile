@@ -71,8 +71,15 @@ kill-live-reload:
 		echo "Port :$(PORT) already free"; \
 	fi
 
+# ghcid gives up for good ("No files loaded, nothing to wait for") when a branch switch
+# changes the module graph under it, so both watchers restart it and say so in the log.
+GHCID_RESTART = echo "── ghcid exited at $$(date +%T) (a branch switch or cabal change usually does this); restarting"; sleep 2
+
 live-reload: kill-live-reload
-	ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' $(RELOAD_ASSETS) $(RELOAD_ENV) --warnings
+	@trap 'exit 130' INT TERM; while :; do \
+	  ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' $(RELOAD_ASSETS) $(RELOAD_ENV) --warnings; \
+	  $(GHCID_RESTART); \
+	done
 
 # The CLI is its own package with no libpq/librdkafka/grpc linkage — see
 # cli/monoscope-cli.cabal. Build it on its own; it does not need the server
@@ -127,9 +134,12 @@ TEST_MATCH ?=
 live-test-dev: build-chart-cli
 	@$(if $(TEST_MATCH),echo '--match "$(TEST_MATCH)"' > .test-args,touch .test-args)
 	@echo "live-test-dev: hspec args from .test-args: [$$(cat .test-args)] (empty = whole suite)" | tee build-test-dev.log
-	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
-	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi +RTS -T -RTS" --with-compiler=$(GHC)' \
-		--test ':cmd Prelude.fmap (":main " Prelude.++) (Prelude.readFile ".test-args")' --reload=.test-args $(RELOAD_ENV) --warnings 2>&1 | tee -a build-test-dev.log
+	@trap 'exit 130' INT TERM; while :; do \
+	  USE_EXTERNAL_DB=true LOG_LEVEL=attention \
+	  ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi +RTS -T -RTS" --with-compiler=$(GHC)' \
+		--test ':cmd Prelude.fmap (":main " Prelude.++) (Prelude.readFile ".test-args")' --reload=.test-args $(RELOAD_ENV) --warnings 2>&1; \
+	  $(GHCID_RESTART); \
+	done | tee -a build-test-dev.log
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
@@ -243,6 +253,11 @@ fmt: $(FOURMOLU)
 
 fmt-check: $(FOURMOLU)
 	@$(FOURMOLU) --mode check $(HS_FILES) >/dev/null 2>&1 || { echo "── not fourmolu-formatted: run \`make fmt\` and commit (CI would rewrite the tree)"; exit 1; }
+
+# CI regenerates monoscope.cabal itself, so a stale committed copy only breaks local
+# builds (a migration missing from extra-source-files, a module ghcid can't see).
+hpack-check:
+	@committed=$$(grep -v '^-- ' monoscope.cabal); generated=$$(hpack - | grep -v '^-- '); [ "$$committed" = "$$generated" ] || { echo "── monoscope.cabal is stale: run \`hpack\` and commit"; exit 1; }
 
 fix-imports:
 	fix-imports $$(find ./src -name '*.hs') <$$(find ./src -name '*.hs')
@@ -453,7 +468,7 @@ ci:
 # Run local checks, publish passing results, then show what GitHub still needs.
 # A committed, clean tree also gets its deploy image, built alongside the checks so
 # `make ship` only has to deploy it.
-ci-signoff: fmt-check
+ci-signoff: fmt-check hpack-check
 	@result=0; image_pid=''; mkdir -p .ci; \
 	if [ -z "$$(git status --porcelain)" ]; then \
 	  ./scripts/ci/ci.sh image > .ci/image.log 2>&1 & image_pid=$$!; \
@@ -552,4 +567,4 @@ builder-rm:
 
 .PHONY: ci ci-signoff ci-status ci-shell ci-down ci-clean ci-selftest deploy-image ship kafka-topics deploy-app rollback-app deploy-status builder-setup builder-status builder-rm tf-image
 
-.PHONY: all test fmt fmt-check lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev tmux-live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin tmux-web-components-watch tmux-minio-local kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
+.PHONY: all test fmt fmt-check hpack-check lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev tmux-live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin tmux-web-components-watch tmux-minio-local kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf

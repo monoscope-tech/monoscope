@@ -1,5 +1,7 @@
 module Pkg.TestUtils (
   shouldContainAll,
+  streamFrames,
+  completeFrame,
   linkParams,
   renderedWidget,
   eventually,
@@ -99,6 +101,7 @@ import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
 import Control.Exception (ErrorCall (..), bracket, finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((%~), (.~), (^.), (^..))
+import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
@@ -204,6 +207,7 @@ import Relude.Extra.Tuple (toSnd)
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.Server qualified as ServantS
+import Servant.Types.SourceT qualified as Source
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..), mkTwilioContentSid)
 import System.Config qualified as Config
@@ -1251,6 +1255,22 @@ shellHtml tr render = renderT . snd <$> testServant tr render
 
 renderT :: Lucid.ToHtml a => a -> Text
 renderT = toStrict . Lucid.renderText . Lucid.toHtml
+
+
+-- | Every frame a streaming handler emitted, or the stream's own error.
+streamFrames :: Servant.Headers hs (Servant.SourceIO a) -> IO (Either String [a])
+streamFrames = runExceptT . Source.runSourceT . Servant.getResponse
+
+
+-- | The payload of a stream's single @complete@ frame, decoded; fails the test otherwise.
+completeFrame :: AE.FromJSON b => Servant.Headers hs (Servant.SourceIO AE.Value) -> IO b
+completeFrame response = do
+  frames <- streamFrames response >>= either fail pure
+  case [v | AE.Object frame <- frames, AEKM.lookup "type" frame == Just (AE.String "complete"), Just v <- [AEKM.lookup "data" frame]] of
+    [value] -> case AE.fromJSON value of
+      AE.Success decoded -> pure decoded
+      AE.Error err -> fail err
+    _ -> fail $ "missing stream completion: " <> show frames
 
 
 -- | Drain all queued extraction batches synchronously, then flush drain

@@ -115,7 +115,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), applyScopedQuery, binDensityFor, browserKql, constantToKQLList, constantToSQLList, defSqlQueryCfg, fillQueryTemplate, fixedUTCTime, mkScopedQuery, parseQueryToComponents, variablePresetsKQL)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, binDensityFor, browserKql, constantToKQLList, constantToSQLList, defSqlQueryCfg, fillQueryTemplate, fixedUTCTime, mkScopedQuery, parseQueryToComponents, variablePresetsKQL)
 import Pkg.Parser.Expr (sqlStringLit)
 import Pkg.Rum qualified
 import Pkg.SchemaLearning.Catalog qualified as Catalog
@@ -381,7 +381,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       activeTabInfo = activeTabSlug >>= findTabBySlug allTabs
       activeTabIdx = maybe 0 fst activeTabInfo
       -- Slug used for content/widget-order, falling back to the first tab when unset
-      renderTabSlug = dash.tabs *> (activeTabSlug <|> (slugify . (.name) <$> listToMaybe allTabs))
+      renderTabSlug = dash.tabs *> (activeTabSlug <|> ((.slug) <$> listToMaybe allTabs))
       renderTab = renderTabSlug >>= findTabBySlug allTabs <&> snd
   actionPickerModal_ "pageTitleModalId" "Rename dashboard" [hxPatch_ (dashboardUrl pid dashId <> "/rename"), hxSwap_ "innerHTML", hxTarget_ "#pageTitleText"]
     $ div_ [class_ "flex flex-col gap-3 p-3"] do
@@ -1014,7 +1014,7 @@ processWidget prefill pid now timeRange allParams widgetBase = do
       -- resolved here or the list searches for the literal "{{var-endpointHash}}".
       -- Every other type reaches /chart_data, which interpolates at fetch time.
       resolveLogsQuery
-        | widgetBase.wType == Widget.WTLogs = fmap (fillQueryTemplate (variablePresetsKQL def pid.toText fromD toD allParams now))
+        | widgetBase.wType == Widget.WTLogs = fmap (fillQueryTemplate KqlTemplate (variablePresetsKQL def pid.toText fromD toD allParams now))
         | otherwise = Relude.id
       widget = widgetBase & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ resolveLogsQuery
 
@@ -1189,7 +1189,7 @@ widgetMatches wid w = w.id == Just wid || maybeToMonoid (slugify <$> w.title) ==
 -- | Apply @f@ to the widget list of @tabSlugM@'s tab on a tabbed dashboard, else to the root widgets.
 overDashWidgets :: Maybe Text -> ([Widget.Widget] -> [Widget.Widget]) -> Dashboards.Dashboard -> Dashboards.Dashboard
 overDashWidgets tabSlugM f dash = case (tabSlugM, dash.tabs) of
-  (Just slug, Just _) -> dash & #tabs . _Just . traversed . filtered ((== slug) . slugify . (.name)) . #widgets %~ f
+  (Just slug, Just _) -> dash & #tabs . _Just . traversed . filtered ((== slug) . (.slug)) . #widgets %~ f
   _ -> dash & #widgets %~ f
 
 
@@ -2579,11 +2579,11 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
       [ "widgetId" AE..= widgetId
       , "targetDashboardId" AE..= targetDashId
       , "sourceTab" AE..= tabSlugM
-      , "destinationTab" AE..= (slugify . (.name) <$> destinationTabM)
+      , "destinationTab" AE..= ((.slug) <$> destinationTabM)
       , "targetTabCount" AE..= length targetTabs
       ]
 
-  _ <- Dashboards.updateSchema targetDashId (overDashWidgets (slugify . (.name) <$> destinationTabM) (<> [widgetCopy]) targetDash) (Just now)
+  _ <- Dashboards.updateSchema targetDashId (overDashWidgets ((.slug) <$> destinationTabM) (<> [widgetCopy]) targetDash) (Just now)
   syncDashboardAndQueuePush pid targetDashId
 
   addWidgetJSON $ encodeText widgetCopy
@@ -2708,13 +2708,13 @@ widgetSqlPreviewGetH pid queryM dashboardIdM sinceStr fromDStr toDStr = do
 
 -- | Find a tab by its slug, returns (index, tab) if found
 findTabBySlug :: [Dashboards.Tab] -> Text -> Maybe (Int, Dashboards.Tab)
-findTabBySlug tabs tabSlug = find ((== tabSlug) . slugify . (.name) . snd) (zip [0 ..] tabs)
+findTabBySlug tabs tabSlug = find ((== tabSlug) . (.slug) . snd) (zip [0 ..] tabs)
 
 
 -- | Find widget by ID in dashboard, searching tabs, root, and recursively into children. Returns (Maybe tabSlug, Widget)
 findWidgetInDashboard :: Text -> Dashboards.Dashboard -> Maybe (Maybe Text, Widget.Widget)
 findWidgetInDashboard wid dash =
-  listToMaybe [(slug, w) | (slug, ws) <- [(Just $ slugify t.name, t.widgets) | t <- fold dash.tabs] <> [(Nothing, dash.widgets)], w <- foldMap (universeOf (#children . _Just . folded)) ws, widgetMatches wid w]
+  listToMaybe [(slug, w) | (slug, ws) <- [(Just t.slug, t.widgets) | t <- fold dash.tabs] <> [(Nothing, dash.widgets)], w <- foldMap (universeOf (#children . _Just . folded)) ws, widgetMatches wid w]
 
 
 -- | Render breadcrumb suffix with out-of-band swap for htmx
@@ -2879,7 +2879,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxTarget allP
         if isJust promptM
           then pure dash'
           else forOf (#tabs . _Just . ix activeTabIdx) dash' \tab ->
-            forOf #widgets tab $ processDashWidgets prefill pid dashId now timeParams allParamsWithConstants . map (#_tabSlug ?~ slugify tab.name)
+            forOf #widgets tab $ processDashWidgets prefill pid dashId now timeParams allParamsWithConstants . map (#_tabSlug ?~ tab.slug)
 
       bwconf <- dashboardBWConf bw pid dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange <$> checkFreeTierStatus pid project.paymentPlan
       -- Pass the active tab slug and computed constants in params for rendering
@@ -2925,7 +2925,7 @@ dashboardTabStrip_ pid dashId activeTabIdx tabs params extraAttrs =
         <> extraAttrs
     )
     $ forM_ (zip [0 ..] tabs) \(idx, tab) -> do
-      let tabUrl = dashboardUrl pid dashId <> "/tab/" <> slugify tab.name <> queryStr
+      let tabUrl = dashboardUrl pid dashId <> "/tab/" <> tab.slug <> queryStr
       a_
         ( [ role_ "tab"
           , href_ tabUrl

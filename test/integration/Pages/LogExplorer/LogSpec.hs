@@ -1,6 +1,5 @@
 module Pages.LogExplorer.LogSpec (spec) where
 
-import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Default (def)
@@ -8,7 +7,6 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
@@ -21,7 +19,6 @@ import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Hasql.Interpolate qualified as HI
-import Lucid qualified
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
@@ -134,7 +131,7 @@ routeSpec = do
   describe "Alert detail header" do
     it "alertDetail_badgeShowsMonitorStatusAttribute_notEmptySuccess" \_ -> do
       let alert = (Telemetry.mkSystemLog testPid "monitor.alert.triggered" Telemetry.SLError "CPU: alerting" (Map.fromList [("monitor.status", AE.String "alerting")]) Nothing frozenTime :: Telemetry.OtelLogsAndSpans){Telemetry.kind = Just "alert"}
-          html = toText $ Lucid.renderText $ LogItem.expandedItemView testPid alert Nothing Nothing
+          html = renderT $ LogItem.expandedItemView testPid alert Nothing Nothing
       html `shouldSatisfy` T.isInfixOf "bg-fillError-weak text-textError border-strokeError-weak\">Alerting</span>"
   describe "LogDataQuery route decoding" do
     let decodeApp =
@@ -846,7 +843,7 @@ databaseSpec = do
   describe "Detail panel request sync" do
     it "logExplorerH_detailsContainer_replacesTheInFlightRequest" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       -- Scoped to the container's own tag, not the page: `lazyLoad_` and the widget loader
       -- already carry the same attribute, so a page-wide search passes with this one deleted.
       -- Splitting on '<' makes it independent of attribute order within the tag.
@@ -861,7 +858,7 @@ databaseSpec = do
   describe "Visualization type switching" do
     it "apiLogH_widgetContainerReadsItsTypeFromMutableWidgetJSON" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "timeseries_line") Nothing Nothing Nothing
-      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       html `shouldSatisfy` T.isInfixOf "var widgetJSON = {"
       html `shouldSatisfy` T.isInfixOf "\"type\":\"timeseries_line\""
       find (elem "id=\"visualization-widget-container\"" . T.words) (T.splitOn "<" html)
@@ -871,7 +868,7 @@ databaseSpec = do
     it "apiLogH_chartVizSkipsTheHiddenLogListPreload" \tr -> do
       let preloads viz = do
             (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing viz Nothing Nothing Nothing
-            pure $ T.isInfixOf "window.logDataPromise" $ toText $ Lucid.renderText $ Lucid.toHtml page
+            pure $ T.isInfixOf "window.logDataPromise" $ renderT page
       preloads (Just "timeseries") `shouldReturn` False
       preloads (Just "timeseries_line") `shouldReturn` False
       preloads Nothing `shouldReturn` True
@@ -879,14 +876,14 @@ databaseSpec = do
   describe "Trace fullscreen scrolling" do
     it "apiLogH_traceOverlayDoesNotCreateAScrollContainer" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       find (T.isInfixOf "id=\"trace_expanded_view\"") (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "overflow-hidden")
 
   describe "Query editor skeleton" do
     it "apiLogH_rendersAnEmptyQueryAsANativePlaceholder" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       let input = find (T.isInfixOf "data-query-input") (T.splitOn "<" html)
       input `shouldSatisfy` maybe False (T.isPrefixOf "textarea ")
       input `shouldSatisfy` maybe False (T.isInfixOf "placeholder=\"level == &quot;ERROR&quot;\"")
@@ -982,7 +979,7 @@ databaseSpec = do
               , title = Just "errors"
               , byMe = True
               }
-          html = LT.toStrict $ Lucid.renderText $ LogQueryBox.queryLibraryContent_ (V.singleton qli) V.empty
+          html = renderT $ LogQueryBox.queryLibraryContent_ (V.singleton qli) V.empty
       -- Lucid escapes quotes in attributes, so match quote-free fragments:
       -- "dataset.query)" is the raw pass-through; the Run button renders "dataset.query, true".
       html `shouldSatisfy` T.isInfixOf "dataset.query)"
@@ -1048,7 +1045,7 @@ databaseSpec = do
     it "renders Common facets with the page and leaves other groups lazy" \tr -> do
       seedFacetSummary tr
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
           eagerUrl = "hx-get=\"/p/" <> testPid.toText <> "/log_explorer/facets\""
       html `shouldSatisfy` T.isInfixOf "data-field=\"resource.service.name\""
       html `shouldSatisfy` T.isInfixOf "data-value=\"checkout-svc\""
@@ -1058,7 +1055,7 @@ databaseSpec = do
 
     it "queryEditor_keepsRestingBoundariesQuietUntilFocus" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       html `shouldSatisfy` T.isInfixOf "bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2"
       html `shouldSatisfy` T.isInfixOf "focus-within:ring-2 focus-within:ring-strokeBrand-weak"
       html `shouldSatisfy` T.isInfixOf "aria-disabled:text-textDisabled aria-[disabled=false]:cursor-pointer"
@@ -1069,7 +1066,7 @@ databaseSpec = do
 
     it "timeTransport_usesExplicitDividersAroundNextButton" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       find (T.isInfixOf "data-next-window") (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "disabled:bg-transparent disabled:text-textDisabled")
       html `shouldSatisfy` T.isInfixOf "h-4 w-px shrink-0 bg-strokeWeak opacity-60\" aria-hidden=\"true\""
@@ -1079,7 +1076,7 @@ databaseSpec = do
     -- fallback worker fetch against chart requests and could render an empty list.
     it "keeps the initial log-data preload inside the HTMX swap target" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
           indexOf needle = T.length $ fst $ T.breakOn needle html
       html `shouldSatisfy` T.isInfixOf "id=\"main-content\""
       html `shouldSatisfy` T.isInfixOf "window.logDataPromise"
@@ -1095,7 +1092,7 @@ databaseSpec = do
     it "renders a reusable trace skeleton for shared and in-app trace loads" \tr -> do
       let traceRef = "774115aaa715abf80d93fc629c2269a4/?timestamp=2026-07-15T18:59:16.952128Z"
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just traceRef) Nothing Nothing Nothing Nothing
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let html = renderT page
       html `shouldSatisfy` T.isInfixOf "trace-loading-skeleton"
       html `shouldSatisfy` T.isInfixOf "Loading trace"
       html `shouldSatisfy` T.isInfixOf "Retry loading trace"
@@ -1143,7 +1140,7 @@ databaseSpec = do
   describe "Alert form endpoint (alertFormH)" do
     it "renders the create-monitor form" \tr -> do
       (_, html) <- testServant tr $ Log.alertFormH testPid Nothing
-      let rendered = LT.toStrict $ Lucid.renderText html
+      let rendered = renderT html
       rendered `shouldSatisfy` T.isInfixOf "Create monitor"
       rendered `shouldContainAll` ["Scope", "name=\"environment\"", "name=\"service\""]
 
@@ -1175,7 +1172,7 @@ databaseSpec = do
         TelemetryPage.TraceDetails{} -> pass
         TelemetryPage.SpanDetails _ _ _ -> expectationFailure "expected trace details, got span details"
         TelemetryPage.TraceDetailsUnavailable _ _ _ _ -> expectationFailure "expected TimeFusion trace details"
-      let initialHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
+      let initialHtml = renderT item
       -- Only the selected panel renders; hidden tabs fetch their panel on first reveal.
       -- The placeholder div still carries the panel id — `hx-swap: outerHTML` has to have
       -- something to target, so asserting the id was *absent* contradicted the lazy-panel
@@ -1187,7 +1184,7 @@ databaseSpec = do
       initialHtml `shouldSatisfy` T.isInfixOf "/detailed?tab=tab-raw&amp;partial=true"
       T.length initialHtml `shouldSatisfy` (< 50_000)
       (_, rawTab) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing (Just "tab-raw") Nothing True
-      let rawHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml rawTab
+      let rawHtml = renderT rawTab
       rawHtml `shouldSatisfy` T.isInfixOf "m-raw-content"
       rawHtml `shouldNotSatisfy` T.isInfixOf "intersect once"
 
@@ -1234,7 +1231,7 @@ databaseSpec = do
           :: IO (V.Vector (UUID.UUID, UTCTime))
       (rid, ts) <- maybe (error "ingested span missing") pure (rows V.!? 0)
       (_, item) <- testServant tr $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
-      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
+      let html = renderT item
       for_ ([("Session ID", "sess-9f2"), ("User ID", "usr-4471"), ("User Email", "ada@example.com"), ("Tenant ID", "acme-eu"), ("Workspace ID", "ws-12")] :: [(Text, Text)]) \(label, value) -> do
         html `shouldSatisfy` T.isInfixOf (label <> ": " <> value)
         -- Each is a filter pill, so "everything from this tenant" is one click away.
@@ -1274,7 +1271,7 @@ databaseSpec = do
       -- Clicking the request span: bodies borrowed from the nested SDK span.
       (_, rootItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req") Nothing False
       assertAnchored rootItem
-      let rootHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml rootItem
+      let rootHtml = renderT rootItem
       rootHtml `shouldSatisfy` T.isInfixOf "subtab=htab-req"
       -- Copy-as-curl is assembled server-side from the HTTP attributes.
       rootHtml `shouldSatisfy` T.isInfixOf "curl -X GET"
@@ -1284,14 +1281,14 @@ databaseSpec = do
       -- panel didn't inline a second.
       T.count "apple" rootHtml `shouldBe` 1
       (_, reqBodyTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req") (Just "htab-req") True
-      let reqBodyHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml reqBodyTab
+      let reqBodyHtml = renderT reqBodyTab
       reqBodyHtml `shouldSatisfy` T.isInfixOf "req_content"
       reqBodyHtml `shouldSatisfy` T.isInfixOf "apple"
       reqBodyHtml `shouldNotSatisfy` T.isInfixOf "intersect once"
 
       -- An unknown ?tab= deep link clamps to a real tab (a checked radio must exist).
       (_, bogusTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-nonexistent") Nothing False
-      LT.toStrict (Lucid.renderText (Lucid.toHtml bogusTab)) `shouldSatisfy` T.isInfixOf "checked"
+      renderT bogusTab `shouldSatisfy` T.isInfixOf "checked"
 
       -- Clicking the SDK span: panel anchors on the parent request, bodies intact.
       (_, sdkItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid sdkId sdkTs Nothing (Just "tab-req") Nothing False
@@ -1309,7 +1306,7 @@ databaseSpec = do
       (_, traceDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing
       case traceDetails of
         TelemetryPage.TraceDetails{} -> do
-          let traceHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml traceDetails
+          let traceHtml = renderT traceDetails
           traceHtml `shouldSatisfy` T.isInfixOf "GET /api/orders"
           traceHtml `shouldNotSatisfy` T.isInfixOf "monoscope.http"
           traceHtml `shouldSatisfy` T.isInfixOf "timeline.addEventListener('tab-visible'"

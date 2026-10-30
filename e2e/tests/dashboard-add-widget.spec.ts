@@ -407,6 +407,7 @@ test.describe("adding widgets to a dashboard", () => {
   });
 
   test("a widget is saved from the drawer, then copied to another dashboard", async ({ page }) => {
+    test.slow(); // Two dashboard lifecycles plus a drawer save; ran out of time while sign-off built the image.
     // The other half of the picker: a widget that already lives on a dashboard is copied
     // across by id rather than sent as JSON. Both branches render from the same rowAttrs,
     // so this is what stops a change to one from silently breaking the other.
@@ -423,7 +424,7 @@ test.describe("adding widgets to a dashboard", () => {
     await Promise.all([
       page.waitForResponse(
         (r) => r.request().method() === "PUT" && r.url().includes(source.id) && r.status() < 400,
-        { timeout: 20000 },
+        { timeout: 60000 },
       ),
       page.getByRole("button", { name: "Add widget" }).first().click(),
     ]);
@@ -683,6 +684,7 @@ async function openWidgetMonitor(page: Page, dash: Dash) {
 }
 
 test("widget thresholds save from Edit and remain visible in Monitors", async ({ page }) => {
+  test.slow(); // Two saves, each followed by a full reload of the drawer.
   const dash = await makeDashboard(page, `E2E Widget Thresholds ${Date.now()}`, "Apache HTTP Server");
   try {
     await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);
@@ -762,6 +764,7 @@ test("widget preview stays visible and compacts as the mobile drawer scrolls", a
 });
 
 test("widget preview compacts when a desktop drawer has a short scroll range", async ({ page }) => {
+  test.slow(); // The scroll range only exists once the drawer's widget data has rendered.
   const dash = await makeDashboard(page, `E2E Desktop Sticky Widget ${Date.now()}`, "Overview");
   try {
     await page.setViewportSize({ width: 2048, height: 700 });
@@ -770,8 +773,8 @@ test("widget preview compacts when a desktop drawer has a short scroll range", a
     const editor = page.locator(".widget-editor");
     const panel = page.locator("#global-data-drawer-panel");
     await expect(editor).toBeVisible();
-    await expect.poll(async () => panel.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
-    await expect.poll(async () => panel.evaluate(el => el.scrollHeight - el.clientHeight)).toBeLessThan(180);
+    await expect.poll(async () => panel.evaluate(el => el.scrollHeight - el.clientHeight), { timeout: 20000 }).toBeGreaterThan(0);
+    await expect.poll(async () => panel.evaluate(el => el.scrollHeight - el.clientHeight), { timeout: 20000 }).toBeLessThan(180);
     await panel.evaluate(el => { el.scrollTop = 500; });
     await expect(editor).toHaveClass(/is-compact/);
     await expect(editor.locator(".widget-preview-heading")).toHaveJSProperty("offsetHeight", 0);

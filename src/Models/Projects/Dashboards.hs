@@ -65,6 +65,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Error.Static (Error, throwError)
+import GHC.Records (HasField (..))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction.Sessions qualified as TxS
 import Language.Haskell.TH (Exp, Q, runIO)
@@ -76,12 +77,13 @@ import Pkg.Components.Table (SortField (..), SortOrder (..))
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), selectFrom)
-import Pkg.Parser (fillQueryTemplate, variablePresets)
+import Pkg.Parser (TemplateLang (..), fillQueryTemplate, variablePresets, variablePresetsKQL)
 import Relude
 import Servant (FromHttpApiData, ServerError (..), err404)
 import System.Directory (listDirectory)
 import System.FilePath (isExtensionOf, (</>))
 import System.Types (DB)
+import Text.Slugify (slugify)
 
 
 data DashboardVM = DashboardVM
@@ -201,6 +203,11 @@ data Tab = Tab
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Tab
 
 
+-- | A tab's URL segment: every tab link, lookup and widget scope goes through this one rule.
+instance HasField "slug" Tab Text where
+  getField = slugify . (.name)
+
+
 -- | A blank dashboard row; callers override the fields they actually set.
 mkDashboardVM :: DashboardId -> Projects.ProjectId -> UTCTime -> Projects.UserId -> DashboardVM
 mkDashboardVM did pid now uid = DashboardVM{id = did, projectId = pid, createdAt = now, updatedAt = now, createdBy = uid, baseTemplate = Nothing, schema = Nothing, starredSince = Nothing, homepageSince = Nothing, tags = V.empty, title = "", teams = V.empty, filePath = Nothing, fileSha = Nothing, gitSyncId = Nothing, savedViews = V.empty}
@@ -308,9 +315,9 @@ replaceDashboardVariables
   :: (HasField' "query" a (Maybe Text), HasField' "sql" a (Maybe SecuredSql))
   => Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> a -> a
 replaceDashboardVariables pid mf mt allParams currentTime x =
-  x & field' @"sql" . _Just . #statement %~ replace & field' @"query" . _Just %~ replace
+  x & field' @"sql" . _Just . #statement %~ fill SqlTemplate variablePresets & field' @"query" . _Just %~ fill KqlTemplate variablePresetsKQL
   where
-    replace = fillQueryTemplate (variablePresets def pid.toText mf mt allParams currentTime)
+    fill lang presets = fillQueryTemplate lang (presets def pid.toText mf mt allParams currentTime)
 
 
 -- | Look up a dashboard WITHOUT checking which project owns it.

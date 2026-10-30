@@ -18,7 +18,9 @@
     "test:gridstack-parity": "playwright test test/browser/dashboard-grid-parity.spec.js --reporter=line"
   },
   "overrides": {
+    "@babel/core": "^7.29.6",
+    "postcss-selector-parser": "^6.1.5",
     "serialize-javascript": "^7.1.4",
-    "tmp": "^0.2.4"
+    "tmp": "^0.2.6"
   }
 }

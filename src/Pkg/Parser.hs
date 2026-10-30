@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, fillQueryTemplate, browserKql, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds) where
 
 import Control.Error (hush)
 import Data.Char (isAlphaNum)
@@ -933,17 +933,31 @@ replacePlaceholders :: Map.Map Text Text -> Text -> Text
 replacePlaceholders mappng txt = Map.foldlWithKey' (\t k v -> T.replace ("{{" <> k <> "}}") v t) txt mappng
 
 
+data TemplateLang = SqlTemplate | KqlTemplate
+
+
 -- | Fill a dashboard query template. A @{{var-…}}@ the request did not set reads as empty, so
 -- @'{{var-x}}' = ''@ means "unfiltered". Unset variables are cleared from the template before
--- substitution, so a substituted value is never rewritten.
+-- substitution, so a substituted value is never rewritten. A @var-@ value is user input that
+-- templates quote (@'{{var-x}}'@ in SQL, @"{{var-x}}"@ in KQL), so it is escaped for that
+-- literal here, once, at the point the text becomes a query.
 --
--- >>> fillQueryTemplate (Map.fromList [("var-a", "x")]) "'{{var-a}}' '{{var-b}}' {{var-"
+-- >>> fillQueryTemplate SqlTemplate (Map.fromList [("var-a", "x")]) "'{{var-a}}' '{{var-b}}' {{var-"
 -- "'x' '' {{var-"
--- >>> fillQueryTemplate (Map.fromList [("row", "{{var-z}}")]) "{{row}} {{var-y}}"
+-- >>> fillQueryTemplate SqlTemplate (Map.fromList [("row", "{{var-z}}")]) "{{row}} {{var-y}}"
 -- "{{var-z}} "
-fillQueryTemplate :: Map.Map Text Text -> Text -> Text
-fillQueryTemplate mappng = replacePlaceholders mappng . clearUnset
+-- >>> fillQueryTemplate SqlTemplate (Map.fromList [("var-a", "x' OR '1'='1"), ("const-c", "('k')")]) "a = '{{var-a}}' AND c IN {{const-c}}"
+-- "a = 'x'' OR ''1''=''1' AND c IN ('k')"
+-- >>> fillQueryTemplate KqlTemplate (Map.fromList [("var-a", "x\" or \"1\"==\"1")]) "a == \"{{var-a}}\""
+-- "a == \"x\\\" or \\\"1\\\"==\\\"1\""
+fillQueryTemplate :: TemplateLang -> Map.Map Text Text -> Text -> Text
+fillQueryTemplate lang mappng = replacePlaceholders (Map.mapWithKey escapeVar mappng) . clearUnset
   where
+    escapeVar k v
+      | "var-" `T.isPrefixOf` k = T.dropEnd 1 $ T.drop 1 $ case lang of
+          SqlTemplate -> sqlStringLit v
+          KqlTemplate -> kqlQuoted v
+      | otherwise = v
     clearUnset t = case T.breakOn "{{var-" t of
       (before, rest) | (key, close) <- T.breakOn "}}" (T.drop 2 rest), not (T.null close) -> before <> bool "" ("{{" <> key <> "}}") (Map.member key mappng) <> clearUnset (T.drop 2 close)
       _ -> t
@@ -972,23 +986,25 @@ variablePresets density pid mf mt allParams currentTime =
         [] -> ""
         bs -> andPrefix $ "(" <> T.intercalate " AND " (map ($ field) bs) <> ")"
    in Map.fromList
-        $ [ ("project_id", pid)
-          , ("from", andPrefix $ fmtUTC mf)
-          , ("to", andPrefix $ fmtUTC mt)
-          , ("time_filter", clause "<=" "timestamp")
-          , ("rollup_time_filter", clause "<" "timestamp")
-          , ("time_filter_sql_created_at", clause "<=" "created_at")
-          , ("rollup_interval", calculateAutoBinWidth density (mf, mt) currentTime)
-          , ("browser_filter", browserSql)
-          , ("pageview_filter", pageViewSql)
-          , ("error_filter", errorSql)
-          , ("browser_kql", browserKql)
-          , ("audience_sessions", audienceSessions)
-          , ("audience_kql_literal", sqlStringLit $ Rum.audienceKql audience)
-          , ("table_search", sqlStringLit $ maybeToMonoid $ join $ Map.lookup "table-search" $ Map.fromList allParams)
-          , ("audience_filter", if any isJust [audience.browser, audience.os, audience.device] || audience.errored then "attributes___session___id IN (" <> audienceSessions <> "SELECT session FROM audience_sessions)" else "TRUE")
-          ]
-        <> (allParams <&> second maybeToMonoid)
+        -- Request params first: fromList keeps the last duplicate, so a request can never
+        -- re-point a server preset such as @project_id@ or @time_filter@.
+        $ (allParams <&> second maybeToMonoid)
+        <> [ ("project_id", pid)
+           , ("from", andPrefix $ fmtUTC mf)
+           , ("to", andPrefix $ fmtUTC mt)
+           , ("time_filter", clause "<=" "timestamp")
+           , ("rollup_time_filter", clause "<" "timestamp")
+           , ("time_filter_sql_created_at", clause "<=" "created_at")
+           , ("rollup_interval", calculateAutoBinWidth density (mf, mt) currentTime)
+           , ("browser_filter", browserSql)
+           , ("pageview_filter", pageViewSql)
+           , ("error_filter", errorSql)
+           , ("browser_kql", browserKql)
+           , ("audience_sessions", audienceSessions)
+           , ("audience_kql_literal", sqlStringLit $ Rum.audienceKql audience)
+           , ("table_search", sqlStringLit $ maybeToMonoid $ join $ Map.lookup "table-search" $ Map.fromList allParams)
+           , ("audience_filter", if any isJust [audience.browser, audience.os, audience.device] || audience.errored then "attributes___session___id IN (" <> audienceSessions <> "SELECT session FROM audience_sessions)" else "TRUE")
+           ]
 
 
 -- | Like variablePresets but uses KQL format for constants.

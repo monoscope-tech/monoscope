@@ -10,7 +10,6 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Hasql.Interpolate qualified as HI
-import Lucid qualified
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, status200)
 import Network.Wai qualified as Wai
@@ -214,7 +213,7 @@ spec = aroundAll withTestResources do
       let bound = runQueryEffect tr (Hasql.interp [HI.sql| SELECT session_id IS NOT NULL FROM users.device_auth_codes WHERE user_code = #{code} |])
       runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| INSERT INTO users.device_auth_codes (id, device_code, user_code, expires_at) VALUES (gen_random_uuid(), gen_random_uuid()::text, #{code}, now() + interval '5 minutes') |]
       (_, prompt) <- testServant tr $ Auth.deviceApproveH False (Just code)
-      toStrict (Lucid.renderText prompt) `shouldSatisfy` T.isInfixOf "method=\"POST\""
+      renderT prompt `shouldSatisfy` T.isInfixOf "method=\"POST\""
       bound `shouldReturn` V.singleton False
       _ <- testServant tr $ Auth.deviceApproveH True (Just code)
       bound `shouldReturn` V.singleton True

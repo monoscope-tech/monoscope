@@ -414,7 +414,7 @@ settingsTests = do
                    ]
                      :: [(Day, Day, Maybe Int, Maybe Text)]
                  )
-    let html = TL.toStrict $ renderText $ LemonSqueezy.billingPage d
+    let html = renderT $ LemonSqueezy.billingPage d
     html `shouldSatisfy` T.isInfixOf "https://invoice.stripe.com/i/inv_two"
     html `shouldSatisfy` T.isInfixOf "$41.50"
 
@@ -913,16 +913,16 @@ s3ConfigTests = do
       -- either makes the handler's bucketExists fail and render "Not connected".
       let s3Form = realS3Form tr
       (_, connected) <- testServant tr $ S3.brings3PostH testPid s3Form
-      TL.toStrict (renderText $ toHtml connected) `shouldSatisfy` T.isInfixOf "Connected"
+      renderT connected `shouldSatisfy` T.isInfixOf "Connected"
       renderText (toHtml connected) `shouldSatisfy` TL.isInfixOf "<span>Remove</span>"
 
       (_, savedPage) <- testServant tr $ S3.bringS3GetH testPid
-      let savedHtml = TL.toStrict $ renderText $ toHtml savedPage
+      let savedHtml = renderT savedPage
       savedHtml `shouldSatisfy` T.isInfixOf s3Form.bucket
       savedHtml `shouldSatisfy` T.isInfixOf "Connected"
 
       (_, removed) <- testServant tr $ S3.brings3RemoveH testPid
-      TL.toStrict (renderText $ toHtml removed) `shouldSatisfy` T.isInfixOf "Not connected"
+      renderT removed `shouldSatisfy` T.isInfixOf "Not connected"
       project <- runTestBg frozenTime tr (Projects.projectById testPid) >>= maybe (fail "the project was not found") pure
       project.s3Bucket `shouldSatisfy` isNothing
 

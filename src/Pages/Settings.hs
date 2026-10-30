@@ -914,7 +914,7 @@ notificationsTestPostH pid TestForm{..} = do
       testTemplate
         | Just mk <- lookup issueType [("runtime_exception", ET.runtimeErrorsEmail), ("escalating_errors", ET.escalatingErrorsEmail), ("regressed_errors", ET.regressedErrorsEmail), ("error_spike", ET.errorSpikesEmail)] =
             mk project.title fullProjectUrl (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
-        | issueType == "report" = ET.sampleWeeklyReport "" ""
+        | issueType == "report" = ET.sampleWeeklyReport Nothing Nothing
         | otherwise = ET.anomalyEndpointEmail "Test User" project.title (fullProjectUrl <> "/issues") [ET.EndpointAlertRow "GET /api/v1/test" (Just "api.example.com") (Just "api-service") (Just "production")]
       sendTestEmail email = let (subj, html) = testTemplate; subj' = "[Test] " <> subj in sendRenderedEmail email subj' (ET.renderEmail subj' html)
 

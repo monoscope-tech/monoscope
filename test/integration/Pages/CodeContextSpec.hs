@@ -15,7 +15,6 @@ import Data.Effectful.Wreq qualified as W
 import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as LT
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
@@ -70,7 +69,7 @@ import Web.Routes qualified as Routes
 
 
 render :: Lucid.Html () -> Text
-render = LT.toStrict . Lucid.renderText
+render = renderT
 
 
 -- | Regression: the revision a span reports lives in its /resource/, not its attributes.
