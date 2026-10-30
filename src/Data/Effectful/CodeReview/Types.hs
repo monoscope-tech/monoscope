@@ -2,6 +2,7 @@ module Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), Observ
 
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
+import Data.Effectful.AgentWorkspace (AllocationReceipt, TestArtifact (..), allocationAttempt, allocationId)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -86,45 +87,6 @@ data ModelUsage = ModelUsage
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
-data AllocationOutcome = Released | ReleaseFailed
-  deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" AllocationOutcome
-
-
-data AllocationData = AllocationData {id :: UUIDId "agent_allocation", attemptId :: UUIDId "agent_attempt", durationMs :: Word64, cpus :: Word16, memoryMiB :: Word32, outcome :: AllocationOutcome}
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
--- | The private wire product preserves positive resources through JSON round-trips.
--- >>> let receipt cpus = AE.object ["id" AE..= ("00000000-0000-4000-8000-000000000001" :: Text), "attemptId" AE..= ("00000000-0000-4000-8000-000000000002" :: Text), "durationMs" AE..= (1 :: Int), "cpus" AE..= (cpus :: Int), "memoryMiB" AE..= (1024 :: Int), "outcome" AE..= ("released" :: Text)]
--- >>> let decoded = AE.fromJSON (receipt 2) :: AE.Result AllocationReceipt
--- >>> case decoded of AE.Success _ -> True; _ -> False
--- True
--- >>> (decoded >>= AE.fromJSON . AE.toJSON) == decoded
--- True
--- >>> case (AE.fromJSON (receipt 0) :: AE.Result AllocationReceipt) of AE.Error _ -> True; _ -> False
--- True
-newtype AllocationReceipt = AllocationReceipt AllocationData
-  deriving stock (Eq, Show)
-  deriving newtype (AE.ToJSON)
-
-
-instance AE.FromJSON AllocationReceipt where
-  parseJSON value = do
-    receipt <- AE.parseJSON value
-    unless (receipt.cpus > 0 && receipt.memoryMiB > 0) $ fail "Allocation resources must be positive"
-    pure $ AllocationReceipt receipt
-
-
-allocationId :: AllocationReceipt -> UUIDId "agent_allocation"
-allocationId (AllocationReceipt receipt) = receipt.id
-
-
-allocationAttempt :: AllocationReceipt -> UUIDId "agent_attempt"
-allocationAttempt (AllocationReceipt receipt) = receipt.attemptId
 
 
 data RevisionSide = Base | Head
@@ -236,11 +198,6 @@ data Failure = InvalidRevision | InvalidCandidate | Unavailable | StaleVersion |
 data FixRequest = FixRequest {request :: Request "issue_fix", issueId :: UUIDId "issue", imageBuildId :: UUIDId "guest_image"}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
-
-
-data TestArtifact = TestArtifact {script :: Text, testPatch :: Text, failureMessage :: Text}
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data PhaseReceipt = PhaseReceipt {id :: UUIDId "issue_fix_step", attemptId :: UUIDId "agent_attempt", step :: Step}

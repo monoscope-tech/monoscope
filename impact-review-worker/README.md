@@ -8,6 +8,8 @@ The pinned libraries are `@earendil-works/pi-coding-agent` 1.4.0 and `@earendil-
 
 Use Node 22.19 or newer, Git, the current Monoscope CLI and a supported local hypervisor. Linux needs hardware virtualization. Image export also needs Docker or Podman, `cpio`, `lz4` and `e2fsprogs`.
 
+Guest builds select Docker, then Podman if Docker is unavailable. Set `IMPACT_REVIEW_CONTAINER_ENGINE=docker` or `podman` to choose explicitly; building and asset export use that same engine.
+
 ```sh
 npm ci --ignore-scripts
 npm run build:guest
@@ -21,13 +23,13 @@ The optional Linux `impact-worker` image packages the native CLI and SDK runtime
 
 ## Runtime boundary
 
-`cli.mjs` is a child of the Haskell CodeReview interpreter. Set `IMPACT_REVIEW_AGENT` to its absolute path and select an immutable guest image with `IMPACT_REVIEW_GUEST_IMAGE`. Haskell supplies role, prompts, tool schemas, pinned revisions, checkout metadata, private receipt paths and callbacks. Telemetry/wiki tools pass through the existing protocol and are authorized by Haskell. Candidate Git commits, bundles, admission records and fix-phase receipts are created natively. Haskell journals and acknowledges each phase before the SDK can advance. The child cannot clone or fetch application source as a fallback.
+`pi-host.mjs` is a child of the Haskell CodeReview interpreter. Set `IMPACT_REVIEW_AGENT` to its absolute path and select an immutable guest image with `IMPACT_REVIEW_GUEST_IMAGE`. Haskell supplies role, prompts, tool schemas, pinned revisions, checkout metadata, private receipt paths and callbacks. Telemetry/wiki tools pass through the existing protocol and are authorized by Haskell. Candidate Git commits, bundles, admission records and fix-phase receipts are created natively. Haskell journals and acknowledges each phase before the SDK can advance. The child cannot clone or fetch application source as a fallback.
 
-Haskell owns the fix state machine: admission, reproduction, source unlocking, candidate capture, verification and submission. The shared runner routes SDK tools into the VM. `fix.mjs` adapts restart and completion callbacks. Shell and mutation tools run as UID 1000. Reads use Gondolin's filesystem access, including the read-only skill mounts. Only the private host protocol can request arbitrary supervisor commands.
+Haskell owns the fix state machine: admission, reproduction, source unlocking, candidate capture, verification and submission. The shared Haskell guest session owns the VM and executes SDK file and shell operations. The Node process forwards model tool calls to that session. Shell and mutation tools run as UID 1000. Reads use the same guest session, including image bytes and read-only skill mounts. Only the private host protocol can request arbitrary supervisor commands.
 
 `run_regression` and `reproduce_issue` accept `testFiles: [{path, content}]` with complete new or changed regular files. Haskell generates their Git diff against the pinned base, preserving existing executable modes. Supply 1–100 unique repository-relative paths and at most 256 KiB of combined UTF-8 content; the generated patch has the same byte limit. Symlinks, directories, traversal and unchanged entries are rejected. Legacy patch inputs remain supported, but cannot accompany `testFiles`. Admission, frozen-test fingerprints and verification still apply.
 
-The VM has no network, private COW writes and read-only host mounts. Agent commands run as UID 1000 with a reset environment. Model credentials stay on the host. `sandbox.mjs` is the SDK command bridge used by native workspace operations.
+The child runs only Pi: the model session, metering and skill discovery. Its `runPi` core is shared with the research runners, which supply VM-backed tools. Pi's read/bash/edit/write calls reach Haskell as `Guest` operations and run as UID 1000 with a reset environment. Role tools (regressions, reproduction, candidate capture, verification, telemetry, wiki) are Haskell handlers. Haskell also supplies the role's prompt, tool schemas, built-in tools and submission envelope, and records phases, checks and VM allocation. The child cannot clone, fetch or start a VM.
 
 Haskell prepares admission patches through the private VM command bridge before model work. Artifact limits, patch application, file-count bounds and workspace locking remain native policy. Admission and independent review are read-only. Fixing requires host-admitted reproduction before source edits. Haskell supplies the peer’s candidate identity and exact evidence-file manifest from verified artifacts. The common SDK runner copies those bytes into the read-only VM and submits its decision through host validation. Peer review does not reopen artifacts or clone a second mirror.
 

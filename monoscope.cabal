@@ -303,11 +303,10 @@ extra-source-files:
     test/fixtures/impact-review-agent.mjs
     test/fixtures/issue-fix-agent.mjs
     test/fixtures/native-checkout-agent.mjs
-    test/fixtures/native-child-lifetime.py
-    test/fixtures/native-publication-gh.py
+    test/fixtures/native-child-lifetime.mjs
+    test/fixtures/native-publication-gh.mjs
     test/fixtures/native-regression-caller.mjs
     test/fixtures/native-sandbox.sh
-    test/fixtures/native-sdk-worker.py
     test/fixtures/regression-admission-agent.mjs
     test/fixtures/review-image.png
     test/fixtures/stage-recovery-bridge.sh

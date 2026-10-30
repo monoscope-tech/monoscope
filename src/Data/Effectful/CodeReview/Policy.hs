@@ -35,7 +35,7 @@ data FileTools = InspectFiles | ModifyFiles
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" FileTools
 
 
-data Policy = Policy {instructions :: Text, tools :: [Tool], fileTools :: FileTools}
+data Policy = Policy {instructions :: Text, tools :: [Tool], fileTools :: FileTools, builtins :: [Text]}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -63,7 +63,7 @@ toolDefinition role name = Tool name (toolDescription name) (schema role name) (
 
 
 policy :: Role -> Text -> Text -> Text -> Policy
-policy role base headRevision rootInstructions = Policy instructions (map (toolDefinition role) (toolsForRole role)) fileTools
+policy role base headRevision rootInstructions = Policy instructions (map (toolDefinition role) (toolsForRole role)) fileTools (case role of (Patch; SourcePatch) -> []; (Advisory; Fix) -> ["bash", "read", "edit", "write"]; _ -> ["bash", "read"])
   where
     fileTools = case role of
       (Advisory; Fix) -> ModifyFiles

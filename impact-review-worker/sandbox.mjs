@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SDK bridge only. Haskell selects commands, paths, resources and cache publication.
-import { createInterface } from 'node:readline';
+import { jsonLines } from './jsonl.mjs';
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
@@ -11,9 +11,8 @@ const abort = () => { controller.abort(); void vm?.close().catch(() => {}); proc
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, abort);
 process.stdin.once('end', abort);
 process.stdout.once('error', abort);
-const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 try {
-  for await (const line of lines) {
+  for await (const line of jsonLines(process.stdin, 16 * 1024 * 1024)) {
     const { tag, contents } = JSON.parse(line);
     let result = [];
     try {
@@ -38,7 +37,7 @@ try {
         }
         case 'GetIdentity': result = vm.id; break;
         case 'ExecuteLogged': {
-          const { command, path, limitBytes } = contents;
+          const { command, path, limitBytes, overflow } = contents;
           const log = await open(path, constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
           try {
             if (!(await log.stat()).isFile()) throw new Error('Invalid log');
@@ -46,12 +45,13 @@ try {
             void execution.catch(() => {});
             let bytes = 0, limited = false;
             for await (const chunk of execution.output()) {
-              if (bytes + chunk.data.length > limitBytes) { limited = true; await vm.close(); break; }
-              await log.writeFile(chunk.data); bytes += chunk.data.length;
+              if (bytes + chunk.data.length > limitBytes && overflow !== 'discard_output') { limited = true; await vm.close(); break; }
+              const kept = chunk.data.subarray(0, limitBytes - bytes);
+              if (kept.length) { await log.writeFile(kept); bytes += kept.length; }
             }
             if (limited) result = { tag: 'LogLimit' };
             else result = { tag: 'Exited', contents: (await execution).exitCode };
-          } finally { try { await log.sync(); } finally { await log.close(); } }
+          } finally { try { if (overflow !== 'discard_output') await log.sync(); } finally { await log.close(); } }
           break;
         }
         case 'Execute': {
@@ -83,4 +83,4 @@ try {
       break;
     }
   }
-} finally { lines.close(); process.stdin.destroy(); await vm?.close(); }
+} finally { process.stdin.destroy(); await vm?.close(); }

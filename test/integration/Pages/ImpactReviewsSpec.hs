@@ -21,6 +21,7 @@ import Data.Conduit.Combinators qualified as CC
 import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace
+import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts qualified as Native
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
@@ -194,8 +195,84 @@ deliver tr value = do
   snd <$> runAsBaseRecordingHTTP configured (GitSyncPage.gitWebhookPostH Git.GitHub $ Git.WebhookReq (Just "pull_request") (Just signature) Nothing Nothing Nothing body)
 
 
+-- Exercise the host protocol without a VM or model; Close acknowledgement is observable.
+withAllocationBridge :: Text -> (Guest.Host -> FilePath -> IO a) -> IO a
+withAllocationBridge mode action = withSystemTempDirectory "allocation-regression" \temporary -> do
+  directory <- canonicalizePath temporary
+  let bridge = directory </> "bridge.mjs"
+      events = directory </> "operations.log"
+      json = toStrict . AE.encode
+  writeFileBS bridge
+    $ "#!/usr/bin/env node\n"
+    <> "import { appendFileSync } from 'node:fs';\nimport { createInterface } from 'node:readline';\n"
+    <> "const mode = "
+    <> json mode
+    <> "; const events = "
+    <> json (toText events)
+    <> ";\n"
+    <> """
+       for await (const line of createInterface({ input: process.stdin })) {
+         const { tag } = JSON.parse(line);
+         appendFileSync(events, tag + '\\n');
+         if (tag === 'Close' && mode === 'timeout') { await new Promise(() => {}); }
+         if (tag === 'CopyFile' && mode === 'pending') await new Promise((resolve) => setTimeout(resolve, 250));
+         const result = tag === 'Resolve' ? { assetDir: '/fixture', buildId: '00000000-0000-4000-8000-000000000001' }
+           : tag === 'GetIdentity' ? mode === 'malformed' ? 'malformed-id' : '00000000-0000-4000-8000-000000000002'
+           : tag === 'Execute' ? { exitCode: 0, stdout: '1000\\n' } : [];
+         console.log(JSON.stringify(tag === 'Close' && ['reject', 'pending'].includes(mode) ? { Left: 'cleanup refused' } : { Right: result }));
+         if (tag === 'Close') break;
+       }
+       """
+  Posix.setFileMode bridge 0o700
+  writeFileBS events ""
+  action (Guest.Host "fixture" bridge [] Nothing) directory
+
+
+sdkAgent :: Agent.ArtifactStore -> [FilePath] -> Eff (Agent.CodeReview ': '[IOE]) a -> Eff '[IOE] a
+sdkAgent store arguments action = do
+  let option name = case dropWhile (/= name) arguments of _ : value : _ -> Just value; _ -> Nothing
+      models = fromMaybe "" $ viaNonEmpty head arguments
+      image = fromMaybe "" $ viaNonEmpty head $ drop 3 arguments
+      diagnostic = fromMaybe "/dev/null" $ viaNonEmpty head $ drop 4 arguments
+      skills = maybe [] (: []) $ option "--skills"
+      worker = "impact-review-worker/pi-host.mjs"
+      host = if null image then Nothing else Just $ (Agent.workerHost skills (option "--prepare") (option "--dependencies") (toText image) worker){Guest.bridge = "test/fixtures/native-sandbox.sh"}
+  Agent.runCodeReviewWith (Just store) host (Just $ \environment -> setEnv ([("IMPACT_REVIEW_MODELS", models), ("IMPACT_REVIEW_USAGE_DIR", store.usageDir), ("IMPACT_REVIEW_CACHE_DIR", store.cacheDir)] <> environment) $ proc "sh" ["-c", "exec node impact-review-worker/pi-host.mjs 2>>\"$1\"", "sdk-worker", diagnostic]) action
+
+
 spec :: Spec
 spec = around withTestResources $ describe "Production impact reviews" do
+  describe "allocation lifecycle regressions" do
+    it "rejects malformed VM identity before entering the agent or issuing allocation proof" \_tr -> withAllocationBridge "malformed" \host directory -> do
+      base <- either (fail . show) pure $ Workspace.mkRevision revision
+      entered <- newIORef False
+      receipts <- newIORef ([] :: [Agent.AllocationReceipt])
+      let capture receipt = modifyIORef' receipts (<> [receipt])
+      result <- Guest.withGuest host Nothing directory base Guest.Explore Nothing (UUIDId UUID.nil) capture capture (const $ writeIORef entered True)
+      readIORef entered `shouldReturn` False
+      result `shouldSatisfy` isLeft
+      readIORef receipts >>= (`shouldSatisfy` null)
+      readFileBS (directory </> "operations.log") >>= (`shouldContain` ["Close"]) . lines . decodeUtf8 @Text
+
+    for_ @[] [("ok", "released"), ("reject", "release_failed"), ("timeout", "release_failed"), ("pending", "release_failed")] \(mode, expected) ->
+      it ("records confirmed VM cleanup after cancellation: " <> toString mode) \_tr -> withAllocationBridge mode \host directory -> do
+        base <- either (fail . show) pure $ Workspace.mkRevision revision
+        ready <- MVar.newEmptyMVar
+        receipts <- newIORef ([] :: [Agent.AllocationReceipt])
+        writeFileBS (directory </> "source") "fixture"
+        let capture receipt = modifyIORef' receipts (<> [receipt])
+            pendingCopy = readFileBS (directory </> "operations.log") >>= \bytes -> unless ("CopyFile" `BS.isInfixOf` bytes) (threadDelay 10000 >> pendingCopy)
+            action session = if mode == "pending" then session.copyIn (directory </> "source") "/run/fixture" else MVar.putMVar ready () >> threadDelay 60000000
+        withAsync (Guest.withGuest host Nothing directory base Guest.Explore Nothing (UUIDId UUID.nil) capture capture action) \running -> do
+          Timeout.timeout 5000000 (if mode == "pending" then pendingCopy else MVar.takeMVar ready) `shouldReturn` Just ()
+          cancel running
+          stopped <- waitCatch running
+          either (\failure -> displayException failure `shouldBe` "AsyncCancelled") (const $ expectationFailure "Cancellation was swallowed") stopped
+        saved <- readIORef receipts
+        length saved `shouldBe` 1
+        for_ saved \receipt -> either fail pure (AET.parseEither (AE.withObject "Allocation" (AE..: "outcome")) $ AE.toJSON receipt) `shouldReturn` (expected :: Text)
+        readFileBS (directory </> "operations.log") >>= (`shouldContain` ["Close"]) . lines . decodeUtf8 @Text
+
   it "hostGit_ignoresInheritedCredentialsAndCommands" \_ -> withSystemTempDirectory "isolated-host-git" \directory -> do
     path <- filter ((== "PATH") . fst) <$> getEnvironment
     let inherited = path <> [("MONOSCOPE_GIT_SECRET", "host-only"), ("GIT_CONFIG_COUNT", "1"), ("GIT_CONFIG_KEY_0", "alias.inherited"), ("GIT_CONFIG_VALUE_0", "!echo unsafe-host-command"), ("GIT_CONFIG_GLOBAL", "/missing-host-config")]
@@ -377,7 +454,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   saved `shouldBe` expected
             result <-
               runEff
-                $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, diagnostic]
+                $ sdkAgent store [models, store.usageDir, store.cacheDir, image, diagnostic]
                 $ Agent.admitRegression
                   configured
                   (const $ liftIO $ fail "Admission unexpectedly requested knowledge")
@@ -540,7 +617,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           choices <- readIORef plan
           pure $ fromMaybe (SdkText "Fix attempt finished.") $ viaNonEmpty head $ drop (length results) choices
     withSdkModel directory "fix-fixture" next \models requests -> do
-      let run action = runEff $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, diagnostic, "--prepare", scriptFile, "--cli", cli] action
+      let run action = runEff $ sdkAgent store [models, store.usageDir, store.cacheDir, image, diagnostic, "--prepare", scriptFile, "--cli", cli] action
           knowledge = const $ pure $ Left "Unexpected knowledge request"
           capture ref receipt = liftIO $ record ref receipt
           inspect result = runExceptT do
@@ -739,7 +816,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     withSdkModel directory "fixture" next \models requests -> do
       let run mode name extra =
             runEff
-              $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") ([models, store.usageDir, store.cacheDir, profile, directory </> "worker.log", "--cli", cli, "--temp", sdkTemp] <> extra)
+              $ sdkAgent store ([models, store.usageDir, store.cacheDir, profile, directory </> "worker.log", "--cli", cli, "--temp", sdkTemp] <> extra)
               $ Evaluation.runEvaluationReal
               $ Evaluation.evaluateSource (mode :| []) caseFile (outputDir </> name)
           result mode name extra = do
@@ -935,7 +1012,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             let configured = request{Agent.runId = uid n} :: Agent.Request "pr_review"
             result <-
               runEff
-                $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, diagnostic, "--cli", cli, "--temp", sdkTemp, "--skill", skill]
+                $ sdkAgent store [models, store.usageDir, store.cacheDir, image, diagnostic, "--cli", cli, "--temp", sdkTemp, "--skill", skill]
                 $ Agent.reviewRepository
                   configured
                   (const $ liftIO $ MVar.putMVar ready () >> MVar.takeMVar blocked $> Left "Cancelled query")
@@ -1120,7 +1197,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       let both = Agent.BoundedPatch :| [Agent.CheckoutHarness]
           evaluateAt modes output =
             runEff
-              $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, directory </> "evaluation-worker.log", "--cli", cli, "--temp", sdkTemp]
+              $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "evaluation-worker.log", "--cli", cli, "--temp", sdkTemp]
               $ Evaluation.runEvaluationReal
               $ Evaluation.evaluate modes caseFile output
           evaluateCase modes name = do
@@ -1211,7 +1288,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 retained identifier expected = readJSON (journal </> toString identifier <> ".json") >>= (`shouldBe` expected)
             result <-
               runEff
-                $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, directory </> "worker.log", "--cli", cli, "--temp", sdkTemp]
+                $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log", "--cli", cli, "--temp", sdkTemp]
                 $ Agent.reviewRepository
                   configured
                   (\telemetryQuery -> liftIO $ modifyIORef' queries (<> [telemetryQuery]) $> Right (AE.object ["key" AE..= ("query-1" :: Text), "queryResult" AE..= AE.object ["kind" AE..= ("aggregated" :: Text), "headers" AE..= (["count"] :: [Text]), "dataset" AE..= ([[7]] :: [[Int]]), "limitReached" AE..= False, "fieldsTruncated" AE..= False]]))
@@ -1308,7 +1385,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 retained identifier expected = readFileBS (journal </> toString identifier <> ".json") >>= either fail pure . AE.eitherDecodeStrict >>= (`shouldBe` expected)
             result <-
               runEff
-                $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, "", directory </> "worker.log", "--temp", sdkTemp]
+                $ sdkAgent store [models, store.usageDir, store.cacheDir, "", directory </> "worker.log", "--temp", sdkTemp]
                 $ Agent.reviewPatch
                   request
                   ( \receipt -> liftIO do
@@ -1345,7 +1422,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           document repositoryURL = AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= commitRevision, "head" AE..= commitRevision, "provider" AE..= ("patch-fixture" :: Text), "model" AE..= ("fixture" :: Text), "pullRequest" AE..= AE.object ["repo" AE..= (repositoryURL :: Text), "pr_number" AE..= (1 :: Int), "title" AE..= ("Source case" :: Text), "body" AE..= ("No telemetry context required." :: Text)]]
           source name =
             runEff
-              $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, "", directory </> "source-worker.log", "--temp", sdkTemp]
+              $ sdkAgent store [models, store.usageDir, store.cacheDir, "", directory </> "source-worker.log", "--temp", sdkTemp]
               $ Evaluation.runEvaluationReal
               $ Evaluation.evaluateSource (Agent.BoundedPatch :| []) sourceCaseFile (directory </> name)
       writeFileLBS sourceCaseFile $ AE.encode $ document "https://github.com/fixture/source"
@@ -1467,7 +1544,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             checks <- newIORef ([] :: [Agent.CheckReceipt])
             result <-
               runEff
-                $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, profile, diagnostic, "--prepare", trustedScript, "--dependencies", archive, "--cli", cli]
+                $ sdkAgent store [models, store.usageDir, store.cacheDir, profile, diagnostic, "--prepare", trustedScript, "--dependencies", archive, "--cli", cli]
                 $ Agent.reviewRepository request{Agent.runId = uid n} (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const pass) (const pass) (const pass) (\receipt -> liftIO $ modifyIORef' checks (<> [receipt])) (const $ pure $ Right ())
             (result,) <$> readIORef checks
       writeFileBS archive $ bytes <> "changed"
@@ -1994,7 +2071,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         baseline = Agent.CheckReceipt{id = uid 6, attemptId = result.attemptId, checkId = result.checkId, side = Agent.Base, revision = Fixes.revisionText base, imageBuildId = (uid 8 :: UUIDId "image").toText, scriptSha256 = T.replicate 64 "d", regression = Just $ Agent.InjectedTest result.regressionSha256, status = Agent.Failed, exitCode = Just 1, durationMs = 1, cpus = 2, memoryMiB = 1024, logBytes = 1, logSha256 = T.replicate 64 "e", workspace = Nothing}
         candidate = baseline{Agent.id = uid 7, Agent.side = Agent.Head, Agent.revision = Fixes.revisionText candidateRevision, Agent.regression = Just $ Agent.RetainedTest result.regressionSha256, Agent.status = Agent.Passed, Agent.exitCode = Just 0}
         request = Agent.ArtifactRequest "https://github.com/fixture/missing.git" result baseline candidate
-    proof <- runEff $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/issue-fix-agent.mjs") [directory </> "failure.txt", toString baseline.imageBuildId, ""] $ Agent.verifyFixArtifacts (Agent.ArtifactStore directory directory) request
+    proof <- runEff $ Agent.runCodeReviewReal Nothing Nothing (Just "test/fixtures/issue-fix-agent.mjs") [directory </> "failure.txt", toString baseline.imageBuildId, ""] $ Agent.verifyFixArtifacts (Agent.ArtifactStore directory directory) request
     isLeft proof `shouldBe` True
 
   it "checkout_cleanupWaitsForChildExit_withPinnedSourceAccess" \_tr -> withSystemTempDirectory "native-checkout" \temporary -> do
@@ -2033,7 +2110,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         decode = either (fail . toString) pure . AE.eitherDecodeStrict @AE.Value . encodeUtf8
         field key = AET.parseEither $ AE.withObject "Prepared checkout" (AE..: key)
         cleaned value = for_ ["directory", "repositorySkills"] $ \key -> either fail pure (field key value) >>= doesDirectoryExist >>= (`shouldBe` False)
-        run input flags validate = runEff $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-checkout-agent.mjs") (launched : flags) $ Agent.reviewRepository input (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const $ liftIO $ if "--replay-call" `elem` flags then modifyIORef' recoveredCalls (+ 1) else fail "Unexpected model call") (const $ liftIO $ fail "Unexpected model usage") (const $ liftIO $ fail "Unexpected allocation") (const $ liftIO $ fail "Unexpected check") validate
+        run input flags validate = runEff $ Agent.runCodeReviewReal (Just store) Nothing (Just "test/fixtures/native-checkout-agent.mjs") (launched : flags) $ Agent.reviewRepository input (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const $ liftIO $ if "--replay-call" `elem` flags then modifyIORef' recoveredCalls (+ 1) else fail "Unexpected model call") (const $ liftIO $ fail "Unexpected model usage") (const $ liftIO $ fail "Unexpected allocation") (const $ liftIO $ fail "Unexpected check") validate
         check input flags = run input flags (const $ pure $ Right ()) >>= either (fail . toString) decode
         withRun n input = input{Agent.runId = UUIDId $ UUID.fromWords 42 0 0 n} :: Agent.Request "pr_review"
     preparedFirst <- check request []
@@ -2053,7 +2130,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       let lifetime = directory </> "child-lifetime-" <> mode <> ".json"
           runLifetime =
             runEff
-              $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-child-lifetime.py") [lifetime, mode]
+              $ Agent.runCodeReviewReal (Just store) Nothing (Just "test/fixtures/native-child-lifetime.mjs") [lifetime, mode]
               $ Agent.reviewRepository
                 request
                 (const $ liftIO (MVar.putMVar ready () >> MVar.takeMVar blocked) $> Right AE.Null)
@@ -2203,7 +2280,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           modifyIORef' events (<> [label])
         run flags =
           runEff
-            $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-checkout-agent.mjs") (marker : flags)
+            $ Agent.runCodeReviewReal (Just store) Nothing (Just "test/fixtures/native-checkout-agent.mjs") (marker : flags)
             $ Agent.fixRepository
               fixRequest
               (const $ pure $ Left "No query")
@@ -2255,7 +2332,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       writeFileLBS (admissionOutbox </> toString identifier <> ".json") $ AE.encode receipt
     refused <-
       runEff
-        $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-checkout-agent.mjs") [marker]
+        $ Agent.runCodeReviewReal (Just store) Nothing (Just "test/fixtures/native-checkout-agent.mjs") [marker]
         $ Agent.admitRegression
           (Agent.AdmissionRequest fixRequest $ Agent.TestArtifact "false" "test patch" "failure")
           (const $ pure $ Left "Unexpected memory request")
@@ -2318,18 +2395,16 @@ spec = around withTestResources $ describe "Production impact reviews" do
         execution = checks </> toString result.checkId.toText
         files = [(captured </> "candidate.json", toStrict $ AE.encode $ metadata result), (captured </> "fix.patch", patch), (captured </> "candidate.bundle", bundle), (execution </> "report.json", toStrict $ AE.encode report), (execution </> "script.sh", script), (execution </> "test.patch", testPatch), (execution </> "base.log", baselineLog), (execution </> "head.log", candidateLog)]
         restore = traverse_ (uncurry writeFileBS) files
-        verify input = runEff $ Agent.runCodeReviewReal Nothing Nothing [] $ Agent.verifyFixArtifacts store input
+        verify input = runEff $ Agent.runCodeReviewReal Nothing Nothing Nothing [] $ Agent.verifyFixArtifacts store input
     createDirectoryIfMissing True captured
     createDirectoryIfMissing True execution
     restore
     fmap Agent.verifiedFixResult <$> verify request `shouldReturn` Right result
-    snapshot <- Checkout.withCheckout store (Checkout.VerifiedCandidate request) (pure . AE.toJSON)
-    prepared <- either (fail . toString) pure snapshot
-    let evidenceField name = AE.withObject "Verified peer-review evidence" (AE..: name)
-        reviewInput = AE.object ["result" AE..= result, "regression" AE..= Agent.TestArtifact (decodeUtf8 script) (decodeUtf8 testPatch) "retry token lost", "baseline" AE..= request.baseline, "candidate" AE..= request.candidate]
+    snapshot <- Checkout.withCheckout store (Checkout.VerifiedCandidate request) (\prepared evidence -> pure (AE.toJSON prepared, evidence))
+    (_, preparedFiles) <- either (fail . toString) pure snapshot
+    let reviewInput = AE.object ["result" AE..= result, "regression" AE..= Agent.TestArtifact (decodeUtf8 script) (decodeUtf8 testPatch) "retry token lost", "baseline" AE..= request.baseline, "candidate" AE..= request.candidate]
         peerFiles = Map.fromList [("/run/monoscope-fix-review.json", toStrict $ AE.encode reviewInput), ("/run/monoscope-fix-review-base.log", baselineLog), ("/run/monoscope-fix-review-head.log", candidateLog)] :: Map Text ByteString
-    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "result") prepared `shouldBe` Just (AE.toJSON result)
-    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "files") prepared `shouldBe` Just (Map.map (extractBase64 . B64.encodeBase64) peerFiles)
+    preparedFiles `shouldBe` peerFiles
     for_ files \(path, bytes) -> do
       writeFileBS path (bytes <> "corruption")
       isLeft <$> verify request `shouldReturn` True
@@ -2363,7 +2438,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     for_ [request{Agent.result = result{Agent.runId = uid 99}}, request{Agent.candidate = candidate{Agent.attemptId = uid 99}}, request{Agent.candidate = differentWorkspace}] \changed ->
       isLeft <$> verify changed `shouldReturn` True
     fmap Agent.verifiedFixResult <$> verify request `shouldReturn` Right result
-    let render = runEff $ Agent.runCodeReviewReal Nothing Nothing [] $ runExceptT do
+    let render = runEff $ Agent.runCodeReviewReal Nothing Nothing Nothing [] $ runExceptT do
           verified <- ExceptT $ Agent.verifyFixArtifacts store request
           ExceptT $ Agent.explainVerifiedFix store request verified
     rendered <- render
@@ -2449,7 +2524,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         setMode mode = do
           remote <- readState
           writeFileLBS stateFile $ AE.encode $ case remote of AE.Object fields -> AE.Object $ KM.insert "mode" (AE.String mode) fields; value -> value
-    copyFile "test/fixtures/native-publication-gh.py" github
+    copyFile "test/fixtures/native-publication-gh.mjs" github
     Posix.setFileMode github 0o700
     writeFileLBS stateFile $ AE.encode initial
     published <- runPublisher authorize validate
@@ -2698,7 +2773,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                           unlift (knowledge $ Agent.ProjectMemory $ Memory.Read page) `shouldReturn` saved
                         let response = directory </> "result.json"
                         writeFileLBS response $ AE.encode answer{Impact.coverage = ["Related test toolchain unavailable"]}
-                        reply <- runEff $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/impact-review-agent.mjs") ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (liftIO . unlift . check)
+                        reply <- runEff $ Agent.runCodeReviewReal Nothing Nothing (Just "test/fixtures/impact-review-agent.mjs") ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (liftIO . unlift . check)
                         diagnostic <- tryAny $ decodeUtf8 <$> readFileBS (response <> ".failure")
                         pure $ first (<> either (const "") ("\n" <>) diagnostic) reply
                     Agent.ReviewSource{} -> pure $ Left "Unexpected source review"
@@ -3220,7 +3295,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   Left message -> pure $ Left message
                   Right verified -> do
                     let candidateReview reviewMode =
-                          Agent.runCodeReviewReal Nothing (Just "test/fixtures/fix-review-agent.mjs") [reviewMode]
+                          Agent.runCodeReviewReal Nothing Nothing (Just "test/fixtures/fix-review-agent.mjs") [reviewMode]
                             $ Agent.reviewVerifiedFix (Agent.FixReviewRequest (Agent.FixRequest request{Agent.attemptId = uid 998} issue image) artifacts) verified (const $ pure $ Left "Unexpected memory request") (const pass) (const pass) (const pass)
                     when (null mode) $ for_ ["--skip", "--tampered", "--post-query", "--check"] \reviewMode -> do
                       rejected <- candidateReview reviewMode
@@ -3235,7 +3310,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         let diagnostic = directory </> "failure.txt"
         result <-
           runEff
-            $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/issue-fix-agent.mjs") [diagnostic, toString image.toText, mode]
+            $ Agent.runCodeReviewReal Nothing Nothing (Just "test/fixtures/issue-fix-agent.mjs") [diagnostic, toString image.toText, mode]
             $ Agent.fixRepository
               (Agent.FixRequest request issue image)
               (const $ pure $ Left "No telemetry fixture")
@@ -3349,7 +3424,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       let request = Agent.Request{projectId = testPid, runId = fid, attemptId = attempt, repository = "https://github.com/impact-org/checkout.git", base = revision, head = revision, gitToken = "fixture-token", prompt = "Issue: retain retry tokens", provider = "fixture", model = "gpt-5.6-luna", thinkingLevel = Agent.High}
       outcome <-
         runEff
-          $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/regression-admission-agent.mjs") [mode]
+          $ Agent.runCodeReviewReal Nothing Nothing (Just "test/fixtures/regression-admission-agent.mjs") [mode]
           $ Agent.admitRegression
             (Agent.AdmissionRequest (Agent.FixRequest request issue (uid 3)) artifact)
             (const $ pure $ Left "Unexpected memory request")
@@ -3444,7 +3519,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                     when (mode == "--app-job") $ memoryRoundTrip request.request.attemptId (unlift . knowledge)
                     result <-
                       runEff
-                        $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/issue-fix-agent.mjs") [diagnostic, toString image.toText, toString mode]
+                        $ Agent.runCodeReviewReal Nothing Nothing (Just "test/fixtures/issue-fix-agent.mjs") [diagnostic, toString image.toText, toString mode]
                         $ Agent.fixRepository
                           request
                           (liftIO . unlift . queryTelemetry)
@@ -3461,13 +3536,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   Agent.AdmitRegression request knowledge calls usage allocations -> localSeqUnliftIO env \unlift -> liftIO do
                     when (mode == "--app-job") $ memoryRoundTrip request.fix.request.attemptId (unlift . knowledge)
                     runEff
-                      $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/regression-admission-agent.mjs") [if request.artifact.testPatch == "admitted-test-patch" then "" else "--reject"]
+                      $ Agent.runCodeReviewReal Nothing Nothing (Just "test/fixtures/regression-admission-agent.mjs") [if request.artifact.testPatch == "admitted-test-patch" then "" else "--reject"]
                       $ Agent.admitRegression request (liftIO . unlift . knowledge) (liftIO . unlift . calls) (liftIO . unlift . usage) (liftIO . unlift . allocations)
                   Agent.VerifyFixArtifacts _ request -> artifactProofFixture (if mode == "--app-job-artifacts-denied" then Left "Fixture rejects artifacts" else Right ()) request
                   Agent.ReviewVerifiedFix request verified knowledge calls usage allocations -> localSeqUnliftIO env \unlift -> liftIO do
                     when (mode == "--app-job") $ memoryRoundTrip request.fix.request.attemptId (unlift . knowledge)
                     runEff
-                      $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/fix-review-agent.mjs") [if mode == "--app-job-review-changes" then "--reject" else if mode == "--app-job-review-blocked" then "--blocked" else ""]
+                      $ Agent.runCodeReviewReal Nothing Nothing (Just "test/fixtures/fix-review-agent.mjs") [if mode == "--app-job-review-changes" then "--reject" else if mode == "--app-job-review-blocked" then "--blocked" else ""]
                       $ Agent.reviewVerifiedFix request verified (liftIO . unlift . knowledge) (liftIO . unlift . calls) (liftIO . unlift . usage) (liftIO . unlift . allocations)
                   Agent.ExplainVerifiedFix store request verified -> explanationProofFixture store (if mode == "--app-job-explanation-denied" then Left "Fixture rejects explanation" else Right $ fixtureExplanation request.result) request verified
                   Agent.ReviewSource{} -> pure $ Left "Unexpected source review"

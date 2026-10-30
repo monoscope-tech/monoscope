@@ -217,7 +217,7 @@ runEvaluationReal = interpret $ \_ -> \case
                   maybe (fail "Evaluation source timed out") pure result
                 harness <- checked SourceUnavailable do
                   skills <- readFileBS "impact-review-worker/skills/superpowers/UPSTREAM.json" >>= either fail pure . AE.eitherDecodeStrict @Skills
-                  let paths = ["impact-review-worker/cli.mjs", "impact-review-worker/review.mjs", "impact-review-worker/workspace.mjs", "impact-review-worker/sandbox.mjs", "impact-review-worker/package-lock.json", "impact-review-worker/skills/superpowers/UPSTREAM.json", "src/Data/Effectful/CodeReview.hs", "src/Data/Effectful/CodeReview/Types.hs", "src/Data/Effectful/CodeReview/Policy.hs", "src/Data/Effectful/CodeReview/Artifacts.hs", "src/Data/Effectful/CodeReview/Outbox.hs", "shared/src/Data/Effectful/AgentWorkspace.hs", "shared/src/Pkg/GitCommand.hs", "src/Pkg/ImpactReview.hs", "src/Data/Effectful/ReviewEvaluation.hs", "app/Main.hs"] <> map ("impact-review-worker/skills/superpowers" </>) (Map.keys skills.sha256)
+                  let paths = ["impact-review-worker/pi-host.mjs", "impact-review-worker/jsonl.mjs", "shared/src/Data/Effectful/AgentWorkspace/Guest.hs", "impact-review-worker/review.mjs", "impact-review-worker/workspace.mjs", "impact-review-worker/sandbox.mjs", "impact-review-worker/package-lock.json", "impact-review-worker/skills/superpowers/UPSTREAM.json", "src/Data/Effectful/CodeReview.hs", "src/Data/Effectful/CodeReview/Types.hs", "src/Data/Effectful/CodeReview/Policy.hs", "src/Data/Effectful/CodeReview/Artifacts.hs", "src/Data/Effectful/CodeReview/Outbox.hs", "shared/src/Data/Effectful/AgentWorkspace.hs", "shared/src/Pkg/GitCommand.hs", "src/Pkg/ImpactReview.hs", "src/Data/Effectful/ReviewEvaluation.hs", "app/Main.hs"] <> map ("impact-review-worker/skills/superpowers" </>) (Map.keys skills.sha256)
                   Map.fromList <$> traverse (\path -> (path,) . Artifacts.sha256 <$> readFileBS path) paths
                 let canonical :: input
                     canonical = case study of ImpactStudy -> (input{repository} :: Case); SourceStudy -> (input{repository} :: SourceCase)
@@ -315,7 +315,11 @@ mainStudy modes action = do
   adapter <- required "IMPACT_REVIEW_AGENT"
   when (CheckoutHarness `elem` modes) $ void $ required "IMPACT_REVIEW_GUEST_IMAGE"
   traverse_ (createDirectoryIfMissing True) [usage, cache]
-  result <- runEff $ Agent.runCodeReviewReal (Just $ Agent.ArtifactStore usage cache) (Just adapter) [] $ runEvaluationReal action
+  image <- lookupEnv "IMPACT_REVIEW_GUEST_IMAGE"
+  prepare <- lookupEnv "IMPACT_REVIEW_PREPARE_SCRIPT"
+  archive <- lookupEnv "IMPACT_REVIEW_DEPENDENCY_ARCHIVE"
+  let host = (\selected -> Agent.workerHost [] prepare archive (toText selected) adapter) <$> image
+  result <- runEff $ Agent.runCodeReviewReal (Just $ Agent.ArtifactStore usage cache) host (Just adapter) [] $ runEvaluationReal action
   case result of
     Left failure -> die $ show failure
     Right success -> unless success exitFailure

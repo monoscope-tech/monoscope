@@ -1,11 +1,11 @@
-module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), withCheckout) where
+module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), Envelope (..), withCheckout) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Char (isAlphaNum, isAscii)
-import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), PeerPreparation, artifactCheckout, peerPreparation, sha256, withVerifiedArtifacts)
+import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), artifactCheckout, peerPreparation, sha256, withVerifiedArtifacts)
 import Data.Effectful.CodeReview.Policy qualified as Policy
-import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, mkRevision, revisionText)
+import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, TestArtifact, mkRevision, revisionText)
 import Data.List (lookup)
 import Data.List.Extra (nubOrd)
 import Data.Text qualified as T
@@ -36,12 +36,15 @@ data CacheStatus = Hit | Miss | Verified
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" CacheStatus
 
 
-data CheckoutEvidence = SourceOnly | VerifiedEvidence PeerPreparation
-  deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
+data Envelope = Artifact TestArtifact | Result FixResult
 
 
-data Prepared = Prepared {directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, evidence :: CheckoutEvidence, policy :: Policy.Policy}
+instance AE.ToJSON Envelope where
+  toJSON (Artifact artifact) = AE.object ["artifact" AE..= artifact]
+  toJSON (Result result) = AE.object ["result" AE..= result]
+
+
+data Prepared = Prepared {guest :: Maybe FilePath, envelope :: Maybe Envelope, directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, policy :: Policy.Policy}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -50,14 +53,14 @@ data Origin = GitHub Text | Local FilePath
 
 
 -- Keep the private checkout alive until the child and all of its VMs have exited.
-withCheckout :: ArtifactStore -> Source -> (Prepared -> IO a) -> IO (Either Text a)
+withCheckout :: ArtifactStore -> Source -> (Prepared -> Map Text ByteString -> IO a) -> IO (Either Text a)
 withCheckout store source action = do
   outcome <- tryAny $ case source of
     Repository request -> withSystemTempDirectory "monoscope-agent-checkout" \temporary -> do
       started <- getMonotonicTimeNSec
       prepared <- Timeout.timeout (120 * 1000000) $ prepare temporary request
       traverse
-        (\(directory, baseRevision, headRevision, cacheStatus) -> deliver started directory request.projectId request.repository baseRevision headRevision cacheStatus SourceOnly)
+        (\(directory, baseRevision, headRevision, cacheStatus) -> deliver started directory request.projectId request.repository baseRevision headRevision cacheStatus mempty)
         prepared
     VerifiedCandidate artifacts -> do
       started <- getMonotonicTimeNSec
@@ -65,7 +68,7 @@ withCheckout store source action = do
         let directory = artifactCheckout verifiedArtifacts
             result = artifacts.result
         git directory ["checkout", "--quiet", "--detach", toString $ revisionText result.head] HostGit.Local
-        deliver started directory result.projectId artifacts.repository result.base result.head Verified $ VerifiedEvidence $ peerPreparation verifiedArtifacts
+        deliver started directory result.projectId artifacts.repository result.base result.head Verified $ peerPreparation verifiedArtifacts
       either (const invalid) (pure . Just) verified
   pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Repository checkout could not be prepared"
   where
@@ -98,7 +101,7 @@ withCheckout store source action = do
         writeFileBS destination =<< content blob
       instructions <- maybe (pure "") instruction $ asum $ map (`lookup` files) instructionNames
       duration <- elapsed started
-      action $ Prepared directory metadata instructions project repository baseRevision headRevision status duration evidence (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions)
+      action (Prepared Nothing Nothing directory metadata instructions project repository baseRevision headRevision status duration (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions)) evidence
     prepare :: FilePath -> Request run -> IO (FilePath, Revision, Revision, CacheStatus)
     prepare temporary request = do
       baseRevision <- either (const invalid) pure $ mkRevision request.base

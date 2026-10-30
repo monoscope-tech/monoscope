@@ -1,6 +1,6 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Data.Effectful.CodeReview (CodeReview (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewTest, validExplanation) where
+module Data.Effectful.CodeReview (CodeReview (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, workerHost, runCodeReviewTest, validExplanation) where
 
 import Control.Concurrent.STM qualified as STM
 import Control.Monad.Trans.Except (throwE)
@@ -10,6 +10,7 @@ import Data.Aeson.Types qualified as AET
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.AgentWorkspace qualified as Workspace
+import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..))
 import Data.Effectful.CodeReview.Artifacts qualified as Native
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
@@ -19,61 +20,29 @@ import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types
 import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
+import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID4
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import Models.Projects.ProjectMemory qualified as Memory
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.Environment (getEnvironment)
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
-import System.IO.Temp (withTempFile)
-import System.Process.Typed (ExitCode (..), createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
+import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
 import UnliftIO.Exception (finally, tryAny)
 import UnliftIO.Timeout qualified as Timeout
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.
-data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | InitializeAdmission () | RestartFix FixBaseline | CompleteFix Native.FixSummary | GuestResult (Either Text Text) | CopiedGuest (Either Text ()) | CheckedRegression (Either Text RegressionWire) | Validate AE.Value | ValidateText Text | Result AE.Value
+data GuestIdentity = Agent | Supervisor
+
+
+data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Guest Guest.Operation | Validate AE.Value | ValidateText Text | Result AE.Value
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
-
-
-data GuestCommand = GuestCommand {arguments :: NonEmpty Text, maxBytes :: Word32, identity :: GuestIdentity}
-  deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
-
-
-data GuestIdentity = Agent | Supervisor
-  deriving stock (Generic, Read, Show)
-  deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" GuestIdentity
-
-
-data GuestCopy = GuestCopy {source :: FilePath, destination :: Text}
-  deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
-
-
-data GuestRead = GuestRead {path :: Text, maxBytes :: Word32}
-  deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
-
-
-data SandboxCommand = Guest GuestCommand | CopyGuest GuestCopy | ReadGuest GuestRead | RunCheck FilePath
-  deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
-
-
-data PreparedDisk = PreparedDisk {path :: FilePath, sha256 :: WorkspaceFingerprint}
-  deriving stock (Generic)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
-data FixBaseline = Pristine | PreparedCheckpoint PreparedDisk
-  deriving stock (Generic)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- The report is opaque presentation data; decisions use the typed receipts.
@@ -102,7 +71,7 @@ instance AE.FromJSON ReproductionInput where
 data FixProgress = NeedsReproduction | Reproduced TestArtifact | Captured TestArtifact Native.CapturedCandidate | Checked TestArtifact Native.CapturedCandidate CheckReceipt
 
 
-data FixSession = FixSession {id :: UUIDId "verifier_session", baseline :: FixBaseline, progress :: FixProgress}
+data FixSession = FixSession {id :: UUIDId "verifier_session", baseline :: Workspace.Baseline, progress :: FixProgress}
 
 
 data GuestSession = AdmissionReady | SourceReady | FixReady FixSession
@@ -202,8 +171,12 @@ data Callbacks format result = Callbacks
   }
 
 
-runCodeReviewReal :: IOE :> es => Maybe ArtifactStore -> Maybe FilePath -> [FilePath] -> Eff (CodeReview ': es) a -> Eff es a
-runCodeReviewReal artifactStore executable skills = interpret \env -> \case
+runCodeReviewReal :: IOE :> es => Maybe ArtifactStore -> Maybe Guest.Host -> Maybe FilePath -> [FilePath] -> Eff (CodeReview ': es) a -> Eff es a
+runCodeReviewReal artifactStore host executable skills = runCodeReviewWith artifactStore host ((\command environment -> setEnv environment $ setStderr nullStream $ proc command skills) <$> executable)
+
+
+runCodeReviewWith :: IOE :> es => Maybe ArtifactStore -> Maybe Guest.Host -> Maybe ([(String, String)] -> ProcessConfig () () ()) -> Eff (CodeReview ': es) a -> Eff es a
+runCodeReviewWith artifactStore host executable = interpret \env -> \case
   ReviewRepository request respond knowledge recordCall recordUsage recordAllocation recordCheck check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
@@ -322,6 +295,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
     launch task callbacks = case executable of
       Nothing -> pure $ Left "Checkout-backed review agent is not configured"
       Just command -> do
+        verifierSession <- UUID4.nextRandom
         let tagged :: AE.ToJSON value => Text -> value -> AE.Value
             tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
             (scope, source, payload, role) = case task of
@@ -347,7 +321,8 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
             Right () -> do
               environment <- getEnvironment
               let childEnvironment = maybe environment (\outbox -> ("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox) : filter ((/= "IMPACT_REVIEW_OUTBOX_DIR") . fst) environment) journal
-              withProcessTerm (setEnv childEnvironment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc command skills) \process -> do
+              withProcessTerm (setStdin createPipe $ setStdout createPipe $ command childEnvironment) \process -> do
+                guest <- newIORef Nothing
                 let stop =
                       ( do
                           hClose $ getStdin process
@@ -360,31 +335,34 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                     writeMessage value = LBS.hPut (getStdin process) (AE.encode value <> "\n") >> hFlush (getStdin process)
                     parseMessage :: AE.Value -> AET.Parser (Either Outbox.Receipt Message)
                     parseMessage value = (Left <$> AE.parseJSON value) <|> (Right <$> AE.parseJSON value)
-                    rpc :: SandboxCommand -> (Message -> Maybe (Either Text value)) -> IO (Either Text value)
-                    rpc instruction extract = do
-                      writeMessage instruction
-                      response <- AE.eitherDecodeStrict <$> BS.hGetLine (getStdout process)
-                      pure $ case response of
-                        Right message | Just output <- extract message -> output
-                        _ -> Left "Guest returned an invalid workspace response"
-                    execute privilege argv = rpc (Guest $ GuestCommand argv 1048576 privilege) \case GuestResult output -> Just output; _ -> Nothing
-                    copy hostPath guestPath = rpc (CopyGuest $ GuestCopy hostPath guestPath) \case CopiedGuest output -> Just output; _ -> Nothing
+                    active :: (Guest.Session -> IO (Either Text value)) -> IO (Either Text value)
+                    active action = readIORef guest >>= maybe (pure $ Left "Guest operations require a host-owned sandbox") action
+                    execute privilege argv = active $ \session -> do
+                      outcome <- tryAny $ case privilege of
+                        Supervisor -> session.root argv $> ""
+                        Agent ->
+                          session.output (Workspace.agentCommand $ toList argv) 1048576 >>= \case
+                            (Workspace.Exited 0, bytes, False) -> pure $ decodeUtf8 bytes
+                            _ -> fail "Guest workspace command failed or exceeded its output limit"
+                      pure $ first (const "Guest workspace command failed") outcome
+                    copy hostPath destination = active $ \session -> first (const "Guest copy failed") <$> tryAny (session.copyIn hostPath destination)
+                    readGuest path = active $ \session ->
+                      session.output (Workspace.agentCommand ["/usr/bin/head", "-c", "262145", "--", path]) 262145 <&> \case
+                        (Workspace.Exited 0, bytes, False) -> Right $ decodeUtf8 bytes
+                        _ -> Left "Regression patch file exceeds its limit or could not be read"
                     protectWorkspace = for_ (["/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path] | path <- ["/workspace", "/workspace/.git"]] <> ["/bin/chown" :| ["-hR", "0:0", "/workspace"], "/bin/chmod" :| ["-R", "u+rwX,go+rX,go-w", "/workspace"], "/usr/bin/git" :| ["update-index", "--refresh"]] :: [NonEmpty Text]) $ void . ExceptT . execute Supervisor
-                    prepareAdmission :: ArtifactStore -> TestArtifact -> IO (Either Text ())
-                    prepareAdmission configured artifact = runExceptT do
-                      let bounded limit text = not (T.null $ T.strip text) && T.length text <= limit
-                      unless (bounded 65536 artifact.script && bounded 262144 artifact.testPatch && bounded 200 artifact.failureMessage) $ throwE "Regression artifact must contain bounded script, patch and failure message"
-                      protectWorkspace
-                      for_ ([("/run/monoscope-admission.patch", encodeUtf8 artifact.testPatch), ("/run/monoscope-admission.json", toStrict $ AE.encode artifact)] :: [(Text, ByteString)]) \(destination, bytes) -> ExceptT $ withTempFile configured.cacheDir ".admission-" \path handle -> do
-                        BS.hPut handle bytes
-                        hFlush handle
-                        copy path destination
-                      stats <- ExceptT $ execute Supervisor $ "/usr/bin/git" :| ["apply", "--recount", "--numstat", "-z", "/run/monoscope-admission.patch"]
-                      let paths = filter (not . T.null) $ T.splitOn "\0" stats
-                      unless (not (null paths) && length paths <= 100) $ throwE "Regression patch requires between one and 100 paths"
-                      void $ ExceptT $ execute Supervisor $ "/usr/bin/git" :| ["-c", "core.hooksPath=/dev/null", "apply", "--recount", "--index", "/run/monoscope-admission.patch"]
-                      void $ ExceptT $ execute Supervisor $ "/bin/chmod" :| ["0444", "/run/monoscope-admission.patch", "/run/monoscope-admission.json"]
-                      protectWorkspace
+                    regression :: Request run -> Workspace.Baseline -> UUID.UUID -> AE.Value -> [(Text, Text)] -> Outbox.Outbox -> IO (Either Text RegressionWire)
+                    regression pinned baseline sessionId artifact revisions outbox = active $ \session -> do
+                      let options = session.verifier (Outbox.outboxPath outbox </> "checks")
+                      case Workspace.mkRegressionRequest pinned.projectId pinned.runId pinned.attemptId sessionId pinned.base session.imageBuildId baseline artifact revisions of
+                        Left _ -> pure $ Left "Regression arguments do not match the host contract"
+                        Right request -> do
+                          checked <- tryAny $ Workspace.verifyRegression options request
+                          case checked of
+                            Left failure -> pure $ Left $ maybe "Local check could not run" Workspace.regressionErrorText $ fromException failure
+                            Right result -> do
+                              traverse_ (uncurry session.copyIn) $ Workspace.regressionLogs options result
+                              pure $ first toText $ AET.parseEither AE.parseJSON $ AE.toJSON result
                     capturePatch base = runExceptT do
                       void $ ExceptT $ execute Agent $ "/usr/bin/git" :| ["add", "-A"]
                       ExceptT $ execute Agent $ "/usr/bin/git" :| ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", base, "--"]
@@ -414,17 +392,10 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                             unless (Native.candidateMatchesPatch captured (Native.candidateIdentity captured) patch) $ reject "Workspace changed; propose and verify a new candidate"
                           comparison artifact revisions = do
                             requireBudget $ length revisions
-                            let input = AE.object ["projectId" AE..= request.request.projectId, "runId" AE..= request.request.runId, "attemptId" AE..= request.request.attemptId, "sessionId" AE..= session.id, "base" AE..= request.request.base, "imageBuildId" AE..= request.imageBuildId, "workspace" AE..= session.baseline, "artifact" AE..= artifact, "revisions" AE..= revisions]
-                            result <- io $ withTempFile checks ".regression-" \path handle -> do
-                              LBS.hPut handle $ AE.encode input
-                              hFlush handle
-                              rpc (RunCheck path) \case CheckedRegression output -> Just output; _ -> Nothing
+                            result <- io $ regression request.request session.baseline session.id.unUUIDId (AE.toJSON artifact) [(case side of { Base -> "base"; Head -> "head" }, revisionText revision) | (side, revision) <- toList revisions] outbox
                             for_ result.receipts \receipt -> do
                               liftIO (Outbox.deliver outbox (Outbox.Check receipt) record) >>= either fatal pure
                               phase $ Observe receipt
-                            for_ result.receipts \receipt -> do
-                              let side = case receipt.side of Base -> "base"; Head -> "head"
-                              io $ copy (checks </> toString receipt.checkId.toText </> toString side <> ".log") ("/run/monoscope-review-output/check-" <> receipt.checkId.toText <> "-" <> side <> ".log")
                             when result.isError $ reject $ "Native regression did not produce usable evidence.\n" <> decodeUtf8 (AE.encode result.report)
                             pure result
                           describe message result = AE.object ["message" AE..= (message :: Text), "report" AE..= result.report]
@@ -440,7 +411,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                                   InlinePatch text -> pure text
                                   FileContents files -> io $ first Workspace.testPatchErrorText <$> Workspace.renderTestPatch checkout.directory (revisionText checkout.base) files
                                   PatchFile path -> do
-                                    text <- io $ rpc (ReadGuest $ GuestRead path 262145) \case GuestResult output -> Just output; _ -> Nothing
+                                    text <- io $ readGuest path
                                     when (BS.length (encodeUtf8 text) > 262144) $ reject "Regression patch file exceeds its 256 KiB limit"
                                     pure text
                                 when (T.null testPatch || T.length testPatch > 262144) $ reject "Regression patch must be nonempty and within its limit"
@@ -503,6 +474,14 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                             assertWorkspace captured
                             either reject pure $ Native.candidateResult captured receipt summary
                        in FixActions invoke finish
+                    runComparison request outbox identifier invocation = active $ \session -> do
+                      verified <- regression request session.baseline identifier invocation.arguments [("base", request.base), ("head", request.head)] outbox
+                      case verified of
+                        Left failure -> pure $ Left failure
+                        Right result -> do
+                          saved <- runExceptT $ for_ result.receipts $ \receipt -> ExceptT $ Outbox.deliver outbox (Outbox.Check receipt) record
+                          pure $ saved >> if result.isError then Left (decodeUtf8 $ AE.encode result.report) else Right result.report
+
                     receive :: Maybe Checkout.Prepared -> Maybe GuestSession -> Int -> Int -> Maybe (AE.Value, result) -> IO (Either Text result)
                     receive supplied guestSession remaining submissions accepted = do
                       message <- (AE.eitherDecodeStrict >=> AET.parseEither parseMessage) <$> BS.hGetLine (getStdout process)
@@ -527,12 +506,52 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                                     _ -> receive supplied ready (remaining - bool 0 1 phase) submissions (if invalidates then Nothing else accepted)
                         Right (Right (Checkout ())) -> case (supplied, artifactStore) of
                           (Nothing, Just configured) -> do
-                            prepared <- Checkout.withCheckout configured source \checkout ->
-                              (writeMessage (Right checkout{Checkout.policy = Policy.policy role (revisionText checkout.base) (revisionText checkout.head) checkout.rootInstructions} :: Either Text Checkout.Prepared) >> receive (Just checkout) guestSession remaining submissions accepted) `finally` stop
+                            prepared <- Checkout.withCheckout configured source \fetched evidence -> do
+                              let checkout = fetched{Checkout.policy = Policy.policy role (revisionText fetched.base) (revisionText fetched.head) fetched.rootInstructions}
+                                  deliver ready readySession = (writeMessage (Right ready :: Either Text Checkout.Prepared) >> receive (Just ready) readySession remaining submissions accepted) `finally` stop
+                                  own :: Request run -> Maybe (UUIDId "guest_image") -> Guest.Setup -> Maybe Checkout.Envelope -> Guest.Host -> IO (Either Text result)
+                                  own request expected setup envelope worker = case Workspace.mkRevision (revisionText checkout.head) of
+                                    Left failure -> pure $ Left failure
+                                    Right revision -> do
+                                      lease <- either (fail . toString) (pure . Guest.Lease configured.cacheDir) $ Workspace.mkRequest request.projectId request.repository request.base expected
+                                      let allocate receipt = do
+                                            saved <- maybe (record $ Outbox.Allocation receipt) (\outbox -> Outbox.deliver outbox (Outbox.Allocation receipt) record) journal
+                                            either (fail . toString) pure saved
+                                          retain receipt = for_ journal $ \outbox -> Outbox.retain outbox $ Outbox.Allocation receipt
+                                      join <$> Guest.withGuest worker expected checkout.directory revision setup (Just lease) request.attemptId allocate retain \session -> do
+                                        writeIORef guest $ Just session
+                                        initialized <- case task of
+                                          FixTask job -> case journal of
+                                            Nothing -> pure $ Left "Fix execution requires a durable outbox"
+                                            Just outbox -> do
+                                              saved <- Outbox.deliverPhase outbox job.request.attemptId RestartReproduction record
+                                              identifier <- UUIDId <$> UUID4.nextRandom
+                                              pure $ saved $> Just (FixReady $ FixSession identifier session.baseline NeedsReproduction)
+                                          SourceTask{} -> pure $ Right $ Just SourceReady
+                                          AdmissionTask{} -> pure $ Right $ Just AdmissionReady
+                                          _ -> pure $ Right Nothing
+                                        either (pure . Left) (deliver checkout{Checkout.guest = Just session.skills, Checkout.envelope = envelope}) initialized
+                              case host of
+                                Nothing -> deliver checkout guestSession
+                                Just worker -> case task of
+                                  PatchTask{} -> deliver checkout guestSession
+                                  SourcePatchTask{} -> deliver checkout guestSession
+                                  SourceTask request -> own request Nothing Guest.LockForReproduction Nothing worker
+                                  AdvisoryTask request -> own request Nothing Guest.Explore Nothing worker
+                                  FixTask job -> own job.request (Just job.imageBuildId) Guest.LockForReproduction Nothing worker
+                                  AdmissionTask job -> own job.fix.request (Just job.fix.imageBuildId) (Guest.InspectAdmission job.artifact) (Just $ Checkout.Artifact job.artifact) worker
+                                  PeerTask job -> own job.fix.request (Just job.fix.imageBuildId) (Guest.ReviewEvidence evidence) (Just $ Checkout.Result job.artifacts.result) worker
                             pure $ join prepared
                           _ -> pure $ Left "Repository checkout was unavailable or already supplied"
                         Right (Right (Tool invocation))
                           | isNothing supplied -> pure $ Left "Tool invocation requires its repository checkout"
+                          | invocation.name == Policy.RunRegression && validTool invocation -> do
+                              response <- case (task, journal) of
+                                (AdvisoryTask request, Just outbox) -> runComparison request outbox verifierSession invocation
+                                (SourceTask request, Just outbox) -> runComparison request outbox verifierSession invocation
+                                _ -> pure $ Left "Regression requires an authorized source review"
+                              writeMessage response
+                              receive supplied guestSession remaining submissions Nothing
                           | invocation.name `elem` [Policy.ReproduceIssue, Policy.ProposeFix, Policy.VerifyFix] && validTool invocation -> case (task, supplied, journal, guestSession) of
                               (FixTask request, Just checkout, Just outbox, Just (FixReady session)) -> do
                                 (outcome, current) <- State.runStateT (runExceptT $ (workflow request checkout outbox session).invoke invocation) (FlowState session.progress remaining)
@@ -577,44 +596,26 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                               writeMessage saved
                               receive supplied guestSession (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
-                        Right (Right (InitializeAdmission ())) -> case (task, supplied, artifactStore, guestSession) of
-                          (AdmissionTask request, Just _, Just configured, Nothing) | remaining > 0 -> do
-                            prepared <- prepareAdmission configured request.artifact
-                            writeMessage prepared
-                            case prepared of
-                              Left failure -> pure $ Left failure
-                              Right () -> receive supplied (Just AdmissionReady) (remaining - 1) submissions Nothing
-                          _ -> pure $ Left "Admission initialization requires a prepared admission task and remaining budget"
-                        Right (Right (RestartFix baseline)) -> case (task, supplied, journal, guestSession) of
-                          (FixTask request, Just _, Just outbox, Nothing) | remaining > 0 -> do
-                            protected <- runExceptT protectWorkspace
-                            case protected of
-                              Left failure -> writeMessage protected $> Left failure
-                              Right () -> do
-                                saved <- Outbox.deliverPhase outbox request.request.attemptId RestartReproduction record
-                                writeMessage saved
-                                case saved of
-                                  Left failure -> pure $ Left failure
-                                  Right () -> do
-                                    identifier <- UUIDId <$> UUID4.nextRandom
-                                    receive supplied (Just $ FixReady $ FixSession identifier baseline NeedsReproduction) (remaining - 1) submissions Nothing
-                          _ -> pure $ Left "Fix initialization requires a prepared issue-fix task and remaining budget"
-                        Right (Right (CompleteFix summary)) -> case (task, supplied, journal, guestSession) of
-                          (FixTask request, Just checkout, Just outbox, Just (FixReady session)) | submissions > 0 -> do
-                            (outcome, current) <- State.runStateT (runExceptT $ (workflow request checkout outbox session).finish summary) (FlowState session.progress remaining)
-                            case outcome of
-                              Left (Fatal failure) -> writeMessage (Left failure :: Either Text FixResult) $> Left failure
-                              Left (ToolRejected failure) -> writeMessage (Left failure :: Either Text FixResult) >> receive supplied (Just $ FixReady session{progress = current.progress}) current.remaining submissions Nothing
-                              Right draft -> do
-                                checked <- case callbacks.validate of
-                                  StructuredDraft validate -> validate $ AE.toJSON draft
-                                writeMessage $ draft <$ checked
-                                receive supplied (Just $ FixReady session{progress = current.progress}) current.remaining (submissions - 1) $ either (const Nothing) (Just . (AE.toJSON draft,)) checked
-                          _ -> pure $ Left "Fix submission requires an initialized session and remaining budget"
-                        Right (Right GuestResult{}) -> pure $ Left "Guest response has no pending workspace command"
-                        Right (Right CopiedGuest{}) -> pure $ Left "Copy response has no pending workspace command"
-                        Right (Right CheckedRegression{}) -> pure $ Left "Check response has no pending workspace command"
+                        Right (Right (Guest operation)) -> do
+                          response <- active $ \session -> session.operate operation
+                          writeMessage response
+                          receive supplied guestSession remaining submissions Nothing
                         Right (Right (Validate draft))
+                          | FixTask request <- task
+                          , Just checkout <- supplied
+                          , Just outbox <- journal
+                          , Just (FixReady session) <- guestSession
+                          , submissions > 0 ->
+                              case AE.fromJSON draft of
+                                AE.Error _ -> writeMessage (Left "Fix summary does not match the host contract" :: Either Text AE.Value) >> receive supplied guestSession remaining (submissions - 1) Nothing
+                                AE.Success summary -> do
+                                  (outcome, current) <- State.runStateT (runExceptT $ (workflow request checkout outbox session).finish summary) (FlowState session.progress remaining)
+                                  checked <- case outcome of
+                                    Left (ToolRejected failure) -> pure $ Left failure
+                                    Left (Fatal failure) -> pure $ Left failure
+                                    Right result -> case callbacks.validate of StructuredDraft validate -> validate $ AE.toJSON result
+                                  writeMessage $ void checked
+                                  receive supplied (Just $ FixReady session{progress = current.progress}) current.remaining (submissions - 1) $ either (const Nothing) (Just . (draft,)) checked
                           | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
                           | SourceTask{} <- task, isJust artifactStore, Just SourceReady <- guestSession, submissions > 0 -> accept
                           | SourceTask{} <- task, isJust artifactStore -> pure $ Left "Source review requires a protected workspace and remaining submission budget"
@@ -698,3 +699,7 @@ reviewOutcome request verified decision = do
     ReviewApproved _ -> Left "Peer review approval requires a bounded rationale"
     ReviewChanges values -> concerns ChangesNeeded values
     ReviewBlocked values -> concerns ReviewUnavailable values
+
+
+workerHost :: [FilePath] -> Maybe FilePath -> Maybe FilePath -> Text -> FilePath -> Guest.Host
+workerHost skills script archive image agent = Guest.Host image (takeDirectory agent </> "sandbox.mjs") (skills <> [takeDirectory agent </> "skills" </> "superpowers"]) ((`Guest.Workspace` archive) <$> script)

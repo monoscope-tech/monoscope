@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, withOutbox, replay, acknowledge, deliver, deliverPhase) where
+module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, withOutbox, replay, acknowledge, retain, deliver, deliverPhase) where
 
 import Control.Monad (foldM)
 import Data.Aeson qualified as AE
@@ -85,7 +85,11 @@ deliverPhase outbox attempt step record = do
 
 
 deliver :: Outbox -> Receipt -> (Receipt -> IO (Either Text ())) -> IO (Either Text ())
-deliver outbox receipt record = do
+deliver outbox receipt record = retain outbox receipt >> acknowledge outbox receipt record
+
+
+retain :: Outbox -> Receipt -> IO ()
+retain outbox receipt = do
   ensure $ permitted outbox.scope receipt
   let filename = toString (receiptId receipt) <> ".json"
   existing <- tryIOError $ Posix.getSymbolicLinkStatus $ outbox.path </> filename
@@ -94,7 +98,6 @@ deliver outbox receipt record = do
     Left failure
       | isDoesNotExistError failure -> writePrivateArtifact outbox.path filename $ AE.encode receipt <> "\n"
       | otherwise -> throwIO failure
-  acknowledge outbox receipt record
 
 
 readReceipt :: Outbox -> FilePath -> IO Receipt

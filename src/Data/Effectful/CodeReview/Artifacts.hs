@@ -1,10 +1,9 @@
-module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidateCause, CandidatePatch, mkCandidatePatch, CapturedCandidate, candidateMatchesPatch, candidateStep, candidateIdentity, candidateRevision, FixSummary, candidateResult, captureCandidate, retainAdmission, VerifiedArtifacts, PeerPreparation, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, writePrivateArtifact, sha256) where
+module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidateCause, CandidatePatch, mkCandidatePatch, CapturedCandidate, candidateMatchesPatch, candidateStep, candidateIdentity, candidateRevision, FixSummary, candidateResult, captureCandidate, retainAdmission, VerifiedArtifacts, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, writePrivateArtifact, sha256) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
-import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isHexDigit)
@@ -29,7 +28,6 @@ import System.Posix.Unistd (fileSynchronise)
 import System.Process.Typed (readProcessStdout_)
 import UnliftIO.Exception (bracket, bracketOnError, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
-import "base64" Data.ByteString.Base64 qualified as Base64
 import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
 
 
@@ -42,25 +40,17 @@ data VerifiedArtifacts = VerifiedArtifacts FilePath ArtifactRequest ReviewEviden
 data ReviewEvidence = ReviewEvidence TestArtifact ByteString ByteString
 
 
-data PeerPreparation = PeerPreparation FixResult (Map Text ByteString)
-
-
-instance AE.ToJSON PeerPreparation where
-  toJSON (PeerPreparation result files) = AE.object ["result" AE..= result, "files" AE..= Map.map (extractBase64 . Base64.encodeBase64) files]
-
-
 artifactCheckout :: VerifiedArtifacts -> FilePath
 artifactCheckout (VerifiedArtifacts directory _ _) = directory
 
 
-peerPreparation :: VerifiedArtifacts -> PeerPreparation
+peerPreparation :: VerifiedArtifacts -> Map Text ByteString
 peerPreparation (VerifiedArtifacts _ request (ReviewEvidence regression baseLog headLog)) =
-  PeerPreparation request.result
-    $ Map.fromList
-      [ ("/run/monoscope-fix-review.json", toStrict $ AE.encode $ AE.object ["result" AE..= request.result, "regression" AE..= regression, "baseline" AE..= request.baseline, "candidate" AE..= request.candidate])
-      , ("/run/monoscope-fix-review-base.log", baseLog)
-      , ("/run/monoscope-fix-review-head.log", headLog)
-      ]
+  Map.fromList
+    [ ("/run/monoscope-fix-review.json", toStrict $ AE.encode $ AE.object ["result" AE..= request.result, "regression" AE..= regression, "baseline" AE..= request.baseline, "candidate" AE..= request.candidate])
+    , ("/run/monoscope-fix-review-base.log", baseLog)
+    , ("/run/monoscope-fix-review-head.log", headLog)
+    ]
 
 
 data ReportStatus = Completed

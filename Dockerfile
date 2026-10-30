@@ -138,10 +138,10 @@ FROM node:24-bookworm-slim AS impact-sdk
 WORKDIR /opt/monoscope/impact-review-worker
 COPY impact-review-worker/package.json impact-review-worker/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
-COPY impact-review-worker/cli.mjs impact-review-worker/review.mjs impact-review-worker/fix.mjs impact-review-worker/workspace.mjs impact-review-worker/sandbox.mjs ./
+COPY impact-review-worker/pi-host.mjs impact-review-worker/jsonl.mjs impact-review-worker/review.mjs impact-review-worker/workspace.mjs impact-review-worker/sandbox.mjs ./
 COPY impact-review-worker/skills ./skills
-RUN node --input-type=module -e "await import('./review.mjs'); await import('./fix.mjs')" && \
-    node --check cli.mjs && node --check sandbox.mjs && \
+RUN node --input-type=module -e "await import('./review.mjs'); await import('./pi-host.mjs')" && \
+    node --check pi-host.mjs && node --check sandbox.mjs && \
     test -f skills/superpowers/systematic-debugging/SKILL.md && \
     test -f skills/superpowers/test-driven-development/SKILL.md
 ARG GH_VERSION=2.103.0
@@ -252,7 +252,7 @@ RUN printf '#!/bin/sh\nunset GHCRTS\nexec /usr/local/libexec/monoscope "$@"\n' >
     chmod 0755 /usr/local/bin/monoscope
 COPY --from=impact-sdk --chmod=755 /usr/local/bin/node /usr/local/bin/gh /usr/local/bin/
 COPY --from=impact-sdk /opt/monoscope/impact-review-worker ./impact-review-worker
-ENV IMPACT_REVIEW_AGENT=/opt/monoscope/impact-review-worker/cli.mjs \
+ENV IMPACT_REVIEW_AGENT=/opt/monoscope/impact-review-worker/pi-host.mjs \
     IMPACT_REVIEW_NATIVE_CLI=/usr/local/bin/monoscope \
     IMPACT_REVIEW_CACHE_DIR=/var/lib/monoscope/cache \
     IMPACT_REVIEW_USAGE_DIR=/var/lib/monoscope/usage \

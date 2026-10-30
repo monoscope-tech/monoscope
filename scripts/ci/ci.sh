@@ -426,7 +426,7 @@ run_integration() {
   if ! command -v ffmpeg >/dev/null || ! command -v dot >/dev/null; then
     apt-get update && apt-get install -y --no-install-recommends ffmpeg graphviz
   fi
-  (cd impact-review-worker && npm ci --ignore-scripts --no-audit)
+  (cd impact-review-worker && npm ci --ignore-scripts --no-audit && npm test)
   prepare_web_deps
   prepare_browser
   # The checkout is bind-mounted from the host: building to ./chart-cli here would

@@ -169,8 +169,9 @@ Resume through the existing executor after a decision.
 
 Keep complete evidence in existing checkpoints and run artifacts.
 Give the model bounded result summaries, explicit truncation markers, and pagination or artifact references.
-Do not JSON-encode the complete MCP envelope into model history.
-The current envelope includes full `structuredContent`, which bypasses the text-side truncation.
+Keep complete MCP envelopes out of model history.
+The combined branch now caps model tool messages at 8,192 characters and retains complete envelopes as evidence.
+Keep that regression while consolidating the remaining operation responses.
 Use existing query formatters and bounded operation responses before adding new formatters.
 
 One conversation contains the user inputs, tool outcomes, decisions, and replies across Slack and the web app.
