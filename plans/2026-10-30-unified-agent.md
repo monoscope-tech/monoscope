@@ -303,7 +303,7 @@ Record actual grants, subscriptions, app eligibility, session behavior, and publ
 ## Implementation evidence
 
 The [visual review](../docs/reviews/2026-10-30-unified-agent.html) shows the architecture, request flows, source excerpts, and remaining work.
-It describes code snapshot `3c9fa2aa9`, including shared scheduled completion.
+It describes code snapshot `9198633ba`, including shared completion and typed capability policies.
 The review now uses one main diagram, a guided request walkthrough, and collapsed code comparisons.
 Text contrast exceeds 7:1 for the tested color pairs. The layout passes browser checks at 390, 768, and 1280 pixels.
 
