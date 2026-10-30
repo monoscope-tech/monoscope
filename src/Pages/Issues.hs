@@ -2299,7 +2299,7 @@ aiChatResponse_ artifactLinkAttrs pid userQuery explanation widgetsM toolCallsM 
 -- >>> :set -XOverloadedStrings -XTypeApplications
 -- >>> import Data.Aeson qualified as AE
 -- >>> import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
--- >>> import Lucid (renderText, toHtml)
+-- >>> import Lucid (href_, renderText, toHtml)
 -- >>> import Data.Default (def)
 -- >>> import Data.Text.Lazy qualified as TL
 -- >>> import Data.UUID qualified as UUID
