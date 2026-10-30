@@ -234,10 +234,10 @@ sdkAgent store arguments action = do
       models = fromMaybe "" $ viaNonEmpty head arguments
       image = fromMaybe "" $ viaNonEmpty head $ drop 3 arguments
       diagnostic = fromMaybe "/dev/null" $ viaNonEmpty head $ drop 4 arguments
-      skills = maybe [] (: []) $ option "--skills"
+      skills = maybe [] (: []) $ option "--skill"
       worker = "impact-review-worker/pi-host.mjs"
       host = if null image then Nothing else Just $ (Agent.workerHost skills (option "--prepare") (option "--dependencies") (toText image) worker){Guest.bridge = "test/fixtures/native-sandbox.sh"}
-  Agent.runCodeReviewWith (Just store) host (Just $ \environment -> setEnv ([("IMPACT_REVIEW_MODELS", models), ("IMPACT_REVIEW_USAGE_DIR", store.usageDir), ("IMPACT_REVIEW_CACHE_DIR", store.cacheDir)] <> environment) $ proc "sh" ["-c", "exec node impact-review-worker/pi-host.mjs 2>>\"$1\"", "sdk-worker", diagnostic]) action
+  Agent.runCodeReviewWith (Just store) host (Just $ \environment -> setEnv ([("IMPACT_REVIEW_MODELS", models), ("IMPACT_REVIEW_USAGE_DIR", store.usageDir), ("IMPACT_REVIEW_CACHE_DIR", store.cacheDir), ("IMPACT_REVIEW_FIXTURE_SECRET", "host-only-fixture")] <> [("TMPDIR", temporary) | Just temporary <- [option "--temp"]] <> [("IMPACT_REVIEW_NATIVE_CLI", cli) | Just cli <- [option "--cli"]] <> filter (\(key, _) -> key `elem` ["PATH", "HOME", "TMPDIR", "IMPACT_REVIEW_OUTBOX_DIR"] && not (key == "TMPDIR" && isJust (option "--temp"))) environment) $ proc "sh" ["-c", "exec node impact-review-worker/pi-host.mjs 2>>\"$1\"", "sdk-worker", diagnostic]) action
 
 
 spec :: Spec
