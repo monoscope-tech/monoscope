@@ -138,13 +138,14 @@ spec = around withTestResources do
             user = (getResponse tr.trSessAndHeader).user.id
             destination = AIThreads.routineDestinationPostH testPid conversation . AIThreads.RoutineDestinationForm
         void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
-        Just routine <- runTestBg frozenTime tr $ Issues.upsertRoutine testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
+        Just routine <- runTestBg frozenTime tr $ Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
         runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` False)
         void $ testServant tr $ destination Issues.DestinationSlack
         runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` True)
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
-        void $ testServant tr $ destination Issues.DestinationConversation
-        void $ testServant tr $ destination Issues.DestinationSlack
+        for_ [Issues.DestinationConversation, Issues.DestinationSlack] \target -> do
+          status <- runAuthHandler tr $ (destination target $> 200) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+          status `shouldBe` 403
         runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` False)
 
     describe "Web conversation persistence" do

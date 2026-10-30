@@ -2050,8 +2050,8 @@ spec = around withTestResources do
         (_, outcome) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"ts\":\"1735689610.000001\"}") $ provider $ tryAny $ SlackPage.processSlackEventWithTools (Just backend) receipt
         outcome `shouldSatisfy` isRight
         catalogs <- readIORef toolResult
-        let activeCatalog = (fst <$> catalogs) >>= (^? key "structuredContent")
-            inactiveCatalog = (snd <$> catalogs) >>= (^? key "structuredContent")
+        let activeCatalog = fst <$> catalogs
+            inactiveCatalog = snd <$> catalogs
         (activeCatalog >>= (^? key "total" . _Number)) `shouldBe` Just 2
         (activeCatalog >>= (^? key "hasMore" . _Bool)) `shouldBe` Just True
         (activeCatalog >>= (^? key "metrics" . _Array . ix 0 . key "metricName" . _String)) `shouldBe` Just "checkout.duration"

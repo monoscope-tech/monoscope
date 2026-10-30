@@ -1119,9 +1119,14 @@ mkToolResultMsg :: LLM.ToolCall -> ToolResult -> LLM.Message
 mkToolResultMsg tc result =
   LLM.Message
     { LLM.role = LLM.Tool
-    , LLM.content = result.formatted
+    , LLM.content =
+        if T.length result.formatted <= 8192
+          then result.formatted
+          else T.take (8192 - T.length truncated) result.formatted <> truncated
     , LLM.messageData = LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall{LLM.toolCallId = LLM.toolCallId tc, LLM.toolCallType = "function", LLM.toolCallFunction = LLM.ToolFunction "" mempty}]}
     }
+  where
+    truncated = "\n[truncated: narrow the query or request the next page]"
 
 
 addMessagesToMemory :: Int -> LLM.ChatHistory -> [LLM.Message] -> IO LLM.ChatHistory
@@ -1345,7 +1350,10 @@ executeToolCall config tc = do
             SlackAccess _ _ userId -> MemberPrincipal userId
             SlackInvestigationAccess run -> MemberPrincipal run.userId
       value <- invoke backend principal config.projectId name args
-      pure $ ToolResult (decodeUtf8 $ AE.encode value) (Just value)
+      let content = value ^.. key "content" . values . key "text" . _String
+          formatted = if null content then encodeText $ fromMaybe value (value ^? key "structuredContent") else T.intercalate "\n" content
+          failure = "Tool failed: " <$ guard (value ^? key "isError" . _Bool == Just True)
+      pure $ ToolResult (fromMaybe "" failure <> formatted) (Just value)
     projectJson :: Projects.Project -> AE.Value
     projectJson project =
       AE.object
