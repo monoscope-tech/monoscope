@@ -539,7 +539,7 @@ runCodeReviewWith artifactStore host executable = interpret \env -> \case
                                   SourceTask request -> own request Nothing Guest.LockForReproduction Nothing worker
                                   AdvisoryTask request -> own request Nothing Guest.Explore Nothing worker
                                   FixTask job -> own job.request (Just job.imageBuildId) Guest.LockForReproduction Nothing worker
-                                  AdmissionTask job -> own job.fix.request (Just job.fix.imageBuildId) (Guest.InspectAdmission job.artifact) (Just $ Checkout.Artifact job.artifact) worker
+                                  AdmissionTask job -> either (pure . Left) (\setup -> own job.fix.request (Just job.fix.imageBuildId) setup (Just $ Checkout.Artifact job.artifact) worker) $ Guest.admissionSetup job.artifact
                                   PeerTask job -> own job.fix.request (Just job.fix.imageBuildId) (Guest.ReviewEvidence evidence) (Just $ Checkout.Result job.artifacts.result) worker
                             pure $ join prepared
                           _ -> pure $ Left "Repository checkout was unavailable or already supplied"

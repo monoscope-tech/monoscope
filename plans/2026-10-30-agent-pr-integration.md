@@ -93,7 +93,9 @@ Adapt #706's timeout recovery and #708's image transport to that same runtime.
 
 The smaller conflict count for #692 does not make it a complete replacement for #693.
 #692's description reports failed container SDK cases and unresolved environment coverage.
-Its snapshot also contains a failed CodeQL check. The cause needs review before publication.
+Its snapshot also contains a failed CodeQL check. A later check-run inspection identifies incomplete HTML-comment sanitization in `scripts/fa-add.mjs:44`.
+That unrelated icon-script rewrite is excluded from this integration; the existing Python helper remains.
+This explains that imported PR check failure but does not establish a CodeQL pass for the combined tree.
 The combined runtime requires provisioned Linux/KVM coverage, protocol bounds, receipt replay, and cleanup evidence.
 
 ## Other open PRs
@@ -259,3 +261,14 @@ The corrected end-to-end publication, isolation, matching/total count, and recov
 The worker suite still passes all fourteen cases after removing the obsolete file-tool mode from the protocol; builtin tool selection now has one policy field.
 Prepared guest assets were subsequently found in the `monoscope-impact-worker-floor` worktree.
 Ignored local asset directories reference those cached files for a focused VM rerun; no guest asset or image was added to Git.
+
+### Native VM verification follow-up
+
+The cached minimal image predates the localhost initialization change, so a fresh minimal guest was built locally with OrbStack.
+The SDK rejects asset symlinks outside an image root. Local assets now use real files; the cached larger profile uses APFS clones.
+The fresh minimal guest passes offline localhost resolution and shutdown after parent-pipe loss.
+Interrupted verifier recovery passes for both cancellation and caller loss.
+A missing SDK export first failed a VM-free bridge regression; the corrected bridge passes all fifteen worker examples.
+The real SDK admission regression also passes after restoring shared artifact bounds at the admission boundary.
+Admission setup hides its unchecked constructor and accepts artifacts through the same validator used by regression decoding.
+These checks use macOS/libkrun. They do not claim provisioned Linux/KVM coverage or final signoff.

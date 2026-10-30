@@ -1,4 +1,4 @@
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Revision, mkRevision, revisionText, TestArtifact (..), AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -100,7 +100,24 @@ hostAllocation identifier attempt durationMs = AllocationReceipt . uncurry (Allo
 
 data TestArtifact = TestArtifact {script :: Text, testPatch :: Text, failureMessage :: Text}
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (AE.ToJSON)
+
+
+mkTestArtifact :: Text -> Text -> Text -> Either Text TestArtifact
+mkTestArtifact script patch failure
+  | validArtifact script (Just patch) failure = Right $ TestArtifact script patch failure
+  | otherwise = Left "Invalid regression artifact"
+
+
+instance AE.FromJSON TestArtifact where
+  parseJSON value =
+    AE.withObject "Regression artifact" (\fields -> mkTestArtifact <$> fields AE..: "script" <*> fields AE..: "testPatch" <*> fields AE..: "failureMessage" >>= either (fail . toString) pure) value
+
+
+validArtifact :: Text -> Maybe Text -> Text -> Bool
+validArtifact script patch failure = bounded 65536 script && bounded 200 failure && all (bounded 262144) patch
+  where
+    bounded limit text = not (T.null $ T.strip text) && T.length text <= limit
 
 
 newtype ProjectId = ProjectId UUID
@@ -471,15 +488,14 @@ instance AE.FromJSON ArtifactInput where
   parseJSON = AE.withObject "Frozen regression" \fields -> do
     script <- fields AE..: "script"
     failure <- fields AE..: "failureMessage"
-    let bounded limit text = not (T.null $ T.strip text) && T.length text <= limit
-    unless (bounded 65536 script && bounded 200 failure) $ fail "Invalid regression artifact"
+    unless (validArtifact script Nothing failure) $ fail "Invalid regression artifact"
     case KM.lookup "testFiles" fields of
       Just value -> do
         when (KM.member "testPatch" fields) $ fail "Supply test files or a test patch, not both"
         FileArtifact script <$> AE.parseJSON value <*> pure failure
       Nothing -> do
         patch <- fields AE..:? "testPatch"
-        unless (all (bounded 262144) patch) $ fail "Invalid regression artifact"
+        unless (validArtifact script patch failure) $ fail "Invalid regression artifact"
         pure $ ExistingArtifact $ Artifact script patch failure
 
 

@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Data.Effectful.AgentWorkspace.Guest (Host (..), Workspace (..), Lease (..), Setup (..), Exec (..), Operation (..), Session (..), withGuest, runSession) where
+module Data.Effectful.AgentWorkspace.Guest (Host (..), Workspace (..), Lease (..), Setup (Explore, ReviewEvidence, LockForReproduction), admissionSetup, Exec (..), Operation (..), Session (..), withGuest, runSession) where
 
 import Conduit (await, leftover, runConduit, (.|))
 import Control.Exception (AsyncException (UserInterrupt))
@@ -49,6 +49,11 @@ data Lease = Lease {cacheDir :: FilePath, request :: AgentWorkspace.Request}
 
 -- | Role-specific guest preparation that runs before the agent sees the workspace.
 data Setup = Explore | InspectAdmission TestArtifact | ReviewEvidence (Map Text ByteString) | LockForReproduction
+
+
+-- | Only a bounded, nonempty frozen artifact can enter admission preparation.
+admissionSetup :: TestArtifact -> Either Text Setup
+admissionSetup artifact = InspectAdmission <$> AgentWorkspace.mkTestArtifact artifact.script artifact.testPatch artifact.failureMessage
 
 
 data Exec = Exec {command :: Text, cwd :: Text, timeout :: Maybe Double}
