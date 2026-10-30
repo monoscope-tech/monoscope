@@ -299,7 +299,9 @@ Record actual grants, subscriptions, app eligibility, session behavior, and publ
 ## Implementation evidence
 
 The [visual review](../docs/reviews/2026-10-30-unified-agent.html) shows the architecture, request flows, source excerpts, and remaining work.
-It describes code snapshot `3685db582`.
+It describes code snapshot `bb350699b`.
+The review now uses one main diagram, a guided request walkthrough, and collapsed code comparisons.
+Text contrast exceeds 7:1 for the tested color pairs. The layout passes browser checks at 390, 768, and 1280 pixels.
 
 The related PR runtime integration passes 33 review integration examples and fifteen worker examples.
 Operation names and agent permission policies now live together in the API tool catalog.
