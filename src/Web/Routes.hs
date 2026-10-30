@@ -449,7 +449,6 @@ data Routes mode = Routes
           :> Header "X-Event-Key" Text -- Bitbucket
           :> ReqBody '[RawJSON] BS.ByteString
           :> Post '[JSON] AE.Value
-  , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> RawM
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[PNG] (Headers '[Header "Cache-Control" Text] LBS.ByteString)
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders (Html ()))
@@ -827,7 +826,6 @@ server logger env tp otlpTraces otlpLogs =
             , gitlabTimestamp = glTs
             , body = body
             }
-    , chartsDataShot = Charts.queryMetrics Nothing
     , avatarGet = avatarGetH
     , widgetPngGet = widgetPngGetH
     , proxyLanding = \path ->
