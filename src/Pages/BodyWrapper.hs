@@ -3,6 +3,7 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..), OnboardingStep (..), stepU
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
 import Data.List (lookup, partition)
 import Data.Text qualified as T
@@ -26,7 +27,7 @@ import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem qualified as LogItem
-import Pkg.DeriveUtils (DB, UUIDId, WrappedEnumShow (..), assetUrl, viteAssetFile)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumShow (..), assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
@@ -85,7 +86,8 @@ mkAIPageCtx pid = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- EffReader.ask @AuthContext
   now <- Time.currentTime
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, shellNow = now})
+  requestId <- UUIDId <$> UUID.genUUID
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, shellNow = now, composerRequestId = Just requestId})
 
 
 -- | The checklist is a statement of customer value, not of which links someone clicked.
@@ -256,6 +258,7 @@ data BWConfig = BWConfig
   , activationProgressM :: Maybe ActivationProgress
   , conversations :: [Issues.ConversationSummary]
   , activeConversationId :: Maybe (UUIDId "conversation")
+  , composerRequestId :: Maybe (UUIDId "ai_routine_run")
   , shellNow :: UTCTime
   }
   deriving stock (Generic, Show)
@@ -640,6 +643,7 @@ bodyWrapper bcfg child = do
         ("Start", ["⌘/Ctrl", "↵"])
         [id_ "ai-composer-panel", hxPost_ $ "/p/" <> pid.toText <> "/ai", hxSwap_ "none", term "hx-disabled-elt" "find button[type='submit']"]
         do
+          forM_ bcfg.composerRequestId $ \requestId -> input_ [type_ "hidden", name_ "requestId", value_ requestId.toText]
           Components.segmented_ "m-2 grid w-fit grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs" "Conversation type" "mode" "ai-composer-" [("chat", "Chat"), ("routine", "Routine")]
           div_ [class_ "border-b border-base-300 px-3"] do
             textarea_

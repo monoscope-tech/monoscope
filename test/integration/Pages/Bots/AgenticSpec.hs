@@ -2,7 +2,7 @@ module Pages.Bots.AgenticSpec (spec) where
 
 import BackgroundJobs qualified
 import Control.Concurrent (threadDelay)
-import Control.Exception (ErrorCall (..))
+import Control.Exception (ErrorCall (..), bracket_)
 import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, values, _Array, _String)
@@ -11,10 +11,12 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.IORef qualified as IORef
 import Data.Map qualified as Map
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple qualified as PGS
 import Effectful qualified as Eff
 import Effectful.Concurrent.Async (concurrently_)
 import Effectful.Dispatch.Dynamic (interpose)
@@ -39,7 +41,7 @@ import Servant (ServerError (..))
 import Servant.API.ResponseHeaders (getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
-import System.Types (ATBackgroundCtx)
+import System.Types (ATAuthCtx, ATBackgroundCtx)
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (urlDecodeAsForm)
@@ -157,6 +159,80 @@ spec = around withTestResources do
         fmap (.allowActions) granted `shouldBe` Right (Just True)
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid (UUIDId UUID.nil) Nothing Nothing
         (renderT threadPage) `shouldSatisfy` T.isInfixOf "name=\"allowActions\""
+        T.count "name=\"requestId\"" (renderT threadPage) `shouldBe` 2
+
+      for_ (["thread", "new", "routine"] :: [Text]) \origin ->
+        it ("webRequestCheckpoint_retriesWithoutRepeatingReadsOrConversationMessages: " <> toString origin) \tr -> do
+          let existingConversation = UUIDId $ UUID.fromWords 0 0 92 1
+              form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm $ "query=Inspect+the+project&requestId=00000000-0000-0000-0000-000000000092&" <> if origin == "routine" then "mode=routine&intervalMinutes=15" else "mode=chat"
+          when (origin == "thread") do
+            void $ runTestBg frozenTime tr $ Issues.getOrCreateConversation testPid existingConversation Issues.CTWeb (AE.object [])
+            runQueryEffect tr $ Issues.renameConversation testPid existingConversation "Checkpoint regression"
+          calls <- IORef.newIORef ([] :: [Text])
+          models <- IORef.newIORef ([] :: [Maybe Text])
+          interrupt <- IORef.newIORef True
+          let original = Routes.mcpProjectTools
+              backend =
+                original
+                  { AI.invoke = \principal pid name args -> do
+                      liftIO $ IORef.modifyIORef' calls (<> [name])
+                      when (name == "get_schema") $ liftIO do
+                        stop <- IORef.atomicModifyIORef' interrupt (\old -> (False, old))
+                        when stop $ throwIO $ ErrorCall "Worker interrupted after a completed web read"
+                      AI.invoke original principal pid name args
+                  }
+              provider :: ATAuthCtx a -> ATAuthCtx a
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history request _ -> do
+                  liftIO $ IORef.modifyIORef' models (<> [AE.toJSON request ^? key "model" . _String])
+                  let results = [message.content | message <- toList history, message.role == LLM.Tool]
+                  pure
+                    $ Right
+                    $ if null results
+                      then LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall name "function" $ LLM.ToolFunction name mempty | name <- ["get_project", "get_schema"]]}
+                      else LLM.Message LLM.Assistant "The project evidence is retained." LLM.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "Unexpected title request"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+              execute = tryAny $ void $ runAuthHandler tr $ provider $ if origin == "thread" then AIThreads.threadPostHWithTools (Just backend) testPid existingConversation form else AIThreads.startThreadPostHWithTools (Just backend) testPid form
+          execute >>= (`shouldSatisfy` isLeft)
+          let ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+          bracket_
+            (ddl "ALTER TABLE apis.ai_routine_runs ADD CONSTRAINT completion_regression CHECK (status <> 'succeeded')")
+            (ddl "ALTER TABLE apis.ai_routine_runs DROP CONSTRAINT completion_regression")
+            do
+              execute >>= (`shouldSatisfy` isLeft)
+              pending <- runQueryEffect tr (Issues.getRoutineRun testPid $ UUIDId $ UUID.fromWords 0 0 0 146) >>= maybe (fail "Missing web run") pure
+              interruptedHistory <- runQueryEffect tr $ Issues.selectChatHistory testPid pending.conversationId
+              [message.content | message <- interruptedHistory, message.role == Issues.ChatAssistant] `shouldBe` []
+              pending.status `shouldBe` Issues.RunRunning
+          pending <- runQueryEffect tr (Issues.getRoutineRun testPid $ UUIDId $ UUID.fromWords 0 0 0 146) >>= maybe (fail "Missing web run") pure
+          let conversation = pending.conversationId
+          execute >>= (`shouldSatisfy` isRight)
+          IORef.readIORef calls >>= (`shouldBe` ["get_project", "get_schema", "get_schema"])
+          when (origin == "routine") $ runQueryEffect tr $ Issues.pauseRoutine testPid conversation
+          execute >>= (`shouldSatisfy` isRight)
+          when (origin == "routine") do
+            saved <- runQueryEffect tr $ Issues.getConversation testPid conversation
+            fmap (.routineActive) saved `shouldBe` Just False
+          IORef.readIORef calls >>= (`shouldBe` ["get_project", "get_schema", "get_schema"])
+          IORef.readIORef models >>= (\requests -> length requests `shouldBe` 2)
+          history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+          [message.content | message <- history, message.role == Issues.ChatUser] `shouldBe` ["Inspect the project"]
+          [message.content | message <- history, message.role == Issues.ChatAssistant] `shouldBe` ["The project evidence is retained."]
+          runs <- runQueryEffect tr $ Issues.listConversationRuns testPid conversation 20
+          map (.status) runs `shouldBe` [Issues.RunSucceeded]
+          for_ ([form{AIThreads.query = "A different request"}, form{AIThreads.allowActions = Just True}] :: [AIThreads.AIChatForm]) \changed -> do
+            status <- runAuthHandler tr $ provider $ (void (if origin == "thread" then AIThreads.threadPostHWithTools (Just backend) testPid conversation changed else AIThreads.startThreadPostHWithTools (Just backend) testPid changed) $> 200) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+            status `shouldBe` 409
+          when (origin /= "thread") do
+            runQueryEffect tr $ Issues.deleteConversation testPid conversation
+            deleted <- runAuthHandler tr $ provider $ (void (AIThreads.startThreadPostHWithTools (Just backend) testPid form) $> 200) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+            deleted `shouldBe` 409
+          let user = (getResponse tr.trSessAndHeader).user.id
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM projects.project_members WHERE project_id = #{testPid} AND user_id = #{user}|]
+          revoked <- runAuthHandler tr $ provider $ (void (AIThreads.threadPostHWithTools (Just backend) testPid conversation form) $> 200) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+          revoked `shouldBe` 403
+          IORef.readIORef calls >>= (`shouldBe` ["get_project", "get_schema", "get_schema"])
 
       it "assistantPages_defaultToAssistant" \tr -> do
         let convId = UUIDId UUID.nil

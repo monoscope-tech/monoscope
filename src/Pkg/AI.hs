@@ -555,12 +555,13 @@ data AgenticConfig = AgenticConfig
 
 -- | Background invocations carry the run whose installation grants authority.
 -- A scheduled prompt alone can never grant it.
-data InvocationMode = InteractiveReadOnly | InteractiveWithActions | ScheduledRoutine (UUIDId "ai_routine_run") Bool | RoutineEventRun (UUIDId "ai_routine_run")
+data InvocationMode = InteractiveReadOnly | InteractiveWithActions | InteractiveRun (UUIDId "ai_routine_run") Issues.ExecutionPolicy | ScheduledRoutine (UUIDId "ai_routine_run") Bool | RoutineEventRun (UUIDId "ai_routine_run")
   deriving stock (Eq, Generic, Show)
 
 
-backgroundRun :: InvocationMode -> Maybe (UUIDId "ai_routine_run")
-backgroundRun = \case
+invocationRun :: InvocationMode -> Maybe (UUIDId "ai_routine_run")
+invocationRun = \case
+  InteractiveRun run _ -> Just run
   ScheduledRoutine run _ -> Just run
   RoutineEventRun run -> Just run
   InteractiveReadOnly -> Nothing
@@ -571,6 +572,7 @@ actionsAllowed :: InvocationMode -> Bool
 actionsAllowed = \case
   InteractiveReadOnly -> False
   InteractiveWithActions -> True
+  InteractiveRun _ policy -> policy == Issues.Autonomous
   ScheduledRoutine _ allowed -> allowed
   RoutineEventRun{} -> False
 
@@ -588,6 +590,7 @@ userMessagePersistence :: InvocationMode -> Bool
 userMessagePersistence = \case
   InteractiveReadOnly -> True
   InteractiveWithActions -> True
+  InteractiveRun{} -> False
   ScheduledRoutine{} -> False
   RoutineEventRun{} -> True
 
@@ -595,8 +598,11 @@ userMessagePersistence = \case
 requireConfigAccess :: (DB es, IOE :> es) => AgenticConfig -> Eff es ()
 requireConfigAccess config = do
   requireAgentAccess config.access config.projectId
-  for_ (backgroundRun config.invocationMode) $ \runId ->
-    unlessM (Issues.routineRunActive config.projectId runId) $ throwIO AgentStopped
+  for_ (invocationRun config.invocationMode) $ \runId -> do
+    active <- case config.invocationMode of
+      InteractiveRun _ policy -> maybe (pure False) (\user -> Issues.interactiveRunActive config.projectId runId user policy) $ accessMember config.access
+      _ -> Issues.routineRunActive config.projectId runId
+    unless active $ throwIO AgentStopped
 
 
 -- | Default agentic configuration with reasonable defaults (maxIterations=5, facetContext=Nothing)
@@ -978,6 +984,7 @@ runAgenticChatWithHistory initialConfig userQuery model apiKey = do
       pure evidence.instructions
     InteractiveReadOnly -> pure Nothing
     InteractiveWithActions -> pure Nothing
+    InteractiveRun{} -> pure Nothing
     ScheduledRoutine{} -> pure Nothing
   let config = initialConfig{customContext = instructions <> initialConfig.customContext}
   requireConfigAccess config
@@ -1004,7 +1011,7 @@ runAgenticChatWithHistory initialConfig userQuery model apiKey = do
           requireConfigAccess config
           traverse (Investigations.saveAnswer turn) result
     (access, Just convId)
-      | Just runId <- backgroundRun config.invocationMode
+      | Just runId <- invocationRun config.invocationMode
       , Just user <- accessMember access -> do
           let target = Investigations.RunCheckpoint $ Investigations.RunTurn config.projectId convId user runId
           checkpoint <-
@@ -1016,7 +1023,7 @@ runAgenticChatWithHistory initialConfig userQuery model apiKey = do
                 )
                 pure
           run (Just $ Investigations.CheckpointCursor target checkpoint.revision) checkpoint.checkpoint
-    _ | isJust $ backgroundRun config.invocationMode -> throwIO AgentAccessDenied
+    _ | isJust $ invocationRun config.invocationMode -> throwIO AgentAccessDenied
     _ -> do
       history <-
         config.conversationId & maybe (pure []) \convId ->
@@ -1333,6 +1340,7 @@ executeToolCall config tc = do
           ScheduledRoutine runId True -> Issues.routineRunCanWriteMemory config.projectId conversation runId
           ScheduledRoutine _ False -> pure False
           InteractiveWithActions -> editorAccess
+          InteractiveRun _ policy -> if policy == Issues.Autonomous then editorAccess else pure False
           RoutineEventRun{} -> pure False
         if exists && allowed
           then either memoryError encodeText <$> Memory.writePage config.projectId edit.pageId edit.version Nothing edit.document (Memory.Conversation conversation)

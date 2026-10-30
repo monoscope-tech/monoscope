@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processActionableAIQueryWithTools, processAIQueryWithMode, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processAIQueryWithMode, storeAgenticResponse, ResponseTarget (..), verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -15,6 +15,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
+import Effectful.Exception (throwIO)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Lucid
@@ -197,10 +198,6 @@ processAIQueryWithTools :: ProjectToolCtx es => Maybe EnvConfig -> Bool -> Maybe
 processAIQueryWithTools sourceConfig useTf projectTools = processAIQueryWithMode sourceConfig useTf projectTools AI.InteractiveReadOnly
 
 
-processActionableAIQueryWithTools :: ProjectToolCtx es => Maybe EnvConfig -> Bool -> Maybe AI.ProjectTools -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processActionableAIQueryWithTools sourceConfig useTf projectTools = processAIQueryWithMode sourceConfig useTf projectTools AI.InteractiveWithActions
-
-
 processAIQueryWithMode :: ProjectToolCtx es => Maybe EnvConfig -> Bool -> Maybe AI.ProjectTools -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid userQuery conversationId model apiKey = do
   AI.requireAgentAccess access pid
@@ -227,7 +224,13 @@ processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid
       parsed <- case (access, conversationId) of
         (AI.SlackInvestigationAccess{}, _) -> pure $ AI.parseAgenticResponse answer -- Saved atomically with the replayable answer.
         (_, Nothing) -> pure $ AI.parseAgenticResponse answer
-        (_, Just convId) -> AI.requireAgentAccess access pid >> storeAgenticResponse pid convId answer
+        (_, Just convId) -> do
+          AI.requireAgentAccess access pid
+          target <- case (invocationMode, access) of
+            (AI.InteractiveRun runId policy, AI.MemberAccess _ user) -> pure $ RunResponse pid runId user policy
+            (AI.InteractiveRun{}, _) -> throwIO AI.AgentAccessDenied
+            _ -> pure $ ConversationResponse pid convId
+          storeAgenticResponse target answer
       whenJust conversationId \convId ->
         AI.ensureConversationTitle sourceConfig pid convId userQuery answer.response (maybe model (.openaiSmallModel) sourceConfig) apiKey
       pure parsed
@@ -236,8 +239,18 @@ processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid
 
 -- | Persist the normalized answer shape consumed by issue chat and the global thread
 -- view. Keeping this here prevents routines and interactive chats from drifting.
-storeAgenticResponse :: DB es => Projects.ProjectId -> UUIDId "conversation" -> AI.AgenticChatResult -> Eff es (Either Text AI.LLMResponse)
-storeAgenticResponse pid convId answer = parsed <$ Issues.insertChatMessage pid convId Issues.ChatAssistant msg (AE.toJSON <$> widgets) (Just $ AE.toJSON answer.toolCalls)
+data ResponseTarget
+  = ConversationResponse Projects.ProjectId (UUIDId "conversation")
+  | RunResponse Projects.ProjectId (UUIDId "ai_routine_run") Projects.UserId Issues.ExecutionPolicy
+
+
+storeAgenticResponse :: DB es => ResponseTarget -> AI.AgenticChatResult -> Eff es (Either Text AI.LLMResponse)
+storeAgenticResponse target answer =
+  parsed <$ case target of
+    ConversationResponse pid convId -> Issues.insertChatMessage pid convId Issues.ChatAssistant msg (AE.toJSON <$> widgets) (Just $ AE.toJSON answer.toolCalls)
+    RunResponse pid runId user policy -> do
+      published <- Issues.finishInteractiveRun pid runId user policy msg (AE.toJSON <$> widgets) (AE.toJSON answer) (AE.toJSON answer.toolCalls)
+      unless published $ throwIO AI.AgentStopped
   where
     parsed = AI.parseAgenticResponse answer
     widgets = guarded (not . null) . take 10 . AI.responseWidgets =<< rightToMaybe parsed

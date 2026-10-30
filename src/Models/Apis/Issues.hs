@@ -143,6 +143,12 @@ module Models.Apis.Issues (
   getEventRoutine,
   startEventRun,
   routineRunActive,
+  ExecutionPolicy (..),
+  InteractiveOrigin (..),
+  startInteractiveRun,
+  InteractiveStart (..),
+  interactiveRunActive,
+  finishInteractiveRun,
   saveRunResult,
   listRunArtifacts,
   getRoutineRun,
@@ -1512,7 +1518,11 @@ data ConversationSummary = ConversationSummary
 
 newtype RoutineInterval = RoutineInterval Int
   deriving stock (Eq, Generic, Show)
-  deriving newtype (FromField, HI.DecodeValue, HI.EncodeValue, ToField)
+  deriving newtype (AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField)
+
+
+instance AE.FromJSON RoutineInterval where
+  parseJSON value = AE.parseJSON value >>= either (fail . toString) pure . mkRoutineInterval
 
 
 routineIntervalMinutes :: RoutineInterval -> Int
@@ -1531,6 +1541,15 @@ routineCadence interval
     frequency count unit = "Every " <> show count <> " " <> unit <> "s"
 
 
+-- | JSON preserves the constructor invariant.
+--
+-- >>> let interval = mkRoutineInterval 15
+-- >>> ((AE.eitherDecode . AE.encode) <$> interval) == (Right <$> interval)
+-- True
+-- >>> AE.eitherDecode @RoutineInterval "4"
+-- Left "Error in $: Routine interval must be at least 5 minutes."
+-- >>> AE.eitherDecode @RoutineInterval "10081"
+-- Left "Error in $: Routine interval must not exceed 10,080 minutes."
 mkRoutineInterval :: Int -> Either Text RoutineInterval
 mkRoutineInterval minutes
   | minutes < 5 = Left "Routine interval must be at least 5 minutes."
@@ -1567,10 +1586,21 @@ data RoutineEventSource = SlackMessage (UUIDId "slack_event") | SlackCommand (UU
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data RoutineRunSource = ScheduledRun | TriggeredRun RoutineEventSource
+data InteractiveOrigin = WebMessage | WebConversation | WebRoutine RoutineInterval
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data RoutineRunSource = ScheduledRun | TriggeredRun RoutineEventSource | InteractiveRun InteractiveOrigin
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb RoutineRunSource
+
+
+-- | The run retains its original authority. Current member permissions still apply.
+data ExecutionPolicy = Observe | Autonomous
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" ExecutionPolicy
 
 
 data RunContinuation = StartRun | ContinueRun | RestartRun
@@ -1837,9 +1867,13 @@ deleteConversation pid convId =
 upsertRoutine :: (DB es, Time :> es) => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> RoutineInterval -> Eff es (Maybe ScheduledRoutine)
 upsertRoutine requestedBy pid convId interval = do
   now <- Time.currentTime
+  Hasql.interpOne $ upsertRoutineSql requestedBy pid convId interval now
+
+
+upsertRoutineSql :: Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> RoutineInterval -> UTCTime -> HI.Sql
+upsertRoutineSql requestedBy pid convId interval now =
   let intervalMinutes = routineIntervalMinutes interval
-  Hasql.interpOne
-    [HI.sql|WITH saved AS (
+   in [HI.sql|WITH saved AS (
         INSERT INTO apis.ai_routines AS routine (requested_by, project_id, conversation_id, interval_minutes, next_run_at, allow_actions)
         SELECT #{requestedBy}, #{pid}, #{convId}, #{intervalMinutes}, #{addUTCTime (fromIntegral $ intervalMinutes * 60) now}, TRUE
         FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
@@ -1935,9 +1969,12 @@ claimRoutine routineId scheduledAt =
 
 
 finishRoutineRun :: DB es => UUIDId "ai_routine_run" -> UTCTime -> RoutineRunCompletion -> Maybe AE.Value -> Maybe AE.Value -> Maybe Text -> Eff es ()
-finishRoutineRun runId startedAt status findings actions err =
-  Hasql.interpExecute_
-    [HI.sql|WITH finished AS (
+finishRoutineRun runId startedAt status findings actions err = Hasql.interpExecute_ $ finishRoutineRunSql runId startedAt status findings actions err
+
+
+finishRoutineRunSql :: UUIDId "ai_routine_run" -> UTCTime -> RoutineRunCompletion -> Maybe AE.Value -> Maybe AE.Value -> Maybe Text -> HI.Sql
+finishRoutineRunSql runId startedAt status findings actions err =
+  [HI.sql|WITH finished AS (
       UPDATE apis.ai_routine_runs
       SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{err}
       WHERE id = #{runId} AND started_at = #{startedAt} AND status = 'running'
@@ -1986,6 +2023,76 @@ startEventRun routine event continuation convId requestedBy input = do
       ) SELECT id, started_at, status, requested_by, instructions FROM inserted
         UNION ALL SELECT id, started_at, status, requested_by, instructions FROM previous
           WHERE #{resume} AND NOT EXISTS (SELECT 1 FROM inserted) AND requested_by IS NOT NULL LIMIT 1|]
+
+
+data InteractiveStart = ConflictingRequest | AcceptedRequest (Maybe ScheduledRoutine)
+
+
+-- | Initialize a request and its optional routine together. Replays never change the routine.
+startInteractiveRun :: (DB es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
+startInteractiveRun pid conversation user runId input policy origin = do
+  now <- Time.currentTime
+  let newConversation = case origin of
+        WebMessage -> False
+        WebConversation -> True
+        WebRoutine{} -> True
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    inserted <-
+      Hasql.queryTx @[UUIDId "ai_routine_run"]
+        [HI.sql|INSERT INTO apis.ai_routine_runs
+        (id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status)
+        SELECT #{runId}, #{pid}, #{conversation}, #{user}, #{input}, #{policy}, #{InteractiveRun origin}, #{now}, #{now}, 'running'
+        WHERE #{newConversation} OR EXISTS
+          (SELECT 1 FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{conversation} FOR KEY SHARE)
+        ON CONFLICT (id) DO NOTHING RETURNING id|]
+    when (newConversation && not (null inserted))
+      $ Hasql.executeTx
+        [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
+        VALUES (#{pid}, #{conversation}, #{CTWeb}, '{}'::jsonb) ON CONFLICT (project_id, conversation_id) DO NOTHING|]
+    matching <-
+      Hasql.queryTx @[UUIDId "ai_routine_run"]
+        [HI.sql|SELECT run.id FROM apis.ai_routine_runs run JOIN apis.ai_conversations c
+        ON c.project_id = run.project_id AND c.conversation_id = run.conversation_id
+        WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.conversation_id = #{conversation} AND run.requested_by = #{user}
+        AND run.input = #{input} AND run.policy = #{policy} AND run.source = #{InteractiveRun origin}
+        FOR UPDATE OF run FOR KEY SHARE OF c|]
+    if null matching
+      then pure ConflictingRequest
+      else
+        AcceptedRequest <$> case (inserted, origin) of
+          (_ : _, WebRoutine interval) -> do
+            scheduled <- Hasql.oneTx $ upsertRoutineSql user pid conversation interval now
+            Hasql.executeTx [HI.sql|UPDATE apis.ai_routines SET instructions = #{input} WHERE id = #{scheduled.id}|]
+            pure $ Just scheduled
+          _ -> pure Nothing
+
+
+interactiveRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Projects.UserId -> ExecutionPolicy -> Eff es Bool
+interactiveRunActive pid runId user policy =
+  fromMaybe False
+    <$> Hasql.interpOne
+      [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_routine_runs run
+      JOIN apis.ai_conversations c ON c.project_id = run.project_id AND c.conversation_id = run.conversation_id
+      WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.requested_by = #{user}
+        AND run.source->>'tag' = 'InteractiveRun' AND run.policy = #{policy} AND run.status IN ('running', 'succeeded'))|]
+
+
+-- | Publish the normalized message and finish its run in the same transaction.
+finishInteractiveRun :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Projects.UserId -> ExecutionPolicy -> Text -> Maybe AE.Value -> AE.Value -> AE.Value -> Eff es Bool
+finishInteractiveRun pid runId user policy body widgets answer tools =
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    runs <-
+      Hasql.queryTx @[(UTCTime, RoutineRunStatus)]
+        [HI.sql|SELECT started_at, status FROM apis.ai_routine_runs WHERE id = #{runId}
+        AND project_id = #{pid} AND requested_by = #{user} AND policy = #{policy}
+        AND source->>'tag' = 'InteractiveRun' FOR UPDATE|]
+    case runs of
+      [(startedAt, RunRunning)] -> do
+        Hasql.executeTx $ runResultMessageSql pid runId body widgets (Just tools)
+        Hasql.executeTx $ finishRoutineRunSql runId startedAt CompletedSucceeded (Just answer) (Just tools) Nothing
+        pure True
+      [(_, RunSucceeded)] -> pure True
+      _ -> pure False
 
 
 routineRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
@@ -2068,13 +2175,16 @@ getEventRun pid event =
 
 -- | A run owns one assistant result message, including across worker recovery.
 insertRunResultMessage :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Text -> Eff es ()
-insertRunResultMessage pid runId body = do
+insertRunResultMessage pid runId body = Hasql.interpExecute_ $ runResultMessageSql pid runId body Nothing Nothing
+
+
+runResultMessageSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Text -> Maybe AE.Value -> Maybe AE.Value -> HI.Sql
+runResultMessageSql pid runId body widgets metadata =
   let messageId :: UUIDId "ai_chat"
       messageId = UUIDId $ UUID5.generateNamed runId.unUUIDId $ BS.unpack "routine-result"
-  Hasql.interpExecute_
-    [HI.sql|WITH inserted AS (
-      INSERT INTO apis.ai_chat_messages (id, project_id, conversation_id, role, content, created_at)
-      SELECT #{messageId}, run.project_id, run.conversation_id, 'assistant', #{body}, clock_timestamp()
+   in [HI.sql|WITH inserted AS (
+      INSERT INTO apis.ai_chat_messages (id, project_id, conversation_id, role, content, widgets, metadata, created_at)
+      SELECT #{messageId}, run.project_id, run.conversation_id, 'assistant', #{body}, #{Aeson <$> widgets}, #{Aeson <$> metadata}, clock_timestamp()
       FROM apis.ai_routine_runs run JOIN apis.ai_conversations c ON c.project_id = run.project_id AND c.conversation_id = run.conversation_id
       WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running' FOR KEY SHARE OF c
       ON CONFLICT (id) DO NOTHING RETURNING project_id, conversation_id

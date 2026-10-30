@@ -3,11 +3,13 @@ module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.ByteString qualified as BS
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
+import Data.UUID.V5 qualified as UUID5
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
@@ -63,6 +65,7 @@ data AIChatForm = AIChatForm
   , mode :: ComposerMode
   , intervalMinutes :: Maybe Issues.RoutineInterval
   , allowActions :: Maybe Bool
+  , requestId :: Maybe (UUIDId "ai_routine_run")
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -242,6 +245,7 @@ threadGetH pid convId docM = threadPageGetH pid convId docM Nothing
 
 threadPageGetH :: Projects.ProjectId -> UUIDId "conversation" -> Maybe Issues.ArtifactKey -> Maybe Issues.RoutineRun -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 threadPageGetH pid convId docM runM hxTarget = do
+  requestId <- UUIDId <$> UUID.genUUID
   canEdit <- canEditRoutines pid
   (_, _, bw) <- mkAIPageCtx pid
   -- The open document's refresh keeps only #ai-document (htmx 4 sends `tag#id`), so skip what it discards.
@@ -277,7 +281,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                   span_ [class_ "max-md:hidden"] "View issue"
                 Nothing -> scheduleControl_ conversation.conversationId routineM <$ guard (canEdit && conversation.conversationType == Issues.CTWeb && (isNothing conversation.routineKind || isJust conversation.routineInterval))
           }
-  addRespHeaders $ PageCtx pageConfig $ threadPage_ canEdit instructions runs runContent conversationM pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
+  addRespHeaders $ PageCtx pageConfig $ threadPage_ requestId canEdit instructions runs runContent conversationM pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
   where
     runStatusId :: Issues.RoutineRun -> Text
     runStatusId run = "routine-run-status-" <> run.id.toText
@@ -292,6 +296,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             div_ [class_ "flex flex-wrap items-center gap-3 text-sm text-textWeak"] do
               span_ [role_ "status"] $ uncurry tonePill_ $ runStatus run.status
               span_ $ toHtml $ case run.source of
+                Issues.InteractiveRun _ -> "Web request"
                 Issues.ScheduledRun -> "Scheduled"
                 Issues.TriggeredRun (Issues.SlackMessage _) -> "Slack request"
                 Issues.TriggeredRun (Issues.SlackCommand _) -> "Slack command"
@@ -337,8 +342,8 @@ threadPageGetH pid convId docM runM hxTarget = do
           button_ [type_ "submit", class_ "btn btn-sm btn-primary w-full active:scale-[0.96] transition-transform"] "Save routine"
         when (any ((.routineActive) . fst) routineState) $ form_ [class_ "mt-3 border-t border-strokeWeak pt-2", hxPost_ $ threadUrl pid conversationId <> "/routine/pause", hxSwap_ "none"] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost w-full active:scale-[0.96] transition-transform"] "Pause routine"
 
-    threadPage_ :: Bool -> Maybe Text -> [Issues.RoutineRun] -> Maybe (Html ()) -> Maybe Issues.ConversationSummary -> Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Bool -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
-    threadPage_ canEdit instructions runs runContent conversationM projectId activeConversationIdM routineM allowActionUi messages docs openDoc = div_ [id_ "ai-conversation", class_ "group/conversation relative h-full min-h-0 flex bg-bgBase"] do
+    threadPage_ :: UUIDId "ai_routine_run" -> Bool -> Maybe Text -> [Issues.RoutineRun] -> Maybe (Html ()) -> Maybe Issues.ConversationSummary -> Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Bool -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
+    threadPage_ requestId canEdit instructions runs runContent conversationM projectId activeConversationIdM routineM allowActionUi messages docs openDoc = div_ [id_ "ai-conversation", class_ "group/conversation relative h-full min-h-0 flex bg-bgBase"] do
       div_ [class_ "min-w-0 grow flex flex-col max-lg:group-has-[[data-open]]/conversation:hidden"] do
         div_ [id_ "ai-thread-messages", class_ "min-h-0 grow overflow-y-auto"] do
           div_ [class_ "max-w-3xl mx-auto px-5 py-8"] do
@@ -392,6 +397,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 ]
                 ""
               input_ [type_ "hidden", name_ "mode", value_ "chat"]
+              input_ [type_ "hidden", name_ "requestId", value_ requestId.toText]
               button_ [type_ "submit", Aria.label_ "Send message", class_ "group/send w-9 h-9 shrink-0 rounded-lg bg-fillBrand-strong text-white flex items-center justify-center cursor-pointer active:scale-[0.96] transition-transform"] do
                 span_ [id_ "ai-thread-loader", class_ "htmx-indicator"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin"
                 span_ [class_ "inline-flex group-has-[.htmx-request]/send:hidden"] $ faSprite_ "arrow-up" "regular" "w-3.5 h-3.5"
@@ -503,18 +509,17 @@ routineInstallPostH pid form = do
 startThreadPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
 startThreadPostHWithTools projectTools pid form = do
   authorizeProject pid
-  (sess, _) <- Projects.sessionAndProject pid
   case normalizeNewThread form of
     Left err -> reject err
     Right request -> do
       case request of
         NewChat _ -> pass
         NewRoutine{} -> void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
-      convId <- UUIDId <$> UUID.genUUID
-      void $ Issues.getOrCreateConversation pid convId Issues.CTWeb (AE.object [])
+      requestId <- maybe (UUIDId <$> UUID.genUUID) pure form.requestId
+      let convId = UUIDId $ UUID5.generateNamed requestId.unUUIDId $ BS.unpack "web-conversation"
       case request of
-        NewChat prompt -> submitTurn projectTools (form.allowActions == Just True) pid convId prompt
-        NewRoutine prompt interval -> submitTurn projectTools (form.allowActions == Just True) pid convId prompt >> enqueue (Issues.upsertRoutine sess.user.id pid convId interval)
+        NewChat prompt -> submitTurn projectTools Issues.WebConversation requestId (form.allowActions == Just True) pid convId prompt
+        NewRoutine prompt interval -> submitTurn projectTools (Issues.WebRoutine interval) requestId (form.allowActions == Just True) pid convId prompt
       redirectToThread pid convId
 
 
@@ -523,13 +528,14 @@ threadPostHWithTools projectTools pid convId form = do
   authorizeProject pid
   case normalizeQuery form.query of
     Left err -> reject err
-    Right prompt ->
+    Right prompt -> do
+      requestId <- maybe (UUIDId <$> UUID.genUUID) pure form.requestId
       Issues.getConversation pid convId >>= \case
         Nothing -> addRespHeaders mempty
         Just conversation -> do
           case Issues.conversationIssueId conversation of
             Just issueId -> void $ IssuePage.aiChatPostHWithTools projectTools pid issueId (IssuePage.AIChatForm prompt)
-            Nothing -> submitTurn projectTools (form.allowActions == Just True) pid convId prompt
+            Nothing -> submitTurn projectTools Issues.WebMessage requestId (form.allowActions == Just True) pid convId prompt
           redirectToThread pid convId
 
 
@@ -546,14 +552,17 @@ threadDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespH
 threadDeleteH pid convId = authorizeProject pid >> Issues.deleteConversation pid convId >> redirect pid ""
 
 
-submitTurn :: Maybe AI.ProjectTools -> Bool -> Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
-submitTurn projectTools allowActions pid convId prompt = do
+submitTurn :: Maybe AI.ProjectTools -> Issues.InteractiveOrigin -> UUIDId "ai_routine_run" -> Bool -> Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
+submitTurn projectTools origin requestId allowActions pid convId prompt = do
   appCtx <- ask @AuthContext
   (sess, _) <- Projects.sessionAndProject pid
-  let query = if allowActions then Bots.processActionableAIQueryWithTools else Bots.processAIQueryWithTools
-  result <- query (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools (AI.MemberAccess AI.WebSession sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
+  let policy = if allowActions then Issues.Autonomous else Issues.Observe
+  Issues.startInteractiveRun pid convId sess.user.id requestId prompt policy origin >>= \case
+    Issues.ConflictingRequest -> throwError Servant.err409{Servant.errBody = "Request ID already belongs to another request"}
+    Issues.AcceptedRequest scheduled -> for_ scheduled $ \routine -> BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
+  result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools (AI.InteractiveRun requestId policy) (AI.MemberAccess AI.WebSession sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
   case result of
-    Left err -> Issues.insertChatMessage pid convId Issues.ChatAssistant ("I couldn't complete that request: " <> err) Nothing Nothing
+    Left err -> throwError Servant.err502{Servant.errBody = encodeUtf8 err}
     Right _ -> pass
 
 

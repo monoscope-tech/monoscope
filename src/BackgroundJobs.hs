@@ -437,7 +437,7 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
           if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer)
             then pure (Issues.CompletedNoFindings, Just $ AE.toJSON answer, Just $ AE.toJSON answer.toolCalls, Nothing)
             else do
-              void $ Bots.storeAgenticResponse routine.projectId routine.conversationId answer
+              void $ Bots.storeAgenticResponse (Bots.ConversationResponse routine.projectId routine.conversationId) answer
               pure (Issues.CompletedSucceeded, Just $ AE.toJSON answer, Just $ AE.toJSON answer.toolCalls, Nothing)
 
   case outcome of

@@ -332,9 +332,30 @@ The regression first demonstrated a repeated project read after interruption.
 Both event and scheduled recovery cases now pass, including conversation isolation and a single retained user message.
 All 153 bot integration examples pass, including existing Slack checkpoint rollback and conflict cases.
 All 75 API v1 integration examples also pass after the checkpoint migration.
-Interactive web requests still need durable run identities and shared checkpoints.
-The common run ledger and operation recovery must cover those requests before autonomous writes reach release.
+General web conversations now use the shared run ledger and checkpoint executor.
+Both web forms submit a request ID. Legacy clients receive a new ID for each submission.
+A run retains its input, origin, authorizing member, and typed Observe or Autonomous policy.
+Retries cannot change that identity or increase its policy.
+The common role gate still applies to each tool.
+
+A new request creates its conversation and optional routine in one transaction.
+Routine creation reuses the existing routine SQL and retains the defining instructions.
+Retries do not change the routine or restore a deleted conversation.
+The normalized assistant message and run completion also commit together.
+These transactions reuse existing routine, completion, and result-message SQL.
+The unused web action wrapper no longer exists.
+
+The web regression first demonstrated a repeated project read after interruption.
+Additional failing cases exposed routine reactivation and conversation resurrection during retry.
+Three handler regressions now cover existing conversations, new conversations, and new routines.
+They cover completion rollback, retained reads, one answer, immutable input and policy, pause, deletion, and revoked access.
+All 156 bot integration examples and all 75 API v1 examples pass after these changes.
+New interval JSON doctests remain part of the final doctest verification.
+
+Issue chat still needs durable request identities and the shared completion path.
+The authority evaluator still needs to replace the legacy invocation predicates and routine action flags.
 A checkpoint does not establish exactly-once mutation or external publication.
+Operation identities and safe write recovery remain necessary before autonomous writes reach release.
 
 ## External references
 
