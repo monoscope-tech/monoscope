@@ -22,8 +22,10 @@ change project resources through AI tools.
 
 The routine stores the request, requester, instructions, status, results, and
 artifacts. Each retry keeps a separate attempt. Changes to instructions apply to
-future runs. Past runs keep their own instructions and artifacts. Follow the
-conversation link to ask another question about a result.
+future runs. Past runs keep their own instructions and artifacts. Run links open
+the conversation with its run details beside it. Within a conversation, runs and
+artifacts open in the same detail panel without clearing your draft. On narrow
+screens, close the panel or press Escape to return to the conversation.
 
 Pause the routine to stop future investigations. Use **Stop active runs** to
 stop current work. If the routine is absent or paused, Slack returns private

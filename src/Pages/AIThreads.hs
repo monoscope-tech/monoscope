@@ -237,7 +237,11 @@ routinesGetH pid = do
 
 
 threadGetH :: Projects.ProjectId -> UUIDId "conversation" -> Maybe Issues.ArtifactKey -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-threadGetH pid convId docM hxTarget = do
+threadGetH pid convId docM = threadPageGetH pid convId docM Nothing
+
+
+threadPageGetH :: Projects.ProjectId -> UUIDId "conversation" -> Maybe Issues.ArtifactKey -> Maybe Issues.RoutineRun -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+threadPageGetH pid convId docM runM hxTarget = do
   canEdit <- canEditRoutines pid
   (_, _, bw) <- mkAIPageCtx pid
   -- The open document's refresh keeps only #ai-document (htmx 4 sends `tag#id`), so skip what it discards.
@@ -250,6 +254,11 @@ threadGetH pid convId docM hxTarget = do
       $ concurrently (unlessRefresh $ Issues.selectChatHistory pid convId) (Issues.listArtifacts pid convId docM)
   instructions <- Issues.getRoutineInstructions pid convId
   runs <- Issues.listConversationRuns pid convId 20
+  runContent <- forM runM \run -> do
+    evidence <- Issues.getRoutineRunEvidence pid run.id >>= maybe (throwError Servant.err404) pure
+    requestedBy <- maybe (pure Nothing) Projects.userById evidence.requestedBy
+    runArtifacts <- Issues.listRunArtifacts pid run.id
+    pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
       docs = bool [] artifacts (isJust conversationM)
@@ -268,8 +277,52 @@ threadGetH pid convId docM hxTarget = do
                   span_ [class_ "max-md:hidden"] "View issue"
                 Nothing -> scheduleControl_ conversation.conversationId routineM <$ guard (canEdit && conversation.conversationType == Issues.CTWeb && (isNothing conversation.routineKind || isJust conversation.routineInterval))
           }
-  addRespHeaders $ PageCtx pageConfig $ threadPage_ canEdit instructions runs conversationM pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
+  addRespHeaders $ PageCtx pageConfig $ threadPage_ canEdit instructions runs runContent conversationM pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
   where
+    runStatusId :: Issues.RoutineRun -> Text
+    runStatusId run = "routine-run-status-" <> run.id.toText
+
+    runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> Html ()
+    runView_ retained run evidence requestedBy artifacts =
+      section_
+        ([id_ "routine-run", class_ "space-y-5"] <> [attribute | run.status == Issues.RunRunning, attribute <- [hxGet_ $ runUrl pid run.id, hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxTarget_ "this", hxSwap_ "outerMorph", term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]])
+        do
+          header_ [class_ "space-y-2"] do
+            h2_ [class_ "text-base font-semibold text-textStrong break-words"] $ toHtml $ fromMaybe "Routine run" run.title
+            div_ [class_ "flex flex-wrap items-center gap-3 text-sm text-textWeak"] do
+              span_ [role_ "status"] $ uncurry tonePill_ $ runStatus run.status
+              span_ $ toHtml $ case run.source of
+                Issues.ScheduledRun -> "Scheduled"
+                Issues.TriggeredRun (Issues.SlackMessage _) -> "Slack request"
+                Issues.TriggeredRun (Issues.SlackCommand _) -> "Slack command"
+                Issues.TriggeredRun (Issues.PullRequestReview _) -> "Pull request"
+                Issues.TriggeredRun (Issues.IssueEnrichment _) -> "New issue"
+              span_ $ toHtml $ "Attempt " <> show @Text run.attempt
+              whenJust requestedBy $ \user -> do
+                let name = T.strip $ user.firstName <> " " <> user.lastName
+                span_ [class_ "min-w-0 break-words"] $ toHtml $ "Requested by " <> if T.null name then CI.original user.email else name
+              time_ [datetime_ $ show run.startedAt] $ toHtml $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" run.startedAt
+          whenJust run.error $ p_ [class_ $ "rounded-lg border border-strokeWeak p-4 text-sm break-words " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; _ -> "text-textWeak"), role_ "status"] . toHtml
+          whenJust evidence.input $ \input -> section_ [Aria.label_ "Run request"] do
+            h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Request"
+            p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml input
+          details_ [class_ "rounded-lg border border-strokeWeak p-4", term "hx-morph-skip" ""] do
+            summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Instructions used for this run"
+            p_ [class_ "mt-3 whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "This run predates instruction snapshots." evidence.instructions
+            whenJust evidence.templateVersion $ \version -> p_ [class_ "mt-2 text-xs text-textWeak"] $ toHtml $ "Template version " <> show @Text version
+          section_ [Aria.label_ "Run artifacts", class_ "space-y-4"] do
+            h2_ [class_ "text-sm font-semibold text-textStrong"] "Artifacts"
+            if null artifacts
+              then p_ [class_ "text-sm text-textWeak"] $ if run.status == Issues.RunRunning then "Artifacts will appear when this run finishes." else "This run did not produce an artifact."
+              else for_ artifacts \artifact -> article_ [class_ "border-t border-strokeWeak pt-4"] do
+                h3_ [class_ "font-medium text-textStrong break-words"] $ toHtml artifact.title
+                div_ [class_ "prose prose-sm mt-4 max-w-none break-words overflow-x-auto"] $ fst $ renderMarkdownToc $ fromMaybe "" artifact.content
+          for_ ([("Findings", evidence.findings), ("Tool results", evidence.actions)] :: [(Text, Maybe AE.Value)]) \(title, value) -> whenJust value \body ->
+            details_ [class_ "rounded-lg border border-strokeWeak p-4"] do
+              summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ toHtml @Text title
+              pre_ [class_ "mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs text-textWeak"] $ toHtml @Text $ decodeUtf8 $ AE.encode body
+          when retained $ p_ [class_ "text-sm text-textWeak"] "This conversation was deleted. Its run and artifacts are retained here."
+
     scheduleControl_ :: UUIDId "conversation" -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
     scheduleControl_ conversationId routineState = details_ [class_ "relative group/routine"] do
       summary_ [class_ "btn btn-sm btn-ghost list-none gap-2 cursor-pointer"] do
@@ -284,44 +337,37 @@ threadGetH pid convId docM hxTarget = do
           button_ [type_ "submit", class_ "btn btn-sm btn-primary w-full active:scale-[0.96] transition-transform"] "Save routine"
         when (any ((.routineActive) . fst) routineState) $ form_ [class_ "mt-3 border-t border-strokeWeak pt-2", hxPost_ $ threadUrl pid conversationId <> "/routine/pause", hxSwap_ "none"] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost w-full active:scale-[0.96] transition-transform"] "Pause routine"
 
-    threadPage_ :: Bool -> Maybe Text -> [Issues.RoutineRun] -> Maybe Issues.ConversationSummary -> Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Bool -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
-    threadPage_ canEdit instructions runs conversationM projectId activeConversationIdM routineM allowActionUi messages docs openDoc = div_ [class_ "h-full flex bg-bgBase"] do
-      div_ [class_ "min-w-0 grow flex flex-col"] do
+    threadPage_ :: Bool -> Maybe Text -> [Issues.RoutineRun] -> Maybe (Html ()) -> Maybe Issues.ConversationSummary -> Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Bool -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
+    threadPage_ canEdit instructions runs runContent conversationM projectId activeConversationIdM routineM allowActionUi messages docs openDoc = div_ [id_ "ai-conversation", class_ "group/conversation relative h-full min-h-0 flex bg-bgBase"] do
+      div_ [class_ "min-w-0 grow flex flex-col max-lg:group-has-[[data-open]]/conversation:hidden"] do
         div_ [id_ "ai-thread-messages", class_ "min-h-0 grow overflow-y-auto"] do
           div_ [class_ "max-w-3xl mx-auto px-5 py-8"] do
-            unless (null docs) $ details_ [class_ "lg:hidden mb-6 rounded-xl border border-strokeWeak bg-bgRaised"] do
-              summary_ [class_ "flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium text-textStrong"] do
-                faSprite_ "file-lines" "regular" "h-3.5 w-3.5 text-iconBrand"
-                toHtml $ "Documents (" <> show @Text (length docs) <> ")"
-              div_ [class_ "border-t border-strokeWeak p-2"] documentsNav_
-            case openDoc of
-              Just doc -> documentView_ doc
-              Nothing -> do
-                for_ routineM routineOverview_
-                when (any (isJust . (.routineKind)) conversationM) $ section_ [class_ "mb-6 space-y-4", Aria.label_ "Routine configuration"] do
-                  when (isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] $ toHtml $ foldMap (\c -> maybe "" Issues.routineKindLabel c.routineKind <> " · " <> bool "Paused" "Active" c.routineActive) conversationM
-                  details_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
-                    summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Routine instructions"
-                    p_ [class_ "my-3 text-sm text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
-                    if canEdit
-                      then do
-                        form_ [hxPost_ $ threadHref <> "/routine/instructions", hxSwap_ "none", class_ "space-y-3"] do
-                          label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
-                          textarea_ [id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-sm"] $ toHtml $ fromMaybe "" instructions
-                          button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
-                      else p_ [class_ "whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "" instructions
-                  when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
-                unless (null runs) $ section_ [class_ "mb-6 space-y-2", Aria.label_ "Routine runs"] do
-                  h2_ [class_ "text-sm font-semibold text-textStrong"] "Runs"
-                  for_ runs \run -> a_ [href_ $ runUrl projectId run.id, class_ "flex flex-wrap items-center justify-between gap-2 rounded-lg border border-strokeWeak px-3 py-2 hover:bg-fillHover"] do
-                    time_ [datetime_ $ show run.startedAt, class_ "text-sm text-textStrong"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
-                    uncurry tonePill_ $ runStatus run.status
-                if hasVisibleHistory messages
+            unless (null docs) $ div_ [class_ "mb-5"] documentsNav_
+            for_ routineM routineOverview_
+            when (any (isJust . (.routineKind)) conversationM) $ section_ [class_ "mb-6 space-y-4", Aria.label_ "Routine configuration"] do
+              when (isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] $ toHtml $ foldMap (\c -> maybe "" Issues.routineKindLabel c.routineKind <> " · " <> bool "Paused" "Active" c.routineActive) conversationM
+              details_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
+                summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Routine instructions"
+                p_ [class_ "my-3 text-sm text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
+                if canEdit
                   then do
-                    when (isJust routineM) $ h2_ [class_ "mb-2 mt-6 text-xs font-medium uppercase tracking-wide text-textWeak"] "Recent results"
-                    IssuePage.aiChatHistoryView_ projectId messages
-                  else foldMap routineEmpty_ routineM
-        form_
+                    form_ [hxPost_ $ threadHref <> "/routine/instructions", hxSwap_ "none", class_ "space-y-3"] do
+                      label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
+                      textarea_ [id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-sm"] $ toHtml $ fromMaybe "" instructions
+                      button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
+                  else p_ [class_ "whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "" instructions
+              when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
+            unless (null runs) $ section_ [class_ "mb-6 space-y-2", Aria.label_ "Routine runs"] do
+              h2_ [class_ "text-sm font-semibold text-textStrong"] "Runs"
+              for_ runs \run -> a_ ([href_ $ runUrl projectId run.id, class_ "flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-offset-2"] <> inspectorAttrs (runUrl projectId run.id) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
+                time_ [datetime_ $ show run.startedAt, class_ "text-sm text-textStrong"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
+                span_ [id_ $ runStatusId run] $ uncurry tonePill_ $ runStatus run.status
+            if hasVisibleHistory messages
+              then do
+                when (isJust routineM) $ h2_ [class_ "mb-2 mt-6 text-xs font-medium uppercase tracking-wide text-textWeak"] "Recent results"
+                IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId messages
+              else foldMap routineEmpty_ routineM
+        unless (isJust runContent && isNothing conversationM) $ form_
           [ class_ "shrink-0 border-t border-strokeWeak bg-bgBase p-4"
           , hxPost_ $ "/p/" <> projectId.toText <> "/ai" <> foldMap (("/" <>) . (.toText)) activeConversationIdM
           , hxTarget_ "this"
@@ -353,26 +399,37 @@ threadGetH pid convId docM hxTarget = do
               input_ [type_ "checkbox", name_ "allowActions", value_ "true", class_ "checkbox checkbox-xs"]
               span_ "Allow the project changes I request in this message"
             p_ [class_ "max-w-3xl mx-auto mt-2 text-xs text-textWeak text-center"] "AI can use your project data and connected integrations. Review actions before relying on them."
-      unless (null docs) $ aside_ [class_ "hidden lg:block w-64 shrink-0 overflow-y-auto border-l border-strokeWeak p-3"] documentsNav_
+      aside_
+        ( [ id_ "ai-inspector"
+          , Aria.label_ "Conversation details"
+          , class_ $ "min-w-0 border-s border-strokeWeak bg-bgRaised focus:outline-none " <> bool "hidden" "absolute inset-0 z-20 flex flex-col lg:static lg:z-auto lg:w-1/2 lg:max-w-2xl lg:shrink-0" (isJust runContent || isJust openDoc)
+          ]
+            <> [[__|init if #ai-thread-input call #ai-thread-input.focus() end end|] | isNothing runContent && isNothing openDoc]
+            <> [attribute | isJust runContent || isJust openDoc, attribute <- [term "data-open" "", tabindex_ "-1", [__|init call me.focus() end on keydown[key == 'Escape'] halt the event then send click to #ai-inspector-close end|]]]
+        )
+        do
+          when (isJust runContent || isJust openDoc) do
+            header_ [class_ "flex shrink-0 items-center justify-between gap-3 border-b border-strokeWeak px-4 py-3"] do
+              span_ [class_ "text-sm font-medium text-textWeak"] $ bool "Run details" "Artifact" (isJust openDoc)
+              a_ ([id_ "ai-inspector-close", href_ threadHref, Aria.label_ "Back to conversation", class_ "btn btn-sm btn-ghost gap-2"] <> inspectorAttrs threadHref) do
+                faSprite_ "xmark" "regular" "size-3.5"
+                span_ "Close"
+            div_ [class_ "min-h-0 grow overflow-y-auto px-5 py-5"] $ maybe (foldMap documentView_ openDoc) identity runContent
       where
         threadHref = foldMap (threadUrl projectId) activeConversationIdM
         docHref doc = threadHref <> "?doc=" <> toText doc.key
-        isOpen doc = ((.key) <$> openDoc) == Just doc.key
         (openBody, openToc) = maybe (mempty, []) renderMarkdownToc $ openDoc >>= (.content)
-        navLink_ active href = a_ ([href_ href, class_ $ "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-fillHover hover:text-textStrong " <> bool "text-textWeak" "bg-fillWeak font-medium text-textStrong" active] <> [term "aria-current" "page" | active] <> navTabAttrs)
+        inspectorAttrs href = [hxGet_ href, hxTarget_ "#ai-inspector", hxSelect_ "#ai-inspector", hxSwap_ "outerHTML"]
+        artifactLinkAttrs href = let url = threadHref <> href in href_ url : inspectorAttrs url
+        navLink_ href = a_ ([href_ href, class_ "flex max-w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-textWeak hover:bg-fillHover hover:text-textStrong"] <> inspectorAttrs href)
 
         documentsNav_ :: Html ()
-        documentsNav_ = nav_ [Aria.label_ "Documents", class_ "flex flex-col gap-0.5"] do
-          h2_ [class_ "px-2 pb-1 pt-1 text-xs font-medium uppercase tracking-wide text-textWeak"] "Documents"
-          navLink_ (isNothing openDoc) threadHref do
-            faSprite_ "comment" "regular" "h-3.5 w-3.5 shrink-0"
-            "Conversation"
-          for_ docs \doc -> do
-            navLink_ (isOpen doc) (docHref doc) do
+        documentsNav_ = nav_ [Aria.label_ "Artifacts", class_ "flex flex-wrap items-center gap-1"] do
+          h2_ [class_ "px-2 pb-1 pt-1 text-xs font-medium uppercase tracking-wide text-textWeak"] "Artifacts"
+          for_ docs \doc ->
+            navLink_ (docHref doc) do
               faSprite_ "file-lines" "regular" "h-3.5 w-3.5 shrink-0 text-iconBrand"
               span_ [class_ "min-w-0 grow truncate"] $ toHtml doc.title
-            when (isOpen doc) $ ul_ [class_ "mb-1 ms-4 border-s border-strokeWeak ps-2"] $ for_ openToc \(anchor, heading) ->
-              li_ $ a_ [href_ $ "#" <> anchor, class_ "block truncate rounded px-2 py-1 text-xs text-textWeak hover:bg-fillHover hover:text-textStrong"] $ toHtml heading
 
         documentView_ :: Issues.AIArtifact -> Html ()
         documentView_ doc =
@@ -383,9 +440,13 @@ threadGetH pid convId docM hxTarget = do
             )
             do
               p_ [class_ "font-mono text-xs text-textWeak"] $ toHtml $ toText doc.key
-              h1_ [class_ "mt-1 text-xl font-semibold text-textStrong text-balance"] $ toHtml doc.title
+              h2_ [class_ "mt-1 text-base font-semibold text-textStrong text-balance break-words"] $ toHtml doc.title
               p_ [class_ "mt-1 text-xs text-textWeak"] $ "Updated " >> localTimeFmt_ "MMM d, HH:mm" doc.updatedAt
-              div_ [class_ "prose prose-sm mt-6 max-w-none [&_h2]:scroll-mt-4"] openBody
+              unless (null openToc) $ details_ [class_ "mt-4 text-sm text-textWeak"] do
+                summary_ [class_ "cursor-pointer"] "On this page"
+                ul_ [class_ "mt-2 space-y-1"] $ for_ openToc \(anchor, heading) ->
+                  li_ $ a_ [href_ $ "#" <> anchor, class_ "block truncate text-textBrand hover:underline"] $ toHtml heading
+              div_ [class_ "prose prose-sm mt-6 max-w-none break-words overflow-x-auto [&_h2]:scroll-mt-4"] openBody
 
         hasVisibleHistory :: [Issues.AIChatMessage] -> Bool
         hasVisibleHistory = any ((`elem` [Issues.ChatAssistant, Issues.ChatExecutionEvent]) . (.role))
@@ -579,57 +640,8 @@ runStatus = \case
 
 routineRunGetH :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 routineRunGetH pid runId = do
-  (_, _, bw) <- mkAIPageCtx pid
   run <- Issues.getRoutineRun pid runId >>= maybe (throwError Servant.err404) pure
-  evidence <- Issues.getRoutineRunEvidence pid runId >>= maybe (throwError Servant.err404) pure
-  requestedBy <- maybe (pure Nothing) Projects.userById evidence.requestedBy
-  artifacts <- Issues.listRunArtifacts pid runId
-  conversations <- Issues.listConversations pid
-  addRespHeaders
-    $ PageCtx bw{pageTitle = "Routine run", menuItem = Just "AI", conversations}
-    $ main_
-      ( [id_ "routine-run", class_ "h-full overflow-y-auto bg-bgBase px-4 py-6 sm:px-6"]
-          <> concat [[hxGet_ $ runUrl pid run.id, hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxSwap_ "outerMorph"] | run.status == Issues.RunRunning]
-      )
-    $ div_ [class_ "mx-auto max-w-3xl space-y-6"] do
-      a_ [href_ $ "/p/" <> pid.toText <> "/ai/routines", class_ "text-sm text-textBrand hover:underline"] "All routines"
-      header_ [class_ "space-y-2"] do
-        h1_ [class_ "text-xl font-semibold text-textStrong break-words"] $ toHtml $ fromMaybe "Routine run" run.title
-        div_ [class_ "flex flex-wrap items-center gap-3 text-sm text-textWeak"] do
-          span_ [role_ "status"] $ uncurry tonePill_ $ runStatus run.status
-          span_ $ toHtml $ case run.source of
-            Issues.ScheduledRun -> "Scheduled"
-            Issues.TriggeredRun (Issues.SlackMessage _) -> "Slack request"
-            Issues.TriggeredRun (Issues.SlackCommand _) -> "Slack command"
-            Issues.TriggeredRun (Issues.PullRequestReview _) -> "Pull request"
-            Issues.TriggeredRun (Issues.IssueEnrichment _) -> "New issue"
-          span_ $ toHtml $ "Attempt " <> show @Text run.attempt
-          whenJust requestedBy $ \user -> do
-            let name = T.strip $ user.firstName <> " " <> user.lastName
-            span_ [class_ "min-w-0 break-words"] $ toHtml $ "Requested by " <> if T.null name then CI.original user.email else name
-          time_ [datetime_ $ show run.startedAt] $ toHtml $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" run.startedAt
-      whenJust run.error $ p_ [class_ $ "rounded-lg border border-strokeWeak p-4 text-sm break-words " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; _ -> "text-textWeak"), role_ "status"] . toHtml
-      whenJust evidence.input $ \input -> section_ [Aria.label_ "Run request"] do
-        h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Request"
-        p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml input
-      details_ [class_ "rounded-lg border border-strokeWeak p-4", term "hx-morph-skip" ""] do
-        summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Instructions used for this run"
-        p_ [class_ "mt-3 whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "This run predates instruction snapshots." evidence.instructions
-        whenJust evidence.templateVersion $ \version -> p_ [class_ "mt-2 text-xs text-textWeak"] $ toHtml $ "Template version " <> show @Text version
-      section_ [Aria.label_ "Run artifacts", class_ "space-y-4"] do
-        h2_ [class_ "text-sm font-semibold text-textStrong"] "Artifacts"
-        if null artifacts
-          then p_ [class_ "text-sm text-textWeak"] $ if run.status == Issues.RunRunning then "Artifacts will appear when this run finishes." else "This run did not produce an artifact."
-          else for_ artifacts \artifact -> article_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4 sm:p-6"] do
-            h3_ [class_ "font-medium text-textStrong break-words"] $ toHtml artifact.title
-            div_ [class_ "prose prose-sm mt-4 max-w-none break-words overflow-x-auto"] $ fst $ renderMarkdownToc $ fromMaybe "" artifact.content
-      for_ ([("Findings", evidence.findings), ("Tool results", evidence.actions)] :: [(Text, Maybe AE.Value)]) \(title, value) -> whenJust value \body ->
-        details_ [class_ "rounded-lg border border-strokeWeak p-4"] do
-          summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ toHtml @Text title
-          pre_ [class_ "mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs text-textWeak"] $ toHtml @Text $ decodeUtf8 $ AE.encode body
-      if any ((== run.conversationId) . (.conversationId)) conversations
-        then a_ [href_ $ threadUrl pid run.conversationId, class_ "btn btn-sm btn-primary"] "Open conversation and follow up"
-        else p_ [class_ "text-sm text-textWeak"] "This conversation was deleted. Its run and artifacts are retained here."
+  threadPageGetH pid run.conversationId Nothing (Just run) Nothing
 
 
 runUrl :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Text

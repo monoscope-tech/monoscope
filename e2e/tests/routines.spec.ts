@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { sql } from './helpers';
 
-test('event routine history shows unnamed requesters and survives polling, edits, and conversation deletion', async ({ page, baseURL }, testInfo) => {
+test('routine detail panels preserve conversation drafts, run history, and artifacts', async ({ page, baseURL }, testInfo) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), run = randomUUID(), repository = randomUUID();
   const email = `${uid.replaceAll('-', '').repeat(2)}@example.test`;
   sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${email}');
@@ -27,25 +27,49 @@ test('event routine history shows unnamed requesters and survives polling, edits
     sql(`INSERT INTO apis.ai_routine_runs (id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, source, requested_by, input, instructions, template_version)
          SELECT '${run}', id, project_id, conversation_id, now(), now(), 'running',
            '{"tag":"TriggeredRun","contents":{"tag":"SlackCommand","contents":"${conversation}"}}', '${uid}', 'Investigate checkout', instructions, template_version
-         FROM apis.ai_routines WHERE id = '${routine}';`);
-    await page.goto(`${root}/runs/${run}`);
+         FROM apis.ai_routines WHERE id = '${routine}';
+         INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content) VALUES ('${pid}', '${conversation}', 'checkout', 'Checkout evidence', 'Later conversation edit.');
+         INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, metadata, created_at)
+         VALUES ('${pid}', '${conversation}', 'assistant', 'I saved the checkout evidence. Continue the investigation here.',
+           '[{"name":"save_artifact","args":{},"result_preview":"Saved checkout evidence","raw_data":"checkout"}]', now());`);
+    await page.goto(`${root}/${conversation}`);
+    const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
+    await composer.fill('Keep this follow-up while I inspect the run.');
+    await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().click();
+    await expect(page).toHaveURL(`${root}/${conversation}`);
+    await expect(composer).toHaveValue('Keep this follow-up while I inspect the run.');
+    await expect(page.getByRole('complementary', { name: 'Conversation details', exact: true })).toBeVisible();
+    const panelBounds = await page.locator('#ai-inspector').boundingBox();
+    const chatBounds = await page.locator('#ai-thread-messages').boundingBox();
+    expect(panelBounds!.x).toBeGreaterThanOrEqual(chatBounds!.x + chatBounds!.width - 1);
     await expect(page.getByRole('status')).toHaveText('Running');
     await expect(page.getByText(`Requested by ${email}`, { exact: true })).toBeVisible();
     await expect(page.getByText('Artifacts will appear when this run finishes.', { exact: true })).toBeVisible();
-    const instructions = page.getByText('Instructions used for this run', { exact: true });
+    const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
+    const instructions = inspector.getByText('Instructions used for this run', { exact: true });
     await instructions.focus();
     await page.keyboard.press('Enter');
     await page.waitForResponse(r => r.request().method() === 'GET' && r.url().endsWith(`/runs/${run}`));
     await expect.poll(() => instructions.evaluate(el => (el.parentElement as HTMLDetailsElement).open)).toBe(true);
-    await expect(page.getByText('Compare the deployment with checkout latency.', { exact: true })).toBeVisible();
+    await expect(inspector.getByText('Compare the deployment with checkout latency.', { exact: true })).toBeVisible();
     sql(`INSERT INTO apis.ai_routine_run_artifacts (run_id, key, title, content) VALUES ('${run}', 'checkout', 'Checkout evidence', 'Original checkout evidence.');
-         UPDATE apis.ai_routine_runs SET status = 'succeeded', finished_at = now() WHERE id = '${run}';
-         INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content) VALUES ('${pid}', '${conversation}', 'checkout', 'Checkout evidence', 'Later conversation edit.');`);
+         UPDATE apis.ai_routine_runs SET status = 'succeeded', finished_at = now() WHERE id = '${run}';`);
     await expect(page.getByRole('status')).toHaveText('Succeeded', { timeout: 12000 });
+    await expect(page.getByRole('region', { name: 'Routine runs', exact: true }).getByText('Succeeded', { exact: true })).toBeVisible();
     await expect(page.locator('#routine-run')).not.toHaveAttribute('hx-trigger');
     await expect(page.getByText('Original checkout evidence.', { exact: true })).toBeVisible();
     await expect(page.getByText('Later conversation edit.', { exact: true })).toHaveCount(0);
     await expect.poll(() => instructions.evaluate(el => (el.parentElement as HTMLDetailsElement).open)).toBe(true);
+    await page.getByRole('link', { name: 'Back to conversation', exact: true }).click();
+    await expect(inspector).toBeHidden();
+    await page.getByRole('link', { name: 'checkout', exact: true }).click();
+    await expect(inspector.getByText('Later conversation edit.', { exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('conversation-artifact-desktop.png') });
+    await expect(page).toHaveURL(`${root}/${conversation}`);
+    await expect(composer).toHaveValue('Keep this follow-up while I inspect the run.');
+    await page.getByRole('link', { name: 'Back to conversation', exact: true }).click();
+    await expect(inspector).toBeHidden();
+    await expect(composer).toHaveValue('Keep this follow-up while I inspect the run.');
     sql(`UPDATE projects.project_members SET active = false WHERE project_id = '${pid}' AND user_id = '${uid}';`);
     await page.goto(`${root}/runs/${run}`);
     await expect(page.getByText('Original checkout evidence.', { exact: true })).toHaveCount(0);
@@ -61,6 +85,19 @@ test('event routine history shows unnamed requesters and survives polling, edits
       await expect.poll(async () => { const box = await page.locator('#side-nav-menu').boundingBox(); return box!.x + box!.width; }).toBeLessThanOrEqual(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`routine-run-${theme}.png`) });
+      await expect(composer).toBeHidden();
+      await inspector.focus();
+      await page.keyboard.press('Escape');
+      await expect(inspector).toBeHidden();
+      await expect(composer).toBeVisible();
+      await composer.fill('Mobile follow-up stays in the conversation.');
+      await page.getByRole('link', { name: 'checkout', exact: true }).click();
+      await expect(inspector.getByText('Later conversation edit.', { exact: true })).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath(`conversation-artifact-${theme}.png`) });
+      await page.getByRole('link', { name: 'Back to conversation', exact: true }).click();
+      await expect(composer).toBeFocused();
+      await expect(composer).toHaveValue('Mobile follow-up stays in the conversation.');
+      await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().click();
     }
     expect((await page.request.delete(`${root}/${conversation}`)).ok()).toBe(true);
     await page.goto(`${root}/runs/${run}`);

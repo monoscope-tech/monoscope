@@ -315,7 +315,7 @@ spec = around withTestResources do
         -- frozenTime is 2025-01-01T00:00Z, still New Year's Eve in New York.
         routinePrompt `shouldSatisfy` T.isInfixOf "key \"2024-12-31\""
         (_, chatPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
-        LT.toStrict (Lucid.renderText $ Lucid.toHtml chatPage) `shouldSatisfy` T.isInfixOf "href=\"?doc=checkout-review\""
+        LT.toStrict (Lucid.renderText $ Lucid.toHtml chatPage) `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/ai/" <> convId.toText <> "?doc=checkout-review\"")
         (_, docPage) <- testServant tr $ AIThreads.threadGetH testPid convId (rightToMaybe $ Issues.mkArtifactKey "checkout-review") Nothing
         let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml docPage
         filter (not . (`T.isInfixOf` html)) ["?doc=checkout-review", "<h2 id=\"followup\">", "href=\"#followup\"", "Latency recovered."] `shouldBe` []

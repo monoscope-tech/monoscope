@@ -2011,7 +2011,7 @@ aiChatPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> Issues.Is
 aiChatPostHWithTools projectTools pid issueId form = do
   _ <- Projects.sessionAndProject pid
   if T.length form.query > 4000
-    then addRespHeaders $ aiChatResponse_ pid (Just form.query) "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
+    then addRespHeaders $ aiChatResponse_ (pure . href_) pid (Just form.query) "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
     else do
       appCtx <- ask @AuthContext
       (sess, _) <- Projects.sessionAndProject pid
@@ -2025,7 +2025,7 @@ aiChatPostHWithTools projectTools pid issueId form = do
     respond systemPromptM convId response widgets toolCalls includeUserMsg = do
       when includeUserMsg $ Issues.insertChatMessage pid convId Issues.ChatUser form.query Nothing Nothing
       Issues.insertChatMessage pid convId Issues.ChatAssistant response (AE.toJSON <$> widgets) (AE.toJSON <$> toolCalls)
-      addRespHeaders $ aiChatResponse_ pid (Just form.query) response widgets toolCalls systemPromptM
+      addRespHeaders $ aiChatResponse_ (pure . href_) pid (Just form.query) response widgets toolCalls systemPromptM
 
     processIssue userId appCtx now convId issue = do
       fullSystemPrompt <- buildSystemPromptForIssue pid issue now
@@ -2054,7 +2054,7 @@ aiChatHistoryGetH pid issueId = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
   Issues.selectIssueById pid issueId >>= \case
-    Nothing -> addRespHeaders $ aiChatHistoryView_ pid []
+    Nothing -> addRespHeaders $ aiChatHistoryView_ (pure . href_) pid []
     Just issue -> do
       systemPrompt <- buildSystemPromptForIssue pid issue now
       messages <- Issues.selectChatHistory pid (UUIDId issueId.unUUIDId :: UUIDId "conversation")
@@ -2062,7 +2062,7 @@ aiChatHistoryGetH pid issueId = do
         disclosure_ [class_ "my-2 border border-strokeWeak rounded-lg"] "px-2.5 py-1.5 text-xs text-textWeak hover:bg-fillWeaker" (faSprite_ "file-lines" "regular" "w-3 h-3" >> "System Prompt")
           $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
           $ toHtml systemPrompt
-        aiChatHistoryView_ pid messages
+        aiChatHistoryView_ (pure . href_) pid messages
 
 
 -- | Build complete system prompt for an issue (shared between POST and GET)
@@ -2235,8 +2235,8 @@ buildSystemPromptForIssue pid issue now = do
 
 
 -- | Render a single chat response (user question + AI answer)
-aiChatResponse_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Maybe Text -> Html ()
-aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
+aiChatResponse_ :: (Text -> [Attribute]) -> Projects.ProjectId -> Maybe Text -> Text -> Maybe [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Maybe Text -> Html ()
+aiChatResponse_ artifactLinkAttrs pid userQuery explanation widgetsM toolCallsM systemPromptM =
   div_ [class_ "animate-fade-in py-3 border-b border-strokeWeak last:border-b-0"] do
     -- User question; routine runs answer the conversation's standing task instead
     whenJust userQuery \q -> div_ [class_ "flex items-start gap-2.5 mb-3"] do
@@ -2249,7 +2249,7 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
         div_ [class_ "prose prose-sm text-textStrong max-w-none leading-relaxed"] $ renderMarkdown explanation
         let savedDocs = ordNub [toText k | tc <- fold toolCallsM, tc.name == "save_artifact", Just (AE.String raw) <- [tc.rawData], Right k <- [Issues.mkArtifactKey raw]]
         unless (null savedDocs) $ div_ [class_ "mt-3 flex flex-wrap gap-2"] $ forM_ savedDocs \k ->
-          a_ [href_ $ "?doc=" <> k, class_ "inline-flex items-center gap-1.5 rounded-md border border-strokeWeak px-2 py-1 text-xs font-medium text-textStrong hover:bg-fillHover"] do
+          a_ (class_ "inline-flex items-center gap-1.5 rounded-md border border-strokeWeak px-2 py-1 text-xs font-medium text-textStrong hover:bg-fillHover" : artifactLinkAttrs ("?doc=" <> k)) do
             faSprite_ "file-lines" "regular" "h-3 w-3 text-iconBrand"
             toHtml k
         whenJust widgetsM \widgets -> do
@@ -2329,11 +2329,11 @@ unparsablePayload_ = span_ [class_ "text-xs italic text-textWeak"] "details unav
 -- fallback, never a bare @#@:
 --
 -- >>> let turn = [def{Issues.role = Issues.ChatUser, Issues.content = "slow checkouts"}, def{Issues.role = Issues.ChatAssistant, Issues.content = "{\"query\":\"name != null\",\"visualization\":\"table\"}"}]
--- >>> let html = renderText $ aiChatHistoryView_ (UUIDId UUID.nil) turn
+-- >>> let html = renderText $ aiChatHistoryView_ (pure . href_) (UUIDId UUID.nil) turn
 -- >>> ("hx-target=\"#chat-" `TL.isInfixOf` html, "hx-target=\"#\"" `TL.isInfixOf` html)
 -- (True,False)
-aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
-aiChatHistoryView_ pid = render
+aiChatHistoryView_ :: (Text -> [Attribute]) -> Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
+aiChatHistoryView_ artifactLinkAttrs pid = render
   where
     render (u : a : rest) | u.role == Issues.ChatUser && a.role == Issues.ChatAssistant = answer (Just u.content) a >> render rest
     render (a : rest) | a.role == Issues.ChatAssistant = answer Nothing a >> render rest
@@ -2344,7 +2344,7 @@ aiChatHistoryView_ pid = render
       render rest
     render (_ : rest) = render rest
     render [] = pass
-    answer q a = let (explanation, widgets) = parseStoredContent a.content a.widgets in aiChatResponse_ pid q explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
+    answer q a = let (explanation, widgets) = parseStoredContent a.content a.widgets in aiChatResponse_ artifactLinkAttrs pid q explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
     -- Stored content is JSON (code blocks stripped) where the LLM produced it, plain text otherwise.
     parseStoredContent content storedWidgets = case AI.parseLLMResponse content of
       Right aiResp ->

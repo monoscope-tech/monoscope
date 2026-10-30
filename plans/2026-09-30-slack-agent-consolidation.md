@@ -424,3 +424,27 @@ On the combined tree, the server compiles and all 133 bot, 15 telemetry, and
 distillation, evasion, and locality reviews found no material issue in the
 resolutions. Final simplification retains the typed optional-image path and
 shared gallery renderer. Final local signoff and image verification remain.
+
+
+### Conversation-panel revision after user review
+
+The standalone run page and document navigation did not fit the conversation
+experience. Runs, conversation artifacts, and saved-artifact cards now load in
+one detail panel beside the existing chat. Direct run links render the same
+conversation shell. Opening or closing the panel preserves the composer draft
+and chat DOM. Narrow screens show the panel within the conversation area and
+return to the same draft with Close or Escape.
+
+The permanent browser regression failed first on run navigation, then reproduced
+inline artifact navigation and mismatched run statuses. These cases now pass,
+including polling, keyboard focus return, light/dark 320px layouts, access
+revocation, and retained artifacts after deletion. The final focused browser
+run passed in 19 seconds. Temporary live-server instrumentation was removed.
+
+The repeated Haskell and interface reviews found no further material issue after
+these corrections. The previous image build was stopped before implementation;
+this revision requires fresh final signoff and image verification before push.
+
+All 133 bot examples pass after the panel revision and canonical artifact-link
+update. The server watcher compiles successfully. Formatting and focused HLint
+pass. Final local signoff is next.

@@ -36,6 +36,9 @@ not outstanding defects.
 | 9 | LOW | Writing | `src/Pages/AIThreads.hs:185` | Recent runs showed the scheduling timestamp | Show execution time consistently with run details | Event execution history must describe when work ran |
 | 10 | MEDIUM | Writing | `src/Pages/AIThreads.hs:155`, `src/Pages/AIThreads.hs:188` | The introduction omitted issue events and said results stayed only in Monoscope | Describe schedule and project events; state that Slack and PR reviews also post replies | Activation must explain where AI results go |
 | 11 | MEDIUM | Writing and layout | `src/Pages/AIThreads.hs:607` | A member without profile names rendered an empty requester label | Use the email when the trimmed name is empty and wrap long identifiers | The permanent browser regression failed on the missing requester and passes with a 64-character local part at 320px |
+| 12 | HIGH | Layout and UI | `src/Pages/AIThreads.hs:239`, `src/Pages/AIThreads.hs:360`, `src/Pages/Issues.hs:2252` | Run links opened a separate page; document selection replaced the chat; saved-artifact cards navigated away | Open runs and artifacts in a shared conversation detail panel; direct run links render the same conversation shell | The conversation, scroll position, and unsent draft must survive inspecting evidence |
+| 13 | MEDIUM | Accessibility | `src/Pages/AIThreads.hs:402` | Detail navigation discarded the composer context | Use a named panel, focus its contents, support Close and Escape, hide the underlying chat on narrow screens, and return focus to the preserved composer | Desktop and narrow-screen users can inspect evidence and resume the same draft |
+| 14 | MEDIUM | UI | `src/Pages/AIThreads.hs:289`, `src/Pages/AIThreads.hs:363` | A completed panel could leave the conversation's run badge showing Running | Refresh that run's badge alongside its panel using an HTMX out-of-band swap | Two simultaneously visible statuses must agree without replacing the conversation |
 
 ## Considered but rejected
 
@@ -71,6 +74,29 @@ not outstanding defects.
 - VoiceOver hardware testing and live Slack workspace acceptance were not run.
   This review makes no claim about those environments.
 
+## Conversation-panel revision
+
+User review found that the earlier isolated run page did not fit the conversation
+experience. The revised layout keeps the chat and composer visible beside run
+or artifact details on desktop. At 320px, the panel occupies the conversation
+area; Close or Escape returns to the preserved draft. It uses existing surface,
+stroke, type, and semantic color tokens, without a new animation or modal.
+
+The permanent browser regression first failed when a run navigated away. It also
+reproduced navigation from an inline artifact card and a stale run badge before
+their fixes. The final focused run passed in 19 seconds. It verifies unchanged
+conversation URLs, draft preservation, direct run links, panel position, artifact
+cards, immutable run artifacts, polling, matching statuses, keyboard dismissal,
+focus return, membership revocation, deletion retention, and light/dark 320px
+layouts. Screenshots were inspected after rebuilding the local CSS.
+
+Repeated Haskell distillation, evasion, and locality reviews found no further
+material issue in the revision. Focused HLint reports no hints. The final
+simplification keeps one conversation renderer and declarative fragment swaps.
+All 133 bot examples pass after the revision, including canonical artifact links.
+The server watcher compiles successfully and formatting passes. Fresh full
+signoff and production image verification are required before push.
+
 ## Verdict
 
-Approve
+Approve the revised conversation layout; final signoff and live Slack acceptance remain separate gates.
