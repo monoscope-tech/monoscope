@@ -31,7 +31,6 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.Annotation (toAnnotation)
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
@@ -106,6 +105,7 @@ import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (throwIO, tryAny)
 import Utils (b64ToJson, jsonToMap, nestedJsonFromDotNotation)
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "base64" Data.ByteString.Base64 qualified as B64
 
 

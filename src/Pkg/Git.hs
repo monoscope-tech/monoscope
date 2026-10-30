@@ -82,7 +82,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens (AsValue, key, values, _Bool, _Integer, _String)
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -102,6 +101,7 @@ import Network.Wreq (FormParam (..))
 import Pkg.DeriveUtils (WrappedEnumSC (..), enumFromField, refineText)
 import Relude
 import Relude.Extra.Bifunctor (firstF)
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 
 -- Relude re-exports 'Show' without its methods, so the redacting instance below has to name
 -- 'showsPrec' from its defining module.
