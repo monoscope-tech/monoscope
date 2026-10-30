@@ -17,6 +17,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -765,6 +766,20 @@ spec = sequential $ aroundAll withTestResources do
       scoped <- either (fail . toString) pure $ LogQueries.scopeUserSql True testPid twice
       plan <- withResource tr.trPool \conn -> PG.query_ conn (fromString $ toString $ "EXPLAIN " <> scoped) :: IO [PG.Only Text]
       [l | PG.Only l <- plan, "CTE Scan" `T.isInfixOf` l] `shouldBe` []
+
+    -- /chart_data ran whatever SQL the browser sent, guarded only by a project_id substring,
+    -- so a viewer (or the anonymous demo guest) could hand it any statement. Only SQL the
+    -- server rendered may run for them; an editor can still preview their own.
+    it "chartData_clientSql_runsOnlyForEditors" \tr -> do
+      let sql = "SELECT 'x'::text FROM otel_logs_and_spans WHERE project_id='" <> testPid.toText <> "' LIMIT 1"
+          userId = (Servant.getResponse tr.trSessAndHeader).user.id
+          setPermission p = withResource tr.trPool \conn -> void $ PG.execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (p, testPid, userId)
+          chart source = toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Routes.chartsDataGetH (Just source) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing []
+      [PG.Only original] <- withResource tr.trPool \conn -> PG.query conn "SELECT permission FROM projects.project_members WHERE project_id = ? AND user_id = ?" (testPid, userId)
+      for_ [Hasql.SqlPostgres, Hasql.SqlTimefusion] \source -> do
+        (.error) <$> chart source `shouldReturn` Nothing
+        E.bracket_ (setPermission ProjectMembers.PView) (setPermission (original :: ProjectMembers.Permissions))
+          $ E.try @E.SomeException (chart source) >>= (`shouldSatisfy` isLeft)
 
     -- A dashboard supplies its own service variable, while non-dashboard charts still use
     -- the sticky selector. Both keep the authenticated environment boundary.
