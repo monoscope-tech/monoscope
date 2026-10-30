@@ -353,7 +353,7 @@ notificationSettingsSection_ :: V.Vector ManageMembers.Team -> V.Vector ManageMe
 notificationSettingsSection_ allTeams selectedTeamIds formId monitorM = do
   let defaultSeverity = maybe "Error" (.alertConfig.severity) monitorM
       defaultSubject = maybe "Alert triggered" (.alertConfig.subject) monitorM
-      defaultMessage = maybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." (.alertConfig.message) monitorM
+      defaultMessage = maybe "The alert threshold has been exceeded. Check the Monoscope dashboard for details." (.alertConfig.message) monitorM
       teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> allTeams
       teamName tId = maybe "Unknown Team" (("@" <>) . (.handle)) $ V.find (\t -> t.id == tId) allTeams
       initialTeamIds = if V.null selectedTeamIds then V.map (.id) $ V.filter (.is_everyone) allTeams else selectedTeamIds
