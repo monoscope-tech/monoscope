@@ -470,3 +470,22 @@ in 19.9 seconds against an isolated live server. The temporary browser harness
 was removed. Formatting and CI self-tests pass. Repeated Haskell reviews and
 final simplification found no material change needed after the clean rebase.
 Fresh full signoff and native image verification remain before publication.
+
+
+### Retained run navigation
+
+The final browser audit reproduced a retained run offering a return to its
+deleted conversation. It also reproduced a historical run losing the existing
+conversation that opened its inspector. Inspector and polling requests now carry
+the caller's typed conversation ID. Direct orphaned runs offer All routines;
+inspecting retained evidence from an existing conversation preserves its draft.
+Both cases are included in the permanent browser regression, which passes in
+18.6 seconds. The temporary live-server harness was removed.
+
+All 34 Agentic examples pass after the caller-context and orphaned-run fixes.
+Formatting and focused HLint pass. Repeated distillation, evasion, locality,
+and final simplification found no further material change in this correction.
+
+All 133 bot examples pass on the final navigation correction. The focused
+browser regression, formatting, and lint also pass. The source is ready for
+fresh final signoff and image verification.

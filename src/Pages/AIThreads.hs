@@ -285,7 +285,7 @@ threadPageGetH pid convId docM runM hxTarget = do
     runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> Html ()
     runView_ retained run evidence requestedBy artifacts =
       section_
-        ([id_ "routine-run", class_ "space-y-5"] <> [attribute | run.status == Issues.RunRunning, attribute <- [hxGet_ $ runUrl pid run.id, hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxTarget_ "this", hxSwap_ "outerMorph", term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]])
+        ([id_ "routine-run", class_ "space-y-5"] <> [attribute | run.status == Issues.RunRunning, attribute <- [hxGet_ $ runUrl pid run.id <> "?conversation=" <> convId.toText, hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxTarget_ "this", hxSwap_ "outerMorph", term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]])
         do
           header_ [class_ "space-y-2"] do
             h2_ [class_ "text-base font-semibold text-textStrong break-words"] $ toHtml $ fromMaybe "Routine run" run.title
@@ -359,7 +359,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
             unless (null runs) $ section_ [class_ "mb-6 space-y-2", Aria.label_ "Routine runs"] do
               h2_ [class_ "text-sm font-semibold text-textStrong"] "Runs"
-              for_ runs \run -> a_ ([href_ $ runUrl projectId run.id, class_ "flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-offset-2"] <> inspectorAttrs (runUrl projectId run.id) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
+              for_ runs \run -> a_ ([href_ $ runUrl projectId run.id, class_ "flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-offset-2"] <> inspectorAttrs (runUrl projectId run.id <> foldMap (("?conversation=" <>) . (.toText)) activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
                 time_ [datetime_ $ show run.startedAt, class_ "text-sm text-textStrong"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
                 span_ [id_ $ runStatusId run] $ uncurry tonePill_ $ runStatus run.status
             if hasVisibleHistory messages
@@ -411,9 +411,13 @@ threadPageGetH pid convId docM runM hxTarget = do
           when (isJust runContent || isJust openDoc) do
             header_ [class_ "flex shrink-0 items-center justify-between gap-3 border-b border-strokeWeak px-4 py-3"] do
               span_ [class_ "text-sm font-medium text-textWeak"] $ bool "Run details" "Artifact" (isJust openDoc)
-              a_ ([id_ "ai-inspector-close", href_ threadHref, Aria.label_ "Back to conversation", class_ "btn btn-sm btn-ghost gap-2"] <> inspectorAttrs threadHref) do
-                faSprite_ "xmark" "regular" "size-3.5"
-                span_ "Close"
+              case activeConversationIdM of
+                Just _ -> a_ ([id_ "ai-inspector-close", href_ threadHref, Aria.label_ "Back to conversation", class_ "btn btn-sm btn-ghost gap-2"] <> inspectorAttrs threadHref) do
+                  faSprite_ "xmark" "regular" "size-3.5"
+                  span_ "Close"
+                Nothing -> a_ ([id_ "ai-inspector-close", href_ $ "/p/" <> projectId.toText <> "/ai/routines", class_ "btn btn-sm btn-ghost gap-2"] <> navTabAttrs) do
+                  faSprite_ "arrow-left" "regular" "size-3.5"
+                  span_ "All routines"
             div_ [class_ "min-h-0 grow overflow-y-auto px-5 py-5"] $ maybe (foldMap documentView_ openDoc) identity runContent
       where
         threadHref = foldMap (threadUrl projectId) activeConversationIdM
@@ -638,10 +642,10 @@ runStatus = \case
   Issues.RunCancelled -> (NeutralBadge, "Cancelled")
 
 
-routineRunGetH :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-routineRunGetH pid runId = do
+routineRunGetH :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Maybe (UUIDId "conversation") -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+routineRunGetH pid runId originM = do
   run <- Issues.getRoutineRun pid runId >>= maybe (throwError Servant.err404) pure
-  threadPageGetH pid run.conversationId Nothing (Just run) Nothing
+  threadPageGetH pid (fromMaybe run.conversationId originM) Nothing (Just run) Nothing
 
 
 runUrl :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Text

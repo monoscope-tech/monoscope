@@ -39,6 +39,7 @@ not outstanding defects.
 | 12 | HIGH | Layout and UI | `src/Pages/AIThreads.hs:239`, `src/Pages/AIThreads.hs:360`, `src/Pages/Issues.hs:2252` | Run links opened a separate page; document selection replaced the chat; saved-artifact cards navigated away | Open runs and artifacts in a shared conversation detail panel; direct run links render the same conversation shell | The conversation, scroll position, and unsent draft must survive inspecting evidence |
 | 13 | MEDIUM | Accessibility | `src/Pages/AIThreads.hs:402` | Detail navigation discarded the composer context | Use a named panel, focus its contents, support Close and Escape, hide the underlying chat on narrow screens, and return focus to the preserved composer | Desktop and narrow-screen users can inspect evidence and resume the same draft |
 | 14 | MEDIUM | UI | `src/Pages/AIThreads.hs:289`, `src/Pages/AIThreads.hs:363` | A completed panel could leave the conversation's run badge showing Running | Refresh that run's badge alongside its panel using an HTMX out-of-band swap | Two simultaneously visible statuses must agree without replacing the conversation |
+| 15 | MEDIUM | UI | `src/Pages/AIThreads.hs:414`, `src/Web/Routes.hs:423` | Orphaned runs offered a return to a deleted conversation; inspecting a historical run could discard its caller context | Preserve the typed caller conversation in inspector and polling requests; offer All routines when no conversation remains | Closing a historical run must preserve the current draft, and retained evidence needs a valid way back |
 
 ## Considered but rejected
 
@@ -100,3 +101,15 @@ signoff and production image verification are required before push.
 ## Verdict
 
 Approve the revised conversation layout; final signoff and live Slack acceptance remain separate gates.
+
+
+The retained-run extension first failed on the dead conversation-return control,
+then on a deleted source conversation opened from an existing routine. The final
+browser run passes in 18.6 seconds, including caller-context preservation,
+retained artifacts, the All routines link, and Escape navigation. Its temporary
+live-server harness was removed. Inspector context is a typed conversation ID;
+project scope and authorization remain fixed by the route.
+
+All 34 Agentic examples, formatting, and focused HLint pass after this correction.
+The final review retains the small typed URI parameter and declarative navigation;
+it adds no client state framework or new authorization capability.

@@ -213,7 +213,7 @@ spec = around withTestResources do
         (newInstructions >>= (.instructions)) `shouldBe` Just "Check the new deployment first."
         map (.attempt) runs `shouldBe` [2, 1]
         fmap (.id) duplicate `shouldBe` Just retry.id
-        (_, page) <- testServant tr $ AIThreads.routineRunGetH testPid run.id
+        (_, page) <- testServant tr $ AIThreads.routineRunGetH testPid run.id Nothing
         let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
         for_ ["Original evidence", "Cancelled", "Investigate checkout", "Instructions used for this run"] $ \text -> html `shouldSatisfy` T.isInfixOf text
         html `shouldSatisfy` (not . T.isInfixOf "Revised evidence")
@@ -223,7 +223,7 @@ spec = around withTestResources do
           Issues.listRunArtifacts testPid failed.id
         map (.content) failed `shouldBe` []
         other <- createTestProject tr "Other routine project"
-        hidden <- runAuthHandler tr $ (AIThreads.routineRunGetH other run.id $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+        hidden <- runAuthHandler tr $ (AIThreads.routineRunGetH other run.id Nothing $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
         hidden `shouldBe` 404
         pending <-
           runTestBg frozenTime tr
@@ -236,7 +236,7 @@ spec = around withTestResources do
           Issues.finishRoutineRun pending.id pending.startedAt Issues.CompletedSucceeded Nothing Nothing Nothing
         retainedArtifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid pending.id
         map (.content) retainedArtifacts `shouldBe` [Just "The published result survives conversation deletion."]
-        (_, retained) <- testServant tr $ AIThreads.routineRunGetH testPid run.id
+        (_, retained) <- testServant tr $ AIThreads.routineRunGetH testPid run.id Nothing
         let retainedHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml retained
         retainedHtml `shouldSatisfy` T.isInfixOf "Original evidence"
         retainedHtml `shouldSatisfy` (not . T.isInfixOf "Open conversation and follow up")
