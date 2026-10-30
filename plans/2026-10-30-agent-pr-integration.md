@@ -234,7 +234,7 @@ This review does not authorize posting PR comments, closing PRs, changing live S
 - #692 runtime reconciliation resolves 26 conflicting paths, including modify/delete cases. Haskell owns guest lifetime and the existing later fix state machine. The old JavaScript VM proxy and fix adapter are removed.
 - Shared workspace maintenance, frozen test files, Git isolation, outbox accounting, source comparisons, shell deadlines, and image detection are retained. Verified peer files stay in the guest instead of a second encoded worker payload.
 - The native worker protocol suite passes all 14 cases. CI self-tests pass. The shared workspace and guest modules compile; the combined server and review suite are still being verified.
-- #661 still requires reconciliation. Guest-dependent acceptance and final signoff remain outstanding.
+- #661 uses the existing scoped query tool for matching/total daily series. The same saved query observation and shared PNG renderer retain its evidence; a second planning LLM loop, evidence product, and Mermaid renderer are omitted. Its regression exercises matching counts, the denominator, project isolation, and private samples through the existing end-to-end handler test. Guest-dependent acceptance and final signoff remain outstanding.
 - The impact-review watcher is focused on the full review suite. Guest-dependent cases require a prepared guest image; no replacement evidence is claimed.
 - The pinned Pi/Gondolin packages install, and both SDK imports pass under the available Node 25 runtime.
 - No PR was updated or closed. Full signoff and live acceptance remain outstanding.

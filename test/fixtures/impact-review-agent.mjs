@@ -83,6 +83,18 @@ process.stdout.write(JSON.stringify({ tag: 'Query', contents: { service: 'test-s
 const truncated = JSON.parse((await input.next()).value).Right;
 assert.equal(truncated?.queryResult.fieldsTruncated, true, 'truncated log fields must be explicit');
 assert.ok(JSON.stringify(truncated.queryResult.dataset).length < 8100);
+// The shared query boundary also supplies #661's matching/total time series.
+process.stdout.write(JSON.stringify({ tag: 'Query', contents: { service: 'test-service', query: '| summarize matching = countif(body contains "another-in-scope-event"), total = count() by bin(timestamp, 1d)' } }) + '\n');
+const seriesReply = JSON.parse((await input.next()).value);
+assert.ok(seriesReply.Right, JSON.stringify(seriesReply));
+const series = seriesReply.Right.queryResult;
+assert.equal(series.kind, 'aggregated');
+assert.ok(series.headers.includes('matching') && series.headers.includes('total'), JSON.stringify(series));
+assert.equal(series.dataset.length, 1);
+assert.equal(series.dataset[0][series.headers.indexOf('matching')], 1);
+assert.equal(series.dataset[0][series.headers.indexOf('total')], 3);
+assert.ok(seriesReply.Right.chartUrl.includes('/widget.png?widgetZ='));
+assert.ok(!JSON.stringify(seriesReply).includes('long-review-log-body'));
 process.stdout.write(JSON.stringify({ tag: 'Knowledge', contents: { tag: 'Recall', contents: 'test-service' } }) + '\n');
 const memories = JSON.parse((await input.next()).value).Right;
 assert.ok(Array.isArray(memories), 'the reviewer must be able to recall scoped knowledge');
