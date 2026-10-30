@@ -1262,19 +1262,19 @@ externalHeadScripts_ config = do
   when (isJust config.facebookPixelId1 || isJust config.facebookPixelId2) $ do
     let fbInit pixelId = [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
         pixelInitScript = foldMap fbInit $ catMaybes [config.facebookPixelId1, config.facebookPixelId2]
+    -- The fbq queue exists at once and only the library download waits, so a conversion tracked
+    -- in the first 3s is queued rather than dropped.
     script_
       [fmt|
-          setTimeout(function(){{
       !function(f,b,e,v,n,t,s)
     {{if(f.fbq)return;n=f.fbq=function(){{n.callMethod?
     n.callMethod.apply(n,arguments):n.queue.push(arguments)}};
     if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
     n.queue=[];t=b.createElement(e);t.async=!0;
     t.src=v;s=b.getElementsByTagName(e)[0];
-    s.parentNode.insertBefore(t,s)}}(window,document,'script',
+    setTimeout(function(){{s.parentNode.insertBefore(t,s)}},3000)}}(window,document,'script',
     'https://connect.facebook.net/en_US/fbevents.js');
       {pixelInitScript}
-      }},3000);
       |]
     whenJust config.facebookPixelId2 $ \pixelId ->
       noscript_ $ img_ [height_ "1", width_ "1", src_ $ "https://www.facebook.com/tr?id=" <> pixelId <> "&ev=PageView&noscript=1"]
@@ -1323,6 +1323,26 @@ externalHeadScripts_ config = do
     }})
 }})();
         |]
+  -- Ad conversions. Signup fires on the first page after the auth callback created the account
+  -- (its one-shot cookie); activation arrives as an @adConversion@ HX-Trigger. The event id is the
+  -- one Pkg.AdConversions sends to Meta's Conversions API and the Google offline-upload order id.
+  let sendTo labelM = fromMaybe "" $ (\aw label -> aw <> "/" <> label) <$> config.googleAdsConversionId <*> labelM
+      signupTo = sendTo config.googleAdsSignupLabel
+      activatedTo = sendTo config.googleAdsActivationLabel
+  script_
+    [text|
+      window.adConversion = function(name, id) {
+        var eventId = name + '-' + id, sendTo = {signup: '${signupTo}', activated: '${activatedTo}'}[name];
+        if (sendTo && window.gtag) gtag('event', 'conversion', {send_to: sendTo, transaction_id: eventId});
+        if (window.fbq) name === 'signup' ? fbq('track', 'CompleteRegistration', {}, {eventID: eventId}) : fbq('trackCustom', 'Activated', {}, {eventID: eventId});
+        if (window.posthog) posthog.capture(name);
+      };
+      document.addEventListener('adConversion', function(e) { e.detail.value.forEach(function(c) { adConversion(c.name, c.id); }); });
+      (function() {
+        var signup = document.cookie.match(/(?:^|; )monoscope_signup=([^;]+)/);
+        if (signup) { document.cookie = 'monoscope_signup=; Max-Age=0; path=/; secure'; adConversion('signup', signup[1]); }
+      })();
+    |]
   -- Crisp chat. Unset or empty CRISP_WEBSITE_ID disables the widget.
   whenJust (mfilter (not . T.null) config.crispWebsiteId) $ \websiteId ->
     script_

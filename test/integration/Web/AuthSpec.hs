@@ -1,19 +1,24 @@
 module Web.AuthSpec (spec) where
 
+import BackgroundJobs qualified
+import BackgroundJobs.Types (BgJobs (AdConversion), Conversion (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List qualified as L
 import Data.Text qualified as T
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime, nominalDay)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie)
+import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, status200)
 import Network.Wai qualified as Wai
+import Network.Wai.Test qualified as WT
+import Pkg.AdConversions qualified as AdConversions
 import Pkg.TestUtils
 import Relude
-import Servant.API (Header, Headers, ResponseHeader (..), getResponse, lookupResponseHeader)
+import Servant.API (Header, Headers, ResponseHeader (..), getHeaders, getResponse, lookupResponseHeader)
 import Servant.Server (ServerError (..))
 import Servant.Server qualified as Servant
 import Servant.Server.Experimental.Auth (unAuthHandler)
@@ -21,7 +26,7 @@ import System.Config (AuthContext (hasqlPool))
 import System.Config qualified as Config
 import Test.Hspec
 import Web.Auth qualified as Auth
-import Web.Cookie (SetCookie)
+import Web.Cookie (SetCookie, parseSetCookie, setCookieName, setCookieValue)
 import Web.I18n qualified as I18n
 
 
@@ -126,6 +131,58 @@ spec = aroundAll withTestResources do
       let session = getResponse response
       session.service `shouldBe` Just "frontend-proxy"
       session.environment `shouldBe` Just "production"
+
+  describe "ad attribution" do
+    let adCtx tr = tr.trATCtx{Config.config = tr.trATCtx.config{Config.auth0Domain = "https://auth0.test", Config.metaCapiAccessToken = Just "capi-token", Config.metaCapiPixelId = Just "123", Config.redditConversionsToken = Just "rdt-token", Config.redditPixelId = Just "t2_px"}}
+        -- Dequeue the ad conversion jobs and run them as the worker would, recording what they send.
+        sendQueued tr = do
+          jobs <- runQueryEffect tr $ Hasql.interp [HI.sql| DELETE FROM background_jobs WHERE payload->>'tag' = 'AdConversion' RETURNING payload |]
+          let convs = [c | HI.OneColumn (HI.AsJsonb (AdConversion c)) <- jobs]
+          (,convs) . fst <$> runTestBgRecordingHTTP (UTCTime (fromGregorian 2026 10 30) 0) tr (traverse_ (AdConversions.sendConversion $ adCtx tr) convs)
+        bodiesTo url = map (decodeUtf8 @Text . snd) . filter (T.isInfixOf url . fst)
+
+    it "carries a consenting landing's click IDs through the auth callback to one signup conversion" \tr -> do
+      let land hs path = WT.runSession (WT.request (WT.setPath Wai.defaultRequest path){Wai.requestHeaders = hs}) (AdConversions.attributionMiddleware \_ respond -> respond $ Wai.responseLBS status200 [] "")
+          setCookies hs = [parseSetCookie v | ("Set-Cookie", v) <- hs]
+          granted = [(hCookie, "ms_consent=granted")]
+          -- Fresh ids: the static test supply restarts at ...0001, the template user's id.
+          callback cookie = replicateM 4 UUIDV4.nextRandom >>= writeIORef tr.trUUIDRef >> setCookies . getHeaders <$> toBaseServantResponse tr{trATCtx = adCtx tr} (Auth.authCallbackH (Just "code") Nothing Nothing (Just cookie) (Just "UA") Nothing)
+      land granted "/p/x" >>= (`shouldBe` []) . setCookies . WT.simpleHeaders
+      land [("CF-IPCountry", "DE")] "/?gclid=G1" >>= (`shouldBe` []) . setCookies . WT.simpleHeaders
+      [stash] <- setCookies . WT.simpleHeaders <$> land granted "/?gclid=G1&utm_source=google&fbclid=F1&rdt_cid=R1&page=2"
+      let cookie = "ms_consent=granted; _fbp=fb.1.1.2; monoscope_attribution=" <> setCookieValue stash
+      [_, signup] <- callback cookie
+      Just (uid :: Projects.UserId) <- runQueryEffect tr $ Hasql.interpOne [HI.sql| SELECT id FROM users.users WHERE email = 'callback@example.com' |]
+      (setCookieName signup, setCookieValue signup) `shouldBe` ("monoscope_signup", encodeUtf8 uid.toText)
+      runQueryEffect tr (Hasql.interpOne [HI.sql| SELECT attribution->>'gclid' FROM users.users WHERE id = #{uid} |]) >>= (`shouldBe` Just (Just "G1" :: Maybe Text))
+      (reqs, convs) <- sendQueued tr
+      let emailSha = "a7872ac5ff5e2cb54645209916a065fd4c5fe5f7196bad0042dc037cc9bd1633"
+      convs `shouldBe` [Signup uid]
+      [meta] <- pure $ bodiesTo "graph.facebook.com/v21.0/123/events" reqs
+      meta `shouldContainAll` ["\"signup-" <> uid.toText <> "\"", "CompleteRegistration", "\"event_source_url\"", "\"client_user_agent\":\"UA\"", "\"fbp\":\"fb.1.1.2\"", "000.F1\"", emailSha]
+      [reddit] <- pure $ bodiesTo "ads-api.reddit.com/api/v3/pixels/t2_px/conversion_events" reqs
+      reddit `shouldContainAll` ["\"SIGN_UP\"", "\"click_id\":\"R1\"", "\"signup-" <> uid.toText <> "\"", emailSha]
+      (meta <> reddit) `shouldNotSatisfy` T.isInfixOf "callback@example.com"
+      -- A returning sign-in, or a new one without consent, records and queues nothing.
+      callback cookie >>= (`shouldBe` 1) . length
+      runQueryEffect tr (AdConversions.recordSignup uid [("CF-IPCountry", "DE")]) >>= (`shouldSatisfy` isNothing)
+      sendQueued tr >>= (`shouldBe` ([], []))
+
+    it "reports a recent project's first ingest once from the hourly job, credited to its consenting creator" \tr -> do
+      now <- getCurrentTime
+      Just (owner :: Projects.UserId) <- runQueryEffect tr $ Hasql.interpOne [HI.sql| SELECT user_id FROM projects.project_members WHERE project_id = #{testPid} ORDER BY created_at, id LIMIT 1 |]
+      runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE users.users SET attribution = jsonb_build_object('gclid', 'G2', 'clicked_at', extract(epoch FROM now())::bigint::text) WHERE id = #{owner} |]
+      apiKey <- createTestAPIKey tr testPid "ad-activation"
+      ingestTrace tr apiKey "ad-activation" (addUTCTime (-600) now)
+      let hourly createdAt = do
+            runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.projects SET created_at = #{createdAt} WHERE id = #{testPid} |]
+            runTestBg now tr $ BackgroundJobs.runHourlyJob now 0
+            second (map (T.isInfixOf ("\"activated-" <> testPid.toText <> "\"") . decodeUtf8 . snd)) . swap <$> sendQueued tr
+      hourly (addUTCTime (-(31 * nominalDay)) now) >>= (`shouldBe` ([], []))
+      hourly now >>= (`shouldBe` ([Activated testPid], [True]))
+      hourly now >>= (`shouldBe` ([], []))
+      offline <- runQueryEffect tr $ Hasql.interp [HI.sql| SELECT order_id, gclid, right(conversion_time, 5) FROM users.google_ads_offline_conversions WHERE gclid = 'G2' ORDER BY order_id |]
+      offline `shouldBe` ([("activated-" <> testPid.toText, "G2", "+0000"), ("signup-" <> owner.toText, "G2", "+0000")] :: [(Text, Text, Text)])
 
   describe "loginH" do
     -- Invite emails link to /login?screen_hint=signup&login_hint=<email> so

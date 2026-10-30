@@ -1,0 +1,8 @@
+{
+  "statusCode": 200,
+  "statusMessage": "OK",
+  "respBody": "{\"email\":\"callback@example.com\",\"given_name\":\"Ada\",\"family_name\":\"Lovelace\",\"picture\":\"\"}",
+  "responseHeaders": [],
+  "originalRequest": "",
+  "responseEarlyHints": []
+}

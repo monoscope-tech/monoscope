@@ -1,14 +1,17 @@
-module BackgroundJobs.Types (BgJobs (..)) where
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob) where
 
 import Data.Aeson qualified as AE
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful (Eff)
+import Hasql.Interpolate qualified as HI
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId)
+import Pkg.DeriveUtils (DB, UUIDId)
 import Relude
 
 
@@ -122,5 +125,18 @@ data BgJobs
     -- enqueue it manually (see docs/runbooks/dlq-recovery.md) — it is never
     -- auto-scheduled because parking is a forensic archive by design.
     ReplayParkedMessages Int
+  | AdConversion Conversion
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | An ad conversion, sent to the ad platforms by 'Pkg.AdConversions.sendConversion'.
+data Conversion = Signup Projects.UserId | Activated Projects.ProjectId
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Queue a job on the request's own DB connection: the odd-jobs row 'BackgroundJobs.enqueueJobs'
+-- writes, for modules that cannot import 'BackgroundJobs' or hold no 'jobsPool'.
+insertJob :: DB es => BgJobs -> Eff es ()
+insertJob job = Hasql.interpExecute_ [HI.sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{HI.AsJsonb job}) |]

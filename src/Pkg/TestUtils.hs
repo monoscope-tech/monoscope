@@ -470,7 +470,8 @@ ensureTemplateDatabase connInfo templateDbName = do
 testSessionHeader :: MonadIO m => Pool Connection -> OHasql.TracedPool -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
 testSessionHeader pool hpool = do
   pSessId <-
-    Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
+    fst
+      <$> Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 100])
       & runHTTPGolden "./tests/golden/"
       & runHasqlPool hpool

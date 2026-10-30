@@ -35,7 +35,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (..), addDays, addUTCTime, dayOfWeek, formatTime)
-import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
+import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime, nominalDay)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (utc, utcToZonedTime)
@@ -81,6 +81,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.Activation qualified as Activation
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
@@ -103,6 +104,7 @@ import Pages.Bots.Utils qualified as Bots
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.AI qualified as AI
+import Pkg.AdConversions qualified as AdConversions
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
@@ -345,6 +347,7 @@ processBackgroundJob authCtx bgJob =
       when (moved >= cap) $ Time.currentTime >>= \t -> enqueueAt authCtx t [Jobs.ReplayParkedMessages cap]
     MonoscopeAdminDaily -> runMonoscopeAdminDaily authCtx
     UsageAuditReport -> runUsageAuditReport authCtx
+    AdConversion conv -> AdConversions.sendConversion authCtx conv
   where
     analyzeRepository :: Projects.ProjectId -> GitSync.RepositoryId -> ATBackgroundCtx ()
     analyzeRepository pid rid = whenJustM (GitSync.getRepository pid rid) \repository -> do
@@ -1393,6 +1396,11 @@ runHourlyJob scheduledTime hour = do
   let activeProjects = ordNub $ mapMaybe Projects.projectIdFromText spanProjects <> metricProjects
 
   Log.logTrace "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
+  -- Projects that never run the onboarding check activate here. The milestone is recorded first, so a
+  -- failed enqueue is not retried.
+  tryStep "ad-activations"
+    $ Activation.recordActivationMilestones Activation.IngestVerified (Just $ addUTCTime (-(30 * nominalDay)) scheduledTime) (V.fromList activeProjects)
+    >>= traverse_ (Jobs.insertJob . AdConversion . Jobs.Activated)
   let projectBatches = chunksOf 10 activeProjects
 
   enqueueJobs ctx

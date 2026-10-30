@@ -17,6 +17,7 @@ module Pages.Onboarding (
   OnboardingPhoneEmailsPost (..),
 ) where
 
+import BackgroundJobs.Types (BgJobs (AdConversion), Conversion (Activated), insertJob)
 import Control.Lens qualified as L
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _String)
@@ -46,7 +47,7 @@ import Pages.Components
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
+import System.Types (ATAuthCtx, HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, addTriggerEvent, redirectCS)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
@@ -232,7 +233,9 @@ checkIntegrationGet pid languageM = do
     Nothing -> maybe (addErrorToast "No events found yet" Nothing >> addRespHeaders "") (addRespHeaders . integrationPoller_ pid) languageM
     Just _ -> do
       markStepCompleted pid $ show Integration
-      Activation.recordActivationMilestone pid Activation.IngestVerified
+      Activation.recordActivationMilestones Activation.IngestVerified Nothing [pid] >>= traverse_ \p -> do
+        insertJob $ AdConversion $ Activated p
+        addTriggerEvent "adConversion" $ AE.object ["name" AE..= ("activated" :: Text), "id" AE..= p]
       if isJust languageM
         then addRespHeaders $ div_ [class_ "flex items-center gap-2 text-textSuccess"] do
           span_ "verified"

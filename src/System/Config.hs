@@ -203,8 +203,17 @@ data EnvConfig = EnvConfig
   , -- External scripts configuration
     googleTagManagerId :: Maybe Text
   , googleAdsConversionId :: Maybe Text
+  , googleAdsSignupLabel :: Maybe Text
+  , googleAdsActivationLabel :: Maybe Text
   , facebookPixelId1 :: Maybe Text
   , facebookPixelId2 :: Maybe Text
+  , metaCapiPixelId :: Maybe Text
+  -- ^ Dataset (pixel) the Conversions API sends signup and activation to; one of the pixels above, so
+  -- browser and server events dedupe. Server-side sending needs this and 'metaCapiAccessToken'.
+  , metaCapiAccessToken :: Maybe Text
+  , metaCapiTestEventCode :: Maybe Text
+  , redditPixelId :: Maybe Text
+  , redditConversionsToken :: Maybe Text
   , linkedInPartnerId :: Maybe Text
   , postHogApiKey :: Maybe Text
   , postHogApiHost :: Maybe Text

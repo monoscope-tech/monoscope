@@ -1,0 +1,8 @@
+{
+  "statusCode": 200,
+  "statusMessage": "OK",
+  "respBody": "{\"subscription\":{}}",
+  "responseHeaders": [],
+  "originalRequest": "",
+  "responseEarlyHints": []
+}
