@@ -139,14 +139,15 @@ spec = around withTestResources do
             destination = AIThreads.routineDestinationPostH testPid conversation . AIThreads.RoutineDestinationForm
         void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
         Just routine <- runTestBg frozenTime tr $ Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
-        runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` False)
+        execution <- runQueryEffect tr (Issues.claimRoutine routine.id routine.scheduledAt) >>= maybe (fail "Expected a claimed run") pure
+        runQueryEffect tr (Issues.routineRunCanWriteMemory testPid conversation execution.runId) >>= (`shouldBe` False)
         void $ testServant tr $ destination Issues.DestinationSlack
-        runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` True)
+        runQueryEffect tr (Issues.routineRunCanWriteMemory testPid conversation execution.runId) >>= (`shouldBe` True)
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
         for_ [Issues.DestinationConversation, Issues.DestinationSlack] \target -> do
           status <- runAuthHandler tr $ (destination target $> 200) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
           status `shouldBe` 403
-        runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` False)
+        runQueryEffect tr (Issues.routineRunCanWriteMemory testPid conversation execution.runId) >>= (`shouldBe` False)
 
     describe "Web conversation persistence" do
       it "requires an explicit per-message grant for project changes" \tr -> do
@@ -207,7 +208,7 @@ spec = around withTestResources do
           Issues.saveRunResult testPid run.id "Investigation" "Original evidence"
           pure (routine, run)
         void $ testServant tr $ AIThreads.routineCancelPostH testPid routine.conversationId
-        active <- runQueryEffect tr $ Issues.eventRunActive testPid run.id
+        active <- runQueryEffect tr $ Issues.routineRunActive testPid run.id
         active `shouldBe` False
         runQueryEffect tr $ Issues.finishRoutineRun run.id run.startedAt Issues.CompletedCancelled Nothing Nothing (Just "Cancelled by member")
         void $ testServant tr $ AIThreads.routineInstructionsPostH testPid routine.conversationId (AIThreads.RoutineInstructionsForm "Check the new deployment first.")
@@ -289,16 +290,16 @@ spec = around withTestResources do
           Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{actor.id}, 'view')|]
           run <- Issues.startEventRun routine (Issues.SlackCommand routine.conversationId) Issues.StartRun routine.conversationId actor.id "Inspect checkout" >>= maybe (throwIO $ ErrorCall "Missing run") pure
           pure (routine, run, actor)
-        runQueryEffect tr (Issues.eventRunActive testPid run.id) >>= (`shouldBe` True)
+        runQueryEffect tr (Issues.routineRunActive testPid run.id) >>= (`shouldBe` True)
         for_ [([HI.sql|UPDATE users.users SET active = FALSE WHERE id = #{routine.requestedBy}|], [HI.sql|UPDATE users.users SET active = TRUE WHERE id = #{routine.requestedBy}|]), ([HI.sql|UPDATE projects.projects SET active = FALSE WHERE id = #{testPid}|], [HI.sql|UPDATE projects.projects SET active = TRUE WHERE id = #{testPid}|])] $ \(disable, restore) -> do
           runQueryEffect tr $ Hasql.interpExecute_ disable
           runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= (`shouldSatisfy` isNothing)
-          runQueryEffect tr (Issues.eventRunActive testPid run.id) >>= (`shouldBe` False)
+          runQueryEffect tr (Issues.routineRunActive testPid run.id) >>= (`shouldBe` False)
           tryAny (runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess AI.ProjectMember routine.requestedBy) testPid) >>= (`shouldSatisfy` isLeft)
           runQueryEffect tr $ Hasql.interpExecute_ restore
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = #{testPid}|]
         tryAny (runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess AI.ProjectMember actor.id) testPid) >>= (`shouldSatisfy` isLeft)
-        runQueryEffect tr (Issues.eventRunActive testPid run.id) >>= (`shouldBe` False)
+        runQueryEffect tr (Issues.routineRunActive testPid run.id) >>= (`shouldBe` False)
 
       it "routineResults_everyRunRendersNotJustTheFirst" \tr -> do
         let convId = UUIDId UUID.nil
@@ -534,9 +535,11 @@ spec = around withTestResources do
             (scheduled, installed, canAct, slackEnabled) <- runTestBg frozenTime tr do
               void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
               scheduled <- Issues.installRoutineTemplate (getResponse tr.trSessAndHeader).user.id testPid convId "Europe/Berlin" template
-              initialCanAct <- maybe (pure False) (Issues.routineCanAct . (.id)) scheduled
+              execution <- traverse (\routine -> Issues.claimRoutine routine.id routine.scheduledAt) scheduled
+              let canAct = maybe (pure False) (Issues.routineRunCanAct testPid . (.runId)) $ join execution
+              initialCanAct <- canAct
               Issues.setRoutineDestination (getResponse tr.trSessAndHeader).user.id testPid convId Issues.DestinationSlack
-              (scheduled,,initialCanAct,) <$> Issues.getConversation testPid convId <*> maybe (pure False) (Issues.routineCanAct . (.id)) scheduled
+              (scheduled,,initialCanAct,) <$> Issues.getConversation testPid convId <*> canAct
             (.scheduledAt) <$> scheduled `shouldBe` Just (addUTCTime (8 * 3600) frozenTime)
             ((.templateKey) =<< installed) `shouldBe` Just template.key
             canAct `shouldBe` False

@@ -463,6 +463,14 @@ data AgentAccess = ServiceAccess | MemberAccess MemberContext Projects.UserId | 
   deriving stock (Generic, Show)
 
 
+accessMember :: AgentAccess -> Maybe Projects.UserId
+accessMember = \case
+  ServiceAccess -> Nothing
+  MemberAccess _ user -> Just user
+  SlackAccess _ _ user -> Just user
+  SlackInvestigationAccess investigation -> Just investigation.userId
+
+
 data SlackInvestigation = SlackInvestigation
   { teamId :: Text
   , slackUserId :: Text
@@ -545,10 +553,18 @@ data AgenticConfig = AgenticConfig
   }
 
 
--- | Invocation policy carries the routine whose persisted installation grants
--- action authority. A scheduled prompt alone can never grant it.
-data InvocationMode = InteractiveReadOnly | InteractiveWithActions | ScheduledRoutine (UUIDId "ai_routine") Bool | RoutineEventRun (UUIDId "ai_routine_run")
+-- | Background invocations carry the run whose installation grants authority.
+-- A scheduled prompt alone can never grant it.
+data InvocationMode = InteractiveReadOnly | InteractiveWithActions | ScheduledRoutine (UUIDId "ai_routine_run") Bool | RoutineEventRun (UUIDId "ai_routine_run")
   deriving stock (Eq, Generic, Show)
+
+
+backgroundRun :: InvocationMode -> Maybe (UUIDId "ai_routine_run")
+backgroundRun = \case
+  ScheduledRoutine run _ -> Just run
+  RoutineEventRun run -> Just run
+  InteractiveReadOnly -> Nothing
+  InteractiveWithActions -> Nothing
 
 
 actionsAllowed :: InvocationMode -> Bool
@@ -579,11 +595,8 @@ userMessagePersistence = \case
 requireConfigAccess :: (DB es, IOE :> es) => AgenticConfig -> Eff es ()
 requireConfigAccess config = do
   requireAgentAccess config.access config.projectId
-  case config.invocationMode of
-    RoutineEventRun runId -> unlessM (Issues.eventRunActive config.projectId runId) $ throwIO AgentStopped
-    InteractiveReadOnly -> pass
-    InteractiveWithActions -> pass
-    ScheduledRoutine{} -> pass
+  for_ (backgroundRun config.invocationMode) $ \runId ->
+    unlessM (Issues.routineRunActive config.projectId runId) $ throwIO AgentStopped
 
 
 -- | Default agentic configuration with reasonable defaults (maxIterations=5, facetContext=Nothing)
@@ -987,9 +1000,23 @@ runAgenticChatWithHistory initialConfig userQuery model apiKey = do
                     Investigations.startCheckpoint turn start
                 )
                 pure
-          result <- run (Just $ Investigations.CheckpointCursor turn checkpoint.revision) checkpoint.checkpoint
+          result <- run (Just $ Investigations.CheckpointCursor (Investigations.SlackCheckpoint turn) checkpoint.revision) checkpoint.checkpoint
           requireConfigAccess config
           traverse (Investigations.saveAnswer turn) result
+    (access, Just convId)
+      | Just runId <- backgroundRun config.invocationMode
+      , Just user <- accessMember access -> do
+          let target = Investigations.RunCheckpoint $ Investigations.RunTurn config.projectId convId user runId
+          checkpoint <-
+            Investigations.loadCheckpointFor target
+              >>= maybe
+                ( do
+                    history <- Issues.selectChatHistory config.projectId convId
+                    Investigations.startCheckpointFor target $ initial history
+                )
+                pure
+          run (Just $ Investigations.CheckpointCursor target checkpoint.revision) checkpoint.checkpoint
+    _ | isJust $ backgroundRun config.invocationMode -> throwIO AgentAccessDenied
     _ -> do
       history <-
         config.conversationId & maybe (pure []) \convId ->
@@ -1149,14 +1176,14 @@ addMessagesToMemory maxTokens history newMsgs = do
 
 callRoutineLLM :: (DB es, ELLM.LLM :> es, Time.Time :> es) => Config.EnvConfig -> Text -> Projects.ProjectId -> Issues.EventRun -> Text -> Eff es (Either Text Text)
 callRoutineLLM config model pid execution task = do
-  active <- Issues.eventRunActive pid execution.id
+  active <- Issues.routineRunActive pid execution.id
   if not active
     then pure $ Left "Routine paused, stopped, or requester access revoked"
     else do
       let prompt = execution.instructions <> "\n\n" <> task
       response <- ELLM.callLLM model prompt config.openaiApiKey
       for_ response $ \answer -> Projects.recordAIUsage pid model Projects.UsageRoutine $ pricedUsage (Just config) (estimatedTokens prompt) (estimatedTokens answer)
-      stillActive <- Issues.eventRunActive pid execution.id
+      stillActive <- Issues.routineRunActive pid execution.id
       pure $ if stillActive then response else Left "Routine paused, stopped, or requester access revoked"
 
 
@@ -1303,7 +1330,7 @@ executeToolCall config tc = do
         exists <- isJust <$> Issues.getConversation config.projectId conversation
         allowed <- case config.invocationMode of
           InteractiveReadOnly -> pure False
-          ScheduledRoutine routine True -> Issues.routineCanWriteMemory config.projectId conversation routine
+          ScheduledRoutine runId True -> Issues.routineRunCanWriteMemory config.projectId conversation runId
           ScheduledRoutine _ False -> pure False
           InteractiveWithActions -> editorAccess
           RoutineEventRun{} -> pure False
@@ -1328,14 +1355,10 @@ executeToolCall config tc = do
       ServiceAccess -> pure denied
       SlackAccess{} -> pure denied
     actionAuthorized = case config.invocationMode of
-      ScheduledRoutine routineId True -> Issues.routineCanAct routineId
+      ScheduledRoutine runId True -> Issues.routineRunCanAct config.projectId runId
       mode -> pure $ actionsAllowed mode
     runProjectTool backend name args = do
-      let principal = case config.access of
-            ServiceAccess -> ApiKeyPrincipal
-            MemberAccess _ userId -> MemberPrincipal userId
-            SlackAccess _ _ userId -> MemberPrincipal userId
-            SlackInvestigationAccess run -> MemberPrincipal run.userId
+      let principal = maybe ApiKeyPrincipal MemberPrincipal $ accessMember config.access
       value <- invoke backend principal config.projectId name args
       let content = value ^.. key "content" . values . key "text" . _String
           formatted = if null content then encodeText $ fromMaybe value (value ^? key "structuredContent") else T.intercalate "\n" content

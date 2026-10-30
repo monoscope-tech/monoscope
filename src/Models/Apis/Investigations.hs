@@ -4,10 +4,15 @@ module Models.Apis.Investigations (
   Step (..),
   Checkpoint (..),
   loadCheckpoint,
+  loadCheckpointFor,
+  CheckpointTarget (..),
+  RunTurn (..),
+  CheckpointAccessDenied (..),
   SavedCheckpoint (..),
   CheckpointCursor (..),
   CheckpointConflict (..),
   startCheckpoint,
+  startCheckpointFor,
   commitProgress,
   AgenticChatResult (..),
   ToolCallInfo (..),
@@ -411,7 +416,20 @@ data SavedCheckpoint = SavedCheckpoint {revision :: Int64, checkpoint :: Checkpo
   deriving anyclass (AE.ToJSON, HI.DecodeRow)
 
 
-data CheckpointCursor = CheckpointCursor {turn :: Turn, revision :: Int64}
+data RunTurn = RunTurn
+  { projectId :: Projects.ProjectId
+  , conversationId :: UUIDId "conversation"
+  , userId :: Projects.UserId
+  , runId :: UUIDId "ai_routine_run"
+  }
+  deriving stock (Show)
+
+
+data CheckpointTarget = SlackCheckpoint Turn | RunCheckpoint RunTurn
+  deriving stock (Show)
+
+
+data CheckpointCursor = CheckpointCursor {target :: CheckpointTarget, revision :: Int64}
   deriving stock (Show)
 
 
@@ -420,22 +438,72 @@ data CheckpointConflict = CheckpointConflict
   deriving anyclass (Exception)
 
 
+data CheckpointAccessDenied = CheckpointAccessDenied
+  deriving stock (Generic, Show)
+  deriving anyclass (Exception)
+
+
+checkpointIdentity :: CheckpointTarget -> (Projects.ProjectId, UUIDId "conversation", Projects.UserId, Maybe Text, Maybe (UUIDId "ai_routine_run"))
+checkpointIdentity = \case
+  SlackCheckpoint turn -> (turn.projectId, turn.conversationId, turn.userId, Just turn.messageTs, Nothing)
+  RunCheckpoint turn -> (turn.projectId, turn.conversationId, turn.userId, Nothing, Just turn.runId)
+
+
+checkpointSql :: CheckpointTarget -> HI.Sql
+checkpointSql target =
+  let (project, conversation, user, message, run) = checkpointIdentity target
+   in [HI.sql|SELECT revision, checkpoint FROM apis.slack_turn_checkpoints
+      WHERE project_id = #{project} AND conversation_id = #{conversation} AND user_id = #{user}
+        AND message_ts IS NOT DISTINCT FROM #{message} AND run_id IS NOT DISTINCT FROM #{run}|]
+
+
 loadCheckpoint :: DB es => Turn -> Eff es (Maybe SavedCheckpoint)
-loadCheckpoint turn =
-  Hasql.interpOne
-    [HI.sql|SELECT revision, checkpoint FROM apis.slack_turn_checkpoints
-    WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
+loadCheckpoint = loadCheckpointFor . SlackCheckpoint
+
+
+loadCheckpointFor :: DB es => CheckpointTarget -> Eff es (Maybe SavedCheckpoint)
+loadCheckpointFor = Hasql.interpOne . checkpointSql
 
 
 startCheckpoint :: DB es => Turn -> Checkpoint -> Eff es SavedCheckpoint
-startCheckpoint turn checkpoint =
-  Hasql.interpOneOrThrow
-    "Starting a Slack checkpoint"
-    [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, message_ts, checkpoint)
-    VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson checkpoint})
-    ON CONFLICT (project_id, conversation_id, user_id, message_ts)
-    DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
+startCheckpoint = startCheckpointFor . SlackCheckpoint
+
+
+-- | The run lock serializes initialization only. Model calls never hold it.
+-- Event input and the initial checkpoint commit together, once per run.
+startCheckpointFor :: DB es => CheckpointTarget -> Checkpoint -> Eff es SavedCheckpoint
+startCheckpointFor target checkpoint = do
+  let (project, conversation, user, message, run) = checkpointIdentity target
+  result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    permitted <- case run of
+      Nothing -> pure True
+      Just identifier ->
+        not
+          . null
+          <$> Hasql.queryTx @[UUIDId "ai_routine_run"]
+            [HI.sql|SELECT id FROM apis.ai_routine_runs
+          WHERE id = #{identifier} AND project_id = #{project} AND conversation_id = #{conversation}
+            AND requested_by = #{user} FOR UPDATE|]
+    if not permitted
+      then pure $ Left CheckpointAccessDenied
+      else do
+        saved <- Hasql.queryTx @[SavedCheckpoint] $ checkpointSql target
+        case saved of
+          existing : _ -> pure $ Right existing
+          [] -> do
+            created <-
+              Hasql.oneTx
+                [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, message_ts, run_id, checkpoint)
+              VALUES (#{project}, #{conversation}, #{user}, #{message}, #{run}, #{Aeson checkpoint})
+              ON CONFLICT (project_id, conversation_id, user_id, message_ts, run_id)
+              DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
+            for_ run $ \identifier ->
+              Hasql.executeTx
+                [HI.sql|INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, created_at)
+              SELECT project_id, conversation_id, 'user', input, clock_timestamp() FROM apis.ai_routine_runs
+              WHERE id = #{identifier} AND input IS NOT NULL AND source <> '{"tag":"ScheduledRun"}'::jsonb|]
+            pure $ Right created
+  either throwIO pure result
 
 
 -- | A stale worker cannot replace newer progress. Updating the checkpoint and
@@ -449,12 +517,13 @@ commitProgress cursor scope checkpoint event
         updated <- case cursor of
           Nothing -> pure $ Right Nothing
           Just key -> do
+            let (project, conversation, user, message, run) = checkpointIdentity key.target
             versions <-
               Hasql.queryTx @[Int64]
                 [HI.sql|UPDATE apis.slack_turn_checkpoints SET checkpoint = #{Aeson checkpoint},
                 revision = revision + 1, updated_at = clock_timestamp()
-                WHERE project_id = #{key.turn.projectId} AND conversation_id = #{key.turn.conversationId}
-                  AND user_id = #{key.turn.userId} AND message_ts = #{key.turn.messageTs}
+                WHERE project_id = #{project} AND conversation_id = #{conversation} AND user_id = #{user}
+                  AND message_ts IS NOT DISTINCT FROM #{message} AND run_id IS NOT DISTINCT FROM #{run}
                   AND revision = #{key.revision} RETURNING revision|]
             pure $ case versions of
               [version] -> Right $ Just (key{revision = version} :: CheckpointCursor)
@@ -462,7 +531,8 @@ commitProgress cursor scope checkpoint event
         for_ (rightToMaybe updated) $ \_ -> for_ scope $ \key -> for_ event $ \activity -> do
           Hasql.executeTx $ recordEventSql key activity
           case (cursor, activity) of
-            (Just turnCursor, FollowupsAccepted _ followups) -> for_ followups $ \followup ->
+            (Just turnCursor, FollowupsAccepted _ followups) -> for_ followups $ \followup -> do
+              let (project, conversation, _, _, _) = checkpointIdentity turnCursor.target
               Hasql.executeTx
                 [HI.sql|WITH accepted AS (
                   UPDATE apis.slack_events SET processed_at = clock_timestamp()
@@ -475,7 +545,7 @@ commitProgress cursor scope checkpoint event
                     AND payload->'event'->>'subtype' IS NULL AND payload->'event'->>'bot_id' IS NULL
                   RETURNING id
                 ) INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
-                  SELECT #{turnCursor.turn.projectId}, #{turnCursor.turn.conversationId}, 'user', #{followup.text}, #{followup.messageTs}, clock_timestamp()
+                  SELECT #{project}, #{conversation}, 'user', #{followup.text}, #{followup.messageTs}, clock_timestamp()
                   WHERE EXISTS (SELECT 1 FROM accepted)
                   ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING|]
             _ -> pass

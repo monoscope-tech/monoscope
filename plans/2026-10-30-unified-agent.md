@@ -322,9 +322,19 @@ An unclassified API entry blocks a local operation with the same name.
 All 151 bot integration examples and all 75 API v1 examples pass after this consolidation.
 Operation retry metadata and recoverable action execution remain incomplete. Slice 1 is not complete.
 
-The existing durable chat checkpoints cover Slack investigation turns.
-Web requests and scheduled work do not yet use that checkpoint path.
-The common run ledger and operation recovery must cover these entry points before autonomous writes reach release.
+Slack investigations, event runs, and scheduled runs now use the same checkpoint store and executor.
+Each scheduled invocation carries its run ID rather than its installation ID.
+Event input and its first checkpoint commit in one transaction under the run lock.
+Checkpoint initialization verifies the project, conversation, and requesting member against the run.
+Retries reuse completed reads and the original model request.
+Scheduled runs now use the same active-run and membership checks as event runs.
+The regression first demonstrated a repeated project read after interruption.
+Both event and scheduled recovery cases now pass, including conversation isolation and a single retained user message.
+All 153 bot integration examples pass, including existing Slack checkpoint rollback and conflict cases.
+All 75 API v1 integration examples also pass after the checkpoint migration.
+Interactive web requests still need durable run identities and shared checkpoints.
+The common run ledger and operation recovery must cover those requests before autonomous writes reach release.
+A checkpoint does not establish exactly-once mutation or external publication.
 
 ## External references
 

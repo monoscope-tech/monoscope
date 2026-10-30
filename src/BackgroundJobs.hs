@@ -421,7 +421,7 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       deliveryContext = case routine.destination of
         Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
         Issues.DestinationConversation -> Nothing
-      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = routine.instructions <> deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.ScheduledRoutine routineId routine.allowActions}
+      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = routine.instructions <> deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.ScheduledRoutine routine.runId routine.allowActions}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
     AI.requireAgentAccess config.access routine.projectId
@@ -3829,7 +3829,7 @@ enhanceIssuesWithLLM pid issueIds = do
                 enhancement <- ExceptT $ Enhancement.enhanceIssueWithLLM complete issue
                 classification <- if issue.issueType == Issues.ApiChange then pure Nothing else Just <$> ExceptT (Enhancement.classifyIssueCriticality complete issue)
                 analysis <- if issue.issueType /= Issues.RuntimeException then pure Nothing else Just <$> ExceptT (Enhancement.analyzeErrorPattern complete issue)
-                active <- lift $ Issues.eventRunActive pid execution.id
+                active <- lift $ Issues.routineRunActive pid execution.id
                 unless active $ throwError "Routine authorization withdrawn"
                 let body =
                       "# "
@@ -3852,7 +3852,7 @@ enhanceIssuesWithLLM pid issueIds = do
                   Hasql.interpExecute_ [HI.sql|UPDATE apis.issues SET llm_enhanced_at = #{now} WHERE id = #{issueId} AND project_id = #{pid}|]
                   Issues.insertRunResultMessage pid execution.id body
                 pure findings
-              active <- Issues.eventRunActive pid execution.id
+              active <- Issues.routineRunActive pid execution.id
               case outcome of
                 Right (Just (Right findings)) -> Issues.finishRoutineRun execution.id execution.startedAt Issues.CompletedSucceeded (Just findings) Nothing Nothing
                 _ -> do

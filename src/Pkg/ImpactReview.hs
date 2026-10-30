@@ -252,7 +252,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                     case failure of
                       Just (status, message, detail) -> do
                         Log.logAttention "Production impact review failed" (run.id, detail)
-                        active <- Issues.eventRunActive run.projectId execution.id
+                        active <- Issues.routineRunActive run.projectId execution.id
                         finish (if active then status else Issues.CompletedCancelled) Nothing Nothing (Just message)
                         Reviews.recordFailure run message
                         throwIO $ ReviewFailure message
@@ -394,7 +394,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           cid <- require =<< Git.publishPullRequestComment conn ref run.number existing (marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink)
           Reviews.finishRun run (Just cid)
     requireActive :: (DB es, Error ReviewFailure :> es) => Reviews.ReviewRun -> Issues.EventRun -> Eff es ()
-    requireActive run execution = unlessM (Issues.eventRunActive run.projectId execution.id) $ throwError $ ReviewFailure "Routine paused, stopped, or requester access revoked"
+    requireActive run execution = unlessM (Issues.routineRunActive run.projectId execution.id) $ throwError $ ReviewFailure "Routine paused, stopped, or requester access revoked"
 
     require :: Either Text a -> ReviewCtx a
     require = either (throwError . ReviewFailure) pure

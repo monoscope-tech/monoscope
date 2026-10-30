@@ -142,7 +142,7 @@ module Models.Apis.Issues (
   RunContinuation (..),
   getEventRoutine,
   startEventRun,
-  eventRunActive,
+  routineRunActive,
   saveRunResult,
   listRunArtifacts,
   getRoutineRun,
@@ -188,8 +188,8 @@ module Models.Apis.Issues (
   resumeRoutine,
   deleteRoutine,
   setRoutineDestination,
-  routineCanAct,
-  routineCanWriteMemory,
+  routineRunCanAct,
+  routineRunCanWriteMemory,
   grantRoutineMemory,
   routineRunCancelled,
   insertChatMessage,
@@ -1988,8 +1988,8 @@ startEventRun routine event continuation convId requestedBy input = do
           WHERE #{resume} AND NOT EXISTS (SELECT 1 FROM inserted) AND requested_by IS NOT NULL LIMIT 1|]
 
 
-eventRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
-eventRunActive pid runId =
+routineRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
+routineRunActive pid runId =
   fromMaybe False
     <$> Hasql.interpOne
       ( [HI.sql|WITH eligible_members AS (
@@ -2182,12 +2182,13 @@ setRoutineDestination requestedBy pid convId destination =
       WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
 
-routineCanAct :: DB es => UUIDId "ai_routine" -> Eff es Bool
-routineCanAct routineId =
+routineRunCanAct :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
+routineRunCanAct pid runId =
   fromMaybe False
     <$> Hasql.interpOne
-      [HI.sql|SELECT active AND allow_actions AND cancelled_at IS NULL
-        FROM apis.ai_routines WHERE id = #{routineId}|]
+      [HI.sql|SELECT r.active AND r.allow_actions AND r.cancelled_at IS NULL
+      FROM apis.ai_routine_runs run JOIN apis.ai_routines r ON r.id = run.routine_id
+      WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running'|]
 
 
 grantRoutineMemory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> Eff es Bool
@@ -2202,13 +2203,14 @@ grantRoutineMemory pid conversation user = do
     else pure False
 
 
-routineCanWriteMemory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> UUIDId "ai_routine" -> Eff es Bool
-routineCanWriteMemory pid conversation routine = do
+routineRunCanWriteMemory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> UUIDId "ai_routine_run" -> Eff es Bool
+routineRunCanWriteMemory pid conversation runId = do
   grant <-
     Hasql.interpOne @(HI.OneColumn Projects.UserId)
-      [HI.sql|SELECT memory_granted_by FROM apis.ai_routines
-      WHERE id = #{routine} AND project_id = #{pid} AND conversation_id = #{conversation}
-      AND active AND allow_actions AND cancelled_at IS NULL AND memory_granted_by IS NOT NULL|]
+      [HI.sql|SELECT r.memory_granted_by FROM apis.ai_routine_runs run JOIN apis.ai_routines r ON r.id = run.routine_id
+      WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.conversation_id = #{conversation}
+        AND r.project_id = #{pid} AND r.conversation_id = #{conversation} AND run.status = 'running'
+        AND r.active AND r.allow_actions AND r.cancelled_at IS NULL AND r.memory_granted_by IS NOT NULL|]
   maybe (pure False) (fmap (maybe False (>= ProjectMembers.PEdit)) . ProjectMembers.getUserPermission pid . HI.getOneColumn) grant
 
 

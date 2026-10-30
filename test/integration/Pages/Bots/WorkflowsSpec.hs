@@ -174,13 +174,15 @@ spec = around withTestResources do
           let conversation = UUIDId UUID.nil
               other = UUIDId $ UUID.fromWords 1 2 3 4
               page = UUIDId UUID.nil
-          for_ [conversation, other] \conv -> void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conv Issues.CTWeb (AE.object [])
+          for_ ([conversation, other] :: [UUIDId "conversation"]) \conv -> void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conv Issues.CTWeb (AE.object [])
           Just routine <- runTestBg frozenTime tr do
             scheduled <- Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
             Issues.setRoutineDestination (getResponse tr.trSessAndHeader).user.id testPid conversation Issues.DestinationSlack
             unless (scenario == "unattributed") $ void $ Issues.grantRoutineMemory testPid conversation (getResponse tr.trSessAndHeader).user.id
             pure scheduled
-          let config = (agentConfig testPid){AI.conversationId = Just $ if scenario == "wrong-conversation" then other else conversation, AI.invocationMode = AI.ScheduledRoutine routine.id True}
+          claimed <- runQueryEffect tr (Issues.claimRoutine routine.id routine.scheduledAt) >>= maybe (fail "Expected a claimed routine run") pure
+          let user = (getResponse tr.trSessAndHeader).user.id
+              config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just $ if scenario == "wrong-conversation" then other else conversation, AI.invocationMode = AI.ScheduledRoutine claimed.runId True}
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> do
                   let evidence = [message.content | message <- toList history, message.role == Chat.Tool]
@@ -193,8 +195,10 @@ spec = around withTestResources do
                     else pure $ Right $ Chat.Message Chat.Assistant "Finished." Chat.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
                 ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-          result <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Save the routine observation" "model" "key"
-          result `shouldSatisfy` isRight
+          result <- runTestBg frozenTime tr $ provider $ tryAny $ AI.runAgenticChatWithHistory config "Save the routine observation" "model" "key"
+          if scenario `elem` ["paused", "wrong-conversation", "grantor-downgraded"]
+            then result `shouldSatisfy` isLeft
+            else result `shouldSatisfy` either (const False) isRight
           pages <- runQueryEffect tr $ Memory.pageHistory testPid page
           map (.author) pages `shouldBe` [Memory.Conversation conversation | scenario == "active"]
 
@@ -1043,6 +1047,66 @@ spec = around withTestResources do
         (replayed, _) <- work receipt
         replayed `shouldBe` []
 
+      for_ (["event", "scheduled"] :: [Text]) \origin ->
+        it ("routineCheckpoint_resumesCompletedReadsWithoutRepeatingTheModel: " <> toString origin) \tr -> do
+          setupSlackAgent tr testPid "T_RUN_CHECKPOINT"
+          let conversation = UUIDId $ UUID.fromWords 0 0 91 1
+              user = (getResponse tr.trSessAndHeader).user.id
+          void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+          (runId, mode) <-
+            if origin == "event"
+              then do
+                routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected an installed routine") pure
+                execution <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.StartRun conversation user "Inspect the project") >>= maybe (fail "Expected a routine run") pure
+                pure (execution.id, AI.RoutineEventRun execution.id)
+              else runTestBg frozenTime tr do
+                Issues.insertChatMessage testPid conversation Issues.ChatUser "Inspect the project" Nothing Nothing
+                scheduled <- Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (liftIO $ fail "Expected a scheduled routine") pure
+                execution <- Issues.claimRoutine scheduled.id scheduled.scheduledAt >>= maybe (liftIO $ fail "Expected a claimed run") pure
+                pure (execution.runId, AI.ScheduledRoutine execution.runId False)
+          calls <- newIORef ([] :: [Text])
+          models <- newIORef ([] :: [Maybe Text])
+          interrupt <- newIORef True
+          let original = Routes.mcpProjectTools
+              backend =
+                original
+                  { AI.invoke = \principal pid name args -> do
+                      liftIO $ modifyIORef' calls (<> [name])
+                      when (name == "get_schema") $ liftIO do
+                        stop <- atomicModifyIORef' interrupt (\old -> (False, old))
+                        when stop $ throwIO $ ErrorCall "Worker interrupted after the completed project read"
+                      AI.invoke original principal pid name args
+                  }
+              config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.conversationType = Just Issues.CTWeb, AI.invocationMode = mode, AI.projectTools = Just backend}
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history request _ -> do
+                  liftIO $ modifyIORef' models (<> [AE.toJSON request ^? key "model" . _String])
+                  let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                  case results of
+                    [] -> pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall name "function" (Chat.ToolFunction name mempty) | name <- ["get_project", "get_schema"]]}
+                    [project, schema] -> do
+                      liftIO $ project `shouldSatisfy` T.isInfixOf testPid.toText
+                      liftIO $ schema `shouldSatisfy` T.isInfixOf "context.trace_id"
+                      pure $ Right $ Chat.Message Chat.Assistant "The project evidence is retained." Chat.defaultMessageData
+                    _ -> liftIO $ fail "Expected both retained tool results"
+                ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+              execute model = runTestBg frozenTime tr $ provider $ tryAny $ AI.runAgenticChatWithHistory config "Inspect the project" model "not-a-real-key"
+          let foreignConversation = UUIDId $ UUID.fromWords 0 0 91 2
+              foreignTarget = Investigations.RunCheckpoint $ Investigations.RunTurn testPid foreignConversation user runId
+          void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid foreignConversation Issues.CTWeb (AE.object [])
+          runQueryEffect tr (Investigations.startCheckpointFor foreignTarget $ Investigations.AnswerReady $ Investigations.AgenticChatResult "Do not attach another conversation" [])
+            `shouldThrow` (\Investigations.CheckpointAccessDenied -> True)
+          execute "original-model" >>= (`shouldSatisfy` isLeft)
+          execute "changed-model" >>= (`shouldSatisfy` isRight)
+          readIORef calls >>= (`shouldBe` ["get_project", "get_schema", "get_schema"])
+          readIORef models >>= (`shouldBe` [Just "original-model", Just "original-model"])
+          execute "another-model" >>= (`shouldSatisfy` isRight)
+          readIORef calls >>= (`shouldBe` ["get_project", "get_schema", "get_schema"])
+          readIORef models >>= (`shouldBe` [Just "original-model", Just "original-model"])
+          history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+          [entry.content | entry <- history, entry.role == Issues.ChatUser] `shouldBe` ["Inspect the project"]
+
       it "resumes between tool reads with the original model context and remaining iteration budget" \tr -> do
         setupSlackAgent tr testPid "T_CHECKPOINT"
         let cfg = tr.trATCtx.config
@@ -1100,7 +1164,7 @@ spec = around withTestResources do
           _ -> fail "Expected a checkpoint after the first source read"
         case pending of
           Just saved -> do
-            let cursor = Just $ Investigations.CheckpointCursor turn saved.revision
+            let cursor = Just $ Investigations.CheckpointCursor (Investigations.SlackCheckpoint turn) saved.revision
                 invalidScope = Investigations.Scope (UUIDId $ UUID.fromWords 0 0 40 1) testPid userId "" "C_CHECKPOINT" "1735689600.000001" turn.messageTs
                 replacement = Investigations.AnswerReady $ Investigations.AgenticChatResult "A stale answer must not replace progress" []
             -- A failed journal insert must also roll back the checkpoint update.

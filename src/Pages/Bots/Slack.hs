@@ -270,7 +270,7 @@ slackInteractionsHWithTools projectTools interaction = do
               for_ run \execution -> forkBackground authCtx.backgroundScope ("Slack command routine " <> execution.id.toText) do
                 let requireRun = do
                       AI.requireAgentAccess access principal.projectId
-                      unlessM (Issues.eventRunActive principal.projectId execution.id) $ throwIO AI.AgentStopped
+                      unlessM (Issues.routineRunActive principal.projectId execution.id) $ throwIO AI.AgentStopped
                     finish status findings = Issues.finishRoutineRun execution.id execution.startedAt status findings Nothing
                     runLink = "<" <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/runs/" <> execution.id.toText <> "|View run and artifacts>"
                 ( do
@@ -303,7 +303,7 @@ slackInteractionsHWithTools projectTools interaction = do
                       pure outcome
                     case result of
                       Left err -> do
-                        active <- Issues.eventRunActive principal.projectId execution.id
+                        active <- Issues.routineRunActive principal.projectId execution.id
                         let message = case fromException @SlackFollowupRejected err of
                               Just _ -> "Slack did not accept the reply. The result is retained in this run."
                               Nothing -> "Slack command was interrupted before completion"
@@ -936,7 +936,7 @@ processSlackEventWithTools projectTools receiptId =
               turn = Investigations.Turn slackData.projectId convId principal.userId event.ts
               requireRunAccess = do
                 AI.requireAgentAccess access slackData.projectId
-                unlessM (Issues.eventRunActive slackData.projectId run.id) $ throwIO AI.AgentStopped
+                unlessM (Issues.routineRunActive slackData.projectId run.id) $ throwIO AI.AgentStopped
               finish = Issues.finishRoutineRun run.id run.startedAt
               addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
               historyMessage message =
