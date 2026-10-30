@@ -387,7 +387,7 @@ authCallbackH codeM _ redirectToM cookieM userAgentM countryM = do
     Right (persistentSessId, signupCookieM) -> pure $ addHeader (fromMaybe "/" redirectToM) $ addHeader (craftSessionCookie persistentSessId True) $ maybe noHeader addHeader signupCookieM do
       html_ do
         head_ $ meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
-        body_ $ a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
+        body_ $ a_ [href_ $ fromMaybe "/" redirectToM] "Continue to Monoscope"
 
 
 -- | The user behind an email address, created on first sight.

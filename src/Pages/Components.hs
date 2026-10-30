@@ -412,7 +412,7 @@ openSourcePricing pid isCurrent =
         "Self-hosted deployment"
         (priceDisplay_ [] "0" "Free forever")
         (div_ $ pricingButton_ isCurrent "bg-green-700 hover:bg-green-600 text-white" (type_ "submit" : [disabled_ "disabled" | isCurrent]) "Continue with Open Source")
-        ["Unlimited events", "Unlimited team members", "Self-hosted deployment", "Full control over your data", "Community support", "All APItoolkit features"]
+        ["Unlimited events", "Unlimited team members", "Self-hosted deployment", "Full control over your data", "Community support", "All Monoscope features"]
         "What's included:"
 
 
