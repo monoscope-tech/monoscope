@@ -304,7 +304,15 @@ MCP read hints, schema discovery, and agent execution use each tool's policy.
 The separate name-indexed agent policy registry has been removed.
 Twenty MCP examples pass, including POST-read annotations and privileged reads.
 The agent regression also denies an unclassified operation with a previously known name.
-The fallback read handlers and agent-only capability consolidation remain in progress; slice 1 is not complete.
+Fifteen duplicate resource-read schemas, their fallback dispatch, and their response formatters have been removed.
+Discord and WhatsApp now receive the host-supplied catalog through a viewer-read projection.
+Their project integrations do not gain administrative reads or writes without a linked member.
+The API issue response includes typed activity records so agent issue reads retain their history.
+Resource reads use canonical API pagination and response shapes.
+Query-only contexts retain the smaller telemetry tool set without a second resource API.
+Bounded model results preserve both ends of large evidence, including the latest investigation status.
+All 150 bot integration examples and all 75 API v1 examples pass after this consolidation.
+Agent-only capability descriptors and operation retry metadata remain in progress; slice 1 is not complete.
 
 ## External references
 

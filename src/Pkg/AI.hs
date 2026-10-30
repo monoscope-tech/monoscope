@@ -33,6 +33,7 @@ module Pkg.AI (
   requireAgentAccess,
   ToolLimits (..),
   ProjectTools (..),
+  viewerProjectTools,
 
   -- * Natural-language search
   sanitizeTimezone,
@@ -76,7 +77,6 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
 import Data.Time.Zones.All qualified as TZ
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
@@ -87,23 +87,18 @@ import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Investigations (AgenticChatResult (..), ToolCallInfo (..), ToolResult (..))
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries (SecuredSql (..), SqlSource (..), executeSecuredQuery, selectLogTable)
-import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.CodeContext qualified as CodeContext
-import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
-import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
@@ -499,6 +494,11 @@ data ProjectTools = ProjectTools
   }
 
 
+-- | Integrations without a linked member retain ordinary project reads only.
+viewerProjectTools :: ProjectTools -> ProjectTools
+viewerProjectTools tools = tools{catalog = Map.filter ((== Just (MCP.AgentPolicy ProjectMembers.PView MCP.ReadOnly)) . (.agentPolicy)) tools.catalog}
+
+
 -- | ServiceAccess leaves authorization to its caller. Slack investigations
 -- retain the requesting identity and revalidate it at each data-use boundary.
 requireAgentAccess :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> Eff es ()
@@ -751,30 +751,15 @@ mkToolDefWithRequired firstRequired name desc props =
       }
 
 
-allToolDefs :: [OAITool.Tool]
-allToolDefs =
+telemetryToolDefs :: [OAITool.Tool]
+telemetryToolDefs =
   [ mkToolDef "get_field_values" "Get distinct values for a specific field" [("field", "string", "Field name (e.g., resource.service.name)"), ("limit", "integer", "Max values (default 10)")]
   , mkToolDef "get_services" "Get list of services in this project" []
   , mkToolDef "count_query" "Get count of results for a KQL query" [("query", "string", "KQL query to count")]
   , mkToolDef "sample_logs" "Get sample log entries matching a query" [("query", "string", "KQL query to match"), ("limit", "integer", "Max samples (default 3, max 5)")]
   , mkToolDef "get_facets" "Get precomputed facets for common fields like services, status codes, methods" []
-  , mkToolDef "get_schema" "Get schema of available fields in the log/span data" []
-  , mkOptionalToolDef "list_metrics" "List metric names and metadata in this authorized project. Active defaults to true for metrics seen in the last seven days; use active=false for older metrics. Each page reports its activity and whether more results exist." [("service", "string", "Exact service name"), ("search", "string", "Metric name search"), ("limit", "integer", "Page size (default 20, max 100)"), ("offset", "integer", "Page offset, starting at 0"), ("active", "boolean", "True for recently seen metrics (default), false for inactive metrics")]
   , mkToolDef "run_query" "Execute a KQL query and return results" [("query", "string", "KQL query to execute"), ("limit", "integer", "Max results (default 20)")]
   , mkToolDef "run_sql_query" "Execute raw SQL on otel_logs_and_spans table. PREFER KQL queries (run_query) when possible - use SQL only for complex JOINs or aggregations not expressible in KQL" [("query", "string", "SQL SELECT query (project_id filter auto-injected for security)"), ("limit", "integer", "Max results (default 20, max 100)")]
-  , mkOptionalToolDef "list_issues" "List recent issues in the authorized project. Defaults to open issues. Project scope is fixed by authorization." [("status", "string", "open, acknowledged or archived"), ("service", "string", "Exact service name"), ("type", "string", "Exact issue type"), ("limit", "integer", "Max issues (default 20, max 100)")]
-  , mkToolDef "get_issue" "Get one issue and its activity timeline from the authorized project." [("issue_id", "string", "Issue UUID")]
-  , mkOptionalToolDef "list_incidents" "List recent incident episodes in the authorized project. Project scope is fixed by authorization." [("phase", "string", "active, recovered or resolved"), ("limit", "integer", "Max incidents (default 20, max 100)")]
-  , mkToolDef "get_incident" "Get one incident episode from the authorized project." [("incident_id", "string", "Incident episode UUID")]
-  , mkOptionalToolDef "list_monitors" "List alert monitors in the authorized project." [("limit", "integer", "Max monitors (default 20, max 100)")]
-  , mkToolDef "get_monitor" "Get one alert monitor from the authorized project." [("monitor_id", "string", "Monitor UUID")]
-  , mkOptionalToolDef "list_endpoints" "List discovered API endpoints in the authorized project." [("outgoing", "boolean", "Whether to list outgoing dependencies; defaults to false"), ("search", "string", "Optional URL path search"), ("limit", "integer", "Max endpoints (default 20, max 100)")]
-  , mkToolDef "get_endpoint" "Get one discovered API endpoint from the authorized project." [("endpoint_id", "string", "Endpoint UUID")]
-  , mkOptionalToolDef "list_log_patterns" "List recent canonical log patterns in the authorized project." [("limit", "integer", "Max patterns (default 20, max 100)")]
-  , mkToolDef "get_log_pattern" "Get one log pattern from the authorized project." [("pattern_id", "integer", "Log pattern ID")]
-  , mkOptionalToolDef "list_dashboards" "List dashboards in the authorized project." [("limit", "integer", "Max dashboards (default 20, max 100)")]
-  , mkToolDef "get_dashboard" "Get one dashboard from the authorized project." [("dashboard_id", "string", "Dashboard UUID")]
-  , mkOptionalToolDef "get_project" "Get settings and billing-plan metadata for the authorized project." []
   ]
 
 
@@ -817,7 +802,7 @@ buildSystemPrompt config now =
       timezoneSection = "\nUSER TIMEZONE: " <> fromMaybe "UTC" config.timezone <> "\nCURRENT TIME (UTC): " <> show now <> "\n"
       facetSection = formatFacetContext config.facetContext
       customSection = fromMaybe "" config.customContext
-      projectSection = "\nPROJECT OPERATIONS\nUse list_metrics to discover metric names before querying an unknown metric. The default active page covers the last seven days; active=false lists older metrics. Report the selected scope and whether more pages exist. For other project operations, search_project_tools by task, then get_project_tool_schema for the selected operation before calling it. Their project scope is fixed by authorization; never infer that data absent from a tool result does not exist in another project.\n"
+      projectSection = maybe "" (const "\nPROJECT OPERATIONS\nUse list_metrics to discover metric names before querying an unknown metric. The default active page covers the last seven days; active=false lists older metrics. Report the selected scope and whether more pages exist. For other project operations, search_project_tools by task, then get_project_tool_schema for the selected operation before calling it. Their project scope is fixed by authorization; never infer that data absent from a tool result does not exist in another project.\n") config.projectTools
       localNow fmt = toText $ formatTime defaultTimeLocale fmt $ utcToLocalTimeTZ (fromMaybe utcTZ $ TZ.tzByName . encodeUtf8 =<< config.timezone) now
       documentsSection = bool "" documentsGuide $ isJust $ documentConversation config
       documentsGuide =
@@ -898,9 +883,9 @@ agenticSetup config userQuery model =
       [ mkToolDef "search_project_tools" "Find project operations by name or task. Returns short summaries; load a selected tool before calling it." [("query", "string", "Operation or task to search for")]
       , mkToolDef "get_project_tool_schema" "Load the full input schema for one discovered project operation and make it callable in this conversation." [("name", "string", "Exact operation name from search_project_tools")]
       ]
-        <> filter (maybe False (`elem` ["get_field_values", "get_services", "get_facets", "run_query", "count_query", "sample_logs"]) . toolName) allToolDefs
+        <> filter (maybe False (`elem` ["get_field_values", "get_services", "get_facets", "run_query", "count_query", "sample_logs"]) . toolName) telemetryToolDefs
         <> case config.projectTools of
-          Nothing -> filter ((== Just "list_metrics") . toolName) allToolDefs
+          Nothing -> []
           Just backend -> map mcpToolDef $ filter (isJust . (.agentPolicy)) $ mapMaybe (`Map.lookup` backend.catalog) ["get_schema", "list_metrics", "query_metrics"]
     repositoryToolDefs :: [OAITool.Tool]
     memoryToolDefs =
@@ -1100,7 +1085,7 @@ mcpToolDef tool =
 projectToolDef :: AgenticConfig -> Text -> Maybe OAITool.Tool
 projectToolDef config name = case config.projectTools of
   Just backend | Just tool <- Map.lookup name backend.catalog -> mcpToolDef tool <$ tool.agentPolicy
-  _ -> find ((== Just name) . toolName) allToolDefs
+  _ -> find ((== Just name) . toolName) telemetryToolDefs
 
 
 -- | Create ToolCallInfo from a tool call and its result
@@ -1121,11 +1106,12 @@ mkToolResultMsg tc result =
     , LLM.content =
         if T.length result.formatted <= 8192
           then result.formatted
-          else T.take (8192 - T.length truncated) result.formatted <> truncated
+          else T.take retained result.formatted <> truncated <> T.takeEnd retained result.formatted
     , LLM.messageData = LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall{LLM.toolCallId = LLM.toolCallId tc, LLM.toolCallType = "function", LLM.toolCallFunction = LLM.ToolFunction "" mempty}]}
     }
   where
-    truncated = "\n[truncated: narrow the query or request the next page]"
+    retained = (8192 - T.length truncated) `div` 2
+    truncated = "\n[middle truncated: narrow the query or request the next page]\n"
 
 
 addMessagesToMemory :: Int -> LLM.ChatHistory -> [LLM.Message] -> IO LLM.ChatHistory
@@ -1179,8 +1165,8 @@ executeToolCall config tc = do
         let summaries = case config.projectTools of
               Just backend ->
                 [(tool.name, tool.description) | tool <- Map.elems backend.catalog, isJust tool.agentPolicy]
-                  <> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction allToolDefs, Map.notMember fn.name backend.catalog]
-              Nothing -> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction allToolDefs]
+                  <> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction telemetryToolDefs, Map.notMember fn.name backend.catalog]
+              Nothing -> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction telemetryToolDefs]
             terms = words $ T.toCaseFold $ T.map (\c -> if isAlphaNum c then c else ' ') query
             score (name, description) = sum [4 | term <- terms, term `T.isInfixOf` T.toCaseFold name] + sum [1 | term <- terms, term `T.isInfixOf` T.toCaseFold description]
             matches = sortWith (Down . fst) [(score tool, tool) | tool <- summaries, score tool > 0]
@@ -1210,7 +1196,7 @@ executeToolCall config tc = do
                     if permitted then runProjectTool backend name args else pure $ noRaw "This operation requires an explicit request and is not available in this conversation."
                   MCP.ConfirmedWrite -> pure $ noRaw "This operation requires confirmation and is not available in this conversation."
     "list_project_memory" -> noRaw . encodeText . map Memory.summarize <$> Memory.latestPages config.projectId
-    "read_project_memory" -> noRaw <$> withToolId "read_project_memory" "pageId" args (fmap (foundJson "Wiki page" . viaNonEmpty head) . Memory.pageHistory config.projectId)
+    "read_project_memory" -> noRaw <$> readMemory args
     "write_project_memory" -> noRaw <$> writeMemory args
     "get_investigation_history" -> noRaw <$> slackThread "Investigation history requires an authorized Slack investigation." \run -> encodeText <$> Investigations.recentEvents config.projectId run.teamId run.channelId run.threadTs
     "get_incident_context" -> noRaw <$> slackThread "Incident context requires an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackInvestigationContext config.projectId run.teamId run.channelId run.threadTs
@@ -1234,30 +1220,11 @@ executeToolCall config tc = do
         (Just cfg, Just query) -> encodeText <$> CodeContext.readRunbook cfg config.projectId query
         _ -> pure "Runbook reads require a repository mapping ID, full commit hash and document path."
     "get_code_context" -> noRaw <$> executeGetCodeContext config args
-    "list_issues" -> noRaw <$> listProjectIssues config args
-    "get_issue" -> noRaw <$> getProjectIssue config args
-    "list_incidents" -> noRaw <$> listProjectIncidents config args
-    "get_incident" -> noRaw <$> withToolId "get_incident" "incident_id" args (fmap (foundJson "Incident") . Incidents.getEpisode config.projectId)
-    "list_monitors" -> noRaw . encodeText . take (toolLimit 20 args) <$> Monitors.queryMonitorsAll config.projectId
-    "get_monitor" -> noRaw <$> withToolArg "get_monitor" "monitor_id" (fmap Monitors.QueryMonitorId . UUID.fromText <=< (^? _String)) args (fmap (foundJson "Monitor") . Monitors.queryMonitorByProjectId config.projectId)
-    "list_endpoints" -> noRaw . encodeText <$> listProjectEndpoints config args
-    "get_endpoint" -> noRaw <$> withToolId "get_endpoint" "endpoint_id" args (fmap (foundJson "Endpoint" . fmap endpointJson) . Endpoints.getEndpointById config.projectId)
-    "list_log_patterns" -> noRaw . encodeText . map logPatternJson <$> LogPatterns.getLogPatterns config.projectId (toolLimit 20 args) 0
-    "get_log_pattern" -> noRaw <$> withToolArg "get_log_pattern" "pattern_id" (parseMaybe AE.parseJSON) args (fmap (foundJson "Log pattern" . fmap logPatternJson) . LogPatterns.getLogPatternByIdScoped config.projectId)
-    "list_dashboards" -> noRaw . encodeText . map dashboardJson . take (toolLimit 20 args) <$> Dashboards.selectDashboardsSortedBy config.projectId Dashboards.Desc Dashboards.DSUpdatedAt
-    "get_dashboard" -> noRaw <$> withToolId "get_dashboard" "dashboard_id" args (fmap (foundJson "Dashboard" . fmap dashboardJson) . Dashboards.getDashboardByProjectId config.projectId)
-    "get_project" -> noRaw . encodeText . fmap projectJson <$> Projects.projectById config.projectId
-    "list_metrics" -> do
-      now <- Time.currentTime
-      let offset = fromMaybe 0 $ Map.lookup "offset" args >>= parseMaybe AE.parseJSON
-          active = fromMaybe True $ Map.lookup "active" args >>= parseMaybe AE.parseJSON
-      noRaw . decodeUtf8 . AE.encode <$> Telemetry.getMetricCatalogResponse config.projectId (getTextArg "service" args) (getTextArg "search" args) now (toolLimit 20 args) offset active
     "get_field_values" -> noRaw <$> executeGetFieldValues config args
     "get_services" -> noRaw <$> executeGetServices config
     "count_query" -> noRaw <$> executeCountQuery config args
     "sample_logs" -> noRaw <$> executeSampleLogs config args
     "get_facets" -> pure $ noRaw $ executeGetFacets config
-    "get_schema" -> pure $ noRaw $ Schema.generateSchemaForAI Schema.telemetrySchema
     "run_query" -> executeRunQuery config args
     "run_sql_query" -> noRaw <$> executeSqlQuery config args
     -- A successful save carries its key as rawData, so renderers need not parse the message.
@@ -1310,6 +1277,9 @@ executeToolCall config tc = do
       | otherwise = T.take (maxReadChars `div` 2) content <> "\n\n[… " <> show (T.length content - maxReadChars) <> " of " <> show (T.length content) <> " characters omitted …]\n\n" <> T.takeEnd (maxReadChars `div` 2) content
     maxReadChars = 40_000
     inConversation f = maybe (pure $ ToolResult "Documents are only available in Monoscope conversations." Nothing) f $ documentConversation config
+    readMemory arguments = case getTextArg "pageId" arguments >>= idFromText of
+      Nothing -> pure $ toolError "read_project_memory" "invalid or missing 'pageId'" arguments
+      Just pageId -> maybe "Wiki page not found in the authorized project." encodeText . viaNonEmpty head <$> Memory.pageHistory config.projectId pageId
     writeMemory arguments = case (config.conversationId, parseMaybe (AE.parseJSON @Memory.Edit) $ AE.toJSON arguments) of
       (Just conversation, Just edit) -> do
         exists <- isJust <$> Issues.getConversation config.projectId conversation
@@ -1353,151 +1323,6 @@ executeToolCall config tc = do
           formatted = if null content then encodeText $ fromMaybe value (value ^? key "structuredContent") else T.intercalate "\n" content
           failure = "Tool failed: " <$ guard (value ^? key "isError" . _Bool == Just True)
       pure $ ToolResult (fromMaybe "" failure <> formatted) (Just value)
-    projectJson :: Projects.Project -> AE.Value
-    projectJson project =
-      AE.object
-        [ "id" AE..= project.id
-        , "title" AE..= project.title
-        , "description" AE..= project.description
-        , "plan" AE..= project.paymentPlan
-        , "time_zone" AE..= project.timeZone
-        , "active" AE..= project.active
-        ]
-
-
-listProjectIssues :: (DB es, Time.Time :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-listProjectIssues config args = case parseStatus $ fromMaybe "open" $ getTextArg "status" args of
-  Nothing -> pure $ toolError "list_issues" "status must be open, acknowledged or archived" args
-  Just (status, ack, archive) -> do
-    let filters =
-          Issues.defIssueFilters
-            { Issues.ack = ack
-            , Issues.archive = archive
-            , Issues.service = getTextArg "service" args
-            , Issues.types = maybeToList $ getTextArg "type" args
-            , Issues.limit = toolLimit 20 args
-            }
-    (issues, total) <- Issues.selectIssues config.projectId Issues.PIssue filters
-    pure $ encodeText $ AE.object ["issues" AE..= map issueJson issues, "total" AE..= total, "status" AE..= status]
-  where
-    parseStatus = \case
-      "open" -> Just ("open" :: Text, Issues.IsNull, Issues.IsNull)
-      "acknowledged" -> Just ("acknowledged", Issues.IsNotNull, Issues.IsNull)
-      "archived" -> Just ("archived", Issues.AnyValue, Issues.IsNotNull)
-      _ -> Nothing
-
-
-getProjectIssue :: (DB es, IOE :> es, Log :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-getProjectIssue config args = withToolId "get_issue" "issue_id" args \issueId ->
-  Issues.selectIssueById config.projectId issueId >>= \case
-    Nothing -> pure "Issue not found in the authorized project."
-    Just issue -> do
-      activity <- Issues.selectIssueActivity config.projectId issueId
-      pure $ encodeText $ AE.object ["issue" AE..= issueJson issue, "activity" AE..= map issueActivityJson activity]
-  where
-    issueActivityJson :: Issues.IssueActivity -> AE.Value
-    issueActivityJson activity =
-      AE.object
-        [ "event" AE..= show @Text activity.event
-        , "created_by" AE..= activity.createdBy
-        , "created_at" AE..= activity.createdAt
-        ]
-
-
-listProjectIncidents :: DB es => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-listProjectIncidents config args = case traverse (parseMaybe AE.parseJSON . AE.String) $ getTextArg "phase" args of
-  Nothing -> pure $ toolError "list_incidents" "phase must be active, recovered or resolved" args
-  Just phase -> do
-    incidents <- Incidents.listEpisodes config.projectId phase $ toolLimit 20 args
-    pure $ encodeText $ AE.object ["incidents" AE..= incidents, "phase" AE..= getTextArg "phase" args]
-
-
-listProjectEndpoints :: DB es => AgenticConfig -> Map.Map Text AE.Value -> Eff es AE.Value
-listProjectEndpoints config args = do
-  let outgoing = fromMaybe False $ Map.lookup "outgoing" args >>= parseMaybe AE.parseJSON
-  (endpoints, total) <- Endpoints.listEndpointsPaged config.projectId outgoing (getTextArg "search" args) (toolLimit 20 args) 0
-  pure $ AE.object ["endpoints" AE..= map endpointJson endpoints, "total" AE..= total, "outgoing" AE..= outgoing]
-
-
-withToolId :: Applicative m => Text -> Text -> Map.Map Text AE.Value -> (UUIDId tag -> m Text) -> m Text
-withToolId tool key' = withToolArg tool key' (idFromText <=< (^? _String))
-
-
--- | Run the continuation on a parsed required argument, or report it invalid or missing.
-withToolArg :: Applicative m => Text -> Text -> (AE.Value -> Maybe a) -> Map.Map Text AE.Value -> (a -> m Text) -> m Text
-withToolArg tool key' parse args action = maybe (pure $ toolError tool ("invalid or missing '" <> key' <> "'") args) action $ parse =<< Map.lookup key' args
-
-
--- | A record as tool output, or the not-found message for the authorized project.
-foundJson :: AE.ToJSON a => Text -> Maybe a -> Text
-foundJson what = maybe (what <> " not found in the authorized project.") encodeText
-
-
-toolLimit :: Int -> Map.Map Text AE.Value -> Int
-toolLimit fallback args = max 1 $ min 100 $ fromMaybe fallback $ Map.lookup "limit" args >>= parseMaybe AE.parseJSON
-
-
-endpointJson :: Endpoints.Endpoint -> AE.Value
-endpointJson endpoint =
-  AE.object
-    [ "id" AE..= endpoint.id
-    , "method" AE..= endpoint.method
-    , "host" AE..= endpoint.host
-    , "url_path" AE..= endpoint.urlPath
-    , "outgoing" AE..= endpoint.outgoing
-    , "description" AE..= endpoint.description
-    , "service" AE..= endpoint.serviceName
-    , "environment" AE..= endpoint.environment
-    , "updated_at" AE..= endpoint.updatedAt
-    ]
-
-
-logPatternJson :: LogPatterns.LogPattern -> AE.Value
-logPatternJson pattern' =
-  AE.object
-    [ "id" AE..= pattern'.id
-    , "pattern" AE..= pattern'.logPattern
-    , "sample_message" AE..= pattern'.sampleMessage
-    , "service" AE..= pattern'.serviceName
-    , "level" AE..= pattern'.logLevel
-    , "state" AE..= pattern'.state
-    , "is_error" AE..= pattern'.isError
-    , "occurrence_count" AE..= pattern'.occurrenceCount
-    , "first_seen_at" AE..= pattern'.firstSeenAt
-    , "last_seen_at" AE..= pattern'.lastSeenAt
-    ]
-
-
-dashboardJson :: Dashboards.DashboardVM -> AE.Value
-dashboardJson dashboard =
-  AE.object
-    [ "id" AE..= dashboard.id
-    , "title" AE..= dashboard.title
-    , "description" AE..= (dashboard.schema >>= (.description))
-    , "tags" AE..= dashboard.tags
-    , "starred_since" AE..= dashboard.starredSince
-    , "updated_at" AE..= dashboard.updatedAt
-    , "schema" AE..= dashboard.schema
-    ]
-
-
-issueJson :: Issues.Issue -> AE.Value
-issueJson issue =
-  AE.object
-    [ "id" AE..= issue.id
-    , "title" AE..= issue.title
-    , "type" AE..= issue.issueType
-    , "severity" AE..= issue.severity
-    , "service" AE..= issue.service
-    , "environment" AE..= issue.environment
-    , "created_at" AE..= issue.createdAt
-    , "updated_at" AE..= issue.updatedAt
-    , "acknowledged_at" AE..= issue.acknowledgedAt
-    , "archived_at" AE..= issue.archivedAt
-    , "affected_requests" AE..= issue.affectedRequests
-    , "affected_clients" AE..= issue.affectedClients
-    , "recommended_action" AE..= issue.recommendedAction
-    ]
 
 
 -- | Source reads retain the tool loop's before/after access checks and use only

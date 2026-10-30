@@ -5,7 +5,7 @@ module Pages.Bots.WorkflowsSpec (spec) where
 import BackgroundJobs qualified as Jobs
 import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), bracket_, throwIO)
-import Control.Lens (ix, toListOf, (.~), (^.), (^?))
+import Control.Lens (ix, toListOf, (.~), (^.), (^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _Bool, _Number, _String)
 import Data.Base64.Types (extractBase64)
@@ -70,6 +70,10 @@ import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
+agentConfig :: Projects.ProjectId -> AI.AgenticConfig
+agentConfig pid = (AI.defaultAgenticConfig pid){AI.projectTools = Just Routes.mcpProjectTools}
+
+
 spec :: Spec
 spec = around withTestResources do
   describe "Complete Bot Workflows" do
@@ -83,7 +87,7 @@ spec = around withTestResources do
             document = AE.object ["title" AE..= ("Payments" :: Text), "body" AE..= ("Retries need an idempotency key." :: Text)]
             write version = Chat.ToolCall (show version) "function" $ Chat.ToolFunction "write_project_memory" $ fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (version :: Int)), ("document", document)]
             calls = [write 0, Chat.ToolCall "read" "function" $ Chat.ToolFunction "read_project_memory" $ fromList [("pageId", AE.toJSON page)], Chat.ToolCall "list" "function" $ Chat.ToolFunction "list_project_memory" mempty, Chat.ToolCall "foreign" "function" $ Chat.ToolFunction "read_project_memory" $ fromList [("pageId", AE.toJSON privatePage)], write 0]
-            config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = AI.InteractiveWithActions, AI.maxIterations = 6}
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = AI.InteractiveWithActions, AI.maxIterations = 6}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> do
                 let evidence = [message.content | message <- toList history, message.role == Chat.Tool]
@@ -117,7 +121,7 @@ spec = around withTestResources do
           let conversation = UUIDId UUID.nil
               page = UUIDId UUID.nil
               user = (getResponse tr.trSessAndHeader).user.id
-              base = (AI.defaultAgenticConfig project){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = AI.InteractiveWithActions}
+              base = (agentConfig project){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = AI.InteractiveWithActions}
               config = case scenario of
                 "readonly" -> base{AI.invocationMode = AI.InteractiveReadOnly}
                 "service" -> base{AI.access = AI.ServiceAccess}
@@ -145,7 +149,7 @@ spec = around withTestResources do
         it ("retains existing " <> toString scope <> " session reads without a membership") \tr -> do
           project <- if scope == "demo" then pure testPid else createTestProject tr "Sudo project"
           let user = (getResponse tr.trSessAndHeader).user.id
-              config = (AI.defaultAgenticConfig project){AI.access = AI.MemberAccess AI.WebSession user}
+              config = (agentConfig project){AI.access = AI.MemberAccess AI.WebSession user}
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ ->
                   pure
@@ -176,7 +180,7 @@ spec = around withTestResources do
             Issues.setRoutineDestination (getResponse tr.trSessAndHeader).user.id testPid conversation Issues.DestinationSlack
             unless (scenario == "unattributed") $ void $ Issues.grantRoutineMemory testPid conversation (getResponse tr.trSessAndHeader).user.id
             pure scheduled
-          let config = (AI.defaultAgenticConfig testPid){AI.conversationId = Just $ if scenario == "wrong-conversation" then other else conversation, AI.invocationMode = AI.ScheduledRoutine routine.id True}
+          let config = (agentConfig testPid){AI.conversationId = Just $ if scenario == "wrong-conversation" then other else conversation, AI.invocationMode = AI.ScheduledRoutine routine.id True}
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> do
                   let evidence = [message.content | message <- toList history, message.role == Chat.Tool]
@@ -260,7 +264,7 @@ spec = around withTestResources do
         (conversations :: Int64) `shouldBe` 1
         toBaseServantResponse tr (Slack.slackThreadProject "T_IDENTITY" "C_IDENTITY" "1735689601.000001") >>= (`shouldBe` Just testPid)
         let access = AI.SlackAccess "T_IDENTITY" "U0123ABCDEF" userId
-            config = (AI.defaultAgenticConfig testPid){AI.access = access}
+            config = (agentConfig testPid){AI.access = access}
             setActive active = withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = ? WHERE user_id = ?|] (active, userId)
         for_ ([Nothing, Just [Chat.ToolCall "tool-1" "function" (Chat.ToolFunction "get_services" mempty)]] :: [Maybe [Chat.ToolCall]]) \toolCalls -> do
           setActive True
@@ -431,7 +435,7 @@ spec = around withTestResources do
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
 
-        result <- toBaseServantResponse tr{trATCtx = testCtx} $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        result <- toBaseServantResponse tr{trATCtx = testCtx} $ discordInteractionsH (Just Routes.mcpProjectTools) signedPayload (Just sig) (Just ts)
         result `shouldSatisfy` isValidJsonResponse
         getDiscordResponseType result `shouldSatisfy` isJust
 
@@ -440,7 +444,7 @@ spec = around withTestResources do
         setupWhatsappNumber tr testPid testPhone
         let msg = twilioWhatsAppPrompt tr testPhone "show me errors in the last hour"
 
-        result <- toBaseServantResponse tr $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr $ whatsappIncomingPostH (Just Routes.mcpProjectTools) msg
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Error Handling Workflows" do
@@ -455,7 +459,7 @@ spec = around withTestResources do
 
       it "WhatsApp: handles unknown phone number" \tr -> do
         let msg = twilioWhatsAppPrompt tr "+19999999999" "show errors"
-        result <- toBaseServantResponse tr $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr $ whatsappIncomingPostH (Just Routes.mcpProjectTools) msg
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Platform-Specific Commands" do
@@ -621,7 +625,7 @@ spec = around withTestResources do
         let (signedPayload, sig, ts) = signDiscordPayload discordPingPayload "1700000000"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        result <- toBaseServantResponse tr{trATCtx = testCtx} $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        result <- toBaseServantResponse tr{trATCtx = testCtx} $ discordInteractionsH (Just Routes.mcpProjectTools) signedPayload (Just sig) (Just ts)
 
         result `shouldSatisfy` isValidJsonResponse
         getDiscordResponseType result `shouldBe` Just 1
@@ -631,7 +635,7 @@ spec = around withTestResources do
         setupWhatsappNumber tr testPid testPhone
         let msg = twilioWhatsAppDashboard tr testPhone
 
-        result <- toBaseServantResponse tr $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr $ whatsappIncomingPostH (Just Routes.mcpProjectTools) msg
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Slack signed events" do
@@ -1045,7 +1049,7 @@ spec = around withTestResources do
             convId = Issues.slackScopedConversationId testPid "T_CHECKPOINT" "C_CHECKPOINT" "1735689600.000001"
             userId = (getResponse tr.trSessAndHeader).user.id
             access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_CHECKPOINT" "U0123ABCDEF" userId "C_CHECKPOINT" "1735689600.000001" "1735689602.000001"
-            config = (AI.defaultAgenticConfig testPid){AI.access = access, AI.sourceConfig = Just cfg, AI.conversationId = Just convId, AI.maxIterations = 1}
+            config = (agentConfig testPid){AI.access = access, AI.sourceConfig = Just cfg, AI.conversationId = Just convId, AI.maxIterations = 1}
             turn = Investigations.Turn testPid convId userId "1735689602.000001"
             oldRevision = T.replicate 40 "a"
             newRevision = T.replicate 40 "b"
@@ -1372,7 +1376,7 @@ spec = around withTestResources do
         map (.role) later `shouldBe` [Issues.ChatUser, Issues.ChatAssistant, Issues.ChatUser, Issues.ChatAssistant]
         let cached channel =
               let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_REPLAY" "U0123ABCDEF" (getResponse tr.trSessAndHeader).user.id channel "1735689600.000001" "1735689602.000001"
-                  config = (AI.defaultAgenticConfig testPid){AI.access = access, AI.conversationId = Just convId}
+                  config = (agentConfig testPid){AI.access = access, AI.conversationId = Just convId}
                in runTestBg frozenTime tr $ provider $ tryAny do
                     answer <- AI.runAgenticChatWithHistory config "Investigate the checkout issue" "model" "key"
                     liftIO $ answer `shouldSatisfy` isRight
@@ -1385,7 +1389,7 @@ spec = around withTestResources do
       it "retains interrupted investigation evidence and exposes it only inside the authorized thread" \tr -> do
         setupSlackAgent tr testPid "T_JOURNAL"
         let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_JOURNAL" "U0123ABCDEF" (getResponse tr.trSessAndHeader).user.id "C_JOURNAL" "1735689600.000001" "1735689602.000001"
-            config = (AI.defaultAgenticConfig testPid){AI.access = access}
+            config = (agentConfig testPid){AI.access = access}
             run = AI.runAgenticChatWithHistory config "Investigate the alert" "model" "not-a-real-key"
             journal = runQueryEffect tr $ Investigations.recentEvents testPid "T_JOURNAL" "C_JOURNAL" "1735689600.000001"
             interrupted = interpose @ELLM.LLM \_ -> \case
@@ -1487,7 +1491,7 @@ spec = around withTestResources do
                 Just suffix | suffix == "/contents/checkout.py?ref=" <> oldRevision -> Just $ source "poolSize = 50\n"
                 Just suffix | suffix == "/contents/checkout.py?ref=" <> newRevision -> Just $ source "poolSize = 5\n"
                 _ -> Nothing
-        (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQuery (Just cfg) False access testPid "Could a pool setting change explain this? Compare production and staging." Nothing "model" "key"
+        (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQueryWithTools (Just cfg) False (Just Routes.mcpProjectTools) access testPid "Could a pool setting change explain this? Compare production and staging." Nothing "model" "key"
         result `shouldSatisfy` isRight
         length requests `shouldBe` 8
         evidence <- readIORef observed
@@ -1509,7 +1513,7 @@ spec = around withTestResources do
             source = "poolSize = 5\n" :: ByteString
             fileResponse = AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 source)]
             access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_SOURCE" "U0123ABCDEF" (getResponse tr.trSessAndHeader).user.id "C_SOURCE" "1735689600.000001" "1735689602.000001"
-            config = (AI.defaultAgenticConfig testPid){AI.access = access, AI.sourceConfig = Just cfg}
+            config = (agentConfig testPid){AI.access = access, AI.sourceConfig = Just cfg}
         Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "acme" Nothing (Just "ghp_source_fixture")
         runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "acme" "checkout-service" "main") (Just "checkout") "/srv/app/" ""
         Cache.insert tr.trATCtx.codeBlobCache ("acme", "checkout-service", revision, "checkout.py") "source cached under another credential"
@@ -1589,7 +1593,7 @@ spec = around withTestResources do
                   [] -> Chat.Message Chat.Assistant "The runbook lists a check to run; it is not evidence that anyone ran it." Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-        (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQuery (Just cfg) False access testPid "Is there a runbook for checkout latency?" Nothing "model" "key"
+        (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQueryWithTools (Just cfg) False (Just Routes.mcpProjectTools) access testPid "Is there a runbook for checkout latency?" Nothing "model" "key"
         result `shouldSatisfy` isRight
         map fst requests `shouldBe` map ("https://api.github.com/repos/acme/checkout-service" <>) (["/commits/" <> revision, "/git/trees/" <> revision <> "?recursive=1"] <> replicate 3 ("/contents/" <> runbookPath <> "?ref=" <> revision))
         evidence <- readIORef observed
@@ -1628,7 +1632,7 @@ spec = around withTestResources do
                   _ -> Chat.Message Chat.Assistant "The runbook and source were read." Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-        (serviceRequests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ transport $ serviceConversation $ AI.runAgenticChatWithHistory (AI.defaultAgenticConfig testPid){AI.sourceConfig = Just cfg} "Read the checkout runbook." "model" "key"
+        (serviceRequests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ transport $ serviceConversation $ AI.runAgenticChatWithHistory (agentConfig testPid){AI.sourceConfig = Just cfg} "Read the checkout runbook." "model" "key"
         outcome `shouldSatisfy` isRight
         map fst serviceRequests `shouldBe` map ("https://api.github.com/repos/acme/checkout-service/contents/" <>) [runbookPath <> "?ref=" <> revision, "checkout.py?ref=" <> revision]
         readIORef serviceEvidence >>= (`shouldSatisfy` \case [runbook, source] -> T.isInfixOf "step 100" runbook && T.isInfixOf "poolSize = 5" source && not (T.isInfixOf "ghp_runbook_fixture" $ runbook <> source); _ -> False)
@@ -1675,7 +1679,7 @@ spec = around withTestResources do
                   _ -> Chat.Message Chat.Assistant "Project operations reviewed." Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-        result <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory (AI.defaultAgenticConfig testPid) "Review project operations" "model" "key"
+        result <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory (agentConfig testPid) "Review project operations" "model" "key"
         result `shouldSatisfy` isRight
         outputs <- readIORef observed
         length outputs `shouldBe` 4
@@ -1702,7 +1706,7 @@ spec = around withTestResources do
                   _ -> Chat.Message Chat.Assistant "Done." Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-        result <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory (AI.defaultAgenticConfig testPid) "List acknowledged issues" "model" "key"
+        result <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory (agentConfig testPid) "List acknowledged issues" "model" "key"
         result `shouldSatisfy` isRight
         readIORef observed >>= \case
           [output] -> do
@@ -2076,12 +2080,13 @@ spec = around withTestResources do
                 pure $ Right $ maybe (Chat.Message Chat.Assistant "Done" Chat.defaultMessageData) (\fn -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall (show $ length seen) "function" fn]}) next
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-        outcome <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory (AI.defaultAgenticConfig testPid) "What issues are open?" "model" "key"
+        outcome <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory (agentConfig testPid) "What issues are open?" "model" "key"
         outcome `shouldSatisfy` isRight
         offeredTools <- readIORef offered
         map (elem "list_issues") offeredTools `shouldBe` [False, False, True, True]
         toolResults <- readIORef results
-        ((AE.decode @AE.Value . encodeUtf8 =<< listToMaybe toolResults) >>= (^? key "tools" . _Array . ix 0 . key "name" . _String)) `shouldBe` Just "list_issues"
+        let discovered = maybe [] (^.. key "tools" . _Array . traverse . key "name" . _String) (AE.decode @AE.Value . encodeUtf8 =<< listToMaybe toolResults)
+        discovered `shouldSatisfy` elem "list_issues"
         ((AE.decode @AE.Value . encodeUtf8 =<< listToMaybe (drop 1 toolResults)) >>= (^? key "input_schema" . key "properties" . key "status" . key "type" . _String)) `shouldBe` Just "string"
 
       it "discovers an MCP operation and checks policy before executing it" \tr -> do
@@ -2096,7 +2101,7 @@ spec = around withTestResources do
                     modifyIORef' invoked (<> [name])
                     pure $ AE.object ["isError" AE..= False, "structuredContent" AE..= AE.object ["title" AE..= ("Dashboard" :: Text)]]
                 }
-            config = (AI.defaultAgenticConfig testPid){AI.projectTools = Just backend, AI.maxIterations = 7}
+            config = (agentConfig testPid){AI.projectTools = Just backend, AI.maxIterations = 7}
             calls = [Chat.ToolFunction "search_project_tools" $ one ("query", AE.String "show dashboard data"), Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String "get_dashboard_data"), Chat.ToolFunction "get_dashboard_data" mempty, Chat.ToolFunction "create_monitor" mempty, Chat.ToolFunction "get_project_tool_schema" (one ("name", AE.String "get_project")), Chat.ToolFunction "get_project" mempty]
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> do
@@ -2127,12 +2132,14 @@ spec = around withTestResources do
                 { AI.catalog = Map.singleton "get_project" $ MCP.Tool "get_project" "Read project" (AE.object []) (Just $ MCP.AgentPolicy PM.PView MCP.ReadOnly) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
                 , AI.invoke = \_ _ _ _ -> pure envelope
                 }
-            config = (AI.defaultAgenticConfig testPid){AI.projectTools = Just backend, AI.limits = AI.defaultLimits{AI.maxTokenBuffer = 1_000_000}}
+            config = (agentConfig testPid){AI.projectTools = Just backend, AI.limits = AI.defaultLimits{AI.maxTokenBuffer = 1_000_000}}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> case [message.content | message <- toList history, message.role == Chat.Tool] of
                 [] -> pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "project" "function" $ Chat.ToolFunction "get_project" mempty]}
                 [result] -> do
                   liftIO $ T.length result `shouldSatisfy` (<= 8192)
+                  liftIO $ result `shouldSatisfy` T.isPrefixOf (T.take 64 full)
+                  liftIO $ result `shouldSatisfy` T.isSuffixOf "retained-evidence-end"
                   liftIO $ result `shouldSatisfy` T.isInfixOf "truncated"
                   pure $ Right $ Chat.Message Chat.Assistant "The full evidence is retained." Chat.defaultMessageData
                 _ -> pure $ Left "Unexpected tool results"
@@ -2142,6 +2149,27 @@ spec = around withTestResources do
         case result of
           Left err -> expectationFailure $ toString err
           Right answer -> map (.rawData) answer.toolCalls `shouldBe` [Just envelope]
+
+      it "legacyIntegrationCatalog_keepsProjectReadsWithoutAdministrativeCapabilities" \tr -> do
+        seen <- newIORef []
+        let config = (agentConfig testPid){AI.projectTools = Just $ AI.viewerProjectTools Routes.mcpProjectTools}
+            calls = [Chat.ToolFunction "search_project_tools" (one ("query", AE.String "ingestion_key")), Chat.ToolFunction "get_api_key" (one ("key_id", AE.String $ UUID.toText UUID.nil)), Chat.ToolFunction "get_project" mempty]
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                writeIORef seen results
+                pure $ Right $ maybe (Chat.Message Chat.Assistant "Done" Chat.defaultMessageData) (\fn -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall (show $ length results) "function" fn]}) $ viaNonEmpty head $ drop (length results) calls
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        outcome <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Inspect this project" "model" "key"
+        outcome `shouldSatisfy` isRight
+        readIORef seen >>= \case
+          [search, denied, project] -> do
+            let names = maybe [] (^.. key "tools" . _Array . traverse . key "name" . _String) $ AE.decode @AE.Value $ encodeUtf8 search
+            names `shouldSatisfy` notElem "get_ingestion_key"
+            denied `shouldBe` "Unknown tool: get_api_key"
+            project `shouldSatisfy` T.isInfixOf testPid.toText
+          _ -> expectationFailure "Expected catalog, denied administrative read, and shared project read"
 
       it "denies an MCP admin read to a view-only linked Slack member" \tr -> do
         setupSlackAgent tr testPid "T_MCP_VIEW"
@@ -2153,7 +2181,7 @@ spec = around withTestResources do
                 , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
                 }
             userId = (getResponse tr.trSessAndHeader).user.id
-            config = (AI.defaultAgenticConfig testPid){AI.projectTools = Just backend, AI.access = AI.SlackAccess "T_MCP_VIEW" "U0123ABCDEF" userId}
+            config = (agentConfig testPid){AI.projectTools = Just backend, AI.access = AI.SlackAccess "T_MCP_VIEW" "U0123ABCDEF" userId}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
                 [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "admin" "function" (Chat.ToolFunction "get_api_key" mempty)]}
@@ -2182,7 +2210,7 @@ spec = around withTestResources do
                 { AI.catalog = Map.singleton "create_monitor" $ MCP.Tool "create_monitor" "Create a monitor" (AE.object []) (Just $ MCP.AgentPolicy PM.PEdit MCP.RequestedWrite) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
                 , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
                 }
-            config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember userId, AI.projectTools = Just backend, AI.invocationMode = AI.InteractiveWithActions}
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember userId, AI.projectTools = Just backend, AI.invocationMode = AI.InteractiveWithActions}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
                 [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "write" "function" (Chat.ToolFunction "create_monitor" mempty)]}
@@ -2204,15 +2232,22 @@ spec = around withTestResources do
             (PGS.Only testPid)
         let userId = (getResponse tr.trSessAndHeader).user.id
             backend = Routes.mcpProjectTools
-            config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember userId, AI.projectTools = Just backend, AI.invocationMode = AI.InteractiveWithActions}
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember userId, AI.projectTools = Just backend, AI.invocationMode = AI.InteractiveWithActions}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
                 [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "ack" "function" (Chat.ToolFunction "ack_issue" $ one ("issue_id", AE.toJSON issueId)), Chat.ToolCall "dashboard" "function" (Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Agent attribution regression" :: Text)]))]}
+                results | length results == 2 -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "issue" "function" (Chat.ToolFunction "get_issue" $ one ("issue_id", AE.toJSON issueId))]}
                 _ -> Chat.Message Chat.Assistant "Issue acknowledged." Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        runTestBg frozenTime tr $ Issues.logIssueActivity issueId Issues.IEViewed (Just userId) Nothing
         outcome <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Acknowledge this issue" "model" "key"
         outcome `shouldSatisfy` isRight
+        case outcome of
+          Right answer -> do
+            let issueResults = [value | call <- answer.toolCalls, call.name == "get_issue", Just value <- [call.rawData]]
+            concatMap (^.. key "structuredContent" . key "activity" . _Array . traverse . key "created_by" . _String) issueResults `shouldBe` [userId.toText]
+          Left failure -> expectationFailure $ toString failure
         [acknowledged] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT acknowledged_at IS NOT NULL, acknowledged_by FROM apis.issues WHERE id = ?|] (PGS.Only issueId)
         acknowledged `shouldBe` (True, Just userId)
         createdBy <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT created_by FROM projects.dashboards WHERE project_id = ? AND title = 'Agent attribution regression'|] (PGS.Only testPid)
@@ -2222,7 +2257,7 @@ spec = around withTestResources do
         setupSlackAgent tr testPid "T_VIEW_ACTION"
         withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ?|] (PGS.Only testPid)
         let userId = (getResponse tr.trSessAndHeader).user.id
-            config = (AI.defaultAgenticConfig testPid){AI.access = AI.SlackAccess "T_VIEW_ACTION" "U0123ABCDEF" userId, AI.invocationMode = AI.InteractiveWithActions}
+            config = (agentConfig testPid){AI.access = AI.SlackAccess "T_VIEW_ACTION" "U0123ABCDEF" userId, AI.invocationMode = AI.InteractiveWithActions}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
                 [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "send" "function" (Chat.ToolFunction "send_to_slack" $ one ("message", AE.String "Do not send"))]}
@@ -2618,7 +2653,7 @@ spec = around withTestResources do
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
 
-        result <- toBaseServantResponse tr{trATCtx = testCtx} $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        result <- toBaseServantResponse tr{trATCtx = testCtx} $ discordInteractionsH (Just Routes.mcpProjectTools) signedPayload (Just sig) (Just ts)
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Multi-Platform Integration" do
@@ -2638,12 +2673,12 @@ spec = around withTestResources do
             (signedPayload, sig, ts) = signDiscordPayload discordPayload "1700000000"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        discordResp <- toBaseServantResponse tr{trATCtx = testCtx} $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        discordResp <- toBaseServantResponse tr{trATCtx = testCtx} $ discordInteractionsH (Just Routes.mcpProjectTools) signedPayload (Just sig) (Just ts)
         discordResp `shouldSatisfy` isValidJsonResponse
 
         -- Test WhatsApp
         let whatsappMsg = twilioWhatsAppPrompt tr testPhone "show status"
-        whatsappResp <- toBaseServantResponse tr $ whatsappIncomingPostH whatsappMsg
+        whatsappResp <- toBaseServantResponse tr $ whatsappIncomingPostH (Just Routes.mcpProjectTools) whatsappMsg
         whatsappResp `shouldSatisfy` isValidJsonResponse
 
     describe "Response Format Validation" do
@@ -2661,7 +2696,7 @@ spec = around withTestResources do
             (signedPayload, sig, ts) = signDiscordPayload payload "1700000000"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        result <- toBaseServantResponse tr{trATCtx = testCtx} $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        result <- toBaseServantResponse tr{trATCtx = testCtx} $ discordInteractionsH (Just Routes.mcpProjectTools) signedPayload (Just sig) (Just ts)
 
         getDiscordResponseType result `shouldSatisfy` isJust
 
@@ -2669,7 +2704,7 @@ spec = around withTestResources do
         let testPhone = getTestPhoneNumber tr
         setupWhatsappNumber tr testPid testPhone
         let msg = twilioWhatsAppPrompt tr testPhone "test query"
-        result <- toBaseServantResponse tr $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr $ whatsappIncomingPostH (Just Routes.mcpProjectTools) msg
 
         result `shouldSatisfy` isValidJsonResponse
 

@@ -1137,9 +1137,10 @@ fetchIssue pid iid = notFoundOr "Issue not found" =<< Issues.selectIssueById pid
 
 
 apiIssueGet :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
-apiIssueGet pid iid =
-  fetchIssue pid iid >>= enrichIssue pid <&> \i ->
-    IssueApiFull{summary = issueToSummary i, recommendedAction = i.recommendedAction, migrationComplexity = i.migrationComplexity, issueData = coerce i.issueData}
+apiIssueGet pid iid = do
+  i <- fetchIssue pid iid >>= enrichIssue pid
+  activity <- map (\entry -> IssueApiActivity (show entry.event) entry.createdBy entry.createdAt) <$> Issues.selectIssueActivity pid iid
+  pure IssueApiFull{summary = issueToSummary i, recommendedAction = i.recommendedAction, migrationComplexity = i.migrationComplexity, issueData = coerce i.issueData, activity}
 
 
 -- | Fill an empty @stack_trace@ on a runtime-exception issue with a synthesised

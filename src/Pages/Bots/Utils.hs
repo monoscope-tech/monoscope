@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processActionableAIQueryWithTools, processAIQueryWithMode, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processActionableAIQueryWithTools, processAIQueryWithMode, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -295,21 +295,6 @@ botReplyPayload r = r.payload
 -- the 'BotType' (which selects every renderer) and @send@ (the transport, which
 -- differs per platform *and* per call site: Slack response_url vs chat.postMessage,
 -- Discord interaction followup, Twilio).
-runBotQuery
-  :: ProjectToolCtx es
-  => BotType
-  -> (BotReply -> Eff es ())
-  -> EnvConfig
-  -> AI.AgentAccess
-  -> Projects.ProjectId
-  -> Text
-  -> Eff es (Maybe (UUIDId "conversation"))
-  -- ^ resolves the conversation thread; run only for agentic queries, so a
-  -- report request never pays for a thread backfill
-  -> Eff es ()
-runBotQuery target deliver env access pid query thread = void $ runBotQueryWithTools Nothing AI.InteractiveReadOnly target deliver env access pid query thread
-
-
 runBotQueryWithTools
   :: ProjectToolCtx es
   => Maybe AI.ProjectTools

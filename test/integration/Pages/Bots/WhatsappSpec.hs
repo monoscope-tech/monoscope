@@ -14,6 +14,7 @@ import Pages.Bots.Whatsapp (BodyType (..), TwilioWhatsAppMessage (..), getWhatsa
 import Pkg.TestUtils
 import Relude
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Web.Routes qualified as Routes
 
 
 spec :: Spec
@@ -39,7 +40,7 @@ spec = around withTestResources do
     describe "Project lookup" do
       it "handles unknown phone number gracefully" \tr -> do
         let msg = twilioWhatsAppPrompt tr "+19999999999" "show errors"
-        result <- toBaseServantResponse tr $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr $ whatsappIncomingPostH (Just Routes.mcpProjectTools) msg
         isEmptyJsonObject result `shouldBe` True
 
       it "processes message for linked phone number" \tr -> do
@@ -47,7 +48,7 @@ spec = around withTestResources do
         setupWhatsappNumber tr testPid testPhone
 
         let msg = twilioWhatsAppPrompt tr testPhone "/dashboard"
-        result <- toBaseServantResponse tr $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr $ whatsappIncomingPostH (Just Routes.mcpProjectTools) msg
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Body type detection" do
@@ -92,7 +93,7 @@ spec = around withTestResources do
             [sql|INSERT INTO projects.dashboards (project_id, created_by, title)
                  SELECT ?, (SELECT id FROM users.users LIMIT 1), 'wa-dash-' || i FROM generate_series(1, 6) i|]
             (PGS.Only testPid)
-        (reqs, _) <- runAsBaseRecordingHTTP tr $ whatsappIncomingPostH (twilioWhatsAppPrompt tr testPhone "dashboard___2")
+        (reqs, _) <- runAsBaseRecordingHTTP tr $ whatsappIncomingPostH (Just Routes.mcpProjectTools) (twilioWhatsAppPrompt tr testPhone "dashboard___2")
         let twilioBodies = [b | (u, b) <- reqs, "twilio" `T.isInfixOf` u]
         twilioBodies `shouldSatisfy` any (("dashboard___4" `BS.isInfixOf`) . toStrict)
 
@@ -111,5 +112,5 @@ spec = around withTestResources do
         setupWhatsappNumber tr testPid testPhone
 
         let msg = twilioWhatsAppPrompt tr testPhone "what's my error rate?"
-        result <- toBaseServantResponse tr $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr $ whatsappIncomingPostH (Just Routes.mcpProjectTools) msg
         result `shouldSatisfy` isValidJsonResponse

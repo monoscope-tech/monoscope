@@ -43,6 +43,7 @@ import System.Types (ATBackgroundCtx)
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (urlDecodeAsForm)
+import Web.Routes qualified as Routes
 
 
 spec :: Spec
@@ -112,7 +113,7 @@ spec = around withTestResources do
 
       it "starts with project tool discovery while keeping actions permission-gated" \tr -> do
         let toolNames config = do
-              (_, _, params) <- Eff.runEff $ Time.runTime $ AI.agenticSetup config "any query" "model"
+              (_, _, params) <- Eff.runEff $ Time.runTime $ AI.agenticSetup config{AI.projectTools = Just Routes.mcpProjectTools} "any query" "model"
               pure $ AE.toJSON params ^.. key "tools" . values . key "function" . key "name" . _String
         readonly <- toolNames $ AI.defaultAgenticConfig testPid
         actionable <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.InteractiveWithActions}

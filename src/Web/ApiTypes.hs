@@ -44,6 +44,7 @@ module Web.ApiTypes (
   -- Issues
   IssueApiSummary (..),
   IssueApiFull (..),
+  IssueApiActivity (..),
   IssueStatus (..),
   -- Incidents
   IncidentSummary (..),
@@ -488,11 +489,21 @@ data IssueApiSummary = IssueApiSummary
   deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON SnakeSchema IssueApiSummary
 
 
+data IssueApiActivity = IssueApiActivity
+  { event :: Text
+  , createdBy :: Maybe Projects.UserId
+  , createdAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON SnakeSchema IssueApiActivity
+
+
 data IssueApiFull = IssueApiFull
   { summary :: IssueApiSummary
   , recommendedAction :: Text
   , migrationComplexity :: Text
   , issueData :: AE.Value
+  , activity :: [IssueApiActivity]
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON JsonValueSchema IssueApiFull
