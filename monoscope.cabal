@@ -242,6 +242,7 @@ extra-source-files:
     static/migrations/0209_overview_infra_stats_numeric.sql
     static/migrations/0210_overview_infra_stat_units.sql
     static/migrations/0211_error_last_event_at.sql
+    static/migrations/0212_ai_routine_requester.sql
     static/migrations/0212_widget_warning_threshold.sql
     static/migrations/0213_pr_impact_reviews.sql
     static/migrations/0214_pr_review_evidence_optin.sql
@@ -274,6 +275,8 @@ extra-source-files:
     static/migrations/0255_dashboard_saved_views.sql
     static/migrations/0256_ai_artifacts.sql
     static/migrations/0257_ad_attribution.sql
+    static/migrations/0257_event_routines_and_run_artifacts.sql
+    static/migrations/0258_issue_enrichment_routine.sql
     test/fixtures/github-app-test.pem
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
@@ -1484,6 +1487,7 @@ test-suite unit-tests
     , hasql-pool
     , hs-opentelemetry-instrumentation-auto
     , hspec
+    , http-api-data
     , http-client
     , http-types
     , langchain-hs

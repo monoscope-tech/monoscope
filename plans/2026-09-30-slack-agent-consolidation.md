@@ -1,6 +1,6 @@
 # Slack Agent consolidation plan
 
-Status: resumed on 2026-10-30; rebased onto master `917172cda`. Implementation in progress. Interactive project writes require an in-app, per-message grant; confirmed writes remain unavailable. The native Slack Agent has not passed sandbox acceptance or gone live.
+Status: resumed on 2026-10-30; rebased onto master `864403cd3`. Implementation in progress. Interactive project writes require an in-app, per-message grant; confirmed writes remain unavailable. The native Slack Agent has not passed sandbox acceptance or gone live.
 
 This plan narrows the [Slack Agent roadmap](2026-09-08-slack-agent.md) to the unfinished conversation and tool experience. The [implementation log](2026-09-08-slack-agent-implementation.md) records earlier work. Current code, tests, and live behavior take precedence over old status notes in that log.
 
@@ -448,3 +448,25 @@ this revision requires fresh final signoff and image verification before push.
 All 133 bot examples pass after the panel revision and canonical artifact-link
 update. The server watcher compiles successfully. Formatting and focused HLint
 pass. Final local signoff is next.
+
+
+### Integration with signup attribution and product copy
+
+Master advanced to `864403cd3` with signup attribution, authentication changes,
+CLI install instructions, and product-copy corrections. The branch was rebased
+without conflicts. Its new attribution middleware and background-job dispatch
+remain in place alongside the shared Agent adapters and routine workers.
+
+Regenerating the Cabal manifest restores the routine migrations to packaged
+source files and the declared unit-test form dependency. Both applied routine
+migration filenames remain unchanged; master's separate `0257_ad_attribution.sql`
+coexists with the existing event-routine migration. The combined tree requires
+focused authentication, bot, and browser verification before fresh signoff.
+
+
+On this combined tree, the server compiles, all 11 authentication and 133 bot
+examples pass, and the permanent conversation-panel browser regression passes
+in 19.9 seconds against an isolated live server. The temporary browser harness
+was removed. Formatting and CI self-tests pass. Repeated Haskell reviews and
+final simplification found no material change needed after the clean rebase.
+Fresh full signoff and native image verification remain before publication.
