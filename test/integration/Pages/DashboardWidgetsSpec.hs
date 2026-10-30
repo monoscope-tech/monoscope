@@ -47,7 +47,7 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as Issues
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (browserKql, parseQueryToAST)
+import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.TestClock (getTestTime, setTestTime)
 import Pkg.TestUtils
@@ -746,6 +746,25 @@ spec = sequential $ aroundAll withTestResources do
           \sql -> run source sql `shouldReturn` Right [testPid.toText]
         run source ("WITH otel_logs_and_spans AS (SELECT * FROM otel_logs_and_spans) SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE")
           >>= (`shouldSatisfy` either (const True) (== [testPid.toText]))
+
+    -- Every statement a template ships must still scope, or its widget errors now that user
+    -- SQL is scoped; and on Postgres a tenant CTE read twice must inline, not materialize into
+    -- a full-project scan that the statement's time filter never reaches.
+    it "templateSql_allScope_andPostgresInlinesTheTenantCte" \tr -> do
+      templates <- DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+      let fill = fillQueryTemplate SqlTemplate (variablePresets def testPid.toText Nothing Nothing [] frozenTime <> Map.fromList [("query_ast_filters", "TRUE"), ("table_sort", "1")])
+          statements =
+            [ (fromMaybe "" d.file, s)
+            | d <- templates
+            , s <- mapMaybe (.sql) (DashboardModel.allWidgets d) <> [c.statement | v <- fold d.variables, Just c <- [v.sql]] <> [c.statement | k <- fold d.constants, Just c <- [k.sql]]
+            ]
+      statements `shouldSatisfy` (not . null)
+      for_ statements \(file, s) -> for_ [True, False] \postgres ->
+        (file, s, LogQueries.scopeUserSql postgres testPid (fill s)) `shouldSatisfy` \(_, _, r) -> isRight r
+      let twice = "SELECT count(*) FROM otel_logs_and_spans a WHERE timestamp > now() - interval '1 hour' AND EXISTS (SELECT 1 FROM otel_logs_and_spans b WHERE b.timestamp > now() - interval '1 hour')"
+      scoped <- either (fail . toString) pure $ LogQueries.scopeUserSql True testPid twice
+      plan <- withResource tr.trPool \conn -> PG.query_ conn (fromString $ toString $ "EXPLAIN " <> scoped) :: IO [PG.Only Text]
+      [l | PG.Only l <- plan, "CTE Scan" `T.isInfixOf` l] `shouldBe` []
 
     -- A dashboard supplies its own service variable, while non-dashboard charts still use
     -- the sticky selector. Both keep the authenticated environment boundary.

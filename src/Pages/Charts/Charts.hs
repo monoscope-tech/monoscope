@@ -227,7 +227,7 @@ runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange prog
           <> variablePresets cfg.binDensity cfg.pid.toText from to [(key, Just value) | (key, value) <- M.toList mapping, "var-" `T.isPrefixOf` key || key == "table-search"] cfg.currentTime
           <> mapping
   -- The template names tenant tables; scoping makes each the project's slice before it runs.
-  case LogQueries.scopeUserSql cfg.pid (fillQueryTemplate SqlTemplate canonical template) of
+  case LogQueries.scopeUserSql (not $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource) cfg.pid (fillQueryTemplate SqlTemplate canonical template) of
     Left err -> pure (emptyMetricsFor cfg.currentTime from to){error = Just err}
     Right sql -> do
       let fetch = liftIO $ fetchMetricsDataWithProgress progress decoder sql cfg.currentTime from to authCtx dbSource >>= either throwIO pure
