@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -325,6 +325,7 @@ data Widget = Widget
   , alertStatus :: Maybe Monitors.MonitorStatus -- runtime
   , description :: Maybe Text -- Help text shown in info icon tooltip
   , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
+  , sqlSig :: Maybe Text -- runtime: 'sqlSignature' of sql/rollupSql, so a viewer's request may run them
   , pngProfile :: Maybe PngProfile
   , _staticRender :: Maybe Bool -- For PNG export: disables scroll legend
   , dbSource :: Maybe Hasql.SqlSource -- Nothing = default routing
@@ -519,6 +520,32 @@ signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text
 signWidgetUrl secret pid widgetJson =
   let payload = pid.toText <> ":" <> widgetJson
    in decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
+
+
+-- | Proof that the server rendered this SQL for @pid@. The browser echoes it back with the
+-- statement, and only an editor may run SQL that does not carry it.
+--
+-- >>> import Data.UUID qualified as UUID
+-- >>> import Pkg.DeriveUtils (UUIDId (..))
+-- >>> let pid = UUIDId UUID.nil
+-- >>> sqlSignature "k" pid (Just "SELECT 1") Nothing == sqlSignature "k" pid (Just "SELECT 1") Nothing
+-- True
+-- >>> sqlSignature "k" pid (Just "SELECT 1") Nothing == sqlSignature "k" pid (Just "SELECT 2") Nothing
+-- False
+-- >>> sqlSignature "k" pid (Just "a") (Just "b") == sqlSignature "k" pid (Just "ab") Nothing
+-- False
+sqlSignature :: Text -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Text
+sqlSignature secret pid sql rollup = signWidgetUrl secret pid $ "sql\0" <> fold sql <> "\0" <> fold rollup
+
+
+-- | Constant-time check of a signature the browser echoed back.
+verifySqlSignature :: Text -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Bool
+verifySqlSignature secret pid sql rollup = maybe False \sig -> BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 $ sqlSignature secret pid sql rollup)
+
+
+-- | Stamp 'sqlSig' on a widget and its children, for those carrying SQL.
+signWidgetSql :: Text -> Projects.ProjectId -> Widget -> Widget
+signWidgetSql secret pid = transformOf (#children . _Just . traverse) \w -> w{sqlSig = sqlSignature secret pid w.sql w.rollupSql <$ (w.sql <|> w.rollupSql)}
 
 
 -- | Standalone timeseries panel with the shared infrastructure-page chrome:
@@ -1249,6 +1276,7 @@ renderChart widget = do
           , "query" AE..= fst (chartQuery widget)
           , "querySQL" AE..= maybeToMonoid widget.sql
           , "rollupSQL" AE..= widget.rollupSql
+          , "sqlSig" AE..= widget.sqlSig
           , "rollupFrom" AE..= widget.rollupFrom
           , "dbSource" AE..= widget.dbSource
           , "theme" AE..= fromMaybe "default" widget.theme

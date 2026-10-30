@@ -1385,6 +1385,10 @@ chartsDataStreamGetH = chartDataH Charts.queryMetricsStream
 -- client SQL (see 'clientPostgresSqlRejection') before either runner sees it.
 chartDataH :: ChartDataH a -> ChartDataH a
 chartDataH run dbSource0 dt pid q qSql0 since fromD toD src density params = do
+  let param k = join $ L.lookup k params
+  case pid of
+    Just p -> Dashboards.authorizeClientSql p qSql0 (param "rollup_sql") (param "sql_sig")
+    Nothing -> when (isJust $ Utils.nonEmptyT qSql0 <|> Utils.nonEmptyT (param "rollup_sql")) $ Error.throwError err400{errBody = "SQL needs a project"}
   scopedParams <- chartScopeParams pid params
   now <- Time.currentTime
   let (dbSource, qSql) = rollupRoute now (TimePicker.TimePicker since fromD toD) scopedParams (dbSource0, qSql0)
@@ -1411,6 +1415,7 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   widget <-
     AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJson)
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
+  Dashboards.authorizeClientSql pid widget.sql widget.rollupSql widget.sqlSig
   now <- Time.currentTime
   let scopeMarker = ("dashboard_id",) . Just <$> widget._dashboardId
   scopedParams <- chartScopeParams (Just pid) $ maybeToList scopeMarker <> allParams

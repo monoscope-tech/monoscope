@@ -50,7 +50,7 @@ spec = sequential $ aroundAll withTestResources do
   describe "Dashboards Tests" do
     let mkDashboard t = Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
         postDashboards ts t = traverse_ (Dashboards.dashboardsPostH testPid . mkDashboard) ts >> Dashboards.dashboardsPostH testPid (mkDashboard t)
-        mkVar k m v = DashboardModel.Variable{key = k, title = Nothing, multi = m, required = Nothing, reloadOnChange = Nothing, helpText = Nothing, _vType = DashboardModel.VTValues, sql = Nothing, facetField = Nothing, query = Nothing, options = Nothing, value = v, dependsOn = Nothing}
+        mkVar k m v = DashboardModel.Variable{key = k, title = Nothing, multi = m, required = Nothing, reloadOnChange = Nothing, helpText = Nothing, _vType = DashboardModel.VTValues, sql = Nothing, facetField = Nothing, query = Nothing, options = Nothing, value = v, dependsOn = Nothing, sqlSig = Nothing}
         renderDash t dash = renderT $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = t} []
         listDashboards tr = do
           (_, pg) <- testServant tr (Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters)

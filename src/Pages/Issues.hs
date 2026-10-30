@@ -542,10 +542,12 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
         changes <- ApiChanges.getAnomaliesVM pid d.anomalyHashes
         schemas <- SchemaCatalog.getByKeysBatch (V.singleton (pid, issue.targetHash))
         pure (changes, HM.lookup (pid, issue.targetHash) schemas)
+      secret <- (.env.apiKeyEncryptionSecretKey) <$> ask @AuthContext
       addRespHeaders
         $ PageCtx bwconf
         $ issueDetailPage
-          IssueView{pid, issue, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom}
+        $ let view = IssueView{pid, issue, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom, rollupSqlSig = Nothing}
+           in view{rollupSqlSig = issueRollupSql view <&> \(sql, _) -> Widget.sqlSignature secret pid Nothing (Just sql)}
   where
     -- A lookup that only decides whether an optional panel renders: a throw or a 10s stall
     -- degrades to Nothing. A transient TF error used to 500 the whole issue, precisely
@@ -925,6 +927,8 @@ data IssueView = IssueView
   -- ^ The error's tag distribution rollup (key, value, count), most common first per key.
   , errHourlyFrom :: Maybe UTCTime
   -- ^ The first hour 'ErrorPatterns.hourlyStatsFrom' holds for the error, if any.
+  , rollupSqlSig :: Maybe Text
+  -- ^ 'Widget.sqlSignature' of 'issueRollupSql', so a viewer's chart may run it.
   }
 
 
@@ -1241,6 +1245,7 @@ issueAggregate_ v@IssueView{..} = do
               , Widget.showTooltip = Just True
               , Widget.query = Just chartQuery
               , Widget.rollupSql = fst <$> rollupM
+              , Widget.sqlSig = rollupSqlSig <* rollupM
               , Widget.rollupFrom = isoT . snd <$> rollupM
               , Widget._projectId = Just issue.projectId
               , Widget.hideLegend = Just True
@@ -1256,25 +1261,29 @@ issueAggregate_ v@IssueView{..} = do
     issueVolumeChart_ :: Text -> Html ()
     issueVolumeChart_ chartTitle = whenJust (issueHashKey issue) \key ->
       issueChartCard_ chartTitle "h-24" Nothing issueHourlySql $ "hashes[*]==\"" <> key <> "\" | summarize count(*) by bin_auto(timestamp)"
-    -- The volume chart's series from the hourly counts ingest already keeps. The KQL
-    -- form scans every row in the window on TimeFusion (@hashes@ has no index there),
-    -- 4-27s for a day; this is an index lookup. Paired with the first hour the table can
-    -- answer. A signal counted since it first appeared has no gap, since it had no events
-    -- before then. Otherwise pattern stats start at their retention horizon, and error
-    -- stats where the error's counting did. See 'Web.Routes.rollupRoute'.
-    issueHourlySql = case Issues.issuePayload issue of
-      Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
-      Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
-      _ ->
-        errM >>= \e ->
-          errHourlyFrom <&> \counted ->
-            (hourlyRollupSql "apis.error_hourly_stats" $ "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId), coveredFrom (zonedTimeToUTC e.base.createdAt) counted)
-      where
-        logPattern sf h = Just (hourlyRollupSql "apis.log_pattern_hourly_stats" $ "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h, maybe horizon (\p -> coveredFrom (zonedTimeToUTC p.firstSeenAt) horizon) patternM)
-        horizon = addUTCTime (fromIntegral $ -(3600 * LogPatterns.hourlyStatsRetentionHours)) now
-        -- Counting that began within the hour of the first event leaves nothing uncounted.
-        coveredFrom firstEvent countedFrom = bool countedFrom (POSIX.posixSecondsToUTCTime 0) (countedFrom <= addUTCTime 3600 firstEvent)
+    issueHourlySql = issueRollupSql v
 
+
+-- | The volume chart's series from the hourly counts ingest already keeps. The KQL
+-- form scans every row in the window on TimeFusion (@hashes@ has no index there),
+-- 4-27s for a day; this is an index lookup. Paired with the first hour the table can
+-- answer. A signal counted since it first appeared has no gap, since it had no events
+-- before then. Otherwise pattern stats start at their retention horizon, and error
+-- stats where the error's counting did. See 'Web.Routes.rollupRoute'. Top-level so the
+-- handler can sign exactly the statement the view renders.
+issueRollupSql :: IssueView -> Maybe (Text, UTCTime)
+issueRollupSql IssueView{..} = case Issues.issuePayload issue of
+  Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
+  Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
+  _ ->
+    errM >>= \e ->
+      errHourlyFrom <&> \counted ->
+        (hourlyRollupSql "apis.error_hourly_stats" $ "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId), coveredFrom (zonedTimeToUTC e.base.createdAt) counted)
+  where
+    logPattern sf h = Just (hourlyRollupSql "apis.log_pattern_hourly_stats" $ "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h, maybe horizon (\p -> coveredFrom (zonedTimeToUTC p.firstSeenAt) horizon) patternM)
+    horizon = addUTCTime (fromIntegral $ -(3600 * LogPatterns.hourlyStatsRetentionHours)) now
+    -- Counting that began within the hour of the first event leaves nothing uncounted.
+    coveredFrom firstEvent countedFrom = bool countedFrom (POSIX.posixSecondsToUTCTime 0) (countedFrom <= addUTCTime 3600 firstEvent)
 
 -- | One card for everything about the sampled event. Its navigator is the only sticky
 -- element in the column: it names the occurrence being shown and links to every
