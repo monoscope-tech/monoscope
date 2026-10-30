@@ -2119,7 +2119,7 @@ spec = around withTestResources do
 
       it "mcpStructuredContent_doesNotBypassModelBudgetAndRetainsFullEvidence" \tr -> do
         let full = T.replicate 100_000 "x" <> "retained-evidence-end"
-            envelope = AE.object ["isError" AE..= False, "content" AE..= [AE.object ["type" AE..= ("text" :: Text), "text" AE..= full]], "structuredContent" AE..= AE.object ["evidence" AE..= full]]
+            envelope = AE.object ["isError" AE..= False, "content" AE..= ([AE.object ["type" AE..= ("text" :: Text), "text" AE..= full]] :: [AE.Value]), "structuredContent" AE..= AE.object ["evidence" AE..= full]]
             backend =
               AI.ProjectTools
                 { AI.catalog = Map.singleton "get_project" $ MCP.Tool "get_project" "Read project" (AE.object []) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
