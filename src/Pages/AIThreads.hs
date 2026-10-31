@@ -785,7 +785,7 @@ routineResumePostH pid convId = do
   (sess, _) <- Projects.sessionAndProject pid
   enqueue (Issues.resumeRoutine sess.user.id pid convId)
   redirect pid "/routines"
-routineDeleteH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.deleteRoutine pid convId >> redirect pid "/routines"
+routineDeleteH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> Issues.deleteRoutine pid convId >> redirect pid "/routines"
 
 
 routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (RespHeaders (Html ()))

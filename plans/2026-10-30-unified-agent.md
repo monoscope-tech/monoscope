@@ -12,6 +12,12 @@ Requester-bound OAuth, encryption, rotating-token refresh, and revocation share 
 
 The policy-configuration checkpoint `e638fb62e` passes 390 bot, 76 API, and 41 incident-delivery examples, plus authenticated Chrome checks for policy controls, saves, reloads, conditional fields, and visible validation in both themes at mobile and desktop widths. Earlier lifecycle verification also covers 35 error-pattern and seven focused native-review examples. Remote evidence reads and provenance have fixture coverage. Remaining review worker paths, signed Slack stop and waiting revocation behavior, native model-session continuation, live Slack acceptance, streaming, and final release checks remain unfinished.
 
+## Routine deletion during review
+
+Deletion now uses the existing pause and notice-wake operations before removing the installation. This closes its requests while their routine binding is still available, then queues the existing cleanup worker. A queue failure leaves the installation paused rather than reviving authority or detaching unfinished work. The change adds no model function, state, migration, or worker.
+
+The new regression first reproduced a deleted routine leaving its Slack continuation deferred. All twelve Slack review lifecycle cases pass after the one-handler fix. The deletion case verifies actual removal, request cancellation, retained proposal and review, zero extra model calls or mutations, and the updated existing notice. Formatting, diff checks, and scoped HLint pass. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue. Broader final verification remains pending.
+
 ## Signed Slack stop and waiting-notice cleanup
 
 Signed stop intake now records the authorized stop marker and cancels covered requests in the same transaction. Routine controls and signed stops use the same run finalizer. Its scope comes from retained signed receipts and the authorized thread marker; an unlinked stop actor cannot expand that scope. Cancellation closes unstarted actions and preserves uncertain started effects, original proposals, review decisions, and artifacts.

@@ -88,7 +88,7 @@ data LegacyFixture = PendingDashboard | PendingAppend | RecordedAppend | Pending
   deriving stock (Bounded, Enum, Eq, Show)
 
 
-data SlackReviewCase = ApproveSlackAction | DeclineSlackAction | ExpireSlackAction | ApproveDuringNotice | RejectFirstReviewNotice | RecoverWaitingAction | StopWaitingAction | PauseWaitingRoutine | CancelWaitingRoutine | StopDuringNotice | StopClaimedAction
+data SlackReviewCase = ApproveSlackAction | DeclineSlackAction | ExpireSlackAction | ApproveDuringNotice | RejectFirstReviewNotice | RecoverWaitingAction | StopWaitingAction | PauseWaitingRoutine | CancelWaitingRoutine | DeleteWaitingRoutine | StopDuringNotice | StopClaimedAction
   deriving stock (Bounded, Enum, Eq, Show)
 
 
@@ -1890,7 +1890,7 @@ spec = around withTestResources do
             (_, retried) <- work receipt
             retried `shouldSatisfy` isRight
             readIORef calls >>= (`shouldBe` 1)
-          if reviewCase `elem` [StopWaitingAction, PauseWaitingRoutine, CancelWaitingRoutine, StopDuringNotice, StopClaimedAction]
+          if reviewCase `elem` [StopWaitingAction, PauseWaitingRoutine, CancelWaitingRoutine, DeleteWaitingRoutine, StopDuringNotice, StopClaimedAction]
             then do
               now <- getTestTime tr.trTestClock
               let ready = runQueryEffect tr $ Hasql.interpScalar @Bool [HI.sql|SELECT COALESCE(bool_or(run_at <= #{now}), FALSE) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt} AND status IN ('queued', 'retry')|]
@@ -1923,6 +1923,9 @@ spec = around withTestResources do
                   replicateM_ 2 $ void $ stop "U0123ABCDEF" "ReviewStopAccepted"
                 PauseWaitingRoutine -> void $ testServant tr $ AIThreads.routinePausePostH testPid routine.conversationId
                 CancelWaitingRoutine -> void $ testServant tr $ AIThreads.routineCancelPostH testPid routine.conversationId
+                DeleteWaitingRoutine -> do
+                  void $ testServant tr $ AIThreads.routineDeleteH testPid routine.conversationId
+                  runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT NOT EXISTS (SELECT 1 FROM apis.ai_routines WHERE id = #{routine.id})|]) >>= (`shouldBe` True)
                 StopDuringNotice -> runTestBgNoReset tr $ JobQueue.deferOperationReview testPid operation.id $ addUTCTime (24 * 60 * 60) now
                 _ -> fail "Expected a stop case"
               ready >>= (`shouldBe` True)
