@@ -1207,7 +1207,7 @@ data ToolRecovery = ReplayReads | AtomicInRun | RetainInRun | ReconcileInRun
 data OperationExecution es result
   = EffectfulOperation (Eff es result)
   | AtomicOperation (Tx.Transaction result)
-  | ReconcilableOperation (Eff es result) (Operation.OperationCall -> Eff es (Maybe result))
+  | ReconcilableOperation (OperationExecution es result) (Operation.OperationCall -> Eff es (Maybe result))
   deriving stock (Functor)
 
 
@@ -1234,8 +1234,8 @@ executeNativeOperation context proposed perform =
         Left denial -> pure $ Left $ toolDenialMessage denial
         Right snapshot -> do
           let response result = ToolResult (either Relude.id (const "Response saved.") result) $ Just $ AE.toJSON result
-          recordedOperation context cursor (Operation.NativeCall frozen) snapshot (response <$> perform frozen) >>= \case
-            Investigations.UncertainResult identifier run -> throwIO $ AgentOperationUncertain identifier run
+          recordedOperation context cursor (Operation.NativeCall frozen) snapshot (authorizeRunOperation context $ Catalog.nativePolicy frozen) (response <$> perform frozen) >>= \case
+            Investigations.UncertainResult claim _ run -> throwIO $ AgentOperationUncertain (Investigations.operationId claim) run
             Investigations.RecordedResult result -> do
               void $ Investigations.commitProgress (Just cursor) Nothing Investigations.NativeReady Nothing
               case result.rawData >>= (\value -> case AE.fromJSON value of AE.Success stored -> Just stored; AE.Error _ -> Nothing) of
@@ -1258,29 +1258,33 @@ executeNativeOperation context proposed perform =
       _ -> throwIO Investigations.OperationScopeMismatch
 
 
-recordedOperation :: DB es => Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
-recordedOperation context cursor call snapshot execution = case execution of
+recordedOperation :: (DB es, IOE :> es) => Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> Eff es (Either ToolDenial OperationPolicy) -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
+recordedOperation context cursor call snapshot reauthorize execution = case execution of
   AtomicOperation action -> Investigations.atomicOperation lease cursor proposal action
-  EffectfulOperation action -> recorded action (const $ pure Nothing)
-  ReconcilableOperation action reconcile -> recorded action reconcile
+  EffectfulOperation action -> recorded action
+  ReconcilableOperation action reconcile ->
+    recordedOperation context cursor call snapshot reauthorize action >>= \case
+      retained@Investigations.RecordedResult{} -> pure retained
+      uncertain@(Investigations.UncertainResult claim original _) ->
+        reconcile original >>= \case
+          Nothing -> pure uncertain
+          Just result -> do
+            current <- reauthorize >>= either (const $ throwIO AgentAccessDenied) pure
+            Investigations.completeOperation claim result
+            if Operation.sameOperation original call
+              then pure $ Investigations.RecordedResult result
+              else recordedOperation context cursor call current reauthorize execution
   where
     lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
     proposal = Investigations.OperationProposal call snapshot
-    recorded action reconcile =
+    recorded action =
       Investigations.beginOperation lease cursor proposal >>= \case
         Investigations.RetainedOperation retained -> pure $ Investigations.RecordedResult retained
         Investigations.ExecuteOperation claim -> do
           result <- action
           Investigations.completeOperation claim result
           pure $ Investigations.RecordedResult result
-        Investigations.ReconcileOperation claim original run ->
-          reconcile original >>= \case
-            Nothing -> pure $ Investigations.UncertainResult (Investigations.operationId claim) run
-            Just result -> do
-              Investigations.completeOperation claim result
-              if Operation.sameOperation original call
-                then pure $ Investigations.RecordedResult result
-                else recordedOperation context cursor call snapshot execution
+        Investigations.ReconcileOperation claim original run -> pure $ Investigations.UncertainResult claim original run
 
 
 data ToolDenial = AuthorityDenied Issues.CapabilityDenial | EvidenceRetentionRequired | AudienceRequired ProjectMembers.Permissions | RestrictedPublication
@@ -1343,12 +1347,12 @@ executeToolAt cursor config tc = do
   where
     recorded snapshot execution = case (snapshot.capability, cursor, invocationContext config.invocationMode) of
       (MCP.ReadOnly{}, _, _) -> Investigations.RecordedResult <$> perform execution
-      (_, Just position, Just context) -> recordedOperation context position (Operation.ModelCall tc) snapshot execution
+      (_, Just position, Just context) -> recordedOperation context position (Operation.ModelCall tc) snapshot (requireConfigAccess config >>= \fresh -> authorizeOperation config fresh snapshot.capability) execution
       _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable checkpoint."
     perform = \case
       EffectfulOperation action -> action
       AtomicOperation action -> Hasql.transaction TxS.ReadCommitted TxS.Write action
-      ReconcilableOperation action _ -> action
+      ReconcilableOperation action _ -> perform action
 
     noRaw t = ToolResult t Nothing
     executeLocal operation args = case operation of
@@ -1368,7 +1372,7 @@ executeToolAt cursor config tc = do
             <> maybe [] (\policy -> ["minimum_permission" AE..= MCP.minimumPermission policy, "evidence_permission" AE..= Catalog.disclosurePermission policy, "action" AE..= MCP.actionName policy]) tool.agentPolicy
       ListProjectMemory -> EffectfulOperation $ noRaw . encodeText . map Memory.summarize <$> Memory.latestPages config.projectId
       ReadProjectMemory -> EffectfulOperation $ noRaw <$> readMemory args
-      WriteProjectMemory -> EffectfulOperation $ noRaw <$> writeMemory args
+      WriteProjectMemory -> AtomicOperation $ noRaw <$> writeMemory args
       GetInvestigationHistory -> EffectfulOperation $ noRaw <$> slackThread "Investigation history requires an authorized Slack investigation." \run -> encodeText <$> Investigations.recentEvents config.projectId run.teamId run.channelId run.threadTs
       GetIncidentContext -> EffectfulOperation $ noRaw <$> slackThread "Incident context requires an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackInvestigationContext config.projectId run.teamId run.channelId run.threadTs
       GetRelatedIncidents -> EffectfulOperation $ noRaw <$> slackThread "Related incidents require an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackRelatedIncidents config.projectId run.teamId run.channelId run.threadTs
@@ -1456,11 +1460,7 @@ executeToolAt cursor config tc = do
       Nothing -> pure $ toolError "read_project_memory" "invalid or missing 'pageId'" arguments
       Just pageId -> maybe "Wiki page not found in the authorized project." encodeText . viaNonEmpty head <$> Memory.pageHistory config.projectId pageId
     writeMemory arguments = case (config.conversationId, parseMaybe (AE.parseJSON @Memory.Edit) $ AE.toJSON arguments) of
-      (Just conversation, Just edit) -> do
-        exists <- isJust <$> Issues.getConversation config.projectId conversation
-        if exists
-          then either memoryError encodeText <$> Memory.writePage config.projectId edit.pageId edit.version Nothing edit.document (Memory.Conversation conversation)
-          else pure "Wiki writes require an existing project conversation."
+      (Just conversation, Just edit) -> either memoryError encodeText <$> Memory.writePageTx config.projectId edit.pageId edit.version Nothing edit.document (Memory.Conversation conversation)
       _ -> pure "Wiki writes require a conversation, pageId, version and bounded document."
     memoryError = \case
       Memory.StaleRevision -> "Wiki page changed; read the current revision before retrying."

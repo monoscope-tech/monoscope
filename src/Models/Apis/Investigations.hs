@@ -135,7 +135,7 @@ operationId :: OperationClaim -> UUIDId "agent_operation"
 operationId (OperationClaim identifier) = identifier
 
 
-data OperationResult = RecordedResult ToolResult | UncertainResult (UUIDId "agent_operation") (UUIDId "ai_routine_run")
+data OperationResult = RecordedResult ToolResult | UncertainResult OperationClaim Operation.OperationCall (UUIDId "ai_routine_run")
   deriving stock (Show)
 
 
@@ -631,7 +631,7 @@ atomicOperation lease cursor proposal action = do
       beginOperationTx lease cursor proposal >>= \case
         Left conflict -> pure $ Left conflict
         Right (RetainedOperation retained) -> pure $ Right $ RecordedResult retained
-        Right (ReconcileOperation claim _ run) -> pure $ Right $ UncertainResult (operationId claim) run
+        Right (ReconcileOperation claim original run) -> pure $ Right $ UncertainResult claim original run
         Right (ExecuteOperation claim) -> do
           response <- action
           fmap (RecordedResult response <$) $ completeOperationTx claim response
@@ -739,7 +739,7 @@ adoptSlackCheckpoint lease turn policy = do
           ToolsPending step message completed (call : pending) -> do
             let capability = fromMaybe (Catalog.Administration ProjectMembers.PAdmin) $ join $ Map.lookup (LLM.toolFunctionName call.toolCallFunction) Catalog.policiesByName
                 uncertain identifier run =
-                  let result = operationResponse turn.projectId $ UncertainResult identifier run
+                  let result = operationResponse turn.projectId $ UncertainResult (OperationClaim identifier) (Operation.ModelCall call) run
                    in LegacyUncertain (AgenticChatResult result.formatted $ step.toolCalls <> map (uncurry mkToolCallInfo) completed <> [mkToolCallInfo call result]) original.checkpoint
             case capability of
               Catalog.ReadOnly{} -> pure original.checkpoint
@@ -1088,10 +1088,11 @@ visibleConversationIds project permission = do
 operationResponse :: Projects.ProjectId -> OperationResult -> ToolResult
 operationResponse project = \case
   RecordedResult result -> result
-  UncertainResult identifier run ->
-    ToolResult
-      ("This request has an action with an uncertain outcome. It may still complete. Further changes were not executed. [View action history](/p/" <> project.toText <> "/ai/runs/" <> run.toText <> "#operation-" <> identifier.toText <> ") before making another request.")
-      (Just $ AE.object ["operation_id" AE..= identifier, "run_id" AE..= run, "outcome" AE..= OperationUnknown])
+  UncertainResult claim _ run ->
+    let identifier = operationId claim
+     in ToolResult
+          ("This request has an action with an uncertain outcome. It may still complete. Further changes were not executed. [View action history](/p/" <> project.toText <> "/ai/runs/" <> run.toText <> "#operation-" <> identifier.toText <> ") before making another request.")
+          (Just $ AE.object ["operation_id" AE..= identifier, "run_id" AE..= run, "outcome" AE..= OperationUnknown])
 
 
 -- | Create ToolCallInfo from a tool call and its result

@@ -357,13 +357,16 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                       AI.authorizeRunOperation context capability >>= \case
                         Left denial -> pure $ Left $ AI.toolDenialMessage denial
                         Right _ -> case request of
-                          Agent.ProjectMemory (Memory.Write edit) ->
-                            AI.executeNativeOperation context (Operation.WriteWiki $ Operation.WikiWrite attemptId edit) \case
-                              Operation.WriteWiki write ->
-                                AI.ReconcilableOperation
-                                  (projectMemory run.projectId write.attemptId (not . null <$> (requireActive run execution >> authorizedServices run mappings)) $ Memory.Write write.edit)
-                                  (reconcileComment run conn)
-                              Operation.PublishPullRequestComment{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+                          Agent.ProjectMemory (Memory.Write edit) -> do
+                            services <- requireActive run execution >> authorizedServices run mappings
+                            if null services
+                              then pure $ Left "Project memory authorization is no longer available"
+                              else AI.executeNativeOperation context (Operation.WriteWiki $ Operation.WikiWrite attemptId edit) \case
+                                Operation.WriteWiki write ->
+                                  AI.ReconcilableOperation
+                                    (AI.AtomicOperation $ memoryResponse <$> Memory.writePageTx run.projectId write.edit.pageId write.edit.version Nothing write.edit.document (Memory.Agent write.attemptId))
+                                    (\original -> reconcileComment run conn original <* unlessM (not . null <$> authorizedServices run mappings) (throwError $ ReviewFailure "Project memory authorization is no longer available"))
+                                Operation.PublishPullRequestComment{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
                           (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}) ->
                             requestKnowledge run.projectId attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
                   )
@@ -432,7 +435,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                 require =<< AI.executeNativeOperation context (Operation.PublishPullRequestComment comment) \case
                   Operation.PublishPullRequestComment frozen ->
                     AI.ReconcilableOperation
-                      ( do
+                      ( AI.EffectfulOperation do
                           unless (frozen == comment) $ throwIO Investigations.OperationProposalChanged
                           requireActive run execution
                           void $ require =<< first AI.toolDenialMessage <$> AI.authorizeRunOperation context Catalog.ExternalPublication
@@ -639,16 +642,18 @@ projectMemory pid attempt authorized request = do
         case viaNonEmpty head history of
           Nothing -> pure $ Left "Wiki page not found"
           Just current -> visible $ AE.toJSON current
-      Memory.Write edit -> do
-        saved <- Memory.writePage pid edit.pageId edit.version Nothing edit.document $ Memory.Agent attempt
-        pure $ case saved of
-          Left Memory.StaleRevision -> Left "Wiki page changed; read the latest revision before editing again"
-          Left Memory.PathTaken -> Left "Wiki path is already in use; choose another page ID for a new page"
-          Right page -> Right $ AE.toJSON page
+      Memory.Write edit -> memoryResponse <$> Memory.writePage pid edit.pageId edit.version Nothing edit.document (Memory.Agent attempt)
   where
     visible value = do
       permitted <- authorized
       pure $ if permitted then Right value else Left "Project memory authorization is no longer available"
+
+
+memoryResponse :: Either Memory.WriteError Memory.Page -> Either Text AE.Value
+memoryResponse = \case
+  Left Memory.StaleRevision -> Left "Wiki page changed; read the latest revision before editing again"
+  Left Memory.PathTaken -> Left "Wiki path is already in use; choose another page ID for a new page"
+  Right page -> Right $ AE.toJSON page
 
 
 requestKnowledge :: (DB es, State.State ReviewMemory :> es) => Projects.ProjectId -> UUIDId "agent_attempt" -> Git.RepoRef -> Eff es [Text] -> [Evidence] -> Agent.KnowledgeRequest -> Eff es (Either Text AE.Value)

@@ -95,7 +95,7 @@ import System.Types (ATBackgroundCtx, ATBaseCtx)
 import Test.Hspec
 import UnliftIO.Async (cancel, concurrently, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (finally, throwIO, tryAny)
+import UnliftIO.Exception (bracket_, finally, throwIO, tryAny)
 import UnliftIO.MVar qualified as MVar
 import UnliftIO.Timeout qualified as Timeout
 import Web.HttpApiData (parseUrlPiece)
@@ -2705,7 +2705,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Review run.id) legacy) `shouldReturn` True
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Review run.id) legacy{Agent.id = uid 997}) `shouldReturn` False
 
-  it "runs the checkout harness with publication recovery and Observe wiki reads without writes" \tr -> do
+  it "runs the checkout harness with atomic wiki receipts, publication recovery and Observe wiki reads without writes" \tr -> do
     parseUrlPiece @CodeContextPage.RepositoryTab "usage" `shouldSatisfy` isRight
     reviewPid <- createTestProject tr "Impact review isolation"
     setupProject tr reviewPid
@@ -2772,9 +2772,21 @@ spec = around withTestResources $ describe "Production impact reviews" do
                           title <- either (fail . toString) pure $ Memory.mkMemoryText "Review context"
                           body <- either (fail . toString) pure $ Memory.mkMemoryText "Retry handling needs caller and telemetry evidence; recheck this dated note."
                           let page = case request.attemptId of UUIDId value -> UUIDId value
-                          saved <- unlift $ knowledge $ Agent.ProjectMemory $ Memory.Write $ Memory.Edit page 0 $ Memory.Document title body
+                              write = unlift $ knowledge $ Agent.ProjectMemory $ Memory.Write $ Memory.Edit page 0 $ Memory.Document title body
+                              ddl statement = withResource tr.trPool \conn -> void $ execute conn statement ()
+                          existing <- runQueryEffect tr $ Memory.latestPages reviewPid
+                          when (null existing)
+                            $ bracket_
+                              (ddl "ALTER TABLE apis.ai_agent_operations ADD CONSTRAINT reject_wiki_receipt CHECK (proposal #>> '{call,contents,tag}' <> 'WriteWiki' OR outcome->>'tag' <> 'OperationReturned') NOT VALID")
+                              (ddl "ALTER TABLE apis.ai_agent_operations DROP CONSTRAINT reject_wiki_receipt")
+                              do
+                                tryAny write >>= (`shouldSatisfy` isLeft)
+                                runQueryEffect tr (Memory.pageHistory reviewPid page) >>= (\history -> length history `shouldBe` 0)
+                                Just execution <- runQueryEffect tr $ Issues.getEventRun reviewPid $ Issues.PullRequestReview request.runId
+                                runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy reviewPid execution.id) >>= (\entries -> length entries `shouldBe` 0)
+                          saved <- write
                           saved `shouldSatisfy` isRight
-                          unlift (knowledge $ Agent.ProjectMemory $ Memory.Write $ Memory.Edit page 0 $ Memory.Document title body) `shouldReturn` saved
+                          write `shouldReturn` saved
                           unlift (knowledge $ Agent.ProjectMemory $ Memory.Read page) `shouldReturn` saved
                         let response = directory </> "result.json"
                         writeFileLBS response $ AE.encode answer{Impact.coverage = ["Related test toolchain unavailable"]}
@@ -3097,6 +3109,22 @@ spec = around withTestResources $ describe "Production impact reviews" do
     lostResponse `shouldSatisfy` isLeft
     [(_, lostPayload)] <- pure $ filter (T.isInfixOf "/issues/comments/99" . fst) lostRequests
     lostBody <- either fail pure $ AE.eitherDecode lostPayload >>= AET.parseEither (AE.withObject "Comment payload" (AE..: "body"))
+    for_ [False, True] \revokeMapping -> do
+      runQueryEffect tr $ Reviews.retryRun reviewPid run.id
+      let changeAccess revoke = withResource tr.trPool \conn ->
+            if revokeMapping
+              then void $ execute conn "UPDATE projects.code_mappings SET service = ? WHERE project_id = ? AND repo = 'checkout'" (if revoke then Nothing else Just ("test-service" :: Text), reviewPid)
+              else void $ execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ?" (if revoke then ProjectMembers.PView else ProjectMembers.PAdmin, reviewPid)
+          revokeDuringLookup = withHTTPResponses \_ endpoint -> do
+            when ("/issues/7/comments?" `T.isInfixOf` toText endpoint) $ changeAccess True
+            pure Nothing
+          revisions = withResource tr.trPool \conn -> query conn "SELECT count(*) FROM projects.memory_revisions WHERE project_id = ?" (Only reviewPid) :: IO [Only Int64]
+      priorRevisions <- revisions
+      (revokedWrites, revoked) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ observedComment 123 lostBody $ revokeDuringLookup $ fakeAgent result $ tryAny $ Impact.reviewPullRequest run.id
+      changeAccess False
+      revoked `shouldSatisfy` isLeft
+      revokedWrites `shouldNotSatisfy` any (T.isInfixOf "/issues/comments/99" . fst)
+      revisions >>= (\stored -> (revokeMapping, stored) `shouldBe` (revokeMapping, priorRevisions))
     runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     (freshRequests, freshResult) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ observedComment 123 lostBody $ fakeAgent result $ tryAny $ Impact.reviewPullRequest run.id
     freshResult `shouldSatisfy` isRight

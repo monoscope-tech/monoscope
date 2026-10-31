@@ -782,6 +782,23 @@ Failing regressions reproduced duplicate model execution across event aliases, m
 Controlled live Slack acceptance, issue-enrichment operation attribution, atomic wiki/result composition, generic wiki attempt attribution, and the remaining plan phases stay open. HTTP fixtures prove application behavior; this session has no Slack connector and does not claim a live workspace test.
 
 
+### Atomic wiki changes and composable reconciliation (31 October)
+
+Native review and model-issued wiki writes now use the same `writePageTx` as the ordinary wiki wrapper. The shared operation interpreter commits the wiki revision and retained response in one transaction. A rejected receipt rolls back the mutation and claim together; a later retry can safely execute the original intent.
+
+`ReconcilableOperation` wraps an execution rather than assuming an external action. It can therefore reconcile an earlier GitHub publication before a new atomic wiki write. The same three execution constructors and derived `Functor` serve both paths. Uncertain results retain their opaque claim and original typed proposal, giving the shared reconciler the actual unresolved intent. Existing result JSON stays unchanged.
+
+The interpreter refreshes authority after reconciliation before retaining or acting on its result. Each caller supplies its original access check, preserving Slack identity and stop checks, web access, or native member authority. Native wiki recovery also rechecks repository mappings after the external lookup. Neither a role downgrade nor a revoked mapping during reconciliation can authorize the next write.
+
+Access revocation uses the existing `AgentAccessDenied` exception, so the shared interpreter declares `IOE`; both callers already provide that effect.
+
+Model wiki writes rely on the existing durable run and lease binding for their conversation. Their separate conversation-existence query was removed. Page creation reports a path conflict within the transaction, while the ordinary wiki wrapper retains its existing rename-conflict handling. This slice adds no migration or additional execution constructor. Historical uncertain wiki operations remain stopped unless their outcome is known.
+
+Failing handler regressions reproduced both native and model wiki revisions surviving receipt rejection, followed by writes after role and mapping revocation during reconciliation. All 233 bot, 75 API v1, 33 native review/SDK, and two wiki UI examples pass. Formatting and diff checks pass. HLint reports the same five hints as `c55a71b88`, with none introduced by this slice. Repeated slice reviews found no additional material distillation, constraint-evasion, or client-behavior findings. Whole-branch review and final release checks remain pending.
+
+Generic conversation wiki attempt attribution, native issue-enrichment operation attribution, the remaining plan phases, and controlled live Slack acceptance stay open.
+
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

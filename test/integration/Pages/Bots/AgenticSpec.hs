@@ -30,6 +30,7 @@ import Models.Apis.Investigations (ToolCallInfo (..), ToolResult (..))
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Pages.AIThreads qualified as AIThreads
 import Pages.Bots.BotTestHelpers (assertJsonGolden, completeTestRun, getOpenAIKey, getOpenAIModel, interactiveInvocation, resetLegacyEvidenceScope, scheduledInvocation, setupSlackData, withHTTPResponses)
@@ -287,39 +288,43 @@ spec = around withTestResources do
         denied `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
         IORef.readIORef calls >>= (`shouldBe` 1)
 
-      it "agentOperation_atomicArtifactAppendRollsBackWithItsOutcome" \tr -> do
-        let conversation = UUIDId UUID.nil
-            request = UUIDId $ UUID.fromWords 0 0 0 199
-            key' = fromRightShow $ Issues.mkArtifactKey "operation-evidence"
-            form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm "query=Append+this+finding&mode=chat&requestId=00000000-0000-0000-0000-0000000000c7"
-            provider :: ATAuthCtx a -> ATAuthCtx a
-            provider = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
-                [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "append" "function" $ LLM.ToolFunction "save_artifact" $ fromList [("key", AE.String "operation-evidence"), ("mode", AE.String "append"), ("content", AE.String "Finding")]]}
-                _ -> LLM.Message LLM.Assistant "The finding is retained once." LLM.defaultMessageData
-              ELLM.CallLLM{} -> pure $ Right "Atomic append"
-              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
-            execute = tryAny $ void $ runAuthHandler tr $ provider $ AIThreads.threadPostHWithTools (Just Routes.mcpProjectTools) testPid conversation form
-            ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
-            content = runQueryEffect tr $ Issues.listArtifacts testPid conversation (Just key')
-        runTestBg frozenTime tr do
-          void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
-          void $ Issues.saveArtifact testPid conversation key' Nothing "Base" Issues.ArtifactReplace
-        bracket_
-          (ddl "ALTER TABLE apis.ai_agent_operations ADD CONSTRAINT reject_operation_outcome CHECK (outcome->>'tag' <> 'OperationReturned') NOT VALID")
-          (ddl "ALTER TABLE apis.ai_agent_operations DROP CONSTRAINT reject_operation_outcome")
-          do
-            execute >>= (`shouldSatisfy` isLeft)
-            content >>= (\docs -> mapMaybe (.content) docs `shouldBe` ["Base"])
-            runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= (\operations -> length operations `shouldBe` 0)
-        execute >>= (`shouldSatisfy` isRight)
-        content >>= (\docs -> mapMaybe (.content) docs `shouldBe` ["Base\n\nFinding"])
-        operations <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid request
-        case operations of
-          [entry] -> do
-            entry.proposal.policy.execution `shouldBe` Issues.Observe
-            entry.outcome `shouldSatisfy` \case Investigations.OperationReturned{} -> True; _ -> False
-          _ -> expectationFailure "Expected one committed operation"
+      for_ ["save_artifact", "write_project_memory"] \tool ->
+        it ("agentOperation_atomicMutationRollsBackWithItsOutcome: " <> toString tool) \tr -> do
+          let wiki = tool == "write_project_memory"
+              page = UUIDId UUID.nil :: Memory.PageId
+              arguments = if wiki then fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (0 :: Int)), ("document", AE.object ["title" AE..= ("Finding" :: Text), "body" AE..= ("Finding" :: Text)])] else fromList [("key", AE.String "operation-evidence"), ("mode", AE.String "append"), ("content", AE.String "Finding")]
+              conversation = UUIDId UUID.nil
+              request = UUIDId $ UUID.fromWords 0 0 0 199
+              key' = fromRightShow $ Issues.mkArtifactKey "operation-evidence"
+              form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm $ "query=Append+this+finding&mode=chat&requestId=00000000-0000-0000-0000-0000000000c7" <> if wiki then "&allowActions=true" else ""
+              provider :: ATAuthCtx a -> ATAuthCtx a
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                  [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "append" "function" $ LLM.ToolFunction tool arguments]}
+                  _ -> LLM.Message LLM.Assistant "The finding is retained once." LLM.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Right "Atomic append"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
+              execute = tryAny $ void $ runAuthHandler tr $ provider $ AIThreads.threadPostHWithTools (Just Routes.mcpProjectTools) testPid conversation form
+              ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+              content = if wiki then map (Memory.memoryText . (.document.body)) <$> runQueryEffect tr (Memory.pageHistory testPid page) else mapMaybe (.content) <$> runQueryEffect tr (Issues.listArtifacts testPid conversation $ Just key')
+          runTestBg frozenTime tr do
+            void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+            unless wiki $ void $ Issues.saveArtifact testPid conversation key' Nothing "Base" Issues.ArtifactReplace
+          bracket_
+            (ddl "ALTER TABLE apis.ai_agent_operations ADD CONSTRAINT reject_operation_outcome CHECK (outcome->>'tag' <> 'OperationReturned') NOT VALID")
+            (ddl "ALTER TABLE apis.ai_agent_operations DROP CONSTRAINT reject_operation_outcome")
+            do
+              execute >>= (`shouldSatisfy` isLeft)
+              content >>= (`shouldBe` if wiki then [] else ["Base"])
+              runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= (\operations -> length operations `shouldBe` 0)
+          execute >>= (`shouldSatisfy` isRight)
+          content >>= (`shouldBe` if wiki then ["Finding"] else ["Base\n\nFinding"])
+          operations <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid request
+          case operations of
+            [entry] -> do
+              entry.proposal.policy.execution `shouldBe` if wiki then Issues.Autonomous else Issues.Observe
+              entry.outcome `shouldSatisfy` \case Investigations.OperationReturned{} -> True; _ -> False
+            _ -> expectationFailure "Expected one committed operation"
 
       for_ (["checkpoint", "outcome"] :: [Text]) \boundary ->
         it ("agentOperation_slackPublicationIsNotRepeatedAfterLost" <> toString boundary) \tr -> do
@@ -416,7 +421,7 @@ spec = around withTestResources do
         let conversation = UUIDId UUID.nil
             config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.projectTools = Just Routes.mcpProjectTools}
         void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
-        for_ ([("get_project", "replay_reads", ProjectMembers.PView, ProjectMembers.PView), ("save_artifact", "atomic_in_run", ProjectMembers.PView, ProjectMembers.PView), ("send_to_slack", "retain_in_run", ProjectMembers.PEdit, ProjectMembers.PView), ("delete_dashboard", "retain_in_run", ProjectMembers.PAdmin, ProjectMembers.PView), ("create_api_key", "retain_in_run", ProjectMembers.PAdmin, ProjectMembers.PAdmin)] :: [(Text, Text, ProjectMembers.Permissions, ProjectMembers.Permissions)]) \(name, expected, role, audience) -> do
+        for_ ([("get_project", "replay_reads", ProjectMembers.PView, ProjectMembers.PView), ("save_artifact", "atomic_in_run", ProjectMembers.PView, ProjectMembers.PView), ("write_project_memory", "atomic_in_run", ProjectMembers.PEdit, ProjectMembers.PView), ("send_to_slack", "retain_in_run", ProjectMembers.PEdit, ProjectMembers.PView), ("delete_dashboard", "retain_in_run", ProjectMembers.PAdmin, ProjectMembers.PView), ("create_api_key", "retain_in_run", ProjectMembers.PAdmin, ProjectMembers.PAdmin)] :: [(Text, Text, ProjectMembers.Permissions, ProjectMembers.Permissions)]) \(name, expected, role, audience) -> do
           result <- runTestBg frozenTime tr $ AI.executeToolCall config $ LLM.ToolCall "schema" "function" $ LLM.ToolFunction "get_project_tool_schema" $ one ("name", AE.String name)
           (AE.decode @AE.Value (encodeUtf8 result.formatted) >>= (^? key "agent_recovery" . _String)) `shouldBe` Just expected
           for_ ([("minimum_permission", role), ("evidence_permission", audience)] :: [(AE.Key, ProjectMembers.Permissions)]) \(field, permission) ->

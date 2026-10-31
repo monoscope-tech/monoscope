@@ -1,4 +1,4 @@
-module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), PageFilter (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), Edit (..), Request (..), Summary (..), summarize, pageLimit, latestPages, pageHistory, writePage) where
+module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), PageFilter (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), Edit (..), Request (..), Summary (..), summarize, pageLimit, latestPages, pageHistory, writePage, writePageTx) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isAlphaNum, isAscii)
@@ -9,6 +9,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff)
 import Effectful.Exception (catch, throwIO)
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Pkg.DeriveUtils (DB, UUIDId, refineText)
 import Relude
@@ -207,34 +208,35 @@ pageWindow pid scope after =
 
 writePage :: DB es => UUIDId "project" -> PageId -> Word32 -> Maybe PagePath -> Document -> Author -> Eff es (Either WriteError Page)
 writePage pid page expected requested document author =
-  Hasql.transaction
-    TxS.ReadCommitted
-    TxS.Write
-    ( runExceptT do
-        let initial = fromMaybe (PagePath page.toText) requested
-        when (expected == 0)
-          $ lift
-          $ Hasql.executeTx
-            [HI.sql|
+  Hasql.transaction TxS.ReadCommitted TxS.Write (writePageTx pid page expected requested document author)
+    `catch` \err -> if Hasql.isUniqueViolation err then pure $ Left PathTaken else throwIO err
+
+
+writePageTx :: UUIDId "project" -> PageId -> Word32 -> Maybe PagePath -> Document -> Author -> Tx.Transaction (Either WriteError Page)
+writePageTx pid page expected requested document author =
+  runExceptT do
+    let initial = fromMaybe (PagePath page.toText) requested
+    when (expected == 0)
+      $ lift
+      $ Hasql.executeTx
+        [HI.sql|
       INSERT INTO projects.memory_pages (project_id, page_id, path) VALUES (#{pid}, #{page}, #{initial})
-      ON CONFLICT (project_id, page_id) DO NOTHING
+      ON CONFLICT DO NOTHING
     |]
-        present <- lift $ Hasql.queryTx @(Maybe (HI.OneColumn PagePath)) [HI.sql| SELECT path FROM projects.memory_pages WHERE project_id = #{pid} AND page_id = #{page} FOR UPDATE |]
-        HI.OneColumn current <- hoistEither $ maybeToRight StaleRevision present
-        HI.OneColumn version <- lift $ Hasql.oneTx @(HI.OneColumn Int64) [HI.sql| SELECT coalesce(max(version), 0) FROM projects.memory_revisions WHERE project_id = #{pid} AND page_id = #{page} |]
-        when (version /= fromIntegral expected || expected == maxBound) $ hoistEither $ Left StaleRevision
-        let location = fromMaybe current requested
-        stored <-
-          lift
-            $ Hasql.queryTx @(Maybe Page)
-              [HI.sql|
+    present <- lift $ Hasql.queryTx @(Maybe (HI.OneColumn PagePath)) [HI.sql| SELECT path FROM projects.memory_pages WHERE project_id = #{pid} AND page_id = #{page} FOR UPDATE |]
+    HI.OneColumn current <- hoistEither $ maybeToRight (if expected == 0 then PathTaken else StaleRevision) present
+    HI.OneColumn version <- lift $ Hasql.oneTx @(HI.OneColumn Int64) [HI.sql| SELECT coalesce(max(version), 0) FROM projects.memory_revisions WHERE project_id = #{pid} AND page_id = #{page} |]
+    when (version /= fromIntegral expected || expected == maxBound) $ hoistEither $ Left StaleRevision
+    let location = fromMaybe current requested
+    stored <-
+      lift
+        $ Hasql.queryTx @(Maybe Page)
+          [HI.sql|
       INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author)
       VALUES (#{pid}, #{page}, #{version} + 1, #{Aeson document}, #{Aeson author})
       ON CONFLICT (project_id, page_id, version) DO NOTHING
       RETURNING page_id, version, document, author, created_at, #{location}
     |]
-        saved <- hoistEither $ maybeToRight StaleRevision stored
-        lift $ Hasql.executeTx [HI.sql| UPDATE projects.memory_pages SET path = #{location} WHERE project_id = #{pid} AND page_id = #{page} |]
-        pure saved
-    )
-    `catch` \err -> if Hasql.isUniqueViolation err then pure $ Left PathTaken else throwIO err
+    saved <- hoistEither $ maybeToRight StaleRevision stored
+    lift $ Hasql.executeTx [HI.sql| UPDATE projects.memory_pages SET path = #{location} WHERE project_id = #{pid} AND page_id = #{page} |]
+    pure saved
