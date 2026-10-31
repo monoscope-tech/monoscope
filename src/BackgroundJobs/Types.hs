@@ -1,13 +1,19 @@
-module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob) where
+{-# LANGUAGE OrPatterns #-}
+
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob, reviewOperation) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Wreq qualified as HTTP
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Effectful (Eff)
+import Effectful (Eff, (:>))
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Projects qualified as Projects
@@ -142,3 +148,28 @@ data Conversion = Signup Projects.UserId | Activated Projects.ProjectId
 -- writes, for modules that cannot import 'BackgroundJobs' or hold no 'jobsPool'.
 insertJob :: DB es => BgJobs -> Eff es ()
 insertJob job = Hasql.interpExecute_ [HI.sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{HI.AsJsonb job}) |]
+
+
+-- Review submissions retain the same decision and wake the existing worker.
+-- Repeated delivery also repairs a decision whose enqueue was interrupted.
+reviewOperation :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> Investigations.ReviewDecision -> Eff es Investigations.ReviewResponse
+reviewOperation project reviewer identifier decision = do
+  result <- Investigations.decideOperationReview project reviewer identifier decision
+  case result of
+    Investigations.ReviewUnavailable -> pass
+    (Investigations.ReviewSaved{}; Investigations.ReviewAlreadyDecided{}; Investigations.ReviewExpired) -> Hasql.transaction TxS.ReadCommitted TxS.Write do
+      slots <-
+        Hasql.queryTx @[(UUIDId "ai_routine", UTCTime)]
+          [HI.sql|SELECT routine.id, run.scheduled_at
+          FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id
+          JOIN apis.ai_routines routine ON routine.id = run.routine_id
+          WHERE operation.id = #{identifier} AND operation.project_id = #{project}
+            AND run.status = #{Issues.RunRunning} AND run.source = #{Issues.ScheduledRun}
+            AND routine.active AND routine.next_run_at = run.scheduled_at FOR UPDATE OF operation|]
+      for_ slots $ \(routine, scheduled) -> do
+        let job = HI.AsJsonb $ AIRoutineRun routine scheduled
+        Hasql.executeTx
+          [HI.sql|INSERT INTO background_jobs (run_at, status, payload)
+          SELECT app_now(), 'queued', #{job} WHERE NOT EXISTS (
+            SELECT 1 FROM background_jobs WHERE payload = #{job} AND status IN ('queued', 'retry'))|]
+  pure result

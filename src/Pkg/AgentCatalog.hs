@@ -7,6 +7,7 @@ module Pkg.AgentCatalog (
   slackReadName,
   slackReadPolicy,
   ReviewApprover (..),
+  approverPermission,
   ReviewClass (..),
   ReviewSelection (..),
   reviewClass,
@@ -97,6 +98,12 @@ data ReviewApprover = ReviewEditors | ReviewAdministrators
   deriving stock (Eq, Generic, Ord, Read, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "Review" ReviewApprover
+
+
+approverPermission :: ReviewApprover -> ProjectMembers.Permissions
+approverPermission = \case
+  ReviewEditors -> ProjectMembers.PEdit
+  ReviewAdministrators -> ProjectMembers.PAdmin
 
 
 data ReviewClass = KnowledgeChanges | ProjectChanges | ExternalPosts | AdministrativeChanges

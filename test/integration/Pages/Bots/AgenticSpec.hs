@@ -411,11 +411,29 @@ spec = around withTestResources do
           waiting.error `shouldBe` Nothing
           [entry] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
           entry.outcome `shouldSatisfy` \case Investigations.OperationUnstarted -> True; _ -> False
+          (_, waitingPage) <- testServant tr $ AIThreads.routineRunGetH testPid waiting.id Nothing
+          for_ ["Approve action", "Decline action", "/ai/operations/" <> entry.id.toText <> "/review"] $ \content -> renderT waitingPage `shouldSatisfy` T.isInfixOf content
+          when (scenario == ApproveReview) do
+            runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+            status <- runAuthHandler tr $ (AIThreads.operationReviewPostH testPid entry.id (AIThreads.OperationReviewForm Investigations.ReviewApproved) $> 200) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+            status `shouldBe` 403
+            (_, readerPage) <- testServant tr $ AIThreads.routineRunGetH testPid waiting.id Nothing
+            renderT readerPage `shouldSatisfy` (not . T.isInfixOf "Approve action")
+            runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'admin' WHERE project_id = #{testPid} AND user_id = #{user}|]
           runQueryEffect tr (Issues.claimRoutine slot.id slot.scheduledAt) >>= (`shouldSatisfy` isNothing)
           runTestBgNoReset tr (Issues.recoverDueRoutines 100) >>= (\due -> map (.id) due `shouldNotContain` [slot.id])
-          if scenario == ExpireBeforeReview
-            then advanceTestTime tr (24 * 60 * 60 + 1)
-            else runTestBgNoReset tr (Investigations.decideOperationReview testPid user entry.id $ if scenario == DeclineReview then Investigations.ReviewRejected else Investigations.ReviewApproved) >>= (`shouldSatisfy` \case Investigations.ReviewSaved{} -> True; _ -> False)
+          when (scenario == ApproveReview) do
+            let ddl statement = withResource tr.trPool $ \connection -> void $ PGS.execute_ connection statement
+            bracket_
+              (ddl "ALTER TABLE background_jobs ADD CONSTRAINT reject_review_wakeup CHECK (payload->>'tag' <> 'AIRoutineRun') NOT VALID")
+              (ddl "ALTER TABLE background_jobs DROP CONSTRAINT reject_review_wakeup")
+              $ void (testServant tr $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm Investigations.ReviewApproved)
+              `shouldThrow` (\(err :: SomeException) -> "reject_review_wakeup" `T.isInfixOf` toText (displayException err))
+          when (scenario == ExpireBeforeReview) $ advanceTestTime tr (24 * 60 * 60 + 1)
+          replicateM_ 2 $ void $ testServant tr $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm $ if scenario == DeclineReview then Investigations.ReviewRejected else Investigations.ReviewApproved
+          [reviewed] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
+          when (scenario == ExpireBeforeReview) $ reviewed.review `shouldBe` entry.review
+          runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ BackgroundJobs.AIRoutineRun slot.id slot.scheduledAt} AND status = 'queued'|]) >>= (`shouldBe` 1)
           advanceTestTime tr (15 * 60)
           runTestBgNoReset tr (Issues.recoverDueRoutines 100) >>= (\due -> map (.id) due `shouldContain` [slot.id])
           run

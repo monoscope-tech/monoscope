@@ -57,7 +57,16 @@ One lease predicate is shared by scheduled admission and recovery. Pending, unex
 
 The failing-first regression reproduced `RunFailed` on review suspension. Three focused cases now pass for approval, rejection, and expiry. They exercise the real dashboard tool, retained model checkpoint, recovery discovery, duplicate admission before execution, unchanged run identity, exactly two model calls, and at most one mutation. All 350 bot examples pass against the final source. Both watchers compile successfully. Formatting and diff checks pass; scoped HLint reports no suggestions on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material issue in this scheduled-worker slice.
 
-This connects scheduled work only. Event, Slack, and web suspension, decision controls, immediate enqueue after a decision, and the user-facing waiting summary remain unfinished. Until controls enqueue a scheduled continuation, the existing recovery sweep discovers ready work.
+This connects scheduled work only. Scheduled web decisions now enqueue continuation immediately, as described below. Event, Slack, and web suspension, Slack decision controls, policy configuration, and the user-facing waiting summary remain unfinished. The existing recovery sweep also discovers ready scheduled work.
+
+
+## Scheduled web decisions
+
+The run inspector now renders Approve and Decline forms for waiting scheduled actions. The POST endpoint uses the shared decision evaluator and queue helper. Reviewer permission floors live in the canonical catalog and are reused by the evaluator and UI. The evaluator rechecks current membership and evidence access; hiding a form is not authorization.
+
+A saved or repeated decision queues the existing `AIRoutineRun` job. Queue insertion locks the operation and retains an existing queued/retry job. If enqueue fails after the immutable decision commits, a repeated submission repairs delivery. Expired reviews can also wake the existing worker to retain their refusal. No migration, second executor, or approval worker is added.
+
+The immediate-continuation regression first failed with zero queued jobs after both approval and rejection. Three focused integration cases now pass through the actual web handler. They cover real dashboard execution, repeat submissions, reader denial and hidden controls, an injected queue failure followed by repair, expiry, and unchanged checkpoint/run identity. The production code passes all 350 bot and 76 API examples. The final focused cases also verify that expired control submissions leave review metadata unchanged and enqueue only refusal processing. Both watchers compile successfully; formatting and diff checks pass. Scoped HLint has no suggestions on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue in this slice. This endpoint does not yet establish complete selective review: Slack controls, policy selection, and suspension/resume for other sources remain unfinished.
 
 ## Product contract
 

@@ -115,9 +115,10 @@ import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pkg.AgentCatalog (ReviewApprover (..))
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.AgentOperation qualified as Operation
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
 import System.Types (DB)
+import Web.HttpApiData (FromHttpApiData)
 import Prelude (until)
 
 
@@ -192,8 +193,9 @@ data ReviewRequest = ReviewRequest {expiresAt :: UTCTime, approver :: ReviewAppr
 
 
 data ReviewDecision = ReviewApproved | ReviewRejected
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "Review" ReviewDecision
 
 
 data ReviewReceipt = ReviewReceipt {decidedBy :: Projects.UserId, decidedAt :: UTCTime, decision :: ReviewDecision, authority :: ReviewApprover}
@@ -693,7 +695,7 @@ beginOperationTx now lease cursor proposal review = runExceptT do
                     <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{lease.turn.projectId} AND member.user_id = #{receipt.decidedBy}|]
                     <> [HI.sql|) eligible|]
                 let required = max request.approver $ maybe request.approver (.approver) review
-                if receipt.authority >= required && case (roles, Catalog.policyForCall entry.proposal.call) of ([HI.OneColumn role], Just capability) -> role >= max (Catalog.minimumPermission capability) (approverPermission required); _ -> False
+                if receipt.authority >= required && case (roles, Catalog.policyForCall entry.proposal.call) of ([HI.OneColumn role], Just capability) -> role >= max (Catalog.minimumPermission capability) (Catalog.approverPermission required); _ -> False
                   then start entry
                   else refuse entry ReviewAuthorityWithdrawn
           ReviewRejected -> refuse entry ReviewDeclined
@@ -749,12 +751,6 @@ completeOperationTx (OperationClaim identifier) result = do
       pure $ if same == [True] then Right () else Left OperationOutcomeChanged
 
 
-approverPermission :: ReviewApprover -> ProjectMembers.Permissions
-approverPermission = \case
-  ReviewEditors -> ProjectMembers.PEdit
-  ReviewAdministrators -> ProjectMembers.PAdmin
-
-
 decideOperationReview :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> ReviewDecision -> Eff es ReviewResponse
 decideOperationReview project reviewer identifier decision = do
   permission <- ProjectMembers.getUserPermission project reviewer
@@ -781,7 +777,7 @@ decideOperationReview project reviewer identifier decision = do
                   [HI.OneColumn fresh] <- pure current
                   policy <- Catalog.policyForCall proposal.call
                   let required = max request.approver $ maybe request.approver (\(Aeson value) -> value.approver) selection
-                  guard $ fresh >= max (Catalog.minimumPermission policy) (approverPermission required)
+                  guard $ fresh >= max (Catalog.minimumPermission policy) (Catalog.approverPermission required)
                   case fresh of
                     ProjectMembers.PView -> Nothing
                     ProjectMembers.PEdit -> Just ReviewEditors

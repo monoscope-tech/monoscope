@@ -1,6 +1,7 @@
-module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH) where
+module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH) where
 
 import BackgroundJobs qualified
+import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
@@ -95,6 +96,11 @@ newtype RoutineDestinationForm = RoutineDestinationForm {destination :: Issues.R
 
 
 newtype RoutinePolicyForm = RoutinePolicyForm {policy :: Issues.ExecutionPolicy}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+newtype OperationReviewForm = OperationReviewForm {decision :: Investigations.ReviewDecision}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
@@ -357,6 +363,16 @@ threadPageGetH pid convId docM runM hxTarget = do
                   pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.outcome
                   when (operation.review /= Investigations.NoReview) $ pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.review
                 else p_ [class_ "text-xs text-textWeak"] $ toHtml $ "Action details require " <> toText (encodeEnumSC @"P" required) <> " permission."
+              case (run.source, run.status, operation.outcome, operation.review) of
+                (Issues.ScheduledRun, Issues.RunRunning, Investigations.OperationUnstarted, Investigations.ReviewPending request) -> do
+                  p_ [class_ "text-xs text-textWeak"] do
+                    "Review deadline: "
+                    localTimeFmt_ "MMM d, HH:mm" request.expiresAt
+                  when (viewerPermission >= max required (Catalog.approverPermission request.approver))
+                    $ form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/operations/" <> operation.id.toText <> "/review", hxSwap_ "none", class_ "flex flex-wrap gap-2"] do
+                      button_ [type_ "submit", name_ "decision", value_ "approved", class_ "btn btn-sm btn-primary"] "Approve action"
+                      button_ [type_ "submit", name_ "decision", value_ "rejected", class_ "btn btn-sm btn-ghost"] "Decline action"
+                _ -> pass
               time_ [datetime_ $ show operation.createdAt, class_ "text-xs text-textWeak"] $ localTimeFmt_ "MMM d, HH:mm" operation.createdAt
               when (operation.runId /= run.id)
                 $ a_ [href_ $ runUrl pid operation.runId, class_ "ms-3 text-xs text-textBrand hover:underline"] "View original attempt"
@@ -715,6 +731,18 @@ routinePolicyPostH pid conversation form = do
   (session, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   Issues.setRoutinePolicy session.user.id pid conversation form.policy
   addSuccessToast "Execution policy saved." Nothing
+  addRespHeaders mempty
+
+
+operationReviewPostH :: Projects.ProjectId -> UUIDId "agent_operation" -> OperationReviewForm -> ATAuthCtx (RespHeaders (Html ()))
+operationReviewPostH pid identifier form = do
+  (session, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
+  result <- Jobs.reviewOperation pid session.user.id identifier form.decision
+  case result of
+    Investigations.ReviewUnavailable -> throwError Servant.err403
+    Investigations.ReviewExpired -> addErrorToast "This action's review deadline has passed." Nothing
+    Investigations.ReviewAlreadyDecided{} -> addSuccessToast "This action already has a decision." Nothing
+    Investigations.ReviewSaved{} -> addSuccessToast "Decision saved." Nothing
   addRespHeaders mempty
 
 
