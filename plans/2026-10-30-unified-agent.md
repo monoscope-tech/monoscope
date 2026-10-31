@@ -6,7 +6,11 @@ It combines the Slack consolidation work and the Slack coworker proposal.
 It incorporates the requested default of autonomous background work without repeated permission prompts.
 This document does not claim that unfinished features or live Slack acceptance are complete.
 
-Audience containment now has one typed scope and one read evaluator shared by web navigation, threads, retained runs, artifacts, and agent access. Personal scopes require their owner; channel scopes require current linked Slack membership; personal Slack delivery also verifies the destination DM. Shared mutations and publication reject private scopes, including the completion transaction. Scope inheritance preserves restrictions after conversation recreation. The latest 301 bot tests, 76 API tests, and 38 incident-delivery tests pass. DM and group-DM membership proof require `im:read` and `mpim:read`, now requested by the installer and manifest; existing installations must reconnect before those evidence paths can work. Newly fetched Slack history now receives its channel or personal audience before seeding and model use. The cancellation heartbeat stays local; provider membership proof remains at data-use boundaries. A data-only upgrade now classifies older Slack evidence from stored receipts and retained authorship, including deleted conversations; ambiguous provenance remains restricted. Remote MCP evidence/provenance and controlled live acceptance remain unfinished; this is not completed Slack evidence support.
+Evidence uses one typed audience and one evaluator across web navigation, threads, retained runs, artifacts, and agent access. Personal reads require ownership and current eligible project membership. Channel reads require current linked Slack membership. Shared mutations and publication reject private evidence.
+
+Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
+
+The latest 302 bot tests, 76 API tests, and 38 incident-delivery tests pass. Remote MCP evidence/provenance, controlled live acceptance, optional review controls, streaming acceptance, and final release checks remain unfinished.
 
 ## Product contract
 
