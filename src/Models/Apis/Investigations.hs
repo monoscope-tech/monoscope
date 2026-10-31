@@ -1008,9 +1008,9 @@ audienceVisible :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> EvidenceVie
 audienceVisible project viewer = \case
   ProjectAudience -> pure True
   NoAudience -> pure False
-  PersonalAudience owner -> pure $ case viewer of
-    MemberViewer member -> owner == member
-    _ -> False
+  PersonalAudience owner -> case viewer of
+    MemberViewer member | owner == member -> isJust <$> ProjectMembers.getUserPermission project member
+    _ -> pure False
   SlackChannelAudience channel -> case viewer of
     MemberViewer member -> Integrations.slackChannelMember project member channel
     ChannelViewer member destination | channel == destination -> Integrations.slackChannelMember project member channel

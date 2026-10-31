@@ -660,6 +660,21 @@ spec = around withTestResources do
         runTestBg frozenTime tr $ void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
         runQueryEffect tr (Investigations.conversationEvidenceAudience testPid conversation) >>= (`shouldBe` privateAudience)
 
+      it "evidenceAudience_publicDemoDoesNotRestorePersonalAccessAfterMembershipRevocation" \tr -> do
+        let owner = (getResponse tr.trSessAndHeader).user.id
+            personal = UUIDId $ UUID.fromWords 0 0 44 50
+            public = UUIDId $ UUID.fromWords 0 0 44 51
+        runTestBg frozenTime tr $ for_ [personal, public] $ \conversation -> do
+          void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+          Issues.insertChatMessage testPid conversation Issues.ChatAssistant "Retained evidence" Nothing Nothing
+        runQueryEffect tr (Investigations.retainEvidenceAudience testPid personal $ Investigations.PersonalAudience owner) >>= (`shouldBe` True)
+        runQueryEffect tr do
+          Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = #{testPid} AND user_id = #{owner}|]
+          Hasql.interpExecute_ [HI.sql|UPDATE users.users SET is_sudo = FALSE WHERE id = #{owner}|]
+        for_ ([(public, 200), (personal, 403)] :: [(UUIDId "conversation", Int)]) $ \(conversation, expected) -> do
+          status <- runAuthHandler tr $ (AIThreads.threadGetH testPid conversation Nothing Nothing $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+          status `shouldBe` expected
+
       it "evidenceAudience_ownerCanReadButCannotPublishPrivateEvidenceToProjectResources" \tr -> do
         let conversation = UUIDId $ UUID.fromWords 0 0 44 22
             user = (getResponse tr.trSessAndHeader).user.id
