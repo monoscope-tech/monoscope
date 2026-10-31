@@ -308,6 +308,7 @@ The [visual review](../docs/reviews/2026-10-30-unified-agent.html) shows the arc
 Each source panel identifies its reviewed commit, including shared completion and typed capability policies.
 The review now uses one main diagram, a guided request walkthrough, and collapsed code comparisons.
 Text contrast exceeds 7:1 for the tested color pairs. The layout passes browser checks at 390, 768, and 1280 pixels.
+The [hosted review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a919) now includes seven scenarios, including automatic incident investigation and closing reports, at source snapshot `00a2da3aa`. All scenarios, four code comparisons, nine roadmap items, keyboard controls, and responsive checks pass. Hosted HTML readback matches the local artifact exactly.
 
 The related PR runtime integration passes 33 review integration examples and fifteen worker examples.
 Operation names and agent permission policies now live together in the API tool catalog.
