@@ -728,8 +728,7 @@ data SlackEventKind
   | AppHomeOpened SlackHomeEvent
   | BotMessage
   | MessageEdit
-  | AssistantStarted SlackAssistantEvent
-  | AssistantContextChanged SlackAssistantEvent
+  | AssistantSession SlackAssistantEvent
   | UnknownEvent SlackEventHeader
   deriving stock (Generic, Show)
 
@@ -762,8 +761,8 @@ classifySlackEvent workspaceId wire = do
       title <- checked @SlackTitleEvent "title" (\v -> [v.event_ts, v.thread_ts]) (\v -> [v.user, v.channel, v.team_id]) Relude.id
       unless (title.team_id == workspaceId) $ fail "Slack title workspace mismatch"
       pure $ AgentSessionTitleChanged title
-    ("assistant_thread_started", _) -> assistant AssistantStarted
-    ("assistant_thread_context_changed", _) -> assistant AssistantContextChanged
+    ("assistant_thread_started", _) -> assistant AssistantSession
+    ("assistant_thread_context_changed", _) -> assistant AssistantSession
     _ -> pure $ UnknownEvent header
 
 
@@ -815,7 +814,7 @@ slackEventsPostH body timestamp signature = do
           SELECT now(), 'queued', #{job} FROM receipt|]
       case kind of
         (AgentSessionStopped _; AgentSessionTitleChanged _) -> recordSlackSessionEvent team_id event_id
-        (UserMessage _; AppMention _; AppContextChanged _; AppHomeOpened _; BotMessage; MessageEdit; AssistantStarted _; AssistantContextChanged _; UnknownEvent _) -> pass
+        (UserMessage _; AppMention _; AppContextChanged _; AppHomeOpened _; BotMessage; MessageEdit; AssistantSession _; UnknownEvent _) -> pass
       pure $ AE.object []
 
 
@@ -863,8 +862,9 @@ processSlackEventWithTools projectTools receiptId =
           case kind of
             UserMessage message -> withThreadLock team_id message process
             AppMention message -> withThreadLock team_id message process
+            AssistantSession session -> withEventLock ("slack-prompts:" <> encodeText ([team_id, session.assistant_thread.channel_id] :: [Text])) process
             AppHomeOpened home -> withEventLock ("slack-onboarding:" <> encodeText ([team_id, home.channel, home.user] :: [Text])) process
-            (AgentSessionStopped _; AgentSessionTitleChanged _; AppContextChanged _; BotMessage; MessageEdit; AssistantStarted _; AssistantContextChanged _; UnknownEvent _) -> process
+            (AgentSessionStopped _; AgentSessionTitleChanged _; AppContextChanged _; BotMessage; MessageEdit; UnknownEvent _) -> process
     withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
 
     handleEventCallback envCfg kind workspaceId eventId =
@@ -878,14 +878,55 @@ processSlackEventWithTools projectTools receiptId =
           | otherwise -> Log.logTrace "Slack App Home visit outside Messages retained" (AE.object [])
         UserMessage message -> handleMessage False envCfg message workspaceId
         AppMention message -> handleMessage True envCfg message workspaceId
-        -- Greet on start only; a context change is a channel switch mid-thread.
-        AssistantStarted session -> do
+        AssistantSession session -> do
           saveAssistantContext workspaceId session
           whenJustM (getSlackDataByTeamId workspaceId) (`greetAssistantThread` session)
-        AssistantContextChanged session -> saveAssistantContext workspaceId session
         BotMessage -> Log.logTrace "Slack bot message retained without starting an investigation" (AE.object [])
         MessageEdit -> Log.logTrace "Slack message edit retained without starting an investigation" (AE.object [])
         UnknownEvent header -> Log.logTrace "Unsupported Slack event retained" (AE.object ["team_id" AE..= workspaceId, "event_type" AE..= header.eventType, "subtype" AE..= header.subtype])
+
+    -- \| Navigation context selects suggestions, never authority. Agent prompts belong
+    -- to the private Messages surface; thread_ts is only supported by legacy assistants.
+    greetAssistantThread :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es, Time.Time :> es) => SlackData -> SlackAssistantEvent -> Eff es ()
+    greetAssistantThread slackData event = when (not (T.null slackData.botToken) && "D" `T.isPrefixOf` event.assistant_thread.channel_id) do
+      let session = event.assistant_thread
+      (user, thread, channel) <-
+        Hasql.interpOneOrThrow @(Text, Text, Maybe Text)
+          "Slack assistant context"
+          [HI.sql|SELECT user_id, thread_ts, context->>'channel_id'
+        FROM apis.slack_assistant_threads WHERE team_id = #{slackData.teamId} AND channel_id = #{session.channel_id}
+        ORDER BY context_event_ts DESC, thread_ts::numeric DESC LIMIT 1|]
+      boundProject <- Integrations.slackThreadProject slackData.teamId session.channel_id thread
+      principal <- Integrations.resolveSlackPrincipal slackData.teamId user boundProject
+      prompts <- case principal of
+        Nothing -> pure [("Link your Monoscope account", "Link my Monoscope account")]
+        Just member -> do
+          (issues, _) <- Issues.selectIssues member.projectId Issues.PIssue Issues.defIssueFilters{Issues.archive = Issues.IsNull, Issues.spam = Issues.IsNull, Issues.ack = Issues.IsNull, Issues.order = Just "-updated_at", Issues.limit = 2}
+          incidents <- Incidents.listEpisodes member.projectId (Just Incidents.EpisodeActive) 1
+          lastAlert <- case channel of
+            Nothing -> pure Nothing
+            Just channelId ->
+              Hasql.interpOne @(Incidents.EpisodeId, Text)
+                [HI.sql|SELECT episode.id, root.message_ts FROM apis.slack_incident_roots root
+              JOIN apis.incident_episodes episode ON episode.id = root.episode_id
+              WHERE episode.project_id = #{member.projectId} AND root.team_id = #{slackData.teamId} AND root.channel_id = #{channelId}
+                AND root.message_ts IS NOT NULL ORDER BY root.message_ts::numeric DESC LIMIT 1|]
+          AI.requireAgentAccess (AI.SlackAccess slackData.teamId user member.userId) member.projectId
+          pure
+            $ take 4
+            $ [("Investigate this channel's latest alert", "Investigate incident " <> episode.toText <> " from Slack alert " <> timestamp) | (episode, timestamp) <- maybeToList lastAlert]
+            <> [("Investigate an active incident", "Investigate active incident " <> incident.id.toText) | incident <- incidents]
+            <> [(T.take 80 $ "Investigate: " <> issue.title, "Investigate issue " <> issue.id.toText) | issue <- issues]
+            <> [("What is broken right now?", "What is broken right now?"), ("Summarise today's errors", "Summarise the errors from the last 24 hours, grouped by service."), ("Why is latency up?", "Which endpoints got slower in the last 24 hours, and what changed?")]
+      whenLeftM_
+        ( slackApi slackData.botToken "assistant.threads.setSuggestedPrompts"
+            $ AE.object
+              [ "channel_id" AE..= session.channel_id
+              , "title" AE..= ("Ask about your telemetry" :: Text)
+              , "prompts" AE..= [AE.object ["title" AE..= title, "message" AE..= message] | (title, message) <- prompts]
+              ]
+        )
+        \err -> Log.logAttention "Slack assistant setup rejected" $ AE.object ["team_id" AE..= slackData.teamId, "error" AE..= err]
 
     sendIdentityLink envCfg workspaceId = do
       slackData <- getSlackDataByTeamId workspaceId >>= maybe (throwError err403) pure
@@ -1514,33 +1555,6 @@ saveAppContext workspaceId event =
     ON CONFLICT (team_id, channel_id, user_id) DO UPDATE
     SET context = EXCLUDED.context, context_event_ts = EXCLUDED.context_event_ts
     WHERE slack_app_contexts.context_event_ts < EXCLUDED.context_event_ts|]
-
-
--- | Slack navigation context is untrusted input, not project authorization.
--- | Starters for an otherwise empty assistant thread; @title@ is shown,
--- @message@ is sent on click.
-assistantPrompts :: [(Text, Text)]
-assistantPrompts =
-  [ ("What is broken right now?", "What is broken right now?")
-  , ("Summarise today's errors", "Summarise the errors from the last 24 hours, grouped by service.")
-  , ("Why is latency up?", "Which endpoints got slower in the last 24 hours, and what changed?")
-  ]
-
-
--- | Offer starters on a newly opened assistant thread. Best-effort: an install
--- predating the Agent scopes refuses these, and that must not fail the event.
-greetAssistantThread :: (HTTP :> es, Log.Log :> es) => SlackData -> SlackAssistantEvent -> Eff es ()
-greetAssistantThread slackData event = unless (T.null slackData.botToken) do
-  let session = event.assistant_thread
-      target = ["channel_id" AE..= session.channel_id, "thread_ts" AE..= session.thread_ts]
-      call method extra =
-        whenLeftM_ (slackApi slackData.botToken method (AE.object (target <> extra)))
-          $ \err -> Log.logAttention "Slack assistant setup rejected" (AE.object ["method" AE..= method, "team_id" AE..= slackData.teamId, "error" AE..= err])
-  call
-    "assistant.threads.setSuggestedPrompts"
-    [ "title" AE..= ("Ask about your telemetry" :: Text)
-    , "prompts" AE..= [AE.object ["title" AE..= t, "message" AE..= m] | (t, m) <- assistantPrompts]
-    ]
 
 
 -- Compare event timestamps so a delayed start cannot overwrite newer context.

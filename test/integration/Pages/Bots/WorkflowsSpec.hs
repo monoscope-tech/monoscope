@@ -911,6 +911,66 @@ spec = around withTestResources do
         runQueryEffect tr (Issues.getConversation testPid conversation) >>= (\thread -> fmap (.title) thread `shouldBe` Just "Edited in Monoscope")
         toBaseServantResponse tr (Slack.slackThreadProject "T_NATIVE" "C_NATIVE" "1735689600.000001") >>= (`shouldBe` Just testPid)
 
+      it "assistantPrompts_useCurrentProjectStateAndStoredContextWithoutDisclosingToUnlinkedUsers" \tr -> do
+        setupLinkedSlackData tr testPid "T_PROMPTS"
+        foreignPid <- createTestProject tr "Foreign prompt project"
+        let issue pid title archived = withResource tr.trPool \conn -> do
+              [PGS.Only iid] <-
+                PGS.query
+                  conn
+                  [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, title, archived_at)
+                VALUES (?, 'runtime_exception', gen_random_uuid()::text, ?, CASE WHEN ? THEN now() END) RETURNING id|]
+                  (pid, title :: Text, archived :: Bool)
+              pure iid
+            session eventType ts user channel =
+              slackCallbackEnvelope "T_PROMPTS" ts
+                $ AE.object
+                  [ "type" AE..= (eventType :: Text)
+                  , "event_ts" AE..= (ts :: Text)
+                  , "assistant_thread" AE..= AE.object ["user_id" AE..= (user :: Text), "channel_id" AE..= ("D_PROMPTS" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "context" AE..= AE.object ["channel_id" AE..= (channel :: Text)]]
+                  ]
+            process event = do
+              receipt <- receiveSlackEvent tr event
+              let work = runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true}") $ processSlackEvent receipt
+              (requests, _) <- work
+              (replayed, _) <- work
+              replayed `shouldBe` []
+              map fst requests `shouldBe` ["https://slack.com/api/assistant.threads.setSuggestedPrompts"]
+              case requests of
+                [(_, body)] -> maybe (fail "Expected prompt payload") pure $ AE.decode @AE.Value body
+                _ -> fail "Expected one prompt request"
+        ownIssue <- issue testPid (T.replicate 120 "x") False
+        void $ issue foreignPid "Foreign issue secret" False
+        void $ issue testPid "Archived issue secret" True
+        payload <- maybe (fail "Expected Slack payload") pure $ Incidents.slackPayload $ AE.object ["text" AE..= ("Checkout alert" :: Text)]
+        Incidents.Recorded episode _ <-
+          runTestBgNoReset tr
+            $ Incidents.recordIncidentEvent
+              Incidents.IncidentUpdate{projectId = testPid, source = Incidents.IssueIncident ownIssue, observedAt = frozenTime, change = Incidents.IncidentAlert, delivery = Incidents.PublishIncident, issueId = Just ownIssue, rootPayload = payload, replyPayload = payload, destinations = [Incidents.SlackDestination "T_PROMPTS" "C_ALERTS"]}
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack_incident_roots SET message_ts = '1735689599.000001' WHERE episode_id = ?|] (PGS.Only episode.id)
+        unlinked <- process $ session "assistant_thread_started" "1735689601.000001" "U_UNKNOWN" "C_ALERTS" & key "event" . key "assistant_thread" . key "channel_id" . _String .~ "D_UNLINKED"
+        unlinked ^.. key "prompts" . _Array . traverse . key "title" . _String `shouldBe` ["Link your Monoscope account"]
+        -- A different thread has a different owner; the retained owner cannot be replaced.
+        let linked event = event & key "event" . key "assistant_thread" . key "thread_ts" . _String .~ "1735689602.000001"
+        initial <- process $ linked $ session "assistant_thread_started" "1735689603.000001" "U0123ABCDEF" "C_ALERTS"
+        initial ^? key "thread_ts" `shouldBe` Nothing
+        let prompts = initial ^.. key "prompts" . _Array . traverse
+            messages = initial ^.. key "prompts" . _Array . traverse . key "message" . _String
+        length prompts `shouldSatisfy` (\n -> n > 0 && n <= 4)
+        mapMaybe (^? key "title" . _String) prompts `shouldSatisfy` all ((<= 80) . T.length)
+        T.unwords messages `shouldSatisfy` T.isInfixOf ownIssue.toText
+        T.unwords messages `shouldSatisfy` T.isInfixOf episode.id.toText
+        T.unwords messages `shouldSatisfy` T.isInfixOf "1735689599.000001"
+        decodeUtf8 (AE.encode initial) `shouldSatisfy` (\body -> not $ any (`T.isInfixOf` body) ["Foreign issue secret", "Archived issue secret"])
+        for_ ([("assistant_thread_context_changed", "1735689605.000001", "C_OTHER"), ("assistant_thread_started", "1735689604.000001", "C_ALERTS")] :: [(Text, Text, Text)]) \(kind, ts, channel) -> do
+          changed <- process $ linked $ session kind ts "U0123ABCDEF" channel
+          T.unwords (changed ^.. key "prompts" . _Array . traverse . key "message" . _String) `shouldSatisfy` (not . T.isInfixOf "1735689599.000001")
+        staleThread <- process $ session "assistant_thread_started" "1735689601.000002" "U0123ABCDEF" "C_ALERTS"
+        T.unwords (staleThread ^.. key "prompts" . _Array . traverse . key "message" . _String) `shouldSatisfy` (not . T.isInfixOf "1735689599.000001")
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ?|] (PGS.Only testPid)
+        revoked <- process $ linked $ session "assistant_thread_context_changed" "1735689606.000001" "U0123ABCDEF" "C_ALERTS"
+        revoked ^.. key "prompts" . _Array . traverse . key "title" . _String `shouldBe` ["Link your Monoscope account"]
+
       it "preserves non-message events and orders assistant context independently of receipt order" \tr -> do
         let callback = slackCallbackEnvelope "T_SESSION"
             session eventType eventTs contextChannel userId =

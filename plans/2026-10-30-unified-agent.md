@@ -887,11 +887,22 @@ Status parsing reuses the existing acknowledgement envelope and definite-rejecti
 
 The existing private-mention integration test now covers all four uncertain responses, failed reset attempts, successful deferred cleanup, and replay, while retaining the known-feature-rejection case. The initial regression failed with zero cleanup jobs instead of one. The focused regression and all 245 bot examples pass, including signed stops, status cleanup, publication reconciliation, and rate limits. Formatting and diff checks pass. HLint reports no hints in the changed application module, matching the baseline. Repeated slice reviews consolidated the request transport and acknowledgement parsing, with no remaining material distillation, constraint-evasion, or client-behavior findings. Whole-branch review, controlled live acceptance, and final release checks remain pending.
 
-Slack's thread session documentation explicitly requires the app to confirm stops and transition status away from `processing`. Its code-channel lifecycle has a different automatic-stop contract. This adapter handles ordinary threads, so its stop confirmation and status cleanup remain unchanged. Code-channel support and controlled live session acceptance remain open.
+Slack's thread session documentation explicitly requires the app to confirm stops and transition status away from `processing`. Its code-channel lifecycle has a different automatic-stop contract. This adapter handles ordinary threads, so its stop confirmation and status cleanup remain unchanged. These changes apply to ordinary thread sessions; controlled live session acceptance remains open.
+
+### Contextual Slack prompts use the shared project stores (31 October)
+
+Assistant start and context-change events now share one typed event branch and the existing event-lock mechanism, scoped to the private DM where prompts appear. Both refresh up to four suggestions from the current project: the selected channel's latest delivered alert, an active incident, recent unacknowledged issues, and generic fallback questions. The issue list and incident list reuse their existing filters and queries. An older event reads the latest retained context across that DM’s threads, so neither a delayed context change nor an older thread can restore an obsolete channel suggestion. No model call or new SQL migration is needed.
+
+Suggestions are sent only to the private Messages surface after resolving the linked member and any existing thread/project binding. Access is checked again after data retrieval. Unlinked or revoked users get only account-link guidance. Titles are bounded; prompts identify existing issue and incident records instead of embedding their content as instructions. The original signed receipt supplies replay protection.
+
+The Agent prompt API now omits `thread_ts`. Slack documents that this legacy assistant parameter makes Agent-app prompt calls silently fail. This implements the original coworker proposal's dynamic suggestions while retaining the canonical identity and conversation boundaries.
+
+The handler-level regression first failed because an unlinked user received generic telemetry prompts. Its added ordering case then reproduced an older thread restoring an obsolete channel alert. It now passes linked/unlinked/revoked cases, project and archived-issue isolation, active incidents, latest channel alerts, bounded titles and prompt count, context changes, delayed events, and receipt replay. All 246 bot examples pass. Formatting, focused HLint, and diff checks pass. Repeated slice reviews merged the two event variants, kept suggestions in their owning worker, and serialized updates at the DM surface, with no remaining material distillation, constraint-evasion, or client-behavior findings. Message shortcut intake, live Slack acceptance, and the remaining plan phases and release checks remain open.
 
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
+- [Suggested prompts](https://docs.slack.dev/reference/methods/assistant.threads.setSuggestedPrompts/): Agent apps omit the legacy thread timestamp and provide at most four prompts.
 - [Agent session status](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/): initial titles are ignored once a session exists.
 - [Agent sessions](https://docs.slack.dev/ai/agent-sessions/): native status, renaming, and title-change events.
 - [Stream start](https://docs.slack.dev/reference/methods/chat.startStream/): stream arguments and recipient requirements.
