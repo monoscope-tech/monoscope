@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob, wakeJob, reviewOperation, deferOperationReview, wakeStoppedReviews) where
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob, wakeJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
@@ -47,6 +47,7 @@ data BgJobs
   | SlackNotification Projects.ProjectId Text
   | ProcessSlackEvent (UUIDId "slack_event")
   | RefreshSlackProgress (UUIDId "slack_progress")
+  | RunConversation Projects.ProjectId (UUIDId "ai_routine_run")
   | AIRoutineRun (UUIDId "ai_routine") UTCTime
   | InvestigateIncident Projects.ProjectId (UUIDId "incident_event") (UUIDId "slack_incident_root")
   | ResetSlackSession Projects.ProjectId Projects.UserId (UUIDId "slack_event")
@@ -178,6 +179,19 @@ wakeStoppedReviews scope = Hasql.transaction TxS.ReadCommitted TxS.Write do
   for_ operations $ \(project, identifier) -> queueReviewTx project FinishCancelledReview identifier
 
 
+startConversation :: (DB es, Time.Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> Issues.ExecutionPolicy -> Issues.InteractiveOrigin -> Eff es Issues.InteractiveStart
+startConversation project conversation user request =
+  Issues.startMemberConversationRunWith
+    ( \scheduled -> do
+        queueJobTx WakeNow $ RunConversation project request
+        for_ scheduled $ \routine -> queueJobTx (DeferUntil routine.scheduledAt) $ AIRoutineRun routine.id routine.scheduledAt
+    )
+    project
+    conversation
+    user
+    request
+
+
 data ReviewWake = ResumeReview | DeferReview UTCTime | FinishCancelledReview
 
 
@@ -203,6 +217,15 @@ queueReviewTx project wake identifier = do
         AND routine.project_id = run.project_id ^{active})|]
       <> waiting
       <> [HI.sql| FOR UPDATE OF operation|]
+  requests <-
+    Hasql.queryTx @[UUIDId "ai_routine_run"]
+      $ [HI.sql|SELECT run.id |]
+      <> Investigations.operationRunSql project identifier
+      <> [HI.sql| AND run.status = #{status} AND run.source->>'tag' = 'ConversationRun'
+      AND run.requested_by IS NOT DISTINCT FROM operation.requested_by|]
+      <> waiting
+      <> [HI.sql| FOR UPDATE OF operation|]
+  for_ requests $ queueJobTx timing . RunConversation project
   for_ slots $ \(source, routine, scheduled) -> do
     let continuation = case source of
           Issues.ScheduledRun -> Just $ AIRoutineRun routine scheduled
@@ -210,7 +233,7 @@ queueReviewTx project wake identifier = do
           Issues.TriggeredRun (Issues.PullRequestReview review) -> Just $ ReviewPullRequest review
           Issues.TriggeredRun (Issues.IssueEnrichment issue) -> Just $ EnhanceIssuesWithLLM project (V.singleton issue)
           Issues.TriggeredRun (Issues.IncidentEvent event root) -> Just $ InvestigateIncident project event root
-          (Issues.TriggeredRun{}; Issues.InteractiveRun{}) -> Nothing
+          (Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> Nothing
     for_ continuation $ queueJobTx timing
 
 

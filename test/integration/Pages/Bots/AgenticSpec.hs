@@ -3,6 +3,7 @@
 module Pages.Bots.AgenticSpec (spec) where
 
 import BackgroundJobs qualified
+import BackgroundJobs.Types qualified as Jobs
 import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), bracket_)
 import Control.Lens ((^..), (^?))
@@ -24,6 +25,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
+import Effectful (Eff, IOE, (:>))
 import Effectful qualified as Eff
 import Effectful.Concurrent.Async (concurrently, concurrently_)
 import Effectful.Dispatch.Dynamic (interpose)
@@ -59,7 +61,7 @@ import Servant.API.ResponseHeaders (getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Timeout qualified as Timeout
-import System.Types (ATAuthCtx, ATBackgroundCtx)
+import System.Types (ATBackgroundCtx)
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotBe, shouldNotContain, shouldSatisfy, shouldThrow)
 import UnliftIO.Async qualified as Async
 import UnliftIO.Exception (throwIO, tryAny)
@@ -232,7 +234,7 @@ spec = around withTestResources do
                           when wasFirst $ throwIO $ ErrorCall "Worker interrupted after dashboard mutation"
                         pure result
                     }
-                provider :: ATAuthCtx a -> ATAuthCtx a
+                provider :: ELLM.LLM :> es => Eff es a -> Eff es a
                 provider = interpose @ELLM.LLM \_ -> \case
                   ELLM.CallAgenticChat history _ _ -> do
                     let evidence = [message.content | message <- toList history, message.role == LLM.Tool]
@@ -242,7 +244,9 @@ spec = around withTestResources do
                       _ -> LLM.Message LLM.Assistant "The dashboard operation completed." LLM.defaultMessageData
                   ELLM.CallLLM{} -> pure $ Right "Durable dashboard request"
                   ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
-                execute = tryAny $ void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just backend) testPid form
+                execute = tryAny do
+                  void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just backend) testPid form
+                  runTestBgNoReset tr $ provider $ BackgroundJobs.processBackgroundJobWithTools (Just backend) tr.trATCtx $ BackgroundJobs.RunConversation testPid request
                 ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
                 count = runQueryEffect tr $ Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Durable action regression'|]
             when administrative
@@ -832,14 +836,16 @@ spec = around withTestResources do
               request = UUIDId $ UUID.fromWords 0 0 0 199
               key' = fromRightShow $ Issues.mkArtifactKey "operation-evidence"
               form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm $ "query=Append+this+finding&mode=chat&requestId=00000000-0000-0000-0000-0000000000c7" <> if wiki then "&allowActions=true" else ""
-              provider :: ATAuthCtx a -> ATAuthCtx a
+              provider :: ELLM.LLM :> es => Eff es a -> Eff es a
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
                   [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "append" "function" $ LLM.ToolFunction tool arguments]}
                   _ -> LLM.Message LLM.Assistant "The finding is retained once." LLM.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Right "Atomic append"
                 ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
-              execute = tryAny $ void $ runAuthHandler tr $ provider $ AIThreads.threadPostHWithTools (Just Routes.mcpProjectTools) testPid conversation form
+              execute = tryAny do
+                void $ runAuthHandler tr $ provider $ AIThreads.threadPostHWithTools (Just Routes.mcpProjectTools) testPid conversation form
+                runTestBgNoReset tr $ provider $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ BackgroundJobs.RunConversation testPid request
               ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
               content = if wiki then map (Memory.memoryText . (.document.body)) <$> runQueryEffect tr (Memory.pageHistory testPid page) else mapMaybe (.content) <$> runQueryEffect tr (Issues.listArtifacts testPid conversation $ Just key')
           runTestBg frozenTime tr do
@@ -871,14 +877,16 @@ spec = around withTestResources do
                 url `shouldBe` "https://slack.com/api/chat.postMessage"
                 IORef.modifyIORef' posts (+ 1)
                 pure $ Just "{\"ok\":true,\"channel\":\"C_NOTIF_CHANNEL\",\"ts\":\"1735689600.000001\"}"
-              provider :: ATAuthCtx a -> ATAuthCtx a
+              provider :: ELLM.LLM :> es => Eff es a -> Eff es a
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
                   [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "publish" "function" $ LLM.ToolFunction "send_to_slack" $ one ("message", AE.String "Retained operation test")]}
                   evidence -> LLM.Message LLM.Assistant (T.intercalate "\n" evidence) LLM.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Right "Retained Slack publication"
                 ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
-              execute = tryAny $ void $ runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ transport $ provider $ AIThreads.startThreadPostHWithTools (Just Routes.mcpProjectTools) testPid form
+              execute = tryAny do
+                void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just Routes.mcpProjectTools) testPid form
+                runTestBgNoReset tr $ transport $ provider $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ BackgroundJobs.RunConversation testPid request
               ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
               reject =
                 if boundary == "checkpoint"
@@ -917,19 +925,21 @@ spec = around withTestResources do
                       liftIO $ putMVar entered () >> takeMVar release
                       pure result
                   }
-              provider :: ATAuthCtx a -> ATAuthCtx a
+              provider :: ELLM.LLM :> es => Eff es a -> Eff es a
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
                   [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "create" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Concurrent durable action" :: Text)])]}
                   evidence -> LLM.Message LLM.Assistant (T.intercalate "\n" evidence) LLM.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Right "Concurrent action"
                 ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
-              execute = tryAny $ void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just backend) testPid form
+              execute = tryAny do
+                void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just backend) testPid form
+                runTestBgNoReset tr $ provider $ BackgroundJobs.processBackgroundJobWithTools (Just backend) tr.trATCtx $ BackgroundJobs.RunConversation testPid request
           Async.withAsync execute \worker -> do
             Timeout.timeout 30_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
             bracket_ (pure ()) (putMVar release ()) do
               case boundary of
-                "retry" -> Timeout.timeout 30_000_000 execute >>= (`shouldSatisfy` maybe False isRight)
+                "retry" -> Timeout.timeout 30_000_000 execute >>= (`shouldSatisfy` maybe False isLeft)
                 _ -> do
                   Just run <- runQueryEffect tr $ Issues.getRoutineRun testPid request
                   let user = (getResponse tr.trSessAndHeader).user.id
@@ -937,15 +947,20 @@ spec = around withTestResources do
                   runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= \case
                     [entry] -> entry.outcome `shouldSatisfy` \case Investigations.OperationRunning -> True; _ -> False
                     _ -> expectationFailure "An invalid completion claim must not change the outstanding operation"
-                  context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.InteractiveClaim user run.conversationId request
+                  context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.ConversationClaim request
                   runTestBg frozenTime tr (Issues.completeRun context $ Issues.TimedOutResult $ Issues.RunFailure "Execution timed out" Issues.RunOnly) >>= \case
                     Issues.RunCompleted{} -> pass
                     _ -> expectationFailure "Expected the current run to time out"
               IORef.readIORef calls >>= (`shouldBe` 1)
               runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= \case
-                [entry] -> entry.outcome `shouldSatisfy` \case Investigations.OperationUnknown -> True; _ -> False
-                _ -> expectationFailure "Expected one in-flight operation with an uncertain outcome"
-            Timeout.timeout 30_000_000 (Async.wait worker) >>= (`shouldSatisfy` maybe False isLeft)
+                [entry] ->
+                  entry.outcome `shouldSatisfy` \case
+                    Investigations.OperationRunning -> boundary == "retry"
+                    Investigations.OperationUnknown -> boundary == "timeout"
+                    _ -> False
+                _ -> expectationFailure "Expected one retained in-flight operation"
+
+            Timeout.timeout 30_000_000 (Async.wait worker) >>= (`shouldSatisfy` maybe False isRight)
           runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Concurrent durable action'|]) >>= (`shouldBe` 1)
           runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= \case
             [entry] -> entry.outcome `shouldSatisfy` \case Investigations.OperationReturned{} -> True; _ -> False
@@ -970,6 +985,140 @@ spec = around withTestResources do
         (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid (UUIDId UUID.nil) Nothing Nothing
         (renderT threadPage) `shouldSatisfy` T.isInfixOf "name=\"allowActions\""
         T.count "name=\"requestId\"" (renderT threadPage) `shouldBe` 2
+
+      it "webConversation_commitsInputWithQueuedExecutionAndPublishesOnce" \tr -> do
+        calls <- IORef.newIORef (0 :: Int)
+        let requestId = UUIDId $ UUID.fromWords 0 0 93 1
+            prompt = "Inspect queued conversation evidence"
+            form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm "query=Inspect+queued+conversation+evidence&requestId=00000000-0000-0000-0000-005d00000001&mode=chat"
+            provider :: (ELLM.LLM :> es, IOE :> es) => Eff es a -> Eff es a
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> do
+                liftIO $ IORef.modifyIORef' calls (+ 1)
+                pure $ Right $ LLM.Message LLM.Assistant "Queued execution completed." LLM.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Right "Queued conversation"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM background_jobs|]
+        void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just Routes.mcpProjectTools) testPid form
+        IORef.readIORef calls >>= (`shouldBe` 0)
+        void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just Routes.mcpProjectTools) testPid form
+        IORef.readIORef calls >>= (`shouldBe` 0)
+        Just admitted <- runQueryEffect tr $ Issues.getRoutineRun testPid requestId
+        admitted.status `shouldBe` Issues.RunRunning
+        (_, pendingPage) <- testServant tr $ AIThreads.threadGetH testPid admitted.conversationId Nothing Nothing
+        renderT pendingPage `shouldSatisfy` T.isInfixOf "hx-select=\"#ai-thread-results\""
+        jobs <- runQueryEffect tr $ Hasql.interp @[HI.OneColumn (Aeson BackgroundJobs.BgJobs)] [HI.sql|SELECT payload FROM background_jobs WHERE status = 'queued'|]
+        length jobs `shouldBe` 1
+        let execute = for_ jobs \(HI.OneColumn (Aeson job)) -> runTestBgNoReset tr $ provider $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx job
+        execute
+        Just completed <- runQueryEffect tr $ Issues.getRoutineRun testPid requestId
+        (completed.id, completed.status) `shouldBe` (admitted.id, Issues.RunSucceeded)
+        (_, finishedPage) <- testServant tr $ AIThreads.threadGetH testPid admitted.conversationId Nothing Nothing
+        renderT finishedPage `shouldSatisfy` (not . T.isInfixOf "hx-trigger=\"every 2s\"")
+        execute
+        IORef.readIORef calls >>= (`shouldBe` 1)
+        messages <- runQueryEffect tr $ Issues.selectChatHistory testPid admitted.conversationId
+        [message.content | message <- messages, message.role == Issues.ChatUser] `shouldBe` [prompt]
+        [message.content | message <- messages, message.role == Issues.ChatAssistant] `shouldBe` ["Queued execution completed."]
+
+      it "webConversation_revokedBeforeExecutionCancelsWithoutInference" \tr -> do
+        let requestId = UUIDId $ UUID.fromWords 0 0 93 3
+            user = (getResponse tr.trSessAndHeader).user.id
+            form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm "query=Inspect+queued+conversation+evidence&requestId=00000000-0000-0000-0000-005d00000003&mode=chat"
+            rejectInference :: (ELLM.LLM :> es, IOE :> es) => Eff es a -> Eff es a
+            rejectInference = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> throwIO $ ErrorCall "Revoked request must not run inference"
+              ELLM.CallLLM{} -> throwIO $ ErrorCall "Revoked request must not request a title"
+              ELLM.EmbedDocuments{} -> throwIO $ ErrorCall "Revoked request must not embed"
+        void $ runAuthHandler tr $ rejectInference $ AIThreads.startThreadPostHWithTools (Just Routes.mcpProjectTools) testPid form
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM projects.project_members WHERE project_id = #{testPid} AND user_id = #{user}|]
+        let execute = runTestBgNoReset tr $ rejectInference $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ BackgroundJobs.RunConversation testPid requestId
+        execute
+        execute
+        Just stopped <- runQueryEffect tr $ Issues.getRoutineRun testPid requestId
+        stopped.status `shouldBe` Issues.RunCancelled
+        runQueryEffect tr (Issues.selectChatHistory testPid stopped.conversationId) >>= (`shouldSatisfy` null)
+
+      for_ [ApproveReview, DeclineReview, ExpireBeforeReview] \scenario ->
+        it ("webConversation_reviewResumesQueuedCheckpoint: " <> show scenario) \tr -> do
+          calls <- newIORef (0 :: Int)
+          let request = UUIDId $ UUID.fromWords 0 0 93 4
+              conversation = UUIDId $ UUID.fromWords 0 0 93 5
+              user = (getResponse tr.trSessAndHeader).user.id
+              policy = Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> do
+                  liftIO $ modifyIORef' calls (+ 1)
+                  pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                    [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "queued-dashboard" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Queued reviewed dashboard" :: Text)])]}
+                    _ -> LLM.Message LLM.Assistant "Queued review outcome recorded." LLM.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Right "Queued review"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              execute = runTestBgNoReset tr $ provider $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ BackgroundJobs.RunConversation testPid request
+          void $ runTestBgNoReset tr $ Jobs.startConversation testPid conversation user request "Create a dashboard" policy Issues.WebConversation
+          execute
+          Just waiting <- runQueryEffect tr $ Issues.getRoutineRun testPid request
+          (waiting.status, waiting.error) `shouldBe` (Issues.RunRunning, Nothing)
+          [entry] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid request
+          entry.outcome `shouldSatisfy` \case Investigations.OperationUnstarted -> True; _ -> False
+          pending <- runQueryEffect tr $ Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM background_jobs WHERE payload = #{Aeson $ BackgroundJobs.RunConversation testPid request} AND status = 'queued'|]
+          pending `shouldBe` 1
+          case scenario of
+            ExpireBeforeReview -> advanceTestTime tr (24 * 60 * 60 + 1)
+            _ -> void $ testServant tr $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm $ if scenario == ApproveReview then Investigations.ReviewApproved else Investigations.ReviewRejected
+          execute
+          execute
+          Just completed <- runQueryEffect tr $ Issues.getRoutineRun testPid request
+          (completed.id, completed.status) `shouldBe` (waiting.id, Issues.RunSucceeded)
+          readIORef calls >>= (`shouldBe` 2)
+          count <- runQueryEffect tr $ Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Queued reviewed dashboard'|]
+          count `shouldBe` if scenario == ApproveReview then 1 else 0
+          messages <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+          [message.content | message <- messages, message.role == Issues.ChatAssistant] `shouldBe` ["Queued review outcome recorded."]
+
+      it "issueConversation_commitsQueuedRequestAndRetainsIssueContext" \tr -> do
+        issue <- runTestBgNoReset tr do
+          alert <- Issues.createQueryAlertIssue testPid "queued-issue" "Queued issue evidence" "service == checkout" 100 200 Issues.Above
+          Issues.insertIssueReturningId alert
+        calls <- newIORef (0 :: Int)
+        let request = UUIDId $ UUID.fromWords 0 0 93 6
+            form = fromRightShow $ urlDecodeAsForm @IssuePage.AIChatForm "query=Explain+this+issue&requestId=00000000-0000-0000-0000-005d00000006"
+            provider :: (ELLM.LLM :> es, IOE :> es) => Eff es a -> Eff es a
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                liftIO do
+                  modifyIORef' calls (+ 1)
+                  let context = unlines [message.content | message <- toList history, message.role == LLM.System]
+                  context `shouldSatisfy` T.isInfixOf "Queued issue evidence"
+                  T.count "You are Monoscope's issue-investigation assistant" context `shouldBe` 1
+                pure $ Right $ LLM.Message LLM.Assistant "The issue context was retained." LLM.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Right "Queued issue"
+              ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+        response <- runAuthHandler tr $ provider $ IssuePage.aiChatPostHWithTools (Just Routes.mcpProjectTools) testPid issue form
+        renderT (getResponse response) `shouldSatisfy` T.isInfixOf "hx-select=\"#issue-ai-results\""
+        readIORef calls >>= (`shouldBe` 0)
+        let execute = runTestBgNoReset tr $ provider $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ BackgroundJobs.RunConversation testPid request
+        execute
+        execute
+        readIORef calls >>= (`shouldBe` 1)
+        Just completed <- runQueryEffect tr $ Issues.getRoutineRun testPid request
+        completed.status `shouldBe` Issues.RunSucceeded
+        messages <- runQueryEffect tr $ Issues.selectChatHistory testPid completed.conversationId
+        [message.content | message <- messages, message.role == Issues.ChatAssistant] `shouldBe` ["The issue context was retained."]
+
+      it "webConversation_queueFailureRollsBackRequestAndConversation" \tr -> do
+        let requestId = UUIDId $ UUID.fromWords 0 0 93 2
+            form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm "query=Inspect+queued+conversation+evidence&requestId=00000000-0000-0000-0000-005d00000002&mode=chat"
+            ddl statement = withResource tr.trPool $ \connection -> void $ PGS.execute_ connection statement
+        before <- runQueryEffect tr $ Issues.listConversations testPid
+        bracket_
+          (ddl "ALTER TABLE background_jobs ADD CONSTRAINT reject_conversation_admission CHECK (payload->>'tag' <> 'RunConversation') NOT VALID")
+          (ddl "ALTER TABLE background_jobs DROP CONSTRAINT reject_conversation_admission")
+          $ void (runAuthHandler tr $ AIThreads.startThreadPostHWithTools (Just Routes.mcpProjectTools) testPid form)
+          `shouldThrow` (\(err :: SomeException) -> "reject_conversation_admission" `T.isInfixOf` toText (displayException err))
+        runQueryEffect tr (Issues.getRoutineRun testPid requestId) >>= (`shouldSatisfy` isNothing)
+        after <- runQueryEffect tr $ Issues.listConversations testPid
+        map (.conversationId) after `shouldBe` map (.conversationId) before
 
       for_ (["thread", "new", "routine", "issue", "issue-thread"] :: [Text]) \origin ->
         it ("webRequestCheckpoint_retriesWithoutRepeatingReadsOrConversationMessages: " <> toString origin) \tr -> do
@@ -996,7 +1145,7 @@ spec = around withTestResources do
                         when stop $ throwIO $ ErrorCall "Worker interrupted after a completed web read"
                       AI.invoke original principal pid name args
                   }
-              provider :: ATAuthCtx a -> ATAuthCtx a
+              provider :: (ELLM.LLM :> es, IOE :> es) => Eff es a -> Eff es a
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history request _ -> do
                   when isIssue $ liftIO $ unlines [message.content | message <- toList history, message.role == LLM.System] `shouldSatisfy` T.isInfixOf "Checkout checkpoint context"
@@ -1014,7 +1163,9 @@ spec = around withTestResources do
                 "issue-thread" -> AIThreads.threadPostHWithTools (Just backend) testPid existingConversation changed
                 "thread" -> AIThreads.threadPostHWithTools (Just backend) testPid existingConversation changed
                 _ -> AIThreads.startThreadPostHWithTools (Just backend) testPid changed
-              execute = tryAny $ void $ runAuthHandler tr $ provider $ submit form
+              execute = tryAny do
+                void $ runAuthHandler tr $ provider $ submit form
+                runTestBgNoReset tr $ provider $ BackgroundJobs.processBackgroundJobWithTools (Just backend) tr.trATCtx $ BackgroundJobs.RunConversation testPid $ UUIDId $ UUID.fromWords 0 0 0 146
           execute >>= (`shouldSatisfy` isLeft)
           let ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
           bracket_

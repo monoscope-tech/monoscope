@@ -163,6 +163,7 @@ module Models.Apis.Issues (
   slackTurnForRun,
   InteractiveOrigin (..),
   startInteractiveRun,
+  startMemberConversationRunWith,
   InteractiveStart (..),
   completeRun,
   completeRunWithProjectMutation,
@@ -1639,7 +1640,7 @@ data InteractiveOrigin = WebMessage | WebConversation | WebRoutine RoutineInterv
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data RoutineRunSource = ScheduledRun | TriggeredRun RoutineEventSource | InteractiveRun InteractiveOrigin
+data RoutineRunSource = ScheduledRun | TriggeredRun RoutineEventSource | InteractiveRun InteractiveOrigin | ConversationRun InteractiveOrigin
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb RoutineRunSource
@@ -1697,7 +1698,8 @@ reviewApprover policy capability = case policy of
 
 
 data RunClaim
-  = InteractiveClaim Projects.UserId (UUIDId "conversation") (UUIDId "ai_routine_run")
+  = ConversationClaim (UUIDId "ai_routine_run")
+  | InteractiveClaim Projects.UserId (UUIDId "conversation") (UUIDId "ai_routine_run")
   | BackgroundClaim Projects.UserId (UUIDId "conversation") (UUIDId "ai_routine_run") UTCTime
   | EventClaim RoutineEventSource (UUIDId "ai_routine_run") UTCTime
 
@@ -1730,6 +1732,7 @@ data RunContextRow = RunContextRow
 runContextFor :: DB es => Projects.ProjectId -> RunClaim -> Eff es (Maybe RunContext)
 runContextFor pid claim =
   let (run, scope) = case claim of
+        ConversationClaim identifier -> (identifier, [HI.sql| AND source->>'tag' = 'ConversationRun' AND status = 'running'|])
         InteractiveClaim user conversation identifier -> (identifier, [HI.sql| AND source->>'tag' = 'InteractiveRun' AND requested_by = #{user} AND conversation_id = #{conversation}|])
         BackgroundClaim user conversation identifier at -> (identifier, [HI.sql| AND source->>'tag' <> 'InteractiveRun' AND started_at = #{at} AND requested_by = #{user} AND conversation_id = #{conversation}|])
         EventClaim event identifier at -> (identifier, [HI.sql| AND source = #{TriggeredRun event} AND started_at = #{at}|])
@@ -1797,7 +1800,7 @@ slackTurnForRun context = case context.source of
   TriggeredRun (SlackMessage receipt) ->
     fmap (Investigations.Turn context.projectId context.conversationId context.requestedBy . HI.getOneColumn)
       <$> Hasql.interpOne @(HI.OneColumn Text) [HI.sql|SELECT payload #>> '{event,ts}' FROM apis.slack_events WHERE id = #{receipt} AND payload #>> '{event,ts}' IS NOT NULL|]
-  (ScheduledRun; InteractiveRun{}; TriggeredRun (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}; IncidentEvent{})) -> pure Nothing
+  (ScheduledRun; InteractiveRun{}; ConversationRun{}; TriggeredRun (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}; IncidentEvent{})) -> pure Nothing
 
 
 runContextScopeSql :: RunContext -> HI.Sql
@@ -1809,20 +1812,23 @@ runContextScopeSql context =
 
 runContextAccessSql :: RunContext -> HI.Sql
 runContextAccessSql context = case context.source of
-  InteractiveRun{} ->
-    [HI.sql|SELECT CASE WHEN conversation.conversation_id IS NULL THEN #{Stopped}
-        WHEN actor.permission IS NULL AND run.project_id = #{Projects.demoProjectId} AND run.evidence_permission = #{ProjectMembers.PView} THEN #{Allowed Observe}
-        WHEN actor.permission IS NULL OR apis.evidence_permission_rank(authority.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
-        ELSE jsonb_build_object('tag', 'Allowed', 'contents', run.policy_limit) END, authority.permission
-      FROM apis.ai_routine_runs run LEFT JOIN apis.ai_conversations conversation
-        ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
-      LEFT JOIN LATERAL (|]
-      <> ProjectMembers.sessionPermissionSql context.projectId context.requestedBy
-      <> [HI.sql|) actor ON TRUE
-      CROSS JOIN LATERAL (SELECT apis.least_permission(actor.permission, run.permission_ceiling) AS permission) authority
-      WHERE run.id = #{context.id} AND run.project_id = #{context.projectId} AND run.status IN ('running', 'succeeded')|]
-      <> runContextScopeSql context
+  InteractiveRun{} -> conversationAccess SessionConversation
+  ConversationRun{} -> conversationAccess MemberConversation
   (ScheduledRun; TriggeredRun{}) -> routineRunAccessSql context.projectId context.id (runContextScopeSql context)
+  where
+    conversationAccess grant =
+      [HI.sql|SELECT CASE WHEN conversation.conversation_id IS NULL THEN #{Stopped}
+          WHEN #{grant == SessionConversation} AND actor.permission IS NULL AND run.project_id = #{Projects.demoProjectId} AND run.evidence_permission = #{ProjectMembers.PView} THEN #{Allowed Observe}
+          WHEN actor.permission IS NULL OR apis.evidence_permission_rank(authority.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
+          ELSE jsonb_build_object('tag', 'Allowed', 'contents', run.policy_limit) END, authority.permission
+        FROM apis.ai_routine_runs run LEFT JOIN apis.ai_conversations conversation
+          ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
+        LEFT JOIN LATERAL (|]
+        <> conversationPermissionSql grant context.projectId context.requestedBy
+        <> [HI.sql|) actor ON TRUE
+        CROSS JOIN LATERAL (SELECT apis.least_permission(actor.permission, run.permission_ceiling) AS permission) authority
+        WHERE run.id = #{context.id} AND run.project_id = #{context.projectId} AND run.status IN ('running', 'succeeded')|]
+        <> runContextScopeSql context
 
 
 data EventRequest
@@ -2445,9 +2451,30 @@ data InteractiveStart = ConflictingRequest | AcceptedRequest (Maybe ScheduledRou
 
 -- | Initialize a request and its optional routine together. Replays never change the routine.
 startInteractiveRun :: (DB es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
-startInteractiveRun pid conversation user runId input policy origin = do
+startInteractiveRun = startConversationRunWith SessionConversation (const pass)
+
+
+startMemberConversationRunWith :: (DB es, Time :> es) => (Maybe ScheduledRoutine -> Tx.Transaction ()) -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
+startMemberConversationRunWith = startConversationRunWith MemberConversation
+
+
+data ConversationGrant = SessionConversation | MemberConversation
+  deriving stock (Eq)
+
+
+conversationPermissionSql :: ConversationGrant -> Projects.ProjectId -> Projects.UserId -> HI.Sql
+conversationPermissionSql SessionConversation = ProjectMembers.sessionPermissionSql
+conversationPermissionSql MemberConversation = \project user ->
+  [HI.sql|SELECT permission FROM (|]
+    <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{project} AND member.user_id = #{user}|]
+    <> [HI.sql|) eligible|]
+
+
+startConversationRunWith :: (DB es, Time :> es) => ConversationGrant -> (Maybe ScheduledRoutine -> Tx.Transaction ()) -> Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> ExecutionPolicy -> InteractiveOrigin -> Eff es InteractiveStart
+startConversationRunWith grant enqueue pid conversation user runId input policy origin = do
   now <- Time.currentTime
-  let initialConversation = case origin of
+  let source = case grant of SessionConversation -> InteractiveRun origin; MemberConversation -> ConversationRun origin
+      initialConversation = case origin of
         WebMessage -> Nothing
         WebConversation -> Just (CTWeb, AE.object [])
         WebRoutine{} -> Just (CTWeb, AE.object [])
@@ -2457,12 +2484,13 @@ startInteractiveRun pid conversation user runId input policy origin = do
       Hasql.queryTx @[UUIDId "ai_routine_run"]
         ( [HI.sql|INSERT INTO apis.ai_routine_runs
         (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status, permission_ceiling)
-        SELECT #{runId}, #{runId}, #{pid}, #{conversation}, #{user}, #{input}, #{policy}, #{InteractiveRun origin}, #{now}, #{now}, 'running', COALESCE(actor.permission, #{ProjectMembers.PView})
+        SELECT #{runId}, #{runId}, #{pid}, #{conversation}, #{user}, #{input}, #{policy}, #{source}, #{now}, #{now}, 'running', COALESCE(actor.permission, #{ProjectMembers.PView})
         FROM (SELECT 1) invocation LEFT JOIN LATERAL (|]
-            <> ProjectMembers.sessionPermissionSql pid user
+            <> conversationPermissionSql grant pid user
             <> [HI.sql|) actor ON TRUE
-        WHERE #{isJust initialConversation} OR EXISTS
-          (SELECT 1 FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{conversation} FOR KEY SHARE)
+        WHERE (#{grant == SessionConversation} OR actor.permission IS NOT NULL)
+        AND (#{isJust initialConversation} OR EXISTS
+          (SELECT 1 FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{conversation} FOR KEY SHARE))
         ON CONFLICT (id) DO NOTHING RETURNING id|]
         )
     unless (null inserted) $ for_ initialConversation $ \(conversationType, context) ->
@@ -2470,22 +2498,24 @@ startInteractiveRun pid conversation user runId input policy origin = do
         [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
         VALUES (#{pid}, #{conversation}, #{conversationType}, #{Aeson context}) ON CONFLICT (project_id, conversation_id) DO NOTHING|]
     matching <-
-      Hasql.queryTx @[UUIDId "ai_routine_run"]
-        [HI.sql|SELECT run.id FROM apis.ai_routine_runs run JOIN apis.ai_conversations c
+      Hasql.queryTx @[HI.OneColumn RoutineRunStatus]
+        [HI.sql|SELECT run.status FROM apis.ai_routine_runs run JOIN apis.ai_conversations c
         ON c.project_id = run.project_id AND c.conversation_id = run.conversation_id
         WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.conversation_id = #{conversation} AND run.requested_by = #{user}
-        AND run.input = #{input} AND run.policy = #{policy} AND run.source = #{InteractiveRun origin}
+        AND run.input = #{input} AND run.policy = #{policy} AND run.source = #{source}
         FOR UPDATE OF run FOR KEY SHARE OF c|]
     if null matching
       then pure ConflictingRequest
-      else
-        AcceptedRequest <$> case (inserted, origin) of
+      else do
+        scheduled <- case (inserted, origin) of
           (_ : _, WebRoutine interval) -> do
             void $ prepareRoutineGrantTx pid conversation
             scheduled <- Hasql.oneTx $ upsertRoutineSql user pid conversation interval now
             Hasql.executeTx [HI.sql|UPDATE apis.ai_routines SET instructions = #{input} WHERE id = #{scheduled.id}|]
             pure $ Just scheduled
           _ -> pure Nothing
+        when (any ((== RunRunning) . HI.getOneColumn) matching) $ enqueue scheduled
+        pure $ AcceptedRequest scheduled
 
 
 data RunAnswer = RunAnswer
@@ -2560,7 +2590,7 @@ completeRunTx now mutation context proposed = do
               <> runContextScopeSql context
               <> [HI.sql| FOR UPDATE OF routine|]
           )
-    (InteractiveRun{}; TriggeredRun{}) -> pure Nothing
+    (InteractiveRun{}; ConversationRun{}; TriggeredRun{}) -> pure Nothing
   states <-
     Hasql.queryTx @[HI.OneColumn RoutineRunStatus]
       ( [HI.sql|SELECT run.status FROM apis.ai_routine_runs run WHERE run.id = #{runId} AND run.project_id = #{pid}|]
@@ -2598,7 +2628,7 @@ completeRunTx now mutation context proposed = do
             Just (NativeEvidence facts) -> (facts, Nothing)
             Nothing -> (Nothing, Nothing)
           title = case context.source of
-            InteractiveRun{} -> Nothing
+            (InteractiveRun{}; ConversationRun{}) -> Nothing
             ScheduledRun -> Just "Routine result"
             TriggeredRun event -> Just $ case event of
               SlackMessage{} -> "Slack investigation"
@@ -2899,7 +2929,7 @@ finishRunRowsTx finalization =
               (CompletedSucceeded; CompletedNoFindings; CompletedCancelled) -> True
               (CompletedFailed; CompletedTimedOut) -> case context.source of
                 TriggeredRun{} -> False
-                (ScheduledRun; InteractiveRun{}) -> True
+                (ScheduledRun; InteractiveRun{}; ConversationRun{}) -> True
          in [HI.sql|WITH finished AS (
           UPDATE apis.ai_routine_runs
           SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{reason}

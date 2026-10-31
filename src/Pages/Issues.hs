@@ -52,6 +52,7 @@ module Pages.Issues (
 where
 
 import BackgroundJobs qualified
+import BackgroundJobs.Types qualified as Jobs
 import Control.Exception qualified as Exception
 import Control.Lens (preview, (%~))
 import Data.Aeson qualified as AE
@@ -93,7 +94,7 @@ import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
@@ -103,17 +104,15 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (sourceFieldLabel)
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
-import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (User (id))
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
-import Pages.Charts.Charts qualified as Charts
+import Pages.Bots.Utils qualified as Bots
 import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), TraceFrame (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, durationQuery, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Replay qualified as Replay
@@ -127,7 +126,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.Mail qualified as Mail
 import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.Parser.Expr (sqlStringLit)
-import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..), FieldStruct (..))
+import Pkg.SchemaLearning.Catalog (FieldStruct (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import PyF (fmt)
 import Relude hiding (ask)
@@ -2011,45 +2010,6 @@ data AIChatForm = AIChatForm {query :: Text, requestId :: Maybe (UUIDId "ai_rout
   deriving anyclass (FromForm)
 
 
--- | System prompt for anomaly investigation AI
-issueSystemPrompt :: UTCTime -> Text
-issueSystemPrompt now =
-  unlines
-    [ "You are Monoscope's issue-investigation assistant — an expert debugger embedded in the issue detail page. The user is on-call and trying to understand a specific issue. You have access to its details, errors, stack traces, and trace data, plus tools that fetch live telemetry."
-    , ""
-    , "Tone: precise, technical, calm. Answer like a senior SRE pairing on a debug — direct, no fluff."
-    , ""
-    , "## Current Context"
-    , "CURRENT TIME (UTC): " <> show now
-    , "Use the current time to interpret relative phrases (e.g. \"last 2 hours\" → `{\"since\": \"2H\"}`)."
-    , ""
-    , "## Telemetry Schema"
-    , "<schema>"
-    , Schema.generateSchemaForAI Schema.telemetrySchema
-    , "</schema>"
-    , ""
-    , AI.kqlGuide
-    , ""
-    , AI.outputFormatInstructions
-    , ""
-    , "## How To Investigate"
-    , "1. Identify the likely root cause from the error type, stack trace, and surrounding telemetry."
-    , "2. Use the issue's service / method / path context to narrow down."
-    , "3. Suggest concrete debugging steps or fixes — name files, fields, queries when possible."
-    , ""
-    , "## Tool-Use Policy (overrides the workflow in <output_format>)"
-    , "- Analysis questions (\"What could cause this?\", \"Suggest a fix\") → answer DIRECTLY from the issue context. Do NOT call tools, and do NOT call `run_query`."
-    , "- Chart / visualization requests (\"plot errors over time\", \"show a chart of...\") → build the KQL query and `widgets` config directly from <schema>. Do NOT call `get_schema`, `get_field_values`, or `run_query` — the chat panel renders the chart from the query alone."
-    , "- Call tools ONLY when the answer must contain actual data values from the live store (e.g. \"top 5 services by error count\" where real numbers are required)."
-    , ""
-    , "## Response Format"
-    , "- Lead with a single-sentence summary."
-    , "- Follow with bullets or short paragraphs — never walls of text."
-    , "- The chat panel is ~400px wide, so brevity matters."
-    , "- For chart requests, prioritize a correct KQL query and a data-driven explanation."
-    ]
-
-
 -- | Handle AI chat POST request
 -- Designed to power the AI chat in the anomalies page. The chat thread is loaded via htmx and theres an input which when submitted gets sent here.
 aiChatPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -2063,19 +2023,24 @@ aiChatPostHWithTools projectTools pid issueId form = do
   requestId <- maybe (UUIDId <$> UUIDEff.genUUID) pure form.requestId
   let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
   unlessM (AI.canReadEvidence (AI.MemberAccess AI.WebSession sess.user.id) pid convId) $ throwError err403
-  Issues.startInteractiveRun pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
+  retained <- Issues.getRoutineRun pid requestId
+  let browserOnly = case (.source) <$> retained of Just Issues.InteractiveRun{} -> True; _ -> False
+      admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation
+  admit pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
     Issues.ConflictingRequest -> throwError err409{errBody = "Request ID already belongs to another request"}
     Issues.AcceptedRequest _ -> pass
-  fullSystemPrompt <- buildSystemPromptForIssue pid issue now
-  mode <- fmap AI.DurableRun $ AI.requireRunContext pid $ Issues.InteractiveClaim sess.user.id convId requestId
-  let access = AI.MemberAccess AI.WebSession sess.user.id
-      config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = access, AI.projectTools = projectTools, AI.invocationMode = mode}
-  answer <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey >>= either (\err -> throwError err502{errBody = encodeUtf8 err}) pure
-  void $ AI.completeAgenticResponse config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey answer
+  fullSystemPrompt <- Bots.buildIssuePrompt pid issue now
+  when browserOnly do
+    mode <- fmap AI.DurableRun $ AI.requireRunContext pid $ Issues.InteractiveClaim sess.user.id convId requestId
+    let access = AI.MemberAccess AI.WebSession sess.user.id
+        config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Nothing, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just fullSystemPrompt, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = access, AI.projectTools = projectTools, AI.invocationMode = mode}
+    answer <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey >>= either (\err -> throwError err502{errBody = encodeUtf8 err}) pure
+    void $ AI.completeAgenticResponse config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey answer
   messages <- Issues.selectChatHistory pid convId
+  runs <- Issues.listConversationRuns pid convId 10
   nextRequestId <- UUIDId <$> UUIDEff.genUUID
   addRespHeaders do
-    issueChatHistory_ pid fullSystemPrompt messages
+    issueChatHistory_ pid issueId (any ((== Issues.RunRunning) . (.status)) runs) fullSystemPrompt messages
     aiChatForm_ pid issueId nextRequestId [term "hx-swap-oob" "outerHTML"]
 
 
@@ -2088,186 +2053,21 @@ aiChatHistoryGetH pid issueId = do
   Issues.selectIssueById pid issueId >>= \case
     Nothing -> addRespHeaders $ aiChatHistoryView_ (pure . href_) pid []
     Just issue -> do
-      systemPrompt <- buildSystemPromptForIssue pid issue now
+      systemPrompt <- Bots.buildIssuePrompt pid issue now
       messages <- Issues.selectChatHistory pid (UUIDId issueId.unUUIDId :: UUIDId "conversation")
-      addRespHeaders $ issueChatHistory_ pid systemPrompt messages
+      runs <- Issues.listConversationRuns pid (UUIDId issueId.unUUIDId) 10
+      addRespHeaders $ issueChatHistory_ pid issueId (any ((== Issues.RunRunning) . (.status)) runs) systemPrompt messages
 
 
-issueChatHistory_ :: Projects.ProjectId -> Text -> [Issues.AIChatMessage] -> Html ()
-issueChatHistory_ pid systemPrompt messages = do
-  disclosure_ [class_ "my-2 border border-strokeWeak rounded-lg"] "px-2.5 py-1.5 text-xs text-textWeak hover:bg-fillWeaker" (faSprite_ "file-lines" "regular" "w-3 h-3" >> "System Prompt")
-    $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
-    $ toHtml systemPrompt
-  aiChatHistoryView_ (pure . href_) pid messages
-
-
--- | Build complete system prompt for an issue (shared between POST and GET)
-buildSystemPromptForIssue :: Projects.ProjectId -> Issues.Issue -> UTCTime -> ATAuthCtx Text
-buildSystemPromptForIssue pid issue now = do
-  useTf <- useTfReads
-  errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
-  (traceDataM, spans) <- maybe (pure (Nothing, V.empty)) (fetchTrace useTf) errorM
-  alertContextM <- case Issues.issuePayload issue of
-    Just (Issues.QueryAlertP alertData) -> do
-      let twoDaysAgo = addUTCTime (-172800) now
-      monitorM <- runMaybeT do
-        monitorId <- hoistMaybe $ UUID.fromText alertData.queryId
-        MaybeT $ Monitors.queryMonitorById (Monitors.QueryMonitorId monitorId)
-      metricsData <- Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing Nothing []
-      pure $ Just (alertData, monitorM, metricsData)
-    _ -> pure Nothing
-  facetSummaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
-  pure
-    $ unlines
-      [ issueSystemPrompt now
-      , ""
-      , "--- FACET SUMMARY ---"
-      , maybe "" formatFacetSummaryForAI facetSummaryM
-      , ""
-      , "--- ISSUE CONTEXT ---"
-      , buildAIContext issue errorM traceDataM spans alertContextM
-      ]
-  where
-    fetchTrace useTf err =
-      fromMaybe (Nothing, V.empty) <$> runMaybeT do
-        tId <- hoistMaybe err.recentTraceId
-        (trData, spans) <- MaybeT $ Telemetry.getTraceDetails useTf pid tId (Just $ zonedTimeToUTC err.updatedAt) now
-        pure (Just trData, V.fromList spans)
-    buildAIContext iss errM trDataM spans alertContextM =
-      unlines
-        $ [ "## Issue Details"
-          , "- **Title**: " <> iss.title
-          , "- **Type**: " <> show iss.issueType
-          , "- **Severity**: " <> display iss.severity
-          , "- **Service**: " <> Issues.serviceLabel iss.service
-          , "- **Recommended Action**: " <> iss.recommendedAction
-          ]
-        <> catMaybes
-          [ alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
-          , errM <&> \err ->
-              unlines
-                [ ""
-                , "## Error Details"
-                , "- **Error Type**: " <> err.errorType
-                , "- **Message**: " <> err.message
-                , "- **Stack Trace**:"
-                , "```"
-                , err.errorData.stackTrace
-                , "```"
-                , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
-                , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
-                , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
-                ]
-          , trDataM <&> \tr ->
-              unlines
-                [ ""
-                , "## Trace Context"
-                , "- **Trace ID**: " <> tr.traceId
-                , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
-                , "- **Span Count**: " <> show (V.length spans)
-                ]
-          , guard (not $ V.null spans)
-              $> unlines
-                [ ""
-                , "## Span Breakdown"
-                , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
-                    "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
-                ]
-          ]
-    formatCompleteAlertContext alertData monitorM metricsData =
-      unlines
-        $ [ ""
-          , "## Alert Configuration"
-          , ""
-          , "### Query & Thresholds"
-          , "- **Alert Query (KQL)**: `" <> alertData.queryExpression <> "`"
-          , "- **Alert Threshold**: " <> show alertData.thresholdValue <> " (trigger when " <> display alertData.thresholdType <> ")"
-          , "- **Current Value**: " <> show alertData.actualValue
-          , "- **Triggered At**: " <> formatUTC alertData.triggeredAt
-          ]
-        -- Every remaining section is read off the monitor row, so each empties out
-        -- under its own heading when the monitor has been deleted.
-        <> concat
-          [ ["", heading] <> foldMap body monitorM
-          | (heading, body) <-
-              [ ("### Execution Schedule", \m -> ["- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes", "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)", "- **Last Evaluated**: " <> maybe "never" formatUTC m.lastEvaluated])
-              ,
-                ( "### Trigger Conditions"
-                , \m ->
-                    ("- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan)
-                      : catMaybes
-                        [ m.warningThreshold <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
-                        , m.alertRecoveryThreshold <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art
-                        , m.warningRecoveryThreshold <&> \wrt -> "- **Warning Recovery**: Warning clears when value returns to " <> show wrt
-                        ]
-                )
-              ,
-                ( "### Current Status"
-                , \m ->
-                    ("- **Status**: " <> show m.currentStatus <> " (last check: " <> show m.currentValue <> ")")
-                      : catMaybes
-                        [ m.alertLastTriggered <&> \t -> "- **Last Alert Triggered**: " <> formatUTC t
-                        , m.warningLastTriggered <&> \t -> "- **Last Warning Triggered**: " <> formatUTC t
-                        ]
-                )
-              ,
-                ( "### Notification Configuration"
-                , \m ->
-                    [ "- **Alert Title**: " <> m.alertConfig.title
-                    , "- **Severity**: " <> m.alertConfig.severity
-                    , "- **Email Recipients**: " <> if m.alertConfig.emailAll then "All project members" else T.intercalate ", " (V.toList $ fmap CI.original m.alertConfig.emails)
-                    , if V.null m.alertConfig.slackChannels then "" else "- **Slack Channels**: " <> T.intercalate ", " (V.toList m.alertConfig.slackChannels)
-                    ]
-                )
-              ]
-          ]
-        <> catMaybes
-          [ guard (metricsData.rowsCount > 0) $> formatQueryResults metricsData
-          , guard (metricsData.rowsCount == 0 && isNothing monitorM) $> "\n_Note: Monitor record was deleted. Only basic alert data available._"
-          ]
-    formatQueryResults md =
-      let timestampIdx = V.elemIndex "timestamp" md.headers
-          formatRow = V.imap \idx -> \case
-            Just n | Just idx == timestampIdx -> formatUTC $ POSIX.posixSecondsToUTCTime $ realToFrac n
-            Just val -> show val
-            Nothing -> "N/A"
-       in unlines
-            [ ""
-            , "## Alert Query Results"
-            , ""
-            , "Recent data points from the alert query (last " <> show (floor md.rowsCount :: Int) <> " measurements):"
-            , ""
-            , maybe "" formatQueryStats md.stats
-            , ""
-            , "| " <> T.intercalate " | " (V.toList md.headers) <> " |"
-            , "|" <> T.replicate (V.length md.headers) "-------|"
-            , unlines $ V.toList $ flip V.map (V.take 20 md.dataset) \row ->
-                "| " <> T.intercalate " | " (V.toList $ formatRow row) <> " |"
-            , if md.rowsCount > 20 then "... (" <> show (floor md.rowsCount - 20 :: Int) <> " more rows)" else ""
-            ]
-      where
-        formatQueryStats stats =
-          unlines
-            [ "**Statistics:**"
-            , "- Min: " <> show stats.min
-            , "- Max: " <> show stats.max
-            , "- Mean: " <> show stats.mean <> " (average)"
-            , "- Sum: " <> show stats.sum
-            , "- Count: " <> show stats.count <> " data points"
-            ]
-    formatFacetSummaryForAI summary =
-      let FacetData facetMap = summary.facetJson
-          formatField (fieldName, values) =
-            "- "
-              <> fieldName
-              <> ": "
-              <> T.intercalate ", " (map (\fv -> fv.value <> " (" <> show fv.count <> ")") $ take 10 values)
-              <> bool "" ", ..." (length values > 10)
-          topFields = take 30 $ sortOn (Down . sum . map (.count) . snd) $ HM.toList facetMap
-       in unlines
-            $ "Available telemetry fields (top values by frequency):"
-            : map formatField topFields
-              <> ["... and " <> show (HM.size facetMap - 30) <> " more fields" | HM.size facetMap > 30]
+issueChatHistory_ :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> [Issues.AIChatMessage] -> Html ()
+issueChatHistory_ pid issueId running systemPrompt messages =
+  div_
+    ([id_ "issue-ai-results"] <> if running then [hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> issueId.toText <> "/ai_chat/history", hxTrigger_ "every 2s", hxSelect_ "#issue-ai-results", hxSwap_ "outerHTML"] else [])
+    do
+      disclosure_ [class_ "my-2 border border-strokeWeak rounded-lg"] "px-2.5 py-1.5 text-xs text-textWeak hover:bg-fillWeaker" (faSprite_ "file-lines" "regular" "w-3 h-3" >> "System Prompt")
+        $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
+        $ toHtml systemPrompt
+      aiChatHistoryView_ (pure . href_) pid messages
 
 
 -- | Render a single chat response (user question + AI answer)

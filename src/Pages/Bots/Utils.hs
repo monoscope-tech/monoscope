@@ -1,46 +1,61 @@
-module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processAIQueryWithMode, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processAIQueryWithMode, buildIssuePrompt, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Number)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Lazy qualified as LBS
+import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (Options, header)
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.Time.LocalTime (zonedTimeToUTC)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
+import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
+import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
-import Lucid
+import Lucid hiding (for_)
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Schema qualified as Schema
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig, OnboardingStep (NotifChannel), PageCtx (..), stepUrl)
+import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateCfg (..), emptyState_, navBar)
 import Pkg.AI qualified as AI
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId, idFromText)
+import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Mail (arr, dcGallery, plainTxt, slackActions, slackContext, slackHeader, slackImage, slackSection)
 import Pkg.Parser (parseQueryToAST)
-import Relude
+import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
+import Relude hiding (Reader, ask)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError, err503)
-import System.Config (EnvConfig (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
+import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
-import UnliftIO.Exception (onException)
-import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
+import UnliftIO.Exception (onException, throwIO)
+import Utils (faSprite_, formatUTC, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
 
 
 data BotType = Discord | Slack | WhatsApp
@@ -200,12 +215,21 @@ processAIQueryWithTools sourceConfig useTf projectTools = processAIQueryWithMode
 processAIQueryWithMode :: ProjectToolCtx es => Maybe EnvConfig -> Bool -> Maybe AI.ProjectTools -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid userQuery conversationId model apiKey = do
   AI.requireAgentAccess access pid
+  for_ conversationId $ AI.requireEvidenceAccess access pid
   now <- Time.currentTime
-  facetSummaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
+  conversation <- join <$> traverse (Issues.getConversation pid) conversationId
+  issuePrompt <- case conversation of
+    Just saved | saved.conversationType == Issues.CTAnomaly -> do
+      issue <- Issues.selectIssueById pid (UUIDId saved.conversationId.unUUIDId) >>= maybe (throwIO AI.AgentStopped) pure
+      Just <$> buildIssuePrompt pid issue now
+    _ -> pure Nothing
+  facetSummaryM <- if isNothing issuePrompt then SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now else pure Nothing
   let defaults = AI.defaultAgenticConfig pid
       config =
         defaults
           { AI.facetContext = facetSummaryM
+          , AI.systemPromptOverride = issuePrompt
+          , AI.conversationType = (.conversationType) <$> conversation
           , AI.conversationId = conversationId
           , AI.useTimefusion = useTf
           , AI.access = access
@@ -220,6 +244,210 @@ processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid
           }
   result <- AI.runAgenticChatWithHistory config userQuery model apiKey >>= either (pure . Left) (AI.completeAgenticResponse config userQuery model apiKey)
   result <$ whenLeft_ result \err -> Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]
+
+
+-- | Issue context shared by HTTP previews and durable agent execution.
+buildIssuePrompt :: (DB es, IOE :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Reader AuthContext :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Issues.Issue -> UTCTime -> Eff es Text
+buildIssuePrompt pid issue now = do
+  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+  errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
+  (traceDataM, spans) <- maybe (pure (Nothing, V.empty)) (fetchTrace useTf) errorM
+  alertContextM <- case Issues.issuePayload issue of
+    Just (Issues.QueryAlertP alertData) -> do
+      let twoDaysAgo = addUTCTime (-172800) now
+      monitorM <- runMaybeT do
+        monitorId <- hoistMaybe $ UUID.fromText alertData.queryId
+        MaybeT $ Monitors.queryMonitorById (Monitors.QueryMonitorId monitorId)
+      metricsData <- Charts.queryProjectMetrics Nothing (Just Charts.DTMetric) pid (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing Nothing []
+      pure $ Just (alertData, monitorM, metricsData)
+    _ -> pure Nothing
+  facetSummaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
+  pure
+    $ unlines
+      [ guide
+      , ""
+      , "--- FACET SUMMARY ---"
+      , maybe "" formatFacetSummaryForAI facetSummaryM
+      , ""
+      , "--- ISSUE CONTEXT ---"
+      , buildAIContext issue errorM traceDataM spans alertContextM
+      ]
+  where
+    fetchTrace useTf err =
+      fromMaybe (Nothing, V.empty) <$> runMaybeT do
+        tId <- hoistMaybe err.recentTraceId
+        (trData, spans) <- MaybeT $ Telemetry.getTraceDetails useTf pid tId (Just $ zonedTimeToUTC err.updatedAt) now
+        pure (Just trData, V.fromList spans)
+    buildAIContext iss errM trDataM spans alertContextM =
+      unlines
+        $ [ "## Issue Details"
+          , "- **Title**: " <> iss.title
+          , "- **Type**: " <> show iss.issueType
+          , "- **Severity**: " <> display iss.severity
+          , "- **Service**: " <> Issues.serviceLabel iss.service
+          , "- **Recommended Action**: " <> iss.recommendedAction
+          ]
+        <> catMaybes
+          [ alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
+          , errM <&> \err ->
+              unlines
+                [ ""
+                , "## Error Details"
+                , "- **Error Type**: " <> err.errorType
+                , "- **Message**: " <> err.message
+                , "- **Stack Trace**:"
+                , "```"
+                , err.errorData.stackTrace
+                , "```"
+                , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
+                , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
+                , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
+                ]
+          , trDataM <&> \tr ->
+              unlines
+                [ ""
+                , "## Trace Context"
+                , "- **Trace ID**: " <> tr.traceId
+                , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
+                , "- **Span Count**: " <> show (V.length spans)
+                ]
+          , guard (not $ V.null spans)
+              $> unlines
+                [ ""
+                , "## Span Breakdown"
+                , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
+                    "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
+                ]
+          ]
+    formatCompleteAlertContext alertData monitorM metricsData =
+      unlines
+        $ [ ""
+          , "## Alert Configuration"
+          , ""
+          , "### Query & Thresholds"
+          , "- **Alert Query (KQL)**: `" <> alertData.queryExpression <> "`"
+          , "- **Alert Threshold**: " <> show alertData.thresholdValue <> " (trigger when " <> display alertData.thresholdType <> ")"
+          , "- **Current Value**: " <> show alertData.actualValue
+          , "- **Triggered At**: " <> formatUTC alertData.triggeredAt
+          ]
+        -- Every remaining section is read off the monitor row, so each empties out
+        -- under its own heading when the monitor has been deleted.
+        <> concat
+          [ ["", heading] <> foldMap body monitorM
+          | (heading, body) <-
+              [ ("### Execution Schedule", \m -> ["- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes", "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)", "- **Last Evaluated**: " <> maybe "never" formatUTC m.lastEvaluated])
+              ,
+                ( "### Trigger Conditions"
+                , \m ->
+                    ("- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan)
+                      : catMaybes
+                        [ m.warningThreshold <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
+                        , m.alertRecoveryThreshold <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art
+                        , m.warningRecoveryThreshold <&> \wrt -> "- **Warning Recovery**: Warning clears when value returns to " <> show wrt
+                        ]
+                )
+              ,
+                ( "### Current Status"
+                , \m ->
+                    ("- **Status**: " <> show m.currentStatus <> " (last check: " <> show m.currentValue <> ")")
+                      : catMaybes
+                        [ m.alertLastTriggered <&> \t -> "- **Last Alert Triggered**: " <> formatUTC t
+                        , m.warningLastTriggered <&> \t -> "- **Last Warning Triggered**: " <> formatUTC t
+                        ]
+                )
+              ,
+                ( "### Notification Configuration"
+                , \m ->
+                    [ "- **Alert Title**: " <> m.alertConfig.title
+                    , "- **Severity**: " <> m.alertConfig.severity
+                    , "- **Email Recipients**: " <> if m.alertConfig.emailAll then "All project members" else T.intercalate ", " (V.toList $ fmap CI.original m.alertConfig.emails)
+                    , if V.null m.alertConfig.slackChannels then "" else "- **Slack Channels**: " <> T.intercalate ", " (V.toList m.alertConfig.slackChannels)
+                    ]
+                )
+              ]
+          ]
+        <> catMaybes
+          [ guard (metricsData.rowsCount > 0) $> formatQueryResults metricsData
+          , guard (metricsData.rowsCount == 0 && isNothing monitorM) $> "\n_Note: Monitor record was deleted. Only basic alert data available._"
+          ]
+    formatQueryResults md =
+      let timestampIdx = V.elemIndex "timestamp" md.headers
+          formatRow = V.imap \idx -> \case
+            Just n | Just idx == timestampIdx -> formatUTC $ POSIX.posixSecondsToUTCTime $ realToFrac n
+            Just val -> show val
+            Nothing -> "N/A"
+       in unlines
+            [ ""
+            , "## Alert Query Results"
+            , ""
+            , "Recent data points from the alert query (last " <> show (floor md.rowsCount :: Int) <> " measurements):"
+            , ""
+            , maybe "" formatQueryStats md.stats
+            , ""
+            , "| " <> T.intercalate " | " (V.toList md.headers) <> " |"
+            , "|" <> T.replicate (V.length md.headers) "-------|"
+            , unlines $ V.toList $ flip V.map (V.take 20 md.dataset) \row ->
+                "| " <> T.intercalate " | " (V.toList $ formatRow row) <> " |"
+            , if md.rowsCount > 20 then "... (" <> show (floor md.rowsCount - 20 :: Int) <> " more rows)" else ""
+            ]
+      where
+        formatQueryStats stats =
+          unlines
+            [ "**Statistics:**"
+            , "- Min: " <> show stats.min
+            , "- Max: " <> show stats.max
+            , "- Mean: " <> show stats.mean <> " (average)"
+            , "- Sum: " <> show stats.sum
+            , "- Count: " <> show stats.count <> " data points"
+            ]
+    formatFacetSummaryForAI summary =
+      let FacetData facetMap = summary.facetJson
+          formatField (fieldName, values) =
+            "- "
+              <> fieldName
+              <> ": "
+              <> T.intercalate ", " (map (\fv -> fv.value <> " (" <> show fv.count <> ")") $ take 10 values)
+              <> bool "" ", ..." (length values > 10)
+          topFields = take 30 $ sortOn (Down . sum . map (.count) . snd) $ HM.toList facetMap
+       in unlines
+            $ "Available telemetry fields (top values by frequency):"
+            : map formatField topFields
+              <> ["... and " <> show (HM.size facetMap - 30) <> " more fields" | HM.size facetMap > 30]
+    guide =
+      unlines
+        [ "You are Monoscope's issue-investigation assistant — an expert debugger embedded in the issue detail page. The user is on-call and trying to understand a specific issue. You have access to its details, errors, stack traces, and trace data, plus tools that fetch live telemetry."
+        , ""
+        , "Tone: precise, technical, calm. Answer like a senior SRE pairing on a debug — direct, no fluff."
+        , ""
+        , "## Current Context"
+        , "CURRENT TIME (UTC): " <> show now
+        , "Use the current time to interpret relative phrases (e.g. \"last 2 hours\" → `{\"since\": \"2H\"}`)."
+        , ""
+        , "## Telemetry Schema"
+        , "<schema>"
+        , Schema.generateSchemaForAI Schema.telemetrySchema
+        , "</schema>"
+        , ""
+        , AI.kqlGuide
+        , ""
+        , AI.outputFormatInstructions
+        , ""
+        , "## How To Investigate"
+        , "1. Identify the likely root cause from the error type, stack trace, and surrounding telemetry."
+        , "2. Use the issue's service / method / path context to narrow down."
+        , "3. Suggest concrete debugging steps or fixes — name files, fields, queries when possible."
+        , ""
+        , "## Tool-Use Policy (overrides the workflow in <output_format>)"
+        , "- Analysis questions (\"What could cause this?\", \"Suggest a fix\") → answer DIRECTLY from the issue context. Do NOT call tools, and do NOT call `run_query`."
+        , "- Chart / visualization requests (\"plot errors over time\", \"show a chart of...\") → build the KQL query and `widgets` config directly from <schema>. Do NOT call `get_schema`, `get_field_values`, or `run_query` — the chat panel renders the chart from the query alone."
+        , "- Call tools ONLY when the answer must contain actual data values from the live store (e.g. \"top 5 services by error count\" where real numbers are required)."
+        , ""
+        , "## Response Format"
+        , "- Lead with a single-sentence summary."
+        , "- Follow with bullets or short paragraphs — never walls of text."
+        , "- The chat panel is ~400px wide, so brevity matters."
+        , "- For chart requests, prioritize a correct KQL query and a data-driven explanation."
+        ]
 
 
 verifyWidgetSignature :: Text -> Projects.ProjectId -> Text -> Maybe Text -> Either LBS.ByteString ()

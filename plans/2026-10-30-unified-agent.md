@@ -10,7 +10,19 @@ Evidence uses one typed audience and one evaluator across web navigation, thread
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-The policy-configuration checkpoint `e638fb62e` passes 390 bot, 76 API, and 41 incident-delivery examples, plus authenticated Chrome checks for policy controls, saves, reloads, conditional fields, and visible validation in both themes at mobile and desktop widths. Earlier lifecycle verification also covers 35 error-pattern and seven focused native-review examples. Remote evidence reads and provenance have fixture coverage. Remaining web/slash review continuations, native model-session continuation, live Slack acceptance, streaming, and final release checks remain unfinished.
+The policy-configuration checkpoint `e638fb62e` passes 390 bot, 76 API, and 41 incident-delivery examples, plus authenticated Chrome checks for policy controls, saves, reloads, conditional fields, and visible validation in both themes at mobile and desktop widths. Earlier lifecycle verification also covers 35 error-pattern and seven focused native-review examples. Remote evidence reads and provenance have fixture coverage. Queued member web and issue conversations are covered below. Slash review continuation, native model-session continuation, live Slack acceptance, streaming, and final release checks remain unfinished.
+
+## Queued web and issue conversations
+
+Member-authorized web requests now commit their input, immutable grant, conversation, optional routine, and background job together. The HTTP handler returns without model inference. The existing dispatcher, conversation lease, model pipeline, checkpoint, operation ledger, and finalizer execute the request. Repeated delivery publishes one answer. Review decisions and deadline wakes resume that same request. Permission loss cancels it before inference.
+
+`ConversationRun` records a durable member grant. Historical `InteractiveRun` requests retain browser authority and cannot silently become background grants. Issue chat uses the same queue and one shared issue-context builder. The chart interpreter now exposes a required-project entry point, so background context building needs neither a simulated browser session nor an interpreted HTTP error effect. The issue guide is included once.
+
+Migration `0277_member_conversation_runs.sql` groups the new source constraints in one append-only file. It adds no table, scheduler, or permission store. Applied migrations remain unchanged.
+
+The original regression failed with one model call during HTTP submission. The current implementation passes 420 bot, 76 API, 41 incident-delivery, 87 dashboard/widget, and 16 chart-cache examples. Six focused web cases cover admission, duplicate delivery, authority loss, approval, rejection, expiry, and enqueue rollback. The issue case verifies queued execution and retained context. Real authenticated Chrome checks at widths 390 and 1280 verify automatic answer display, terminal polling removal, and preservation of an unsent draft and its request ID. The temporary browser fixture was restored after acceptance. Formatting and diff checks pass. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material finding in this slice; HLint reports only the two pre-existing hints in unchanged AI code.
+
+Remaining work includes final handling when queued retries are exhausted, refreshing the generated title in the asynchronous view, durable slash intake/publication, native model-session and workspace continuation, streaming, live Slack acceptance, the artifact refresh, and final branch reviews and release checks. This checkpoint does not establish completion of the unified plan.
 
 ## Slash delivery and web visibility contract
 

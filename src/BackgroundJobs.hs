@@ -105,6 +105,7 @@ import OddJobs.Types (FailureMode (FailPermanent))
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Slack qualified as Slack
+import Pages.Bots.Utils qualified as Bots
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.AI qualified as AI
@@ -301,6 +302,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     SlackNotification pid message -> sendSlackMessage pid message
     ProcessSlackEvent eventId -> Slack.processSlackEventWithTools projectTools eventId
     RefreshSlackProgress publicationId -> Slack.refreshSlackProgress publicationId
+    RunConversation pid runId -> runConversation pid runId
     AIRoutineRun routineId scheduledAt -> runAIRoutine authCtx projectTools routineId scheduledAt
     InvestigateIncident pid eventId rootId -> investigateIncident pid eventId rootId
     ResetSlackSession pid uid receiptId -> Slack.resetSlackSession pid uid receiptId
@@ -437,6 +439,25 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         let suggestions = GitSync.AnalysisSuggestions names matches metadata.defaultBranch
         lift $ Hasql.interpExecute_ [HI.sql| INSERT INTO projects.repository_analysis (repository_id, suggestions) VALUES (#{rid}, #{suggestions}) ON CONFLICT (repository_id) DO UPDATE SET suggestions = EXCLUDED.suggestions, analyzed_at = now(), error = NULL |]
       for_ (leftToMaybe result) \err -> Hasql.interpExecute_ [HI.sql| INSERT INTO projects.repository_analysis (repository_id, error) VALUES (#{rid}, #{err}) ON CONFLICT (repository_id) DO UPDATE SET error = EXCLUDED.error, analyzed_at = now() |]
+    runConversation :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ATBackgroundCtx ()
+    runConversation project identifier = do
+      let claim = Issues.runContextFor project $ Issues.ConversationClaim identifier
+      whenJustM claim \queued -> do
+        acquired <- withXactLease authCtx ("agent-conversation:" <> project.toText <> ":" <> queued.conversationId.toText)
+          $ whenJustM claim \context -> do
+            result <- tryAny do
+              void $ Issues.runContextAuthority context >>= maybe (throwIO AI.AgentStopped) pure
+              input <- maybe (throwIO AI.AgentStopped) pure context.input
+              response <- Bots.processAIQueryWithMode (Just authCtx.config) authCtx.env.enableTimefusionReads projectTools (AI.DurableRun context) (AI.MemberAccess AI.ProjectMember context.requestedBy) project input (Just context.conversationId) authCtx.config.openaiModel authCtx.config.openaiApiKey
+              for_ (leftToMaybe response) $ throwIO . CE.ErrorCall . toString
+            case result of
+              Right _ -> pass
+              Left err
+                | Just (AI.AgentAwaitingReview operation deadline) <- fromException err -> Jobs.deferOperationReview project operation deadline
+                | isJust (fromException @AI.AgentStopped err) || isJust (fromException @AI.AgentAccessDenied err) -> void $ Issues.completeRun context $ Issues.CancelledResult Nothing
+                | otherwise -> throwIO err
+        when (isNothing acquired) $ throwIO $ CE.ErrorCall "Conversation is already executing; retry queued request"
+
     unlessStale scheduledTime buffer action = do
       now <- Time.currentTime
       bool action (Log.logTrace ("Skipping stale " <> jobTypeName bgJob) scheduledTime) $ diffUTCTime now scheduledTime > (buffer :: NominalDiffTime)

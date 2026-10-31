@@ -351,7 +351,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             div_ [class_ "flex flex-wrap items-center gap-3 text-sm text-textWeak"] do
               span_ [role_ "status"] $ uncurry tonePill_ $ runStatus run.status
               span_ $ toHtml $ case run.source of
-                Issues.InteractiveRun _ -> "Web request"
+                (Issues.InteractiveRun _; Issues.ConversationRun _) -> "Web request"
                 Issues.ScheduledRun -> "Scheduled"
                 Issues.TriggeredRun (Issues.SlackMessage _) -> "Slack request"
                 Issues.TriggeredRun (Issues.SlackCommand _) -> "Slack command"
@@ -502,16 +502,19 @@ threadPageGetH pid convId docM runM hxTarget = do
                       button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
                   else p_ [class_ "whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "" instructions
               when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
-            unless (null runs) $ section_ [class_ "mb-6 space-y-2", Aria.label_ "Routine runs"] do
-              h2_ [class_ "text-sm font-semibold text-textStrong"] "Runs"
-              for_ runs \run -> a_ ([href_ $ runUrl projectId run.id, class_ "flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-offset-2"] <> inspectorAttrs (runUrl projectId run.id <> foldMap (("?conversation=" <>) . (.toText)) activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
-                time_ [datetime_ $ show run.startedAt, class_ "text-sm text-textStrong"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
-                span_ [id_ $ runStatusId run] $ uncurry tonePill_ $ runStatus run.status
-            if hasVisibleHistory messages
-              then do
-                when (isJust routineM) $ h2_ [class_ "mb-2 mt-6 text-xs font-medium uppercase tracking-wide text-textWeak"] "Recent results"
-                IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId messages
-              else foldMap routineEmpty_ routineM
+            div_
+              ([id_ "ai-thread-results"] <> if any ((== Issues.RunRunning) . (.status)) runs then [hxGet_ threadHref, hxTrigger_ "every 2s", hxSelect_ "#ai-thread-results", hxSwap_ "outerHTML"] else [])
+              do
+                unless (null runs) $ section_ [class_ "mb-6 space-y-2", Aria.label_ "Routine runs"] do
+                  h2_ [class_ "text-sm font-semibold text-textStrong"] "Runs"
+                  for_ runs \run -> a_ ([href_ $ runUrl projectId run.id, class_ "flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-offset-2"] <> inspectorAttrs (runUrl projectId run.id <> foldMap (("?conversation=" <>) . (.toText)) activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
+                    time_ [datetime_ $ show run.startedAt, class_ "text-sm text-textStrong"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
+                    span_ [id_ $ runStatusId run] $ uncurry tonePill_ $ runStatus run.status
+                if hasVisibleHistory messages
+                  then do
+                    when (isJust routineM) $ h2_ [class_ "mb-2 mt-6 text-xs font-medium uppercase tracking-wide text-textWeak"] "Recent results"
+                    IssuePage.aiChatHistoryView_ artifactLinkAttrs projectId messages
+                  else foldMap routineEmpty_ routineM
         unless (isJust runContent && isNothing conversationM) $ form_
           [ class_ "shrink-0 border-t border-strokeWeak bg-bgBase p-4"
           , hxPost_ $ "/p/" <> projectId.toText <> "/ai" <> foldMap (("/" <>) . (.toText)) activeConversationIdM
@@ -709,14 +712,21 @@ submitTurn projectTools origin requestId allowActions pid convId prompt = do
   appCtx <- ask @AuthContext
   (sess, _) <- Projects.sessionAndProject pid
   let policy = if allowActions then Issues.Autonomous else Issues.Observe
-  Issues.startInteractiveRun pid convId sess.user.id requestId prompt policy origin >>= \case
+  retained <- Issues.getRoutineRun pid requestId
+  member <- ProjectMembers.getUserPermission pid sess.user.id
+  let browserOnly = case (.source) <$> retained of
+        Just Issues.InteractiveRun{} -> True
+        _ -> isNothing member
+      admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation
+  admit pid convId sess.user.id requestId prompt policy origin >>= \case
     Issues.ConflictingRequest -> throwError Servant.err409{Servant.errBody = "Request ID already belongs to another request"}
-    Issues.AcceptedRequest scheduled -> for_ scheduled $ \routine -> BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
-  mode <- fmap AI.DurableRun $ AI.requireRunContext pid $ Issues.InteractiveClaim sess.user.id convId requestId
-  result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools mode (AI.MemberAccess AI.WebSession sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
-  case result of
-    Left err -> throwError Servant.err502{Servant.errBody = encodeUtf8 err}
-    Right _ -> pass
+    Issues.AcceptedRequest scheduled -> when browserOnly $ for_ scheduled $ \routine -> BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
+  when browserOnly do
+    mode <- fmap AI.DurableRun $ AI.requireRunContext pid $ Issues.InteractiveClaim sess.user.id convId requestId
+    result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools mode (AI.MemberAccess AI.WebSession sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
+    case result of
+      Left err -> throwError Servant.err502{Servant.errBody = encodeUtf8 err}
+      Right _ -> pass
 
 
 normalizeQuery :: Text -> Either Text Text

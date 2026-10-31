@@ -238,13 +238,13 @@ completeAgenticResponse config userQuery model apiKey answer = do
       let message = prepareRunAnswer answer
       case (config.invocationMode, config.access) of
         (DurableRun context, MemberAccess{})
-          | Issues.InteractiveRun{} <- context.source ->
+          | (Issues.InteractiveRun{}; Issues.ConversationRun{}) <- context.source ->
               Issues.completeRun context (Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer message) >>= \case
                 Issues.CompletionRejected -> throwIO AgentStopped
                 Issues.RunCompleted termination _ -> case termination of
                   (Issues.CompletedSucceeded; Issues.CompletedNoFindings) -> pass
                   (Issues.CompletedCancelled; Issues.CompletedFailed; Issues.CompletedTimedOut) -> throwIO AgentStopped
-        (DurableRun context, _) | Issues.InteractiveRun{} <- context.source -> throwIO AgentAccessDenied
+        (DurableRun context, _) | (Issues.InteractiveRun{}; Issues.ConversationRun{}) <- context.source -> throwIO AgentAccessDenied
         _ -> Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just $ AE.toJSON answer.toolCalls)
   void $ ensureConversationTitle config userQuery model apiKey $ Just answer
   pure $ parseAgenticResponse answer
@@ -1105,7 +1105,7 @@ runAgenticChatWithHistory suppliedConfig requestedInput model apiKey = do
        in case context.source of
             Issues.ScheduledRun -> pure (requestedInput, context.instructions)
             Issues.TriggeredRun{} -> retained
-            Issues.InteractiveRun{} -> retained
+            (Issues.InteractiveRun{}; Issues.ConversationRun{}) -> retained
     InteractiveReadOnly -> pure (requestedInput, Nothing)
   let config = initialConfig{customContext = instructions <> initialConfig.customContext}
   void $ requireConfigAccess config

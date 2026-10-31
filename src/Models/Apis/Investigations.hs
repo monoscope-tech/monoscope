@@ -1316,7 +1316,7 @@ classifyLegacyEvidence project selected = do
       Hasql.interp @[(UUIDId "conversation", Maybe (UUIDId "conversation"))]
         [HI.sql|SELECT DISTINCT run.conversation_id, routine.conversation_id FROM apis.ai_routine_runs run
         LEFT JOIN apis.ai_routines routine ON routine.id = run.routine_id AND routine.project_id = #{project}
-        WHERE run.project_id = #{project} AND run.conversation_id = ANY(#{pending}) AND run.source->>'tag' <> 'InteractiveRun'|]
+        WHERE run.project_id = #{project} AND run.conversation_id = ANY(#{pending}) AND run.source->>'tag' NOT IN ('InteractiveRun', 'ConversationRun')|]
     calls <-
       Hasql.interp @[(UUIDId "conversation", Aeson AE.Value)]
         [HI.sql|SELECT conversation_id, metadata FROM apis.ai_chat_messages
