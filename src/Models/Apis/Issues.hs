@@ -2852,6 +2852,7 @@ data RunFinalization
   = FinishRun RunContext RunTermination (Maybe AE.Value) (Maybe AE.Value) (Maybe Text)
   | RetireUnownedWork RoutineRetirement
   | RetireAbandonedRuns
+  | StopRoutineRuns Projects.ProjectId (UUIDId "conversation")
 
 
 data RoutineRetirement = UnownedInstallations | ReauthorizingRoutine Projects.ProjectId (UUIDId "conversation")
@@ -2891,6 +2892,15 @@ finishRunRowsTx finalization =
           SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{reason}
           WHERE id = #{context.id} AND started_at = #{context.startedAt} AND status = #{RunRunning}
           RETURNING id, project_id, conversation_id, root_run_id, #{requestEnded} AS request_ended
+        )|]
+      StopRoutineRuns pid conversation ->
+        [HI.sql|WITH finished AS (
+          UPDATE apis.ai_routine_runs run SET status = #{RunCancelled}, finished_at = clock_timestamp(),
+            error = 'Run cancelled by a project member.'
+          FROM apis.ai_routines routine
+          WHERE run.routine_id = routine.id AND run.project_id = #{pid} AND routine.project_id = #{pid}
+            AND routine.conversation_id = #{conversation} AND run.status = #{RunRunning}
+          RETURNING run.id, run.project_id, run.conversation_id, run.root_run_id, TRUE AS request_ended
         )|]
       RetireAbandonedRuns ->
         [HI.sql|WITH finished AS (
@@ -2934,20 +2944,22 @@ prepareRoutineGrantTx pid conversation = do
 
 
 pauseRoutine :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
-pauseRoutine pid convId =
-  Hasql.interpExecute_
+pauseRoutine pid convId = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  Hasql.executeTx
     [HI.sql|UPDATE apis.ai_routines SET active = FALSE,
         next_run_at = CASE WHEN running_since IS NULL THEN NULL ELSE next_run_at END
         WHERE project_id = #{pid} AND conversation_id = #{convId}|]
+  finishRunRowsTx $ StopRoutineRuns pid convId
 
 
 cancelRoutineRun :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
-cancelRoutineRun pid convId =
-  Hasql.interpExecute_
+cancelRoutineRun pid convId = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  Hasql.executeTx
     [HI.sql|UPDATE apis.ai_routines SET cancelled_at = clock_timestamp()
       WHERE project_id = #{pid} AND conversation_id = #{convId}
         AND (running_since IS NOT NULL OR EXISTS
           (SELECT 1 FROM apis.ai_routine_runs run WHERE run.routine_id = apis.ai_routines.id AND run.status = 'running'))|]
+  finishRunRowsTx $ StopRoutineRuns pid convId
 
 
 resumeRoutine :: (DB es, Time :> es) => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ScheduledRoutine)

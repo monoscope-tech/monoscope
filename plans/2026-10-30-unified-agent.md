@@ -10,7 +10,19 @@ Evidence uses one typed audience and one evaluator across web navigation, thread
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-The policy-configuration checkpoint `e638fb62e` passes 390 bot, 76 API, and 41 incident-delivery examples, plus authenticated Chrome checks for policy controls, saves, reloads, conditional fields, and visible validation in both themes at mobile and desktop widths. Earlier lifecycle verification also covers 35 error-pattern and seven focused native-review examples. Remote evidence reads and provenance have fixture coverage. Remaining review worker paths, waiting pause/stop behavior, native model-session continuation, live Slack acceptance, streaming, and final release checks remain unfinished.
+The policy-configuration checkpoint `e638fb62e` passes 390 bot, 76 API, and 41 incident-delivery examples, plus authenticated Chrome checks for policy controls, saves, reloads, conditional fields, and visible validation in both themes at mobile and desktop widths. Earlier lifecycle verification also covers 35 error-pattern and seven focused native-review examples. Remote evidence reads and provenance have fixture coverage. Remaining review worker paths, signed Slack stop and waiting revocation behavior, native model-session continuation, live Slack acceptance, streaming, and final release checks remain unfinished.
+
+## Routine pause and stop while awaiting review
+
+Routine pause and stop now cancel running requests before returning. The routine update and shared run finalizer commit together. Unstarted actions receive the existing request-ended refusal; already-started effects retain an uncertain outcome. Original proposals, review receipts, and artifact snapshots remain available for audit.
+
+Resume enables future work. It cannot revive the cancelled request or let its retained context execute another tool. The existing schedule-recovery sweep releases the completed slot and admits a fresh scheduled request; no cancellation worker, migration, or separate operation cleanup was added.
+
+All twelve failing-first cases now pass through real routine handlers. They cover scheduled and issue-enrichment requests, pause and stop, pending/approved/started actions, repeated controls, preserved decisions, rejected stale execution, and fresh scheduled work. An injected operation-closure failure proves that pause rolls back with the run transition. Recovery fixtures seed historical paused-but-running rows directly because the current pause handler correctly closes them.
+
+The final code passes 404 bot, 76 API, and 41 incident-delivery examples. Formatting and diff checks pass; HLint reports no hints in the changed production module. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material issue in this slice.
+
+Signed Slack stop events and the pending Slack notice still need their own wake-up and cleanup checks. Waiting revocation, other source continuations, native model-session continuation, live acceptance, streaming, and final branch gates remain open. This checkpoint establishes routine-control cancellation, not completion of every waiting lifecycle.
 
 ## Initial Slack transcript visibility
 

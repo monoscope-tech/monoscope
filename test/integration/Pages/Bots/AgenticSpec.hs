@@ -60,7 +60,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Timeout qualified as Timeout
 import System.Types (ATAuthCtx, ATBackgroundCtx)
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotBe, shouldNotContain, shouldSatisfy, shouldThrow)
 import UnliftIO.Async qualified as Async
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (urlDecodeAsForm)
@@ -95,6 +95,10 @@ data ReviewScenario = ApproveReview | DeclineReview | ExpireBeforeReview | Expir
 
 
 data ReviewRunKind = InteractiveReview | ScheduledReview | EventReview
+  deriving stock (Eq, Show)
+
+
+data ReviewProgress = WaitingDecision | DecisionApproved | ActionStarted
   deriving stock (Eq, Show)
 
 
@@ -624,6 +628,80 @@ spec = around withTestResources do
                     closed.outcome `shouldSatisfy` \case Investigations.OperationRefused Investigations.ReviewRequestEnded -> True; _ -> False
                     closed.review `shouldBe` before.review
                   _ -> expectationFailure "Expected a recoverable event attempt"
+
+      for_ [ScheduledReview, EventReview] $ \kind ->
+        for_ [False, True] $ \pause ->
+          for_ [WaitingDecision, DecisionApproved, ActionStarted] $ \progress ->
+            it ("agentReview_stopClosesTheRequestBeforeResume: " <> show (kind, pause, progress)) \tr -> do
+              let user = (getResponse tr.trSessAndHeader).user.id
+                  conversation = UUIDId $ UUID.fromWords 0 0 0 284
+                  policy = Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+              (installation, context) <-
+                if kind == ScheduledReview
+                  then
+                    scheduledInvocation tr conversation policy >>= \case
+                      AI.DurableRun context -> pure (conversation, context)
+                      AI.InteractiveReadOnly -> fail "Expected a scheduled run"
+                  else do
+                    issue <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "stopped-review" "Original title" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId
+                    void $ testServant tr $ AIThreads.routineInstallPostH testPid $ AIThreads.RoutineTemplateForm "issue-enrichment"
+                    Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventIssueEnrichment
+                    runQueryEffect tr $ Issues.setRoutinePolicy user testPid routine.conversationId policy
+                    let target = UUIDId issue.unUUIDId
+                    void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid target Issues.CTAnomaly (AE.object [])
+                    Just run <- runTestBgNoReset tr $ Issues.startEventRun routine (Issues.IssueEnrichmentRequest issue) Issues.StartRun target "Create a dashboard"
+                    context <- runTestBgNoReset tr $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.IssueEnrichment issue) run.id run.startedAt
+                    pure (routine.conversationId, context)
+              let call = LLM.ToolCall "stopped-review" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Stopped dashboard" :: Text)])
+                  message = LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [call]}
+                  parameters = OpenAI._CreateChatCompletion{OpenAI.model = "model", OpenAI.reasoning_effort = Nothing, OpenAI.tools = Nothing, OpenAI.messages = mempty}
+                  checkpoint = Investigations.ToolsPending (Investigations.Step (one message) parameters 0 (Nothing, Nothing) []) message [] [call]
+                  turn = Investigations.RunTurn testPid context.conversationId user context.rootId
+                  target = Investigations.RunCheckpoint turn
+                  lease = Investigations.RunLease turn context.startedAt
+                  proposal = Investigations.OperationProposal (Operation.ModelCall call) $ AI.OperationPolicy Catalog.ProjectWrite policy ProjectMembers.PAdmin
+                  review = Investigations.ReviewRequest (addUTCTime 60 frozenTime) Investigations.ReviewEditors
+              saved <- runQueryEffect tr $ Investigations.startCheckpointFor target checkpoint
+              let cursor = Investigations.CheckpointCursor target saved.revision
+              pending <- runQueryEffect tr $ Investigations.beginOperation lease cursor proposal $ Just review
+              identifier <- case pending of Investigations.AwaitOperationReview identifier _ -> pure identifier; _ -> fail "Expected a waiting action"
+              when (progress /= WaitingDecision) $ void $ testServant tr $ AIThreads.operationReviewPostH testPid identifier $ AIThreads.OperationReviewForm Investigations.ReviewApproved
+              when (progress == ActionStarted) $ runQueryEffect tr (Investigations.beginOperation lease cursor proposal $ Just review) >>= (`shouldSatisfy` \case Investigations.ExecuteOperation{} -> True; _ -> False)
+              [before] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
+              when (kind == ScheduledReview && pause && progress == WaitingDecision) do
+                let ddl statement = withResource tr.trPool $ \connection -> void $ PGS.execute_ connection statement
+                bracket_
+                  (ddl "ALTER TABLE apis.ai_agent_operations ADD CONSTRAINT reject_stopped_review CHECK (outcome->>'tag' <> 'OperationRefused') NOT VALID")
+                  (ddl "ALTER TABLE apis.ai_agent_operations DROP CONSTRAINT reject_stopped_review")
+                  (void $ testServant tr $ AIThreads.routinePausePostH testPid installation)
+                  `shouldThrow` (\(err :: SomeException) -> "reject_stopped_review" `T.isInfixOf` toText (displayException err))
+                runQueryEffect tr (Issues.routineRunActive testPid context.id) >>= (`shouldBe` True)
+              replicateM_ 2 $ void $ testServant tr $ (if pause then AIThreads.routinePausePostH else AIThreads.routineCancelPostH) testPid installation
+              Just stopped <- runQueryEffect tr $ Issues.getRoutineRun testPid context.id
+              stopped.status `shouldBe` Issues.RunCancelled
+              [closed] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
+              (AE.toJSON closed.proposal, closed.review) `shouldBe` (AE.toJSON before.proposal, before.review)
+              closed.outcome `shouldSatisfy` \case
+                Investigations.OperationUnknown -> progress == ActionStarted
+                Investigations.OperationRefused Investigations.ReviewRequestEnded -> progress /= ActionStarted
+                _ -> False
+              response <- runTestBgNoReset tr $ Investigations.decideOperationReview testPid user identifier Investigations.ReviewApproved
+              (response, before.review) `shouldSatisfy` \case
+                (Investigations.ReviewUnavailable, Investigations.ReviewPending{}) -> True
+                (Investigations.ReviewAlreadyDecided receipt, Investigations.ReviewResolved _ original) -> receipt == original
+                _ -> False
+              void $ testServant tr $ AIThreads.routineResumePostH testPid installation
+              runQueryEffect tr (Issues.routineRunActive testPid context.id) >>= (`shouldBe` False)
+              let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just context.conversationId, AI.invocationMode = AI.DurableRun context, AI.projectTools = Just Routes.mcpProjectTools}
+              runTestBgNoReset tr (AI.runAgenticChatWithHistory config "Create a dashboard" "model" "key") `shouldThrow` (isJust . fromException @AI.AgentStopped)
+              runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Stopped dashboard'|]) >>= (`shouldBe` 0)
+              when (kind == ScheduledReview) do
+                void $ runTestBgNoReset tr $ Issues.recoverDueRoutines 100
+                Just (routine, nextAt) <- runQueryEffect tr $ Hasql.interpOne @(UUIDId "ai_routine", UTCTime) [HI.sql|SELECT id, next_run_at FROM apis.ai_routines WHERE project_id = #{testPid} AND conversation_id = #{installation} AND next_run_at IS NOT NULL|]
+                advanceTestTime tr (15 * 60)
+                Just fresh <- runQueryEffect tr $ Issues.claimRoutine routine nextAt
+                fresh.runId `shouldNotBe` context.id
+                runQueryEffect tr (Issues.routineRunActive testPid fresh.runId) >>= (`shouldBe` True)
 
       for_ [ApproveReview, DeclineReview, ExpireAfterReview] $ \scenario ->
         it ("agentReview_nativeExecutionRetainsItsReviewAndResponseContract: " <> show scenario) \tr -> do
@@ -2086,7 +2164,7 @@ spec = around withTestResources do
             runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET last_run_at = #{previousFinish} WHERE id = #{slot.id}|]
             let refreshedLease = status == Issues.RunCancelled && not paused && isNothing finishedAt
             when refreshedLease $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET running_since = now() - interval '31 minutes' WHERE id = #{slot.id}|]
-            when paused $ runQueryEffect tr $ Issues.pauseRoutine testPid conversation
+            when paused $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET active = FALSE WHERE id = #{slot.id}|]
             advanceTestTime tr 3600
             let leaseState = runQueryEffect tr $ Hasql.interpOne @(Maybe UTCTime, Maybe UTCTime, Maybe UTCTime, Bool) [HI.sql|SELECT running_since, next_run_at, last_run_at, active FROM apis.ai_routines WHERE id = #{slot.id}|]
                 ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
@@ -2257,8 +2335,8 @@ spec = around withTestResources do
           Just otherRun <- runQueryEffect tr $ Issues.claimRoutine otherSlot.id otherSlot.scheduledAt
           runQueryEffect tr do
             void $ Issues.saveArtifact testPid conversation artifact Nothing "Original evidence" Issues.ArtifactReplace
-            Issues.pauseRoutine testPid conversation
-            Issues.pauseRoutine otherProject conversation
+            -- Seed historical paused leases without applying the current stop transition.
+            Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET active = FALSE WHERE id IN (#{slot.id}, #{otherSlot.id})|]
             Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET requested_by = NULL WHERE id IN (#{slot.id}, #{otherSlot.id})|]
             unless unownedInstallation $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET requested_by = #{user}, authority_version = authority_version + 1 WHERE id = #{slot.id}|]
             Hasql.interpExecute_ [HI.sql|DELETE FROM users.users WHERE id = #{previousOwner.id}|]
