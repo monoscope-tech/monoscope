@@ -969,47 +969,50 @@ runAgenticChatWithHistory initialConfig requestedInput model apiKey = do
   let config = initialConfig{customContext = instructions <> initialConfig.customContext}
   void $ requireConfigAccess config
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
-  let initial history = Investigations.ModelPending $ Investigations.Step (systemMsg :| (mapMaybe dbMessageToLLMMessage history <> [userMsg])) params 0 config.timeRange []
-      run turn checkpoint = withInvestigationJournal config userQuery model $ \journal -> runAgenticLoopRaw turn journal config apiKey checkpoint
-  case (config.access, config.conversationId) of
-    (SlackInvestigationAccess investigation, Just convId) -> do
+  case config.access of
+    SlackInvestigationAccess investigation -> for_ config.conversationId \convId -> do
       expected <- Incidents.threadConversationId config.projectId investigation.teamId investigation.channelId investigation.threadTs
       unless (convId == expected) $ throwIO AgentAccessDenied
+    _ -> pass
+  let initial history = Investigations.ModelPending $ Investigations.Step (systemMsg :| (mapMaybe dbMessageToLLMMessage history <> [userMsg])) params 0 config.timeRange []
+      run turn checkpoint = withInvestigationJournal config userQuery model $ \journal -> runAgenticLoopRaw turn journal config apiKey checkpoint
+      initialize target turn adoption = do
+        history <- case (turn, config.conversationId) of
+          (Just slack, _) -> Issues.prepareSlackTurn slack.projectId slack.conversationId slack.messageTs userQuery
+          (_, Just convId) -> Issues.selectChatHistory config.projectId convId
+          (_, Nothing) -> throwIO AgentAccessDenied
+        adopted <- adoption
+        maybe (Investigations.startCheckpointFor target $ initial history) pure adopted
+      resume target prepare = do
+        checkpoint <- Investigations.loadCheckpointFor target >>= maybe prepare pure
+        run (Just $ Investigations.CheckpointCursor target checkpoint.revision) checkpoint.checkpoint
+  result <- case (config.access, config.conversationId) of
+    (SlackInvestigationAccess investigation, Just convId) | isNothing (invocationContext config.invocationMode) -> do
       let turn = Investigations.Turn config.projectId convId investigation.userId investigation.messageTs
-      result <-
-        Investigations.loadAnswer turn >>= \case
-          Just answer -> pure $ Right answer
-          Nothing -> do
-            checkpoint <-
-              Investigations.loadCheckpoint turn
-                >>= maybe
-                  ( do
-                      start <- initial <$> Issues.prepareSlackTurn config.projectId convId investigation.messageTs userQuery
-                      Investigations.startCheckpoint turn start
-                  )
-                  pure
-            run (Just $ Investigations.CheckpointCursor (Investigations.SlackCheckpoint turn) checkpoint.revision) checkpoint.checkpoint
-      void $ requireConfigAccess config
-      traverse (Investigations.saveAnswer turn) result
+          target = Investigations.SlackCheckpoint turn
+      Investigations.loadAnswer turn >>= maybe (resume target $ initialize target (Just turn) $ pure Nothing) (pure . Right)
     (access, Just convId)
       | Just context <- invocationContext config.invocationMode
       , Just user <- accessMember access -> do
           let target = Investigations.RunCheckpoint $ Investigations.RunTurn config.projectId convId user context.rootId
-          checkpoint <-
-            Investigations.loadCheckpointFor target
-              >>= maybe
-                ( do
-                    history <- Issues.selectChatHistory config.projectId convId
-                    Investigations.startCheckpointFor target $ initial history
-                )
-                pure
-          run (Just $ Investigations.CheckpointCursor target checkpoint.revision) checkpoint.checkpoint
+          resume target do
+            turn <- Issues.slackTurnForRun context
+            initialize target turn $ case turn of
+              Just slack -> do
+                authority <- requireConfigAccess config
+                let lease = Investigations.RunLease (Investigations.RunTurn config.projectId convId user context.id) context.startedAt
+                Investigations.adoptSlackCheckpoint lease slack (\capability -> OperationPolicy capability authority.policy authority.permission)
+              Nothing -> pure Nothing
     _ | isJust $ invocationContext config.invocationMode -> throwIO AgentAccessDenied
     _ -> do
       history <-
         config.conversationId & maybe (pure []) \convId ->
           Issues.selectChatHistory config.projectId convId <* Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing
       run Nothing $ initial history
+  void $ requireConfigAccess config
+  case (config.access, config.conversationId) of
+    (SlackInvestigationAccess investigation, Just convId) -> traverse (Investigations.saveAnswer $ Investigations.Turn config.projectId convId investigation.userId investigation.messageTs) result
+    _ -> pure result
 
 
 -- | Each attempt gets its own journal; a retry never overwrites partial evidence.
@@ -1037,6 +1040,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
   void $ requireConfigAccess config
   case checkpoint of
     (Investigations.NativePending{}; Investigations.NativeReady) -> throwIO Investigations.CheckpointAccessDenied
+    Investigations.LegacyUncertain answer _ -> pure $ Right answer
     Investigations.AnswerReady answer -> do
       Log.logTrace "AI final response" (AE.object ["responseLength" AE..= T.length answer.response, "toolCount" AE..= length answer.toolCalls])
       pure $ Right answer
@@ -1079,16 +1083,16 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
         let loaded = mapMaybe requestedProjectTool calls
             tools = fromMaybe V.empty step.request.tools
             newTools = foldl' (\defs tool -> if any ((== toolName tool) . toolName) defs then defs else V.snoc defs tool) tools loaded
-        advance $ Investigations.ModelPending step{Investigations.history = history, Investigations.request = step.request{OpenAIV1.tools = Just newTools}, Investigations.iteration = step.iteration + 1, Investigations.toolCalls = step.toolCalls <> zipWith mkToolCallInfo calls results}
+        advance $ Investigations.ModelPending step{Investigations.history = history, Investigations.request = step.request{OpenAIV1.tools = Just newTools}, Investigations.iteration = step.iteration + 1, Investigations.toolCalls = step.toolCalls <> zipWith Investigations.mkToolCallInfo calls results}
       tool : remaining -> do
         Log.logTrace "AI requesting tool" (AE.object ["iteration" AE..= step.iteration, "tool" AE..= LLM.toolFunctionName (LLM.toolCallFunction tool)])
         record $ Investigations.ToolStarted step.iteration tool
         outcome <- executeToolAt turn config{timeRange = step.timeRange} tool
-        let result = operationResponse config.projectId outcome
+        let result = Investigations.operationResponse config.projectId outcome
             attempted = completed <> [(tool, result)]
             next = case outcome of
               Investigations.RecordedResult{} -> Investigations.ToolsPending step message attempted remaining
-              Investigations.UncertainResult{} -> Investigations.AnswerReady $ AgenticChatResult result.formatted (step.toolCalls <> map (uncurry mkToolCallInfo) attempted)
+              Investigations.UncertainResult{} -> Investigations.AnswerReady $ AgenticChatResult result.formatted (step.toolCalls <> map (uncurry Investigations.mkToolCallInfo) attempted)
         updated <-
           Investigations.commitProgress turn journal next
             $ Just
@@ -1132,17 +1136,6 @@ modelToolDef tool =
 
 projectToolDef :: AgenticConfig -> Text -> Maybe OAITool.Tool
 projectToolDef config name = modelToolDef <$> Map.lookup name (discoverableCatalog config)
-
-
--- | Create ToolCallInfo from a tool call and its result
-mkToolCallInfo :: LLM.ToolCall -> ToolResult -> ToolCallInfo
-mkToolCallInfo tc result =
-  ToolCallInfo
-    { name = LLM.toolFunctionName (LLM.toolCallFunction tc)
-    , args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
-    , resultPreview = T.take 2000 result.formatted
-    , rawData = result.rawData
-    }
 
 
 mkToolResultMsg :: LLM.ToolCall -> ToolResult -> LLM.Message
@@ -1204,15 +1197,6 @@ data OperationPolicy = OperationPolicy
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
-operationResponse :: Projects.ProjectId -> Investigations.OperationResult -> ToolResult
-operationResponse project = \case
-  Investigations.RecordedResult result -> result
-  Investigations.UncertainResult identifier run ->
-    ToolResult
-      ("This request has an action with an uncertain outcome. It may still complete. Further changes were not executed. [View action history](/p/" <> project.toText <> "/ai/runs/" <> run.toText <> "#operation-" <> identifier.toText <> ") before making another request.")
-      (Just $ AE.object ["operation_id" AE..= identifier, "run_id" AE..= run, "outcome" AE..= Investigations.OperationUnknown])
 
 
 data ToolRecovery = ReplayReads | AtomicInRun | RetainInRun | ReconcileInRun
@@ -1333,7 +1317,7 @@ authorizeOperation config authority policy = Except.runExceptT do
 
 
 executeToolCall :: ProjectToolCtx es => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
-executeToolCall config call = operationResponse config.projectId <$> executeToolAt Nothing config call
+executeToolCall config call = Investigations.operationResponse config.projectId <$> executeToolAt Nothing config call
 
 
 executeToolAt :: ProjectToolCtx es => Maybe Investigations.CheckpointCursor -> AgenticConfig -> LLM.ToolCall -> Eff es Investigations.OperationResult
@@ -1353,7 +1337,7 @@ executeToolAt cursor config tc = do
             ProjectOperation backend -> EffectfulOperation $ runProjectTool backend funcName args
             LocalOperation operation -> executeLocal operation args
   void $ requireConfigAccess config
-  let response = operationResponse config.projectId result
+  let response = Investigations.operationResponse config.projectId result
   Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length response.formatted])
   pure result
   where

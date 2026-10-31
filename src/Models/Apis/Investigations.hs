@@ -17,6 +17,9 @@ module Models.Apis.Investigations (
   startCheckpoint,
   startCheckpointFor,
   prepareNativeOperation,
+  adoptSlackCheckpoint,
+  operationResponse,
+  mkToolCallInfo,
   commitProgress,
   AgenticChatResult (..),
   ToolCallInfo (..),
@@ -76,6 +79,7 @@ import Data.ByteString qualified as BS
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM ()
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID.V5 qualified as UUID5
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -322,9 +326,18 @@ data Turn = Turn
 
 
 loadAnswer :: DB es => Turn -> Eff es (Maybe AgenticChatResult)
-loadAnswer turn =
-  loadCheckpoint turn >>= \case
+loadAnswer turn = do
+  canonical <-
+    Hasql.interpOne @SavedCheckpoint
+      [HI.sql|SELECT checkpoint.revision, checkpoint.checkpoint FROM apis.slack_turn_checkpoints checkpoint
+    JOIN apis.ai_routine_runs run ON run.root_run_id = checkpoint.run_id AND run.project_id = checkpoint.project_id
+    JOIN apis.slack_events receipt ON receipt.id::text = run.source #>> '{contents,contents}'
+    WHERE checkpoint.project_id = #{turn.projectId} AND checkpoint.conversation_id = #{turn.conversationId} AND checkpoint.user_id = #{turn.userId}
+      AND run.source #>> '{contents,tag}' = 'SlackMessage' AND receipt.payload #>> '{event,ts}' = #{turn.messageTs}
+    ORDER BY run.started_at DESC, run.id DESC LIMIT 1|]
+  maybe (loadCheckpoint turn) (pure . Just) canonical >>= \case
     Just SavedCheckpoint{checkpoint = AnswerReady answer} -> pure $ Just answer
+    Just SavedCheckpoint{checkpoint = LegacyUncertain answer _} -> pure $ Just answer
     _ ->
       Hasql.interpOneJson
         [HI.sql|SELECT answer FROM apis.slack_turn_answers
@@ -475,6 +488,7 @@ data Checkpoint
   = ModelPending Step
   | ToolsPending Step LLM.Message [(LLM.ToolCall, ToolResult)] [LLM.ToolCall]
   | AnswerReady AgenticChatResult
+  | LegacyUncertain AgenticChatResult Checkpoint
   | NativePending Operation.NativeOperation
   | NativeReady
   deriving stock (Generic, Show)
@@ -541,7 +555,7 @@ beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => Run
 beginOperationTx lease cursor proposal = runExceptT do
   let turn = lease.turn
       (project, conversation, user, message, checkpointRun) = checkpointIdentity cursor.target
-      identifier = UUIDId $ UUID5.generateNamed UUID5.namespaceOID $ BS.unpack $ toStrict $ AE.encode (checkpointIdentity cursor.target, cursor.revision)
+      identifier = operationIdentity cursor
       matchingScope = project == turn.projectId && conversation == turn.conversationId && user == turn.userId
   unless matchingScope $ hoistEither $ Left OperationScopeMismatch
   runs <-
@@ -680,7 +694,92 @@ prepareNativeOperation turn proposed = do
     NativeReady -> do
       next <- commitProgress (Just cursor) Nothing (NativePending proposed) Nothing
       maybe (throwIO CheckpointAccessDenied) (\position -> pure (position, proposed)) next
-    (ModelPending{}; ToolsPending{}; AnswerReady{}) -> throwIO CheckpointAccessDenied
+    (ModelPending{}; ToolsPending{}; AnswerReady{}; LegacyUncertain{}) -> throwIO CheckpointAccessDenied
+
+
+operationIdentity :: CheckpointCursor -> UUIDId "agent_operation"
+operationIdentity cursor = UUIDId $ UUID5.generateNamed UUID5.namespaceOID $ BS.unpack $ toStrict $ AE.encode (checkpointIdentity cursor.target, cursor.revision)
+
+
+-- | Adopt the historical message checkpoint under its original conservative grant.
+-- A pending mutation without a retained response cannot be replayed.
+adoptSlackCheckpoint :: forall policy es. (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunLease -> Turn -> (Catalog.AgentPolicy -> policy) -> Eff es (Maybe SavedCheckpoint)
+adoptSlackCheckpoint lease turn policy = do
+  unless (lease.turn.projectId == turn.projectId && lease.turn.conversationId == turn.conversationId && lease.turn.userId == turn.userId) $ throwIO CheckpointAccessDenied
+  result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    outcome <- runExceptT do
+      roots <-
+        lift
+          $ Hasql.queryTx @[(UUIDId "ai_routine_run", Bool)]
+            [HI.sql|SELECT run.root_run_id, run.policy = 'observe' FROM apis.ai_routine_runs run
+        JOIN apis.ai_routine_runs root ON root.id = run.root_run_id
+        JOIN apis.slack_events receipt ON receipt.id::text = run.source #>> '{contents,contents}'
+        WHERE run.id = #{lease.turn.runId} AND run.project_id = #{turn.projectId} AND run.conversation_id = #{turn.conversationId}
+          AND run.requested_by = #{turn.userId} AND run.started_at = #{lease.startedAt} AND run.status = 'running'
+          AND run.source #>> '{contents,tag}' = 'SlackMessage' AND receipt.payload #>> '{event,ts}' = #{turn.messageTs}
+        FOR UPDATE OF root|]
+      (root, readOnly) <- case roots of [bound] -> pure bound; _ -> hoistEither $ Left CheckpointAccessDenied
+      legacy <- lift $ Hasql.queryTx @[SavedCheckpoint] $ checkpointSql (SlackCheckpoint turn) <> [HI.sql| FOR UPDATE|]
+      historical <-
+        lift
+          $ Hasql.queryTx @[HI.OneColumn (Aeson AgenticChatResult)]
+            [HI.sql|SELECT answer FROM apis.slack_turn_answers WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+          AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
+      let saved = listToMaybe legacy <|> (\(HI.OneColumn (Aeson answer)) -> SavedCheckpoint 0 $ AnswerReady answer) <$> listToMaybe historical
+          target = RunCheckpoint lease.turn{runId = root}
+      forM saved \original -> do
+        unless readOnly $ hoistEither $ Left CheckpointAccessDenied
+        revision <-
+          lift
+            $ Hasql.oneTx @(HI.OneColumn Int64)
+              [HI.sql|SELECT greatest(#{original.revision}, coalesce(max(operation.checkpoint_revision) + 1, 0))
+          FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id WHERE run.root_run_id = #{root}|]
+        let cursor = CheckpointCursor target revision.getOneColumn
+        checkpoint <- case original.checkpoint of
+          ToolsPending step message completed (call : pending) -> do
+            let capability = fromMaybe (Catalog.Administration ProjectMembers.PAdmin) $ join $ Map.lookup (LLM.toolFunctionName call.toolCallFunction) Catalog.policiesByName
+                uncertain identifier run =
+                  let result = operationResponse turn.projectId $ UncertainResult identifier run
+                   in LegacyUncertain (AgenticChatResult result.formatted $ step.toolCalls <> map (uncurry mkToolCallInfo) completed <> [mkToolCallInfo call result]) original.checkpoint
+            case capability of
+              Catalog.ReadOnly{} -> pure original.checkpoint
+              _ -> do
+                prior <-
+                  lift
+                    $ Hasql.queryTx @[OperationEntry policy]
+                    $ operationsSql turn.projectId lease.turn.runId
+                    <> [HI.sql| AND operation.id = #{operationIdentity $ CheckpointCursor (SlackCheckpoint turn) original.revision} FOR UPDATE OF operation|]
+                case prior of
+                  entry : _ -> do
+                    unless (entry.proposal.call == Operation.ModelCall call) $ hoistEither $ Left CheckpointAccessDenied
+                    pure $ case entry.outcome of
+                      OperationReturned result -> ToolsPending step message (completed <> [(call, result)]) pending
+                      (OperationRunning; OperationUnknown) -> uncertain entry.id entry.runId
+                  [] -> do
+                    let identifier = operationIdentity cursor
+                        proposal = OperationProposal (Operation.ModelCall call) $ policy capability
+                    lift
+                      $ Hasql.executeTx
+                        [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
+                    VALUES (#{identifier}, #{turn.projectId}, #{lease.turn.runId}, #{turn.userId}, #{cursor.revision}, #{Aeson proposal}, #{Aeson OperationUnknown})|]
+                    pure $ uncertain identifier lease.turn.runId
+          (ModelPending{}; ToolsPending{}; AnswerReady{}; LegacyUncertain{}) -> pure original.checkpoint
+          (NativePending{}; NativeReady) -> hoistEither $ Left CheckpointAccessDenied
+        created <-
+          lift
+            $ Hasql.oneTx @SavedCheckpoint
+              [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, run_id, revision, checkpoint)
+          VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{root}, #{cursor.revision}, #{Aeson checkpoint})
+          ON CONFLICT (project_id, conversation_id, user_id, message_ts, run_id)
+          DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
+        lift
+          $ Hasql.executeTx
+            [HI.sql|DELETE FROM apis.slack_turn_checkpoints WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+          AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs} AND run_id IS NULL|]
+        pure created
+    when (isLeft outcome) Tx.condemn
+    pure outcome
+  either throwIO pure result
 
 
 -- | The run lock serializes initialization only. Model calls never hold it.
@@ -715,11 +814,14 @@ startCheckpointFor target checkpoint = do
               DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
             case checkpoint of
               (NativePending{}; NativeReady) -> pass
-              (ModelPending{}; ToolsPending{}; AnswerReady{}) -> for_ run $ \identifier ->
+              (ModelPending{}; ToolsPending{}; AnswerReady{}; LegacyUncertain{}) -> for_ run $ \identifier ->
                 Hasql.executeTx
-                  [HI.sql|INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, created_at)
-              SELECT project_id, conversation_id, 'user', input, clock_timestamp() FROM apis.ai_routine_runs
-              WHERE id = #{identifier} AND input IS NOT NULL AND source <> '{"tag":"ScheduledRun"}'::jsonb|]
+                  [HI.sql|INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
+              SELECT run.project_id, run.conversation_id, 'user', run.input, receipt.payload #>> '{event,ts}', clock_timestamp()
+              FROM apis.ai_routine_runs run LEFT JOIN apis.slack_events receipt
+                ON receipt.id = CASE WHEN run.source #>> '{contents,tag}' = 'SlackMessage' THEN (run.source #>> '{contents,contents}')::uuid END
+              WHERE run.id = #{identifier} AND run.input IS NOT NULL AND run.source <> '{"tag":"ScheduledRun"}'::jsonb
+              ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING|]
             pure $ Right created
   either throwIO pure result
 
@@ -969,6 +1071,7 @@ classifyLegacyEvidence project selected = do
       ToolsPending step _ completed pending -> map (.name) step.toolCalls <> map (LLM.toolFunctionName . LLM.toolCallFunction) (map fst completed <> pending)
       NativePending operation -> [Catalog.operationName $ Operation.NativeCall operation]
       NativeReady -> []
+      LegacyUncertain _ original -> checkpointNames original
 
 
 visibleConversationIds :: DB es => Projects.ProjectId -> ProjectMembers.Permissions -> Eff es [UUIDId "conversation"]
@@ -980,3 +1083,23 @@ visibleConversationIds project permission = do
         UNION ALL SELECT conversation_id, evidence_permission FROM apis.ai_routine_runs WHERE project_id = #{project}
       ) scopes GROUP BY conversation_id
       HAVING max(apis.evidence_permission_rank(evidence_permission)) <= apis.evidence_permission_rank(#{permission})|]
+
+
+operationResponse :: Projects.ProjectId -> OperationResult -> ToolResult
+operationResponse project = \case
+  RecordedResult result -> result
+  UncertainResult identifier run ->
+    ToolResult
+      ("This request has an action with an uncertain outcome. It may still complete. Further changes were not executed. [View action history](/p/" <> project.toText <> "/ai/runs/" <> run.toText <> "#operation-" <> identifier.toText <> ") before making another request.")
+      (Just $ AE.object ["operation_id" AE..= identifier, "run_id" AE..= run, "outcome" AE..= OperationUnknown])
+
+
+-- | Create ToolCallInfo from a tool call and its result
+mkToolCallInfo :: LLM.ToolCall -> ToolResult -> ToolCallInfo
+mkToolCallInfo tc result =
+  ToolCallInfo
+    { name = LLM.toolFunctionName (LLM.toolCallFunction tc)
+    , args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
+    , resultPreview = T.take 2000 result.formatted
+    , rawData = result.rawData
+    }

@@ -38,9 +38,10 @@ This branch already contains:
 - Run history, instruction snapshots, retained artifacts, and a conversation detail panel.
 - Versioned project wiki storage with member and agent authors.
 
-Slack event tool calls retain an Observe ceiling while legacy-checkpoint adoption is completed.
-Interactive and scheduled administrator actions now use the common Autonomous policy and durable operation ledger.
-Native business mutations still need that common operation ledger.
+Fresh Slack requests now use the routine's configured policy and the shared owner/requester role ceiling.
+Legacy Slack checkpoints retain Observe authority during adoption into the common run checkpoint.
+Interactive, scheduled, and Slack administrator actions use the common Autonomous policy and durable operation ledger.
+Native wiki and GitHub publication use that ledger; issue-enrichment attribution remains unfinished.
 Current native Slack behavior still needs controlled workspace acceptance.
 The silent private-channel mention needs a traced reproduction. Metric discovery alone does not explain that failure.
 
@@ -760,6 +761,25 @@ The application workflow passes after first reproducing missing history, checkpo
 A further failing timing case changed the PR head during comment lookup. The existing revision check now runs after that lookup and before the operation is claimed. The policy, revision, and restricted-evidence timing cases all reach their intended boundary and make no subsequent write. All 220 bot, 75 API v1, and 33 native review/SDK examples pass. Formatting and diff checks pass. Repeated slice reviews found no further material distillation, constraint-evasion, or client-behavior findings. The redundant DeriveFunctor pragma was removed because GHC2024 already enables it; the focused workflow passes after that cleanup. Whole-branch review and final release checks remain pending.
 
 Issue enrichment still needs operation-ledger attribution. Atomic wiki mutation/result composition, generic conversation agent-attempt attribution, Slack legacy adoption, selected review, and the remaining plan phases stay in scope. HTTP fixtures prove application behavior; they do not claim live GitHub or Slack acceptance.
+
+
+### Slack autonomy and historical checkpoint adoption (31 October)
+
+Fresh signed Slack messages and slash commands use the installation's policy through the same authority evaluator as web and scheduled work. They retain the linked requester's identity and immutable role ceiling. A reader cannot inherit the routine owner's editor or administrator powers. No per-action approval prompt was added.
+
+All durable invocations now resume the request-root checkpoint through one initializer and executor. The stored run source identifies Slack input even when recovery starts from member access in the web application. User messages retain their Slack timestamp, making input recording idempotent. Completed answers remain in the common checkpoint; historical answer rows are read-only compatibility data.
+
+Slack can deliver an ordinary message event and an app mention for the same message. Admission and lookup share one receipt-identity query. It prefers an already admitted request, including when a later receipt has an earlier timestamp, so retries reuse the original root and operation results instead of repeating writes.
+
+Historical checkpoints and answers do not gain autonomous authority on upgrade. Admission fixes their grant to Observe and viewer authority. Adoption retains the original model request, system context, completed results, and pending intent. Reads can resume; a known mutation response is reused. An unrecorded or unresolved mutation becomes an explicit `LegacyUncertain` checkpoint and an unknown operation record. It is not replayed. Relinking the Slack identity to another member cannot adopt the original member's historical request.
+
+The adoption transaction locks the request root and historical checkpoint, creates the common checkpoint, and removes the replaced historical checkpoint together. The operation response and tool-summary functions are shared with the normal executor. There is no second tool dispatcher or recovery loop.
+
+The only new schema file is `0267_slack_message_identity.sql`, containing the index for receipt lookup. Its index definition was verified inside the migrated integration-test database. Applied migrations through `0266` remain unchanged: merging their files would invalidate the migration checksums. New schema work should continue to be grouped by a coherent invariant before application.
+
+Failing regressions reproduced duplicate model execution across event aliases, missing input during member-access recovery, and adoption after identity relinking. All 232 bot and 75 API v1 examples pass. The Slack cases use the production adapter and project tools, covering administrator/editor writes, reader denial, interrupted inference and delivery, event aliases, historical append uncertainty, known-response reuse, original model context, and account relinking. Formatting, focused HLint, and diff checks pass. Repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings. Whole-branch review and final release checks remain pending.
+
+Controlled live Slack acceptance, issue-enrichment operation attribution, atomic wiki/result composition, generic wiki attempt attribution, and the remaining plan phases stay open. HTTP fixtures prove application behavior; this session has no Slack connector and does not claim a live workspace test.
 
 
 ## External references
