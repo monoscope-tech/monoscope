@@ -41,7 +41,7 @@ This branch already contains:
 Fresh Slack requests now use the routine's configured policy and the shared owner/requester role ceiling.
 Legacy Slack checkpoints retain Observe authority during adoption into the common run checkpoint.
 Interactive, scheduled, and Slack administrator actions use the common Autonomous policy and durable operation ledger.
-Native wiki and GitHub publication use that ledger; issue-enrichment attribution remains unfinished.
+Native wiki, GitHub publication, and issue enrichment use that ledger.
 Current native Slack behavior still needs controlled workspace acceptance.
 The silent private-channel mention needs a traced reproduction. Metric discovery alone does not explain that failure.
 
@@ -812,6 +812,21 @@ The regression first failed on the stored conversation author. It now uses a fai
 All 233 bot and 75 API v1 examples pass. Fourteen focused wiki examples, both wiki UI examples, and the native review and issue-fix workflows also pass. Formatting and diff checks pass. HLint reports the same four hints as `e707208ae` across the changed application modules, with none introduced. Repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings. The open-PR refresh still lists 28 PRs; all twenty selected incoming heads and published #619 remain included, so no additional selected merge is needed.
 
 The new codec doctest awaits the final doctest run. Native issue-enrichment operation attribution, the remaining plan phases, whole-branch review, controlled live Slack acceptance, and release checks stay open.
+
+
+### Native enrichment uses the shared action ledger (31 October)
+
+Issue enrichment now retains a typed native intent with its issue ID, enhancement, classification, error analysis, and analysis time. The existing checkpoint stores that intent before mutation. Recovery reuses it instead of repeating completed inference. Nonnegative classification counts use `Natural` at the parsing boundary and in the retained intent.
+
+The existing completion implementation is now also available as a transaction. The shared atomic-operation interpreter composes it with the issue mutation and operation receipt. Metadata, classification, linked error analysis, report, answer, receipt, and final run state therefore commit together. The target issue is locked within its project before the completion guard runs. There is one completion implementation and one operation ledger, with no new table or migration.
+
+The canonical native policy is `ProjectWrite`. Observe retains analysis without a mutation record. Autonomous work uses the original actor and current authority. Native scope checks reject an intent for another issue before dispatch, including when a valid earlier intent is already pending. The timestamp identifies completed analysis; it does not claim that a pending mutation has already committed.
+
+The regression reproduces missing action history on the original mutation path. It then rejects either final completion or receipt storage and verifies full rollback. Both recovery cases apply the metadata once, publish one answer, retain one typed native receipt with the real actor and run, and use only the original three inference calls. Five policy cases and the source-scope rejection also pass.
+
+All 234 bot, 75 API v1, and 35 error-pattern pipeline examples pass. The native review workflow also passes, covering atomic wiki receipts and GitHub recovery through the extended operation type. Formatting and diff checks pass. HLint reports the same seven hints as the baseline across the changed application modules, with none introduced. Repeated slice reviews replaced a Boolean decision with the existing execution-policy type and found no further material distillation, constraint-evasion, or client-behavior findings.
+
+The test watcher was restarted once after it demonstrably continued running an old test name and old source locations. The corrected failure and subsequent passing evidence come from the refreshed module graph. Existing warnings in unrelated test files remain unchanged. Whole-branch reviews, final doctests, controlled live Slack acceptance, and the remaining plan phases stay open.
 
 
 ## External references

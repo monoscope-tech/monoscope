@@ -105,6 +105,7 @@ import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Investigations (AgenticChatResult (..), ToolCallInfo (..), ToolResult (..))
 import Models.Apis.Investigations qualified as Investigations
+import Models.Apis.IssueEnhancement.Types qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (SecuredSql (..), SqlSource (..), executeSecuredQuery, selectLogTable)
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
@@ -1254,6 +1255,9 @@ executeNativeOperation context proposed perform =
           Hasql.interpOne @(HI.OneColumn Bool)
             [HI.sql|SELECT TRUE FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
           WHERE r.id = #{review} AND r.id = #{comment.reviewId} AND t.project_id = #{context.projectId}|]
+        unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
+      (Issues.TriggeredRun (Issues.IssueEnrichment issue), Operation.EnrichIssue enrichment) -> do
+        permitted <- Hasql.interpOne @(HI.OneColumn Bool) [HI.sql|SELECT TRUE FROM apis.issues WHERE project_id = #{context.projectId} AND id = #{issue} AND id = #{enrichment.enhancement.issueId}|]
         unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
       _ -> throwIO Investigations.OperationScopeMismatch
 

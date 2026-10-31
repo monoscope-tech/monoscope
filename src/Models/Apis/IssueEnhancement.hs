@@ -5,16 +5,23 @@ module Models.Apis.IssueEnhancement (
   classifyIssueCriticality,
   updateIssueClassification,
   analyzeErrorPattern,
+  enrichmentAnswer,
+  completeEnrichmentTx,
   IssueEnhancement (..),
+  IssueEnrichment (..),
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful (Eff)
+import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.IssueEnhancement.Types (IssueEnhancement (..), IssueEnrichment (..))
 import Models.Apis.Issues qualified as Issues
 import NeatInterpolation (text)
 import Pkg.AI qualified as AI
@@ -22,22 +29,54 @@ import PyF (fmtTrim)
 import Relude hiding (id)
 
 
-data IssueEnhancement = IssueEnhancement
-  { issueId :: Issues.IssueId
-  , enhancedTitle :: Text
-  , enhancedDescription :: Text
-  , recommendedAction :: Text
-  , migrationComplexity :: Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
 enhanceIssueWithLLM :: (Text -> Eff es (Either Text Text)) -> Issues.Issue -> Eff es (Either Text IssueEnhancement)
 enhanceIssueWithLLM complete issue = runExceptT do
   enhancedTitle <- ExceptT $ generateEnhancedTitle complete issue
   (enhancedDescription, recommendedAction, migrationComplexity) <- ExceptT $ generateEnhancedDescription complete issue
   pure IssueEnhancement{issueId = issue.id, enhancedTitle, enhancedDescription, recommendedAction, migrationComplexity}
+
+
+enrichmentAnswer :: Issues.ExecutionPolicy -> IssueEnrichment -> Issues.RunAnswer
+enrichmentAnswer policy enrichment =
+  let enhancement = enrichment.enhancement
+      body =
+        "# "
+          <> enhancement.enhancedTitle
+          <> "\n\n"
+          <> enhancement.enhancedDescription
+          <> "\n\n## Recommended action\n"
+          <> enhancement.recommendedAction
+          <> "\n\nMigration complexity: "
+          <> enhancement.migrationComplexity
+          <> foldMap (\(critical, _, _) -> "\n\nSeverity assessment: " <> bool "Not critical" "Critical" critical) enrichment.classification
+          <> foldMap (\(cause, category) -> "\n\n## Error analysis\n" <> cause <> "\n\nCategory: " <> category) enrichment.analysis
+          <> case policy of Issues.Observe -> "\n\nObserve policy: issue metadata was not changed."; Issues.Autonomous -> ""
+   in Issues.reportAnswer body $ Just $ AE.object ["enhancement" AE..= enhancement, "classification" AE..= enrichment.classification, "analysis" AE..= enrichment.analysis]
+
+
+completeEnrichmentTx :: Issues.RunContext -> IssueEnrichment -> Tx.Transaction (Either Text AE.Value)
+completeEnrichmentTx context enrichment = do
+  let enhancement = enrichment.enhancement
+      pid = context.projectId
+      issue = enhancement.issueId
+      mutate = do
+        Issues.updateIssueEnhancement enrichment.analyzedAt issue enhancement.enhancedTitle enhancement.recommendedAction enhancement.migrationComplexity
+        for_ enrichment.classification $ \(critical, breaking, _) -> updateIssueClassification issue critical breaking
+        for_ enrichment.analysis $ \(cause, category) -> do
+          patterns <-
+            Hasql.queryTx @[HI.OneColumn ErrorPatterns.ErrorPatternId]
+              [HI.sql|SELECT pattern.id FROM apis.error_patterns pattern JOIN apis.issues issue
+            ON issue.project_id = pattern.project_id AND issue.target_hash = pattern.hash WHERE issue.id = #{issue} AND issue.project_id = #{pid}|]
+          for_ patterns $ \(HI.OneColumn patternId) -> ErrorPatterns.updateErrorPatternAnalysis patternId cause category
+        Hasql.executeTx [HI.sql|UPDATE apis.issues SET llm_enhanced_at = #{enrichment.analyzedAt} WHERE id = #{issue} AND project_id = #{pid}|]
+  target <- Hasql.queryTx @(Maybe (HI.OneColumn Issues.IssueId)) [HI.sql|SELECT id FROM apis.issues WHERE project_id = #{pid} AND id = #{issue} FOR UPDATE|]
+  result <- case target of
+    Nothing -> Issues.completeRunTx enrichment.analyzedAt Nothing context $ Issues.CancelledResult $ Just "Issue is no longer available."
+    Just _ -> Issues.completeRunTx enrichment.analyzedAt (Just mutate) context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ enrichmentAnswer Issues.Autonomous enrichment
+  pure $ case result of
+    Issues.RunCompleted Issues.CompletedSucceeded _ -> Right $ AE.object ["issue_id" AE..= issue, "analyzed_at" AE..= enrichment.analyzedAt]
+    Issues.RunCompleted _ _ -> Left "Issue metadata update was cancelled."
+    Issues.CompletionRejected -> Left "Issue enrichment could not complete this run."
 
 
 -- | Completion split into stripped lines, for the strict N-line reply formats.
@@ -285,13 +324,13 @@ schemaObservationPrompt observation =
 
 
 -- | Classify issue as critical/safe and count breaking/incremental changes
-classifyIssueCriticality :: (Text -> Eff es (Either Text Text)) -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
+classifyIssueCriticality :: (Text -> Eff es (Either Text Text)) -> Issues.Issue -> Eff es (Either Text (Bool, Natural, Natural))
 classifyIssueCriticality complete issue = (parse =<<) <$> askLLMLines complete (buildCriticalityPrompt issue)
   where
     parse [critical, breaking, incremental]
       | critical `elem` (["critical", "safe"] :: [Text]) = (,,) (critical == "critical") <$> count breaking <*> count incremental
     parse _ = badFormat
-    count value = maybe badFormat Right $ readMaybe (toString value) >>= guarded (>= 0)
+    count value = maybe badFormat (Right . fromInteger) (readMaybe @Integer (toString value) >>= guarded (>= 0))
 
 
 buildCriticalityPrompt :: Issues.Issue -> Text
@@ -352,7 +391,7 @@ buildCriticalityPrompt issue =
       Issues.Feedback -> "User feedback: " <> issue.title
 
 
-updateIssueClassification :: Issues.IssueId -> Bool -> Int -> Tx.Transaction ()
+updateIssueClassification :: Issues.IssueId -> Bool -> Natural -> Tx.Transaction ()
 updateIssueClassification issueId isCritical breakingCount =
   Issues.updateIssueCriticality issueId isCritical
     $ if

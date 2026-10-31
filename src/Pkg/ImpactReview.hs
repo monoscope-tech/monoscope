@@ -366,7 +366,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                                   AI.ReconcilableOperation
                                     (AI.AtomicOperation $ memoryResponse <$> Memory.writePageTx run.projectId write.edit.pageId write.edit.version Nothing write.edit.document (Memory.Run context.id))
                                     (\original -> reconcileComment run conn original <* unlessM (not . null <$> authorizedServices run mappings) (throwError $ ReviewFailure "Project memory authorization is no longer available"))
-                                Operation.PublishPullRequestComment{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+                                (Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
                           (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}) ->
                             requestKnowledge run.projectId attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
                   )
@@ -443,7 +443,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                           pure $ Right $ AE.toJSON published
                       )
                       (reconcileComment run conn)
-                  Operation.WriteWiki{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+                  (Operation.WriteWiki{}; Operation.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
               cid <- require $ first toText $ AET.parseEither AE.parseJSON response
               Reviews.finishRun run (Just cid)
     reconcileComment :: (Error ReviewFailure :> es, HTTP.HTTP :> es, Reader AuthContext :> es) => Reviews.ReviewRun -> Git.GitConn -> Operation.OperationCall -> Eff es (Maybe (Either Text AE.Value))

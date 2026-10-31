@@ -1,3 +1,4 @@
+{-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE StrictData #-}
 
 module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl) where
@@ -76,6 +77,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Integrations
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -108,6 +110,7 @@ import Pages.Reports qualified as RP
 import Pkg.AI qualified as AI
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.AgentCatalog qualified as Catalog
+import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
@@ -3808,37 +3811,31 @@ enhanceIssuesWithLLM pid issueIds = do
             when (execution.status == Issues.RunRunning) do
               context <- AI.requireRunContext pid $ Issues.EventClaim (Issues.IssueEnrichment issueId) execution.id execution.startedAt
               outcome <- tryAny $ Timeout.timeout (120 * 1_000_000) $ runExceptT do
-                let complete = AI.callRoutineLLM ctx.config ctx.config.openaiSmallModel context
-                enhancement <- ExceptT $ Enhancement.enhanceIssueWithLLM complete issue
-                classification <- if issue.issueType == Issues.ApiChange then pure Nothing else Just <$> ExceptT (Enhancement.classifyIssueCriticality complete issue)
-                analysis <- if issue.issueType /= Issues.RuntimeException then pure Nothing else Just <$> ExceptT (Enhancement.analyzeErrorPattern complete issue)
-                let body =
-                      "# "
-                        <> enhancement.enhancedTitle
-                        <> "\n\n"
-                        <> enhancement.enhancedDescription
-                        <> "\n\n## Recommended action\n"
-                        <> enhancement.recommendedAction
-                        <> "\n\nMigration complexity: "
-                        <> enhancement.migrationComplexity
-                        <> foldMap (\(critical, _, _) -> "\n\nSeverity assessment: " <> bool "Not critical" "Critical" critical) classification
-                        <> foldMap (\(cause, category) -> "\n\n## Error analysis\n" <> cause <> "\n\nCategory: " <> category) analysis
-                    findings = AE.object ["enhancement" AE..= enhancement, "classification" AE..= classification, "analysis" AE..= analysis]
+                let target = Investigations.RunCheckpoint $ Investigations.RunTurn pid context.conversationId context.requestedBy context.rootId
+                saved <- lift $ Investigations.loadCheckpointFor target
+                enrichment <- case saved of
+                  Just Investigations.SavedCheckpoint{checkpoint = Investigations.NativePending (Operation.EnrichIssue retained)} -> pure retained
+                  Just Investigations.SavedCheckpoint{checkpoint = (Investigations.ModelPending{}; Investigations.ToolsPending{}; Investigations.AnswerReady{}; Investigations.LegacyUncertain{}; Investigations.NativePending{}; Investigations.NativeReady)} -> throwError "Issue enrichment checkpoint has another operation"
+                  Nothing -> do
+                    let complete = AI.callRoutineLLM ctx.config ctx.config.openaiSmallModel context
+                    enhancement <- ExceptT $ Enhancement.enhanceIssueWithLLM complete issue
+                    classification <- if issue.issueType == Issues.ApiChange then pure Nothing else Just <$> ExceptT (Enhancement.classifyIssueCriticality complete issue)
+                    analysis <- if issue.issueType /= Issues.RuntimeException then pure Nothing else Just <$> ExceptT (Enhancement.analyzeErrorPattern complete issue)
+                    now <- lift Time.currentTime
+                    pure $ Enhancement.IssueEnrichment enhancement classification analysis now
                 decision <- lift $ AI.authorizeRunOperation context Catalog.ProjectWrite
-                mutate <- case decision of
-                  Right _ -> pure True
-                  Left (AI.AuthorityDenied Issues.ActionGrantRequired) -> pure False
+                policy <- case decision of
+                  Right _ -> pure Issues.Autonomous
+                  Left (AI.AuthorityDenied Issues.ActionGrantRequired) -> pure Issues.Observe
                   Left denial -> throwError $ AI.toolDenialMessage denial
-                errorPattern <- lift $ if isJust analysis then ErrorPatterns.getErrorPatternByHash pid issue.targetHash else pure Nothing
-                now <- lift Time.currentTime
-                let mutation = do
-                      Issues.updateIssueEnhancement now issueId enhancement.enhancedTitle enhancement.recommendedAction enhancement.migrationComplexity
-                      for_ classification $ \(critical, breaking, _) -> Enhancement.updateIssueClassification issueId critical breaking
-                      for_ ((,) <$> errorPattern <*> analysis) $ \(ep, (cause, category)) -> ErrorPatterns.updateErrorPatternAnalysis ep.id cause category
-                      Hasql.executeTx [HI.sql|UPDATE apis.issues SET llm_enhanced_at = #{now} WHERE id = #{issueId} AND project_id = #{pid}|]
-                pure (Issues.reportAnswer (body <> if mutate then "" else "\n\nObserve policy: issue metadata was not changed.") $ Just findings, mutation <$ guard mutate)
+                pure (enrichment, policy)
               case outcome of
-                Right (Just (Right (answer, mutation))) -> void $ maybe Issues.completeRun Issues.completeRunWithProjectMutation mutation context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer answer
+                Right (Just (Right (enrichment, Issues.Observe))) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Enhancement.enrichmentAnswer Issues.Observe enrichment
+                Right (Just (Right (enrichment, Issues.Autonomous))) -> do
+                  result <- AI.executeNativeOperation context (Operation.EnrichIssue enrichment) \case
+                    Operation.EnrichIssue frozen -> AI.AtomicOperation $ Enhancement.completeEnrichmentTx context frozen
+                    (Operation.WriteWiki{}; Operation.PublishPullRequestComment{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+                  for_ (leftToMaybe result) $ \reason -> void $ Issues.completeRun context $ Issues.CancelledResult $ Just reason
                 _ -> do
                   active <- Issues.routineRunActive pid execution.id
                   let message = "Issue enrichment failed. A retry will create a new attempt."

@@ -28,6 +28,7 @@ import Hasql.Interpolate qualified as HI
 import Langchain.LLM.Core qualified as LLM
 import Models.Apis.Investigations (ToolCallInfo (..), ToolResult (..))
 import Models.Apis.Investigations qualified as Investigations
+import Models.Apis.IssueEnhancement.Types qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
@@ -38,6 +39,7 @@ import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
 import Pages.Bots.Utils (processAIQuery)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
+import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
@@ -48,7 +50,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Timeout qualified as Timeout
 import System.Types (ATAuthCtx, ATBackgroundCtx)
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy, shouldThrow)
 import UnliftIO.Async qualified as Async
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (urlDecodeAsForm)
@@ -1038,43 +1040,66 @@ spec = around withTestResources do
           runQueryEffect tr (Issues.listRunArtifacts testPid execution.id) >>= (`shouldSatisfy` null)
           runQueryEffect tr (Issues.selectIssueById testPid issueId) >>= (\issue -> fmap (.title) issue `shouldBe` Just "Original title")
 
-      it "nativeCompletion_enrichmentRollsBackPublishedEvidenceWhenFinishFails" \tr -> do
-        issueId <- runTestBg frozenTime tr do
-          issue <- Issues.createQueryAlertIssue testPid "atomic-native" "Original title" "service == checkout" 100 200 Issues.Above
-          Issues.insertIssueReturningId issue
-        let savedIssue = runQueryEffect tr $ Hasql.interpOneJson @AE.Value [HI.sql|SELECT to_jsonb(issue) FROM apis.issues issue WHERE project_id = #{testPid} AND id = #{issueId}|]
-        original <- savedIssue
-        void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
-        let model :: ATBackgroundCtx a -> ATBackgroundCtx a
-            model = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallLLM _ prompt _ ->
-                pure
-                  $ Right
-                  $ if
-                    | "issue titler" `T.isInfixOf` prompt -> "Enriched title"
-                    | "issue describer" `T.isInfixOf` prompt -> "Observed checkout latency.\nCompare the traces.\nlow"
-                    | otherwise -> "critical\n0\n0"
-              ELLM.CallAgenticChat{} -> pure $ Left "Unexpected agentic request"
-              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
-            execute = runTestBg frozenTime tr $ model $ Reader.local (\ctx -> ctx{config = ctx.config{openaiApiKey = "routine-test-key"}}) $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.EnhanceIssuesWithLLM testPid $ V.singleton issueId)
-            ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
-        bracket_
-          (ddl "ALTER TABLE apis.ai_routine_runs ADD CONSTRAINT reject_native_completion CHECK (status <> 'succeeded') NOT VALID")
-          (ddl "ALTER TABLE apis.ai_routine_runs DROP CONSTRAINT reject_native_completion")
-          (tryAny execute >>= (`shouldSatisfy` isLeft))
-        Just interrupted <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment issueId
-        interrupted.status `shouldBe` Issues.RunRunning
-        runQueryEffect tr (Issues.listRunArtifacts testPid interrupted.id) >>= (`shouldSatisfy` null)
-        history <- runQueryEffect tr $ Issues.selectChatHistory testPid interrupted.conversationId
-        filter ((== Issues.ChatAssistant) . (.role)) history `shouldSatisfy` null
-        savedIssue >>= (`shouldBe` original)
-        execute
-        Just completed <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment issueId
-        completed.id `shouldBe` interrupted.id
-        completed.status `shouldBe` Issues.RunSucceeded
-        runQueryEffect tr (Issues.listRunArtifacts testPid completed.id) >>= (\artifacts -> length artifacts `shouldBe` 1)
-        after <- runQueryEffect tr $ Issues.selectChatHistory testPid completed.conversationId
-        length (filter ((== Issues.ChatAssistant) . (.role)) after) `shouldBe` 1
+      for_ ["completion", "receipt"] \boundary ->
+        it ("nativeCompletion_enrichmentRollsBackMetadataReportAndOperation: " <> toString boundary) \tr -> do
+          calls <- IORef.newIORef (0 :: Int)
+          issueId <- runTestBg frozenTime tr do
+            issue <- Issues.createQueryAlertIssue testPid "atomic-native" "Original title" "service == checkout" 100 200 Issues.Above
+            Issues.insertIssueReturningId issue
+          let savedIssue = runQueryEffect tr $ Hasql.interpOneJson @AE.Value [HI.sql|SELECT to_jsonb(issue) FROM apis.issues issue WHERE project_id = #{testPid} AND id = #{issueId}|]
+          original <- savedIssue
+          void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
+          Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventIssueEnrichment
+          runQueryEffect tr $ Issues.setRoutinePolicy (getResponse tr.trSessAndHeader).user.id testPid routine.conversationId Issues.Autonomous
+          let model :: ATBackgroundCtx a -> ATBackgroundCtx a
+              model = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallLLM _ prompt _ -> do
+                  liftIO $ IORef.modifyIORef' calls (+ 1)
+                  pure
+                    $ Right
+                    $ if
+                      | "issue titler" `T.isInfixOf` prompt -> "Enriched title"
+                      | "issue describer" `T.isInfixOf` prompt -> "Observed checkout latency.\nCompare the traces.\nlow"
+                      | otherwise -> "critical\n0\n0"
+                ELLM.CallAgenticChat{} -> pure $ Left "Unexpected agentic request"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+              execute = runTestBg frozenTime tr $ model $ Reader.local (\ctx -> ctx{config = ctx.config{openaiApiKey = "routine-test-key"}}) $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.EnhanceIssuesWithLLM testPid $ V.singleton issueId)
+              ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+          bracket_
+            (ddl $ if boundary == "completion" then "ALTER TABLE apis.ai_routine_runs ADD CONSTRAINT reject_native_completion CHECK (status <> 'succeeded') NOT VALID" else "ALTER TABLE apis.ai_agent_operations ADD CONSTRAINT reject_native_receipt CHECK (outcome->>'tag' <> 'OperationReturned') NOT VALID")
+            (ddl $ if boundary == "completion" then "ALTER TABLE apis.ai_routine_runs DROP CONSTRAINT reject_native_completion" else "ALTER TABLE apis.ai_agent_operations DROP CONSTRAINT reject_native_receipt")
+            (tryAny execute >>= (`shouldSatisfy` isLeft))
+          Just interrupted <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment issueId
+          interrupted.status `shouldBe` Issues.RunRunning
+          runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid interrupted.id) >>= (`shouldSatisfy` null)
+          runQueryEffect tr (Issues.listRunArtifacts testPid interrupted.id) >>= (`shouldSatisfy` null)
+          history <- runQueryEffect tr $ Issues.selectChatHistory testPid interrupted.conversationId
+          filter ((== Issues.ChatAssistant) . (.role)) history `shouldSatisfy` null
+          savedIssue >>= (`shouldBe` original)
+          when (boundary == "completion") do
+            other <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "other-native" "Other title" "service == other" 100 200 Issues.Above >>= Issues.insertIssueReturningId
+            context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.IssueEnrichment issueId) interrupted.id interrupted.startedAt
+            let target = Investigations.RunCheckpoint $ Investigations.RunTurn testPid context.conversationId context.requestedBy context.rootId
+            Just saved <- runQueryEffect tr $ Investigations.loadCheckpointFor target
+            case saved.checkpoint of
+              Investigations.NativePending (Operation.EnrichIssue retained) -> do
+                let foreignIntent = retained{Enhancement.enhancement = retained.enhancement{Enhancement.issueId = other}}
+                runTestBg frozenTime tr (AI.executeNativeOperation context (Operation.EnrichIssue foreignIntent) $ \_ -> AI.EffectfulOperation $ liftIO $ fail "Another issue's enrichment was dispatched")
+                  `shouldThrow` (\case Investigations.OperationScopeMismatch -> True; _ -> False)
+              _ -> expectationFailure "Expected the retained typed enrichment intent"
+          execute
+          Just completed <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment issueId
+          completed.id `shouldBe` interrupted.id
+          completed.status `shouldBe` Issues.RunSucceeded
+          runQueryEffect tr (Issues.selectIssueById testPid issueId) >>= (\issue -> fmap (.title) issue `shouldBe` Just "Enriched title")
+          runQueryEffect tr (Issues.listRunArtifacts testPid completed.id) >>= (\artifacts -> length artifacts `shouldBe` 1)
+          after <- runQueryEffect tr $ Issues.selectChatHistory testPid completed.conversationId
+          length (filter ((== Issues.ChatAssistant) . (.role)) after) `shouldBe` 1
+          operations <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid completed.id
+          [(entry.runId, entry.requestedBy) | entry <- operations] `shouldBe` [(completed.id, (getResponse tr.trSessAndHeader).user.id)]
+          [AE.toJSON entry.proposal.call ^? key "contents" . key "tag" . _String | entry <- operations] `shouldBe` [Just "EnrichIssue"]
+          [AE.toJSON entry.outcome ^? key "tag" . _String | entry <- operations] `shouldBe` [Just "OperationReturned"]
+          IORef.readIORef calls >>= (`shouldBe` 3)
 
       for_ [Issues.Observe, Issues.Autonomous] $ \policy ->
         it ("nativePolicy_issueEnrichmentRetainsAnalysisAndHonorsMutationPolicy: " <> show policy) \tr -> do
@@ -1097,6 +1122,7 @@ spec = around withTestResources do
           runQueryEffect tr (Issues.selectIssueById testPid issueId) >>= (\issue -> fmap (.title) issue `shouldBe` Just (if policy == Issues.Autonomous then "Enriched title" else "Original title"))
           Just execution <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment issueId
           execution.status `shouldBe` Issues.RunSucceeded
+          runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid execution.id) >>= (\entries -> length entries `shouldBe` if policy == Issues.Autonomous then 1 else 0)
           runQueryEffect tr (Issues.listRunArtifacts testPid execution.id) >>= (\artifacts -> T.intercalate " " (mapMaybe (.content) artifacts) `shouldSatisfy` T.isInfixOf "Compare traces.")
 
       for_ (["policy-withdrawn", "original-role-limit", "restricted-evidence"] :: [Text]) $ \restriction ->

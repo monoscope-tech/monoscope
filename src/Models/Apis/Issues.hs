@@ -161,6 +161,7 @@ module Models.Apis.Issues (
   InteractiveStart (..),
   completeRun,
   completeRunWithProjectMutation,
+  completeRunTx,
   RunAnswer (..),
   reportAnswer,
   AnswerEvidence (..),
@@ -2357,101 +2358,105 @@ completeRunWithProjectMutation = completeRunWith . Just
 completeRunWith :: (DB es, Time :> es) => Maybe (Tx.Transaction ()) -> RunContext -> RunCompletion -> Eff es CompletionResult
 completeRunWith mutation context proposed = do
   now <- Time.currentTime
+  Hasql.transaction TxS.ReadCommitted TxS.Write $ completeRunTx now mutation context proposed
+
+
+completeRunTx :: UTCTime -> Maybe (Tx.Transaction ()) -> RunContext -> RunCompletion -> Tx.Transaction CompletionResult
+completeRunTx now mutation context proposed = do
   let pid = context.projectId
       runId = context.id
-  Hasql.transaction TxS.ReadCommitted TxS.Write do
-    schedule <- case context.source of
-      ScheduledRun ->
-        listToMaybe
-          <$> Hasql.queryTx @[ScheduledRoutine]
-            ( [HI.sql|SELECT routine.id, routine.next_run_at FROM apis.ai_routines routine
-            JOIN apis.ai_routine_runs run ON run.routine_id = routine.id
-            WHERE run.id = #{runId} AND run.project_id = #{pid}
-              AND routine.project_id = #{pid} AND routine.conversation_id = run.conversation_id
-              AND routine.next_run_at = run.scheduled_at AND routine.running_since = #{context.startedAt}|]
-                <> runContextScopeSql context
-                <> [HI.sql| FOR UPDATE OF routine|]
-            )
-      (InteractiveRun{}; TriggeredRun{}) -> pure Nothing
-    states <-
-      Hasql.queryTx @[HI.OneColumn RoutineRunStatus]
-        ( [HI.sql|SELECT run.status FROM apis.ai_routine_runs run WHERE run.id = #{runId} AND run.project_id = #{pid}|]
-            <> runContextScopeSql context
-            <> [HI.sql| FOR UPDATE OF run|]
-        )
-    case states of
-      [HI.OneColumn RunRunning] -> do
-        (access, permission) <- Hasql.oneTx @(RunAccess, ProjectMembers.Permissions) (runContextAccessSql context)
-        required <- case mutation of
-          Nothing -> pure ProjectMembers.PView
-          Just _ -> HI.getOneColumn <$> Hasql.oneTx @(HI.OneColumn ProjectMembers.Permissions) [HI.sql|SELECT COALESCE(apis.conversation_evidence_permission(#{pid}, #{context.conversationId}), #{ProjectMembers.PAdmin})|]
-        let outcome = case (access, proposed) of
-              (_, CancelledResult{}) -> proposed
-              (Stopped, _) -> CancelledResult Nothing
-              (_, FailedResult RunFailure{notice = RunOnly}) -> proposed
-              (_, TimedOutResult RunFailure{notice = RunOnly}) -> proposed
-              (Allowed policy, CompletedResult{})
-                | isJust mutation
-                , isLeft (authorizeCapability (RunAuthority policy permission) Catalog.ProjectWrite) || required > Catalog.disclosurePermission Catalog.ProjectWrite ->
-                    CancelledResult $ Just "Project mutation authority was withdrawn before completion."
-              (Allowed _, _) -> proposed
-              (Unavailable, _) -> CancelledResult Nothing
-            (status, response, publication, failure) = case outcome of
-              CompletedResult resultStatus visibility answer -> (case resultStatus of ResultSucceeded -> CompletedSucceeded; ResultNoFindings -> CompletedNoFindings, Just answer, visibility, Nothing)
-              FailedResult err -> (CompletedFailed, Nothing, RetainAnswer, Just err)
-              TimedOutResult err -> (CompletedTimedOut, Nothing, RetainAnswer, Just err)
-              CancelledResult{} -> (CompletedCancelled, Nothing, RetainAnswer, Nothing)
-            reason = case outcome of CancelledResult detail -> detail; _ -> (.reason) <$> failure
-            (findings, actions) = case (.evidence) <$> response of
-              Just (AgentEvidence answer) -> (Just $ AE.toJSON answer, Just $ AE.toJSON answer.toolCalls)
-              Just (NativeEvidence facts) -> (facts, Nothing)
-              Nothing -> (Nothing, Nothing)
-            title = case context.source of
-              InteractiveRun{} -> Nothing
-              ScheduledRun -> Just "Routine result"
-              TriggeredRun event -> Just $ case event of
-                SlackMessage{} -> "Slack investigation"
-                SlackCommand{} -> "Slack command result"
-                PullRequestReview{} -> "Production impact review"
-                IssueEnrichment{} -> "Issue enrichment"
-        for_ response $ \answer -> do
-          sequence_ mutation
-          for_ title $ \label -> Hasql.executeTx $ saveRunResultSql context label answer.report
-          case publication of
-            PublishAnswer -> Hasql.executeTx $ runMessageSql pid runId ChatAssistant answer.content answer.widgets actions
-            RetainAnswer -> pass
-        for_ failure $ \err -> case err.notice of
-          RunOnly -> pass
-          ConversationNotice body -> Hasql.executeTx $ runMessageSql pid runId ChatExecutionEvent body Nothing Nothing
-        Hasql.executeTx
-          [HI.sql|WITH finished AS (
-                UPDATE apis.ai_routine_runs
-                SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{reason}
-                WHERE id = #{runId} AND started_at = #{context.startedAt} AND status = 'running'
-                RETURNING id, project_id, conversation_id, started_at
-              ), uncertain AS (
-                UPDATE apis.ai_agent_operations operation
-                SET outcome = #{Aeson Investigations.OperationUnknown}, updated_at = clock_timestamp()
-                FROM finished run WHERE operation.run_id = run.id AND operation.outcome = #{Aeson Investigations.OperationRunning}
-              ) INSERT INTO apis.ai_routine_run_artifacts (run_id, key, title, content)
-                SELECT run.id, a.key, a.title, a.content FROM finished run
-                JOIN apis.ai_artifacts a ON a.project_id = run.project_id AND a.conversation_id = run.conversation_id
-                WHERE a.key <> 'latest-result' ON CONFLICT (run_id, key) DO NOTHING|]
+  schedule <- case context.source of
+    ScheduledRun ->
+      listToMaybe
+        <$> Hasql.queryTx @[ScheduledRoutine]
+          ( [HI.sql|SELECT routine.id, routine.next_run_at FROM apis.ai_routines routine
+          JOIN apis.ai_routine_runs run ON run.routine_id = routine.id
+          WHERE run.id = #{runId} AND run.project_id = #{pid}
+            AND routine.project_id = #{pid} AND routine.conversation_id = run.conversation_id
+            AND routine.next_run_at = run.scheduled_at AND routine.running_since = #{context.startedAt}|]
+              <> runContextScopeSql context
+              <> [HI.sql| FOR UPDATE OF routine|]
+          )
+    (InteractiveRun{}; TriggeredRun{}) -> pure Nothing
+  states <-
+    Hasql.queryTx @[HI.OneColumn RoutineRunStatus]
+      ( [HI.sql|SELECT run.status FROM apis.ai_routine_runs run WHERE run.id = #{runId} AND run.project_id = #{pid}|]
+          <> runContextScopeSql context
+          <> [HI.sql| FOR UPDATE OF run|]
+      )
+  case states of
+    [HI.OneColumn RunRunning] -> do
+      (access, permission) <- Hasql.oneTx @(RunAccess, ProjectMembers.Permissions) (runContextAccessSql context)
+      required <- case mutation of
+        Nothing -> pure ProjectMembers.PView
+        Just _ -> HI.getOneColumn <$> Hasql.oneTx @(HI.OneColumn ProjectMembers.Permissions) [HI.sql|SELECT COALESCE(apis.conversation_evidence_permission(#{pid}, #{context.conversationId}), #{ProjectMembers.PAdmin})|]
+      let outcome = case (access, proposed) of
+            (_, CancelledResult{}) -> proposed
+            (Stopped, _) -> CancelledResult Nothing
+            (_, FailedResult RunFailure{notice = RunOnly}) -> proposed
+            (_, TimedOutResult RunFailure{notice = RunOnly}) -> proposed
+            (Allowed policy, CompletedResult{})
+              | isJust mutation
+              , isLeft (authorizeCapability (RunAuthority policy permission) Catalog.ProjectWrite) || required > Catalog.disclosurePermission Catalog.ProjectWrite ->
+                  CancelledResult $ Just "Project mutation authority was withdrawn before completion."
+            (Allowed _, _) -> proposed
+            (Unavailable, _) -> CancelledResult Nothing
+          (status, response, publication, failure) = case outcome of
+            CompletedResult resultStatus visibility answer -> (case resultStatus of ResultSucceeded -> CompletedSucceeded; ResultNoFindings -> CompletedNoFindings, Just answer, visibility, Nothing)
+            FailedResult err -> (CompletedFailed, Nothing, RetainAnswer, Just err)
+            TimedOutResult err -> (CompletedTimedOut, Nothing, RetainAnswer, Just err)
+            CancelledResult{} -> (CompletedCancelled, Nothing, RetainAnswer, Nothing)
+          reason = case outcome of CancelledResult detail -> detail; _ -> (.reason) <$> failure
+          (findings, actions) = case (.evidence) <$> response of
+            Just (AgentEvidence answer) -> (Just $ AE.toJSON answer, Just $ AE.toJSON answer.toolCalls)
+            Just (NativeEvidence facts) -> (facts, Nothing)
+            Nothing -> (Nothing, Nothing)
+          title = case context.source of
+            InteractiveRun{} -> Nothing
+            ScheduledRun -> Just "Routine result"
+            TriggeredRun event -> Just $ case event of
+              SlackMessage{} -> "Slack investigation"
+              SlackCommand{} -> "Slack command result"
+              PullRequestReview{} -> "Production impact review"
+              IssueEnrichment{} -> "Issue enrichment"
+      for_ response $ \answer -> do
+        sequence_ mutation
+        for_ title $ \label -> Hasql.executeTx $ saveRunResultSql context label answer.report
+        case publication of
+          PublishAnswer -> Hasql.executeTx $ runMessageSql pid runId ChatAssistant answer.content answer.widgets actions
+          RetainAnswer -> pass
+      for_ failure $ \err -> case err.notice of
+        RunOnly -> pass
+        ConversationNotice body -> Hasql.executeTx $ runMessageSql pid runId ChatExecutionEvent body Nothing Nothing
+      Hasql.executeTx
+        [HI.sql|WITH finished AS (
+              UPDATE apis.ai_routine_runs
+              SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{reason}
+              WHERE id = #{runId} AND started_at = #{context.startedAt} AND status = 'running'
+              RETURNING id, project_id, conversation_id, started_at
+            ), uncertain AS (
+              UPDATE apis.ai_agent_operations operation
+              SET outcome = #{Aeson Investigations.OperationUnknown}, updated_at = clock_timestamp()
+              FROM finished run WHERE operation.run_id = run.id AND operation.outcome = #{Aeson Investigations.OperationRunning}
+            ) INSERT INTO apis.ai_routine_run_artifacts (run_id, key, title, content)
+              SELECT run.id, a.key, a.title, a.content FROM finished run
+              JOIN apis.ai_artifacts a ON a.project_id = run.project_id AND a.conversation_id = run.conversation_id
+              WHERE a.key <> 'latest-result' ON CONFLICT (run_id, key) DO NOTHING|]
 
-        next <- forM schedule $ \slot -> do
-          timing <- decodeRoutineTiming <$> Hasql.oneTx (routineTimingSql [HI.sql|id = #{slot.id}|])
-          let nextAt = timing >>= \(definition, zone) -> nextRoutineAt definition zone slot.scheduledAt now
-          at <-
-            Hasql.oneTx @(HI.OneColumn (Maybe UTCTime))
-              [HI.sql|UPDATE apis.ai_routines SET last_run_at = #{now}, running_since = NULL, cancelled_at = NULL,
-              next_run_at = CASE WHEN active THEN #{nextAt} END
-              WHERE id = #{slot.id} AND next_run_at = #{slot.scheduledAt} AND running_since = #{context.startedAt}
-              RETURNING CASE WHEN active THEN next_run_at END|]
-          pure $ ScheduledRoutine slot.id <$> HI.getOneColumn at
-        pure $ RunCompleted status $ join next
-      [HI.OneColumn RunSucceeded] | context.source /= ScheduledRun -> pure $ RunCompleted CompletedSucceeded Nothing
-      [HI.OneColumn RunNoFindings] | context.source /= ScheduledRun -> pure $ RunCompleted CompletedNoFindings Nothing
-      _ -> pure CompletionRejected
+      next <- forM schedule $ \slot -> do
+        timing <- decodeRoutineTiming <$> Hasql.oneTx (routineTimingSql [HI.sql|id = #{slot.id}|])
+        let nextAt = timing >>= \(definition, zone) -> nextRoutineAt definition zone slot.scheduledAt now
+        at <-
+          Hasql.oneTx @(HI.OneColumn (Maybe UTCTime))
+            [HI.sql|UPDATE apis.ai_routines SET last_run_at = #{now}, running_since = NULL, cancelled_at = NULL,
+            next_run_at = CASE WHEN active THEN #{nextAt} END
+            WHERE id = #{slot.id} AND next_run_at = #{slot.scheduledAt} AND running_since = #{context.startedAt}
+            RETURNING CASE WHEN active THEN next_run_at END|]
+        pure $ ScheduledRoutine slot.id <$> HI.getOneColumn at
+      pure $ RunCompleted status $ join next
+    [HI.OneColumn RunSucceeded] | context.source /= ScheduledRun -> pure $ RunCompleted CompletedSucceeded Nothing
+    [HI.OneColumn RunNoFindings] | context.source /= ScheduledRun -> pure $ RunCompleted CompletedNoFindings Nothing
+    _ -> pure CompletionRejected
 
 
 routineRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool

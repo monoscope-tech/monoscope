@@ -4,6 +4,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Deriving.Aeson qualified as DAE
 import Langchain.LLM.Core qualified as LLM
+import Models.Apis.IssueEnhancement.Types qualified as Enhancement
 import Models.Projects.ProjectMemory qualified as Memory
 import Pkg.DeriveUtils (UUIDId)
 import Relude
@@ -27,7 +28,7 @@ data ReviewComment = ReviewComment {reviewId :: UUIDId "pr_review", body :: Text
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data NativeOperation = WriteWiki WikiWrite | PublishPullRequestComment ReviewComment
+data NativeOperation = WriteWiki WikiWrite | PublishPullRequestComment ReviewComment | EnrichIssue Enhancement.IssueEnrichment
   deriving stock (Eq, Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.TagSingleConstructors] NativeOperation
 

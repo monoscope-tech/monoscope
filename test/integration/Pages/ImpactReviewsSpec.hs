@@ -3258,6 +3258,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                     when (invocation == 1) $ liftIO $ MVar.putMVar committed () >> MVar.takeMVar release
                     pure $ first show $ AE.toJSON <$> stored
                   Operation.PublishPullRequestComment{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+                  Operation.EnrichIssue{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
                 executeWrite = runTestBg frozenTime tr $ AI.executeNativeOperation runContext operation perform
             late <- withAsync executeWrite \worker -> do
               reached <- Timeout.timeout (10 * 1000000) $ MVar.takeMVar committed

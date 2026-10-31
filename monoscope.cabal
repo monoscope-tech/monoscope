@@ -389,6 +389,7 @@ library
       Models.Apis.Integrations
       Models.Apis.Investigations
       Models.Apis.IssueEnhancement
+      Models.Apis.IssueEnhancement.Types
       Models.Apis.Issues
       Models.Apis.LogPatterns
       Models.Apis.LogQueries
@@ -1056,6 +1057,7 @@ test-suite test-dev
       Models.Apis.Integrations
       Models.Apis.Investigations
       Models.Apis.IssueEnhancement
+      Models.Apis.IssueEnhancement.Types
       Models.Apis.Issues
       Models.Apis.LogPatterns
       Models.Apis.LogQueries

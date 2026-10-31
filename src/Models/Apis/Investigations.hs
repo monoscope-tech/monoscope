@@ -585,7 +585,7 @@ beginOperationTx lease cursor proposal = runExceptT do
         Operation.NativeCall (Operation.WriteWiki write) ->
           [HI.sql|operation.proposal #>> '{call,contents,tag}' = 'WriteWiki'
           AND operation.proposal #> '{call,contents,contents,edit}' = #{Aeson write.edit}|]
-        Operation.NativeCall operation@Operation.PublishPullRequestComment{} ->
+        Operation.NativeCall operation@(Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) ->
           [HI.sql|operation.proposal->'call' = #{Aeson $ Operation.NativeCall operation}|]
   prior <-
     lift

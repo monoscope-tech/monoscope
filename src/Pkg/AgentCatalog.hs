@@ -263,12 +263,14 @@ operationName = \case
   Operation.ModelCall call -> LLM.toolFunctionName $ LLM.toolCallFunction call
   Operation.NativeCall (Operation.WriteWiki _) -> toText $ encodeEnumSC @"" WriteProjectMemory
   Operation.NativeCall Operation.PublishPullRequestComment{} -> "publish_pull_request_comment"
+  Operation.NativeCall Operation.EnrichIssue{} -> "enrich_issue"
 
 
 nativePolicy :: Operation.NativeOperation -> AgentPolicy
 nativePolicy = \case
   Operation.WriteWiki _ -> localPolicy WriteProjectMemory
   Operation.PublishPullRequestComment _ -> ExternalPublication
+  Operation.EnrichIssue _ -> ProjectWrite
 
 
 localTools :: Map Text (Tool LocalOperation)
