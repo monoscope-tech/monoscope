@@ -225,6 +225,14 @@ Refresh PR status before any merge decision. A draft or an old green check is no
 Run the required review loops, simplification, local signoff, and image checks only after implementation finishes.
 This review does not authorize posting PR comments, closing PRs, changing live Slack configuration, or production deployment.
 
+## Current-head refresh (31 October)
+
+The refreshed inventory contains 28 open PRs. All twenty selected current heads remain ancestors of this integration branch: #568, #571, #619, #692, #693, #694, and #696–#709. The #661 behavior remains deliberately adapted through shared query and evidence code rather than merged as a second planner. #695 is outside that agent chain; its RUM/dashboard squash merge was already included.
+
+Fetched master now ends at `3c34f3c83`, two commits beyond the previously integrated baseline. This local merge retains #758's per-table SQL isolation and signed browser SQL, plus #759's TLS/dependency update. Conflict resolution preserves this branch's typed issue request identity alongside the new SQL signature, and keeps the required qualified Base16 import without restoring an unused wire import.
+
+The web-components watcher rebuilt successfully and TypeScript checking passes. The server watcher compiles the combined sources; application startup still fails against the pre-existing configured database credentials. All 87 dashboard/widget integration examples pass on the merged tree, including SQL isolation, signed browser SQL, and template compatibility. A duplicate clock import reported after the merge is removed; the rerun is warning-free. All 409 bot integration examples also pass after the merge. Neighboring API/incident verification is pending. No PR update, remote merge, app configuration change, or deployment has occurred. Final signoff and live acceptance remain outstanding.
+
 ## Local consolidation progress
 
 - `39d50b1a1` integrates master through `c71ce414c`, including chart-route removal and the current shared-view changes.

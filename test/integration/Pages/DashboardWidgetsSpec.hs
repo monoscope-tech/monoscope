@@ -49,7 +49,7 @@ import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
-import Pkg.TestClock (getTestTime, setTestTime)
+import Pkg.TestClock (setTestTime)
 import Pkg.TestUtils hiding (sql)
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
