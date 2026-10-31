@@ -78,6 +78,10 @@ saveConversationArtifact tr conversation args = do
     _ -> fail "Expected a successful durable invocation"
 
 
+data AbandonedRun = DeletedRequester | DetachedSchedule | DetachedEvent | HistoricalRequester
+  deriving stock (Eq, Show)
+
+
 spec :: Spec
 spec = around withTestResources do
   describe "Agentic Query Processing" do
@@ -792,7 +796,7 @@ spec = around withTestResources do
           replacement <- runTestBg frozenTime tr do
             actor <- Projects.createUser "Replacement" "Owner" "" "native-replacement@example.test"
             Projects.insertUser actor
-            Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{actor.id}, 'edit')|]
+            Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{actor.id}, #{ProjectMembers.PEdit})|]
             void $ Issues.resumeRoutine actor.id testPid conversation
             Issues.setRoutineInstructions testPid conversation "Instructions for future events."
             pure actor.id
@@ -1452,6 +1456,70 @@ spec = around withTestResources do
           evidence <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid run.id
           (evidence >>= (.input)) `shouldBe` Just "Send a daily reliability brief to Slack"
           (evidence >>= (.instructions)) `shouldBe` Just "Send a daily reliability brief to Slack"
+
+      for_ [DeletedRequester, DetachedSchedule, DetachedEvent, HistoricalRequester] \fixture ->
+        it ("routineRecovery_retiresAbandonedAttemptsWithoutChangingHealthyGrants: " <> show fixture) \tr -> do
+          let conversation = UUIDId $ UUID.fromWords 0 0 113 1
+              healthyConversation = UUIDId $ UUID.fromWords 0 0 113 2
+              healthyRun = UUIDId $ UUID.fromWords 0 0 113 3
+              user = (getResponse tr.trSessAndHeader).user.id
+              artifact = fromRightShow $ Issues.mkArtifactKey "abandoned-evidence"
+          (actor, abandoned) <- runTestBg frozenTime tr do
+            actor <- Projects.createUser "Former" "Requester" "" "abandoned-requester@example.test"
+            Projects.insertUser actor
+            Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{actor.id}, #{ProjectMembers.PEdit})|]
+            for_ [conversation, healthyConversation] \conv -> void $ Issues.getOrCreateConversation testPid conv Issues.CTWeb (AE.object [])
+            void $ Issues.startInteractiveRun testPid healthyConversation user healthyRun "Keep healthy work" Issues.Observe Issues.WebConversation
+            run <- case fixture of
+              DeletedRequester -> do
+                let request = UUIDId $ UUID.fromWords 0 0 113 4
+                void $ Issues.startInteractiveRun testPid conversation actor.id request "Retain abandoned work" Issues.Autonomous Issues.WebConversation
+                pure request
+              DetachedEvent -> do
+                template <- maybe (throwIO $ ErrorCall "Missing Slack routine") pure $ find ((== "slack-investigation") . (.key)) Issues.routineTemplates
+                void $ Issues.installRoutineTemplate user testPid conversation "UTC" template
+                routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (throwIO $ ErrorCall "Missing event installation") pure
+                started <- Issues.startEventRun routine (Issues.SlackCommandRequest conversation actor.id) Issues.StartRun conversation "Retain abandoned event"
+                Issues.deleteRoutine testPid conversation
+                maybe (throwIO $ ErrorCall "Missing event run") (pure . (.id)) started
+              _ -> do
+                slot <- Issues.upsertRoutine actor.id testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (throwIO $ ErrorCall "Missing schedule") pure
+                claimed <- Issues.claimRoutine slot.id slot.scheduledAt >>= maybe (throwIO $ ErrorCall "Missing scheduled run") pure
+                case fixture of
+                  DetachedSchedule -> Issues.deleteRoutine testPid conversation
+                  HistoricalRequester ->
+                    Hasql.interpExecute_
+                      [HI.sql|UPDATE apis.ai_routines SET requested_by = #{user}, authority_version = authority_version + 1,
+                    running_since = NULL, next_run_at = #{slot.scheduledAt} + interval '15 minutes' WHERE id = #{slot.id}|]
+                pure claimed.runId
+            when (fixture `elem` [DeletedRequester, HistoricalRequester]) $ Hasql.interpExecute_ [HI.sql|DELETE FROM users.users WHERE id = #{actor.id}|]
+            pure (actor.id, run)
+          let proposal = Investigations.OperationProposal (Operation.ModelCall $ LLM.ToolCall "pending" "function" $ LLM.ToolFunction "save_artifact" mempty) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Autonomous ProjectMembers.PEdit
+          runQueryEffect tr do
+            void $ Issues.saveArtifact testPid conversation artifact (Just "Retained evidence") "Original observation" Issues.ArtifactReplace
+            for_ (zip [0, 1 :: Int64] [Investigations.OperationRunning, Investigations.OperationReturned $ Investigations.ToolResult "Known response" Nothing]) \(revision, outcome) ->
+              Hasql.interpExecute_
+                [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
+                VALUES (gen_random_uuid(), #{testPid}, #{abandoned}, #{actor}, #{revision}, #{Aeson proposal}, #{Aeson outcome})|]
+          before <- runQueryEffect tr $ Hasql.interp @[(UUIDId "ai_routine", Bool, Maybe UTCTime, Maybe UTCTime, Maybe Projects.UserId)] [HI.sql|SELECT id, active, next_run_at, running_since, requested_by FROM apis.ai_routines WHERE project_id = #{testPid}|]
+          let ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+          bracket_
+            (ddl "ALTER TABLE apis.ai_agent_operations ADD CONSTRAINT reject_abandoned_retirement CHECK (outcome->>'tag' <> 'OperationUnknown') NOT VALID")
+            (ddl "ALTER TABLE apis.ai_agent_operations DROP CONSTRAINT reject_abandoned_retirement")
+            do
+              tryAny (runQueryEffect tr $ Issues.recoverDueRoutines 100) >>= (`shouldSatisfy` isLeft)
+              runQueryEffect tr (Issues.getRoutineRun testPid abandoned) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunRunning)
+              runQueryEffect tr (Issues.listRunArtifacts testPid abandoned) >>= (`shouldSatisfy` null)
+          replicateM_ 2 $ void $ runQueryEffect tr $ Issues.recoverDueRoutines 100
+          runQueryEffect tr (Issues.getRoutineRun testPid abandoned) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)
+          runQueryEffect tr (Issues.getRoutineRun testPid healthyRun) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunRunning)
+          after <- runQueryEffect tr $ Hasql.interp @[(UUIDId "ai_routine", Bool, Maybe UTCTime, Maybe UTCTime, Maybe Projects.UserId)] [HI.sql|SELECT id, active, next_run_at, running_since, requested_by FROM apis.ai_routines WHERE project_id = #{testPid}|]
+          after `shouldBe` before
+          entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid abandoned
+          map (.requestedBy) entries `shouldBe` [actor, actor]
+          sort [AE.toJSON entry.outcome ^? key "tag" . _String | entry <- entries] `shouldBe` [Just "OperationReturned", Just "OperationUnknown"]
+          runQueryEffect tr (Issues.getRoutineRunEvidence testPid abandoned) >>= (\evidence -> (evidence >>= (.requestedBy)) `shouldBe` if fixture `elem` [DeletedRequester, HistoricalRequester] then Nothing else Just actor)
+          runQueryEffect tr (Issues.listRunArtifacts testPid abandoned) >>= (\artifacts -> map (.content) artifacts `shouldBe` [Just "Original observation"])
 
       it "routineRecovery_retiresUnownedWorkWithoutInventingAnActorOrDeletingEvidence" \tr -> do
         let conversation = UUIDId UUID.nil

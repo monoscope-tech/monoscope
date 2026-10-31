@@ -917,6 +917,14 @@ The existing receipt insertion is shared with signed Events API intake. A stable
 
 The manifest declares the message shortcut and its callback. The rollout guide explains its thread and identity behavior. The handler regression first failed because message shortcuts were rejected with HTTP 400. Both root-message and selected-reply cases now pass through signed form intake, duplicate intake, queue processing, model context, run attribution, Autonomous policy, final thread publication, and receipt replay. They also verify quoted blocks, unknown callbacks, invalid timestamps, unlinked members, and revoked members, with no extra model calls for denied or replayed work. All 248 bot examples pass. Formatting, manifest checks, and diff checks pass. HLint reports the same one hint as the baseline across changed application modules, with none introduced. Repeated slice reviews retain typed source validation, keep the dashboard handler local to signed intake, narrow the shared receipt effect row, and preserve the existing alias index path, with no remaining material slice findings. Whole-branch reviews and live workspace acceptance remain pending.
 
+### The shared maintenance sweep retires detached and actorless attempts (31 October)
+
+The hourly recovery transaction now extends the same run-finalization algebra to abandoned attempts. It cancels running work whose requesting account disappeared, including interactive and historical attempts outside a routine's current slot. It also cancels scheduled and event work whose installation was deleted, while retaining a still-current requesting actor. Healthy interactive attempts do not need an installation and remain running.
+
+The existing finalizer marks unresolved operations unknown and snapshots retained artifacts. Known operation responses and original operation actors stay unchanged. This cleanup leaves a healthy routine's replacement owner, activation, next schedule, and lease untouched. It adds no scheduler, worker, table, migration, or substitute actor.
+
+Four failing-first regressions use actual account deletion or installation deletion, and an independent healthy interactive attempt. Each now passes cancellation, rollback on operation-result rejection, actor preservation, known-response preservation, artifact retention, repeated maintenance, and unchanged healthy grants. All 252 bot examples pass. Formatting, focused HLint, and diff checks pass. Repeated slice reviews retain the existing finalizer and transaction, distinguish healthy interactive work from detached installation work, and preserve healthy replacement grants, with no remaining material slice findings. Final release checks and terminal-run lease recovery remain open.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

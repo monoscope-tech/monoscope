@@ -2615,6 +2615,7 @@ routineRunsSql pid =
 recoverDueRoutines :: DB es => Int -> Eff es [ScheduledRoutine]
 recoverDueRoutines limit = Hasql.transaction TxS.ReadCommitted TxS.Write do
   finishRunRowsTx $ RetireUnownedWork UnownedInstallations
+  finishRunRowsTx RetireAbandonedRuns
   Hasql.queryTx
     [HI.sql|SELECT id, next_run_at
       FROM apis.ai_routines WHERE active AND next_run_at <= now()
@@ -2625,6 +2626,7 @@ recoverDueRoutines limit = Hasql.transaction TxS.ReadCommitted TxS.Write do
 data RunFinalization
   = FinishRun RunContext RunTermination (Maybe AE.Value) (Maybe AE.Value) (Maybe Text)
   | RetireUnownedWork RoutineRetirement
+  | RetireAbandonedRuns
 
 
 data RoutineRetirement = UnownedInstallations | ReauthorizingRoutine Projects.ProjectId (UUIDId "conversation")
@@ -2649,6 +2651,14 @@ finishRunRowsTx finalization =
           UPDATE apis.ai_routine_runs
           SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{reason}
           WHERE id = #{context.id} AND started_at = #{context.startedAt} AND status = #{RunRunning}
+          RETURNING id, project_id, conversation_id
+        )|]
+      RetireAbandonedRuns ->
+        [HI.sql|WITH finished AS (
+          UPDATE apis.ai_routine_runs SET status = #{RunCancelled}, finished_at = clock_timestamp(),
+            error = 'Run authorizing member or installation is no longer available.'
+          WHERE status = #{RunRunning} AND (requested_by IS NULL OR
+            (routine_id IS NULL AND source->>'tag' IN ('ScheduledRun', 'TriggeredRun')))
           RETURNING id, project_id, conversation_id
         )|]
       RetireUnownedWork scope ->
