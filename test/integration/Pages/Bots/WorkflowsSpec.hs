@@ -88,7 +88,7 @@ data LegacyFixture = PendingDashboard | PendingAppend | RecordedAppend | Pending
   deriving stock (Bounded, Enum, Eq, Show)
 
 
-data SlackReviewCase = ApproveSlackAction | DeclineSlackAction | ExpireSlackAction | ApproveDuringNotice | RejectFirstReviewNotice | RecoverWaitingAction | StopWaitingAction | PauseWaitingRoutine | CancelWaitingRoutine | DeleteWaitingRoutine | StopDuringNotice | StopClaimedAction
+data SlackReviewCase = ApproveSlackAction | DeclineSlackAction | ExpireSlackAction | ApproveDuringNotice | RejectFirstReviewNotice | RecoverWaitingAction | StopWaitingAction | PauseWaitingRoutine | CancelWaitingRoutine | DeleteWaitingRoutine | StopDuringNotice | StopClaimedAction | RevokeWaitingRequester | UnlinkWaitingRequester | DowngradeWaitingOwner
   deriving stock (Bounded, Enum, Eq, Show)
 
 
@@ -1890,7 +1890,7 @@ spec = around withTestResources do
             (_, retried) <- work receipt
             retried `shouldSatisfy` isRight
             readIORef calls >>= (`shouldBe` 1)
-          if reviewCase `elem` [StopWaitingAction, PauseWaitingRoutine, CancelWaitingRoutine, DeleteWaitingRoutine, StopDuringNotice, StopClaimedAction]
+          if reviewCase `elem` [StopWaitingAction, PauseWaitingRoutine, CancelWaitingRoutine, DeleteWaitingRoutine, StopDuringNotice, StopClaimedAction, RevokeWaitingRequester, UnlinkWaitingRequester, DowngradeWaitingOwner]
             then do
               now <- getTestTime tr.trTestClock
               let ready = runQueryEffect tr $ Hasql.interpScalar @Bool [HI.sql|SELECT COALESCE(bool_or(run_at <= #{now}), FALSE) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt} AND status IN ('queued', 'retry')|]
@@ -1926,14 +1926,18 @@ spec = around withTestResources do
                 DeleteWaitingRoutine -> do
                   void $ testServant tr $ AIThreads.routineDeleteH testPid routine.conversationId
                   runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT NOT EXISTS (SELECT 1 FROM apis.ai_routines WHERE id = #{routine.id})|]) >>= (`shouldBe` True)
+                RevokeWaitingRequester -> runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM projects.project_members WHERE project_id = #{testPid} AND user_id = #{routine.requestedBy}|]
+                UnlinkWaitingRequester -> runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM apis.slack_identities WHERE team_id = 'T_REVIEW' AND slack_user_id = 'U0123ABCDEF'|]
+                DowngradeWaitingOwner -> runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{routine.requestedBy}|]
                 StopDuringNotice -> runTestBgNoReset tr $ JobQueue.deferOperationReview testPid operation.id $ addUTCTime (24 * 60 * 60) now
                 _ -> fail "Expected a stop case"
-              ready >>= (`shouldBe` True)
-              (_, finished) <- work receipt
-              finished `shouldSatisfy` isRight
-              readIORef calls >>= (`shouldBe` 1)
+              ready >>= (`shouldBe` (reviewCase `notElem` [RevokeWaitingRequester, UnlinkWaitingRequester, DowngradeWaitingOwner]))
+              (continuationRequests, finished) <- work receipt
               Just stopped <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt
               (stopped.id, stopped.status) `shouldBe` (current.id, Issues.RunCancelled)
+              finished `shouldSatisfy` isRight
+              readIORef calls >>= (`shouldBe` 1)
+              when (reviewCase `elem` [RevokeWaitingRequester, UnlinkWaitingRequester]) $ continuationRequests `shouldBe` []
               [closed] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid current.id
               closed.outcome `shouldSatisfy` \case
                 Investigations.OperationUnknown -> reviewCase == StopClaimedAction
@@ -1946,11 +1950,14 @@ spec = around withTestResources do
               (updates, refreshed) <- runTestBgRecordingHTTP now tr $ transport $ tryAny $ SlackPage.refreshSlackProgress publication
               refreshed `shouldSatisfy` isRight
               let cards = [decodeUtf8 @Text bytes | (url, bytes) <- updates, url == "https://slack.com/api/chat.update"]
-              cards `shouldSatisfy` (not . null)
-              cards `shouldSatisfy` any (T.isInfixOf "Investigation stopped")
-              cards `shouldSatisfy` any (T.isInfixOf $ if reviewCase == StopClaimedAction then "outcome uncertain" else "not completed")
-              cards `shouldSatisfy` all (\card -> all (not . (`T.isInfixOf` card)) ["monoscope_review_approved", "monoscope_review_rejected"])
-              cards `shouldSatisfy` any (T.isInfixOf $ "/ai/operations/" <> operation.id.toText)
+              if reviewCase `elem` [RevokeWaitingRequester, UnlinkWaitingRequester]
+                then cards `shouldBe` []
+                else do
+                  cards `shouldSatisfy` (not . null)
+                  cards `shouldSatisfy` any (T.isInfixOf "Investigation stopped")
+                  cards `shouldSatisfy` any (T.isInfixOf $ if reviewCase == StopClaimedAction then "outcome uncertain" else "not completed")
+                  cards `shouldSatisfy` all (\card -> all (not . (`T.isInfixOf` card)) ["monoscope_review_approved", "monoscope_review_rejected"])
+                  cards `shouldSatisfy` any (T.isInfixOf $ "/ai/operations/" <> operation.id.toText)
               runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT processed_at IS NOT NULL FROM apis.slack_events WHERE id = #{receipt}|]) >>= (`shouldBe` True)
             else do
               when (reviewCase == ExpireSlackAction) $ advanceTestTime tr (24 * 60 * 60 + 1)

@@ -1148,41 +1148,56 @@ processSlackEventWithTools projectTools receiptId =
       let threadTs = fromMaybe event.ts event.thread_ts
       threadProject <- Integrations.slackThreadProject workspaceId event.channel threadTs
       if mentioned || event.channel_type == Just "im" || isJust threadProject
-        then
-          Integrations.resolveSlackPrincipal workspaceId event.user threadProject >>= \case
+        then do
+          linked <- Integrations.resolveSlackPrincipal workspaceId event.user threadProject
+          closed <- maybe (pure False) (closeRetained linked threadTs) $ threadProject <|> ((.projectId) <$> linked)
+          unless closed $ case linked of
             Nothing -> sendIdentityLink envCfg workspaceId
             Just principal -> do
               bound <- Integrations.bindSlackInvestigation principal workspaceId event.channel threadTs
               unless bound $ throwError err403{errBody = "Slack investigation thread belongs to another project"}
-              retained <- Issues.getEventRun principal.projectId $ Issues.SlackMessage receiptId
-              cancelled <- case retained of
-                Just run | run.status == Issues.RunCancelled -> Issues.runContextFor principal.projectId $ Issues.BackgroundClaim principal.userId run.conversationId run.id run.startedAt
-                _ -> pure Nothing
-              case cancelled of
-                Just _ -> queueCancelledProgress $ Investigations.ProgressTarget principal.projectId workspaceId event.channel threadTs event.ts principal.userId event.user
-                Nothing ->
-                  unlessM (Investigations.isAcceptedFollowup principal.projectId workspaceId event.channel threadTs event.ts) $ void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
-                    if Integrations.slackAgentScopesGranted slackData
-                      then
-                        Issues.getEventRoutine principal.projectId Issues.EventSlackMessage >>= \case
-                          Just routine -> processThreadedEvent routine principal envCfg slackData event workspaceId threadTs
-                          Nothing ->
-                            slackApiOrThrow "Slack routine activation" slackData.botToken "chat.postEphemeral"
-                              $ AE.object
-                                [ "channel" AE..= event.channel
-                                , "user" AE..= event.user
-                                , "text" AE..= ("Ask a project editor to activate or resume Slack investigation in <" <> envCfg.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/routines|AI routines>. Notifications remain connected.")
-                                ]
-                      else do
-                        AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) principal.projectId
-                        void
-                          $ sendRecoveryNotice "Slack reconnect notice" slackData event.channel event.user
-                          $ "Reconnect Slack from <"
-                          <> envCfg.hostUrl
-                          <> "p/"
-                          <> principal.projectId.toText
-                          <> "/settings/integrations|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect."
+              unlessM (Investigations.isAcceptedFollowup principal.projectId workspaceId event.channel threadTs event.ts) $ void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
+                if Integrations.slackAgentScopesGranted slackData
+                  then
+                    Issues.getEventRoutine principal.projectId Issues.EventSlackMessage >>= \case
+                      Just routine -> processThreadedEvent routine principal envCfg slackData event workspaceId threadTs
+                      Nothing ->
+                        slackApiOrThrow "Slack routine activation" slackData.botToken "chat.postEphemeral"
+                          $ AE.object
+                            [ "channel" AE..= event.channel
+                            , "user" AE..= event.user
+                            , "text" AE..= ("Ask a project editor to activate or resume Slack investigation in <" <> envCfg.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/routines|AI routines>. Notifications remain connected.")
+                            ]
+                  else do
+                    AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) principal.projectId
+                    void
+                      $ sendRecoveryNotice "Slack reconnect notice" slackData event.channel event.user
+                      $ "Reconnect Slack from <"
+                      <> envCfg.hostUrl
+                      <> "p/"
+                      <> principal.projectId.toText
+                      <> "/settings/integrations|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect."
         else Log.logTrace "Slack message is outside an active investigation" (AE.object ["team_id" AE..= workspaceId, "channel_id" AE..= event.channel])
+      where
+        closeRetained linked threadTs project = do
+          saved <- Issues.getEventRun project $ Issues.SlackMessage receiptId
+          case saved of
+            Just run -> case run.status of
+              (Issues.RunRunning; Issues.RunCancelled) ->
+                Issues.runContextFor project (Issues.EventClaim (Issues.SlackMessage receiptId) run.id run.startedAt) >>= \case
+                  Just context -> do
+                    authority <- case linked of
+                      Just principal | principal.userId == context.requestedBy && principal.projectId == project -> Issues.runContextAuthority context
+                      _ -> pure Nothing
+                    case authority of
+                      Just _ -> pure False
+                      Nothing -> do
+                        void $ Issues.completeRun context $ Issues.CancelledResult Nothing
+                        queueCancelledProgress $ Investigations.ProgressTarget project workspaceId event.channel threadTs event.ts context.requestedBy event.user
+                        pure True
+                  Nothing -> pure False
+              (Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunFailed; Issues.RunTimedOut) -> pure False
+            Nothing -> pure False
 
     processThreadedEvent routine principal envCfg slackData event workspaceId threadTs = do
       unless (slackData.teamId == workspaceId) $ throwError err403
