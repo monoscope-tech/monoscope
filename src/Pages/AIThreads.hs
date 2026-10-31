@@ -13,7 +13,6 @@ import Data.UUID.V5 qualified as UUID5
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
-import Langchain.LLM.Core qualified as LLM
 import Lucid hiding (for_)
 import Lucid qualified
 import Lucid.Aria qualified as Aria
@@ -28,6 +27,7 @@ import Pages.Bots.Utils qualified as Bots
 import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), emptyState_, iconBadge_, localTimeFmt_, tonePill_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Table (Config (..), EmptyStateAction (..), Features (..), Table (..), ZeroState (ZeroState), col, withAttrs)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC)
 import Relude hiding (ask)
@@ -339,7 +339,7 @@ threadPageGetH pid convId docM runM hxTarget = do
             p_ [class_ "text-xs text-textWeak"] "Most recent 200 actions for this request, including unresolved earlier actions. A saved response can contain a tool error."
             for_ operations \operation -> article_ [id_ $ "operation-" <> operation.id.toText, class_ "space-y-2 rounded-lg border border-strokeWeak p-3"] do
               div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
-                code_ [class_ "min-w-0 break-all text-sm text-textStrong"] $ toHtml $ T.replace "_" " " $ LLM.toolFunctionName operation.proposal.call.toolCallFunction
+                code_ [class_ "min-w-0 break-all text-sm text-textStrong"] $ toHtml $ T.replace "_" " " $ Catalog.operationName operation.proposal.call
                 uncurry tonePill_ $ case operation.outcome of
                   Investigations.OperationRunning -> (BrandBadge, "Awaiting outcome")
                   Investigations.OperationUnknown -> (WarningBadge, "Outcome uncertain")

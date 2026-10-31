@@ -134,7 +134,7 @@ data Page = Page {id :: PageId, version :: Int64, document :: Document, author :
 
 
 data Edit = Edit {pageId :: PageId, version :: Word32, document :: Document}
-  deriving stock (Generic, Show)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 

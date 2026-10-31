@@ -44,6 +44,7 @@ import Network.HTTP.Types.URI (urlEncode)
 import OpenAI.V1.Chat.Completions qualified as OpenAI
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
+import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.Git qualified as Git
@@ -351,7 +352,12 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                             Agent.Remember{} -> Catalog.ConversationWrite
                       AI.authorizeRunOperation context capability >>= \case
                         Left denial -> pure $ Left $ AI.toolDenialMessage denial
-                        Right _ -> requestKnowledge run.projectId attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
+                        Right _ -> case request of
+                          Agent.ProjectMemory (Memory.Write edit) ->
+                            AI.executeNativeOperation context (Operation.WriteWiki $ Operation.WikiWrite attemptId edit) \case
+                              Operation.WriteWiki write -> projectMemory run.projectId write.attemptId (not . null <$> (requireActive run execution >> authorizedServices run mappings)) $ Memory.Write write.edit
+                          (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}) ->
+                            requestKnowledge run.projectId attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
                   )
                   ( \call -> do
                       requireActive run execution

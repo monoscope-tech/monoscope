@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Models.Apis.Investigations (
   Scope (..),
   Turn (..),
@@ -14,6 +16,7 @@ module Models.Apis.Investigations (
   CheckpointConflict (..),
   startCheckpoint,
   startCheckpointFor,
+  prepareNativeOperation,
   commitProgress,
   AgenticChatResult (..),
   ToolCallInfo (..),
@@ -37,7 +40,7 @@ module Models.Apis.Investigations (
   Entry (..),
   History (..),
   ToolResult (..),
-  ToolProposal (..),
+  OperationProposal (..),
   OperationClaim,
   OperationDecision (..),
   OperationResult (..),
@@ -87,6 +90,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pkg.AgentCatalog qualified as Catalog
+import Pkg.AgentOperation qualified as Operation
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.Types (DB)
@@ -112,10 +116,10 @@ data ToolResult = ToolResult {formatted :: Text, rawData :: Maybe AE.Value}
 
 
 -- | The proposal is immutable. Its policy is a typed caller-supplied audit snapshot.
-data ToolProposal policy = ToolProposal {call :: LLM.ToolCall, policy :: policy}
+data OperationProposal policy = OperationProposal {call :: Operation.OperationCall, policy :: policy}
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
-  deriving (HI.DecodeValue) via Aeson (ToolProposal policy)
+  deriving (HI.DecodeValue) via Aeson (OperationProposal policy)
 
 
 newtype OperationClaim = OperationClaim (UUIDId "agent_operation")
@@ -137,7 +141,7 @@ data OperationOutcome = OperationRunning | OperationUnknown | OperationReturned 
   deriving (HI.DecodeValue) via Aeson OperationOutcome
 
 
-data OperationConflict = OperationScopeMismatch | OperationStepMoved | OperationProposalChanged | OperationOutcomeChanged
+data OperationConflict = OperationScopeMismatch | OperationStepMoved | OperationProposalChanged | OperationOutcomeChanged | OperationResponseInvalid
   deriving stock (Show)
   deriving anyclass (Exception)
 
@@ -146,7 +150,7 @@ data OperationEntry policy = OperationEntry
   { id :: UUIDId "agent_operation"
   , runId :: UUIDId "ai_routine_run"
   , requestedBy :: Projects.UserId
-  , proposal :: ToolProposal policy
+  , proposal :: OperationProposal policy
   , outcome :: OperationOutcome
   , createdAt :: UTCTime
   }
@@ -463,6 +467,8 @@ data Checkpoint
   = ModelPending Step
   | ToolsPending Step LLM.Message [(LLM.ToolCall, ToolResult)] [LLM.ToolCall]
   | AnswerReady AgenticChatResult
+  | NativePending Operation.NativeOperation
+  | NativeReady
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson Checkpoint
@@ -519,11 +525,11 @@ checkpointSql target =
 
 -- | A checkpoint revision identifies one pending tool position. An interrupted
 -- retained invocation becomes explicitly uncertain; it is never claimed twice.
-beginOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunLease -> CheckpointCursor -> ToolProposal policy -> Eff es OperationDecision
+beginOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunLease -> CheckpointCursor -> OperationProposal policy -> Eff es OperationDecision
 beginOperation lease cursor proposal = Hasql.transaction TxS.ReadCommitted TxS.Write (beginOperationTx lease cursor proposal) >>= either throwIO pure
 
 
-beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => RunLease -> CheckpointCursor -> ToolProposal policy -> Tx.Transaction (Either OperationConflict OperationDecision)
+beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => RunLease -> CheckpointCursor -> OperationProposal policy -> Tx.Transaction (Either OperationConflict OperationDecision)
 beginOperationTx lease cursor proposal = runExceptT do
   let turn = lease.turn
       (project, conversation, user, message, checkpointRun) = checkpointIdentity cursor.target
@@ -544,20 +550,32 @@ beginOperationTx lease cursor proposal = runExceptT do
       AND message_ts IS NOT DISTINCT FROM #{message} AND run_id IS NOT DISTINCT FROM #{checkpointRun}
       AND revision = #{cursor.revision} FOR UPDATE|]
   when (null checkpoints) $ hoistEither $ Left OperationStepMoved
-  unless (case checkpoints of [HI.OneColumn (ToolsPending _ _ _ (expected : _))] -> expected == proposal.call; _ -> False) $ hoistEither $ Left OperationProposalChanged
+  unless
+    ( case checkpoints of
+        [HI.OneColumn (ToolsPending _ _ _ (expected : _))] -> Operation.ModelCall expected == proposal.call
+        [HI.OneColumn (NativePending expected)] -> Operation.NativeCall expected == proposal.call
+        _ -> False
+    )
+    $ hoistEither
+    $ Left OperationProposalChanged
+  let matchingCall = case proposal.call of
+        Operation.ModelCall call -> [HI.sql|operation.proposal->'call'->'function' = #{Aeson $ LLM.toolCallFunction call}|]
+        Operation.NativeCall (Operation.WriteWiki write) ->
+          [HI.sql|operation.proposal #>> '{call,contents,tag}' = 'WriteWiki'
+          AND operation.proposal #> '{call,contents,contents,edit}' = #{Aeson write.edit}|]
   prior <-
     lift
       $ Hasql.queryTx @[OperationEntry policy]
       $ operationsSql project turn.runId
       <> [HI.sql| AND (operation.id = #{identifier}
         OR operation.outcome->>'tag' IN ('OperationRunning', 'OperationUnknown')
-        OR operation.proposal->'call'->'function' = #{Aeson $ LLM.toolCallFunction proposal.call})
+        OR ^{matchingCall})
         ORDER BY operation.created_at, operation.id FOR UPDATE OF operation|]
   case find ((== identifier) . (.id)) prior of
     Just entry -> do
       unless (entry.proposal.call == proposal.call) $ hoistEither $ Left OperationProposalChanged
       reuse entry
-    Nothing -> case find unresolved prior <|> find ((== LLM.toolCallFunction proposal.call) . LLM.toolCallFunction . (.call) . (.proposal)) prior of
+    Nothing -> case find unresolved prior <|> find (Operation.sameOperation proposal.call . (.call) . (.proposal)) prior of
       Just entry -> reuse entry
       Nothing -> do
         inserted <-
@@ -582,7 +600,7 @@ beginOperationTx lease cursor proposal = runExceptT do
 
 -- | The mutation and its retained outcome commit together. A failed transaction
 -- leaves no claimed operation, so a later worker can safely execute it.
-atomicOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunLease -> CheckpointCursor -> ToolProposal policy -> Tx.Transaction ToolResult -> Eff es OperationResult
+atomicOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunLease -> CheckpointCursor -> OperationProposal policy -> Tx.Transaction ToolResult -> Eff es OperationResult
 atomicOperation lease cursor proposal action = do
   result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
     outcome <-
@@ -641,6 +659,19 @@ startCheckpoint :: DB es => Turn -> Checkpoint -> Eff es SavedCheckpoint
 startCheckpoint = startCheckpointFor . SlackCheckpoint
 
 
+prepareNativeOperation :: DB es => RunTurn -> Operation.NativeOperation -> Eff es (CheckpointCursor, Operation.NativeOperation)
+prepareNativeOperation turn proposed = do
+  let target = RunCheckpoint turn
+  saved <- loadCheckpointFor target >>= maybe (startCheckpointFor target $ NativePending proposed) pure
+  let cursor = CheckpointCursor target saved.revision
+  case saved.checkpoint of
+    NativePending retained -> pure (cursor, retained)
+    NativeReady -> do
+      next <- commitProgress (Just cursor) Nothing (NativePending proposed) Nothing
+      maybe (throwIO CheckpointAccessDenied) (\position -> pure (position, proposed)) next
+    (ModelPending{}; ToolsPending{}; AnswerReady{}) -> throwIO CheckpointAccessDenied
+
+
 -- | The run lock serializes initialization only. Model calls never hold it.
 -- Event input and the initial checkpoint commit together, once per request.
 startCheckpointFor :: DB es => CheckpointTarget -> Checkpoint -> Eff es SavedCheckpoint
@@ -669,9 +700,11 @@ startCheckpointFor target checkpoint = do
               VALUES (#{project}, #{conversation}, #{user}, #{message}, #{run}, #{Aeson checkpoint})
               ON CONFLICT (project_id, conversation_id, user_id, message_ts, run_id)
               DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
-            for_ run $ \identifier ->
-              Hasql.executeTx
-                [HI.sql|INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, created_at)
+            case checkpoint of
+              (NativePending{}; NativeReady) -> pass
+              (ModelPending{}; ToolsPending{}; AnswerReady{}) -> for_ run $ \identifier ->
+                Hasql.executeTx
+                  [HI.sql|INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, created_at)
               SELECT project_id, conversation_id, 'user', input, clock_timestamp() FROM apis.ai_routine_runs
               WHERE id = #{identifier} AND input IS NOT NULL AND source <> '{"tag":"ScheduledRun"}'::jsonb|]
             pure $ Right created
@@ -906,7 +939,7 @@ classifyLegacyEvidence project selected = do
             <> existing
             <> [(conversation, parsed (toolsPermission . (map (.name) :: [ToolCallInfo] -> [Text])) payload) | (conversation, Aeson payload) <- calls]
             <> [(conversation, parsed (toolsPermission . checkpointNames) payload) | (conversation, Aeson payload) <- checkpoints]
-            <> [(conversation, max (parsed (toolPermission . LLM.toolFunctionName . LLM.toolCallFunction) call) (parsed Catalog.disclosurePermission capability)) | (conversation, Aeson call, Aeson capability) <- operations]
+            <> [(conversation, max (parsed (toolPermission . Catalog.operationName) call) (parsed Catalog.disclosurePermission capability)) | (conversation, Aeson call, Aeson capability) <- operations]
         inherit roles = Map.unionWith max roles $ Map.fromListWith max [(target, maybe ProjectMembers.PAdmin (\source -> Map.findWithDefault ProjectMembers.PAdmin source roles) origin) | (target, origin) <- sources]
         resolved = until (\roles -> inherit roles == roles) inherit policies
     for_ (Map.toList $ Map.fromListWith (<>) [(role, [conversation]) | (conversation, role) <- Map.toList resolved]) $ \(role, conversations) -> retainEvidencePermission project conversations role
@@ -921,6 +954,8 @@ classifyLegacyEvidence project selected = do
       AnswerReady answer -> map (.name) answer.toolCalls
       ModelPending step -> map (.name) step.toolCalls
       ToolsPending step _ completed pending -> map (.name) step.toolCalls <> map (LLM.toolFunctionName . LLM.toolCallFunction) (map fst completed <> pending)
+      NativePending operation -> [Catalog.operationName $ Operation.NativeCall operation]
+      NativeReady -> []
 
 
 visibleConversationIds :: DB es => Projects.ProjectId -> ProjectMembers.Permissions -> Eff es [UUIDId "conversation"]

@@ -448,6 +448,7 @@ library
       Pages.Telemetry
       Pkg.AdConversions
       Pkg.AgentCatalog
+      Pkg.AgentOperation
       Pkg.AI
       Pkg.AssetManifestFingerprint
       Pkg.Components.Facets
@@ -1114,6 +1115,7 @@ test-suite test-dev
       Pages.Telemetry
       Pkg.AdConversions
       Pkg.AgentCatalog
+      Pkg.AgentOperation
       Pkg.AI
       Pkg.AssetManifestFingerprint
       Pkg.Components.Facets

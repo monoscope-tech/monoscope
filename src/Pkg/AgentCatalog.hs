@@ -10,6 +10,8 @@ module Pkg.AgentCatalog (
   apiOperations,
   LocalOperation (..),
   localPolicy,
+  operationName,
+  nativePolicy,
   localTools,
   CompositeOperation (..),
   compositeTools,
@@ -22,7 +24,9 @@ import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Map.Strict qualified as Map
+import Langchain.LLM.Core qualified as LLM
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Pkg.AgentOperation qualified as Operation
 import Pkg.DeriveUtils (encodeEnumSC)
 import Relude
 
@@ -252,6 +256,17 @@ localPolicy = \case
   SaveArtifact -> ConversationWrite
   WriteProjectMemory -> ProjectMemoryWrite
   (GetFieldValues; GetServices; CountQuery; SampleLogs; GetFacets; RunQuery; RunSqlQuery; GetInvestigationHistory; GetRelatedIncidents; GetIncidentContext; ReadArtifact; SearchProjectTools; GetProjectToolSchema; GetCodeContext; ListRunbooks; ReadRunbook; GetLinkedRepositories; GetDeployments; ListProjectMemory; ReadProjectMemory) -> ReadOnly ProjectMembers.PView
+
+
+operationName :: Operation.OperationCall -> Text
+operationName = \case
+  Operation.ModelCall call -> LLM.toolFunctionName $ LLM.toolCallFunction call
+  Operation.NativeCall (Operation.WriteWiki _) -> toText $ encodeEnumSC @"" WriteProjectMemory
+
+
+nativePolicy :: Operation.NativeOperation -> AgentPolicy
+nativePolicy = \case
+  Operation.WriteWiki _ -> localPolicy WriteProjectMemory
 
 
 localTools :: Map Text (Tool LocalOperation)

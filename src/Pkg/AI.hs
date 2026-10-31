@@ -54,6 +54,7 @@ module Pkg.AI (
   ToolDenial (..),
   toolDenialMessage,
   authorizeRunOperation,
+  executeNativeOperation,
   defaultLimits,
 
   -- * Message Conversion
@@ -93,6 +94,7 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
@@ -115,6 +117,7 @@ import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
 import Pkg.AgentCatalog (LocalOperation (..))
 import Pkg.AgentCatalog qualified as Catalog
+import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.TimePicker (TimePicker)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC, idFromText)
@@ -1032,6 +1035,7 @@ runAgenticLoopRaw :: ProjectToolCtx es => Maybe Investigations.CheckpointCursor 
 runAgenticLoopRaw turn journal config apiKey checkpoint = do
   void $ requireConfigAccess config
   case checkpoint of
+    (Investigations.NativePending{}; Investigations.NativeReady) -> throwIO Investigations.CheckpointAccessDenied
     Investigations.AnswerReady answer -> do
       Log.logTrace "AI final response" (AE.object ["responseLength" AE..= T.length answer.response, "toolCount" AE..= length answer.toolCalls])
       pure $ Right answer
@@ -1218,6 +1222,64 @@ data ToolRecovery = ReplayReads | AtomicInRun | RetainInRun
 data ToolExecution es = EffectfulTool (Eff es ToolResult) | AtomicTool (Tx.Transaction ToolResult)
 
 
+data AgentOperationUncertain = AgentOperationUncertain (UUIDId "agent_operation") (UUIDId "ai_routine_run")
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
+executeNativeOperation
+  :: (DB es, IOE :> es)
+  => Issues.RunContext
+  -> Operation.NativeOperation
+  -> (Operation.NativeOperation -> Eff es (Either Text AE.Value))
+  -> Eff es (Either Text AE.Value)
+executeNativeOperation context proposed perform =
+  authorizeRunOperation context (Catalog.nativePolicy proposed) >>= \case
+    Left denial -> pure $ Left $ toolDenialMessage denial
+    Right _ -> do
+      validateScope proposed
+      let root = Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.rootId
+      (cursor, frozen) <- Investigations.prepareNativeOperation root proposed
+      validateScope frozen
+      authorizeRunOperation context (Catalog.nativePolicy frozen) >>= \case
+        Left denial -> pure $ Left $ toolDenialMessage denial
+        Right snapshot -> do
+          let action = do
+                result <- perform frozen
+                pure $ ToolResult (either Relude.id (const "Response saved.") result) $ Just $ AE.toJSON result
+          recordedOperation context cursor (Operation.NativeCall frozen) snapshot (EffectfulTool action) >>= \case
+            Investigations.UncertainResult identifier run -> throwIO $ AgentOperationUncertain identifier run
+            Investigations.RecordedResult result -> do
+              void $ Investigations.commitProgress (Just cursor) Nothing Investigations.NativeReady Nothing
+              case result.rawData >>= (\value -> case AE.fromJSON value of AE.Success stored -> Just stored; AE.Error _ -> Nothing) of
+                Just stored -> pure stored
+                Nothing -> throwIO Investigations.OperationResponseInvalid
+  where
+    validateScope operation = case (context.source, operation) of
+      (Issues.TriggeredRun (Issues.PullRequestReview review), Operation.WriteWiki write) -> do
+        permitted <-
+          Hasql.interpOne @(HI.OneColumn Bool)
+            [HI.sql|SELECT TRUE FROM projects.pr_review_attempts
+          WHERE id = #{write.attemptId} AND project_id = #{context.projectId} AND run_id = #{review}|]
+        unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
+      _ -> throwIO Investigations.OperationScopeMismatch
+
+
+recordedOperation :: DB es => Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> ToolExecution es -> Eff es Investigations.OperationResult
+recordedOperation context cursor call snapshot execution = do
+  let lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
+      proposal = Investigations.OperationProposal call snapshot
+  case execution of
+    AtomicTool action -> Investigations.atomicOperation lease cursor proposal action
+    EffectfulTool action ->
+      Investigations.beginOperation lease cursor proposal >>= \case
+        Investigations.RetainedOperation retained -> pure retained
+        Investigations.ExecuteOperation claim -> do
+          result <- action
+          Investigations.completeOperation claim result
+          pure $ Investigations.RecordedResult result
+
+
 data ToolDenial = AuthorityDenied Issues.CapabilityDenial | EvidenceRetentionRequired | AudienceRequired ProjectMembers.Permissions | RestrictedPublication
 
 
@@ -1278,18 +1340,7 @@ executeToolAt cursor config tc = do
   where
     recorded snapshot execution = case (snapshot.capability, cursor, invocationContext config.invocationMode) of
       (MCP.ReadOnly{}, _, _) -> Investigations.RecordedResult <$> perform execution
-      (_, Just position, Just context) -> do
-        let lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
-            proposal = Investigations.ToolProposal tc snapshot
-        case execution of
-          AtomicTool action -> Investigations.atomicOperation lease position proposal action
-          EffectfulTool action ->
-            Investigations.beginOperation lease position proposal >>= \case
-              Investigations.RetainedOperation retained -> pure retained
-              Investigations.ExecuteOperation claim -> do
-                result <- action
-                Investigations.completeOperation claim result
-                pure $ Investigations.RecordedResult result
+      (_, Just position, Just context) -> recordedOperation context position (Operation.ModelCall tc) snapshot execution
       _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable checkpoint."
     perform = \case
       EffectfulTool action -> action

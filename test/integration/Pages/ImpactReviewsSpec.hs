@@ -67,6 +67,8 @@ import Pages.AIThreads qualified as AIThreads
 import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.CodeContext qualified as CodeContextPage
 import Pages.GitSync qualified as GitSyncPage
+import Pkg.AI qualified as AI
+import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
@@ -2771,6 +2773,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                           let page = case request.attemptId of UUIDId value -> UUIDId value
                           saved <- unlift $ knowledge $ Agent.ProjectMemory $ Memory.Write $ Memory.Edit page 0 $ Memory.Document title body
                           saved `shouldSatisfy` isRight
+                          unlift (knowledge $ Agent.ProjectMemory $ Memory.Write $ Memory.Edit page 0 $ Memory.Document title body) `shouldReturn` saved
                           unlift (knowledge $ Agent.ProjectMemory $ Memory.Read page) `shouldReturn` saved
                         let response = directory </> "result.json"
                         writeFileLBS response $ AE.encode answer{Impact.coverage = ["Related test toolchain unavailable"]}
@@ -2796,6 +2799,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     for_ visibleRuns \visible -> do
       visible.status `shouldBe` Issues.RunSucceeded
       runQueryEffect tr (Issues.listArtifacts reviewPid visible.conversationId Nothing) >>= (`shouldSatisfy` (not . null))
+      (_, detail) <- testServant tr $ AIThreads.routineRunGetH reviewPid visible.id Nothing
+      unless (T.isInfixOf "write project memory" $ decodeUtf8 $ Lucid.renderBS $ Lucid.toHtml detail) $ fail "Native wiki write is missing from the run's action history"
     let comments = filter (T.isInfixOf "/issues/comments/99" . fst) requests
     length comments `shouldBe` 1
     let published = T.intercalate " " $ map (decodeUtf8 . snd) comments
@@ -3156,6 +3161,49 @@ spec = around withTestResources $ describe "Production impact reviews" do
     T.intercalate " " (map (decodeUtf8 . snd) metricsRequests) `shouldNotSatisfy` T.isInfixOf "No telemetry observed"
 
     Just routine <- runQueryEffect tr $ Issues.getEventRoutine reviewPid Issues.EventPullRequest
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
+    nativeWrites <- newIORef (0 :: Int)
+    let recoveringAgent = interpose @Agent.CodeReview \_ -> \case
+          Agent.ReviewRepository request _ _ _ _ _ _ _ -> liftIO do
+            Just nativeExecution <- runQueryEffect tr $ Issues.getEventRun reviewPid $ Issues.PullRequestReview run.id
+            runContext <- runTestBg frozenTime tr $ AI.requireRunContext reviewPid $ Issues.EventClaim (Issues.PullRequestReview run.id) nativeExecution.id nativeExecution.startedAt
+            title <- either (fail . toString) pure $ Memory.mkMemoryText "Recovered native write"
+            body <- either (fail . toString) pure $ Memory.mkMemoryText "The same proposal must not write twice."
+            let page = case request.attemptId of UUIDId value -> UUIDId value
+                wikiInput = Operation.WikiWrite request.attemptId $ Memory.Edit page 0 $ Memory.Document title body
+                operation = Operation.WriteWiki wikiInput
+                target = Investigations.RunCheckpoint $ Investigations.RunTurn reviewPid runContext.conversationId runContext.requestedBy runContext.rootId
+            rejectedActor <- tryAny $ runTestBg frozenTime tr $ AI.executeNativeOperation runContext (Operation.WriteWiki wikiInput{Operation.attemptId = UUIDId UUID.nil}) \_ -> do
+              liftIO $ modifyIORef' nativeWrites (+ 1)
+              pure $ Right AE.Null
+            rejectedActor `shouldSatisfy` isLeft
+            readIORef nativeWrites `shouldReturn` 0
+            runQueryEffect tr (Investigations.loadCheckpointFor target) >>= (`shouldSatisfy` isNothing)
+            committed <- MVar.newEmptyMVar
+            release <- MVar.newEmptyMVar
+            let perform (Operation.WriteWiki write) = do
+                  invocation <- liftIO $ atomicModifyIORef' nativeWrites (\count -> (count + 1, count + 1))
+                  stored <- Memory.writePage reviewPid write.edit.pageId write.edit.version Nothing write.edit.document $ Memory.Agent write.attemptId
+                  when (invocation == 1) $ liftIO $ MVar.putMVar committed () >> MVar.takeMVar release
+                  pure $ first show $ AE.toJSON <$> stored
+                executeWrite = runTestBg frozenTime tr $ AI.executeNativeOperation runContext operation perform
+            late <- withAsync executeWrite \worker -> do
+              reached <- Timeout.timeout (10 * 1000000) $ MVar.takeMVar committed
+              reached `shouldBe` Just ()
+              tryAny executeWrite >>= (`shouldSatisfy` isLeft)
+              entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy reviewPid nativeExecution.id
+              map (\entry -> case entry.outcome of Investigations.OperationUnknown -> True; _ -> False) entries `shouldBe` [True]
+              MVar.putMVar release ()
+              either throwIO pure =<< waitCatch worker
+            late `shouldSatisfy` isRight
+            void $ withResource tr.trPool \conn -> execute conn "DELETE FROM apis.slack_turn_checkpoints WHERE project_id = ? AND run_id = ?" (reviewPid, runContext.rootId)
+            executeWrite `shouldReturn` late
+            executeWrite `shouldReturn` late
+            readIORef nativeWrites `shouldReturn` 1
+            runQueryEffect tr (Memory.pageHistory reviewPid page) >>= (\revisions -> map (.version) revisions `shouldBe` [1])
+            pure $ Right $ decodeUtf8 $ AE.encode result{Impact.findings = [], Impact.coverage = ["Recovered native action"]}
+          _ -> liftIO $ fail "Unexpected agent request during native recovery"
+    void $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ recoveringAgent $ Impact.reviewPullRequest run.id
     for_ [False, True] $ \withdraw -> do
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId (if withdraw then Issues.Autonomous else Issues.Observe)
       runQueryEffect tr $ Reviews.retryRun reviewPid run.id

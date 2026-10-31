@@ -731,6 +731,20 @@ The extended application workflow passes: Autonomous wiki writes still read back
 
 Native mutations still need common operation identities, retained proposals/results, and interruption recovery through the action ledger. Generic conversation wiki writes also still need actual agent-attempt attribution. These remain part of the full plan.
 
+### Typed native wiki requests in the shared action ledger (31 October)
+
+A handler-level regression reproduced native wiki writes missing from run action history. `OperationCall` now distinguishes model calls from typed native requests; native wiki writes retain their actual agent attempt and bounded edit. Model calls keep their historical JSON format, and the decoder rejects unsupported tagged calls. Operation names and native policies resolve through the existing catalog.
+
+The checkpoint type now represents a pending native operation and a ready native worker. Both model and native mutations use the same claim, retained-result, ambiguity, and completion code. Native checkpoints retain the proposal until its response is recorded; completed native responses live in the operation ledger. Native trigger input stays on the run rather than becoming a fabricated user chat message. No new migration or parallel ledger was added.
+
+Native admission checks the stored run authority and validates the agent attempt against its project and PR review before persisting a proposal. Recovery checks the retained proposal and current authority again. An uncertain result stops the native worker. A known result replays without another backend invocation.
+
+The application workflow now verifies action-history rendering, exact repeated-call results, rejection of an invalid attempt before checkpoint creation, an in-flight call becoming uncertain, retention of its legitimate late response, and replay after deleting its checkpoint. The recovered wiki stays at one revision and the backend runs once. All 220 bot, 75 API v1, and 33 native review/SDK examples pass. Formatting and diff checks pass. Repeated slice reviews found no further material distillation, constraint-evasion, or client-behavior findings. New wire-format doctests and final release checks remain pending.
+
+Adding the module exposed stale watcher state: both watchers reran tests against old object files without loading the new Cabal module. Their existing tmux panes were restarted after confirming newer source timestamps and missing module objects. The reloaded watchers compiled and exercised the new implementation. Pre-existing ReplaySpec imports and package warnings remain; no warning suppression was added.
+
+Native GitHub publication and issue enrichment still need operation identities in this same ledger. Slack legacy adoption, selected review, actual attempt attribution for generic conversation wiki writes, and the remaining phases stay in scope.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
