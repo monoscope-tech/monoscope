@@ -24,6 +24,8 @@ The discovery regression first failed because Slack reads were absent from the c
 
 These are deterministic integration checks against a protocol fixture, not live Slack acceptance. Actual app eligibility, provider schemas, Slack Connect behavior, streaming acceptance, selective review controls, and final branch release gates remain open.
 
+The [visual review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a919) now shows source snapshot `4bd943a77`, including the remote-read path and availability handling. Chrome checks pass for all eight walkthroughs, code panels, keyboard interaction, and widths 390/768/1280. Every evidence-flow step fits those widths; the mobile read-containment step was visually inspected. The hosted HTML matches the local artifact: 126,529 bytes, SHA-256 `6d0b7b4dae15fc0a14aee5e7a90ad04ad5b2cb32d5d42800503d1d42f7ca842f`, Page sequence 37. This verifies the review artifact, not live Slack behavior.
+
 ## Product contract
 
 Monoscope investigates telemetry, uses project tools, remembers team knowledge, and follows up on its work.
