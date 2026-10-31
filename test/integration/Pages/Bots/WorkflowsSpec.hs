@@ -6,9 +6,10 @@ module Pages.Bots.WorkflowsSpec (spec) where
 import BackgroundJobs qualified as Jobs
 import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), bracket_, throwIO)
-import Control.Lens (ix, toListOf, (.~), (^.), (^..), (^?))
+import Control.Lens (ix, toListOf, (.~), (?~), (^.), (^..), (^?))
+import Control.Lens qualified as Lens
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _Array, _Bool, _Number, _String)
+import Data.Aeson.Lens (key, _Array, _Bool, _Number, _Object, _String)
 import Data.Base64.Types (extractBase64)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
@@ -16,6 +17,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Cache qualified as Cache
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
+import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as HTTP
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -61,6 +63,7 @@ import Pkg.AgentOperation qualified as Operation
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Git qualified as Git
 import Pkg.SlackRateLimit qualified as RateLimit
+import Pkg.TestClock (advanceTime)
 import Pkg.TestUtils
 import Relude
 import Servant.API.ResponseHeaders (getHeaders, getResponse)
@@ -88,6 +91,37 @@ data SessionTitleCase = GenerateTitle | ExistingTitle | RacingTitle
 
 data SlackRevocationCase = MemberDisconnect | UpstreamRevocation
   deriving stock (Bounded, Enum, Show)
+
+
+data SlackRefreshRace = ConcurrentRefresh | DisconnectDuringRefresh | ReconnectDuringRefresh | ReconnectDuringRejectedRefresh | MembershipLostDuringRefresh | WorkspaceReplacedDuringRefresh
+  deriving stock (Bounded, Enum, Show)
+
+
+data SlackRefreshReplyCase = RevokedRefresh | RejectedRefresh | WrongRefreshUser | ExpandedRefreshScopes | MissingRefreshSecret | ConflictingRefreshScopes | MalformedRefresh
+  deriving stock (Bounded, Enum, Show)
+
+
+authorizeSlackTestGrant :: TestResources -> Slack.SlackUserGrant -> IO ()
+authorizeSlackTestGrant tr grant = do
+  let userId = (getResponse tr.trSessAndHeader).user.id
+      encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+  stateId <- runQueryEffect tr $ UUIDId <$> UUIDEff.genUUID
+  verifier <- runQueryEffect tr Slack.newSlackPKCE
+  runQueryEffect tr (Slack.createSlackEvidenceConsent stateId userId testPid grant.slackUserId verifier) >>= (`shouldBe` True)
+  Just (Slack.EvidenceAuthorization consent) <- runQueryEffect tr $ Slack.consumeSlackAuthorization stateId userId
+  runQueryEffect tr (Slack.saveSlackEvidenceGrant encKey consent grant) >>= (`shouldBe` Right True)
+
+
+slackRefreshFixture :: TestResources -> Text -> IO (ByteString, Slack.SlackEvidenceSubject)
+slackRefreshFixture tr workspace = do
+  setupLinkedSlackData tr testPid workspace
+  let userId = (getResponse tr.trSessAndHeader).user.id
+  authorizeSlackTestGrant tr $ Slack.SlackUserGrant workspace "U0123ABCDEF" "expired-token" (Slack.Rotating "refresh-once" $ addUTCTime (-1) frozenTime) (fromList ["search:read.public"])
+  pure (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey, Slack.SlackEvidenceSubject testPid userId workspace "U0123ABCDEF")
+
+
+slackRefreshedToken :: AE.Value
+slackRefreshedToken = AE.object ["ok" AE..= True, "token_type" AE..= ("user" :: Text), "access_token" AE..= ("renewed-token" :: Text), "refresh_token" AE..= ("next-refresh" :: Text), "expires_in" AE..= (3600 :: Int), "scope" AE..= ("search:read.public" :: Text)]
 
 
 agentConfig :: Projects.ProjectId -> AI.AgenticConfig
@@ -409,6 +443,116 @@ spec = around withTestResources do
         toBaseServantResponse tr (Slack.getSlackLink $ linkId 4) >>= (`shouldSatisfy` isNothing)
 
     describe "Slack installation authorization" do
+      for_ ([minBound .. maxBound] :: [SlackRefreshReplyCase]) \scenario ->
+        it ("personalSlackOAuth_refreshRejectsUnsafeResponsesWithoutReplay: " <> show scenario) \tr -> do
+          (encKey, subject) <- slackRefreshFixture tr "T_REFRESH_REPLY"
+          let resolve = Slack.resolveSlackEvidenceGrant encKey "test-client" "test-secret" subject
+              response = case scenario of
+                RevokedRefresh -> AE.object ["ok" AE..= False, "error" AE..= ("invalid_refresh_token" :: Text)]
+                RejectedRefresh -> AE.object ["ok" AE..= False, "error" AE..= ("internal_error" :: Text)]
+                WrongRefreshUser -> slackRefreshedToken & _Object . Lens.at "authed_user" ?~ AE.object ["id" AE..= ("U_OTHER" :: Text), "scope" AE..= ("search:read.public" :: Text)]
+                ExpandedRefreshScopes -> slackRefreshedToken & key "scope" . _String .~ "search:read.public,search:read.private"
+                MissingRefreshSecret -> slackRefreshedToken & key "refresh_token" .~ AE.Null
+                ConflictingRefreshScopes -> slackRefreshedToken & key "scope" . _String .~ "search:read.public,chat:write" & _Object . Lens.at "authed_user" ?~ AE.object ["id" AE..= ("U0123ABCDEF" :: Text), "scope" AE..= ("search:read.public" :: Text)]
+                MalformedRefresh -> AE.String "Unexpected OAuth payload"
+              (expected, repeatedExpected) = case scenario of
+                RevokedRefresh -> (Slack.SlackRefreshRevoked, Slack.SlackNotConnected)
+                _ -> (Slack.SlackRefreshUncertain, Slack.SlackRefreshUncertain)
+          (requests, result) <- runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode response) resolve
+          map fst requests `shouldBe` ["https://slack.com/api/oauth.v2.user.access"]
+          fmap (.accessToken) result `shouldBe` Left expected
+          (repeated, current) <- runAsBaseRecordingHTTP tr resolve
+          repeated `shouldBe` []
+          fmap (.accessToken) current `shouldBe` Left repeatedExpected
+
+      for_ ([minBound .. maxBound] :: [SlackRefreshRace]) \scenario ->
+        it ("personalSlackOAuth_refreshDoesNotOverwriteConcurrentAuthority: " <> show scenario) \tr -> do
+          (encKey, subject) <- slackRefreshFixture tr "T_REFRESH_RACE"
+          entered <- newEmptyMVar
+          release <- newEmptyMVar
+          let resolve = Slack.resolveSlackEvidenceGrant encKey "test-client" "test-secret" subject
+              provider _ _ = do
+                putMVar entered ()
+                takeMVar release
+                pure $ Just $ AE.encode $ case scenario of
+                  ReconnectDuringRejectedRefresh -> AE.object ["ok" AE..= False, "error" AE..= ("invalid_refresh_token" :: Text)]
+                  _ -> slackRefreshedToken
+          withAsync (runAsBaseRecordingHTTP tr $ withHTTPResponses provider resolve) \refreshing -> do
+            takeMVar entered
+            (duplicate, waiting) <- runAsBaseRecordingHTTP tr resolve
+            duplicate `shouldBe` []
+            fmap (.accessToken) waiting `shouldBe` Left (Slack.SlackRefreshPending $ addUTCTime 120 frozenTime)
+            expected <- case scenario of
+              ConcurrentRefresh -> pure $ Right "renewed-token"
+              DisconnectDuringRefresh -> runQueryEffect tr (Slack.revokeSlackEvidence testPid subject.userId) $> Left Slack.SlackNotConnected
+              (ReconnectDuringRefresh; ReconnectDuringRejectedRefresh) -> do
+                authorizeSlackTestGrant tr $ Slack.SlackUserGrant subject.teamId subject.slackUserId "reconnected-token" Slack.NonExpiring (fromList ["search:read.public"])
+                pure $ Right "reconnected-token"
+              MembershipLostDuringRefresh -> do
+                withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE projects.project_members SET active = FALSE WHERE project_id = ? AND user_id = ?" (testPid, subject.userId)
+                pure $ Left Slack.SlackNotConnected
+              WorkspaceReplacedDuringRefresh -> do
+                withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE apis.slack SET team_id = 'T_REPLACED_REFRESH' WHERE project_id = ?" (PGS.Only testPid)
+                pure $ Left Slack.SlackNotConnected
+            putMVar release ()
+            (requests, result) <- wait refreshing
+            map fst requests `shouldBe` ["https://slack.com/api/oauth.v2.user.access"]
+            fmap (.accessToken) result `shouldBe` expected
+            (again, current) <- runAsBaseRecordingHTTP tr resolve
+            again `shouldBe` []
+            fmap (.accessToken) current `shouldBe` expected
+
+      it "personalSlackOAuth_uncertainRefreshDoesNotReplayAndAStaleClaimNeedsReconnection" \tr -> do
+        (encKey, subject) <- slackRefreshFixture tr "T_REFRESH_UNCERTAIN"
+        let resolve = Slack.resolveSlackEvidenceGrant encKey "test-client" "test-secret" subject
+        (_, failed) <- runAsBaseRecordingHTTP tr $ tryAny $ withHTTPResponses (\_ _ -> throwIO $ ErrorCall "lost refresh acknowledgement") resolve
+        isLeft failed `shouldBe` True
+        (requests, unavailable) <- runAsBaseRecordingHTTP tr resolve
+        requests `shouldBe` []
+        fmap (.accessToken) unavailable `shouldBe` Left Slack.SlackRefreshUncertain
+        authorizeSlackTestGrant tr $ Slack.SlackUserGrant subject.teamId subject.slackUserId "expired-again" (Slack.Rotating "another-refresh" $ addUTCTime (-1) frozenTime) (fromList ["search:read.public"])
+        withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE apis.slack_user_credentials SET refresh_state = jsonb_build_object('tag', 'RefreshClaimed', 'contents', jsonb_build_array(?::text, ?::text)) WHERE project_id = ?" (UUID.toText UUID.nil, ("2025-01-01T00:00:00Z" :: Text), testPid)
+        (pendingRequests, pending) <- runAsBaseRecordingHTTP tr resolve
+        pendingRequests `shouldBe` []
+        fmap (.accessToken) pending `shouldBe` Left (Slack.SlackRefreshPending $ addUTCTime 120 frozenTime)
+        advanceTime tr.trTestClock 121
+        (staleRequests, stale) <- runAsBaseRecordingHTTP tr resolve
+        staleRequests `shouldBe` []
+        fmap (.accessToken) stale `shouldBe` Left Slack.SlackRefreshUncertain
+
+      it "personalSlackOAuth_rateLimitedRefreshKeepsTheUnspentTokenForRetry" \tr -> do
+        (encKey, subject) <- slackRefreshFixture tr "T_REFRESH_LIMIT"
+        let resolve = Slack.resolveSlackEvidenceGrant encKey "test-client" "test-secret" subject
+            limited = interpose @HTTP.HTTP \_ -> \case
+              HTTP.PostWith opts url body -> do
+                response <- send $ HTTP.PostWith opts url body
+                pure $ response & Wreq.responseStatus .~ status429 & Wreq.responseHeaders .~ [("Retry-After", "5")]
+              request -> send @HTTP.HTTP $ coerce request
+        (_, failed) <- runAsBaseRecordingHTTP tr $ tryAny $ limited resolve
+        isJust (leftToMaybe failed >>= fromException @RateLimit.SlackRateLimited) `shouldBe` True
+        withResource tr.trPool \conn -> void $ PGS.execute_ conn "DELETE FROM apis.slack_api_cooldowns WHERE team_id = 'T_REFRESH_LIMIT'"
+        (requests, result) <- runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode slackRefreshedToken) resolve
+        fmap (.accessToken) result `shouldBe` Right "renewed-token"
+        map (lookup "refresh_token" . parseSimpleQuery . toStrict . snd) requests `shouldBe` [Just "refresh-once"]
+
+      it "personalSlackOAuth_refreshesAnExpiredGrantOnceAndKeepsItsSubject" \tr -> do
+        (encKey, subject) <- slackRefreshFixture tr "T_REFRESH"
+        let resolve = Slack.resolveSlackEvidenceGrant encKey "test-client" "test-secret" subject
+        (requests, resolved) <- runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode slackRefreshedToken) resolve
+        fmap (.accessToken) resolved `shouldBe` Right "renewed-token"
+        map fst requests `shouldBe` ["https://slack.com/api/oauth.v2.user.access"]
+        map (lookup "refresh_token" . parseSimpleQuery . toStrict . snd) requests `shouldBe` [Just "refresh-once"]
+        (repeated, current) <- runAsBaseRecordingHTTP tr resolve
+        repeated `shouldBe` []
+        fmap (.accessToken) current `shouldBe` Right "renewed-token"
+        case resolved of
+          Right updated -> do
+            (updated.teamId, updated.slackUserId, updated.scopes) `shouldBe` ("T_REFRESH", "U0123ABCDEF", fromList ["search:read.public"])
+            case updated.lifetime of
+              Slack.Rotating refresh expires -> (refresh, expires) `shouldBe` ("next-refresh", addUTCTime 3600 frozenTime)
+              _ -> expectationFailure "Refresh did not retain rotation credentials"
+          _ -> expectationFailure "Refresh did not return its credential"
+
       it "personalSlackOAuth_signedRevocationClearsOnlyItsSubjectOnceBeforeWorkersRun" \tr -> do
         setupLinkedSlackData tr testPid "T_REVOKED"
         let userId = (getResponse tr.trSessAndHeader).user.id

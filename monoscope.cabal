@@ -308,6 +308,9 @@ extra-source-files:
     static/migrations/0266_agent_role_ceiling.sql
     static/migrations/0267_slack_message_identity.sql
     static/migrations/0268_wiki_run_author.sql
+    static/migrations/0269_channel_incident_routines.sql
+    static/migrations/0270_incident_agent_delivery.sql
+    static/migrations/0271_slack_user_authorization.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs
@@ -486,6 +489,7 @@ library
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.SlackOAuth
       Pkg.SlackRateLimit
       Pkg.StackTrace
       Pkg.TestClock
@@ -1154,6 +1158,7 @@ test-suite test-dev
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.SlackOAuth
       Pkg.SlackRateLimit
       Pkg.StackTrace
       Pkg.TestClock

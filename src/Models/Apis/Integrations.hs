@@ -29,6 +29,9 @@ module Models.Apis.Integrations (
   slackEvidenceScopes,
   saveSlackEvidenceGrant,
   getSlackEvidenceGrant,
+  SlackEvidenceSubject (..),
+  SlackCredentialFailure (..),
+  resolveSlackEvidenceGrant,
   revokeSlackEvidence,
   recordSlackTokenRevocation,
   SlackLink (..),
@@ -58,13 +61,15 @@ import Data.ByteArray qualified as BA
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUID
+import Data.Effectful.Wreq qualified as HTTP
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson qualified as AE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import Effectful.Exception qualified as Exception
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
@@ -74,6 +79,9 @@ import Models.Projects.ProjectMembers (activeMembership)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId, enumLit, refineText)
+import Pkg.SlackOAuth (SlackTokenLifetime (..), SlackUserGrant (..), slackEvidenceScopes)
+import Pkg.SlackOAuth qualified as OAuth
+import Pkg.SlackRateLimit qualified as RateLimit
 import Relude
 import System.Types (DB)
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
@@ -412,30 +420,9 @@ consumeSlackAuthorization stateId userId = do
     _ -> Nothing
 
 
--- No Show instance: tokens must never enter diagnostics or retained evidence.
-data SlackUserGrant = SlackUserGrant
-  { teamId :: Text
-  , slackUserId :: Text
-  , accessToken :: Text
-  , lifetime :: SlackTokenLifetime
-  , scopes :: V.Vector Text
-  }
-
-
-data SlackTokenLifetime = NonExpiring | Rotating Text UTCTime
-
-
-slackEvidenceScopes :: [Text]
-slackEvidenceScopes = ["search:read.public", "search:read.private", "search:read.im", "search:read.mpim", "channels:history", "groups:history", "im:history", "mpim:history"]
-
-
 saveSlackEvidenceGrant :: (DB es, UUID.UUIDEff :> es) => ByteString -> SlackEvidenceConsent -> SlackUserGrant -> Eff es (Either Secrets.SecretError Bool)
 saveSlackEvidenceGrant key consent grant = runExceptT do
-  token <- ExceptT $ Secrets.encryptSecret key $ encodeUtf8 grant.accessToken
-  let (refreshToken, expiresAt) = case grant.lifetime of
-        NonExpiring -> (Nothing, Nothing)
-        Rotating refresh expires -> (Just refresh, Just expires)
-  refresh <- traverse (ExceptT . Secrets.encryptSecret key . encodeUtf8) refreshToken
+  (token, refresh, expiresAt) <- ExceptT $ sealSlackGrant key grant
   affected <-
     lift
       $ withSlackCredentialLock consent.projectId consent.userId
@@ -456,32 +443,143 @@ saveSlackEvidenceGrant key consent grant = runExceptT do
     ) INSERT INTO apis.slack_user_credentials (project_id, user_id, team_id, slack_user_id, access_token, refresh_token, expires_at, scopes)
       SELECT project_id, user_id, team_id, slack_user_id, #{token}, #{refresh}, #{expiresAt}, #{grant.scopes} FROM consent
       ON CONFLICT (project_id, user_id, team_id, slack_user_id) DO UPDATE SET
-        access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token, expires_at = EXCLUDED.expires_at, scopes = EXCLUDED.scopes|]
+        access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token, expires_at = EXCLUDED.expires_at, scopes = EXCLUDED.scopes, refresh_state = #{Aeson RefreshIdle}|]
   pure $ affected == 1
+
+
+sealSlackGrant :: UUID.UUIDEff :> es => ByteString -> SlackUserGrant -> Eff es (Either Secrets.SecretError (Text, Maybe Text, Maybe UTCTime))
+sealSlackGrant key grant = runExceptT do
+  token <- ExceptT $ Secrets.encryptSecret key $ encodeUtf8 grant.accessToken
+  let (refreshToken, expiresAt) = case grant.lifetime of
+        NonExpiring -> (Nothing, Nothing)
+        Rotating refresh expires -> (Just refresh, Just expires)
+  refresh <- traverse (ExceptT . Secrets.encryptSecret key . encodeUtf8) refreshToken
+  pure (token, refresh, expiresAt)
+
+
+data SlackEvidenceSubject = SlackEvidenceSubject {projectId :: Projects.ProjectId, userId :: Projects.UserId, teamId :: Text, slackUserId :: Text}
+
+
+data SlackCredentialFailure = SlackNotConnected | SlackRefreshPending UTCTime | SlackRefreshUncertain | SlackRefreshRevoked | SlackRefreshStorageFailure Secrets.SecretError
+  deriving stock (Eq, Show)
+
+
+data SlackRefreshState = RefreshIdle | RefreshClaimed UUID.UUID UTCTime | RefreshUncertain UUID.UUID UTCTime
+  deriving stock (Eq, Generic)
+  deriving anyclass (Aeson.FromJSON, Aeson.ToJSON)
+
+
+data SlackCredentialSnapshot = SlackCredentialSnapshot {version :: Text, refreshState :: SlackRefreshState, grant :: SlackUserGrant}
+
+
+resolveSlackEvidenceGrant :: (DB es, HTTP.HTTP :> es, Time.Time :> es, UUID.UUIDEff :> es) => ByteString -> Text -> Text -> SlackEvidenceSubject -> Eff es (Either SlackCredentialFailure SlackUserGrant)
+resolveSlackEvidenceGrant key clientId clientSecret subject = do
+  now <- Time.currentTime
+  credential <- readSlackCredential key subject
+  case credential of
+    Nothing -> pure $ Left SlackNotConnected
+    Just snapshot -> case snapshot.grant.lifetime of
+      NonExpiring -> pure $ Right snapshot.grant
+      Rotating refresh expires
+        | expires > addUTCTime 60 now -> pure $ Right snapshot.grant
+        | otherwise -> case snapshot.refreshState of
+            RefreshIdle -> refreshCredential now snapshot refresh
+            RefreshClaimed _ started -> current $ if now < addUTCTime 120 started then SlackRefreshPending (addUTCTime 120 started) else SlackRefreshUncertain
+            RefreshUncertain{} -> current SlackRefreshUncertain
+  where
+    refreshCredential now snapshot refresh = do
+      owner <- UUID.genUUID
+      let claimedState = RefreshClaimed owner now
+          claimed = snapshot{refreshState = claimedState}
+          uncertain = void $ changeSlackRefreshState subject claimed $ RefreshUncertain owner now
+      acquired <- changeSlackRefreshState subject snapshot claimedState
+      if not acquired
+        then current $ SlackRefreshPending $ addUTCTime 1 now
+        else
+          ( do
+              response <-
+                RateLimit.withRateLimits subject.teamId (OAuth.exchangeUserToken clientId clientSecret $ OAuth.RefreshUserToken $ OAuth.SlackTokenRefresh subject.teamId subject.slackUserId snapshot.grant.scopes refresh)
+                  `Exception.catch` \(err :: RateLimit.SlackRateLimited) -> do
+                    void $ changeSlackRefreshState subject claimed RefreshIdle
+                    Exception.throwIO err
+              case response of
+                Left OAuth.OAuthRevoked -> do
+                  removed <- withSlackCredentialLock subject.projectId subject.userId $ Hasql.queryTx @HI.RowsAffected $ [HI.sql|DELETE FROM apis.slack_user_credentials target|] <> slackCredentialVersionSql subject claimed
+                  if HI.getRowsAffected removed == 1 then pure $ Left SlackRefreshRevoked else current SlackRefreshRevoked
+                Left _ -> uncertain >> current SlackRefreshUncertain
+                Right grant -> do
+                  sealed <- sealSlackGrant key grant
+                  case sealed of
+                    Left failure -> uncertain $> Left (SlackRefreshStorageFailure failure)
+                    Right (token, nextRefresh, expiresAt) -> do
+                      withSlackCredentialLock subject.projectId subject.userId
+                        . Hasql.executeTx
+                        $ [HI.sql|UPDATE apis.slack_user_credentials target SET access_token = #{token}, refresh_token = #{nextRefresh}, expires_at = #{expiresAt}, scopes = #{grant.scopes}, refresh_state = #{Aeson RefreshIdle}|]
+                        <> slackCredentialVersionSql subject claimed
+                      current SlackNotConnected
+          )
+            `Exception.onException` uncertain
+    current failure = do
+      now <- Time.currentTime
+      credential <- readSlackCredential key subject
+      pure $ case credential of
+        Nothing -> Left SlackNotConnected
+        Just snapshot -> if usableSlackGrant now snapshot.grant then Right snapshot.grant else Left failure
+
+
+changeSlackRefreshState :: DB es => SlackEvidenceSubject -> SlackCredentialSnapshot -> SlackRefreshState -> Eff es Bool
+changeSlackRefreshState subject snapshot next = withSlackCredentialLock subject.projectId subject.userId do
+  affected <- Hasql.queryTx @HI.RowsAffected $ [HI.sql|UPDATE apis.slack_user_credentials target SET refresh_state = #{Aeson next}|] <> slackCredentialVersionSql subject snapshot
+  pure $ HI.getRowsAffected affected == 1
+
+
+slackCredentialVersionSql :: SlackEvidenceSubject -> SlackCredentialSnapshot -> HI.Sql
+slackCredentialVersionSql subject snapshot =
+  [HI.sql| WHERE target.project_id = #{subject.projectId} AND target.user_id = #{subject.userId} AND target.team_id = #{subject.teamId} AND target.slack_user_id = #{subject.slackUserId}
+    AND target.access_token = #{snapshot.version} AND target.refresh_state = #{Aeson snapshot.refreshState}
+    AND EXISTS (SELECT 1|]
+    <> slackCredentialScopeSql subject
+    <> [HI.sql|)|]
 
 
 getSlackEvidenceGrant :: (DB es, Time.Time :> es) => ByteString -> Projects.ProjectId -> Projects.UserId -> Text -> Text -> Eff es (Maybe SlackUserGrant)
 getSlackEvidenceGrant key pid userId teamId slackUserId = do
   now <- Time.currentTime
+  credential <- readSlackCredential key $ SlackEvidenceSubject pid userId teamId slackUserId
+  pure $ (.grant) <$> (credential >>= \snapshot -> snapshot <$ guard (usableSlackGrant now snapshot.grant))
+
+
+usableSlackGrant :: UTCTime -> SlackUserGrant -> Bool
+usableSlackGrant now grant = case grant.lifetime of
+  NonExpiring -> True
+  Rotating _ expires -> expires > now
+
+
+readSlackCredential :: DB es => ByteString -> SlackEvidenceSubject -> Eff es (Maybe SlackCredentialSnapshot)
+readSlackCredential key subject = do
   stored <-
-    Hasql.interpOne @(Text, Maybe Text, Maybe UTCTime, V.Vector Text)
-      $ [HI.sql|SELECT credential.access_token, credential.refresh_token, credential.expires_at, credential.scopes
-      FROM apis.slack_user_credentials credential
-      JOIN apis.slack installation ON installation.project_id = credential.project_id AND installation.team_id = credential.team_id
-      JOIN apis.slack_identities identity ON identity.team_id = credential.team_id AND identity.slack_user_id = credential.slack_user_id AND identity.user_id = credential.user_id
-      JOIN projects.project_members member ON member.project_id = credential.project_id AND member.user_id = credential.user_id
-      JOIN projects.projects project ON project.id = member.project_id JOIN users.users account ON account.id = member.user_id
-      WHERE credential.project_id = #{pid} AND credential.user_id = #{userId} AND credential.team_id = #{teamId} AND credential.slack_user_id = #{slackUserId}
-        AND (credential.expires_at IS NULL OR credential.expires_at > #{now})|]
-      <> ProjectMembers.activeMembership
-  pure $ stored >>= \(token, refresh, expiresAt, scopes) -> do
+    Hasql.interpOne @(Text, Maybe Text, Maybe UTCTime, V.Vector Text, Aeson SlackRefreshState)
+      $ [HI.sql|SELECT credential.access_token, credential.refresh_token, credential.expires_at, credential.scopes, credential.refresh_state|]
+      <> slackCredentialScopeSql subject
+  pure $ stored >>= \(token, refresh, expiresAt, scopes, Aeson refreshState) -> do
     accessToken <- decodeUtf8 <$> rightToMaybe (Secrets.decryptSecret key token)
     refreshToken <- traverse (fmap decodeUtf8 . rightToMaybe . Secrets.decryptSecret key) refresh
     lifetime <- case (refreshToken, expiresAt) of
       (Nothing, Nothing) -> Just NonExpiring
       (Just refreshValue, Just expiry) -> Just $ Rotating refreshValue expiry
       _ -> Nothing
-    pure SlackUserGrant{teamId, slackUserId, accessToken, lifetime, scopes}
+    pure $ SlackCredentialSnapshot token refreshState $ SlackUserGrant subject.teamId subject.slackUserId accessToken lifetime scopes
+
+
+slackCredentialScopeSql :: SlackEvidenceSubject -> HI.Sql
+slackCredentialScopeSql subject =
+  [HI.sql| FROM apis.slack_user_credentials credential
+      JOIN apis.slack installation ON installation.project_id = credential.project_id AND installation.team_id = credential.team_id
+      JOIN apis.slack_identities identity ON identity.team_id = credential.team_id AND identity.slack_user_id = credential.slack_user_id AND identity.user_id = credential.user_id
+      JOIN projects.project_members member ON member.project_id = credential.project_id AND member.user_id = credential.user_id
+      JOIN projects.projects project ON project.id = member.project_id JOIN users.users account ON account.id = member.user_id
+      WHERE credential.project_id = #{subject.projectId} AND credential.user_id = #{subject.userId} AND credential.team_id = #{subject.teamId} AND credential.slack_user_id = #{subject.slackUserId}|]
+    <> ProjectMembers.activeMembership
 
 
 revokeSlackEvidence :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es ()

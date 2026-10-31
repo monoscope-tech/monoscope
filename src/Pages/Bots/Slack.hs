@@ -69,6 +69,7 @@ import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Mail (arr, mrkdwn, slackHeader, slackImage, slackSection)
+import Pkg.SlackOAuth qualified as OAuth
 import Pkg.SlackRateLimit qualified as RateLimit
 import PyF
 import Relude hiding (ask, asks)
@@ -234,37 +235,13 @@ linkProjectGetH slack_code stateM = do
     linkEvidence :: Integrations.SlackEvidenceConsent -> Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
     linkEvidence consent code = do
       envCfg <- asks @AuthContext (.config)
-      let formData :: [FormParam]
-          formData = ["client_id" Wreq.:= envCfg.slackClientId, "client_secret" Wreq.:= envCfg.slackClientSecret, "redirect_uri" Wreq.:= envCfg.slackRedirectUri, "code" Wreq.:= code, "grant_type" Wreq.:= ("authorization_code" :: Text), "code_verifier" Wreq.:= Integrations.slackPKCEVerifier consent.verifier]
-      response <- postWith (defaults & contentTypeHeader "application/x-www-form-urlencoded; charset=utf-8") "https://slack.com/api/oauth.v2.user.access" formData
-      now <- Time.currentTime
-      grant <- either (const $ throwError err400{errBody = "Slack search access could not be connected. Start a new connection and approve read access for your linked Slack account."}) pure $ AE.eitherDecode (response ^. responseBody) >>= AE.parseEither (parseGrant now)
+      response <- RateLimit.withRateLimits consent.teamId $ OAuth.exchangeUserToken envCfg.slackClientId envCfg.slackClientSecret $ OAuth.ExchangeUserCode $ OAuth.SlackUserCode code envCfg.slackRedirectUri $ Integrations.slackPKCEVerifier consent.verifier
+      grant <- either (const $ throwError err400{errBody = "Slack search access could not be connected. Start a new connection and approve read access for your linked Slack account."}) pure response
       saved <- Integrations.saveSlackEvidenceGrant (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) consent grant
       case saved of
         Left _ -> throwError err503{errBody = "Slack search access could not be stored. Please try again later."}
         Right False -> throwError err403{errBody = "This Slack connection no longer matches your account, project, or workspace. Start a new connection."}
         Right True -> pure $ addHeader ("/p/" <> consent.projectId.toText <> "/settings/integrations") $ NoContent $ PageCtx def ()
-    parseGrant :: UTCTime -> AE.Value -> AE.Parser Integrations.SlackUserGrant
-    parseGrant now = AE.withObject "Slack user authorization" \response -> do
-      ok <- response AE..: "ok"
-      tokenType <- response AE..: "token_type"
-      unless (ok && tokenType == ("user" :: Text)) $ fail "User authorization required"
-      team <- response AE..: "team"
-      teamId <- team AE..: "id"
-      user <- response AE..: "authed_user"
-      slackUserId <- user AE..: "id"
-      scope <- user AE..: "scope"
-      let scopes = V.fromList $ filter (not . T.null) $ map T.strip $ T.splitOn "," scope
-      unless (any (T.isPrefixOf "search:read.") scopes && all (`elem` Integrations.slackEvidenceScopes) scopes) $ fail "Read-only search scopes required"
-      accessToken <- response AE..: "access_token"
-      when (T.null accessToken) $ fail "Missing user token"
-      refresh <- response AE..:? "refresh_token"
-      expires <- response AE..:? "expires_in"
-      lifetime <- case (refresh, expires) of
-        (Nothing, Nothing) -> pure Integrations.NonExpiring
-        (Just token, Just (seconds :: Int)) | not (T.null token) && seconds > 0 -> pure $ Integrations.Rotating token $ addUTCTime (fromIntegral seconds) now
-        _ -> fail "Incomplete token rotation credentials"
-      pure Integrations.SlackUserGrant{teamId, slackUserId, accessToken, lifetime, scopes}
     linkWorkspace :: Integrations.SlackInstall -> Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
     linkWorkspace install code = do
       let pid = install.projectId

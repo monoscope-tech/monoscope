@@ -134,9 +134,17 @@ in that workspace. The receipt and cleanup commit together, so duplicate deliver
 or a delayed worker cannot remove a later reconnection. The same worker recovers a
 failed intake cleanup. The manifest includes the required event subscription.
 
-The consent, disconnect, and upstream revocation flow is implemented. Remote MCP
-reads, automatic token refresh, and audience containment remain unfinished; agent
-tools cannot use these credentials yet.
+The credential resolver refreshes rotating tokens before expiry or on their next
+use after expiry. Code exchange and refresh share one OAuth client. Concurrent
+callers share a durable claim; HTTP runs outside database transactions. A definite
+rate limit leaves the refresh token available for retry. An uncertain exchange is
+not replayed. If its access token expires, the user must reconnect. Disconnect,
+membership loss, and workspace replacement prevent an in-flight response from
+restoring access; a later reconnection wins over an older refresh response.
+
+The consent, disconnect, revocation, and refresh lifecycle is implemented. Remote
+MCP reads and audience containment remain unfinished; agent tools cannot use these
+credentials yet.
 
 ## Link a Slack identity
 

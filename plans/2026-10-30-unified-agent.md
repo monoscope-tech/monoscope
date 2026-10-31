@@ -1010,6 +1010,22 @@ The regression first failed because a signed revocation left its credential read
 
 The manifest template now includes `tokens_revoked`. No live app settings changed. This slice adds no migration, table, scheduler, executor, or separate revocation worker. Remote MCP reads, automatic refresh, audience containment, controlled live acceptance, and the other unfinished unified-plan slices remain open.
 
+### Automatic refresh shares the OAuth client and credential state (31 October)
+
+Code exchange and refresh now use `Pkg.SlackOAuth`: one request algebra, form encoder, token endpoint, response parser, identity check, and read-scope contract. The installation-only bot exchange remains separate because it returns a workspace installation, not personal evidence authority. Duplicate personal-response parsing has been removed from the Slack handler. Credentials and requests still have no Show or JSON encoders that could expose secrets.
+
+The credential resolver renews rotating grants within one minute of expiry or on their next use after expiry. Fresh and non-expiring grants make no OAuth request. One durable refresh claim is stored on the existing credential. Other callers can use an unexpired access token or receive a retry deadline while a claim runs. An uncertain exchange, including a stale claim left by a crashed worker, never automatically replays its single-use refresh token. A definite rate limit releases the unspent claim through the existing cooldown mechanism. Reconnection clears the old state.
+
+Claim, completion, and revocation share the existing member lock. HTTP runs outside database transactions. Conditional writes bind the exact credential version and claim, and one scope query checks current identity, installation, account, project, and membership. Disconnect cannot resurrect a credential; membership loss or workspace replacement prevents its return; a later reconnection wins over both a successful and a rejected older refresh. Access token, refresh token, scopes, expiry, and ready state change together. One shared sealer handles initial grants and refreshed grants.
+
+Migration `0272_slack_token_refresh.sql` adds one typed JSON state column and its shape constraint. It adds no table, worker, or scheduler and leaves applied migrations unchanged. The schema represents idle, claimed, and uncertain states with the claim owner and timestamp kept together.
+
+The new expired-grant test first failed with `SlackNotConnected`. Further regressions exposed conflicting top-level/nested scopes being accepted and a late rejection being returned after a successful reconnection. Both are fixed. All 25 focused personal-OAuth examples, 293 bot examples, and 76 API examples pass against the final source. They cover single refresh, cached reuse, concurrent callers, disconnect/reconnect, membership loss, workspace replacement, lost acknowledgement, stale claims, rate limits, revoked refresh tokens, malformed responses, identity mismatch, and scope escalation. All 38 incident-delivery examples also pass. Formatting, focused HLint, and diff checks pass; repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior finding.
+
+Adding the shared module exposed stale watcher module graphs: a new named test initially matched zero examples, and its compiled object lacked the new name. Those results were discarded. The test watcher was restarted once and loaded the new module; the failing and passing regressions above ran with the expected example counts. The server watcher was refreshed once for the same stale graph and now compiles the shared client. Runtime startup still fails against the pre-existing configured database credentials; compilation is not counted as live application acceptance.
+
+This implements credential refresh support; the agent has no remote Slack evidence capability yet. Audience containment and remote MCP reads remain required before these credentials enter agent execution. Selective review, streaming, controlled live Slack acceptance, the final visual-review refresh, and whole-branch release checks remain unfinished.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
