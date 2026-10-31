@@ -445,6 +445,74 @@ spec = around withTestResources do
           readIORef calls >>= (`shouldBe` 2)
           runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Scheduled reviewed dashboard'|]) >>= (`shouldBe` if scenario == ApproveReview then 1 else 0)
 
+      for_ [ApproveReview, DeclineReview, ExpireBeforeReview] $ \scenario ->
+        it ("nativeReview_enrichmentWaitsAndResumesWithoutRepeatingAnalysis: " <> show scenario) \tr -> do
+          issue <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "native-review-worker" "Original issue" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId
+          void $ testServant tr $ AIThreads.routineInstallPostH testPid $ AIThreads.RoutineTemplateForm "issue-enrichment"
+          Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventIssueEnrichment
+          runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+          calls <- newIORef (0 :: Int)
+          let appCtx = tr.trATCtx{config = tr.trATCtx.config{openaiApiKey = "native-review-worker-test-key"}}
+              job = BackgroundJobs.EnhanceIssuesWithLLM testPid $ V.singleton issue
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallLLM _ prompt _ -> do
+                  modifyIORef' calls (+ 1)
+                  pure
+                    $ Right
+                    $ if
+                      | "issue titler" `T.isInfixOf` prompt -> "Reviewed issue title"
+                      | "issue describer" `T.isInfixOf` prompt -> "Recorded diagnosis.\nCheck the trace.\nlow"
+                      | otherwise -> "critical\n0\n0"
+                ELLM.CallAgenticChat{} -> pure $ Left "No agent model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              worker = runTestBgNoReset tr $ Reader.local (const appCtx) $ provider $ BackgroundJobs.processBackgroundJob appCtx job
+              queued payload = runQueryEffect tr $ Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON payload} AND status = 'queued'|]
+              sweep = runTestBgNoReset tr $ Reader.local (const appCtx) $ BackgroundJobs.processBackgroundJob appCtx $ BackgroundJobs.ProcessIssuesEnhancement $ addUTCTime 60 frozenTime
+          worker
+          Just waiting <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment issue
+          waiting.status `shouldBe` Issues.RunRunning
+          [operation] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
+          queued job >>= (`shouldBe` 1)
+          (_, page) <- testServant tr $ AIThreads.operationGetH testPid operation.id
+          renderT page `shouldSatisfy` T.isInfixOf "Approve action"
+          fresh <- runTestBgNoReset tr $ Issues.createQueryAlertIssue testPid "fresh-native-review-worker" "Fresh issue" "service == billing" 100 200 Issues.Above >>= Issues.insertIssueReturningId
+          entered <- newEmptyMVar
+          blocked <- newEmptyMVar
+          let interrupted = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallLLM{} -> liftIO $ putMVar entered () >> takeMVar blocked
+                ELLM.CallAgenticChat{} -> pure $ Left "No agent model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+          Async.withAsync (runTestBgNoReset tr $ Reader.local (const appCtx) $ interrupted $ BackgroundJobs.processBackgroundJob appCtx $ BackgroundJobs.EnhanceIssuesWithLLM testPid $ V.singleton fresh) $ \_ ->
+            Timeout.timeout 5_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
+          Just abandoned <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment fresh
+          abandoned.status `shouldBe` Issues.RunRunning
+          sweep
+          queued job >>= (`shouldBe` 1)
+          queued (BackgroundJobs.EnhanceIssuesWithLLM testPid $ V.singleton fresh) >>= (`shouldBe` 1)
+          replicateM_ 2 worker
+          readIORef calls >>= (`shouldBe` 3)
+          if scenario == ExpireBeforeReview
+            then advanceTestTime tr (24 * 60 * 60 + 1)
+            else void $ testServant tr $ AIThreads.operationReviewPostH testPid operation.id $ AIThreads.OperationReviewForm $ if scenario == DeclineReview then Investigations.ReviewRejected else Investigations.ReviewApproved
+          withResource tr.trPool $ \connection -> PGS.withTransaction connection do
+            locked <- PGS.query connection "SELECT pg_try_advisory_xact_lock(hashtext(?))" $ PGS.Only $ "issue-enrichment:" <> testPid.toText <> ":" <> issue.toText
+            locked `shouldBe` [PGS.Only True]
+            runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON job} AND status = 'queued'|]
+            worker
+            Just busy <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment issue
+            busy.status `shouldBe` Issues.RunRunning
+            queued job >>= (`shouldBe` 1)
+          worker
+          worker
+          Just finished <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment issue
+          (finished.id, finished.status) `shouldBe` (waiting.id, if scenario == ApproveReview then Issues.RunSucceeded else Issues.RunCancelled)
+          Just retained <- runQueryEffect tr $ Issues.selectIssueById testPid issue
+          retained.title `shouldBe` (if scenario == ApproveReview then "Reviewed issue title" else "Original issue")
+          isJust retained.llmEnhancedAt `shouldBe` (scenario == ApproveReview)
+          readIORef calls >>= (`shouldBe` 3)
+          sweep
+          queued job >>= (`shouldBe` 1)
+
       for_ [ApproveReview, DeclineReview, ExpireAfterReview] $ \scenario ->
         it ("agentReview_nativeExecutionRetainsItsReviewAndResponseContract: " <> show scenario) \tr -> do
           issueId <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "review-native" "Original title" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId

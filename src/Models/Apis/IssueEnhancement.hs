@@ -1,5 +1,3 @@
-{-# LANGUAGE OrPatterns #-}
-
 module Models.Apis.IssueEnhancement (
   enhanceIssueWithLLM,
   generateEnhancedTitle,
@@ -7,6 +5,7 @@ module Models.Apis.IssueEnhancement (
   classifyIssueCriticality,
   updateIssueClassification,
   analyzeErrorPattern,
+  EnrichmentResult (..),
   enrichmentAnswer,
   completeEnrichmentTx,
   IssueEnhancement (..),
@@ -38,8 +37,11 @@ enhanceIssueWithLLM complete issue = runExceptT do
   pure IssueEnhancement{issueId = issue.id, enhancedTitle, enhancedDescription, recommendedAction, migrationComplexity}
 
 
-enrichmentAnswer :: Issues.ExecutionPolicy -> IssueEnrichment -> Issues.RunAnswer
-enrichmentAnswer policy enrichment =
+data EnrichmentResult = Observed | Applied
+
+
+enrichmentAnswer :: EnrichmentResult -> IssueEnrichment -> Issues.RunAnswer
+enrichmentAnswer result enrichment =
   let enhancement = enrichment.enhancement
       body =
         "# "
@@ -52,7 +54,7 @@ enrichmentAnswer policy enrichment =
           <> enhancement.migrationComplexity
           <> foldMap (\(critical, _, _) -> "\n\nSeverity assessment: " <> bool "Not critical" "Critical" critical) enrichment.classification
           <> foldMap (\(cause, category) -> "\n\n## Error analysis\n" <> cause <> "\n\nCategory: " <> category) enrichment.analysis
-          <> case policy of Issues.Observe -> "\n\nObserve policy: issue metadata was not changed."; (Issues.Autonomous; Issues.ReviewSelected{}) -> ""
+          <> case result of Observed -> "\n\nObserve policy: issue metadata was not changed."; Applied -> ""
    in Issues.reportAnswer body $ Just $ AE.object ["enhancement" AE..= enhancement, "classification" AE..= enrichment.classification, "analysis" AE..= enrichment.analysis]
 
 
@@ -74,7 +76,7 @@ completeEnrichmentTx context enrichment = do
   target <- Hasql.queryTx @(Maybe (HI.OneColumn Issues.IssueId)) [HI.sql|SELECT id FROM apis.issues WHERE project_id = #{pid} AND id = #{issue} FOR UPDATE|]
   result <- case target of
     Nothing -> Issues.completeRunTx enrichment.analyzedAt Nothing context $ Issues.CancelledResult $ Just "Issue is no longer available."
-    Just _ -> Issues.completeRunTx enrichment.analyzedAt (Just mutate) context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ enrichmentAnswer Issues.Autonomous enrichment
+    Just _ -> Issues.completeRunTx enrichment.analyzedAt (Just mutate) context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ enrichmentAnswer Applied enrichment
   pure $ case result of
     Issues.RunCompleted Issues.CompletedSucceeded _ -> Right $ AE.object ["issue_id" AE..= issue, "analyzed_at" AE..= enrichment.analyzedAt]
     Issues.RunCompleted _ _ -> Left "Issue metadata update was cancelled."

@@ -1012,22 +1012,17 @@ processSlackEventWithTools projectTools receiptId =
 
     deferReview identifier expiresAt = do
       now <- Time.currentTime
-      delivered <-
-        Hasql.interpScalar @Bool
-          [HI.sql|SELECT EXISTS (
-        SELECT 1 FROM apis.slack_investigation_progress progress JOIN apis.slack_events receipt ON receipt.id = #{receiptId}
-        WHERE progress.team_id = receipt.team_id AND progress.channel_id = receipt.payload #>> '{event,channel}'
-          AND progress.thread_ts = COALESCE(receipt.payload #>> '{event,thread_ts}', receipt.payload #>> '{event,ts}')
-          AND progress.message_ts = receipt.payload #>> '{event,ts}' AND progress.progress_ts IS NOT NULL)|]
-      scheduleSlackJob
-        ( Hasql.queryTx @[UUIDId "slack_event"]
-            [HI.sql|SELECT receipt.id FROM apis.slack_events receipt
-          JOIN apis.ai_agent_operations operation ON operation.id = #{identifier}
-          WHERE receipt.id = #{receiptId} AND receipt.processed_at IS NULL
-            AND operation.review->>'tag' = 'ReviewPending' FOR UPDATE OF operation, receipt|]
-        )
-        (BgJobs.ProcessSlackEvent receiptId)
-        (if delivered then expiresAt else min expiresAt $ addUTCTime 60 now)
+      targets <-
+        Hasql.interpOne @(Bool, Projects.ProjectId)
+          [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.slack_investigation_progress progress
+          WHERE progress.project_id = operation.project_id AND progress.team_id = receipt.team_id
+            AND progress.channel_id = receipt.payload #>> '{event,channel}'
+            AND progress.thread_ts = COALESCE(receipt.payload #>> '{event,thread_ts}', receipt.payload #>> '{event,ts}')
+            AND progress.message_ts = receipt.payload #>> '{event,ts}' AND progress.progress_ts IS NOT NULL), operation.project_id
+        FROM apis.ai_agent_operations operation JOIN apis.slack_events receipt ON receipt.id = #{receiptId}
+        WHERE operation.id = #{identifier} AND receipt.processed_at IS NULL|]
+      for_ targets $ \(delivered, project) ->
+        BgJobs.deferOperationReview project identifier $ if delivered then expiresAt else min expiresAt $ addUTCTime 60 now
 
     runReceipt = do
       pending <-

@@ -479,7 +479,8 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ AI.prepareRunAnswer answer
   case outcome of
     Just (Left err)
-      | Just (AI.AgentAwaitingReview identifier _) <- fromException err ->
+      | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> do
+          Jobs.deferOperationReview routine.projectId identifier deadline
           Log.logInfo "AI routine is awaiting action review" $ AE.object ["routine_id" AE..= routineId, "operation_id" AE..= identifier]
     _ -> do
       completion <- case outcome of
@@ -3834,11 +3835,22 @@ processIssuesEnhancement scheduledTime = do
   issuesToEnhance <-
     Hasql.interp
       [HI.sql| SELECT id, project_id
-              FROM apis.issues
+              FROM apis.issues issue
               WHERE created_at >= #{oneHourAgo} AND created_at < #{scheduledTime}
                 AND llm_enhanced_at IS NULL
                 AND acknowledged_at IS NULL
                 AND archived_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM apis.ai_routine_runs run
+                  WHERE run.project_id = issue.project_id
+                    AND run.source = jsonb_build_object('tag', 'TriggeredRun', 'contents',
+                      jsonb_build_object('tag', 'IssueEnrichment', 'contents', issue.id))
+                    AND (run.status IN (#{Issues.RunSucceeded}, #{Issues.RunNoFindings}, #{Issues.RunCancelled})
+                      OR (run.status = #{Issues.RunRunning} AND EXISTS (
+                        SELECT 1 FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs origin ON origin.id = operation.run_id
+                        WHERE origin.project_id = run.project_id AND origin.root_run_id = run.root_run_id
+                          AND operation.outcome = #{HI.AsJsonb Investigations.OperationUnstarted}
+                          AND operation.review->>'tag' = 'ReviewPending'
+                          AND (operation.review #>> '{contents,expiresAt}')::timestamptz > app_now()))))
               ORDER BY project_id
               LIMIT 100 |]
 
@@ -3851,9 +3863,8 @@ enhanceIssuesWithLLM :: Projects.ProjectId -> V.Vector Issues.IssueId -> ATBackg
 enhanceIssuesWithLLM pid issueIds = do
   ctx <- ask @Config.AuthContext
   unless (T.null ctx.config.openaiApiKey) $ for_ issueIds \issueId ->
-    whenJustM (Issues.getEventRoutine pid Issues.EventIssueEnrichment) \routine ->
-      void
-        $ withXactLease ctx ("issue-enrichment:" <> pid.toText <> ":" <> issueId.toText)
+    whenJustM (Issues.getEventRoutine pid Issues.EventIssueEnrichment) \routine -> do
+      acquired <- withXactLease ctx ("issue-enrichment:" <> pid.toText <> ":" <> issueId.toText)
         $ whenJustM (Issues.selectIssueById pid issueId) \issue -> unless (Issues.isNewEndpointOnly issue) do
           let convId = UUIDId issueId.unUUIDId
           void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object [])
@@ -3875,17 +3886,21 @@ enhanceIssuesWithLLM pid issueIds = do
                     pure $ Enhancement.IssueEnrichment enhancement classification analysis now
                 decision <- lift $ AI.authorizeRunOperation context Catalog.ProjectWrite
                 policy <- case decision of
-                  Right _ -> pure Issues.Autonomous
+                  Right snapshot -> pure snapshot.execution
                   Left (AI.AuthorityDenied Issues.ActionGrantRequired) -> pure Issues.Observe
                   Left denial -> throwError $ AI.toolDenialMessage denial
                 pure (enrichment, policy)
               case outcome of
-                Right (Just (Right (enrichment, Issues.Observe))) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Enhancement.enrichmentAnswer Issues.Observe enrichment
-                Right (Just (Right (enrichment, (Issues.Autonomous; Issues.ReviewSelected{})))) -> do
-                  result <- AI.executeNativeOperation context (Operation.EnrichIssue enrichment) \case
-                    Operation.EnrichIssue frozen -> AI.AtomicOperation $ Enhancement.completeEnrichmentTx context frozen
-                    (Operation.WriteWiki{}; Operation.PublishPullRequestComment{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
-                  for_ (leftToMaybe result) $ \reason -> void $ Issues.completeRun context $ Issues.CancelledResult $ Just reason
+                Right (Just (Right (enrichment, policy))) -> case policy of
+                  Issues.Observe -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Enhancement.enrichmentAnswer Enhancement.Observed enrichment
+                  (Issues.Autonomous; Issues.ReviewSelected{}) ->
+                    ( do
+                        result <- AI.executeNativeOperation context (Operation.EnrichIssue enrichment) \case
+                          Operation.EnrichIssue frozen -> AI.AtomicOperation $ Enhancement.completeEnrichmentTx context frozen
+                          (Operation.WriteWiki{}; Operation.PublishPullRequestComment{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+                        for_ (leftToMaybe result) $ \reason -> void $ Issues.completeRun context $ Issues.CancelledResult $ Just reason
+                    )
+                      `catch` \(AI.AgentAwaitingReview identifier deadline) -> Jobs.deferOperationReview pid identifier deadline
                 _ -> do
                   active <- Issues.routineRunActive pid execution.id
                   let message = "Issue enrichment failed. A retry will create a new attempt."
@@ -3893,6 +3908,9 @@ enhanceIssuesWithLLM pid issueIds = do
                       completion = if not active then Issues.CancelledResult Nothing else case outcome of Right Nothing -> Issues.TimedOutResult failure; _ -> Issues.FailedResult failure
                   void $ Issues.completeRun context completion
                   when active $ throwIO $ CE.ErrorCall $ toString message
+      when (isNothing acquired) do
+        now <- Time.currentTime
+        enqueueAt ctx (addUTCTime 1 now) [Jobs.EnhanceIssuesWithLLM pid $ V.singleton issueId]
 
 
 patternEmbeddingAndMerge :: Projects.ProjectId -> ATBackgroundCtx ()

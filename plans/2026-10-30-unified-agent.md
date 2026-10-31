@@ -10,7 +10,7 @@ Evidence uses one typed audience and one evaluator across web navigation, thread
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-The latest bot suite passes 356 examples, including 27 Slack MCP cases, 18 ledger/policy review cases, three scheduled review cases, and six signed Slack review flows. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, policy configuration, remaining review lifecycle work, streaming acceptance, and final release checks remain unfinished.
+The latest bot suite passes 359 examples, including 27 Slack MCP cases, 18 ledger/policy review cases, three scheduled review cases, and six signed Slack review flows. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, policy configuration, remaining review lifecycle work, streaming acceptance, and final release checks remain unfinished.
 
 ## Slack MCP integration checkpoint
 
@@ -87,6 +87,17 @@ Policy configuration, suspension for web/slash/native sources, waiting stop/paus
 Proposal links, review decisions, and continuation jobs now share one request-scoped lookup. It retains the proposal's original attempt while selecting the latest admitted attempt in the same project, conversation, and request root. A new vote requires a live attempt whose requester still matches the stored proposal. Completed proposal links resolve to the latest result; the inspector still links the original attempt for audit.
 
 The lookup uses the existing project/request-root index. No migration, queue, or executor is added. Failed-attempt recovery initially returned the old run ID from the proposal link. Six signed Slack scenarios now pass, including failure while waiting, denial before retry admission, recovery without new inference, original-actor/proposal retention, one real dashboard mutation, and completed-result inspection. The final source passes all 356 bot, 76 API, and 38 incident-delivery examples. Both watchers compile successfully. Formatting and diff checks pass; scoped HLint reports no findings on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue. Final branch checks and the other unfinished plan items remain pending.
+
+
+## Native issue-enrichment review
+
+Issue enrichment now returns normally while its retained metadata update awaits review. Scheduled, Slack, and enrichment workers use the same transactional scheduling function. A private wake type distinguishes bringing reviewed work forward from deferring a still-pending proposal; a deferred job cannot postpone a recorded decision. All three use existing job constructors, the request-scoped operation lookup, and the shared evaluator/executor. The run inspector offers the same review controls for enrichment.
+
+The periodic scanner skips terminal enrichment requests and unexpired review waits. It still discovers an ordinary analysis interrupted before a proposal was stored. Source equality and request-root joins use existing indexes. A busy enrichment lease requeues its existing job instead of consuming the continuation. Metadata reports distinguish analysis-only from applied results independently of execution policy; authorization retains the real effective policy.
+
+The new integration cases first failed on uncaught suspension. Further checks reproduced scanner starvation of interrupted analysis and loss of a continuation while its real advisory lock was held. Approval, rejection, and expiry now pass through the actual worker and web controls. For the target enrichment, repeated waiting/resume calls retain the original three inference results. Only approval changes metadata. The same cases cover fresh-issue discovery, interrupted-analysis rediscovery, busy-lease retry, repeated completion, and terminal suppression. All 27 focused review examples pass. The final source passes 359 bot, 35 error-pattern, 76 API, and 38 incident-delivery examples. Formatting and diff checks pass; scoped HLint has no findings on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue in this slice.
+
+No migration, new worker type, or executor is added. Policy configuration, waiting stop/pause acceptance, other native/web/slash worker paths, controlled live acceptance, and final branch checks remain unfinished.
 
 ## Product contract
 
