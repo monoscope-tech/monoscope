@@ -22,7 +22,7 @@ Migration `0277_member_conversation_runs.sql` groups the new source constraints 
 
 The original regression failed with one model call during HTTP submission. The current implementation passes 420 bot, 76 API, 41 incident-delivery, 87 dashboard/widget, and 16 chart-cache examples. Six focused web cases cover admission, duplicate delivery, authority loss, approval, rejection, expiry, and enqueue rollback. The issue case verifies queued execution and retained context. Real authenticated Chrome checks at widths 390 and 1280 verify automatic answer display, terminal polling removal, and preservation of an unsent draft and its request ID. The temporary browser fixture was restored after acceptance. Formatting and diff checks pass. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material finding in this slice; HLint reports only the two pre-existing hints in unchanged AI code.
 
-Remaining work includes final handling when queued retries are exhausted, refreshing the generated title in the asynchronous view, retained slash binding and evidence scope, native model-session and workspace continuation, streaming, live Slack acceptance, the artifact refresh, and final branch reviews and release checks. This checkpoint does not establish completion of the unified plan.
+Remaining work includes interrupted terminal-callback recovery, refreshing the generated title in the asynchronous view, retained slash binding and evidence scope, native model-session and workspace continuation, streaming, live Slack acceptance, the artifact refresh, and final branch reviews and release checks. This checkpoint does not establish completion of the unified plan.
 
 ## Queued slash commands and shared Slack publication
 
@@ -30,13 +30,19 @@ Slash intake now commits the original input, requester, grant, destination, and 
 
 Replies use `chat.postMessage` in the original channel or DM, with no thread for a slash command. This preserves the original channel-visible reply audience. The callback URL is no longer the execution or delivery mechanism. The existing app grant covers public-channel posting; private channels and DMs must be accessible to the app. A destination failure stays visible and retryable; it does not silently redirect the result elsewhere.
 
-The final source passes all 442 bot, 76 API, and 41 incident-delivery examples. Focused cases cover atomic admission and enqueue rollback, channel and DM replies, ambiguous acknowledgements, reconciliation without another model call or mutation, approval, rejection, expiry, membership removal, Slack unlinking, pause, cached reports, and fresh web access checks. These are deterministic integration checks, not live Slack acceptance.
+The slash consolidation checkpoint passed 442 bot, 76 API, and 41 incident-delivery examples; terminal-hook verification below extends the bot suite to 446 examples. Focused cases cover atomic admission and enqueue rollback, channel and DM replies, ambiguous acknowledgements, reconciliation without another model call or mutation, approval, rejection, expiry, membership removal, Slack unlinking, pause, cached reports, and fresh web access checks. These are deterministic integration checks, not live Slack acceptance.
 
 Failing-first regressions reproduced lost replies after deleting web history and refused reads of the command's own channel. Commands now retain their typed original workspace, destination, and Slack user on the existing run record. The smart constructor has read-only field access; SQL rejects changes to the binding and mismatched recovery attempts. Legacy requests remain unbound rather than guessing from current identities. Delivery, recovery, and conversation readers use the retained origin even after transcript deletion.
 
 Native events and slash commands share destination-bound Slack evidence reads. Channel requests cannot broaden their destination or use personal workspace search. DM requests use the existing DM-owner check. The same parameterized cases verify credentials, provenance, disconnection, membership loss, schema changes, wrong DM peers, invalid locators, and rejected broader searches for both adapters. Deletion, original-input recovery, and SQL immutability regressions pass. Formatting and diff checks pass; scoped HLint has no new findings. Repeated scoped distillation, constraint, and client-behavior reviews leave no material finding in this checkpoint.
 
-Retry exhaustion, asynchronous web-title refresh, native workspace continuation, streaming, live Slack acceptance, the visual artifact refresh, and final branch gates remain open.
+Interrupted terminal-callback recovery, asynchronous web-title refresh, native workspace continuation, streaming, live Slack acceptance, the visual artifact refresh, and final branch gates remain open.
+
+## Terminal queued failures
+
+The worker configuration now connects both OddJobs terminal hooks to the existing run finalizer. A retry leaves the request active. A permanently failed exception records a failed run; an exhausted timeout records a timed-out run. Both retain saved artifacts and action history and add one visible execution message. A completed or cancelled run is not reopened. Other job types retain their existing behavior.
+
+The same production configuration is used by the worker and the real queue regression. Four failing-first cases cover web and slash requests with exceptions and timeouts. They use OddJobs' configured attempt limit, exercise its actual retry and terminal transitions, and verify retained evidence and one execution message. All 446 bot examples pass on the final source. Formatting, diff checks, and scoped HLint pass. Repeated scoped distillation, constraint, and client-behavior reviews leave no material finding in this slice. The change adds no table, scheduler, attempt counter, or model executor. A database outage or process crash between OddJobs saving its terminal job and the application finalizer remains a separate recovery gap; the hooks do not make those commits atomic.
 
 ## Retried Slack requests after authority loss
 

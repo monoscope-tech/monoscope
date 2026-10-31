@@ -1251,6 +1251,48 @@ spec = around withTestResources do
           (_, allowed) <- runAsBaseRecordingHTTP tr $ transport $ AI.canReadEvidence access testPid conversation
           allowed `shouldBe` expected
 
+      for_ [(command, timedOut) | command <- [False, True], timedOut <- [False, True]] \(command, timedOut) ->
+        it ("queuedConversation_retryExhaustionClosesTheRetainedRun: " <> show (command, timedOut)) \tr -> do
+          let user = (getResponse tr.trSessAndHeader).user.id
+              conversation = UUIDId $ UUID.fromWords 0 0 46 1
+              request = UUIDId $ UUID.fromWords 0 0 46 2
+          when command $ setupSlackAgent tr testPid "T_EXHAUSTED"
+          context <- runTestBgNoReset tr do
+            identifier <-
+              if command
+                then do
+                  routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (liftIO $ throwIO $ ErrorCall "Missing Slack routine") pure
+                  let origin = fromRightShow $ Issues.commandOrigin "T_EXHAUSTED" "CEXHAUSTED" "U0123ABCDEF"
+                  admitted <- JobQueue.startCommand routine origin conversation user "Retain this request" >>= maybe (liftIO $ throwIO $ ErrorCall "Missing queued request") pure
+                  pure admitted.id
+                else do
+                  void $ JobQueue.startConversation testPid conversation user request "Retain this request" Issues.Autonomous Issues.WebConversation
+                  pure request
+            AI.requireRunContext testPid $ Issues.ConversationClaim identifier
+          runQueryEffect tr $ Issues.saveRunResult context "Retained evidence" "The completed investigation survives delivery failure."
+          threads <- newIORef mempty
+          let worker =
+                (Jobs.jobsWorkerConfig tr.trLogger tr.trATCtx tr.trTracerProvider Nothing)
+                  { OddJobs.cfgDefaultJobTimeout = if timedOut then 0 else 30
+                  , OddJobs.cfgJobRunner = \_ -> if timedOut then threadDelay 1_000_000 else throwIO $ ErrorCall "Injected worker failure"
+                  , OddJobs.cfgLogger = \_ _ -> pure ()
+                  }
+              step = do
+                Just attempt <- runReaderT (OddJobs.pollRunJob "conversation-exhaustion-regression" Nothing) $ OddJobs.RunnerEnv worker threads
+                void $ tryAny $ wait attempt
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE background_jobs SET attempts = #{worker.cfgDefaultMaxAttempts - 2}, run_at = clock_timestamp() - interval '1 second' WHERE payload = #{Aeson $ AE.toJSON $ Jobs.RunConversation testPid context.id}|]
+          step
+          runQueryEffect tr (Hasql.interpScalar @Text [HI.sql|SELECT status::text FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.RunConversation testPid context.id}|]) >>= (`shouldBe` "retry")
+          runQueryEffect tr (Hasql.interpScalar @Text [HI.sql|SELECT status FROM apis.ai_routine_runs WHERE id = #{context.id}|]) >>= (`shouldBe` "running")
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE background_jobs SET run_at = clock_timestamp() - interval '1 second' WHERE payload = #{Aeson $ AE.toJSON $ Jobs.RunConversation testPid context.id}|]
+          step
+          runQueryEffect tr (Hasql.interpScalar @Text [HI.sql|SELECT status::text FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.RunConversation testPid context.id}|]) >>= (`shouldBe` "failed")
+          runQueryEffect tr (Hasql.interpScalar @Text [HI.sql|SELECT status FROM apis.ai_routine_runs WHERE id = #{context.id}|]) >>= (`shouldBe` if timedOut then "timed_out" else "failed")
+          artifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid context.id
+          map (.content) artifacts `shouldSatisfy` any (maybe False $ T.isInfixOf "The completed investigation survives delivery failure.")
+          history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+          length [message | message <- history, message.role == Issues.ChatExecutionEvent] `shouldBe` 1
+
       it "slackSlashCommand_commitsRequestWithQueuedExecution" \tr -> do
         setupSlackAgent tr testPid "T_QUEUED_SLASH"
         calls <- newIORef (0 :: Int)
