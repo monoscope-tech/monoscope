@@ -799,6 +799,21 @@ Failing handler regressions reproduced both native and model wiki revisions surv
 Generic conversation wiki attempt attribution, native issue-enrichment operation attribution, the remaining plan phases, and controlled live Slack acceptance stay open.
 
 
+### Wiki authors link to the actual shared run (31 October)
+
+Chat, scheduled, and native review wiki revisions now retain a typed `Run` author from the current opaque run context. A recovery worker records its actual run ID, rather than its conversation or request root. The existing run row supplies the actor, original grant, request root, and action history.
+
+Wiki history renders this author as a link to the existing run inspector. Historical member, SDK-attempt, and conversation authors remain readable. Native review proposals retain the real SDK attempt that supplied the edit, while the wiki author identifies the shared worker that committed it. SDK workflows without a shared run retain their real SDK-attempt authors. New model writes no longer create conversation-only authors.
+
+The only schema change is the `Run` alternative in the existing author constraint, added by `0268_wiki_run_author.sql`. It adds no table or copied actor metadata. Earlier applied migrations remain unchanged.
+
+The regression first failed on the stored conversation author. It now uses a failed request followed by a distinct recovery worker, verifies the actual writer ID, follows the wiki's run link through the real handler, checks its action history, and retrieves the knowledge from another conversation. Scheduled authority and denial cases verify the same author contract. A native workflow regression first failed on its SDK-only author, then passed with the shared run reference.
+
+All 233 bot and 75 API v1 examples pass. Fourteen focused wiki examples, both wiki UI examples, and the native review and issue-fix workflows also pass. Formatting and diff checks pass. HLint reports the same four hints as `e707208ae` across the changed application modules, with none introduced. Repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings. The open-PR refresh still lists 28 PRs; all twenty selected incoming heads and published #619 remain included, so no additional selected merge is needed.
+
+The new codec doctest awaits the final doctest run. Native issue-enrichment operation attribution, the remaining plan phases, whole-branch review, controlled live Slack acceptance, and release checks stay open.
+
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

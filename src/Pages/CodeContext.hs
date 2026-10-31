@@ -355,9 +355,15 @@ instance ToHtml WikiGet where
         visible = take Memory.pageLimit pages
         displayed = visible <> [page | page <- maybeToList current, all ((/= page.id) . (.id)) visible]
         title page = toHtml $ Memory.memoryText page.document.title
-        authorName = \case Memory.Member _ -> "Project member"; Memory.Agent _ -> "Agent"; Memory.Conversation _ -> "AI conversation"
+        author = \case
+          Memory.Member _ -> "Project member"
+          Memory.Agent _ -> "Agent"
+          Memory.Conversation _ -> "AI conversation"
+          Memory.Run run -> a_ [href_ $ "/p/" <> pid.toText <> "/ai/runs/" <> run.toText, class_ "underline underline-offset-2"] "Agent run"
         edited page = span_ [class_ "tabular-nums"] do
-          toHtml @Text $ "Revision " <> show page.version <> " · " <> authorName page.author <> " · "
+          toHtml @Text $ "Revision " <> show page.version <> " · "
+          author page.author
+          " · "
           localTimeFmt_ "MMM d, yyyy HH:mm" page.updatedAt
         baseSyntax = wikilinksSpec TitleAfterPipe <> gfmExtensions <> Markdown.defaultSyntaxSpec
         -- Embedded HTML is text; only Markdown constructs may create markup.

@@ -364,7 +364,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                               else AI.executeNativeOperation context (Operation.WriteWiki $ Operation.WikiWrite attemptId edit) \case
                                 Operation.WriteWiki write ->
                                   AI.ReconcilableOperation
-                                    (AI.AtomicOperation $ memoryResponse <$> Memory.writePageTx run.projectId write.edit.pageId write.edit.version Nothing write.edit.document (Memory.Agent write.attemptId))
+                                    (AI.AtomicOperation $ memoryResponse <$> Memory.writePageTx run.projectId write.edit.pageId write.edit.version Nothing write.edit.document (Memory.Run context.id))
                                     (\original -> reconcileComment run conn original <* unlessM (not . null <$> authorizedServices run mappings) (throwError $ ReviewFailure "Project memory authorization is no longer available"))
                                 Operation.PublishPullRequestComment{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
                           (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}) ->

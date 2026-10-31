@@ -123,7 +123,9 @@ data Document = Document {title :: MemoryText 120, body :: MemoryText 16000}
 -- True
 -- >>> Aeson.eitherDecode @Memory.Author "{\"tag\":\"Conversation\",\"contents\":\"00000000-0000-0000-0000-000000000000\"}" == Right (Memory.Conversation $ UUIDId UUID.nil)
 -- True
-data Author = Member (UUIDId "user") | Agent (UUIDId "agent_attempt") | Conversation (UUIDId "conversation")
+-- >>> Aeson.toJSON (Memory.Run $ UUIDId UUID.nil) == Aeson.object ["tag" Aeson..= ("Run" :: Text), "contents" Aeson..= ("00000000-0000-0000-0000-000000000000" :: Text)]
+-- True
+data Author = Member (UUIDId "user") | Agent (UUIDId "agent_attempt") | Conversation (UUIDId "conversation") | Run (UUIDId "ai_routine_run")
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson Author

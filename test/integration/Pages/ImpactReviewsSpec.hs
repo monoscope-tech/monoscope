@@ -2811,6 +2811,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     visibleRuns `shouldSatisfy` (not . null)
     for_ visibleRuns \visible -> do
       visible.status `shouldBe` Issues.RunSucceeded
+      runQueryEffect tr (Memory.latestPages reviewPid) >>= (\pages -> map (.author) pages `shouldBe` [Memory.Run visible.id])
       runQueryEffect tr (Issues.listArtifacts reviewPid visible.conversationId Nothing) >>= (`shouldSatisfy` (not . null))
       (_, detail) <- testServant tr $ AIThreads.routineRunGetH reviewPid visible.id Nothing
       unless (T.isInfixOf "write project memory" $ decodeUtf8 $ Lucid.renderBS $ Lucid.toHtml detail) $ fail "Native wiki write is missing from the run's action history"
@@ -3732,7 +3733,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     completed.runId `shouldBe` fid
     memories <- runQueryEffect tr $ Memory.latestPages testPid
     length memories `shouldBe` 4
-    map (.author) memories `shouldSatisfy` all (\case Memory.Agent _ -> True; Memory.Member _ -> False; Memory.Conversation _ -> False)
+    map (.author) memories `shouldSatisfy` all (\case Memory.Agent _ -> True; Memory.Member _ -> False; Memory.Conversation _ -> False; Memory.Run _ -> False)
     map (.version) memories `shouldBe` [1, 1, 1, 1]
     [Only persisted] <- withResource tr.trPool (\conn -> query conn "SELECT coalesce(to_jsonb(j)->'explanation', 'null'::jsonb) <> 'null'::jsonb FROM projects.issue_fix_jobs j WHERE run_id = ?" (Only fid)) :: IO [Only Bool]
     persisted `shouldBe` True

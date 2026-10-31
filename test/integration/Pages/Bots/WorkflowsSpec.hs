@@ -29,6 +29,7 @@ import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Error.Static (catchError)
 import Hasql.Interpolate qualified as HI
 import Langchain.LLM.Core qualified as Chat
+import Lucid qualified
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Slack
 import Models.Apis.Investigations qualified as Investigations
@@ -44,6 +45,7 @@ import Network.Wreq qualified as Wreq
 import OddJobs.Job qualified as OddJobs
 import OpenAI.V1.Chat.Completions qualified as OpenAI
 import Pages.AIThreads qualified as AIThreads
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Discord (discordInteractionsH)
@@ -51,6 +53,7 @@ import Pages.Bots.Slack (processSlackEvent, slackEventsPostH, slackInteractionsH
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Bots.Utils qualified as Bot
 import Pages.Bots.Whatsapp (whatsappIncomingPostH)
+import Pages.CodeContext qualified as CodeContextPage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.AgentOperation qualified as Operation
@@ -64,7 +67,7 @@ import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx)
-import Test.Hspec (Spec, anyException, around, describe, expectationFailure, it, shouldBe, shouldNotContain, shouldReturn, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, anyException, around, describe, expectationFailure, it, shouldBe, shouldNotBe, shouldNotContain, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
 import Web.ApiTypes (ApiActor (..))
@@ -86,13 +89,22 @@ spec :: Spec
 spec = around withTestResources do
   describe "Complete Bot Workflows" do
     describe "project wiki tools" do
-      it "shares versioned wiki context with chat and attributes assistant revisions" \tr -> do
+      it "wikiRecovery_attributesTheActualRunAndLinksItsActionHistory" \tr -> do
         otherProject <- createTestProject tr "Private wiki"
-        mode <- interactiveInvocation tr testPid (UUIDId UUID.nil) "Remember our retry behavior" Issues.Autonomous
         let conversation = UUIDId UUID.nil
-            page = UUIDId UUID.nil
-            privatePage = UUIDId $ UUID.fromWords 1 2 3 4
             user = (getResponse tr.trSessAndHeader).user.id
+            request = Issues.SlackCommandRequest conversation user
+        setupSlackAgent tr testPid "T_WIKI_RECOVERY"
+        void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+        Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventSlackMessage
+        Just original <- runTestBg frozenTime tr $ Issues.startEventRun routine request Issues.StartRun conversation "Remember our retry behavior"
+        runTestBg frozenTime tr $ completeTestRun testPid (Issues.EventClaim (Issues.SlackCommand conversation) original.id original.startedAt) $ Issues.FailedResult $ Issues.RunFailure "Interrupted before initialization" Issues.RunOnly
+        Just recovered <- runTestBg frozenTime tr $ Issues.startEventRun routine request Issues.ContinueRun conversation "Changed retry input"
+        recovered.id `shouldNotBe` original.id
+        mode@(AI.DurableRun execution) <- runTestBg frozenTime tr $ fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.SlackCommand conversation) recovered.id recovered.startedAt
+        execution.rootId `shouldBe` original.id
+        let page = UUIDId UUID.nil
+            privatePage = UUIDId $ UUID.fromWords 1 2 3 4
             document = AE.object ["title" AE..= ("Payments" :: Text), "body" AE..= ("Retries need an idempotency key." :: Text)]
             write version content = Chat.ToolCall (show version) "function" $ Chat.ToolFunction "write_project_memory" $ fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (version :: Int)), ("document", content)]
             calls = [write 0 document, Chat.ToolCall "read" "function" $ Chat.ToolFunction "read_project_memory" $ fromList [("pageId", AE.toJSON page)], Chat.ToolCall "list" "function" $ Chat.ToolFunction "list_project_memory" mempty, Chat.ToolCall "foreign" "function" $ Chat.ToolFunction "read_project_memory" $ fromList [("pageId", AE.toJSON privatePage)], write 0 (document & key "body" . _String .~ "A stale edit must not replace the observation.")]
@@ -115,12 +127,19 @@ spec = around withTestResources do
         let privateDocument = fromRightShow $ Memory.Document <$> Memory.mkMemoryText "Private" <*> Memory.mkMemoryText "Private project body"
         seeded <- runQueryEffect tr $ Memory.writePage otherProject privatePage 0 Nothing privateDocument (Memory.Member user)
         seeded `shouldSatisfy` isRight
-        void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
         result <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Remember our retry behavior" "model" "key"
         result `shouldSatisfy` isRight
         pages <- runQueryEffect tr $ Memory.pageHistory testPid page
         map (.version) pages `shouldBe` [1]
-        map (.author) pages `shouldBe` [Memory.Conversation conversation]
+        map (AE.toJSON . (.author)) pages `shouldBe` [AE.object ["tag" AE..= ("Run" :: Text), "contents" AE..= execution.id]]
+        (_, wiki) <- testServant tr $ CodeContextPage.memoryGetH testPid $ Just page
+        decodeUtf8 @Text (Lucid.renderBS $ Lucid.toHtml wiki.content) `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/ai/runs/" <> execution.id.toText)
+        (_, run) <- testServant tr $ AIThreads.routineRunGetH testPid execution.id Nothing
+        decodeUtf8 @Text (Lucid.renderBS $ Lucid.toHtml run) `shouldSatisfy` T.isInfixOf "write project memory"
+        let otherConversation = UUIDId $ UUID.fromWords 0 0 0 9
+        void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid otherConversation Issues.CTWeb (AE.object [])
+        recalled <- runTestBg frozenTime tr $ AI.executeToolCall config{AI.conversationId = Just otherConversation, AI.invocationMode = AI.InteractiveReadOnly} $ Chat.ToolCall "recall" "function" $ Chat.ToolFunction "read_project_memory" $ one ("pageId", AE.toJSON page)
+        recalled.formatted `shouldSatisfy` T.isInfixOf "Retries need an idempotency key."
         runQueryEffect tr (Memory.pageHistory (UUIDId $ UUID.fromWords 1 2 3 4) page) >>= (`shouldSatisfy` null)
 
       for_ ["readonly", "service", "downgraded", "foreign-conversation", "inactive"] \scenario ->
@@ -212,7 +231,7 @@ spec = around withTestResources do
             then result `shouldSatisfy` isLeft
             else result `shouldSatisfy` either (const False) isRight
           pages <- runQueryEffect tr $ Memory.pageHistory testPid page
-          map (.author) pages `shouldBe` [Memory.Conversation conversation | scenario == "active"]
+          map (AE.toJSON . (.author)) pages `shouldBe` [AE.object ["tag" AE..= ("Run" :: Text), "contents" AE..= claimed.runId] | scenario == "active"]
 
     describe "Slack personal linking" do
       it "onboards Messages-tab visits once per live link and never starts an investigation" \tr -> do

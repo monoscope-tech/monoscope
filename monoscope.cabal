@@ -307,6 +307,7 @@ extra-source-files:
     static/migrations/0265_agent_evidence_lookup.sql
     static/migrations/0266_agent_role_ceiling.sql
     static/migrations/0267_slack_message_identity.sql
+    static/migrations/0268_wiki_run_author.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs

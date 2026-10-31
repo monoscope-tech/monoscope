@@ -1459,9 +1459,9 @@ executeToolAt cursor config tc = do
     readMemory arguments = case getTextArg "pageId" arguments >>= idFromText of
       Nothing -> pure $ toolError "read_project_memory" "invalid or missing 'pageId'" arguments
       Just pageId -> maybe "Wiki page not found in the authorized project." encodeText . viaNonEmpty head <$> Memory.pageHistory config.projectId pageId
-    writeMemory arguments = case (config.conversationId, parseMaybe (AE.parseJSON @Memory.Edit) $ AE.toJSON arguments) of
-      (Just conversation, Just edit) -> either memoryError encodeText <$> Memory.writePageTx config.projectId edit.pageId edit.version Nothing edit.document (Memory.Conversation conversation)
-      _ -> pure "Wiki writes require a conversation, pageId, version and bounded document."
+    writeMemory arguments = case (invocationContext config.invocationMode, parseMaybe (AE.parseJSON @Memory.Edit) $ AE.toJSON arguments) of
+      (Just context, Just edit) -> either memoryError encodeText <$> Memory.writePageTx config.projectId edit.pageId edit.version Nothing edit.document (Memory.Run context.id)
+      _ -> pure "Wiki writes require a durable run, pageId, version and bounded document."
     memoryError = \case
       Memory.StaleRevision -> "Wiki page changed; read the current revision before retrying."
       Memory.PathTaken -> "Wiki page path is already in use."
