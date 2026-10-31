@@ -19,6 +19,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful qualified as Eff
 import Effectful.Concurrent.Async (concurrently_)
 import Effectful.Dispatch.Dynamic (interpose)
@@ -27,6 +28,7 @@ import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Langchain.LLM.Core qualified as LLM
+import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Investigations (ToolCallInfo (..), ToolResult (..))
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.IssueEnhancement.Types qualified as Enhancement
@@ -35,7 +37,8 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Pages.AIThreads qualified as AIThreads
-import Pages.Bots.BotTestHelpers (assertJsonGolden, completeTestRun, getOpenAIKey, getOpenAIModel, interactiveInvocation, resetLegacyEvidenceScope, scheduledInvocation, setupSlackData, withHTTPResponses)
+import Pages.Bots.BotFixtures (slackThreadedEvent)
+import Pages.Bots.BotTestHelpers (assertJsonGolden, completeTestRun, getOpenAIKey, getOpenAIModel, interactiveInvocation, receiveSlackEvent, resetLegacyEvidenceScope, scheduledInvocation, setupSlackAgent, setupSlackData, withHTTPResponses)
 import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
 import Pages.Bots.Utils (processAIQuery)
 import Pages.Issues qualified as IssuePage
@@ -582,6 +585,49 @@ spec = around withTestResources do
         void $ testServant tr $ AIThreads.routinePostH testPid conversation.conversationId (AIThreads.RoutineForm $ fromRightShow $ Issues.mkRoutineInterval 15)
         unchanged <- runQueryEffect tr $ Issues.getConversation testPid conversation.conversationId
         (unchanged >>= (.routineKind)) `shouldBe` Just Issues.ScheduleSlackMessage
+
+      it "legacySlackAudience_upgradeProtectsStoredHistoryWithoutCurrentIdentityLinks" \tr -> do
+        setupSlackAgent tr testPid "T_LEGACY_SCOPE"
+        let user = (getResponse tr.trSessAndHeader).user.id
+            context channel = AE.object ["team_id" AE..= ("T_LEGACY_SCOPE" :: Text), "channel_id" AE..= (channel :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text)]
+            channelAudience = Investigations.SlackChannelAudience $ fromRightShow $ Integrations.slackChannel "T_LEGACY_SCOPE" "G123LEGACY"
+            cases = [(40, Issues.CTSlackThread, context "G123LEGACY", channelAudience, 403), (41, Issues.CTSlackThread, context "D123LEGACY", Investigations.PersonalAudience user, 200), (42, Issues.CTSlackThread, AE.object [], Investigations.NoAudience, 403), (43, Issues.CTSlackThread, context "D123UNKNOWN", Investigations.NoAudience, 403), (44, Issues.CTWeb, AE.object [], Investigations.ProjectAudience, 200)] :: [(Word32, Issues.ConversationType, AE.Value, Investigations.EvidenceAudience, Int)]
+        for_ cases $ \(suffix, kind, metadata, _, _) -> do
+          let conversation = UUIDId $ UUID.fromWords 0 0 44 suffix
+              checkpoint = Aeson $ Investigations.AnswerReady $ AI.AgenticChatResult "Legacy Slack history canary" []
+          runTestBg frozenTime tr do
+            void $ Issues.getOrCreateConversation testPid conversation kind metadata
+            Issues.insertChatMessage testPid conversation Issues.ChatAssistant "Legacy Slack history canary" Nothing Nothing
+          void $ interactiveInvocation tr testPid conversation "Resume legacy evidence" Issues.Observe
+          when (kind == Issues.CTSlackThread)
+            $ runQueryEffect tr
+            $ Hasql.interpExecute_
+              [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, message_ts, checkpoint)
+            VALUES (#{testPid}, #{conversation}, #{user}, '1735689601.000001', #{checkpoint})|]
+          when (suffix == 43)
+            $ runQueryEffect tr
+            $ Hasql.interpExecute_
+              [HI.sql|UPDATE apis.ai_routine_runs SET requested_by = NULL, source = #{Issues.TriggeredRun $ Issues.SlackCommand conversation}
+            WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]
+        let deleted = Issues.slackScopedConversationId testPid "T_LEGACY_SCOPE" "G123LEGACY" "1735689602.000001"
+        receipt <- receiveSlackEvent tr $ slackThreadedEvent "T_LEGACY_SCOPE" "G123LEGACY" "Retained incident evidence" "1735689603.000001" "1735689602.000001"
+        Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventSlackMessage
+        runTestBg frozenTime tr $ void $ Issues.getOrCreateConversation testPid deleted Issues.CTAnomaly (AE.object [])
+        Just retained <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackMessageRequest receipt user) Issues.StartRun deleted "Retained incident evidence"
+        runTestBg frozenTime tr $ Issues.deleteConversation testPid deleted
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM apis.slack_identities WHERE team_id = 'T_LEGACY_SCOPE'|]
+        migration <- readFileBS "static/migrations/0274_legacy_slack_evidence_audience.sql"
+        replicateM_ 2 $ withResource tr.trPool $ \conn -> void $ PGS.execute_ conn $ Query migration
+        for_ cases $ \(suffix, _, _, audience, expected) -> do
+          let conversation = UUIDId $ UUID.fromWords 0 0 44 suffix
+          runQueryEffect tr (Investigations.conversationEvidenceAudience testPid conversation) >>= (`shouldBe` audience)
+          status <- runAuthHandler tr $ (AIThreads.threadGetH testPid conversation Nothing Nothing $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+          status `shouldBe` expected
+        runQueryEffect tr (Investigations.conversationEvidenceAudience testPid deleted) >>= (`shouldBe` channelAudience)
+        retainedStatus <- runAuthHandler tr $ (AIThreads.routineRunGetH testPid retained.id Nothing $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+        retainedStatus `shouldBe` 403
+        runTestBg frozenTime tr $ void $ Issues.getOrCreateConversation testPid deleted Issues.CTWeb (AE.object [])
+        runQueryEffect tr (Investigations.conversationEvidenceAudience testPid deleted) >>= (`shouldBe` channelAudience)
 
       it "evidenceAudience_projectAdministratorCannotReadAnotherMembersPrivateConversation" \tr -> do
         let conversation = UUIDId $ UUID.fromWords 0 0 44 20
