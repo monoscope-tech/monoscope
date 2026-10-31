@@ -33,6 +33,7 @@ module Models.Apis.Integrations (
   saveSlackEvidenceGrant,
   getSlackEvidenceGrant,
   SlackEvidenceSubject (..),
+  memberSlackEvidenceSubject,
   SlackCredentialFailure (..),
   resolveSlackEvidenceGrant,
   revokeSlackEvidence,
@@ -569,10 +570,27 @@ sealSlackGrant key grant = runExceptT do
 
 
 data SlackEvidenceSubject = SlackEvidenceSubject {projectId :: Projects.ProjectId, userId :: Projects.UserId, teamId :: Text, slackUserId :: Text}
+  deriving stock (Generic)
+  deriving anyclass (Aeson.ToJSON, HI.DecodeRow)
 
 
-data SlackCredentialFailure = SlackNotConnected | SlackRefreshPending UTCTime | SlackRefreshUncertain | SlackRefreshRevoked | SlackRefreshStorageFailure Secrets.SecretError
+data SlackCredentialFailure = SlackNotConnected | SlackAccountAmbiguous | SlackRefreshPending UTCTime | SlackRefreshUncertain | SlackRefreshRevoked | SlackRefreshStorageFailure Secrets.SecretError
   deriving stock (Eq, Show)
+
+
+memberSlackEvidenceSubject :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Either SlackCredentialFailure SlackEvidenceSubject)
+memberSlackEvidenceSubject project user = do
+  candidates <-
+    Hasql.interp @[SlackEvidenceSubject]
+      [HI.sql|SELECT credential.project_id, credential.user_id, credential.team_id, credential.slack_user_id
+    FROM apis.slack_user_credentials credential
+    JOIN apis.slack installation ON installation.project_id = credential.project_id AND installation.team_id = credential.team_id
+    JOIN apis.slack_identities identity ON identity.team_id = credential.team_id AND identity.slack_user_id = credential.slack_user_id AND identity.user_id = credential.user_id
+    WHERE credential.project_id = #{project} AND credential.user_id = #{user} LIMIT 2|]
+  pure $ case candidates of
+    [subject] -> Right subject
+    [] -> Left SlackNotConnected
+    _ -> Left SlackAccountAmbiguous
 
 
 data SlackRefreshState = RefreshIdle | RefreshClaimed UUID.UUID UTCTime | RefreshUncertain UUID.UUID UTCTime

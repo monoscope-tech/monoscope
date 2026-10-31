@@ -10,7 +10,19 @@ Evidence uses one typed audience and one evaluator across web navigation, thread
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-The latest 302 bot tests, 76 API tests, and 38 incident-delivery tests pass. Remote MCP evidence/provenance, controlled live acceptance, optional review controls, streaming acceptance, and final release checks remain unfinished.
+The latest bot suite passes 329 examples, including 27 Slack MCP cases. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, optional review controls, streaming acceptance, and final release checks remain unfinished.
+
+## Slack MCP integration checkpoint
+
+The remote client now discovers Slack's four supported read operations through the shared capability catalog. It uses the requester's encrypted grant, validates initialization and response identities, releases provider sessions, and checks the advertised schema again before each read. Provider write tools remain excluded even if they claim to be read-only.
+
+The common dispatcher applies personal or verified current-channel scope before a read and retains the result with its requester and arguments through existing tool evidence. Channel reads override the destination from the signed context and reject unrecognized locator arguments. Workspace-wide search requires the requester's personal DM or web context. Membership loss, disconnect, or schema changes cannot expose a new result to the model.
+
+Slack discovery is optional: credential rejection, app-access denial, server failures, and throttling leave core project work available. A requested Slack read during cooldown uses the existing retry deadline without another provider request. This slice adds no migration, ledger, executor, scheduler, or rate-limit table.
+
+The discovery regression first failed because Slack reads were absent from the common catalog. The availability regression then failed on both throttling and server errors. The final source passes all 329 bot, 76 API, and 38 incident-delivery examples. Formatting and diff checks pass; HLint has no suggestions on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material issue.
+
+These are deterministic integration checks against a protocol fixture, not live Slack acceptance. Actual app eligibility, provider schemas, Slack Connect behavior, streaming acceptance, selective review controls, and final branch release gates remain open.
 
 ## Product contract
 

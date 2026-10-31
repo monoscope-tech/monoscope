@@ -2,6 +2,10 @@
 
 module Pkg.AgentCatalog (
   Tool (..),
+  SlackRead (..),
+  slackReads,
+  slackReadName,
+  slackReadPolicy,
   AgentPolicy (..),
   minimumPermission,
   requiresAutonomy,
@@ -46,6 +50,28 @@ data Tool operation = Tool
   , dispatch :: !operation
   }
   deriving stock (Functor)
+
+
+data SlackRead = SearchPublic | SearchPersonal | ReadChannel | ReadThread
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+slackReadName :: SlackRead -> Text
+slackReadName = \case
+  SearchPublic -> "slack_search_public"
+  SearchPersonal -> "slack_search_public_and_private"
+  ReadChannel -> "slack_read_channel"
+  ReadThread -> "slack_read_thread"
+
+
+slackReads :: Map Text SlackRead
+slackReads = Map.fromList [(slackReadName operation, operation) | operation <- [minBound .. maxBound]]
+
+
+slackReadPolicy :: SlackRead -> AgentPolicy
+slackReadPolicy = \case
+  (SearchPublic; SearchPersonal; ReadChannel; ReadThread) -> ReadOnly ProjectMembers.PView
 
 
 -- | The Agent adapter must deny operations without a policy. The registry
@@ -359,7 +385,7 @@ compositeTools = [findErrorPatterns, searchEventsNL, analyzeIssue]
 
 
 policiesByName :: Map Text (Maybe AgentPolicy)
-policiesByName = Map.fromList (Map.elems apiOperations) <> Map.map (.agentPolicy) localTools <> Map.fromList [(tool.name, tool.agentPolicy) | tool <- compositeTools]
+policiesByName = Map.fromList (Map.elems apiOperations) <> Map.map (.agentPolicy) localTools <> Map.fromList [(tool.name, tool.agentPolicy) | tool <- compositeTools] <> Map.map (Just . slackReadPolicy) slackReads
 
 
 -- | Shared @{type: object, properties, required}@ JSON-Schema shape used by

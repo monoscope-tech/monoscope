@@ -31,7 +31,7 @@ withRateLimits workspace = interpose @HTTP.HTTP $ \_ request -> case request of
 
 
 limited :: DB es => Text -> HTTP.Options -> String -> (HTTP.Options -> Eff es (HTTP.Response LByteString)) -> Eff es (HTTP.Response LByteString)
-limited workspace options url request = case T.stripPrefix "https://slack.com/api/" $ toText url of
+limited workspace options url request = case if url == "https://mcp.slack.com/mcp" then Just "mcp" else T.stripPrefix "https://slack.com/api/" (toText url) of
   Nothing -> request options
   Just path -> do
     let method = T.takeWhile (/= '?') path
@@ -54,5 +54,5 @@ limited workspace options url request = case T.stripPrefix "https://slack.com/ap
         for_ saved $ \(HI.OneColumn retryAt) -> throwIO $ SlackRateLimited retryAt
         throwIO $ ErrorCall "Saving the Slack rate-limit deadline returned no row"
       else do
-        unless (statusIsSuccessful $ response ^. Wreq.responseStatus) $ throwIO $ ErrorCall "Slack returned an unsuccessful HTTP status"
+        unless (url == "https://mcp.slack.com/mcp" || statusIsSuccessful (response ^. Wreq.responseStatus)) $ throwIO $ ErrorCall "Slack returned an unsuccessful HTTP status"
         pure response

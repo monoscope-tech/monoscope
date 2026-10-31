@@ -44,7 +44,7 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (parseSimpleQuery, renderSimpleQuery, status429, status503)
+import Network.HTTP.Types (parseSimpleQuery, renderSimpleQuery, status401, status403, status429, status503)
 import Network.Wreq qualified as Wreq
 import OddJobs.Job qualified as OddJobs
 import OpenAI.V1.Chat.Completions qualified as OpenAI
@@ -100,6 +100,36 @@ data SlackRefreshRace = ConcurrentRefresh | DisconnectDuringRefresh | ReconnectD
 
 data SlackRefreshReplyCase = RevokedRefresh | RejectedRefresh | WrongRefreshUser | ExpandedRefreshScopes | MissingRefreshSecret | ConflictingRefreshScopes | MalformedRefresh
   deriving stock (Bounded, Enum, Show)
+
+
+data SlackEvidenceCase = EvidenceRead | DisconnectDuringRead | WrongDMPeer | SchemaChanged | MembershipRevokedDuringRead
+  deriving stock (Bounded, Enum, Eq, Show)
+
+
+data SlackChannelReadCase = CurrentChannel | CurrentThread | ThreadLocatorRejected | ExtraTargetArgument | ChannelMemberRemoved | PersonalGrantMissing | BroaderChannelSearch
+  deriving stock (Bounded, Enum, Eq, Show)
+
+
+data SlackMCPCatalogCase = WrongRpcIdentity | UnsupportedProtocol | MissingToolsCapability | RpcFailureEnvelope | RepeatedPageCursor | DuplicateReadName | ChangedReadContract | InvalidInputSchema | OversizedEnvelope
+  deriving stock (Bounded, Enum, Eq, Show)
+
+
+slackMCPTools :: AE.Value -> V.Vector AE.Value
+slackMCPTools schema =
+  V.fromList
+    [ AE.object ["name" AE..= name, "description" AE..= ("Search and read Slack evidence" :: Text), "inputSchema" AE..= schema, "annotations" AE..= AE.object ["readOnlyHint" AE..= True]]
+    | name <- (["slack_search_public", "slack_search_public_and_private", "slack_read_channel", "slack_read_thread", "slack_send_message"] :: [Text])
+    ]
+
+
+slackMCPReply :: AE.Value -> V.Vector AE.Value -> AE.Value -> AE.Value
+slackMCPReply request tools result = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (request ^? key "id"), "result" AE..= payload]
+  where
+    payload = case request ^? key "method" . _String of
+      Just "initialize" -> AE.object ["protocolVersion" AE..= ("2025-06-18" :: Text), "capabilities" AE..= AE.object ["tools" AE..= AE.object []], "serverInfo" AE..= AE.object ["name" AE..= ("slack-test-peer" :: Text), "version" AE..= ("1" :: Text)]]
+      Just "tools/list" -> AE.object ["tools" AE..= tools]
+      Just "tools/call" -> result
+      _ -> AE.Null
 
 
 authorizeSlackTestGrant :: TestResources -> Slack.SlackUserGrant -> IO ()
@@ -964,6 +994,205 @@ spec = around withTestResources do
 
         -- Process background jobs that send final response
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+      for_ [False, True] $ \shared ->
+        it ("slackEvidenceDiscovery_usesRequesterGrantAndExcludesProviderWrites: shared=" <> show shared) \tr -> do
+          setupSlackAgent tr testPid "T_MCP"
+          authorizeSlackTestGrant tr $ Slack.SlackUserGrant "T_MCP" "U0123ABCDEF" "personal-mcp-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
+          let conversation = Issues.slackScopedConversationId testPid "T_MCP" "D123MCP" "1735689600.000001"
+              user = (getResponse tr.trSessAndHeader).user.id
+              access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP" "U0123ABCDEF" user "D123MCP" "1735689600.000001" "1735689600.000001"
+          mode <- interactiveInvocation tr testPid conversation "Find Slack evidence" Issues.Observe
+          let config = (agentConfig testPid){AI.access = if shared then AI.MemberAccess AI.SharedMember user else access, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.sourceConfig = Just tr.trATCtx.config{Config.slackAppId = "A123MONOSCOPE"}}
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == Chat.Tool] of
+                  [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "discover-slack" "function" $ Chat.ToolFunction "search_project_tools" $ one ("query", AE.String "slack search")]}
+                  results -> Chat.Message Chat.Assistant (if any (T.isInfixOf "slack_search_public") results && not (any (T.isInfixOf "slack_send_message") results) then "Slack reads discovered without provider writes." else "Slack reads missing.") Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              transport = withSlackMCPResponses \options request -> do
+                options ^. Wreq.header "Authorization" `shouldBe` ["Bearer personal-mcp-token"]
+                let schema = AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object ["query" AE..= AE.object ["type" AE..= ("string" :: Text)]]]
+                pure $ slackMCPReply request (slackMCPTools schema) AE.Null
+          (requests, answer) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ AI.runAgenticChatWithHistory config "Find Slack evidence" "model" "key"
+          fmap (.response) answer `shouldBe` Right (if shared then "Slack reads missing." else "Slack reads discovered without provider writes.")
+          map fst requests `shouldBe` replicate (if shared then 0 else 4) "https://mcp.slack.com/mcp"
+
+      for_ [minBound .. maxBound] $ \scenario ->
+        it ("slackEvidenceRead_usesOwnedCredentialsRetainsProvenanceAndRechecksAuthority: " <> show scenario) \tr -> do
+          setupSlackAgent tr testPid "T_MCP_READ"
+          authorizeSlackTestGrant tr $ Slack.SlackUserGrant "T_MCP_READ" "U0123ABCDEF" "private-mcp-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
+          lists <- newIORef (0 :: Int)
+          let conversation = Issues.slackScopedConversationId testPid "T_MCP_READ" "D123MCP" "1735689600.000001"
+              user = (getResponse tr.trSessAndHeader).user.id
+              secret = "slack-private-provider-evidence-canary"
+              name = "slack_search_public_and_private"
+              access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_READ" "U0123ABCDEF" user "D123MCP" "1735689600.000001" "1735689600.000001"
+              schema = AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object ["query" AE..= AE.object ["type" AE..= ("string" :: Text)]]]
+          mode <- interactiveInvocation tr testPid conversation "Find Slack evidence" Issues.Observe
+          let config = (agentConfig testPid){AI.access = access, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.sourceConfig = Just tr.trATCtx.config{Config.slackAppId = "A123MONOSCOPE"}}
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history parameters _ -> do
+                  liftIO $ decodeUtf8 (AE.encode parameters) `shouldSatisfy` (not . T.isInfixOf "private-mcp-token")
+                  pure $ Right $ case [message.content | message <- toList history, message.role == Chat.Tool] of
+                    [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" $ Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String name)]}
+                    [_] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "read-slack" "function" $ Chat.ToolFunction name $ one ("query", AE.String "checkout incident")]}
+                    results -> Chat.Message Chat.Assistant (if any (T.isInfixOf secret) results then "Private evidence used." else "Slack evidence unavailable.") Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              transport = withSlackMCPResponses \options request -> do
+                options ^. Wreq.header "Authorization" `shouldBe` ["Bearer private-mcp-token"]
+                options ^. Wreq.header "MCP-Protocol-Version" `shouldBe` ["2025-06-18"]
+                when ((request ^? key "method" . _String) == Just "tools/list") $ modifyIORef' lists (+ 1)
+                count <- readIORef lists
+                when ((request ^? key "method" . _String) == Just "tools/call") do
+                  runQueryEffect tr (Investigations.conversationEvidenceAudience testPid conversation) >>= (`shouldBe` Investigations.PersonalAudience user)
+                  when (scenario == DisconnectDuringRead) $ runQueryEffect tr $ Slack.revokeSlackEvidence testPid user
+                  when (scenario == MembershipRevokedDuringRead) $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = #{testPid} AND user_id = #{user}|]
+                let changed = if scenario == SchemaChanged && count > 1 then schema & key "properties" .~ AE.object [] else schema
+                    result = AE.object ["content" AE..= V.singleton (AE.object ["type" AE..= ("text" :: Text), "text" AE..= secret]), "structuredContent" AE..= AE.object ["source" AE..= secret]]
+                pure $ slackMCPReply request (slackMCPTools changed) result
+              peer = withHTTPResponses \_ url ->
+                pure
+                  $ if url == "https://slack.com/api/conversations.info"
+                    then Just $ AE.encode $ AE.object ["ok" AE..= True, "channel" AE..= AE.object ["is_im" AE..= True, "id" AE..= ("D123MCP" :: Text), "user" AE..= (if scenario == WrongDMPeer then "U_OTHER" else "U0123ABCDEF" :: Text)]]
+                    else Nothing
+          (requests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ peer $ transport $ provider $ tryAny $ AI.runAgenticChatWithHistory config "Find Slack evidence" "model" "key"
+          let readRequests = [request | (_, bytes) <- requests, Just request <- [AE.decode @AE.Value bytes], request ^? key "method" . _String == Just "tools/call"]
+          length readRequests `shouldBe` if scenario `elem` [WrongDMPeer, SchemaChanged] then 0 else 1
+          case outcome of
+            Left failure -> do
+              scenario `shouldBe` MembershipRevokedDuringRead
+              isJust (fromException @AI.AgentAccessDenied failure) `shouldBe` True
+            Right answer -> do
+              fmap (.response) answer `shouldBe` Right (if scenario == EvidenceRead then "Private evidence used." else "Slack evidence unavailable.")
+              when (scenario == EvidenceRead) $ case answer of
+                Right result -> do
+                  let evidence = find ((== name) . (.name)) result.toolCalls >>= (.rawData)
+                  (evidence >>= (^? key "subject" . key "userId" . _String)) `shouldBe` Just user.toText
+                  decodeUtf8 (AE.encode result.toolCalls) `shouldSatisfy` (not . T.isInfixOf "private-mcp-token")
+                Left _ -> expectationFailure "Expected retained Slack evidence"
+
+      for_ [minBound .. maxBound] $ \scenario ->
+        it ("slackEvidenceChannel_confinesReadsToTheVerifiedDestination: " <> show scenario) \tr -> do
+          setupSlackAgent tr testPid "T_MCP_CHANNEL"
+          unless (scenario == PersonalGrantMissing) $ authorizeSlackTestGrant tr $ Slack.SlackUserGrant "T_MCP_CHANNEL" "U0123ABCDEF" "channel-user-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
+          let channel = "G123MCP"
+              user = (getResponse tr.trSessAndHeader).user.id
+              conversation = Issues.slackScopedConversationId testPid "T_MCP_CHANNEL" channel "1735689600.000001"
+              access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_CHANNEL" "U0123ABCDEF" user channel "1735689600.000001" "1735689600.000001"
+              operation
+                | scenario == BroaderChannelSearch = "slack_search_public"
+                | scenario `elem` [CurrentThread, ThreadLocatorRejected] = "slack_read_thread"
+                | otherwise = "slack_read_channel"
+              secret = "current-channel-mcp-evidence"
+              schema = AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object ["channel_id" AE..= AE.object ["type" AE..= ("string" :: Text)], "team_id" AE..= AE.object ["type" AE..= ("string" :: Text)], "message_ts" AE..= AE.object ["type" AE..= ("string" :: Text)]]]
+          mode <- interactiveInvocation tr testPid conversation "Read Slack context" Issues.Observe
+          let config = (agentConfig testPid){AI.access = access, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.sourceConfig = Just tr.trATCtx.config{Config.slackAppId = "A123MONOSCOPE"}}
+              arguments = Map.fromList $ [("channel_id", AE.String "G_OTHER"), ("channel", AE.String "G_ALTERNATE"), ("team_id", AE.String "T_OTHER"), ("message_ts", AE.String $ if scenario == ThreadLocatorRejected then "https://example.invalid/another-channel" else "1735689600.000001")] <> [("url", AE.String "https://example.invalid/another-channel") | scenario == ExtraTargetArgument]
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == Chat.Tool] of
+                  [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" $ Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String operation)]}
+                  [_] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "bounded-read" "function" $ Chat.ToolFunction operation arguments]}
+                  results -> Chat.Message Chat.Assistant (if any (T.isInfixOf secret) results then "Channel evidence read." else "Slack read unavailable.") Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              transport = withSlackMCPResponses \options request -> do
+                options ^. Wreq.header "Authorization" `shouldBe` ["Bearer channel-user-token"]
+                when ((request ^? key "method" . _String) == Just "tools/call") do
+                  request ^? key "params" . key "arguments" . key "channel_id" . _String `shouldBe` Just channel
+                  request ^? key "params" . key "arguments" . key "team_id" . _String `shouldBe` Just "T_MCP_CHANNEL"
+                  request ^? key "params" . key "arguments" . key "channel" `shouldBe` Nothing
+                  runQueryEffect tr (Investigations.conversationEvidenceAudience testPid conversation) >>= (`shouldBe` Investigations.SlackChannelAudience (fromRightShow $ Slack.slackChannel "T_MCP_CHANNEL" channel))
+                pure $ slackMCPReply request (slackMCPTools schema) $ AE.object ["content" AE..= V.singleton (AE.object ["type" AE..= ("text" :: Text), "text" AE..= secret])]
+              membership = withHTTPResponses \_ url ->
+                pure
+                  $ if url == "https://slack.com/api/conversations.members"
+                    then Just $ AE.encode $ AE.object ["ok" AE..= True, "members" AE..= (["U0123ABCDEF" | scenario /= ChannelMemberRemoved] :: [Text])]
+                    else Nothing
+          (requests, answer) <- runTestBgRecordingHTTP frozenTime tr $ membership $ transport $ provider $ AI.runAgenticChatWithHistory config "Read Slack context" "model" "key"
+          let expected = scenario `elem` [CurrentChannel, CurrentThread]
+              calls = [request | (_, bytes) <- requests, Just request <- [AE.decode @AE.Value bytes], request ^? key "method" . _String == Just "tools/call"]
+          fmap (.response) answer `shouldBe` Right (if expected then "Channel evidence read." else "Slack read unavailable.")
+          length calls `shouldBe` if expected then 1 else 0
+          when (scenario == PersonalGrantMissing) $ filter ((== "https://mcp.slack.com/mcp") . fst) requests `shouldBe` []
+
+      for_ [minBound .. maxBound] $ \scenario ->
+        it ("slackEvidenceProtocol_rejectsUntrustedCatalogsAndReleasesTheSession: " <> show scenario) \tr -> do
+          setupSlackAgent tr testPid "T_MCP_PROTOCOL"
+          authorizeSlackTestGrant tr $ Slack.SlackUserGrant "T_MCP_PROTOCOL" "U0123ABCDEF" "protocol-user-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
+          let user = (getResponse tr.trSessAndHeader).user.id
+              conversation = Issues.slackScopedConversationId testPid "T_MCP_PROTOCOL" "D123MCP" "1735689600.000001"
+              access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_PROTOCOL" "U0123ABCDEF" user "D123MCP" "1735689600.000001" "1735689600.000001"
+              canary = "private-upstream-error-canary"
+              schema = AE.object ["type" AE..= ("object" :: Text)]
+          mode <- interactiveInvocation tr testPid conversation "Discover Slack" Issues.Observe
+          let config = (agentConfig testPid){AI.access = access, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.sourceConfig = Just tr.trATCtx.config{Config.slackAppId = "A123MONOSCOPE"}}
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == Chat.Tool] of
+                  [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "discover" "function" $ Chat.ToolFunction "search_project_tools" $ one ("query", AE.String "slack search")]}
+                  results -> Chat.Message Chat.Assistant (if all (\result -> not (T.isInfixOf "slack_search_public" result) && not (T.isInfixOf canary result)) results then "Slack unavailable without private diagnostics." else "Unsafe Slack catalog.") Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              transport = withSlackMCPResponses \_ request -> do
+                let tools = slackMCPTools schema
+                    response = slackMCPReply request tools AE.Null
+                pure
+                  $ if request ^? key "method" . _String == Just "initialize"
+                    then case scenario of
+                      WrongRpcIdentity -> response & key "id" .~ AE.toJSON UUID.nil
+                      UnsupportedProtocol -> response & key "result" . key "protocolVersion" .~ AE.String "2024-11-05"
+                      MissingToolsCapability -> response & key "result" . key "capabilities" .~ AE.object []
+                      RpcFailureEnvelope -> AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (request ^? key "id"), "error" AE..= AE.object ["code" AE..= (-32603 :: Int), "message" AE..= canary]]
+                      OversizedEnvelope -> response & key "result" . _Object . Lens.at "instructions" ?~ AE.String (T.replicate 1_048_577 "x")
+                      _ -> response
+                    else case scenario of
+                      RepeatedPageCursor -> response & key "result" . _Object . Lens.at "nextCursor" ?~ AE.String "again"
+                      DuplicateReadName -> response & key "result" . key "tools" .~ AE.toJSON (tools <> tools)
+                      ChangedReadContract -> response & key "result" . key "tools" . _Array . traverse . key "annotations" . key "readOnlyHint" .~ AE.Bool False
+                      InvalidInputSchema -> slackMCPReply request (slackMCPTools $ AE.object ["type" AE..= ("string" :: Text)]) AE.Null
+                      _ -> response
+          (requests, answer) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ AI.runAgenticChatWithHistory config "Discover Slack" "model" "key"
+          fmap (.response) answer `shouldBe` Right "Slack unavailable without private diagnostics."
+          length requests `shouldBe` case scenario of
+            RepeatedPageCursor -> 5
+            DuplicateReadName -> 4
+            ChangedReadContract -> 4
+            InvalidInputSchema -> 4
+            _ -> 2
+          snd <$> viaNonEmpty last requests `shouldBe` Just ""
+
+      for_ [status401, status403, status429, status503] $ \status ->
+        it ("slackEvidenceAvailability_preservesCoreWork: " <> show status) \tr -> do
+          setupSlackAgent tr testPid "T_MCP_COOLDOWN"
+          authorizeSlackTestGrant tr $ Slack.SlackUserGrant "T_MCP_COOLDOWN" "U0123ABCDEF" "cooldown-user-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
+          let user = (getResponse tr.trSessAndHeader).user.id
+              conversation = Issues.slackScopedConversationId testPid "T_MCP_COOLDOWN" "D123MCP" "1735689600.000001"
+              access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_COOLDOWN" "U0123ABCDEF" user "D123MCP" "1735689600.000001" "1735689600.000001"
+          mode <- interactiveInvocation tr testPid conversation "Discover Slack" Issues.Observe
+          let config = (agentConfig testPid){AI.access = access, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.sourceConfig = Just tr.trATCtx.config{Config.slackAppId = "A123MONOSCOPE"}}
+              limited = interpose @HTTP.HTTP \_ -> \case
+                HTTP.PostWith options url@"https://mcp.slack.com/mcp" body -> do
+                  response <- send $ HTTP.PostWith options url body
+                  pure $ response & Wreq.responseStatus .~ status & Wreq.responseHeaders .~ [("Retry-After", "7")]
+                request -> send @HTTP.HTTP $ coerce request
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat{} -> pure $ Right $ Chat.Message Chat.Assistant "Telemetry work continues." Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              run = tryAny $ provider $ AI.runAgenticChatWithHistory config "Discover Slack" "model" "key"
+          for_ (if status == status429 then [1, 0] else [1, 1] :: [Int]) $ \count -> do
+            (requests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ limited run
+            length requests `shouldBe` count
+            ((.response) <<$>> outcome) `shouldSatisfy` either (const False) (== Right "Telemetry work continues.")
+          when (status == status429) do
+            pendingMode <- interactiveInvocation tr testPid conversation "Resume Slack read" Issues.Observe
+            let pendingRead = interpose @ELLM.LLM \_ -> \case
+                  ELLM.CallAgenticChat{} -> pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "pending-read" "function" $ Chat.ToolFunction "slack_read_channel" mempty]}
+                  request -> send @ELLM.LLM $ coerce request
+            (requests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ limited $ provider $ pendingRead $ tryAny $ AI.runAgenticChatWithHistory config{AI.invocationMode = pendingMode} "Resume Slack read" "model" "key"
+            requests `shouldBe` []
+            isJust (leftToMaybe outcome >>= fromException @RateLimit.SlackRateLimited) `shouldBe` True
 
       it "evidenceAudience_channelAccessRequiresFreshLinkedMembershipAndFollowsPagination" \tr -> do
         setupLinkedSlackData tr testPid "T_AUDIENCE"

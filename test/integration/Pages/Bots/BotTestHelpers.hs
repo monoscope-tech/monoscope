@@ -11,6 +11,7 @@ module Pages.Bots.BotTestHelpers (
   resetLegacyEvidenceScope,
   withHTTPResponses,
   withSlackReplyResponses,
+  withSlackMCPResponses,
   receiveSlackEvent,
   slackRootEvent,
   setupDiscordData,
@@ -92,6 +93,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (RequestBody (..), defaultRequest, requestBody)
+import Network.HTTP.Types (status202, status204)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types qualified as WreqTypes
 import Pages.AIThreads qualified as AIThreads
@@ -208,6 +210,28 @@ withHTTPResponses fixture = interpose @HTTP.HTTP \_ -> \case
     respond opts url response = do
       body <- liftIO $ fixture opts url
       pure $ maybe response (\value -> response & Wreq.responseBody .~ value) body
+
+
+-- | Exercise the real HTTP effect and recorder with a deterministic MCP peer.
+withSlackMCPResponses :: (HTTP.HTTP :> es, IOE :> es) => (HTTP.Options -> AE.Value -> IO AE.Value) -> Eff es a -> Eff es a
+withSlackMCPResponses fixture = interpose @HTTP.HTTP \_ -> \case
+  HTTP.PostWith options url@"https://mcp.slack.com/mcp" payload -> do
+    request <- liftIO $ WreqTypes.postPayload payload defaultRequest
+    bytes <- case requestBody request of
+      RequestBodyLBS body -> pure body
+      RequestBodyBS body -> pure $ fromStrict body
+      _ -> liftIO $ fail "Expected a JSON MCP request"
+    value <- either (liftIO . fail) pure $ AE.eitherDecode bytes
+    response <- send $ HTTP.PostWith options url payload
+    if (value ^? key "method" . _String) == Just "notifications/initialized"
+      then pure $ response & Wreq.responseStatus .~ status202 & Wreq.responseBody .~ ""
+      else do
+        reply <- liftIO $ fixture options value
+        pure $ response & Wreq.responseBody .~ AE.encode reply & Wreq.responseHeaders .~ [("Content-Type", "application/json"), ("Mcp-Session-Id", "mcp-session")]
+  HTTP.DeleteWith options url@"https://mcp.slack.com/mcp" -> do
+    response <- send $ HTTP.DeleteWith options url
+    pure $ response & Wreq.responseStatus .~ status204 & Wreq.responseBody .~ ""
+  request -> send @HTTP.HTTP $ coerce request
 
 
 -- | Fault only answer posts, allowing asynchronous progress to publish normally.

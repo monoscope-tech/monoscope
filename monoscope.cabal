@@ -311,6 +311,9 @@ extra-source-files:
     static/migrations/0269_channel_incident_routines.sql
     static/migrations/0270_incident_agent_delivery.sql
     static/migrations/0271_slack_user_authorization.sql
+    static/migrations/0272_slack_token_refresh.sql
+    static/migrations/0273_agent_evidence_audience.sql
+    static/migrations/0274_legacy_slack_evidence_audience.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs
@@ -489,6 +492,7 @@ library
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.SlackMCP
       Pkg.SlackOAuth
       Pkg.SlackRateLimit
       Pkg.StackTrace
@@ -1158,6 +1162,7 @@ test-suite test-dev
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.SlackMCP
       Pkg.SlackOAuth
       Pkg.SlackRateLimit
       Pkg.StackTrace

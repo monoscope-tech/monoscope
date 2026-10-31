@@ -73,7 +73,9 @@ module Pkg.AI (
 import Control.Lens ((.~), (^.), (^..), (^?))
 import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, values, _Bool, _Number, _String)
+import Data.Aeson.Key qualified as AK
+import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Lens (key, values, _Bool, _Number, _Object, _String)
 import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Cache qualified as Cache
@@ -93,6 +95,7 @@ import Data.Time.Zones.All qualified as TZ
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
+import Effectful.Exception qualified as Exception
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
@@ -127,6 +130,9 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC, idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
+import Pkg.SlackMCP qualified as SlackMCP
+import Pkg.SlackOAuth qualified as SlackOAuth
+import Pkg.SlackRateLimit qualified as SlackRateLimit
 import Relude
 import System.Config qualified as Config
 import System.Tracing (Tracing)
@@ -639,6 +645,7 @@ data AgenticConfig = AgenticConfig
   , useTimefusion :: Bool -- Route raw-SQL reads to TimeFusion (mirrors env.enableTimefusionReads)
   , invocationMode :: InvocationMode
   , projectTools :: Maybe ProjectTools
+  , slackEvidence :: Either SlackEvidenceFailure (Map.Map Text (Catalog.Tool SlackMCP.SlackRead))
   }
 
 
@@ -708,6 +715,7 @@ defaultAgenticConfig pid =
     , useTimefusion = False
     , invocationMode = InteractiveReadOnly
     , projectTools = Nothing
+    , slackEvidence = Left SlackRequesterRequired
     }
 
 
@@ -826,7 +834,7 @@ formatFacetContext = foldMap \summary -> case facetLines (\(FacetValue v _) -> "
 -- * Capability catalog
 
 
-data AgentOperation = ProjectOperation ProjectTools | LocalOperation LocalOperation
+data AgentOperation = ProjectOperation ProjectTools | LocalOperation LocalOperation | SlackEvidenceOperation SlackMCP.SlackRead
 
 
 -- | Every dispatcher uses the same descriptor. API tools win on name collisions,
@@ -835,6 +843,109 @@ agentCatalog :: AgenticConfig -> Map.Map Text (MCP.Tool AgentOperation)
 agentCatalog config =
   foldMap (\backend -> Map.map (ProjectOperation backend <$) backend.catalog) config.projectTools
     <> Map.map (fmap LocalOperation) Catalog.localTools
+    <> either (const mempty) (Map.map $ fmap SlackEvidenceOperation) config.slackEvidence
+
+
+data SlackEvidenceFailure = SlackRequesterRequired | SlackCredentialFailure Integrations.SlackCredentialFailure | SlackProviderFailure SlackMCP.Failure | SlackProviderCoolingDown UTCTime | SlackAudienceUnavailable | SlackSearchRequiresPersonalScope | SlackSchemaUnsupported | SlackReadArgumentsInvalid
+  deriving stock (Show)
+
+
+data SlackEvidence = SlackEvidence {subject :: Integrations.SlackEvidenceSubject, operation :: SlackMCP.SlackRead, arguments :: Map.Map Text AE.Value, result :: SlackMCP.ReadResult}
+  deriving stock (Generic)
+  deriving anyclass (AE.ToJSON)
+
+
+slackGrant :: (DB es, Time.Time :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Eff es (Either SlackEvidenceFailure (Config.EnvConfig, Integrations.SlackEvidenceSubject, SlackOAuth.SlackUserGrant))
+slackGrant config = runExceptT do
+  settings <- Except.liftEither $ maybeToRight SlackRequesterRequired config.sourceConfig
+  when (T.null $ T.strip settings.slackAppId) $ Except.throwError $ SlackProviderFailure SlackMCP.ClientNotConfigured
+  subject <- case config.access of
+    SlackInvestigationAccess run -> pure $ Integrations.SlackEvidenceSubject config.projectId run.userId run.teamId run.slackUserId
+    SlackAccess team user member -> pure $ Integrations.SlackEvidenceSubject config.projectId member team user
+    MemberAccess context member | context /= SharedMember -> ExceptT $ first SlackCredentialFailure <$> Integrations.memberSlackEvidenceSubject config.projectId member
+    _ -> Except.throwError SlackRequesterRequired
+  grant <- ExceptT $ first SlackCredentialFailure <$> Integrations.resolveSlackEvidenceGrant (encodeUtf8 settings.apiKeyEncryptionSecretKey) settings.slackClientId settings.slackClientSecret subject
+  pure (settings, subject, grant)
+
+
+currentSlackGrant :: (DB es, Time.Time :> es) => Config.EnvConfig -> Integrations.SlackEvidenceSubject -> SlackOAuth.SlackUserGrant -> Eff es Bool
+currentSlackGrant settings subject grant = do
+  current <- Integrations.getSlackEvidenceGrant (encodeUtf8 settings.apiKeyEncryptionSecretKey) subject.projectId subject.userId subject.teamId subject.slackUserId
+  pure $ maybe False ((== grant.accessToken) . (.accessToken)) current
+
+
+loadSlackEvidence :: (DB es, Time.Time :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Eff es AgenticConfig
+loadSlackEvidence config = do
+  result <-
+    Exception.handle (\(SlackRateLimit.SlackRateLimited deadline) -> pure $ Left $ SlackProviderCoolingDown deadline)
+      $ slackGrant config
+      >>= \case
+        Left failure -> pure $ Left failure
+        Right (settings, subject, grant) -> do
+          catalog <- first SlackProviderFailure <$> SlackRateLimit.withRateLimits subject.teamId (SlackMCP.discoverReads settings.slackAppId grant)
+          current <- currentSlackGrant settings subject grant
+          pure $ if current then catalog else Left (SlackCredentialFailure Integrations.SlackNotConnected)
+  pure config{slackEvidence = result}
+
+
+runSlackEvidence :: (DB es, IOE :> es, Time.Time :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Catalog.Tool AgentOperation -> SlackMCP.SlackRead -> Map.Map Text AE.Value -> Eff es ToolResult
+runSlackEvidence config tool operation proposed = do
+  outcome <- runExceptT do
+    (settings, subject, grant) <- ExceptT $ slackGrant config
+    conversation <- Except.liftEither $ maybeToRight SlackAudienceUnavailable config.conversationId
+    (audience, arguments) <- case config.access of
+      MemberAccess context member | context /= SharedMember -> pure (Investigations.PersonalAudience member, proposed)
+      SlackInvestigationAccess run | "D" `T.isPrefixOf` run.channelId -> do
+        own <- lift $ Integrations.slackDirectMessageOwner config.projectId run.userId run.teamId run.slackUserId run.channelId
+        unless own $ Except.throwError SlackAudienceUnavailable
+        pure (Investigations.PersonalAudience run.userId, proposed)
+      SlackInvestigationAccess run | operation `elem` [SlackMCP.ReadChannel, SlackMCP.ReadThread] -> do
+        channel <- Except.liftEither $ first (const SlackAudienceUnavailable) $ Integrations.slackChannel run.teamId run.channelId
+        member <- lift $ Integrations.slackChannelMember config.projectId run.userId channel
+        unless member $ Except.throwError SlackAudienceUnavailable
+        fields <- Except.liftEither $ maybeToRight SlackSchemaUnsupported $ tool.inputSchema ^? key "properties" . _Object
+        field <- case filter (`KM.member` fields) ["channel_id", "channel"] of
+          [name] -> pure name
+          _ -> Except.throwError SlackSchemaUnsupported
+        unless (all (`elem` (["channel_id", "channel", "team_id", "ts", "thread_ts", "message_ts", "oldest", "latest", "limit", "cursor"] :: [Text])) $ Map.keys proposed) $ Except.throwError SlackSchemaUnsupported
+        unless ((KM.lookup field fields >>= (^? key "type" . _String)) == Just "string") $ Except.throwError SlackSchemaUnsupported
+        for_ (["ts", "thread_ts", "message_ts"] :: [Text]) $ \name -> for_ (Map.lookup name proposed) $ \value ->
+          unless (isJust $ value ^? _String >>= Incidents.slackTimestamp) $ Except.throwError SlackReadArgumentsInvalid
+        let bounded = Map.insert (AK.toText field) (AE.String run.channelId) $ Map.filterWithKey (\name _ -> AK.fromText name `KM.member` fields && name `notElem` (["channel_id", "channel", "team_id"] :: [Text])) proposed
+            arguments = if KM.member "team_id" fields then Map.insert "team_id" (AE.String run.teamId) bounded else bounded
+        pure (Investigations.SlackChannelAudience channel, arguments)
+      SlackInvestigationAccess{} -> Except.throwError SlackSearchRequiresPersonalScope
+      _ -> Except.throwError SlackAudienceUnavailable
+    retained <- lift $ Investigations.retainEvidenceAudience config.projectId conversation audience
+    unless retained $ Except.throwError SlackAudienceUnavailable
+    lift $ void $ requireConfigAccess config
+    let remote = Catalog.Tool tool.name tool.description tool.inputSchema tool.agentPolicy operation
+    result <- ExceptT $ first SlackProviderFailure <$> SlackRateLimit.withRateLimits subject.teamId (SlackMCP.readEvidence settings.slackAppId grant remote arguments)
+    unlessM (lift $ currentSlackGrant settings subject grant) $ Except.throwError $ SlackCredentialFailure Integrations.SlackNotConnected
+    pure SlackEvidence{subject, operation, arguments, result}
+  pure $ case outcome of
+    Left failure -> ToolResult (slackEvidenceMessage failure) Nothing
+    Right evidence -> ToolResult ((case evidence.result.outcome of SlackMCP.ReadSucceeded -> ""; SlackMCP.ReadRejected -> "Slack evidence read failed:\n") <> T.intercalate "\n\n" evidence.result.content) (Just $ AE.toJSON evidence)
+
+
+slackEvidenceMessage :: SlackEvidenceFailure -> Text
+slackEvidenceMessage = \case
+  SlackRequesterRequired -> "Slack evidence requires a linked account and a configured Slack integration."
+  SlackCredentialFailure Integrations.SlackNotConnected -> "Connect your own Slack account with /monoscope search connect."
+  SlackCredentialFailure Integrations.SlackAccountAmbiguous -> "More than one Slack account is connected. Continue in your Slack DM to select that account."
+  SlackCredentialFailure Integrations.SlackRefreshPending{} -> "Your Slack connection is refreshing. Try again shortly."
+  SlackCredentialFailure Integrations.SlackRefreshUncertain -> "Reconnect your Slack account; its previous refresh could not be confirmed."
+  SlackCredentialFailure Integrations.SlackRefreshRevoked -> "Slack revoked this connection. Reconnect your Slack account."
+  SlackCredentialFailure Integrations.SlackRefreshStorageFailure{} -> "This Slack connection could not be opened. Reconnect your account."
+  SlackProviderFailure SlackMCP.ClientNotConfigured -> "Slack evidence is not configured for this installation."
+  SlackProviderFailure SlackMCP.CredentialsRejected -> "Slack rejected this connection. Reconnect your Slack account."
+  SlackProviderFailure SlackMCP.AccessRejected -> "Slack denied this app access. Check the workspace's app approval and MCP configuration."
+  SlackProviderFailure _ -> "Slack evidence is temporarily unavailable. Try again later."
+  SlackProviderCoolingDown{} -> "Slack evidence is rate limited. Other project tools remain available."
+  SlackAudienceUnavailable -> "Slack evidence requires your private conversation or verified current-channel access."
+  SlackSearchRequiresPersonalScope -> "Workspace-wide Slack search requires your private DM or a personal web conversation."
+  SlackSchemaUnsupported -> "Slack's current read schema cannot be confined to this channel."
+  SlackReadArgumentsInvalid -> "Slack thread reads require a valid message timestamp."
 
 
 initialLocalOperations :: AgenticConfig -> [LocalOperation]
@@ -855,7 +966,7 @@ discoverableCatalog config = Map.filter visible $ agentCatalog config
   where
     visible tool =
       isJust tool.agentPolicy && case tool.dispatch of
-        ProjectOperation{} -> True
+        (ProjectOperation{}; SlackEvidenceOperation{}) -> True
         LocalOperation operation -> operation `elem` (RunSqlQuery : initialLocalOperations config)
 
 
@@ -987,8 +1098,9 @@ runAgenticChatWithHistory
   -> Text
   -> Text
   -> Eff es (Either Text AgenticChatResult)
-runAgenticChatWithHistory initialConfig requestedInput model apiKey = do
-  void $ requireConfigAccess initialConfig
+runAgenticChatWithHistory suppliedConfig requestedInput model apiKey = do
+  void $ requireConfigAccess suppliedConfig
+  initialConfig <- loadSlackEvidence suppliedConfig
   (userQuery, instructions) <- case initialConfig.invocationMode of
     DurableRun context ->
       let retained = (,context.instructions) <$> maybe (throwIO AgentStopped) pure context.input
@@ -1366,6 +1478,11 @@ executeToolAt cursor config tc = do
       args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
   Log.logTrace "AI executing tool" (AE.object ["tool" AE..= funcName])
   result <- case Map.lookup funcName (agentCatalog config) of
+    Nothing
+      | Map.member funcName Catalog.slackReads
+      , Left failure <- config.slackEvidence -> case failure of
+          SlackProviderCoolingDown deadline -> throwIO $ SlackRateLimit.SlackRateLimited deadline
+          _ -> pure $ Investigations.RecordedResult $ noRaw $ slackEvidenceMessage failure
     Nothing -> pure $ Investigations.RecordedResult $ noRaw $ "Unknown tool: " <> funcName
     Just tool -> case tool.agentPolicy of
       Nothing -> pure $ Investigations.RecordedResult $ noRaw "This project operation has no Agent policy."
@@ -1375,6 +1492,7 @@ executeToolAt cursor config tc = do
           Right snapshot -> recorded snapshot $ case tool.dispatch of
             ProjectOperation backend -> EffectfulOperation $ runProjectTool backend funcName args
             LocalOperation operation -> executeLocal operation args
+            SlackEvidenceOperation operation -> EffectfulOperation $ runSlackEvidence config tool operation args
   void $ requireConfigAccess config
   let response = Investigations.operationResponse config.projectId result
   Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length response.formatted])
@@ -1398,7 +1516,7 @@ executeToolAt cursor config tc = do
               terms = words $ T.toCaseFold $ T.map (\c -> if isAlphaNum c then c else ' ') query
               score (name, description) = sum [4 | term <- terms, term `T.isInfixOf` T.toCaseFold name] + sum [1 | term <- terms, term `T.isInfixOf` T.toCaseFold description]
               matches = sortWith (Down . fst) [(score tool, tool) | tool <- summaries, score tool > 0]
-           in AE.object ["tools" AE..= map (\(_, (name, description)) -> AE.object ["name" AE..= name, "description" AE..= description]) (take 12 matches), "total" AE..= length matches, "has_more" AE..= (length matches > 12)]
+           in AE.object $ ["tools" AE..= map (\(_, (name, description)) -> AE.object ["name" AE..= name, "description" AE..= description]) (take 12 matches), "total" AE..= length matches, "has_more" AE..= (length matches > 12)] <> ["slack_evidence" AE..= either slackEvidenceMessage (const "Slack read tools are connected.") config.slackEvidence | "slack" `elem` terms]
       GetProjectToolSchema -> EffectfulOperation $ pure $ noRaw $ encodeText $ case getTextArg "name" args >>= (\name -> Map.lookup name $ discoverableCatalog config) of
         Nothing -> AE.object ["error" AE..= ("unknown project operation" :: Text)]
         Just tool ->
@@ -1481,7 +1599,7 @@ executeToolAt cursor config tc = do
     recovery tool = case tool.agentPolicy of
       Just MCP.ReadOnly{} -> ReplayReads
       _ -> case tool.dispatch of
-        ProjectOperation{} -> RetainInRun
+        (ProjectOperation{}; SlackEvidenceOperation{}) -> RetainInRun
         LocalOperation operation -> case executeLocal operation mempty of
           AtomicOperation{} -> AtomicInRun
           EffectfulOperation{} -> RetainInRun
