@@ -2865,6 +2865,15 @@ finishRunRowsTx finalization =
       UPDATE apis.ai_agent_operations operation
       SET outcome = #{Aeson Investigations.OperationUnknown}, updated_at = clock_timestamp()
       FROM finished run WHERE operation.run_id = run.id AND operation.outcome = #{Aeson Investigations.OperationRunning}
+    ), refused AS (
+      UPDATE apis.ai_agent_operations operation
+      SET outcome = #{Aeson $ Investigations.OperationRefused Investigations.ReviewRequestEnded}, updated_at = clock_timestamp()
+      FROM finished run, apis.ai_routine_runs origin
+      WHERE origin.id = operation.run_id AND origin.project_id = run.project_id
+        AND origin.root_run_id = run.root_run_id AND origin.conversation_id = run.conversation_id
+        AND operation.project_id = run.project_id
+        AND operation.outcome = #{Aeson Investigations.OperationUnstarted}
+        AND run.request_ended
     ) INSERT INTO apis.ai_routine_run_artifacts (run_id, key, title, content)
       SELECT run.id, a.key, a.title, a.content FROM finished run
       JOIN apis.ai_artifacts a ON a.project_id = run.project_id AND a.conversation_id = run.conversation_id
@@ -2872,11 +2881,16 @@ finishRunRowsTx finalization =
   where
     finished = case finalization of
       FinishRun context status findings actions reason ->
-        [HI.sql|WITH finished AS (
+        let requestEnded = case status of
+              (CompletedSucceeded; CompletedNoFindings; CompletedCancelled) -> True
+              (CompletedFailed; CompletedTimedOut) -> case context.source of
+                TriggeredRun{} -> False
+                (ScheduledRun; InteractiveRun{}) -> True
+         in [HI.sql|WITH finished AS (
           UPDATE apis.ai_routine_runs
           SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{reason}
           WHERE id = #{context.id} AND started_at = #{context.startedAt} AND status = #{RunRunning}
-          RETURNING id, project_id, conversation_id
+          RETURNING id, project_id, conversation_id, root_run_id, #{requestEnded} AS request_ended
         )|]
       RetireAbandonedRuns ->
         [HI.sql|WITH finished AS (
@@ -2884,7 +2898,7 @@ finishRunRowsTx finalization =
             error = 'Run authorizing member or installation is no longer available.'
           WHERE status = #{RunRunning} AND (requested_by IS NULL OR
             (routine_id IS NULL AND source->>'tag' IN ('ScheduledRun', 'TriggeredRun')))
-          RETURNING id, project_id, conversation_id
+          RETURNING id, project_id, conversation_id, root_run_id, TRUE AS request_ended
         )|]
       RetireUnownedWork scope ->
         [HI.sql|WITH retired_routines AS (
@@ -2900,7 +2914,7 @@ finishRunRowsTx finalization =
             error = 'Routine authorizing member is no longer available.'
           FROM retired_routines retired WHERE run.routine_id = retired.id AND run.status = #{RunRunning}
             AND (retired.requested_by IS NULL OR run.requested_by IS NULL)
-          RETURNING run.id, run.project_id, run.conversation_id
+          RETURNING run.id, run.project_id, run.conversation_id, run.root_run_id, TRUE AS request_ended
         )|]
     retirementScope = \case
       UnownedInstallations -> [HI.sql|routine.requested_by IS NULL|]

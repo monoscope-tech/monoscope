@@ -349,12 +349,16 @@ threadPageGetH pid convId docM runM hxTarget = do
                 code_ [class_ "min-w-0 break-all text-sm text-textStrong"] $ toHtml $ T.replace "_" " " $ Catalog.operationName operation.proposal.call
                 uncurry tonePill_ $ case operation.outcome of
                   Investigations.OperationRefused Investigations.ReviewDeclined -> (NeutralBadge, "Declined")
+                  Investigations.OperationRefused Investigations.ReviewRequestEnded -> (NeutralBadge, "Request ended")
                   Investigations.OperationRefused Investigations.ReviewAuthorityWithdrawn -> (WarningBadge, "Approval withdrawn")
                   Investigations.OperationRefused Investigations.ReviewTimedOut -> (WarningBadge, "Review expired")
                   Investigations.OperationUnstarted -> (BrandBadge, "Awaiting review")
                   Investigations.OperationRunning -> (BrandBadge, "Awaiting outcome")
                   Investigations.OperationUnknown -> (WarningBadge, "Outcome uncertain")
                   Investigations.OperationReturned{} -> (NeutralBadge, "Response saved")
+              case operation.outcome of
+                Investigations.OperationRefused reason -> p_ [class_ "text-sm text-textWeak"] $ toHtml $ Investigations.reviewRefusalMessage reason
+                _ -> pass
               when (case operation.outcome of Investigations.OperationUnknown -> True; _ -> False)
                 $ p_ [class_ "text-sm text-textWeak"] "No result was retained. This action was not repeated. It may still complete."
               let required = MCP.minimumPermission operation.proposal.policy.capability

@@ -113,6 +113,12 @@ Incident investigations now suspend on the shared operation record and use the s
 
 Approval, rejection, and expiry first failed because suspension became an investigation failure and unconditional cleanup closed the run. All 41 incident-delivery examples now pass. The three new cases verify real web controls, one queued continuation, no report or repeated inference while waiting, the same run and attempt after continuation, one published report, and exactly one permitted dashboard mutation only after approval. Formatting and diff checks pass, and scoped HLint has no findings on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue in this slice. Configuration, waiting stop/pause cleanup, other entry points, native model-session continuation, live acceptance, and final release checks remain unfinished.
 
+## Terminal request cleanup
+
+The shared run finalizer now closes unstarted actions when their request ends. An exhaustive Haskell match distinguishes terminal scheduled/interactive work from failed or timed-out event attempts that can recover. SQL applies the decision to the same project, conversation, and request root, including proposals retained on older attempts. Running or uncertain effects keep their separate uncertainty path. Proposals and review receipts remain unchanged.
+
+A typed refusal records that the request ended before execution. The run inspector shows its reason instead of leaving the action labelled as awaiting review. No migration, worker, or store is added. Thirty failing-first cases cover three run sources, five outcomes, and both pending and approved-but-unexecuted actions. They also cover a later event attempt closing an earlier retained proposal. All 30 cases and the full 389-example bot suite pass. The same code passes 76 API, 41 incident-delivery, 35 error-pattern, and seven focused native-review examples. Formatting and diff checks pass; scoped HLint has no findings on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue in this slice. Waiting pause/stop semantics and the other unfinished plan items remain open.
+
 ## Product contract
 
 Monoscope investigates telemetry, uses project tools, remembers team knowledge, and follows up on its work.

@@ -178,7 +178,7 @@ data OperationOutcome = OperationUnstarted | OperationRunning | OperationUnknown
   deriving (HI.DecodeValue) via Aeson OperationOutcome
 
 
-data ReviewRefusal = ReviewDeclined | ReviewTimedOut | ReviewAuthorityWithdrawn
+data ReviewRefusal = ReviewDeclined | ReviewTimedOut | ReviewAuthorityWithdrawn | ReviewRequestEnded
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -188,6 +188,7 @@ reviewRefusalMessage = \case
   ReviewDeclined -> "A reviewer declined this action. It was not executed."
   ReviewTimedOut -> "The review expired before this action could execute."
   ReviewAuthorityWithdrawn -> "This approval no longer meets current project permissions. Start a new request."
+  ReviewRequestEnded -> "This request ended before the action executed. Start a new request."
 
 
 data ReviewRequest = ReviewRequest {expiresAt :: UTCTime, approver :: ReviewApprover}

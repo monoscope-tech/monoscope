@@ -92,6 +92,10 @@ data ReviewScenario = ApproveReview | DeclineReview | ExpireBeforeReview | Expir
   deriving stock (Bounded, Enum, Eq, Show)
 
 
+data ReviewRunKind = InteractiveReview | ScheduledReview | EventReview
+  deriving stock (Eq, Show)
+
+
 spec :: Spec
 spec = around withTestResources do
   describe "Agentic Query Processing" do
@@ -512,6 +516,81 @@ spec = around withTestResources do
           readIORef calls >>= (`shouldBe` 3)
           sweep
           queued job >>= (`shouldBe` 1)
+
+      for_ [InteractiveReview, ScheduledReview, EventReview] $ \kind ->
+        for_ [False, True] $ \approved ->
+          for_
+            [ (Issues.CompletedSucceeded, Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ Issues.reportAnswer "Finished" Nothing)
+            , (Issues.CompletedNoFindings, Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer $ Issues.reportAnswer "No findings" Nothing)
+            , (Issues.CompletedCancelled, Issues.CancelledResult Nothing)
+            , (Issues.CompletedFailed, Issues.FailedResult $ Issues.RunFailure "Interrupted" Issues.RunOnly)
+            , (Issues.CompletedTimedOut, Issues.TimedOutResult $ Issues.RunFailure "Timed out" Issues.RunOnly)
+            ]
+            $ \(termination, completion) ->
+              it ("agentReview_runCompletionClosesUnstartedActionsAndRetainsRecoverableAttempts: " <> show (kind, approved, termination)) \tr -> do
+                let user = (getResponse tr.trSessAndHeader).user.id
+                    conversation = UUIDId $ UUID.fromWords 0 0 0 283
+                    policy = Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+                context <- case kind of
+                  InteractiveReview -> do
+                    void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+                    interactiveInvocation tr testPid conversation "Review a dashboard" policy >>= \case
+                      AI.DurableRun context -> pure context
+                      AI.InteractiveReadOnly -> fail "Expected an admitted interactive run"
+                  ScheduledReview -> runTestBg frozenTime tr do
+                    void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+                    Issues.insertChatMessage testPid conversation Issues.ChatUser "Review a dashboard" Nothing Nothing
+                    slot <- maybe (throwIO $ ErrorCall "Expected a scheduled review") pure =<< Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 5)
+                    Issues.setRoutinePolicy user testPid conversation policy
+                    claimed <- maybe (throwIO $ ErrorCall "Expected a scheduled claim") pure =<< Issues.claimRoutine slot.id slot.scheduledAt
+                    AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation claimed.runId claimed.claimedAt
+                  EventReview -> do
+                    issue <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "ended-review" "Original title" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId
+                    void $ testServant tr $ AIThreads.routineInstallPostH testPid $ AIThreads.RoutineTemplateForm "issue-enrichment"
+                    Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventIssueEnrichment
+                    runQueryEffect tr $ Issues.setRoutinePolicy user testPid routine.conversationId policy
+                    let issueConversation = UUIDId issue.unUUIDId
+                    void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid issueConversation Issues.CTAnomaly (AE.object [])
+                    Just execution <- runTestBgNoReset tr $ Issues.startEventRun routine (Issues.IssueEnrichmentRequest issue) Issues.StartRun issueConversation "Review a dashboard"
+                    runTestBgNoReset tr $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.IssueEnrichment issue) execution.id execution.startedAt
+                let call = LLM.ToolCall "ended-review" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Unstarted review" :: Text)])
+                    message = LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [call]}
+                    parameters = OpenAI._CreateChatCompletion{OpenAI.model = "model", OpenAI.reasoning_effort = Nothing, OpenAI.tools = Nothing, OpenAI.messages = mempty}
+                    checkpoint = Investigations.ToolsPending (Investigations.Step (one message) parameters 0 (Nothing, Nothing) []) message [] [call]
+                    turn = Investigations.RunTurn testPid context.conversationId user context.rootId
+                    target = Investigations.RunCheckpoint turn
+                    lease = Investigations.RunLease turn context.startedAt
+                    proposal = Investigations.OperationProposal (Operation.ModelCall call) $ AI.OperationPolicy Catalog.ProjectWrite policy ProjectMembers.PAdmin
+                    review = Investigations.ReviewRequest (addUTCTime 60 frozenTime) Investigations.ReviewEditors
+                    retained = kind == EventReview && termination `elem` [Issues.CompletedFailed, Issues.CompletedTimedOut]
+                saved <- runQueryEffect tr $ Investigations.startCheckpointFor target checkpoint
+                pending <- runQueryEffect tr $ Investigations.beginOperation lease (Investigations.CheckpointCursor target saved.revision) proposal $ Just review
+                identifier <- case pending of Investigations.AwaitOperationReview identifier _ -> pure identifier; _ -> fail "Expected a waiting proposal"
+                when approved $ void $ runTestBgNoReset tr $ Investigations.decideOperationReview testPid user identifier Investigations.ReviewApproved
+                [before] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
+                runTestBgNoReset tr (Issues.completeRun context completion) >>= \case
+                  Issues.RunCompleted actual _ -> actual `shouldBe` termination
+                  Issues.CompletionRejected -> expectationFailure "Run completion was rejected"
+                [after] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
+                (AE.toJSON after.proposal, after.review) `shouldBe` (AE.toJSON before.proposal, before.review)
+                after.outcome `shouldSatisfy` \case
+                  Investigations.OperationUnstarted -> retained
+                  Investigations.OperationRefused Investigations.ReviewRequestEnded -> not retained
+                  _ -> False
+                unless retained do
+                  (_, page) <- testServant tr $ AIThreads.operationGetH testPid identifier
+                  renderT page `shouldSatisfy` (not . T.isInfixOf "Awaiting review")
+                  renderT page `shouldSatisfy` T.isInfixOf "This request ended before the action executed."
+                when retained $ case context.source of
+                  Issues.TriggeredRun (Issues.IssueEnrichment issue) -> do
+                    Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventIssueEnrichment
+                    Just retry <- runTestBgNoReset tr $ Issues.startEventRun routine (Issues.IssueEnrichmentRequest issue) Issues.ContinueRun context.conversationId "Review a dashboard"
+                    retryContext <- runTestBgNoReset tr $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.IssueEnrichment issue) retry.id retry.startedAt
+                    void $ runTestBgNoReset tr $ Issues.completeRun retryContext $ Issues.CancelledResult Nothing
+                    [closed] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
+                    closed.outcome `shouldSatisfy` \case Investigations.OperationRefused Investigations.ReviewRequestEnded -> True; _ -> False
+                    closed.review `shouldBe` before.review
+                  _ -> expectationFailure "Expected a recoverable event attempt"
 
       for_ [ApproveReview, DeclineReview, ExpireAfterReview] $ \scenario ->
         it ("agentReview_nativeExecutionRetainsItsReviewAndResponseContract: " <> show scenario) \tr -> do
