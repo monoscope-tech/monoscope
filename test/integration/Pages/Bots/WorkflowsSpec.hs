@@ -32,6 +32,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful (Eff, IOE, (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Error.Static (catchError)
 import Hasql.Interpolate qualified as HI
@@ -989,18 +990,29 @@ spec = around withTestResources do
             runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(DISTINCT root_run_id) FROM apis.ai_routine_runs WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]) >>= (`shouldBe` 1)
             when (expectedWrites == 1) $ runQueryEffect tr (Hasql.interpScalar @Projects.UserId [HI.sql|SELECT created_by FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Slack autonomous dashboard'|]) >>= (`shouldBe` requester.id)
 
-      it "Slack: handles general query end-to-end" \tr -> do
-        setupSlackAgent tr testPid "T_WF_SLACK"
-        let interaction = slackInteraction "/monoscope" "show errors" "T_WF_SLACK"
-
-        -- Get immediate loading response
-        loadingResp <- toBaseServantResponse tr $ slackInteractionsH interaction
-        loadingResp `shouldSatisfy` isValidJsonResponse
-        let loadingText = fromMaybe "" $ extractResponseText loadingResp
-        (T.isInfixOf "Analyzing" loadingText || T.isInfixOf "⏳" loadingText) `shouldBe` True
-
-        -- Process background jobs that send final response
-        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      for_ ([("show errors", 1, "No errors were found."), ("show weekly report", 0, "report found")] :: [(Text, Int, Text)]) \(prompt, expectedCalls, expectedReply) ->
+        it ("Slack: handles queued query end-to-end: " <> toString prompt) \tr -> do
+          setupSlackAgent tr testPid "T_WF_SLACK"
+          calls <- newIORef (0 :: Int)
+          let interaction = slackInteraction "/monoscope" prompt "T_WF_SLACK"
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat{} -> do
+                  modifyIORef' calls (+ 1)
+                  pure $ Right $ Chat.Message Chat.Assistant "No errors were found." Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"channel\":\"C0123ABCDEF\",\"ts\":\"1735689601.000001\",\"members\":[\"U0123ABCDEF\"]}"
+          receipt <- toBaseServantResponse tr $ slackInteractionsH interaction
+          fromMaybe "" (extractResponseText receipt) `shouldSatisfy` T.isInfixOf "/ai/runs/"
+          queued <- runQueryEffect tr $ Hasql.interp @[HI.OneColumn (Aeson Jobs.BgJobs)] [HI.sql|SELECT payload FROM background_jobs WHERE payload->>'tag' = 'RunConversation' AND status = 'queued'|]
+          length queued `shouldBe` 1
+          (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ for_ queued \(HI.OneColumn (Aeson job)) -> Jobs.processBackgroundJob tr.trATCtx job
+          let replies = [body | (url, body) <- requests, url == "https://slack.com/api/chat.postMessage"]
+          length replies `shouldBe` 1
+          for_ replies $ \body -> decodeUtf8 @Text body `shouldSatisfy` T.isInfixOf expectedReply
+          readIORef calls >>= (`shouldBe` expectedCalls)
+          Just completed <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackCommand $ Issues.slackCommandConversationId testPid interaction.team_id interaction.channel_id interaction.trigger_id
+          completed.status `shouldBe` Issues.RunSucceeded
 
       for_ [False, True] $ \shared ->
         it ("slackEvidenceDiscovery_usesRequesterGrantAndExcludesProviderWrites: shared=" <> show shared) \tr -> do
@@ -1025,8 +1037,8 @@ spec = around withTestResources do
           fmap (.response) answer `shouldBe` Right (if shared then "Slack reads missing." else "Slack reads discovered without provider writes.")
           map fst requests `shouldBe` replicate (if shared then 0 else 4) "https://mcp.slack.com/mcp"
 
-      for_ [minBound .. maxBound] $ \scenario ->
-        it ("slackEvidenceRead_usesOwnedCredentialsRetainsProvenanceAndRechecksAuthority: " <> show scenario) \tr -> do
+      for_ [(command, scenario) | command <- [False, True], scenario <- [minBound .. maxBound]] $ \(command, scenario) ->
+        it ("slackEvidenceRead_usesOwnedCredentialsRetainsProvenanceAndRechecksAuthority: " <> show (command, scenario)) \tr -> do
           setupSlackAgent tr testPid "T_MCP_READ"
           authorizeSlackTestGrant tr $ Slack.SlackUserGrant "T_MCP_READ" "U0123ABCDEF" "private-mcp-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
           lists <- newIORef (0 :: Int)
@@ -1034,7 +1046,7 @@ spec = around withTestResources do
               user = (getResponse tr.trSessAndHeader).user.id
               secret = "slack-private-provider-evidence-canary"
               name = "slack_search_public_and_private"
-              access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_READ" "U0123ABCDEF" user "D123MCP" "1735689600.000001" "1735689600.000001"
+              access = if command then AI.SlackCommandAccess (fromRightShow $ Issues.commandOrigin "T_MCP_READ" "D123MCP" "U0123ABCDEF") user else AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_READ" "U0123ABCDEF" user "D123MCP" "1735689600.000001" "1735689600.000001"
               schema = AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object ["query" AE..= AE.object ["type" AE..= ("string" :: Text)]]]
           mode <- interactiveInvocation tr testPid conversation "Find Slack evidence" Issues.Observe
           let config = (agentConfig testPid){AI.access = access, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.sourceConfig = Just tr.trATCtx.config{Config.slackAppId = "A123MONOSCOPE"}}
@@ -1080,14 +1092,14 @@ spec = around withTestResources do
                   decodeUtf8 (AE.encode result.toolCalls) `shouldSatisfy` (not . T.isInfixOf "private-mcp-token")
                 Left _ -> expectationFailure "Expected retained Slack evidence"
 
-      for_ [minBound .. maxBound] $ \scenario ->
-        it ("slackEvidenceChannel_confinesReadsToTheVerifiedDestination: " <> show scenario) \tr -> do
+      for_ [(command, scenario) | command <- [False, True], scenario <- [minBound .. maxBound]] $ \(command, scenario) ->
+        it ("slackEvidenceChannel_confinesReadsToTheVerifiedDestination: " <> show (command, scenario)) \tr -> do
           setupSlackAgent tr testPid "T_MCP_CHANNEL"
           unless (scenario == PersonalGrantMissing) $ authorizeSlackTestGrant tr $ Slack.SlackUserGrant "T_MCP_CHANNEL" "U0123ABCDEF" "channel-user-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
           let channel = "G123MCP"
               user = (getResponse tr.trSessAndHeader).user.id
               conversation = Issues.slackScopedConversationId testPid "T_MCP_CHANNEL" channel "1735689600.000001"
-              access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_CHANNEL" "U0123ABCDEF" user channel "1735689600.000001" "1735689600.000001"
+              access = if command then AI.SlackCommandAccess (fromRightShow $ Issues.commandOrigin "T_MCP_CHANNEL" channel "U0123ABCDEF") user else AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_CHANNEL" "U0123ABCDEF" user channel "1735689600.000001" "1735689600.000001"
               operation
                 | scenario == BroaderChannelSearch = "slack_search_public"
                 | scenario `elem` [CurrentThread, ThreadLocatorRejected] = "slack_read_thread"
@@ -1239,60 +1251,182 @@ spec = around withTestResources do
           (_, allowed) <- runAsBaseRecordingHTTP tr $ transport $ AI.canReadEvidence access testPid conversation
           allowed `shouldBe` expected
 
-      it "slackSlashCommand_recordsRoutineRunAndArtifactIncludingRejectedDelivery" \tr -> do
-        setupSlackAgent tr testPid "T_SLASH_ROUTINE"
-        let other = UUIDId $ UUID.fromWords 0 0 44 61
-            otherResources = tr{trSessAndHeader = fmap (Lens.set (Generic.field @"user" . Generic.field @"id") other) tr.trSessAndHeader}
-        runQueryEffect tr do
-          Hasql.interpExecute_ [HI.sql|INSERT INTO users.users (id, email) VALUES (#{other}, 'slash-other@example.test')|]
-          Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{other}, 'admin')|]
-          Hasql.interpExecute_ [HI.sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id) VALUES ('T_SLASH_ROUTINE', 'U123OTHER', #{other}, #{testPid})|]
-        for_ [False, True] \rejected -> do
-          let interaction = (slackInteraction "/monoscope" "Create a latency dashboard" "T_SLASH_ROUTINE"){SlackPage.trigger_id = "slash-routine-" <> show rejected, SlackPage.channel_id = "C123SLASH"}
-              source = Issues.SlackCommand $ Issues.slackCommandConversationId testPid interaction.team_id interaction.channel_id interaction.trigger_id
+      it "slackSlashCommand_commitsRequestWithQueuedExecution" \tr -> do
+        setupSlackAgent tr testPid "T_QUEUED_SLASH"
+        calls <- newIORef (0 :: Int)
+        let interaction = (slackInteraction "/monoscope" "Inspect queued slash evidence" "T_QUEUED_SLASH"){SlackPage.trigger_id = "queued-slash", SlackPage.channel_id = "C123SLASH"}
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> do
+                liftIO $ modifyIORef' calls (+ 1)
+                pure $ Right $ Chat.Message Chat.Assistant "Queued slash evidence retained." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "No title model"
+              ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+        void $ runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}") $ provider $ SlackPage.slackInteractionsHWithTools (Just Routes.mcpProjectTools) interaction
+        queued <- runQueryEffect tr $ Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM background_jobs WHERE status = 'queued' AND payload->>'tag' = 'RunConversation'|]
+        queued `shouldBe` 1
+        readIORef calls >>= (`shouldBe` 0)
+        let source = Issues.SlackCommand $ Issues.slackCommandConversationId testPid interaction.team_id interaction.channel_id interaction.trigger_id
+        Just admitted <- runQueryEffect tr $ Issues.getEventRun testPid source
+        admitted.status `shouldBe` Issues.RunRunning
+        Just context <- runQueryEffect tr $ Issues.runContextFor testPid $ Issues.ConversationClaim admitted.id
+        context.origin `shouldBe` Just (fromRightShow $ Issues.commandOrigin interaction.team_id interaction.channel_id interaction.user_id)
+        runQueryEffect tr (Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET command_origin = jsonb_set(command_origin, '{channel_id}', '"COTHER"') WHERE id = #{admitted.id}|])
+          `shouldThrow` (\(err :: SomeException) -> "Command origin is immutable" `T.isInfixOf` toText (displayException err))
+        runQueryEffect tr $ void $ Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Interrupted before delivery" Issues.RunOnly
+        Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventSlackMessage
+        Just recovery <- runQueryEffect tr $ Issues.startEventRun routine (Issues.SlackCommandRequest context.conversationId context.requestedBy) Issues.ContinueRun context.conversationId "Replacement input must not replace the request"
+        Just recovered <- runQueryEffect tr $ Issues.runContextFor testPid $ Issues.ConversationClaim recovery.id
+        (recovered.rootId, recovered.origin, recovered.input) `shouldBe` (context.rootId, context.origin, context.input)
+
+      it "slackSlashCommand_queueFailureRollsBackInputDestinationAndRun" \tr -> do
+        setupSlackAgent tr testPid "T_SLASH_ROLLBACK"
+        let interaction = (slackInteraction "/monoscope" "Inspect queued slash evidence" "T_SLASH_ROLLBACK"){SlackPage.trigger_id = "rollback-slash", SlackPage.channel_id = "C123SLASH"}
+            conversation = Issues.slackCommandConversationId testPid interaction.team_id interaction.channel_id interaction.trigger_id
+            ddl statement = withResource tr.trPool $ \connection -> void $ PGS.execute_ connection statement
+        bracket_
+          (ddl "ALTER TABLE background_jobs ADD CONSTRAINT reject_slash_admission CHECK (payload->>'tag' <> 'RunConversation') NOT VALID")
+          (ddl "ALTER TABLE background_jobs DROP CONSTRAINT reject_slash_admission")
+          $ void (toBaseServantResponse tr $ SlackPage.slackInteractionsHWithTools (Just Routes.mcpProjectTools) interaction)
+          `shouldThrow` (\(err :: SomeException) -> "reject_slash_admission" `T.isInfixOf` toText (displayException err))
+        runQueryEffect tr (Issues.getEventRun testPid $ Issues.SlackCommand conversation) >>= (`shouldSatisfy` isNothing)
+        runQueryEffect tr (Issues.getConversation testPid conversation) >>= (`shouldSatisfy` isNothing)
+
+      for_ ([("C123SLASH", True), ("D123SLASH", False)] :: [(Text, Bool)]) \(channel, shared) ->
+        it ("slackSlashCommand_retainsAndReconcilesReplyInOriginalConversation: " <> toString channel) \tr -> do
+          let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_SLASH"}}}
+          setupSlackAgent resources testPid "T_SLASH_ROUTINE"
+          let other = UUIDId $ UUID.fromWords 0 0 44 61
+              otherResources = resources{trSessAndHeader = fmap (Lens.set (Generic.field @"user" . Generic.field @"id") other) tr.trSessAndHeader}
+          runQueryEffect resources do
+            Hasql.interpExecute_ [HI.sql|INSERT INTO users.users (id, email) VALUES (#{other}, 'slash-other@example.test')|]
+            Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{other}, 'admin')|]
+            Hasql.interpExecute_ [HI.sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id) VALUES ('T_SLASH_ROUTINE', 'U123OTHER', #{other}, #{testPid})|]
+          for_ [(False, False), (True, False), (False, True)] \(rejected, deleted) -> do
+            calls <- newIORef (0 :: Int)
+            historyPage <- newIORef $ AE.object ["ok" AE..= True, "messages" AE..= ([] :: [AE.Value])]
+            stamp <- newIORef ("1735689600.000001" :: Text)
+            let interaction = (slackInteraction "/monoscope" "Create a latency dashboard" "T_SLASH_ROUTINE"){SlackPage.trigger_id = "slash-routine-" <> show (rejected, deleted), SlackPage.channel_id = channel}
+                source = Issues.SlackCommand $ Issues.slackCommandConversationId testPid interaction.team_id interaction.channel_id interaction.trigger_id
+                provider :: (ELLM.LLM :> es, IOE :> es) => Eff es a -> Eff es a
+                provider = interpose @ELLM.LLM \_ -> \case
+                  ELLM.CallAgenticChat history _ _ -> do
+                    liftIO $ modifyIORef' calls (+ 1)
+                    pure
+                      $ Right
+                      $ if any ((== Chat.Tool) . (.role)) history
+                        then Chat.Message Chat.Assistant "Created a latency dashboard." Chat.defaultMessageData
+                        else Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "create" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Slash dashboard " <> show (rejected, deleted))])]}
+                  ELLM.CallLLM{} -> pure $ Left "No title model"
+                  ELLM.EmbedDocuments{} -> pure $ Left "No embedding model"
+                members _ _ = pure $ Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\",\"U123OTHER\"]}"
+                ownerOnly _ _ = pure $ Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}"
+                transport :: (HTTP.HTTP :> es, IOE :> es) => Eff es a -> Eff es a
+                transport =
+                  withHTTPResponses
+                    ( \options url -> case url of
+                        "https://slack.com/api/chat.postMessage" -> do
+                          timestamp <- readIORef stamp
+                          pure $ Just $ AE.encode $ AE.object ["ok" AE..= True, "channel" AE..= interaction.channel_id, "ts" AE..= timestamp]
+                        "https://slack.com/api/conversations.info" ->
+                          pure $ Just $ AE.encode $ AE.object ["ok" AE..= True, "channel" AE..= AE.object ["id" AE..= interaction.channel_id, "is_im" AE..= not shared, "user" AE..= interaction.user_id]]
+                        "https://slack.com/api/conversations.history" -> do
+                          options ^. Wreq.param "channel" `shouldBe` [interaction.channel_id]
+                          readIORef historyPage <&> Just . AE.encode
+                        _ -> members options url
+                    )
+                    . interpose @HTTP.HTTP
+                      ( \_ request -> case request of
+                          HTTP.PostWith options url body | url == "https://slack.com/api/chat.postMessage" -> do
+                            response <- send $ HTTP.PostWith options url body
+                            pure $ if rejected then response & Wreq.responseStatus .~ status503 else response
+                          _ -> send @HTTP.HTTP $ coerce request
+                      )
+            (intake, _) <- runAsBaseRecordingHTTP resources $ transport $ provider $ SlackPage.slackInteractionsHWithTools (Just Routes.mcpProjectTools) interaction
+            [url | (url, _) <- intake, url == "https://slack.com/api/chat.postMessage" || url == interaction.response_url] `shouldBe` []
+            readIORef calls >>= (`shouldBe` 0)
+            Just admitted <- runQueryEffect resources $ Issues.getEventRun testPid source
+            when deleted $ runQueryEffect resources $ Issues.deleteConversation testPid admitted.conversationId
+            writeIORef stamp $ show (floor (utcTimeToPOSIXSeconds admitted.startedAt) + 1 :: Integer) <> ".000001"
+            let execute = runTestBgRecordingHTTP frozenTime resources $ transport $ provider $ tryAny $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) resources.trATCtx $ Jobs.RunConversation testPid admitted.id
+            (outgoing, firstAttempt) <- execute
+            firstAttempt `shouldSatisfy` if rejected then isLeft else isRight
+            let replies = [payload | (url, bytes) <- outgoing, url == "https://slack.com/api/chat.postMessage", Just payload <- [AE.decode @AE.Value bytes]]
+            length replies `shouldBe` 1
+            for_ replies \reply -> do
+              reply ^? key "channel" . _String `shouldBe` Just interaction.channel_id
+              reply ^? key "thread_ts" `shouldBe` Nothing
+              reply ^? key "response_type" `shouldBe` Nothing
+            Just retained <- runQueryEffect resources $ Issues.getEventRun testPid source
+            retained.status `shouldBe` if rejected then Issues.RunRunning else Issues.RunSucceeded
+            artifacts <- runQueryEffect resources $ Issues.listRunArtifacts testPid admitted.id
+            map (.content) artifacts `shouldSatisfy` any (maybe False $ T.isInfixOf "Created a latency dashboard.")
+            timestamp <- readIORef stamp
+            metadata <- case mapMaybe (^? key "metadata") replies of [value] -> pure value; _ -> fail "Expected one retained publication identity"
+            writeIORef historyPage $ AE.object ["ok" AE..= True, "messages" AE..= AE.Array [AE.object ["ts" AE..= timestamp, "app_id" AE..= ("A_SLASH" :: Text), "bot_id" AE..= ("B_SLASH" :: Text), "metadata" AE..= metadata]]]
+            (retried, recovered) <- execute
+            recovered `shouldSatisfy` isRight
+            [url | (url, _) <- retried, url == "https://slack.com/api/chat.postMessage"] `shouldBe` []
+            Just completed <- runQueryEffect resources $ Issues.getEventRun testPid source
+            (completed.id, completed.status) `shouldBe` (admitted.id, Issues.RunSucceeded)
+            readIORef calls >>= (`shouldBe` 2)
+            runQueryEffect resources (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = #{"Slash dashboard " <> show @Text (rejected, deleted)}|]) >>= (`shouldBe` 1)
+            let readable = Investigations.canReadEvidence testPid PM.PAdmin (Investigations.MemberViewer other) completed.conversationId
+                webStatus = (AIThreads.threadGetH testPid completed.conversationId Nothing Nothing $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+            toBaseServantResponse resources (withHTTPResponses members readable) >>= (`shouldBe` shared)
+            runAuthHandler otherResources (withHTTPResponses members webStatus) >>= (`shouldBe` if shared then 200 else 403)
+            toBaseServantResponse resources (withHTTPResponses ownerOnly readable) >>= (`shouldBe` False)
+            runAuthHandler otherResources (withHTTPResponses ownerOnly webStatus) >>= (`shouldBe` 403)
+            messages <- runQueryEffect resources $ Issues.selectChatHistory testPid completed.conversationId
+            [message.content | message <- messages, message.role == Issues.ChatAssistant] `shouldBe` ["Created a latency dashboard."]
+
+      for_ (["approve", "decline", "expire", "revoke", "unlink", "pause"] :: [Text]) \scenario ->
+        it ("slackSlashCommand_reviewResumesTheSameQueuedRequest: " <> toString scenario) \tr -> do
+          setupSlackAgent tr testPid "T_SLASH_REVIEW"
+          calls <- newIORef (0 :: Int)
+          posts <- newIORef (0 :: Int)
+          let user = (getResponse tr.trSessAndHeader).user.id
+              policy = Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+              interaction = (slackInteraction "/monoscope" "Create a reviewed dashboard" "T_SLASH_REVIEW"){SlackPage.trigger_id = "reviewed-slash", SlackPage.channel_id = "CREVIEWED"}
+              provider :: (ELLM.LLM :> es, IOE :> es) => Eff es a -> Eff es a
               provider = interpose @ELLM.LLM \_ -> \case
-                ELLM.CallAgenticChat history _ _ ->
+                ELLM.CallAgenticChat history _ _ -> do
+                  liftIO $ modifyIORef' calls (+ 1)
                   pure
                     $ Right
                     $ if any ((== Chat.Tool) . (.role)) history
-                      then Chat.Message Chat.Assistant "Created a latency dashboard." Chat.defaultMessageData
-                      else Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "create" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Slash dashboard " <> show rejected)])]}
+                      then Chat.Message Chat.Assistant "Command review recorded." Chat.defaultMessageData
+                      else Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "reviewed-command" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Reviewed slash dashboard" :: Text)])]}
                 ELLM.CallLLM{} -> pure $ Left "No title model"
-                ELLM.EmbedDocuments{} -> pure $ Left "No embedding model"
-              members _ _ = pure $ Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\",\"U123OTHER\"]}"
-              ownerOnly _ _ = pure $ Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}"
-              transport =
-                withHTTPResponses members
-                  . interpose @HTTP.HTTP
-                    ( \_ request -> case request of
-                        HTTP.PostWith options url body | toText url == interaction.response_url -> do
-                          response <- send $ HTTP.PostWith options url body
-                          pure $ if rejected then response & Wreq.responseStatus .~ status503 else response
-                        _ -> send @HTTP.HTTP $ coerce request
-                    )
-          let waitForResult = do
-                current <- runQueryEffect tr $ Issues.getEventRun testPid source
-                if maybe True ((== Issues.RunRunning) . (.status)) current then threadDelay 20_000 >> waitForResult else pure current
-          (requests, completedResult) <- runAsBaseRecordingHTTP tr $ transport $ provider do
-            void $ SlackPage.slackInteractionsHWithTools (Just Routes.mcpProjectTools) interaction
-            liftIO $ timeout 5_000_000 waitForResult
-          let replies = [payload | (url, bytes) <- requests, url == interaction.response_url, Just payload <- [AE.decode @AE.Value bytes]]
-          replies `shouldSatisfy` (not . null)
-          for_ replies $ \reply -> reply ^? key "response_type" . _String `shouldBe` Just "in_channel"
-          case completedResult of
-            Just (Just completed) -> do
-              completed.status `shouldBe` if rejected then Issues.RunFailed else Issues.RunSucceeded
-              when rejected $ completed.error `shouldBe` Just "Slack did not accept the reply. The result is retained in this run."
-              runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = #{"Slash dashboard " <> show @Text rejected}|]) >>= (`shouldBe` 1)
-              let readable = Investigations.canReadEvidence testPid PM.PAdmin (Investigations.MemberViewer other) completed.conversationId
-                  webStatus = (AIThreads.threadGetH testPid completed.conversationId Nothing Nothing $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
-              toBaseServantResponse tr (withHTTPResponses members readable) >>= (`shouldBe` True)
-              runAuthHandler otherResources (withHTTPResponses members webStatus) >>= (`shouldBe` 200)
-              toBaseServantResponse tr (withHTTPResponses ownerOnly readable) >>= (`shouldBe` False)
-              runAuthHandler otherResources (withHTTPResponses ownerOnly webStatus) >>= (`shouldBe` 403)
-              artifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid completed.id
-              map (.content) artifacts `shouldSatisfy` any (maybe False $ T.isInfixOf "Created a latency dashboard.")
-            _ -> expectationFailure "Slash command did not finish its routine run"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              transport :: (HTTP.HTTP :> es, IOE :> es) => Eff es a -> Eff es a
+              transport = withHTTPResponses \_ url -> do
+                when (url == "https://slack.com/api/chat.postMessage") $ modifyIORef' posts (+ 1)
+                pure $ Just "{\"ok\":true,\"channel\":\"CREVIEWED\",\"ts\":\"1735689601.000001\",\"members\":[\"U0123ABCDEF\"]}"
+          Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventSlackMessage
+          runQueryEffect tr $ Issues.setRoutinePolicy user testPid routine.conversationId policy
+          void $ runAsBaseRecordingHTTP tr $ transport $ provider $ SlackPage.slackInteractionsHWithTools (Just Routes.mcpProjectTools) interaction
+          let source = Issues.SlackCommand $ Issues.slackCommandConversationId testPid interaction.team_id interaction.channel_id interaction.trigger_id
+          Just admitted <- runQueryEffect tr $ Issues.getEventRun testPid source
+          let execute = runTestBgNoReset tr $ transport $ provider $ Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx $ Jobs.RunConversation testPid admitted.id
+          execute
+          readIORef calls >>= (`shouldBe` 1)
+          readIORef posts >>= (`shouldBe` 0)
+          [entry] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid admitted.id
+          entry.outcome `shouldSatisfy` \case Investigations.OperationUnstarted -> True; _ -> False
+          case scenario of
+            "expire" -> advanceTestTime tr (24 * 60 * 60 + 1)
+            "revoke" -> runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM projects.project_members WHERE project_id = #{testPid} AND user_id = #{user}|]
+            "unlink" -> runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM apis.slack_identities WHERE team_id = 'T_SLASH_REVIEW' AND user_id = #{user}|]
+            "pause" -> runQueryEffect tr $ Issues.pauseRoutine testPid routine.conversationId
+            _ -> void $ runAuthHandler tr $ transport $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm $ if scenario == "approve" then Investigations.ReviewApproved else Investigations.ReviewRejected
+          execute
+          execute
+          Just completed <- runQueryEffect tr $ Issues.getEventRun testPid source
+          let cancelled = scenario `elem` ["revoke", "unlink", "pause"]
+          (completed.id, completed.status) `shouldBe` (admitted.id, if cancelled then Issues.RunCancelled else Issues.RunSucceeded)
+          readIORef calls >>= (`shouldBe` if cancelled then 1 else 2)
+          readIORef posts >>= (`shouldBe` if cancelled then 0 else 1)
+          runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Reviewed slash dashboard'|]) >>= (`shouldBe` if scenario == "approve" then 1 else 0)
 
       it "Discord: handles query with signature verification" \tr -> do
         setupDiscordData tr testPid "guild_wf_discord"
@@ -2495,7 +2629,7 @@ spec = around withTestResources do
                 when failTransport $ throwIO $ ErrorCall "Reply response lost after submission"
                 pure "{\"ok\":true,\"messages\":[],\"members\":[\"U0123ABCDEF\"]}"
               work receipt = runTestBgRecordingHTTP frozenTime resources $ transport $ provider $ tryAny $ processSlackEvent receipt
-              delivered = fmap (fmap (.deliveredCount)) $ runQueryEffect resources $ Investigations.loadReplyBatch turn
+              delivered = fmap (fmap (.deliveredCount)) $ runQueryEffect resources $ Investigations.loadReplyBatch (Investigations.SlackCheckpoint turn)
           receipt <- receiveSlackEvent resources $ slackThreadedEvent "T_REPLY_ACK" "CREPLYACK" "Investigate" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
           (firstRequests, deferred) <- work receipt
           deferred `shouldSatisfy` isRight
@@ -2600,18 +2734,18 @@ spec = around withTestResources do
         for_ ([Nothing, Just "expired", Nothing, Just "next"] :: [Maybe Text]) $ \expected -> do
           (_, pending) <- work receipt
           pending `shouldSatisfy` isRight
-          search <- runQueryEffect resources $ Investigations.loadReplySearch turn 0
+          search <- runQueryEffect resources $ Investigations.loadReplySearch (Investigations.SlackCheckpoint turn) 0
           fmap (.cursor) search `shouldBe` Just expected
-          batch <- runQueryEffect resources $ Investigations.loadReplyBatch turn
+          batch <- runQueryEffect resources $ Investigations.loadReplyBatch (Investigations.SlackCheckpoint turn)
           fmap (.deliveredCount) batch `shouldBe` Just 0
         (_, revoked) <- work receipt
         revoked `shouldSatisfy` isLeft
-        stillPending <- runQueryEffect resources $ Investigations.loadReplyBatch turn
+        stillPending <- runQueryEffect resources $ Investigations.loadReplyBatch (Investigations.SlackCheckpoint turn)
         fmap (.deliveredCount) stillPending `shouldBe` Just 0
         withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = TRUE WHERE project_id = ?|] (PGS.Only testPid)
         (_, recovered) <- work receipt
         recovered `shouldSatisfy` isRight
-        batch <- runQueryEffect resources $ Investigations.loadReplyBatch turn
+        batch <- runQueryEffect resources $ Investigations.loadReplyBatch (Investigations.SlackCheckpoint turn)
         fmap (.deliveredCount) batch `shouldBe` Just 1
         readIORef pages >>= (`shouldBe` [])
         readIORef posts >>= (`shouldBe` 1)
@@ -2643,14 +2777,14 @@ spec = around withTestResources do
         receipt <- receiveSlackEvent tr event
         (_, rejected) <- work receipt
         rejected `shouldSatisfy` isLeft
-        saved <- runQueryEffect tr $ Investigations.loadReplyBatch turn
+        saved <- runQueryEffect tr $ Investigations.loadReplyBatch (Investigations.SlackCheckpoint turn)
         case saved of
           Nothing -> fail "Expected a rendered reply batch before delivery"
           Just batch -> do
             length batch.replies `shouldBe` 2
             batch.deliveredCount `shouldBe` 1
             -- An accidental second preparation cannot replace the original parts.
-            retained <- runQueryEffect tr $ Investigations.saveReplyBatch turn (AE.object ["text" AE..= ("replacement" :: Text)] :| [])
+            retained <- runQueryEffect tr $ Investigations.saveReplyBatch (Investigations.SlackCheckpoint turn) (AE.object ["text" AE..= ("replacement" :: Text)] :| [])
             retained.replies `shouldBe` batch.replies
             (requests, delivered) <- work receipt
             delivered `shouldSatisfy` isRight
@@ -2659,7 +2793,7 @@ spec = around withTestResources do
             mapMaybe (\value -> value ^? key "blocks" . _Array . ix 0 . key "text" . key "text" . _String) sent `shouldBe` ["Inspect the checkout latency change."]
         readIORef modelCalls >>= (`shouldBe` 1)
         readIORef posts >>= (`shouldBe` 3)
-        completed <- runQueryEffect tr $ Investigations.loadReplyBatch turn
+        completed <- runQueryEffect tr $ Investigations.loadReplyBatch (Investigations.SlackCheckpoint turn)
         fmap (.deliveredCount) completed `shouldBe` Just 2
         publications <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT publication_id FROM apis.slack_reply_publications WHERE project_id = ? AND conversation_id = ? AND part = 0|] (testPid, turn.conversationId)
         case publications of

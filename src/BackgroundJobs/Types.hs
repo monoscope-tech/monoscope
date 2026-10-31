@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob, wakeJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation) where
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob, wakeJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
@@ -192,6 +192,13 @@ startConversation project conversation user request =
     request
 
 
+startCommand :: (DB es, Time.Time :> es) => Issues.EventRoutine -> Issues.CommandOrigin -> UUIDId "conversation" -> Projects.UserId -> Text -> Eff es (Maybe Issues.EventRun)
+startCommand routine =
+  Issues.startCommandRunWith
+    (queueJobTx WakeNow . RunConversation routine.projectId . (.id))
+    routine
+
+
 data ReviewWake = ResumeReview | DeferReview UTCTime | FinishCancelledReview
 
 
@@ -221,7 +228,7 @@ queueReviewTx project wake identifier = do
     Hasql.queryTx @[UUIDId "ai_routine_run"]
       $ [HI.sql|SELECT run.id |]
       <> Investigations.operationRunSql project identifier
-      <> [HI.sql| AND run.status = #{status} AND run.source->>'tag' = 'ConversationRun'
+      <> [HI.sql| AND run.status = #{status} AND (run.source->>'tag' = 'ConversationRun' OR (run.source->>'tag' = 'TriggeredRun' AND run.source #>> '{contents,tag}' = 'SlackCommand'))
       AND run.requested_by IS NOT DISTINCT FROM operation.requested_by|]
       <> waiting
       <> [HI.sql| FOR UPDATE OF operation|]

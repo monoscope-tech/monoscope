@@ -245,6 +245,7 @@ completeAgenticResponse config userQuery model apiKey answer = do
                   (Issues.CompletedSucceeded; Issues.CompletedNoFindings) -> pass
                   (Issues.CompletedCancelled; Issues.CompletedFailed; Issues.CompletedTimedOut) -> throwIO AgentStopped
         (DurableRun context, _) | (Issues.InteractiveRun{}; Issues.ConversationRun{}) <- context.source -> throwIO AgentAccessDenied
+        (DurableRun context, _) | Issues.TriggeredRun Issues.SlackCommand{} <- context.source -> pass
         _ -> Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just $ AE.toJSON answer.toolCalls)
   void $ ensureConversationTitle config userQuery model apiKey $ Just answer
   pure $ parseAgenticResponse answer
@@ -526,7 +527,7 @@ data MemberContext = ProjectMember | WebSession | SharedMember
   deriving stock (Eq, Generic, Show)
 
 
-data AgentAccess = ServiceAccess | MemberAccess MemberContext Projects.UserId | SlackAccess Text Text Projects.UserId | SlackInvestigationAccess SlackInvestigation
+data AgentAccess = ServiceAccess | MemberAccess MemberContext Projects.UserId | SlackAccess Text Text Projects.UserId | SlackCommandAccess Issues.CommandOrigin Projects.UserId | SlackInvestigationAccess SlackInvestigation
   deriving stock (Generic, Show)
 
 
@@ -535,6 +536,7 @@ accessMember = \case
   ServiceAccess -> Nothing
   MemberAccess _ user -> Just user
   SlackAccess _ _ user -> Just user
+  SlackCommandAccess _ user -> Just user
   SlackInvestigationAccess investigation -> Just investigation.userId
 
 
@@ -592,6 +594,7 @@ agentPermission (SlackAccess teamId slackUserId userId) projectId = do
   case principal of
     Just member | member.userId == userId && member.projectId == projectId -> pure member.permission
     _ -> throwIO AgentAccessDenied
+agentPermission (SlackCommandAccess origin user) projectId = agentPermission (SlackAccess origin.teamId origin.slackUserId user) projectId
 agentPermission (SlackInvestigationAccess run) projectId = do
   permission <- agentPermission (SlackAccess run.teamId run.slackUserId run.userId) projectId
   whenM (Integrations.slackInvestigationStopped projectId run.teamId run.channelId run.threadTs run.messageTs) $ throwIO AgentStopped
@@ -603,7 +606,7 @@ evidenceAudience :: AgentAccess -> ProjectMembers.Permissions -> ProjectMembers.
 evidenceAudience access role = case access of
   MemberAccess SharedMember _ -> ProjectMembers.PView
   MemberAccess{} -> role
-  (ServiceAccess; SlackAccess{}; SlackInvestigationAccess{}) -> ProjectMembers.PView
+  (ServiceAccess; SlackAccess{}; SlackCommandAccess{}; SlackInvestigationAccess{}) -> ProjectMembers.PView
 
 
 canReadEvidence :: (DB es, IOE :> es, W.HTTP :> es) => AgentAccess -> Projects.ProjectId -> UUIDId "conversation" -> Eff es Bool
@@ -613,12 +616,15 @@ canReadEvidence access project conversation = do
     MemberAccess ProjectMember member -> pure $ Investigations.MemberViewer member
     MemberAccess WebSession member -> pure $ Investigations.MemberViewer member
     SlackAccess _ _ member -> pure $ Investigations.MemberViewer member
-    SlackInvestigationAccess run -> case Integrations.slackChannel run.teamId run.channelId of
-      Right channel -> pure $ Investigations.ChannelViewer run.userId channel
-      Left _ | "D" `T.isPrefixOf` run.channelId -> pure $ Investigations.DirectMessageViewer run.userId run.teamId run.slackUserId run.channelId
-      Left _ -> pure Investigations.ProjectViewer
+    SlackInvestigationAccess run -> pure $ slackViewer run.userId run.teamId run.slackUserId run.channelId
+    SlackCommandAccess origin member -> pure $ slackViewer member origin.teamId origin.slackUserId origin.channelId
     _ -> pure Investigations.ProjectViewer
   Investigations.canReadEvidence project (evidenceAudience access permission) viewer conversation
+  where
+    slackViewer member team user channelId = case Integrations.slackChannel team channelId of
+      Right channel -> Investigations.ChannelViewer member channel
+      Left _ | "D" `T.isPrefixOf` channelId -> Investigations.DirectMessageViewer member team user channelId
+      Left _ -> Investigations.ProjectViewer
 
 
 requireEvidenceAccess :: (DB es, IOE :> es, W.HTTP :> es) => AgentAccess -> Projects.ProjectId -> UUIDId "conversation" -> Eff es ProjectMembers.Permissions
@@ -676,9 +682,7 @@ invocationPolicy = \case
 documentConversation :: AgenticConfig -> Maybe (UUIDId "conversation")
 documentConversation config = case config.access of
   ServiceAccess -> config.conversationId <* guard (all (== Issues.CTWeb) config.conversationType)
-  MemberAccess{} -> config.conversationId
-  SlackAccess{} -> config.conversationId
-  SlackInvestigationAccess{} -> config.conversationId
+  (MemberAccess{}; SlackAccess{}; SlackCommandAccess{}; SlackInvestigationAccess{}) -> config.conversationId
 
 
 requireConfigAccess :: (DB es, IOE :> es, W.HTTP :> es) => AgenticConfig -> Eff es Issues.RunAuthority
@@ -860,6 +864,7 @@ slackGrant config = runExceptT do
   subject <- case config.access of
     SlackInvestigationAccess run -> pure $ Integrations.SlackEvidenceSubject config.projectId run.userId run.teamId run.slackUserId
     SlackAccess team user member -> pure $ Integrations.SlackEvidenceSubject config.projectId member team user
+    SlackCommandAccess origin member -> pure $ Integrations.SlackEvidenceSubject config.projectId member origin.teamId origin.slackUserId
     MemberAccess context member | context /= SharedMember -> ExceptT $ first SlackCredentialFailure <$> Integrations.memberSlackEvidenceSubject config.projectId member
     _ -> Except.throwError SlackRequesterRequired
   grant <- ExceptT $ first SlackCredentialFailure <$> Integrations.resolveSlackEvidenceGrant (encodeUtf8 settings.apiKeyEncryptionSecretKey) settings.slackClientId settings.slackClientSecret subject
@@ -891,15 +896,19 @@ runSlackEvidence config tool operation proposed = do
   outcome <- runExceptT do
     (settings, subject, grant) <- ExceptT $ slackGrant config
     conversation <- Except.liftEither $ maybeToRight SlackAudienceUnavailable config.conversationId
-    (audience, arguments) <- case config.access of
-      MemberAccess context member | context /= SharedMember -> pure (Investigations.PersonalAudience member, proposed)
-      SlackInvestigationAccess run | "D" `T.isPrefixOf` run.channelId -> do
-        own <- lift $ Integrations.slackDirectMessageOwner config.projectId run.userId run.teamId run.slackUserId run.channelId
+    let destination = case config.access of
+          SlackInvestigationAccess run -> Just run.channelId
+          SlackCommandAccess origin _ -> Just origin.channelId
+          _ -> Nothing
+    (audience, arguments) <- case (config.access, destination) of
+      (MemberAccess context member, _) | context /= SharedMember -> pure (Investigations.PersonalAudience member, proposed)
+      (_, Just channelId) | "D" `T.isPrefixOf` channelId -> do
+        own <- lift $ Integrations.slackDirectMessageOwner config.projectId subject.userId subject.teamId subject.slackUserId channelId
         unless own $ Except.throwError SlackAudienceUnavailable
-        pure (Investigations.PersonalAudience run.userId, proposed)
-      SlackInvestigationAccess run | operation `elem` [SlackMCP.ReadChannel, SlackMCP.ReadThread] -> do
-        channel <- Except.liftEither $ first (const SlackAudienceUnavailable) $ Integrations.slackChannel run.teamId run.channelId
-        member <- lift $ Integrations.slackChannelMember config.projectId run.userId channel
+        pure (Investigations.PersonalAudience subject.userId, proposed)
+      (_, Just channelId) | operation `elem` [SlackMCP.ReadChannel, SlackMCP.ReadThread] -> do
+        channel <- Except.liftEither $ first (const SlackAudienceUnavailable) $ Integrations.slackChannel subject.teamId channelId
+        member <- lift $ Integrations.slackChannelMember config.projectId subject.userId channel
         unless member $ Except.throwError SlackAudienceUnavailable
         fields <- Except.liftEither $ maybeToRight SlackSchemaUnsupported $ tool.inputSchema ^? key "properties" . _Object
         field <- case filter (`KM.member` fields) ["channel_id", "channel"] of
@@ -909,10 +918,10 @@ runSlackEvidence config tool operation proposed = do
         unless ((KM.lookup field fields >>= (^? key "type" . _String)) == Just "string") $ Except.throwError SlackSchemaUnsupported
         for_ (["ts", "thread_ts", "message_ts"] :: [Text]) $ \name -> for_ (Map.lookup name proposed) $ \value ->
           unless (isJust $ value ^? _String >>= Incidents.slackTimestamp) $ Except.throwError SlackReadArgumentsInvalid
-        let bounded = Map.insert (AK.toText field) (AE.String run.channelId) $ Map.filterWithKey (\name _ -> AK.fromText name `KM.member` fields && name `notElem` (["channel_id", "channel", "team_id"] :: [Text])) proposed
-            arguments = if KM.member "team_id" fields then Map.insert "team_id" (AE.String run.teamId) bounded else bounded
+        let bounded = Map.insert (AK.toText field) (AE.String channelId) $ Map.filterWithKey (\name _ -> AK.fromText name `KM.member` fields && name `notElem` (["channel_id", "channel", "team_id"] :: [Text])) proposed
+            arguments = if KM.member "team_id" fields then Map.insert "team_id" (AE.String subject.teamId) bounded else bounded
         pure (Investigations.SlackChannelAudience channel, arguments)
-      SlackInvestigationAccess{} -> Except.throwError SlackSearchRequiresPersonalScope
+      (_, Just _) -> Except.throwError SlackSearchRequiresPersonalScope
       _ -> Except.throwError SlackAudienceUnavailable
     retained <- lift $ Investigations.retainEvidenceAudience config.projectId conversation audience
     unless retained $ Except.throwError SlackAudienceUnavailable
@@ -1000,9 +1009,7 @@ buildSystemPrompt config now =
               , "Missing observations do not prove recovery or zero impact. Treat human suggestions as hypotheses to test, and explain contrary evidence."
               ]
           )
-        MemberAccess{} -> (systemPrompt, "")
-        ServiceAccess -> (systemPrompt, "")
-        SlackAccess{} -> (systemPrompt, "")
+        (MemberAccess{}; ServiceAccess; SlackAccess{}; SlackCommandAccess{}) -> (systemPrompt, "")
       basePrompt = fromMaybe defaultPrompt config.systemPromptOverride
       timezoneSection = "\nUSER TIMEZONE: " <> fromMaybe "UTC" config.timezone <> "\nCURRENT TIME (UTC): " <> show now <> "\n"
       facetSection = formatFacetContext config.facetContext
@@ -1173,9 +1180,7 @@ withInvestigationJournal config userQuery model action = do
             Nothing -> Investigations.InvestigationInterrupted
       Investigations.recordEvent scope $ either (const Investigations.InvestigationFailed) (const Investigations.InvestigationFinished) result
       pure result
-    MemberAccess{} -> action Nothing
-    ServiceAccess -> action Nothing
-    SlackAccess{} -> action Nothing
+    (MemberAccess{}; ServiceAccess; SlackAccess{}; SlackCommandAccess{}) -> action Nothing
 
 
 -- | Save each completed decision/read before advancing. Pending read tools may
@@ -1636,9 +1641,7 @@ executeToolAt cursor config tc = do
       Memory.PathTaken -> "Wiki page path is already in use."
     slackThread denied f = case config.access of
       SlackInvestigationAccess run -> f run
-      MemberAccess{} -> pure denied
-      ServiceAccess -> pure denied
-      SlackAccess{} -> pure denied
+      (MemberAccess{}; ServiceAccess; SlackAccess{}; SlackCommandAccess{}) -> pure denied
     runProjectTool backend name args = do
       let principal = maybe ApiKeyPrincipal MemberPrincipal $ accessMember config.access
       value <- invoke backend principal config.projectId name args

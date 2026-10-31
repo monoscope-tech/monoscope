@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processAIQueryWithMode, buildIssuePrompt, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
@@ -238,9 +240,7 @@ processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid
           , AI.projectTools = projectTools
           , AI.maxIterations = case access of
               AI.SlackInvestigationAccess{} -> 12
-              AI.MemberAccess{} -> defaults.maxIterations
-              AI.SlackAccess{} -> defaults.maxIterations
-              AI.ServiceAccess -> defaults.maxIterations
+              (AI.MemberAccess{}; AI.SlackAccess{}; AI.SlackCommandAccess{}; AI.ServiceAccess) -> defaults.maxIterations
           }
   result <- AI.runAgenticChatWithHistory config userQuery model apiKey >>= either (pure . Left) (AI.completeAgenticResponse config userQuery model apiKey)
   result <$ whenLeft_ result \err -> Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]
@@ -497,10 +497,8 @@ botReplyPayload r = r.payload
 
 
 -- | The shared bot ask pipeline: intent detection → report or agentic query →
--- per-platform rendering → outbound send. The only platform-specific inputs are
--- the 'BotType' (which selects every renderer) and @send@ (the transport, which
--- differs per platform *and* per call site: Slack response_url vs chat.postMessage,
--- Discord interaction followup, Twilio).
+-- per-platform rendering → the supplied reply sink. Slack collects replies for
+-- durable publication; other adapters can send them directly.
 runBotQueryWithTools
   :: ProjectToolCtx es
   => Maybe AI.ProjectTools

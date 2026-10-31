@@ -447,9 +447,13 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
           $ whenJustM claim \context -> do
             result <- tryAny do
               void $ Issues.runContextAuthority context >>= maybe (throwIO AI.AgentStopped) pure
-              input <- maybe (throwIO AI.AgentStopped) pure context.input
-              response <- Bots.processAIQueryWithMode (Just authCtx.config) authCtx.env.enableTimefusionReads projectTools (AI.DurableRun context) (AI.MemberAccess AI.ProjectMember context.requestedBy) project input (Just context.conversationId) authCtx.config.openaiModel authCtx.config.openaiApiKey
-              for_ (leftToMaybe response) $ throwIO . CE.ErrorCall . toString
+              case context.source of
+                Issues.ConversationRun{} -> do
+                  input <- maybe (throwIO AI.AgentStopped) pure context.input
+                  response <- Bots.processAIQueryWithMode (Just authCtx.config) authCtx.env.enableTimefusionReads projectTools (AI.DurableRun context) (AI.MemberAccess AI.ProjectMember context.requestedBy) project input (Just context.conversationId) authCtx.config.openaiModel authCtx.config.openaiApiKey
+                  for_ (leftToMaybe response) $ throwIO . CE.ErrorCall . toString
+                Issues.TriggeredRun Issues.SlackCommand{} -> Slack.runCommandWithTools projectTools context
+                _ -> throwIO AI.AgentStopped
             case result of
               Right _ -> pass
               Left err

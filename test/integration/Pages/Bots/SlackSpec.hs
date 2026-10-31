@@ -1,9 +1,9 @@
 module Pages.Bots.SlackSpec (spec) where
 
-import Control.Lens ((^?))
+import Control.Lens ((%~), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson.Lens (key, _Array)
+import Data.Aeson.Lens (key, _Array, _String)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful.Error.Static (catchError)
@@ -53,14 +53,15 @@ spec = around withTestResources do
           _ -> expectationFailure "Expected blocks array"
 
     describe "/monoscope command" do
-      it "returns loading message immediately" \tr -> do
+      it "returns a loading receipt and retained run link immediately" \tr -> do
         setupSlackAgent tr testPid "T03MONOSC0P"
         let interaction = slackInteraction "/monoscope" "show error rate" "T03MONOSC0P"
         result <- toBaseServantResponse tr $ slackInteractionsH interaction
 
-        assertJsonGolden "slack/monoscope_loading_response.json" result
+        assertJsonGolden "slack/monoscope_loading_response.json" $ result & key "text" . _String %~ T.takeWhile (/= '\n')
         extractResponseText result `shouldSatisfy` isJust
         let responseText = fromMaybe "" $ extractResponseText result
+        T.isInfixOf "/ai/runs/" responseText `shouldBe` True
         T.isInfixOf "Analyzing" responseText || T.isInfixOf "⏳" responseText `shouldBe` True
 
       it "handles missing slack data gracefully" \tr -> do

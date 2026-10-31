@@ -26,6 +26,7 @@ module Models.Apis.Investigations (
   loadAnswer,
   saveAnswer,
   ReplyBatch (..),
+  ReplyDestination (..),
   loadReplyBatch,
   saveReplyBatch,
   claimReplyPart,
@@ -428,39 +429,62 @@ data ReplyBatch = ReplyBatch {replies :: NonEmpty AE.Value, deliveredCount :: In
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ReplyBatch
 
 
-loadReplyBatch :: DB es => Turn -> Eff es (Maybe ReplyBatch)
-loadReplyBatch turn =
-  Hasql.interpOneJson
-    [HI.sql|SELECT to_jsonb(batch) FROM apis.slack_reply_batches batch
-      WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-        AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
+data ReplyDestination = ReplyDestination {teamId :: Text, channelId :: Text, threadTs :: Maybe Text}
+  deriving stock (Eq, Show)
 
 
-saveReplyBatch :: DB es => Turn -> NonEmpty AE.Value -> Eff es ReplyBatch
-saveReplyBatch turn replies =
-  Hasql.interpOneJsonOrThrow
-    "Saving a Slack reply batch"
-    [HI.sql|WITH saved AS (
-      INSERT INTO apis.slack_reply_batches (project_id, conversation_id, user_id, message_ts, replies)
-      VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson replies})
-      ON CONFLICT (project_id, conversation_id, user_id, message_ts)
-      DO UPDATE SET replies = slack_reply_batches.replies RETURNING *
-    ) SELECT to_jsonb(saved) FROM saved|]
+replyScopeSql :: CheckpointTarget -> HI.Sql
+replyScopeSql = \case
+  SlackCheckpoint turn ->
+    [HI.sql|project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+    AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs} AND run_id IS NULL|]
+  RunCheckpoint turn ->
+    [HI.sql|project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+    AND user_id = #{turn.userId} AND run_id = #{turn.runId} AND message_ts IS NULL|]
+
+
+loadReplyBatch :: DB es => CheckpointTarget -> Eff es (Maybe ReplyBatch)
+loadReplyBatch target =
+  let scope = replyScopeSql target
+   in Hasql.interpOneJson [HI.sql|SELECT to_jsonb(batch) FROM apis.slack_reply_batches batch WHERE ^{scope}|]
+
+
+saveReplyBatch :: DB es => CheckpointTarget -> NonEmpty AE.Value -> Eff es ReplyBatch
+saveReplyBatch target replies =
+  let (projection, conflict) = case target of
+        SlackCheckpoint turn ->
+          ( [HI.sql|SELECT #{turn.projectId}::uuid AS project_id, #{turn.conversationId}::uuid AS conversation_id,
+              #{turn.userId}::uuid AS user_id, #{turn.messageTs}::text AS message_ts, NULL::uuid AS run_id|]
+          , [HI.sql|project_id, conversation_id, user_id, message_ts|]
+          )
+        RunCheckpoint turn ->
+          ( [HI.sql|SELECT project_id, conversation_id, requested_by AS user_id, NULL::text AS message_ts, id AS run_id
+              FROM apis.ai_routine_runs WHERE id = #{turn.runId} AND root_run_id = id AND project_id = #{turn.projectId}
+                AND conversation_id = #{turn.conversationId} AND requested_by = #{turn.userId}|]
+          , [HI.sql|run_id|]
+          )
+   in Hasql.interpOneJsonOrThrow
+        "Saving a Slack reply batch"
+        [HI.sql|WITH saved AS (
+          INSERT INTO apis.slack_reply_batches (project_id, conversation_id, user_id, message_ts, run_id, replies)
+          SELECT source.project_id, source.conversation_id, source.user_id, source.message_ts, source.run_id, #{Aeson replies}
+          FROM (^{projection}) source
+          ON CONFLICT (^{conflict}) DO UPDATE SET replies = slack_reply_batches.replies RETURNING *
+        ) SELECT to_jsonb(saved) FROM saved|]
 
 
 -- | Reserve before HTTP. An existing unacknowledged reservation must not repost.
-claimReplyPart :: DB es => Turn -> Text -> Text -> Text -> Int -> Eff es (Maybe (UUIDId "slack_reply"))
-claimReplyPart turn team channel thread part =
-  fmap HI.getOneColumn
-    <$> Hasql.interpOne
-      [HI.sql|INSERT INTO apis.slack_reply_publications
-      (project_id, conversation_id, user_id, message_ts, part, team_id, channel_id, thread_ts)
-    SELECT project_id, conversation_id, user_id, message_ts, #{part}, #{team}, #{channel}, #{thread}
-    FROM apis.slack_reply_batches WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}
-      AND delivered_count = #{part} AND delivered_count < jsonb_array_length(replies)
-    ON CONFLICT (project_id, conversation_id, user_id, message_ts, part) DO NOTHING
-    RETURNING publication_id|]
+claimReplyPart :: DB es => CheckpointTarget -> ReplyDestination -> Int -> Eff es (Maybe (UUIDId "slack_reply"))
+claimReplyPart target destination part =
+  let scope = replyScopeSql target
+   in fmap HI.getOneColumn
+        <$> Hasql.interpOne
+          [HI.sql|WITH batch AS (SELECT * FROM apis.slack_reply_batches WHERE ^{scope} FOR UPDATE)
+          INSERT INTO apis.slack_reply_publications
+            (project_id, conversation_id, user_id, message_ts, run_id, part, team_id, channel_id, thread_ts)
+          SELECT project_id, conversation_id, user_id, message_ts, run_id, #{part}, #{destination.teamId}, #{destination.channelId}, #{destination.threadTs}
+          FROM batch WHERE delivered_count = #{part} AND delivered_count < jsonb_array_length(replies)
+          ON CONFLICT DO NOTHING RETURNING publication_id|]
 
 
 -- | Acknowledgement and batch advancement are atomic. Repeated matching evidence
@@ -475,7 +499,8 @@ confirmReplyPublication publicationId timestamp = do
     ), advanced AS (
       UPDATE apis.slack_reply_batches b SET delivered_count = delivered_count + 1 FROM confirmed p
       WHERE b.project_id = p.project_id AND b.conversation_id = p.conversation_id
-        AND b.user_id = p.user_id AND b.message_ts = p.message_ts AND b.delivered_count = p.part
+        AND b.user_id = p.user_id AND b.message_ts IS NOT DISTINCT FROM p.message_ts
+        AND b.run_id IS NOT DISTINCT FROM p.run_id AND b.delivered_count = p.part
     ) SELECT TRUE FROM confirmed|]
   pure $ isJust confirmed
 
@@ -499,7 +524,9 @@ captureReplyPublication appId receiptId = do
       AND p.publication_id::text = se.payload #>> '{event,metadata,event_payload,publication_id}'
       AND se.team_id = p.team_id AND se.payload->>'api_app_id' = #{appId}
       AND se.payload #>> '{event,channel}' = p.channel_id
-      AND se.payload #>> '{event,thread_ts}' = p.thread_ts
+      AND ((p.thread_ts IS NOT NULL AND se.payload #>> '{event,thread_ts}' = p.thread_ts)
+        OR (p.thread_ts IS NULL AND (se.payload #>> '{event,thread_ts}' IS NULL
+          OR se.payload #>> '{event,thread_ts}' = se.payload #>> '{event,ts}')))
       AND se.payload #>> '{event,type}' = 'message'
       AND COALESCE(se.payload #>> '{event,subtype}', 'bot_message') = 'bot_message'
       AND COALESCE(se.payload #>> '{event,app_id}', se.payload #>> '{event,bot_profile,app_id}') = #{appId}
@@ -513,20 +540,23 @@ data PublicationSearch kind = PublicationSearch
   { publicationId :: UUIDId kind
   , teamId :: Text
   , channelId :: Text
-  , threadTs :: Text
-  , messageTs :: Text
+  , threadTs :: Maybe Text
+  , oldest :: Text
   , cursor :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
 
-loadReplySearch :: DB es => Turn -> Int -> Eff es (Maybe (PublicationSearch "slack_reply"))
-loadReplySearch turn part =
-  Hasql.interpOne
-    [HI.sql|SELECT publication_id, team_id, channel_id, thread_ts, message_ts, history_cursor
-    FROM apis.slack_reply_publications WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs} AND part = #{part} AND slack_ts IS NULL|]
+loadReplySearch :: DB es => CheckpointTarget -> Int -> Eff es (Maybe (PublicationSearch "slack_reply"))
+loadReplySearch target part =
+  let scope = replyScopeSql target
+   in Hasql.interpOne
+        [HI.sql|WITH publication AS (SELECT * FROM apis.slack_reply_publications
+          WHERE ^{scope} AND part = #{part} AND slack_ts IS NULL)
+          SELECT p.publication_id, p.team_id, p.channel_id, p.thread_ts,
+            COALESCE(p.message_ts, extract(epoch FROM run.started_at)::text), p.history_cursor
+          FROM publication p LEFT JOIN apis.ai_routine_runs run ON run.id = p.run_id|]
 
 
 saveReplySearchCursor :: DB es => PublicationSearch "slack_reply" -> Maybe Text -> Eff es ()
@@ -1221,6 +1251,10 @@ conversationReadAudienceSql project conversation =
         THEN (run.source #>> '{contents,contents}')::uuid END
     WHERE run.project_id = #{project} AND run.conversation_id = ^{conversation}
       AND run.source->>'tag' = 'TriggeredRun' AND run.source #>> '{contents,tag}' = 'SlackMessage'
+    UNION ALL
+    SELECT command_origin->>'team_id', command_origin->>'channel_id'
+    FROM apis.ai_routine_runs WHERE project_id = #{project} AND conversation_id = ^{conversation}
+      AND command_origin IS NOT NULL
   ), roots AS (
     SELECT * FROM receipts
     UNION ALL
