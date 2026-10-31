@@ -1,7 +1,8 @@
-module Pkg.AgentOperation (OperationCall (..), NativeOperation (..), WikiWrite (..), ReviewComment (..), sameOperation) where
+module Pkg.AgentOperation (AgentAwaitingReview (..), OperationCall (..), NativeOperation (..), WikiWrite (..), ReviewComment (..), sameOperation) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.Time (UTCTime)
 import Deriving.Aeson qualified as DAE
 import Langchain.LLM.Core qualified as LLM
 import Models.Apis.IssueEnhancement.Types qualified as Enhancement
@@ -16,6 +17,11 @@ import Relude
 -- >>> import Data.Map.Strict qualified as Map
 -- >>> import Langchain.LLM.Core qualified as LLM
 -- >>> let call = LLM.ToolCall "legacy" "function" (LLM.ToolFunction "save_artifact" Map.empty)
+
+
+data AgentAwaitingReview = AgentAwaitingReview (UUIDId "agent_operation") UTCTime
+  deriving stock (Show)
+  deriving anyclass (Exception)
 
 
 data WikiWrite = WikiWrite {attemptId :: UUIDId "agent_attempt", edit :: Memory.Edit}

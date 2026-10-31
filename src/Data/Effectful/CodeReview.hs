@@ -26,13 +26,14 @@ import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import Models.Projects.ProjectMemory qualified as Memory
+import Pkg.AgentOperation (AgentAwaitingReview)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
-import UnliftIO.Exception (finally, tryAny)
+import UnliftIO.Exception (finally, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
 
 
@@ -645,10 +646,12 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                           _ -> pure $ Left "Review agent returned an unvalidated draft"
                 writeMessage payload
                 receive Nothing Nothing (20 :: Int) (5 :: Int) Nothing
-        pure case outcome of
-          Left _ -> Left "Review agent could not be executed"
-          Right Nothing -> Left "Review agent exceeded its eight-minute budget"
-          Right (Just result) -> result
+        case outcome of
+          Left err
+            | Just waiting <- fromException @AgentAwaitingReview err -> throwIO waiting
+            | otherwise -> pure $ Left "Review agent could not be executed"
+          Right Nothing -> pure $ Left "Review agent exceeded its eight-minute budget"
+          Right (Just result) -> pure result
 
 
 runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a

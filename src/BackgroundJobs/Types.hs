@@ -183,6 +183,7 @@ queueReviewTx project wake identifier = do
     let continuation = case source of
           Issues.ScheduledRun -> Just $ AIRoutineRun routine scheduled
           Issues.TriggeredRun (Issues.SlackMessage receipt) -> Just $ ProcessSlackEvent receipt
+          Issues.TriggeredRun (Issues.PullRequestReview review) -> Just $ ReviewPullRequest review
           Issues.TriggeredRun (Issues.IssueEnrichment issue) -> Just $ EnhanceIssuesWithLLM project (V.singleton issue)
           (Issues.TriggeredRun{}; Issues.InteractiveRun{}) -> Nothing
     for_ continuation $ \resume -> do

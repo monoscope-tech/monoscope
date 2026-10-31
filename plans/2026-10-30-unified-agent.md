@@ -99,6 +99,14 @@ The new integration cases first failed on uncaught suspension. Further checks re
 
 No migration, new worker type, or executor is added. Policy configuration, waiting stop/pause acceptance, other native/web/slash worker paths, controlled live acceptance, and final branch checks remain unfinished.
 
+## PR publication review
+
+PR publication now suspends through the same operation ledger and continuation scheduler. Its completed analysis remains in the existing review result. A decision resumes that result without starting another model attempt. A publication refusal has a distinct internal outcome and cancels the shared run instead of reporting an execution failure. Web controls use the same reviewer evaluator.
+
+The native review interpreter preserves typed review suspension from its callbacks. The suspension type lives beside shared operation types and remains re-exported by the agent runtime. No new effect, executor, worker, migration, or queue is introduced.
+
+Failing-first cases reproduced publication being classified as a failed review and typed callback suspension becoming a generic execution error. A further regression reproduced loss of the continuation while the same native worker lease was held. That lease now requeues the existing job. Seven focused native review examples pass, including the three enrichment cases. The full impact-review run passed 36 examples, including real SDK/VM admission, fixes, calibration, screenshots, evaluation, native artifact recovery, and application jobs. Its remaining queue assertion assumed busy same-run work disappears. The updated case now explicitly requires that retry while checking webhook deduplication and newer-revision isolation; it passes separately. Formatting and diff checks pass; scoped HLint has no findings on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material issue in this slice. Mid-analysis wiki review still needs durable model-session continuation; preserving its typed suspension alone does not prove that lifecycle. This does not establish complete selected review for every source or live Slack acceptance.
+
 ## Product contract
 
 Monoscope investigates telemetry, uses project tools, remembers team knowledge, and follows up on its work.

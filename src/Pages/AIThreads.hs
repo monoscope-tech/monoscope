@@ -367,7 +367,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 else p_ [class_ "text-xs text-textWeak"] $ toHtml $ "Action details require " <> toText (encodeEnumSC @"P" required) <> " permission."
               case (run.status, operation.outcome, operation.review) of
                 (Issues.RunRunning, Investigations.OperationUnstarted, Investigations.ReviewPending request)
-                  | (Issues.ScheduledRun; Issues.TriggeredRun (Issues.SlackMessage _; Issues.IssueEnrichment _)) <- run.source -> do
+                  | (Issues.ScheduledRun; Issues.TriggeredRun (Issues.SlackMessage _; Issues.IssueEnrichment _; Issues.PullRequestReview _)) <- run.source -> do
                       p_ [class_ "text-xs text-textWeak"] do
                         "Review deadline: "
                         localTimeFmt_ "MMM d, HH:mm" request.expiresAt

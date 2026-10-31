@@ -2,6 +2,7 @@
 
 module Pkg.ImpactReview (reviewPullRequest, fixIssue, ReviewResult (..), ReviewDraft, Finding (..), Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
 
+import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as LBS
@@ -128,7 +129,7 @@ data ReviewResult = ReviewResult
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-newtype ReviewFailure = ReviewFailure Text
+data ReviewFailure = ReviewFailure Text | ReviewPublicationRefused Text
   deriving stock (Generic, Show)
   deriving anyclass (Exception)
 
@@ -250,20 +251,23 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                     context <- AI.requireRunContext run.projectId $ Issues.EventClaim (Issues.PullRequestReview run.id) execution.id execution.startedAt
                     outcome <- tryAny $ Timeout.timeout (540 * 1000000) $ runErrorNoCallStack $ execute run execution context
                     let retryMessage = "Review failed; retry to collect current evidence"
-                        failure = case outcome of
-                          Left err -> Just (Issues.FailedResult, retryMessage, show err)
-                          Right Nothing -> Just (Issues.TimedOutResult, "Review exceeded its nine-minute budget", "Review timed out")
-                          Right (Just (Left (ReviewFailure err))) -> Just (Issues.FailedResult, retryMessage, err)
-                          Right (Just (Right ())) -> Nothing
                         finish = void . Issues.completeRun context
-                    case failure of
-                      Just (failureResult, message, detail) -> do
-                        Log.logAttention "Production impact review failed" (run.id, detail)
-                        active <- Issues.routineRunActive run.projectId execution.id
-                        finish $ if active then failureResult (Issues.RunFailure message Issues.RunOnly) else Issues.CancelledResult Nothing
-                        Reviews.recordFailure run message
-                        throwIO $ ReviewFailure message
-                      Nothing -> do
+                        failReview failureResult message detail = do
+                          Log.logAttention "Production impact review failed" (run.id, detail)
+                          active <- Issues.routineRunActive run.projectId execution.id
+                          finish $ if active then failureResult (Issues.RunFailure message Issues.RunOnly) else Issues.CancelledResult Nothing
+                          Reviews.recordFailure run message
+                          throwIO $ ReviewFailure message
+                    case outcome of
+                      Left err
+                        | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview run.projectId identifier deadline
+                        | otherwise -> failReview Issues.FailedResult retryMessage (show @Text err)
+                      Right Nothing -> failReview Issues.TimedOutResult "Review exceeded its nine-minute budget" "Review timed out"
+                      Right (Just (Left (ReviewFailure err))) -> failReview Issues.FailedResult retryMessage err
+                      Right (Just (Left (ReviewPublicationRefused reason))) -> do
+                        finish $ Issues.CancelledResult $ Just reason
+                        Reviews.recordFailure run reason
+                      Right (Just (Right ())) -> do
                         current <- Reviews.getRun run.id
                         case current of
                           Just completed | completed.state == Reviews.Completed -> completeReview completed execution.id execution.startedAt
@@ -432,7 +436,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                   body = marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink
                   comment = Operation.ReviewComment run.id body
               response <-
-                require =<< AI.executeNativeOperation context (Operation.PublishPullRequestComment comment) \case
+                either (throwError . ReviewPublicationRefused) pure =<< AI.executeNativeOperation context (Operation.PublishPullRequestComment comment) \case
                   Operation.PublishPullRequestComment frozen ->
                     AI.ReconcilableOperation
                       ( AI.EffectfulOperation do

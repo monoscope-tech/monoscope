@@ -126,6 +126,7 @@ import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
 import Pkg.AgentCatalog (LocalOperation (..))
 import Pkg.AgentCatalog qualified as Catalog
+import Pkg.AgentOperation (AgentAwaitingReview (..))
 import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.TimePicker (TimePicker)
 import Pkg.Components.Widget qualified as Widget
@@ -1359,11 +1360,6 @@ data OperationExecution es result
   | AtomicOperation (Tx.Transaction result)
   | ReconcilableOperation (OperationExecution es result) (Operation.OperationCall -> Eff es (Maybe result))
   deriving stock (Functor)
-
-
-data AgentAwaitingReview = AgentAwaitingReview (UUIDId "agent_operation") UTCTime
-  deriving stock (Show)
-  deriving anyclass (Exception)
 
 
 data AgentOperationUncertain = AgentOperationUncertain (UUIDId "agent_operation") (UUIDId "ai_routine_run")

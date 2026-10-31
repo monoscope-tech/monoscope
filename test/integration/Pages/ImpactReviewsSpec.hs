@@ -68,6 +68,7 @@ import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.CodeContext qualified as CodeContextPage
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.AI qualified as AI
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -2616,6 +2617,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     queuedPayload <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () :: IO [Only (Aeson AE.Value)]
     queuedPayload `shouldBe` [Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest old.id]
     (_, ()) <- runTestBgRecordingHTTP frozenTime tr $ Impact.reviewPullRequest old.id
+    retainedRetry <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM background_jobs WHERE payload = ? AND status = 'queued'" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest old.id) :: IO [Only Int]
+    retainedRetry `shouldBe` [Only 2]
     void $ deliver tr $ payload "synchronize" next "2025-01-01T00:01:00Z"
     void $ deliver tr firstEvent
     runQueryEffect tr (Reviews.currentRun old) `shouldReturn` False
@@ -2623,7 +2626,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     map (.latestRevision) runs `shouldBe` [next, next]
     new <- maybe (fail "new revision missing") pure $ find ((== next) . (.revision)) runs
     runQueryEffect tr (Reviews.claimRun new) `shouldReturn` False
-    deferred <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE run_at > now() AND payload->>'tag' = 'ReviewPullRequest'" () :: IO [Only (Aeson AE.Value)]
+    deferred <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE run_at > now() AND payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest new.id) :: IO [Only (Aeson AE.Value)]
     deferred `shouldBe` [Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest new.id]
     runQueryEffect tr $ Reviews.releaseRun old
     runQueryEffect tr (Reviews.claimRun new) `shouldReturn` True
@@ -2704,6 +2707,87 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Usage.recordCall testPid (Usage.Review run.id) call{Agent.id = uid 996, Agent.attemptId = legacyAttempt}) `shouldReturn` True
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Review run.id) legacy) `shouldReturn` True
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Review run.id) legacy{Agent.id = uid 997}) `shouldReturn` False
+
+  it "nativeReview_interpreterPreservesRetainedOperationSuspension" \_ -> withSystemTempDirectory "review-suspension" \directory -> do
+    let uid n = UUIDId $ UUID.fromWords 59 0 0 n
+        request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = "unavailable-source", base = revision, head = revision, gitToken = "", prompt = "Retain pending work", provider = "fixture", model = "fixture", thinkingLevel = Agent.Off}
+        script = directory </> "review.sh"
+    writeFileBS script "read request\nprintf '%s\\n' '{\"tag\":\"Knowledge\",\"contents\":{\"tag\":\"Recall\",\"contents\":\"test-service\"}}'\nread reply\n"
+    outcome <-
+      tryAny
+        $ runEff
+        $ Agent.runCodeReviewReal Nothing (Right Nothing) (Just "sh") [script]
+        $ Agent.reviewRepository request (const $ pure $ Left "Unexpected telemetry") (const $ throwIO $ AI.AgentAwaitingReview (uid 3) frozenTime) (const pass) (const pass) (const pass) (const pass) (const $ pure $ Left "Unexpected result")
+    case outcome of
+      Left err -> case fromException err of
+        Just (AI.AgentAwaitingReview identifier deadline) -> (identifier, deadline) `shouldBe` (uid 3, frozenTime)
+        Nothing -> expectationFailure $ "Wrong native operation exception: " <> displayException err
+      Right result -> expectationFailure $ "Native operation suspension was lost: " <> show result
+
+  for_ [Just Investigations.ReviewApproved, Just Investigations.ReviewRejected, Nothing] $ \decision ->
+    it ("nativeReview_pullRequestPublicationResumesRetainedAnalysis: " <> show decision) \tr -> do
+      setup tr
+      void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
+      [review] <- runQueryEffect tr $ Reviews.latestRuns testPid
+      Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
+      runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ExternalPosts) Catalog.ReviewEditors
+      let result = Impact.ReviewResult Impact.NoFinding [] [] [] frozenTime frozenTime Nothing
+      runQueryEffect tr $ Reviews.saveResult review result
+      void $ withResource tr.trPool \conn -> execute conn "DELETE FROM background_jobs WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
+      pem <- readFileBS "test/fixtures/github-app-test.pem"
+      let cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem}
+          transport :: ATBackgroundCtx a -> ATBackgroundCtx a
+          transport = withHTTPResponses \_ endpoint ->
+            pure
+              $ Just
+              $ AE.encode
+              $ if "/access_tokens" `T.isSuffixOf` toText endpoint
+                then AE.object ["token" AE..= ("fixture-token" :: Text), "expires_at" AE..= ("2030-01-01T00:00:00Z" :: Text)]
+                else
+                  if "/files?per_page=100" `T.isInfixOf` toText endpoint
+                    then AE.toJSON @[Git.PullRequestFile] [Git.PullRequestFile "checkout.hs" "modified" (Just "@@ -1 +1 @@\n-old\n+new")]
+                    else
+                      if "/comments?per_page=100&page=1" `T.isSuffixOf` toText endpoint
+                        then AE.toJSON ([] :: [AE.Value])
+                        else
+                          if "/issues/7/comments" `T.isSuffixOf` toText endpoint
+                            then AE.object ["id" AE..= (99 :: Int)]
+                            else AE.object ["head" AE..= AE.object ["sha" AE..= revision], "base" AE..= AE.object ["sha" AE..= T.replicate 40 "d"], "state" AE..= ("open" :: Text), "draft" AE..= False, "changed_files" AE..= (1 :: Int), "updated_at" AE..= ("2025-01-01T00:00:00Z" :: Text)]
+          worker at = runTestBgRecordingHTTP at tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.ReviewPullRequest review.id
+          publications = length . filter (T.isSuffixOf "/issues/7/comments" . fst)
+          queued = withResource tr.trPool (\conn -> query conn "SELECT count(*) FROM background_jobs WHERE payload = ? AND status IN ('queued', 'retry')" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)) :: IO [Only Int]
+      (initial, ()) <- worker frozenTime
+      publications initial `shouldBe` 0
+      Just waiting <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.PullRequestReview review.id
+      waiting.status `shouldBe` Issues.RunRunning
+      [operation] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
+      (_, page) <- testServant tr $ AIThreads.operationGetH testPid operation.id
+      toStrict (Lucid.renderText $ Lucid.toHtml page) `shouldSatisfy` T.isInfixOf "Approve action"
+      queued `shouldReturn` [Only 1]
+      let resumedAt = maybe (addUTCTime (24 * 60 * 60 + 1) frozenTime) (const frozenTime) decision
+      case decision of
+        Just vote -> void $ testServant tr $ AIThreads.operationReviewPostH testPid operation.id $ AIThreads.OperationReviewForm vote
+        Nothing -> pass
+      Just leased <- runQueryEffect tr $ Reviews.getRun review.id
+      bracket_
+        (runQueryEffect tr (Reviews.claimRun leased) >>= (`shouldBe` True))
+        (runQueryEffect tr $ Reviews.releaseRun leased)
+        do
+          void $ withResource tr.trPool \conn -> execute conn "DELETE FROM background_jobs WHERE payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest review.id)
+          (busy, ()) <- worker resumedAt
+          publications busy `shouldBe` 0
+          Just stillWaiting <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.PullRequestReview review.id
+          stillWaiting.status `shouldBe` Issues.RunRunning
+          queued `shouldReturn` [Only 1]
+      (resumed, ()) <- worker resumedAt
+      (repeated, ()) <- worker resumedAt
+      publications (initial <> resumed <> repeated) `shouldBe` if decision == Just Investigations.ReviewApproved then 1 else 0
+      Just finished <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.PullRequestReview review.id
+      (finished.id, finished.status) `shouldBe` (waiting.id, if decision == Just Investigations.ReviewApproved then Issues.RunNoFindings else Issues.RunCancelled)
+      Just retained <- runQueryEffect tr $ Reviews.getRun review.id
+      retained.result `shouldBe` Just (AE.toJSON result)
+      attempts <- withResource tr.trPool (\conn -> query conn "SELECT count(*) FROM projects.pr_review_attempts WHERE run_id = ?" (Only review.id)) :: IO [Only Int]
+      attempts `shouldBe` [Only 0]
 
   it "runs the checkout harness with atomic wiki receipts, publication recovery and Observe wiki reads without writes" \tr -> do
     parseUrlPiece @CodeContextPage.RepositoryTab "usage" `shouldSatisfy` isRight

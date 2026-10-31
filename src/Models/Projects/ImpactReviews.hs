@@ -220,10 +220,10 @@ claimRun run = do
     WHERE id = #{run.id} AND thread_id IN (SELECT id FROM leased) RETURNING id
   ), deferred AS (
     INSERT INTO background_jobs (run_at, status, payload)
-    SELECT t.lease_until + interval '1 second', 'queued', #{payload}
+    SELECT (CASE WHEN t.lease_owner = r.id THEN now() ELSE t.lease_until END) + interval '1 second', 'queued', #{payload}
     FROM projects.pr_review_threads t JOIN projects.pr_review_runs r ON r.thread_id = t.id
-    WHERE r.id = #{run.id} AND t.latest_revision = r.revision AND t.lease_owner <> r.id AND t.lease_until > now()
-      AND r.state IN (#{Queued}, #{Incomplete}) AND NOT EXISTS (SELECT 1 FROM claimed)
+    WHERE r.id = #{run.id} AND t.latest_revision = r.revision AND t.lease_until > now()
+      AND r.state IN (#{Queued}, #{Reviewing}, #{Incomplete}) AND NOT EXISTS (SELECT 1 FROM claimed)
     RETURNING id
   ) SELECT EXISTS (SELECT 1 FROM claimed)|]
 
