@@ -185,6 +185,7 @@ queueReviewTx project wake identifier = do
           Issues.TriggeredRun (Issues.SlackMessage receipt) -> Just $ ProcessSlackEvent receipt
           Issues.TriggeredRun (Issues.PullRequestReview review) -> Just $ ReviewPullRequest review
           Issues.TriggeredRun (Issues.IssueEnrichment issue) -> Just $ EnhanceIssuesWithLLM project (V.singleton issue)
+          Issues.TriggeredRun (Issues.IncidentEvent event root) -> Just $ InvestigateIncident project event root
           (Issues.TriggeredRun{}; Issues.InteractiveRun{}) -> Nothing
     for_ continuation $ \resume -> do
       let job = HI.AsJsonb resume

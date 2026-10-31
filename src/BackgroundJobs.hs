@@ -142,7 +142,7 @@ import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatu
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
-import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny)
+import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny, withException)
 import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierUsageStatus, hostPath, nonEmptyT, toUriStr, toXXHash, truncateHour, usageWindowStart)
 
 
@@ -396,11 +396,13 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
                           $ AI.runAgenticChatWithHistory config input authCtx.config.openaiModel authCtx.config.openaiApiKey
                       case outcome of
                         Nothing -> failRun Issues.TimedOutResult "Incident investigation timed out."
-                        Just (Left _) -> failRun Issues.FailedResult "Incident investigation was interrupted before completion."
+                        Just (Left err)
+                          | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview pid identifier deadline
+                          | otherwise -> failRun Issues.FailedResult "Incident investigation was interrupted before completion."
                         Just (Right (Left _)) -> failRun Issues.FailedResult "Incident investigation did not return a report."
                         Just (Right (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer answer
                     )
-                    `finally` void (Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Incident investigation worker stopped before recording its result." Issues.RunOnly)
+                    `withException` \(_ :: SomeException) -> void (Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Incident investigation worker stopped before recording its result." Issues.RunOnly)
                 now <- Time.currentTime
                 Incidents.queueIncidentReport now authCtx.env.hostUrl pid eventId rootId execution.id
       when (isNothing acquired) $ throwIO $ CE.ErrorCall "Another investigation is using this incident thread."

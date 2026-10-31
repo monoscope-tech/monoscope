@@ -22,6 +22,7 @@ import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Langchain.LLM.Core qualified as Chat
+import Lucid qualified
 import Models.Apis.ErrorPatterns qualified as Errors
 import Models.Apis.Incidents qualified as I
 import Models.Apis.Integrations qualified as Integrations
@@ -31,11 +32,13 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
+import Pages.AIThreads qualified as AIThreads
 import Pages.Bots.BotFixtures (slackCallbackEnvelope, slackInteraction)
 import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupLinkedSlackData, setupSlackData, slackRootEvent, withHTTPResponses)
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Issues qualified as IssuesPage
 import Pkg.AI qualified as AI
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
@@ -155,6 +158,62 @@ spec = around withTestResources do
         Just run <- runTestBgNoReset tr $ Issues.getEventRun testPid $ Issues.IncidentEvent event root
         run.status `shouldBe` Issues.RunSucceeded
         run.attempt `shouldBe` if interrupted then 2 else 1
+
+    for_ [Just Investigations.ReviewApproved, Just Investigations.ReviewRejected, Nothing] $ \decision ->
+      it ("proactiveIncident_reviewResumesItsCheckpointAndPublishesOnce: " <> show decision) \tr -> do
+        update <- setupWithIssue tr
+        setupLinkedSlackData tr testPid "T1"
+        void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
+        channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+        Just routine <- runTestBgNoReset tr $ Issues.getIncidentRoutine testPid channel
+        runTestBgNoReset tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+        I.Recorded _ event <- runTestBgNoReset tr $ I.recordIncidentEvent update
+        void $ captureNotifs tr runSlackIncidentDeliveries
+        [PGS.Only root] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
+        calls <- newIORef (0 :: Int)
+        invoked <- newIORef ([] :: [Text])
+        let job = Jobs.InvestigateIncident testPid event root
+            original = Routes.mcpProjectTools
+            backend = original{AI.invoke = \actor pid tool arguments -> modifyIORef' invoked (<> [tool]) >> AI.invoke original actor pid tool arguments}
+            model :: ATBackgroundCtx a -> ATBackgroundCtx a
+            model = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                modifyIORef' calls (+ 1)
+                pure
+                  $ Right
+                  $ if any ((== Chat.Tool) . (.role)) history
+                    then Chat.Message Chat.Assistant "The incident decision and evidence are retained." Chat.defaultMessageData
+                    else Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "review-remediation" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Reviewed incident remediation" :: Text)])]}
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            work = captureNotifs tr $ model $ Jobs.processBackgroundJobWithTools (Just backend) tr.trATCtx job >> runSlackIncidentDeliveries
+            reports notifications = [sd | Notify.SlackNotification sd <- notifications, maybe False (T.isPrefixOf "AI incident analysis") (sd.payload ^? key "text" . _String)]
+        void $ withResource tr.trPool \conn -> PGS.execute conn [sql|DELETE FROM background_jobs WHERE payload = ?|] (PGS.Only $ Aeson $ AE.toJSON job)
+        (initial, _) <- work
+        reports initial `shouldSatisfy` null
+        Just waiting <- runTestBgNoReset tr $ Issues.getEventRun testPid $ Issues.IncidentEvent event root
+        waiting.status `shouldBe` Issues.RunRunning
+        [operation] <- runTestBgNoReset tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
+        (_, page) <- testServant tr $ AIThreads.operationGetH testPid operation.id
+        decodeUtf8 @Text (Lucid.renderBS $ Lucid.toHtml page) `shouldSatisfy` T.isInfixOf "Approve action"
+        queued <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM background_jobs WHERE payload = ? AND status = 'queued'|] (PGS.Only $ Aeson $ AE.toJSON job)
+        (queued :: [PGS.Only Int]) `shouldBe` [PGS.Only 1]
+        void work
+        readIORef calls `shouldReturn` 1
+        readIORef invoked `shouldReturn` []
+        case decision of
+          Just vote -> void $ testServant tr $ AIThreads.operationReviewPostH testPid operation.id $ AIThreads.OperationReviewForm vote
+          Nothing -> advanceTestTime tr (24 * 60 * 60 + 1)
+        (resumed, _) <- work
+        length (reports resumed) `shouldBe` 1
+        (repeated, _) <- work
+        reports repeated `shouldSatisfy` null
+        readIORef calls `shouldReturn` 2
+        readIORef invoked `shouldReturn` ["create_dashboard" | decision == Just Investigations.ReviewApproved]
+        Just finished <- runTestBgNoReset tr $ Issues.getEventRun testPid $ Issues.IncidentEvent event root
+        (finished.id, finished.attempt, finished.status) `shouldBe` (waiting.id, 1, Issues.RunSucceeded)
+        dashboards <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT created_by FROM projects.dashboards WHERE project_id = ? AND title = 'Reviewed incident remediation'|] (PGS.Only testPid)
+        (dashboards :: [PGS.Only Projects.UserId]) `shouldBe` [PGS.Only routine.requestedBy | decision == Just Investigations.ReviewApproved]
 
     for_ [minBound .. maxBound] \interruption ->
       it ("proactiveIncident_withholdsWorkAndPublication: " <> show interruption) \tr -> do
