@@ -68,8 +68,12 @@ not live Agent availability or acceptance.
 [`agent-manifest.json`](agent-manifest.json) is the reviewable app configuration
 template. Replace every `https://YOUR_MONOSCOPE_HOST` with the deployed origin,
 then compare it with the current app manifest before applying it in the selected
-sandbox. It includes `agent_view`, the four suggested prompts, commands, signed
+sandbox. It declares `agent_view` without static prompts and includes commands, signed
 callback routes, event subscriptions, and incoming webhooks.
+Static prompts are omitted so the app can update suggestions from project state when
+the Messages tab opens or assistant context changes. Existing apps must also remove
+static prompts in their Slack configuration; Slack rejects dynamic updates while
+static prompts are configured.
 It retains the existing notification scopes. Preserve unrelated live app settings
 when merging the template. The Agent declaration is required in addition to OAuth
 grants; see [Slack's Agent guide](https://docs.slack.dev/ai/developing-agents/).

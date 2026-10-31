@@ -862,10 +862,12 @@ processSlackEventWithTools projectTools receiptId =
           case kind of
             UserMessage message -> withThreadLock team_id message process
             AppMention message -> withThreadLock team_id message process
-            AssistantSession session -> withEventLock ("slack-prompts:" <> encodeText ([team_id, session.assistant_thread.channel_id] :: [Text])) process
-            AppHomeOpened home -> withEventLock ("slack-onboarding:" <> encodeText ([team_id, home.channel, home.user] :: [Text])) process
+            AssistantSession session -> withPromptLock team_id session.assistant_thread.channel_id process
+            AppHomeOpened home -> withPromptLock team_id home.channel process
             (AgentSessionStopped _; AgentSessionTitleChanged _; AppContextChanged _; BotMessage; MessageEdit; UnknownEvent _) -> process
     withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
+
+    withPromptLock workspaceId channel = withEventLock ("slack-prompts:" <> encodeText ([workspaceId, channel] :: [Text]))
 
     handleEventCallback envCfg kind workspaceId eventId =
       case kind of
@@ -875,35 +877,34 @@ processSlackEventWithTools projectTools receiptId =
           | home.tab == Just "messages" -> do
               principal <- Integrations.resolveSlackPrincipal workspaceId home.user Nothing
               when (isNothing principal) $ unlessM (Integrations.hasDeliveredSlackLink workspaceId home.channel home.user) $ sendIdentityLink envCfg workspaceId
+              whenJustM (getSlackDataByTeamId workspaceId) \connection -> refreshAssistantPrompts connection home.channel home.user
           | otherwise -> Log.logTrace "Slack App Home visit outside Messages retained" (AE.object [])
         UserMessage message -> handleMessage False envCfg message workspaceId
         AppMention message -> handleMessage True envCfg message workspaceId
         AssistantSession session -> do
           saveAssistantContext workspaceId session
-          whenJustM (getSlackDataByTeamId workspaceId) (`greetAssistantThread` session)
+          whenJustM (getSlackDataByTeamId workspaceId) \connection -> refreshAssistantPrompts connection session.assistant_thread.channel_id session.assistant_thread.user_id
         BotMessage -> Log.logTrace "Slack bot message retained without starting an investigation" (AE.object [])
         MessageEdit -> Log.logTrace "Slack message edit retained without starting an investigation" (AE.object [])
         UnknownEvent header -> Log.logTrace "Unsupported Slack event retained" (AE.object ["team_id" AE..= workspaceId, "event_type" AE..= header.eventType, "subtype" AE..= header.subtype])
 
-    -- \| Navigation context selects suggestions, never authority. Agent prompts belong
+    -- Navigation context selects suggestions, never authority. Agent prompts belong
     -- to the private Messages surface; thread_ts is only supported by legacy assistants.
-    greetAssistantThread :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es, Time.Time :> es) => SlackData -> SlackAssistantEvent -> Eff es ()
-    greetAssistantThread slackData event = when (not (T.null slackData.botToken) && "D" `T.isPrefixOf` event.assistant_thread.channel_id) do
-      let session = event.assistant_thread
-      (user, thread, channel) <-
-        Hasql.interpOneOrThrow @(Text, Text, Maybe Text)
-          "Slack assistant context"
-          [HI.sql|SELECT user_id, thread_ts, context->>'channel_id'
-        FROM apis.slack_assistant_threads WHERE team_id = #{slackData.teamId} AND channel_id = #{session.channel_id}
+    refreshAssistantPrompts :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es, Time.Time :> es) => SlackData -> Text -> Text -> Eff es ()
+    refreshAssistantPrompts slackData dmChannel user = when (not (T.null slackData.botToken) && "D" `T.isPrefixOf` dmChannel) do
+      latest <-
+        Hasql.interpOne @(Text, Maybe Text)
+          [HI.sql|SELECT thread_ts, context->>'channel_id'
+        FROM apis.slack_assistant_threads WHERE team_id = #{slackData.teamId} AND channel_id = #{dmChannel} AND user_id = #{user}
         ORDER BY context_event_ts DESC, thread_ts::numeric DESC LIMIT 1|]
-      boundProject <- Integrations.slackThreadProject slackData.teamId session.channel_id thread
+      boundProject <- maybe (pure Nothing) (\(thread, _) -> Integrations.slackThreadProject slackData.teamId dmChannel thread) latest
       principal <- Integrations.resolveSlackPrincipal slackData.teamId user boundProject
       prompts <- case principal of
         Nothing -> pure [("Link your Monoscope account", "Link my Monoscope account")]
         Just member -> do
           (issues, _) <- Issues.selectIssues member.projectId Issues.PIssue Issues.defIssueFilters{Issues.archive = Issues.IsNull, Issues.spam = Issues.IsNull, Issues.ack = Issues.IsNull, Issues.order = Just "-updated_at", Issues.limit = 2}
           incidents <- Incidents.listEpisodes member.projectId (Just Incidents.EpisodeActive) 1
-          lastAlert <- case channel of
+          lastAlert <- case snd =<< latest of
             Nothing -> pure Nothing
             Just channelId ->
               Hasql.interpOne @(Incidents.EpisodeId, Text)
@@ -921,7 +922,7 @@ processSlackEventWithTools projectTools receiptId =
       whenLeftM_
         ( slackApi slackData.botToken "assistant.threads.setSuggestedPrompts"
             $ AE.object
-              [ "channel_id" AE..= session.channel_id
+              [ "channel_id" AE..= dmChannel
               , "title" AE..= ("Ask about your telemetry" :: Text)
               , "prompts" AE..= [AE.object ["title" AE..= title, "message" AE..= message] | (title, message) <- prompts]
               ]

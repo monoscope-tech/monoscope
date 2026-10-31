@@ -899,6 +899,14 @@ The Agent prompt API now omits `thread_ts`. Slack documents that this legacy ass
 
 The handler-level regression first failed because an unlinked user received generic telemetry prompts. Its added ordering case then reproduced an older thread restoring an obsolete channel alert. It now passes linked/unlinked/revoked cases, project and archived-issue isolation, active incidents, latest channel alerts, bounded titles and prompt count, context changes, delayed events, and receipt replay. All 246 bot examples pass. Formatting, focused HLint, and diff checks pass. Repeated slice reviews merged the two event variants, kept suggestions in their owning worker, and serialized updates at the DM surface, with no remaining material distillation, constraint-evasion, or client-behavior findings. Message shortcut intake, live Slack acceptance, and the remaining plan phases and release checks remain open.
 
+### Agent Messages opens refresh the same prompts (31 October)
+
+The current Slack Agent experience sends `app_home_opened` for the Messages tab. That event now uses the same prompt refresh as legacy assistant start/context events, sharing the DM lock and signed member identity. A first visit does not require an assistant-thread row: it uses the linked default project and generic project suggestions. A later visit can reuse that user's latest retained thread context and binding.
+
+The manifest template removes static prompts, which Slack documents as incompatible with dynamic Messages-tab updates. The rollout guide records the corresponding existing-app setting change. The application does not apply a live manifest migration.
+
+The onboarding regression first failed because a Messages visit sent only its account-link message. It now verifies prompt refresh on opening and reopening, one-time link delivery, linked and unlinked content, omitted legacy thread timestamps, receipt replay, and no investigation creation. The contextual prompt test also checks a Messages reopen retains the selected project context. All 246 bot examples pass. Formatting, focused HLint, manifest JSON checks, and diff checks pass. Repeated slice reviews reuse one refresh for both native and legacy surfaces and remove the required-context assumption, with no remaining material slice findings. Live manifest acceptance and final rollout checks remain pending.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

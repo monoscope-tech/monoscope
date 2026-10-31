@@ -280,22 +280,26 @@ spec = around withTestResources do
         failed `shouldSatisfy` isLeft
         toBaseServantResponse tr (Slack.hasDeliveredSlackLink "T_HOME" "D_HOME" "U_HOME") >>= (`shouldBe` False)
         (initial, _) <- process $ visit "messages" "FirstOpen"
-        map fst initial `shouldBe` ["https://slack.com/api/chat.postEphemeral"]
+        map fst initial `shouldBe` ["https://slack.com/api/chat.postEphemeral", "https://slack.com/api/assistant.threads.setSuggestedPrompts"]
         (replayed, _) <- process $ visit "messages" "FirstOpen"
         replayed `shouldBe` []
         (reopened, _) <- process $ visit "messages" "SecondOpen"
-        reopened `shouldBe` []
+        map fst reopened `shouldBe` ["https://slack.com/api/assistant.threads.setSuggestedPrompts"]
         (otherUser, _) <- process $ visit "messages" "OtherUserOpen" & key "event" . key "user" . _String .~ "U_OTHER"
-        map fst otherUser `shouldBe` ["https://slack.com/api/chat.postEphemeral"]
+        map fst otherUser `shouldBe` ["https://slack.com/api/chat.postEphemeral", "https://slack.com/api/assistant.threads.setSuggestedPrompts"]
         withResource tr.trPool \conn -> void $ PGS.execute_ conn [sql|UPDATE apis.slack_identity_requests SET expires_at = now() - interval '1 second'|]
         (expired, _) <- process $ visit "messages" "ExpiredOpen"
-        map fst expired `shouldBe` ["https://slack.com/api/chat.postEphemeral"]
+        map fst expired `shouldBe` ["https://slack.com/api/chat.postEphemeral", "https://slack.com/api/assistant.threads.setSuggestedPrompts"]
         active :: [PGS.Only (UUIDId "slack_link")] <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT id FROM apis.slack_identity_requests WHERE expires_at > now() AND consumed_at IS NULL|]
         case active of
           [PGS.Only linkId] -> toBaseServantResponse tr (Slack.completeSlackLink linkId (getResponse tr.trSessAndHeader).user.id testPid) >>= (`shouldBe` True)
           _ -> fail "Expected one active onboarding link"
         (linked, _) <- process $ visit "messages" "LinkedOpen"
-        linked `shouldBe` []
+        map fst linked `shouldBe` ["https://slack.com/api/assistant.threads.setSuggestedPrompts"]
+        let titles requests = [title | (url, body) <- requests, url == "https://slack.com/api/assistant.threads.setSuggestedPrompts", Just value <- [AE.decode @AE.Value body], title <- value ^.. key "prompts" . _Array . traverse . key "title" . _String]
+        titles initial `shouldBe` ["Link your Monoscope account"]
+        titles linked `shouldSatisfy` (\values -> not (null values) && "Link your Monoscope account" `notElem` values)
+        for_ (initial <> reopened <> linked) \(_, body) -> (AE.decode @AE.Value body >>= (^? key "thread_ts")) `shouldBe` Nothing
         conversations <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.ai_conversations|]
         conversations `shouldBe` [PGS.Only (0 :: Int64)]
 
@@ -961,6 +965,8 @@ spec = around withTestResources do
         T.unwords messages `shouldSatisfy` T.isInfixOf ownIssue.toText
         T.unwords messages `shouldSatisfy` T.isInfixOf episode.id.toText
         T.unwords messages `shouldSatisfy` T.isInfixOf "1735689599.000001"
+        reopened <- process $ slackCallbackEnvelope "T_PROMPTS" "MessagesOpen" $ AE.object ["type" AE..= ("app_home_opened" :: Text), "user" AE..= ("U0123ABCDEF" :: Text), "channel" AE..= ("D_PROMPTS" :: Text), "tab" AE..= ("messages" :: Text)]
+        reopened ^.. key "prompts" . _Array . traverse . key "message" . _String `shouldBe` messages
         decodeUtf8 (AE.encode initial) `shouldSatisfy` (\body -> not $ any (`T.isInfixOf` body) ["Foreign issue secret", "Archived issue secret"])
         for_ ([("assistant_thread_context_changed", "1735689605.000001", "C_OTHER"), ("assistant_thread_started", "1735689604.000001", "C_ALERTS")] :: [(Text, Text, Text)]) \(kind, ts, channel) -> do
           changed <- process $ linked $ session kind ts "U0123ABCDEF" channel

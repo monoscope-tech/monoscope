@@ -12,25 +12,7 @@
       "messages_tab_read_only_enabled": false
     },
     "agent_view": {
-      "agent_description": "Investigate production issues, understand what changed, and coordinate recovery in Slack.",
-      "suggested_prompts": [
-        {
-          "title": "What needs attention?",
-          "message": "What needs attention?"
-        },
-        {
-          "title": "Investigate this alert",
-          "message": "Investigate this alert"
-        },
-        {
-          "title": "What changed before this started?",
-          "message": "What changed before this started?"
-        },
-        {
-          "title": "Show the relevant dashboard",
-          "message": "Show the relevant dashboard"
-        }
-      ]
+      "agent_description": "Investigate production issues, understand what changed, and coordinate recovery in Slack."
     },
     "slash_commands": [
       {
