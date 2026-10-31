@@ -149,6 +149,8 @@ module Models.Apis.Issues (
   routineRunActive,
   incidentReportAllowed,
   ExecutionPolicy (..),
+  permitsActions,
+  reviewApprover,
   RunClaim (..),
   RunContext,
   runContextFor,
@@ -1631,9 +1633,54 @@ data RoutineRunSource = ScheduledRun | TriggeredRun RoutineEventSource | Interac
 
 
 -- | The run retains its original authority. Current member permissions still apply.
-data ExecutionPolicy = Observe | Autonomous
+--
+-- >>> import Pkg.AgentCatalog qualified as Catalog
+-- >>> import Data.List.NonEmpty (NonEmpty(..))
+-- >>> import Data.Either (isLeft)
+-- >>> let selected = ReviewSelected (Catalog.ReviewSelection (Catalog.ProjectChanges :| []) Catalog.ReviewEditors)
+-- >>> AE.eitherDecode @ExecutionPolicy (AE.encode selected) == Right selected
+-- True
+-- >>> AE.eitherDecode @ExecutionPolicy "\"autonomous\"" == Right Autonomous
+-- True
+-- >>> isLeft (AE.eitherDecode @ExecutionPolicy "{\"review_selected\":{\"classes\":[],\"approver\":\"ReviewEditors\"}}")
+-- True
+data ExecutionPolicy = Observe | Autonomous | ReviewSelected Catalog.ReviewSelection
   deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" ExecutionPolicy
+  deriving (FromField, ToField) via Aeson ExecutionPolicy
+  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb ExecutionPolicy
+
+
+instance AE.ToJSON ExecutionPolicy where
+  toJSON = \case
+    Observe -> AE.String "observe"
+    Autonomous -> AE.String "autonomous"
+    ReviewSelected selection -> AE.object ["review_selected" AE..= selection]
+
+
+instance AE.FromJSON ExecutionPolicy where
+  parseJSON = \case
+    AE.String "observe" -> pure Observe
+    AE.String "autonomous" -> pure Autonomous
+    value -> AE.withObject "Execution policy" (fmap ReviewSelected . (AE..: "review_selected")) value
+
+
+instance FromHttpApiData ExecutionPolicy where
+  parseUrlPiece = \case
+    "observe" -> Right Observe
+    "autonomous" -> Right Autonomous
+    value -> first toText $ AE.eitherDecodeStrict $ encodeUtf8 value
+
+
+permitsActions :: ExecutionPolicy -> Bool
+permitsActions = \case
+  Observe -> False
+  (Autonomous; ReviewSelected{}) -> True
+
+
+reviewApprover :: ExecutionPolicy -> Catalog.AgentPolicy -> Maybe Catalog.ReviewApprover
+reviewApprover policy capability = case policy of
+  (Observe; Autonomous) -> Nothing
+  ReviewSelected selection -> selection.approver <$ (Catalog.reviewClass capability >>= guarded (`elem` selection.classes))
 
 
 data RunClaim
@@ -1711,7 +1758,7 @@ data CapabilityDenial = RoleRequired ProjectMembers.Permissions | ActionGrantReq
 authorizeCapability :: RunAuthority -> Catalog.AgentPolicy -> Either CapabilityDenial ()
 authorizeCapability authority capability
   | authority.permission < Catalog.minimumPermission capability = Left $ RoleRequired $ Catalog.minimumPermission capability
-  | Catalog.requiresAutonomy capability && authority.policy /= Autonomous = Left ActionGrantRequired
+  | Catalog.requiresAutonomy capability && not (permitsActions authority.policy) = Left ActionGrantRequired
   | otherwise = Right ()
 
 
@@ -1753,7 +1800,7 @@ runContextAccessSql context = case context.source of
     [HI.sql|SELECT CASE WHEN conversation.conversation_id IS NULL THEN #{Stopped}
         WHEN actor.permission IS NULL AND run.project_id = #{Projects.demoProjectId} AND run.evidence_permission = #{ProjectMembers.PView} THEN #{Allowed Observe}
         WHEN actor.permission IS NULL OR apis.evidence_permission_rank(authority.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
-        WHEN run.policy = #{Autonomous} THEN #{Allowed Autonomous} ELSE #{Allowed Observe} END, authority.permission
+        ELSE jsonb_build_object('tag', 'Allowed', 'contents', run.policy_limit) END, authority.permission
       FROM apis.ai_routine_runs run LEFT JOIN apis.ai_conversations conversation
         ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
       LEFT JOIN LATERAL (|]
@@ -2618,7 +2665,7 @@ routineRunAccessWithStatus status pid runId scope =
     <> [HI.sql|) THEN #{Stopped}
       WHEN owner.user_id IS NULL OR owner.permission NOT IN ('admin', 'edit') OR actor.user_id IS NULL
         OR apis.evidence_permission_rank(authority.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
-      WHEN run.policy = #{Autonomous} AND r.policy = #{Autonomous} AND run.authority_version = r.authority_version THEN #{Allowed Autonomous}
+      WHEN run.authority_version = r.authority_version THEN jsonb_build_object('tag', 'Allowed', 'contents', apis.meet_agent_policy(run.policy_limit, r.policy))
       ELSE #{Allowed Observe} END,
       authority.permission
       FROM apis.ai_routine_runs run LEFT JOIN apis.ai_routines r ON r.id = run.routine_id
@@ -2907,7 +2954,7 @@ setRoutinePolicy :: DB es => Projects.UserId -> Projects.ProjectId -> UUIDId "co
 setRoutinePolicy user pid conversation policy =
   Hasql.interpExecute_
     [HI.sql|UPDATE apis.ai_routines SET
-      authority_version = authority_version + CASE WHEN (policy = #{Autonomous} AND #{policy} = #{Observe}) OR requested_by IS DISTINCT FROM #{user} THEN 1 ELSE 0 END,
+      authority_version = authority_version + CASE WHEN (policy <> #{Observe} AND #{policy} = #{Observe}) OR requested_by IS DISTINCT FROM #{user} THEN 1 ELSE 0 END,
       requested_by = #{user}, policy = #{policy}
       WHERE project_id = #{pid} AND conversation_id = #{conversation}|]
 

@@ -3876,7 +3876,7 @@ enhanceIssuesWithLLM pid issueIds = do
                 pure (enrichment, policy)
               case outcome of
                 Right (Just (Right (enrichment, Issues.Observe))) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Enhancement.enrichmentAnswer Issues.Observe enrichment
-                Right (Just (Right (enrichment, Issues.Autonomous))) -> do
+                Right (Just (Right (enrichment, (Issues.Autonomous; Issues.ReviewSelected{})))) -> do
                   result <- AI.executeNativeOperation context (Operation.EnrichIssue enrichment) \case
                     Operation.EnrichIssue frozen -> AI.AtomicOperation $ Enhancement.completeEnrichmentTx context frozen
                     (Operation.WriteWiki{}; Operation.PublishPullRequestComment{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged

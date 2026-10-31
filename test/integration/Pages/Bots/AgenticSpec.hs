@@ -88,7 +88,7 @@ data AbandonedRun = DeletedRequester | DetachedSchedule | DetachedEvent | Histor
   deriving stock (Eq, Show)
 
 
-data ReviewScenario = ApproveReview | DeclineReview | ExpireBeforeReview | ExpireAfterReview | RevokeReviewer | AdministratorRequired | PrivateReview | ExpiredProposal | ConcurrentDecisions
+data ReviewScenario = ApproveReview | DeclineReview | ExpireBeforeReview | ExpireAfterReview | RevokeReviewer | AdministratorRequired | PrivateReview | ExpiredProposal | ConcurrentDecisions | RevokeApprovedReviewer | RaisedApproverRequirement
   deriving stock (Bounded, Enum, Eq, Show)
 
 
@@ -306,6 +306,78 @@ spec = around withTestResources do
         denied `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
         IORef.readIORef calls >>= (`shouldBe` 1)
 
+      it "agentReviewPolicy_invalidStorageAndGrantRewritesCannotIncreaseAuthority" \tr -> do
+        let conversation = UUIDId $ UUID.fromWords 0 0 0 281
+            selected = Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+            invalid :: [Text] -> Text -> AE.Value
+            invalid classes approver = AE.object ["review_selected" AE..= AE.object ["classes" AE..= classes, "approver" AE..= approver]]
+        mode <- scheduledInvocation tr conversation Issues.Autonomous
+        context <- case mode of AI.DurableRun context -> pure context; AI.InteractiveReadOnly -> fail "Expected a scheduled invocation"
+        for_ [AE.Null, invalid ([] :: [Text]) "ReviewEditors", invalid ["unknown"] "ReviewEditors", invalid ["project_changes"] "unknown"] $ \bad ->
+          runQueryEffect tr (Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET policy = #{Aeson bad} WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]) `shouldThrow` (\(err :: SomeException) -> "ai_routines_policy_check" `T.isInfixOf` toText (displayException err))
+        runQueryEffect tr (Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET policy = #{Issues.Observe} WHERE id = #{context.id}|]) `shouldThrow` (\(err :: SomeException) -> "original run policy is immutable" `T.isInfixOf` toText (displayException err))
+        runQueryEffect tr $ Issues.setRoutinePolicy context.requestedBy testPid conversation selected
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET policy_limit = #{Issues.Autonomous} WHERE id = #{context.id}|]
+        runQueryEffect tr (Issues.runContextAuthority context) >>= (`shouldBe` Just (Issues.RunAuthority selected context.permissionCeiling))
+
+      it "agentReviewPolicy_activeLimitsRetainRestrictionsAcrossLaterRelaxation" \tr -> do
+        let conversation = UUIDId $ UUID.fromWords 0 0 0 280
+            editorPolicy = Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+            adminPolicy = Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ExternalPosts) Catalog.ReviewAdministrators
+        mode <- scheduledInvocation tr conversation Issues.Autonomous
+        context <- case mode of AI.DurableRun context -> pure context; AI.InteractiveReadOnly -> fail "Expected a scheduled invocation"
+        let set policy = void $ testServant tr $ AIThreads.routinePolicyPostH testPid conversation $ AIThreads.RoutinePolicyForm policy
+            authority = runQueryEffect tr $ Issues.runContextAuthority context
+        set editorPolicy
+        authority >>= (`shouldBe` Just (Issues.RunAuthority editorPolicy context.permissionCeiling))
+        set Issues.Autonomous
+        authority >>= (`shouldBe` Just (Issues.RunAuthority editorPolicy context.permissionCeiling))
+        set adminPolicy
+        set Issues.Autonomous
+        current <- authority
+        case current of
+          Just grant -> case grant.policy of
+            Issues.ReviewSelected selection -> do
+              selection.approver `shouldBe` Catalog.ReviewAdministrators
+              length selection.classes `shouldBe` 2
+              toList selection.classes `shouldSatisfy` all (`elem` [Catalog.ProjectChanges, Catalog.ExternalPosts])
+            _ -> expectationFailure "An active run must retain its review restrictions"
+          Nothing -> expectationFailure "Selected review must not remove unrelated action authority"
+        runQueryEffect tr (Hasql.interpScalar @Issues.ExecutionPolicy [HI.sql|SELECT policy FROM apis.ai_routine_runs WHERE id = #{context.id}|]) >>= (`shouldBe` Issues.Autonomous)
+
+      for_ [True, False] $ \selected ->
+        it ("agentReviewPolicy_onlySelectedCapabilitiesWaitForReview: " <> show selected) \tr -> do
+          calls <- newIORef (0 :: Int)
+          let conversation = UUIDId $ UUID.fromWords 0 0 0 279
+              user = (getResponse tr.trSessAndHeader).user.id
+              policy = Issues.ReviewSelected $ Catalog.ReviewSelection (one $ if selected then Catalog.ProjectChanges else Catalog.KnowledgeChanges) Catalog.ReviewEditors
+              call = LLM.ToolCall "review-dashboard" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Reviewed dashboard" :: Text)])
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> do
+                  liftIO $ modifyIORef' calls (+ 1)
+                  pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                    [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [call]}
+                    _ -> LLM.Message LLM.Assistant "Dashboard created." LLM.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+          void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+          mode <- interactiveInvocation tr testPid conversation "Create a dashboard" policy
+          let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.projectTools = Just Routes.mcpProjectTools}
+          outcome <- tryAny $ runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Create a dashboard" "model" "key"
+          if selected
+            then outcome `shouldSatisfy` either (isJust . fromException @AI.AgentAwaitingReview) (const False)
+            else (.response) <<$>> outcome `shouldSatisfy` either (const False) (== Right "Dashboard created.")
+          runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Reviewed dashboard'|]) >>= (`shouldBe` if selected then 0 else 1)
+
+          when selected do
+            context <- case mode of AI.DurableRun context -> pure context; AI.InteractiveReadOnly -> fail "Expected a durable invocation"
+            entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
+            identifier <- case entries of [entry] -> pure entry.id; _ -> fail "Expected one waiting action"
+            runTestBgNoReset tr (Investigations.decideOperationReview testPid user identifier Investigations.ReviewApproved) >>= (`shouldSatisfy` \case Investigations.ReviewSaved{} -> True; _ -> False)
+            replicateM_ 2 $ runTestBgNoReset tr (provider $ AI.runAgenticChatWithHistory config "Create a dashboard" "model" "key") >>= (\answer -> fmap (.response) answer `shouldBe` Right "Dashboard created.")
+            runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Reviewed dashboard'|]) >>= (`shouldBe` 1)
+          readIORef calls >>= (`shouldBe` 2)
+
       for_ [ApproveReview, DeclineReview, ExpireAfterReview] $ \scenario ->
         it ("agentReview_nativeExecutionRetainsItsReviewAndResponseContract: " <> show scenario) \tr -> do
           issueId <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "review-native" "Original title" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId
@@ -364,9 +436,10 @@ spec = around withTestResources do
               lease = Investigations.RunLease turn context.startedAt
           saved <- runQueryEffect tr $ Investigations.startCheckpointFor target checkpoint
           let cursor = Investigations.CheckpointCursor target saved.revision
-              execute = runQueryEffect tr $ Investigations.atomicOperation lease cursor proposal (Just review) do
+              executeWith requirement = runQueryEffect tr $ Investigations.atomicOperation lease cursor proposal requirement do
                 result <- Issues.saveArtifactTx testPid conversation artifactKey Nothing "Finding" Issues.ArtifactAppend
                 pure $ Investigations.ToolResult (either show (const "Finding saved.") result) Nothing
+              execute = executeWith $ Just review
               artifacts = runQueryEffect tr $ Issues.listArtifacts testPid conversation $ Just artifactKey
           when (scenario == ExpiredProposal) $ advanceTestTime tr 60
           pending <- execute
@@ -389,6 +462,7 @@ spec = around withTestResources do
           when (scenario == RevokeReviewer) $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
           when (scenario == AdministratorRequired) $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = #{testPid} AND user_id = #{user}|]
           when (scenario == PrivateReview) $ runQueryEffect tr (Investigations.retainEvidenceAudience testPid conversation $ Investigations.PersonalAudience $ UUIDId $ UUID.fromWords 0 0 0 99998) >>= (`shouldBe` True)
+          when (scenario == RaisedApproverRequirement) $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = #{testPid} AND user_id = #{user}|]
           decision <-
             if scenario /= ConcurrentDecisions
               then runTestBgNoReset tr decide
@@ -404,15 +478,18 @@ spec = around withTestResources do
             _ -> case decision of
               Investigations.ReviewSaved receipt -> do
                 receipt.decidedBy `shouldBe` user
+                receipt.authority `shouldBe` if scenario == RaisedApproverRequirement then Investigations.ReviewEditors else Investigations.ReviewAdministrators
                 runTestBgNoReset tr (Investigations.decideOperationReview testPid user identifier Investigations.ReviewRejected) >>= (`shouldBe` Investigations.ReviewAlreadyDecided receipt)
               _ -> expectationFailure "Expected one immutable review decision"
           when (scenario == ExpireAfterReview) $ advanceTestTime tr 60
-          outcomes <- replicateM 2 execute
+          when (scenario == RevokeApprovedReviewer) $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+          when (scenario == RaisedApproverRequirement) $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'admin' WHERE project_id = #{testPid} AND user_id = #{user}|]
+          outcomes <- replicateM 2 $ if scenario == RaisedApproverRequirement then executeWith (Just review{Investigations.approver = Investigations.ReviewAdministrators}) else execute
           for_ outcomes $ \case
             Investigations.RefusedResult retainedId reason -> do
               retainedId `shouldBe` identifier
-              reason `shouldBe` (if scenario == DeclineReview then Investigations.ReviewDeclined else Investigations.ReviewTimedOut)
-              scenario `shouldSatisfy` (`elem` [DeclineReview, ExpireBeforeReview, ExpireAfterReview, ExpiredProposal])
+              reason `shouldBe` (if | scenario == DeclineReview -> Investigations.ReviewDeclined | scenario `elem` [RevokeApprovedReviewer, RaisedApproverRequirement] -> Investigations.ReviewAuthorityWithdrawn | otherwise -> Investigations.ReviewTimedOut)
+              scenario `shouldSatisfy` (`elem` [DeclineReview, ExpireBeforeReview, ExpireAfterReview, ExpiredProposal, RevokeApprovedReviewer, RaisedApproverRequirement])
             Investigations.WaitingResult retainedId request -> (retainedId, request) `shouldBe` (identifier, review)
             Investigations.RecordedResult{} -> scenario `shouldSatisfy` (`elem` [ApproveReview, ConcurrentDecisions])
             Investigations.UncertainResult{} -> expectationFailure "An unstarted action cannot have an uncertain effect"

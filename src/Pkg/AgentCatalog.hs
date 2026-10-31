@@ -6,6 +6,10 @@ module Pkg.AgentCatalog (
   slackReads,
   slackReadName,
   slackReadPolicy,
+  ReviewApprover (..),
+  ReviewClass (..),
+  ReviewSelection (..),
+  reviewClass,
   AgentPolicy (..),
   minimumPermission,
   requiresAutonomy,
@@ -20,6 +24,7 @@ module Pkg.AgentCatalog (
   CompositeOperation (..),
   compositeTools,
   policiesByName,
+  policyForCall,
   schemaObject,
 ) where
 
@@ -31,8 +36,9 @@ import Data.Map.Strict qualified as Map
 import Langchain.LLM.Core qualified as LLM
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Pkg.AgentOperation qualified as Operation
-import Pkg.DeriveUtils (encodeEnumSC)
+import Pkg.DeriveUtils (WrappedEnumSC (..), encodeEnumSC)
 import Relude
+import Web.HttpApiData (FromHttpApiData)
 
 
 -- $setup
@@ -85,6 +91,31 @@ data AgentPolicy
   | Administration ProjectMembers.Permissions
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.ToJSON)
+
+
+data ReviewApprover = ReviewEditors | ReviewAdministrators
+  deriving stock (Eq, Generic, Ord, Read, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "Review" ReviewApprover
+
+
+data ReviewClass = KnowledgeChanges | ProjectChanges | ExternalPosts | AdministrativeChanges
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "" ReviewClass
+
+
+data ReviewSelection = ReviewSelection {classes :: NonEmpty ReviewClass, approver :: ReviewApprover}
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+reviewClass :: AgentPolicy -> Maybe ReviewClass
+reviewClass = \case
+  (ReadOnly{}; ConversationWrite) -> Nothing
+  ProjectMemoryWrite -> Just KnowledgeChanges
+  ProjectWrite -> Just ProjectChanges
+  ExternalPublication -> Just ExternalPosts
+  Administration{} -> Just AdministrativeChanges
 
 
 -- | Historical administration snapshots did not describe their result audience.
@@ -382,6 +413,12 @@ compositeTools = [findErrorPatterns, searchEventsNL, analyzeIssue]
     strProp, intProp :: Text -> AE.Value
     strProp d = AE.object ["type" AE..= ("string" :: Text), "description" AE..= d]
     intProp d = AE.object ["type" AE..= ("integer" :: Text), "description" AE..= d]
+
+
+policyForCall :: Operation.OperationCall -> Maybe AgentPolicy
+policyForCall = \case
+  Operation.ModelCall call -> join $ Map.lookup (LLM.toolFunctionName $ LLM.toolCallFunction call) policiesByName
+  Operation.NativeCall operation -> Just $ nativePolicy operation
 
 
 policiesByName :: Map Text (Maybe AgentPolicy)

@@ -93,6 +93,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
 import Data.Time.Zones.All qualified as TZ
+import Data.Traversable (for)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
@@ -959,7 +960,7 @@ initialLocalOperations config =
     <> [SaveArtifact | isJust $ documentConversation config, isJust $ invocationContext config.invocationMode]
     <> [ReadArtifact | isJust $ documentConversation config]
   where
-    writes = invocationPolicy config.invocationMode == Issues.Autonomous && isJust (accessMember config.access)
+    writes = Issues.permitsActions (invocationPolicy config.invocationMode) && isJust (accessMember config.access)
 
 
 discoverableCatalog :: AgenticConfig -> Map.Map Text (MCP.Tool AgentOperation)
@@ -1030,7 +1031,7 @@ buildSystemPrompt config now =
                   , "Append one \"## " <> localNow "%H:%M" <> "\" section with what this run observed. When nothing changed, append a single line saying so rather than repeating earlier sections."
                   ]
             _ -> []
-      actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ invocationPolicy config.invocationMode == Issues.Autonomous
+      actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ Issues.permitsActions (invocationPolicy config.invocationMode)
    in basePrompt <> timezoneSection <> facetSection <> customSection <> projectSection <> investigationSection <> documentsSection <> actionsSection
 
 
@@ -1416,26 +1417,31 @@ executeNativeOperation context proposed perform =
 
 
 recordedOperation :: (DB es, IOE :> es, Time.Time :> es) => Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> Eff es (Either ToolDenial OperationPolicy) -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
-recordedOperation context cursor call snapshot reauthorize execution = case execution of
-  AtomicOperation action -> Investigations.atomicOperation lease cursor proposal Nothing action
-  EffectfulOperation action -> recorded action
-  ReconcilableOperation action reconcile ->
-    recordedOperation context cursor call snapshot reauthorize action >>= \case
-      retained@(Investigations.RecordedResult{}; Investigations.WaitingResult{}; Investigations.RefusedResult{}) -> pure retained
-      uncertain@(Investigations.UncertainResult claim original _) ->
-        reconcile original >>= \case
-          Nothing -> pure uncertain
-          Just result -> do
-            current <- reauthorize >>= either (const $ throwIO AgentAccessDenied) pure
-            Investigations.completeOperation claim result
-            if Operation.sameOperation original call
-              then pure $ Investigations.RecordedResult result
-              else recordedOperation context cursor call current reauthorize execution
+recordedOperation context cursor call snapshot reauthorize execution = do
+  requirement <- for (Issues.reviewApprover snapshot.execution snapshot.capability) $ \approver -> do
+    now <- Time.currentTime
+    pure $ Investigations.ReviewRequest (addUTCTime (24 * 60 * 60) now) approver
+  perform requirement execution
   where
+    perform requirement = \case
+      AtomicOperation action -> Investigations.atomicOperation lease cursor proposal requirement action
+      EffectfulOperation action -> recorded requirement action
+      ReconcilableOperation action reconcile ->
+        recordedOperation context cursor call snapshot reauthorize action >>= \case
+          retained@(Investigations.RecordedResult{}; Investigations.WaitingResult{}; Investigations.RefusedResult{}) -> pure retained
+          uncertain@(Investigations.UncertainResult claim original _) ->
+            reconcile original >>= \case
+              Nothing -> pure uncertain
+              Just result -> do
+                current <- reauthorize >>= either (const $ throwIO AgentAccessDenied) pure
+                Investigations.completeOperation claim result
+                if Operation.sameOperation original call
+                  then pure $ Investigations.RecordedResult result
+                  else recordedOperation context cursor call current reauthorize execution
     lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
     proposal = Investigations.OperationProposal call snapshot
-    recorded action =
-      Investigations.beginOperation lease cursor proposal Nothing >>= \case
+    recorded requirement action =
+      Investigations.beginOperation lease cursor proposal requirement >>= \case
         Investigations.RefuseOperation identifier reason -> pure $ Investigations.RefusedResult identifier reason
         Investigations.AwaitOperationReview identifier request -> pure $ Investigations.WaitingResult identifier request
         Investigations.RetainedOperation retained -> pure $ Investigations.RecordedResult retained
@@ -1452,7 +1458,7 @@ data ToolDenial = AuthorityDenied Issues.CapabilityDenial | EvidenceRetentionReq
 toolDenialMessage :: ToolDenial -> Text
 toolDenialMessage = \case
   AuthorityDenied (Issues.RoleRequired permission) -> "This run's project role does not meet the required " <> toText (encodeEnumSC @"P" permission) <> " permission."
-  AuthorityDenied Issues.ActionGrantRequired -> "Project changes require an Autonomous execution policy."
+  AuthorityDenied Issues.ActionGrantRequired -> "Project changes require an execution policy of Autonomous or selected review."
   EvidenceRetentionRequired -> "Restricted evidence requires a durable conversation run."
   AudienceRequired permission -> "This destination cannot receive evidence requiring " <> toText (encodeEnumSC @"P" permission) <> " permission."
   RestrictedPublication -> "This conversation contains restricted evidence and cannot publish it to a shared destination."

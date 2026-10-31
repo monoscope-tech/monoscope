@@ -10,7 +10,7 @@ Evidence uses one typed audience and one evaluator across web navigation, thread
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-The latest bot suite passes 341 examples, including 27 Slack MCP cases and 12 review cases. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, optional review controls, streaming acceptance, and final release checks remain unfinished.
+The latest bot suite passes 347 examples, including 27 Slack MCP cases and 18 review cases. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, optional review controls, streaming acceptance, and final release checks remain unfinished.
 
 ## Slack MCP integration checkpoint
 
@@ -34,7 +34,19 @@ One decision function checks the reviewer's current project role, the capability
 
 The first regression failed because the real artifact writer executed before review. Twelve focused cases now pass: nine ledger cases cover approval, rejection, expiry before review, expiry after approval, reviewer downgrade, administrator-only review, private evidence, an already-expired proposal, and concurrent decisions. They also verify wrong-project decisions and retries that try to remove review, lower the approver requirement, or extend the deadline. Three native issue-update cases verify a real approved mutation, rejection, and expiry, including repeated calls and retained response contracts. The final runtime passes all 341 bot examples. The preceding revision also passed 33 native review/SDK examples; the final native approval/refusal paths pass three focused integration cases. The same final source passes 76 API and 38 incident-delivery examples. Formatting, diff checks, and scoped HLint pass with no hints on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material issue in this foundation.
 
-Migration `0275_agent_operation_review.sql` adds one review field to the existing ledger; it adds no table or worker. The run inspector shows waiting state and retained review metadata. Existing execution paths explicitly use no review, preserving autonomous behavior. Routine configuration, web/Slack decision controls, expiry/resume scheduling, pause and actor-revocation acceptance still need connection. This foundation does not establish a working selective-review mode.
+Migration `0275_agent_operation_review.sql` adds one review field to the existing ledger; it adds no table or worker. The run inspector shows waiting state and retained review metadata. Observe and Autonomous preserve their existing behavior; selected review now uses this foundation through the shared interpreter. Routine configuration, web/Slack decision controls, expiry/resume scheduling, pause and actor-revocation acceptance still need connection. This foundation does not establish a working selective-review mode.
+
+## Selected-review policy backend
+
+`ExecutionPolicy` now represents Observe, Autonomous, or selected review with a nonempty collection of action classes and a reviewer requirement. Existing JSON values for Observe and Autonomous remain unchanged. One catalog classification maps capabilities to knowledge changes, project changes, external posts, or administrative changes. Ordinary reads and conversation-result storage do not require review.
+
+The shared interpreter derives review requirements from the same effective policy snapshot used for authorization. Selected operations wait before effects; unselected operations stay automatic. Approval resumes the stored tool checkpoint without repeating inference or the completed mutation. Review receipts retain the reviewer's authority at decision time. Execution checks both that proof and current membership, so a later role upgrade cannot strengthen an earlier vote and revoked approval authority cannot execute a write.
+
+Migration `0276_agent_review_policy.sql` stores policies as JSONB and adds a monotonic policy limit to the existing run. Original grants remain immutable. Policy edits constrain current work; later relaxation does not expand an older run. One database meet function supplies both limit retention and current policy evaluation. Review request and decision immutability share this migration. No table, executor, or scheduler is added.
+
+The policy-selection regression first failed because a selected dashboard action executed immediately. Eighteen focused review cases now pass, including selected/unselected execution, approval and checkpoint resumption, policy tightening and relaxation, invalid storage, original-grant rewrite rejection, and reviewer authority changes. The final source passes all 347 bot, 76 API, and 38 incident-delivery examples. Policy codec doctests are added; their final suite still needs to run. Formatting and diff checks pass; scoped HLint has no suggestions on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material issue in this backend slice; human controls and waiting lifecycle remain required.
+
+The database policy column changes from text to JSONB. Deploy the updated server and schema together; older SQL decoders expect text. This is a rollout requirement, not deployment authorization. Human configuration controls, web/Slack decision controls, and durable waiting/resume lifecycle remain unfinished. Autonomous remains the default.
 
 ## Product contract
 

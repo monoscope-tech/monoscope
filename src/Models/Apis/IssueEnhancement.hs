@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Models.Apis.IssueEnhancement (
   enhanceIssueWithLLM,
   generateEnhancedTitle,
@@ -50,7 +52,7 @@ enrichmentAnswer policy enrichment =
           <> enhancement.migrationComplexity
           <> foldMap (\(critical, _, _) -> "\n\nSeverity assessment: " <> bool "Not critical" "Critical" critical) enrichment.classification
           <> foldMap (\(cause, category) -> "\n\n## Error analysis\n" <> cause <> "\n\nCategory: " <> category) enrichment.analysis
-          <> case policy of Issues.Observe -> "\n\nObserve policy: issue metadata was not changed."; Issues.Autonomous -> ""
+          <> case policy of Issues.Observe -> "\n\nObserve policy: issue metadata was not changed."; (Issues.Autonomous; Issues.ReviewSelected{}) -> ""
    in Issues.reportAnswer body $ Just $ AE.object ["enhancement" AE..= enhancement, "classification" AE..= enrichment.classification, "analysis" AE..= enrichment.analysis]
 
 

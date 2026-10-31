@@ -112,6 +112,7 @@ import Models.Apis.Integrations qualified as Integrations
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
+import Pkg.AgentCatalog (ReviewApprover (..))
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.AgentOperation qualified as Operation
 import Pkg.DeriveUtils (UUIDId (..))
@@ -173,7 +174,7 @@ data OperationOutcome = OperationUnstarted | OperationRunning | OperationUnknown
   deriving (HI.DecodeValue) via Aeson OperationOutcome
 
 
-data ReviewRefusal = ReviewDeclined | ReviewTimedOut
+data ReviewRefusal = ReviewDeclined | ReviewTimedOut | ReviewAuthorityWithdrawn
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -182,11 +183,7 @@ reviewRefusalMessage :: ReviewRefusal -> Text
 reviewRefusalMessage = \case
   ReviewDeclined -> "A reviewer declined this action. It was not executed."
   ReviewTimedOut -> "The review expired before this action could execute."
-
-
-data ReviewApprover = ReviewEditors | ReviewAdministrators
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  ReviewAuthorityWithdrawn -> "This approval no longer meets current project permissions. Start a new request."
 
 
 data ReviewRequest = ReviewRequest {expiresAt :: UTCTime, approver :: ReviewApprover}
@@ -199,7 +196,7 @@ data ReviewDecision = ReviewApproved | ReviewRejected
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data ReviewReceipt = ReviewReceipt {decidedBy :: Projects.UserId, decidedAt :: UTCTime, decision :: ReviewDecision}
+data ReviewReceipt = ReviewReceipt {decidedBy :: Projects.UserId, decidedAt :: UTCTime, decision :: ReviewDecision, authority :: ReviewApprover}
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -685,7 +682,20 @@ beginOperationTx now lease cursor proposal review = runExceptT do
         NoReview -> start entry
         ReviewPending request -> if now < request.expiresAt then pure $ AwaitOperationReview entry.id request else refuse entry ReviewTimedOut
         ReviewResolved request receipt -> case receipt.decision of
-          ReviewApproved -> if now < request.expiresAt then start entry else refuse entry ReviewTimedOut
+          ReviewApproved ->
+            if now >= request.expiresAt
+              then refuse entry ReviewTimedOut
+              else do
+                roles <-
+                  lift
+                    $ Hasql.queryTx @[HI.OneColumn ProjectMembers.Permissions]
+                    $ [HI.sql|SELECT permission FROM (|]
+                    <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{lease.turn.projectId} AND member.user_id = #{receipt.decidedBy}|]
+                    <> [HI.sql|) eligible|]
+                let required = max request.approver $ maybe request.approver (.approver) review
+                if receipt.authority >= required && case (roles, Catalog.policyForCall entry.proposal.call) of ([HI.OneColumn role], Just capability) -> role >= max (Catalog.minimumPermission capability) (approverPermission required); _ -> False
+                  then start entry
+                  else refuse entry ReviewAuthorityWithdrawn
           ReviewRejected -> refuse entry ReviewDeclined
       OperationReturned response -> pure $ RetainedOperation response
       OperationRefused reason -> pure $ RefuseOperation entry.id reason
@@ -739,6 +749,12 @@ completeOperationTx (OperationClaim identifier) result = do
       pure $ if same == [True] then Right () else Left OperationOutcomeChanged
 
 
+approverPermission :: ReviewApprover -> ProjectMembers.Permissions
+approverPermission = \case
+  ReviewEditors -> ProjectMembers.PEdit
+  ReviewAdministrators -> ProjectMembers.PAdmin
+
+
 decideOperationReview :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> ReviewDecision -> Eff es ReviewResponse
 decideOperationReview project reviewer identifier decision = do
   permission <- ProjectMembers.getUserPermission project reviewer
@@ -752,8 +768,8 @@ decideOperationReview project reviewer identifier decision = do
           now <- Time.currentTime
           Hasql.transaction TxS.ReadCommitted TxS.Write do
             entries <-
-              Hasql.queryTx @[(OperationProposal AE.Value, Aeson OperationReview, Bool)]
-                [HI.sql|SELECT operation.proposal, operation.review, run.status = 'running' AND operation.outcome->>'tag' = 'OperationUnstarted'
+              Hasql.queryTx @[(OperationProposal AE.Value, Aeson OperationReview, Maybe (Aeson Catalog.ReviewSelection), Bool)]
+                [HI.sql|SELECT operation.proposal, operation.review, run.policy_limit->'review_selected', run.status = 'running' AND operation.outcome->>'tag' = 'OperationUnstarted'
             FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id AND run.project_id = operation.project_id
             WHERE operation.id = #{identifier} AND operation.project_id = #{project} FOR UPDATE OF operation|]
             current <-
@@ -761,29 +777,31 @@ decideOperationReview project reviewer identifier decision = do
                 $ [HI.sql|SELECT permission FROM (|]
                 <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{project} AND member.user_id = #{reviewer}|]
                 <> [HI.sql|) eligible|]
-            let permitted request proposal = case (current, capability proposal.call) of
-                  ([HI.OneColumn fresh], Just policy) -> fresh >= max (Catalog.minimumPermission policy) (case request.approver of ReviewEditors -> ProjectMembers.PEdit; ReviewAdministrators -> ProjectMembers.PAdmin)
-                  _ -> False
+            let permitted selection request proposal = do
+                  [HI.OneColumn fresh] <- pure current
+                  policy <- Catalog.policyForCall proposal.call
+                  let required = max request.approver $ maybe request.approver (\(Aeson value) -> value.approver) selection
+                  guard $ fresh >= max (Catalog.minimumPermission policy) (approverPermission required)
+                  case fresh of
+                    ProjectMembers.PView -> Nothing
+                    ProjectMembers.PEdit -> Just ReviewEditors
+                    ProjectMembers.PAdmin -> Just ReviewAdministrators
             case entries of
-              [(proposal, Aeson review, live)] -> case review of
+              [(proposal, Aeson review, selection, live)] -> case review of
                 NoReview -> pure ReviewUnavailable
-                ReviewResolved request receipt -> pure $ if permitted request proposal then ReviewAlreadyDecided receipt else ReviewUnavailable
-                ReviewPending request ->
-                  if not live || not (permitted request proposal)
-                    then pure ReviewUnavailable
-                    else
-                      if now >= request.expiresAt
-                        then pure ReviewExpired
-                        else do
-                          let receipt = ReviewReceipt reviewer now decision
-                          Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET review = #{Aeson $ ReviewResolved request receipt}, updated_at = clock_timestamp() WHERE id = #{identifier}|]
-                          pure $ ReviewSaved receipt
+                ReviewResolved request receipt -> pure $ if isJust (permitted selection request proposal) then ReviewAlreadyDecided receipt else ReviewUnavailable
+                ReviewPending request -> case permitted selection request proposal of
+                  Just authority
+                    | live ->
+                        if now >= request.expiresAt
+                          then pure ReviewExpired
+                          else do
+                            let receipt = ReviewReceipt reviewer now decision authority
+                            Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET review = #{Aeson $ ReviewResolved request receipt}, updated_at = clock_timestamp() WHERE id = #{identifier}|]
+                            pure $ ReviewSaved receipt
+                  _ -> pure ReviewUnavailable
               _ -> pure ReviewUnavailable
     _ -> pure ReviewUnavailable
-  where
-    capability = \case
-      Operation.ModelCall call -> join $ Map.lookup (LLM.toolFunctionName $ LLM.toolCallFunction call) Catalog.policiesByName
-      Operation.NativeCall operation -> Just $ Catalog.nativePolicy operation
 
 
 listOperations :: (AE.FromJSON policy, DB es) => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es [OperationEntry policy]
@@ -840,7 +858,7 @@ adoptSlackCheckpoint lease turn policy = do
       roots <-
         lift
           $ Hasql.queryTx @[(UUIDId "ai_routine_run", Bool)]
-            [HI.sql|SELECT run.root_run_id, run.policy = 'observe' FROM apis.ai_routine_runs run
+            [HI.sql|SELECT run.root_run_id, run.policy = '"observe"'::jsonb FROM apis.ai_routine_runs run
         JOIN apis.ai_routine_runs root ON root.id = run.root_run_id
         JOIN apis.slack_events receipt ON receipt.id::text = run.source #>> '{contents,contents}'
         WHERE run.id = #{lease.turn.runId} AND run.project_id = #{turn.projectId} AND run.conversation_id = #{turn.conversationId}

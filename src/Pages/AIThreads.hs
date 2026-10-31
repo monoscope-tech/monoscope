@@ -341,6 +341,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 code_ [class_ "min-w-0 break-all text-sm text-textStrong"] $ toHtml $ T.replace "_" " " $ Catalog.operationName operation.proposal.call
                 uncurry tonePill_ $ case operation.outcome of
                   Investigations.OperationRefused Investigations.ReviewDeclined -> (NeutralBadge, "Declined")
+                  Investigations.OperationRefused Investigations.ReviewAuthorityWithdrawn -> (WarningBadge, "Approval withdrawn")
                   Investigations.OperationRefused Investigations.ReviewTimedOut -> (WarningBadge, "Review expired")
                   Investigations.OperationUnstarted -> (BrandBadge, "Awaiting review")
                   Investigations.OperationRunning -> (BrandBadge, "Awaiting outcome")

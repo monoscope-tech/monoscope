@@ -315,6 +315,7 @@ extra-source-files:
     static/migrations/0273_agent_evidence_audience.sql
     static/migrations/0274_legacy_slack_evidence_audience.sql
     static/migrations/0275_agent_operation_review.sql
+    static/migrations/0276_agent_review_policy.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs
