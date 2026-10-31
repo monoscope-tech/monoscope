@@ -151,6 +151,8 @@ module Models.Apis.Issues (
   RunContext,
   runContextFor,
   runContextPolicy,
+  RunAuthority (..),
+  runContextAuthority,
   InteractiveOrigin (..),
   startInteractiveRun,
   InteractiveStart (..),
@@ -1670,21 +1672,33 @@ data RunAccess = Allowed ExecutionPolicy | Unavailable | Stopped
   deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb RunAccess
 
 
-readRunPolicy :: DB es => HI.Sql -> Eff es (Maybe ExecutionPolicy)
-readRunPolicy query = (accessPolicy . HI.getOneColumn =<<) <$> Hasql.interpOne query
+data RunAuthority = RunAuthority
+  { policy :: ExecutionPolicy
+  , permission :: ProjectMembers.Permissions
+  }
+  deriving stock (Eq, Show)
+
+
+readRunAuthority :: DB es => HI.Sql -> Eff es (Maybe RunAuthority)
+readRunAuthority query = (accessAuthority =<<) <$> Hasql.interpOne query
   where
-    accessPolicy = \case
-      Allowed policy -> Just policy
-      Unavailable -> Nothing
-      Stopped -> Nothing
+    accessAuthority = \case
+      (Allowed policy, permission) -> Just RunAuthority{policy, permission}
+      (Unavailable, _) -> Nothing
+      (Stopped, _) -> Nothing
 
 
 runContextPolicy :: DB es => RunContext -> Eff es (Maybe ExecutionPolicy)
-runContextPolicy context = fmap effective <$> readRunPolicy (runContextAccessSql context)
+runContextPolicy context = fmap (.policy) <$> runContextAuthority context
+
+
+runContextAuthority :: DB es => RunContext -> Eff es (Maybe RunAuthority)
+runContextAuthority context = fmap effective <$> readRunAuthority (runContextAccessSql context)
   where
-    effective policy = case context.source of
-      TriggeredRun{} -> Observe
-      _ -> policy
+    effective :: RunAuthority -> RunAuthority
+    effective authority = case context.source of
+      TriggeredRun{} -> authority{policy = Observe}
+      _ -> authority
 
 
 runContextScopeSql :: RunContext -> HI.Sql
@@ -1699,7 +1713,7 @@ runContextAccessSql context = case context.source of
     [HI.sql|SELECT CASE WHEN conversation.conversation_id IS NULL THEN #{Stopped}
         WHEN actor.permission IS NULL AND run.project_id = #{Projects.demoProjectId} AND run.evidence_permission = #{ProjectMembers.PView} THEN #{Allowed Observe}
         WHEN actor.permission IS NULL OR apis.evidence_permission_rank(actor.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
-        WHEN run.policy = #{Autonomous} THEN #{Allowed Autonomous} ELSE #{Allowed Observe} END
+        WHEN run.policy = #{Autonomous} THEN #{Allowed Autonomous} ELSE #{Allowed Observe} END, COALESCE(actor.permission, #{ProjectMembers.PView})
       FROM apis.ai_routine_runs run LEFT JOIN apis.ai_conversations conversation
         ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
       LEFT JOIN LATERAL (|]
@@ -2281,7 +2295,7 @@ completeRun context proposed = do
         )
     case states of
       [HI.OneColumn RunRunning] -> do
-        access <- HI.getOneColumn <$> Hasql.oneTx (runContextAccessSql context)
+        (access, _) <- Hasql.oneTx @(RunAccess, ProjectMembers.Permissions) (runContextAccessSql context)
         let outcome = case (access, proposed) of
               (_, CancelledResult{}) -> proposed
               (Stopped, _) -> CancelledResult Nothing
@@ -2347,7 +2361,7 @@ completeRun context proposed = do
 
 
 routineRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
-routineRunActive pid runId = isJust <$> readRunPolicy (routineRunAccessSql pid runId mempty)
+routineRunActive pid runId = isJust <$> readRunAuthority (routineRunAccessSql pid runId mempty)
 
 
 routineRunAccessSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql -> HI.Sql
@@ -2366,7 +2380,9 @@ routineRunAccessSql pid runId scope =
         OR apis.evidence_permission_rank(actor.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin}))
         OR apis.evidence_permission_rank(owner.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
       WHEN run.policy = #{Autonomous} AND r.policy = #{Autonomous} AND run.authority_version = r.authority_version THEN #{Allowed Autonomous}
-      ELSE #{Allowed Observe} END
+      ELSE #{Allowed Observe} END,
+      COALESCE(CASE WHEN apis.evidence_permission_rank(owner.permission) < apis.evidence_permission_rank(actor.permission)
+        THEN owner.permission ELSE actor.permission END, #{ProjectMembers.PView})
       FROM apis.ai_routine_runs run LEFT JOIN apis.ai_routines r ON r.id = run.routine_id
       LEFT JOIN eligible_members owner ON owner.project_id = r.project_id AND owner.user_id = r.requested_by
       LEFT JOIN eligible_members actor ON actor.project_id = run.project_id AND actor.user_id = run.requested_by
@@ -2547,7 +2563,7 @@ setRoutinePolicy user pid conversation policy =
 
 routineRunPolicyFor :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Projects.UserId -> UUIDId "conversation" -> Eff es (Maybe ExecutionPolicy)
 routineRunPolicyFor pid run user conversation =
-  readRunPolicy $ routineRunAccessSql pid run [HI.sql| AND run.requested_by = #{user} AND run.conversation_id = #{conversation}|]
+  fmap (.policy) <$> readRunAuthority (routineRunAccessSql pid run [HI.sql| AND run.requested_by = #{user} AND run.conversation_id = #{conversation}|])
 
 
 -- | Inverse of 'fromEnum' on 'DayOfWeek' as stored in @schedule_weekday@ (Monday=1 … Sunday=7).

@@ -2402,6 +2402,33 @@ spec = around withTestResources do
             Right answer -> T.isInfixOf (if role == PM.PView then "project role" else "destination") answer.response
             _ -> False
 
+      for_ ([(PM.PAdmin, PM.PEdit), (PM.PEdit, PM.PAdmin), (PM.PAdmin, PM.PAdmin)] :: [(PM.Permissions, PM.Permissions)]) \(actorRole, ownerRole) ->
+        it ("routineAuthority_ownerAndRequesterBothConstrainRestrictedReads: " <> show (actorRole, ownerRole)) \tr -> do
+          setupSlackAgent tr testPid "T_EFFECTIVE_ROLE"
+          let user = (getResponse tr.trSessAndHeader).user.id
+              conversation = UUIDId $ UUID.fromWords 0 0 46 1
+              allowed = min actorRole ownerRole == PM.PAdmin
+          runTestBg frozenTime tr do
+            owner <- Projects.createUser "Routine" "Owner" "" "authority-owner@example.test"
+            Projects.insertUser owner
+            Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{owner.id}, #{ownerRole})|]
+            routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (liftIO $ fail "Expected routine") pure
+            Issues.setRoutinePolicy owner.id testPid routine.conversationId Issues.Autonomous
+            Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = #{actorRole} WHERE project_id = #{testPid} AND user_id = #{user}|]
+            void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+          routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected current routine") pure
+          run <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommandRequest conversation user) Issues.StartRun conversation "Inspect project credentials") >>= maybe (fail "Expected event run") pure
+          context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.SlackCommand conversation) run.id run.startedAt
+          calls <- newIORef ([] :: [Text])
+          let backend = Routes.mcpProjectTools{AI.invoke = \actor project name args -> liftIO (modifyIORef' calls (<> [name])) >> AI.invoke Routes.mcpProjectTools actor project name args}
+              config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.projectTools = Just backend, AI.conversationId = Just conversation, AI.invocationMode = AI.DurableRun context}
+          result <- runTestBg frozenTime tr $ tryAny $ AI.executeToolCall config $ Chat.ToolCall "private-read" "function" $ Chat.ToolFunction "list_api_keys" mempty
+          readIORef calls >>= (`shouldBe` if allowed then ["list_api_keys"] else [])
+          result `shouldSatisfy` \case
+            Right response -> allowed || T.isInfixOf "project role" response.formatted
+            _ -> False
+          runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` if allowed then PM.PAdmin else PM.PView)
+
       it "rechecks in-app membership after access is revoked" \tr -> do
         let userId = (getResponse tr.trSessAndHeader).user.id
             check = runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess AI.ProjectMember userId) testPid

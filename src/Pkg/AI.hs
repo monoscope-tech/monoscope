@@ -531,9 +531,6 @@ data AgentAccessDenied = AgentAccessDenied
   deriving anyclass (Exception)
 
 
-data AgentAuthority = ServiceAuthority | MemberAuthority ProjectMembers.Permissions
-
-
 -- | The host supplies the MCP catalog and its in-process runner together.
 data ProjectTools = ProjectTools
   { catalog :: Map.Map Text (MCP.Tool MCP.Dispatch)
@@ -549,28 +546,28 @@ viewerProjectTools tools = tools{catalog = Map.filter ((== Just (MCP.ReadOnly Pr
 -- | Service invocations retain viewer access. Member and Slack invocations
 -- revalidate the requesting identity at each data-use boundary.
 requireAgentAccess :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> Eff es ()
-requireAgentAccess access projectId = void $ agentAuthority access projectId
+requireAgentAccess access projectId = void $ agentPermission access projectId
 
 
-agentAuthority :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> Eff es AgentAuthority
-agentAuthority ServiceAccess _ = pure ServiceAuthority
-agentAuthority (MemberAccess context userId) projectId = do
+agentPermission :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> Eff es ProjectMembers.Permissions
+agentPermission ServiceAccess _ = pure ProjectMembers.PView
+agentPermission (MemberAccess context userId) projectId = do
   permission <- case context of
     ProjectMember -> ProjectMembers.getUserPermission projectId userId
     WebSession -> do
       member <- ProjectMembers.getSessionPermission projectId userId
       public <- if projectId == Projects.demoProjectId then isJust <$> Projects.projectById projectId else pure False
       pure $ member <|> (ProjectMembers.PView <$ guard public)
-  maybe (throwIO AgentAccessDenied) (pure . MemberAuthority) permission
-agentAuthority (SlackAccess teamId slackUserId userId) projectId = do
+  maybe (throwIO AgentAccessDenied) pure permission
+agentPermission (SlackAccess teamId slackUserId userId) projectId = do
   principal <- Integrations.resolveSlackPrincipal teamId slackUserId (Just projectId)
   case principal of
-    Just member | member.userId == userId && member.projectId == projectId -> pure $ MemberAuthority member.permission
+    Just member | member.userId == userId && member.projectId == projectId -> pure member.permission
     _ -> throwIO AgentAccessDenied
-agentAuthority (SlackInvestigationAccess run) projectId = do
-  authority <- agentAuthority (SlackAccess run.teamId run.slackUserId run.userId) projectId
+agentPermission (SlackInvestigationAccess run) projectId = do
+  permission <- agentPermission (SlackAccess run.teamId run.slackUserId run.userId) projectId
   whenM (Integrations.slackInvestigationStopped projectId run.teamId run.channelId run.threadTs run.messageTs) $ throwIO AgentStopped
-  pure authority
+  pure permission
 
 
 -- | Transport audiences cannot inherit a member's private administrative evidence.
@@ -580,12 +577,12 @@ evidenceAudience access role = case access of
   (ServiceAccess; SlackAccess{}; SlackInvestigationAccess{}) -> ProjectMembers.PView
 
 
-requireEvidenceAccess :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
+requireEvidenceAccess :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> UUIDId "conversation" -> Eff es ProjectMembers.Permissions
 requireEvidenceAccess access project conversation = do
-  authority <- agentAuthority access project
+  permission <- agentPermission access project
   required <- Investigations.conversationEvidencePermission project conversation
-  let role = case authority of ServiceAuthority -> ProjectMembers.PView; MemberAuthority permission -> permission
-  unless (role >= required && evidenceAudience access role >= required) $ throwIO AgentAccessDenied
+  unless (permission >= required && evidenceAudience access permission >= required) $ throwIO AgentAccessDenied
+  pure permission
 
 
 data AgenticConfig = AgenticConfig
@@ -641,16 +638,17 @@ documentConversation config = case config.access of
   SlackInvestigationAccess{} -> config.conversationId
 
 
-requireConfigAccess :: (DB es, IOE :> es) => AgenticConfig -> Eff es Issues.ExecutionPolicy
+requireConfigAccess :: (DB es, IOE :> es) => AgenticConfig -> Eff es Issues.RunAuthority
 requireConfigAccess config = do
-  case config.conversationId of
-    Nothing -> requireAgentAccess config.access config.projectId
+  permission <- case config.conversationId of
+    Nothing -> agentPermission config.access config.projectId
     Just conversation -> requireEvidenceAccess config.access config.projectId conversation
   case invocationContext config.invocationMode of
-    Nothing -> pure $ invocationPolicy config.invocationMode
+    Nothing -> pure $ Issues.RunAuthority Issues.Observe permission
     Just context -> do
       unless (context.projectId == config.projectId && Just context.requestedBy == accessMember config.access && Just context.conversationId == config.conversationId) $ throwIO AgentStopped
-      Issues.runContextPolicy context >>= maybe (throwIO AgentStopped) pure
+      authority <- Issues.runContextAuthority context >>= maybe (throwIO AgentStopped) pure
+      pure authority{Issues.permission = min permission authority.permission}
 
 
 -- | Default agentic configuration with reasonable defaults (maxIterations=5, facetContext=Nothing)
@@ -1225,7 +1223,7 @@ executeToolCall config call = operationResponse config.projectId <$> executeTool
 
 executeToolAt :: ProjectToolCtx es => Maybe Investigations.CheckpointCursor -> AgenticConfig -> LLM.ToolCall -> Eff es Investigations.OperationResult
 executeToolAt cursor config tc = do
-  execution <- requireConfigAccess config
+  authority <- requireConfigAccess config
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
       args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
   Log.logTrace "AI executing tool" (AE.object ["tool" AE..= funcName])
@@ -1234,9 +1232,9 @@ executeToolAt cursor config tc = do
     Just tool -> case tool.agentPolicy of
       Nothing -> pure $ Investigations.RecordedResult $ noRaw "This project operation has no Agent policy."
       Just policy ->
-        authorize execution policy >>= \case
+        authorize authority policy >>= \case
           Left denial -> pure $ Investigations.RecordedResult $ noRaw $ case denial of
-            RoleRequired permission -> "Your project role does not meet the required " <> toText (encodeEnumSC @"P" permission) <> " permission."
+            RoleRequired permission -> "This run's project role does not meet the required " <> toText (encodeEnumSC @"P" permission) <> " permission."
             ActionGrantRequired -> "Project changes require an Autonomous execution policy."
             ActionRecoveryRequired -> "Administrative operations are unavailable until durable action recovery is enabled."
             EvidenceRetentionRequired -> "Restricted evidence requires a durable conversation run."
@@ -1250,11 +1248,11 @@ executeToolAt cursor config tc = do
   Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length response.formatted])
   pure result
   where
-    authorize :: (DB es, IOE :> es) => Issues.ExecutionPolicy -> MCP.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
-    authorize execution policy = Except.runExceptT do
-      authority <- lift $ agentAuthority config.access config.projectId
-      let requireActions = unless (execution == Issues.Autonomous) $ Except.throwError ActionGrantRequired
-          permission = case authority of ServiceAuthority -> ProjectMembers.PView; MemberAuthority role -> role
+    authorize :: DB es => Issues.RunAuthority -> MCP.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
+    authorize authority policy = Except.runExceptT do
+      let execution = authority.policy
+          permission = authority.permission
+          requireActions = unless (execution == Issues.Autonomous) $ Except.throwError ActionGrantRequired
       unless (permission >= MCP.minimumPermission policy) $ Except.throwError $ RoleRequired (MCP.minimumPermission policy)
       case policy of
         MCP.ReadOnly{} -> pass

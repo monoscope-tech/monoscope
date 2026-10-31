@@ -645,6 +645,19 @@ Pending-followup selection now requires the run's stored requesting member befor
 The focused regression and all 201 bot examples pass after the two-line runtime change. Formatting and diff checks pass; repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings. Existing already-accepted historical steering must still be considered at the event-autonomy transition: this change prevents new cross-requester acceptance, and does not rewrite old model checkpoints. The temporary event Observe ceiling remains until the effective owner/requester authority and transition behavior are verified.
 
 
+### Shared effective owner/requester authority (31 October)
+
+A failing integration regression reproduced an administrator requester executing `list_api_keys` through an editor-owned routine. The previous check stopped the run only after the read and after raising the conversation's evidence requirement.
+
+`RunAuthority` now carries execution policy and effective project role together. The existing admission SQL returns the lower of the current routine owner's and original requester's roles, using the canonical permission ranking. Interactive admission retains current web-session and public-demo behavior. The same admission query still governs atomic completion; it does not acquire a parallel role evaluator.
+
+The executor carries that authority into the catalog decision before execution. Its transport identity check supplies the transport's role cap, and the catalog no longer performs a second requester-only role lookup. The private `AgentAuthority` sum is removed: its only meaningful result was the permission already supplied by the existing identity checks. Role denials now describe the run's role rather than incorrectly attributing an owner's restriction to the requester's own membership.
+
+All three owner/requester combinations pass: administrator/editor and editor/administrator are denied before dispatch without raising evidence scope; administrator/administrator retains the authorized private read. All 204 bot examples pass, including public-demo, sudo, current-role revocation, durable completion, and Slack steering coverage. All 33 native review/SDK examples also pass after the admission-query change. Formatting and diff checks pass; repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings. No migration or permission prompt was added.
+
+The broader event-autonomy transition remains incomplete. It must preserve immutable role/policy ceilings through recovery and account for pre-upgrade Slack checkpoints that already contain accepted steering. `origin/master` has the legacy Slack checkpoint/followup implementation without the new event-run root; a first new event run must not silently give such retained work broader authority. Native mutation-ledger integration and administrative result visibility also remain release work. The temporary event Observe ceiling has not been removed in this slice.
+
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
