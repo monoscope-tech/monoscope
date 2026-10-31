@@ -46,6 +46,14 @@ The existing hourly recovery step closes requests whose failed job was saved bef
 
 Eight failing-first lifecycle cases cover web and slash requests, actual OddJobs retry and terminal transitions, missed exception and timeout callbacks, repeated hourly recovery, newer queued work, retained artifacts, one execution message, and zero model or HTTP calls during recovery. All 450 bot examples pass on the final source. Formatting, diff checks, and scoped HLint pass. Repeated scoped distillation, constraint, and client-behavior reviews leave no material finding. This adds no table, migration, scheduler, attempt counter, or model executor. The job and run commits remain separate; the retained states support eventual recovery through the existing scheduler.
 
+## Native SDK resume contract
+
+The Pi adapter can now consume an owner-supplied SDK session manager. It resumes the exact pending tool calls through the SDK's existing runner and registered before/after hooks, retains their results, and continues the original transcript without adding a user prompt. Completed tool calls are skipped. The runner uses the current catalog and schema, so a removed or changed tool is refused before its host callback. The already-installed `pi-agent-core` 1.4.0 package is now declared directly for that public runner; no dependency version was upgraded.
+
+The failing-first regression reproduced a completed file append running twice. Four parameterized cases now pass with the real SDK and a restored-file fixture: approval, rejection, tool removal, and schema change. They retain one file edit, preserve the original host call identity, and use three model responses instead of repeating the first response. The complete worker suite passes 19 tests on Node 22.23.2; lockfile regeneration succeeds offline.
+
+This is a resume primitive, not completed production continuation. The production host still creates an in-memory session. Durable SDK state must be paired with the live workspace, original request identity, callback evidence and notes, workflow budgets, and accepted-submission state before the production adapter can resume. Real VM interruption and restoration acceptance remains required. The prepared dependency checkpoint alone does not contain later agent file edits. Streaming remains after that recovery work.
+
 ## Retried Slack requests after authority loss
 
 Before treating a retained receipt as new work, the adapter now loads its original actor through the existing event claim and evaluates current linked identity and shared run authority. A running request whose authority is unavailable closes through the common finalizer; an already-cancelled request only retries cleanup. Completed and failed attempts retain their existing delivery and recovery paths. No schema, authority evaluator, executor, or worker is added.

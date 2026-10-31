@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -8,7 +8,9 @@ import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { jsonLines } from './jsonl.mjs';
-import { parseSubmission } from './pi-host.mjs';
+import { parseSubmission, runPi } from './pi-host.mjs';
+import { ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent';
+import { AssistantMessageEventStream } from '@earendil-works/pi-ai';
 
 const exec = promisify(execFile);
 const records = (chunks, limit) => Array.fromAsync(jsonLines(Readable.from(chunks.map((chunk) => Buffer.from(chunk))), limit));
@@ -179,4 +181,58 @@ test('sandbox bridge loads its real SDK imports and answers without creating a V
   bridge.child.stdin.end(JSON.stringify({ tag: 'Resolve', contents: '/nonexistent-monoscope-guest' }) + '\n');
   const { stdout } = await bridge;
   assert.equal(typeof JSON.parse(stdout).Left, 'string');
+});
+
+
+for (const decision of ['approve', 'reject', 'removed', 'changed-schema']) test(`native Pi continuation resumes the pending host call without repeating a completed file edit or model response: ${decision}`, { timeout: 10000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'impact-pi-continuation-'));
+  try {
+    const firstWorkspace = join(root, 'first'), restoredWorkspace = join(root, 'restored');
+    await Promise.all([firstWorkspace, restoredWorkspace, join(root, 'skills')].map((path) => mkdir(path)));
+    let modelCalls = 0, fileEdits = 0, checkpoint;
+    const hostCalls = [];
+    const runtime = await ModelRuntime.create({ authPath: join(root, 'auth.json'), modelsPath: null, refreshOnCreate: false });
+    runtime.registerProvider('continuation-fixture', {
+      api: 'openai-completions', apiKey: 'fixture-key', baseUrl: 'http://127.0.0.1',
+      models: [{ id: 'fixture', name: 'Continuation fixture', reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 16384, maxTokens: 1024 }],
+      streamSimple(model, context) {
+        modelCalls++;
+        const results = context.messages.filter((message) => message.role === 'toolResult');
+        const call = (id, name, args = {}) => ({ type: 'toolCall', id, name, arguments: args });
+        const content = results.some((message) => message.toolName === 'submit_review') ? [{ type: 'text', text: 'Review finished.' }]
+          : results.some((message) => message.toolName === 'write_project_memory') ? [call('submit', 'submit_review', { summary: results.findLast((message) => message.toolName === 'write_project_memory').isError ? 'The host action was refused.' : 'The earlier edit survived.' })]
+          : [call('edit', 'append_file'), call('remember', 'write_project_memory')];
+        const message = { role: 'assistant', content, api: 'openai-completions', provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: content[0].type === 'text' ? 'stop' : 'toolUse', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+        const stream = new AssistantMessageEventStream();
+        queueMicrotask(() => { stream.push({ type: 'start', partial: message }); stream.push({ type: 'done', reason: message.stopReason, message }); });
+        return stream;
+      },
+    });
+    const parameters = { type: 'object', properties: {}, additionalProperties: false };
+    const policy = { instructions: 'Use the supplied tools to retain the edit and submit a review.', builtins: [], tools: ['append_file', 'write_project_memory', 'submit_review'].map((name) => ({ name, description: name, sequential: true, parameters: name === 'submit_review' ? { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false } : parameters })) };
+    const common = { preparedCheckout: { policy, repositorySkills: root }, request: { provider: 'continuation-fixture', model: 'fixture', prompt: 'Append one edit, remember it, then submit.', thinkingLevel: 'off' }, modelRuntime: runtime, attemptId: '00000000-0000-0000-0000-000000000001', workflow: { name: 'submit_review', prepare: async (draft) => ({ Right: draft }) }, skillsDir: join(root, 'skills'), root, onEvent: () => {} };
+    const tools = (workspace) => [{ name: 'append_file', parameters, async execute() { fileEdits++; await writeFile(join(workspace, 'edited.txt'), 'one edit\n', { flag: 'a' }); return { content: [{ type: 'text', text: 'Appended once.' }], details: {} }; } }];
+    const original = SessionManager.inMemory('/workspace'), controller = new AbortController();
+    await assert.rejects(runPi({ ...common, sessionManager: original, tools: tools(firstWorkspace), signal: controller.signal, optionsTool: async (invocation) => {
+      hostCalls.push(invocation.name);
+      checkpoint = structuredClone([original.getHeader(), ...original.getEntries()]);
+      controller.abort();
+      throw new Error('Awaiting the retained action review');
+    } }));
+    await writeFile(join(restoredWorkspace, 'edited.txt'), await readFile(join(firstWorkspace, 'edited.txt')));
+    const sessionFile = join(root, 'resume.jsonl');
+    await writeFile(sessionFile, checkpoint.map((entry) => JSON.stringify(entry)).join('\n') + '\n');
+    const resumed = SessionManager.open(sessionFile, root);
+    if (decision === 'removed') policy.tools = policy.tools.filter((tool) => tool.name !== 'write_project_memory');
+    if (decision === 'changed-schema') policy.tools.find((tool) => tool.name === 'write_project_memory').parameters = { type: 'object', properties: { currentGrant: { type: 'string' } }, required: ['currentGrant'], additionalProperties: false };
+    const result = await runPi({ ...common, sessionManager: resumed, tools: tools(restoredWorkspace), optionsTool: async (invocation) => {
+      hostCalls.push(invocation.name);
+      return decision === 'approve' ? { Right: 'Approved and saved once.' } : { Left: 'The action review was rejected.' };
+    } });
+    assert.equal(fileEdits, 1, 'Resume repeated an already completed workspace edit');
+    assert.equal(await readFile(join(restoredWorkspace, 'edited.txt'), 'utf8'), 'one edit\n');
+    assert.deepEqual(hostCalls, ['write_project_memory', ...(['approve', 'reject'].includes(decision) ? ['write_project_memory'] : [])]);
+    assert.equal(modelCalls, 3, 'Resume repeated a completed model response');
+    assert.deepEqual(result, { summary: decision === 'approve' ? 'The earlier edit survived.' : 'The host action was refused.' });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -12,6 +12,7 @@ import {
   createAgentSession, createBashToolDefinition, createEditToolDefinition, createReadToolDefinition, createWriteToolDefinition,
   detectSupportedImageMimeTypeFromFile, DefaultResourceLoader, loadSkills, ModelRuntime, SessionManager, SettingsManager,
 } from '@earendil-works/pi-coding-agent';
+import { runToolCall } from '@earendil-works/pi-agent-core';
 import { Type } from 'typebox';
 import { Assert } from 'typebox/value';
 import writeFileAtomic from 'write-file-atomic';
@@ -80,7 +81,7 @@ export function bashTool(exec, publish) {
  * Runs one Pi session over `tools` and returns the accepted submission. `workflow` names the submit tool and
  * prepares each candidate; tool contracts come from the host policy.
  */
-export async function runPi({ preparedCheckout, request, modelRuntime, attemptId, tools, workflow, skillsDir, root, optionsTool, signal, onEvent }) {
+export async function runPi({ preparedCheckout, request, modelRuntime, attemptId, tools, workflow, skillsDir, root, optionsTool, signal, onEvent, sessionManager = SessionManager.inMemory(cwd) }) {
   const modelCalls = new Set();
   const meteredRuntime = new Proxy(modelRuntime, {
     get(target, property) {
@@ -147,14 +148,32 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
     ({ session } = await createAgentSession({
       cwd, agentDir: join(root, 'agent'), modelRuntime: meteredRuntime, model,
       thinkingLevel: request.thinkingLevel, settingsManager, resourceLoader: loader,
-      sessionManager: SessionManager.inMemory(cwd), tools: tools.map((tool) => tool.name), customTools: tools,
+      sessionManager, tools: tools.map((tool) => tool.name), customTools: tools,
     }));
-    session.subscribe((event) => {
+    const emit = (event) => {
       if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end' && event.toolName !== workflow.name) submitted = undefined;
       onEvent(event);
-    });
+    };
+    session.subscribe(emit);
     signal?.throwIfAborted();
-    await session.prompt(request.prompt);
+    if (session.messages.length === 0) await session.prompt(request.prompt);
+    else {
+      const assistant = session.messages.findLastIndex((message) => message.role === 'assistant');
+      const issued = session.messages[assistant];
+      const completed = new Set(session.messages.slice(assistant + 1).filter((message) => message.role === 'toolResult').map((message) => message.toolCallId));
+      for (const call of issued?.content.filter((block) => block.type === 'toolCall' && !completed.has(block.id)) ?? []) {
+        signal?.throwIfAborted();
+        emit({ type: 'tool_execution_start', toolCallId: call.id, toolName: call.name, args: call.arguments });
+        const outcome = await runToolCall(call, { tools: session.agent.state.tools, assistantMessage: issued, context: { messages: session.messages, tools: session.agent.state.tools }, beforeToolCall: session.agent.beforeToolCall, afterToolCall: session.agent.afterToolCall, signal });
+        signal?.throwIfAborted();
+        const result = { role: 'toolResult', toolCallId: call.id, toolName: call.name, content: outcome.result.content, details: outcome.result.details, isError: outcome.isError, timestamp: Date.now() };
+        session.agent.state.messages = [...session.messages, result];
+        sessionManager.appendMessage(result);
+        emit({ type: 'tool_execution_end', toolCallId: call.id, toolName: call.name, result: outcome.result, isError: outcome.isError });
+        emit({ type: 'message_end', message: result });
+      }
+      await session.agent.continue();
+    }
     signal?.throwIfAborted();
     if (session.messages.findLast((message) => message.role === 'assistant')?.stopReason !== 'stop') throw new Error('Review agent did not finish successfully');
     if (!submitted) throw new Error('Review agent did not submit a validated draft');
