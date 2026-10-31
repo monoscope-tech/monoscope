@@ -14,12 +14,12 @@ import Data.Text.Display (display)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful (Eff)
+import Hasql.Transaction qualified as Tx
 import Models.Apis.Issues qualified as Issues
 import NeatInterpolation (text)
 import Pkg.AI qualified as AI
 import PyF (fmtTrim)
 import Relude hiding (id)
-import System.Types (DB)
 
 
 data IssueEnhancement = IssueEnhancement
@@ -352,7 +352,7 @@ buildCriticalityPrompt issue =
       Issues.Feedback -> "User feedback: " <> issue.title
 
 
-updateIssueClassification :: DB es => Issues.IssueId -> Bool -> Int -> Eff es ()
+updateIssueClassification :: Issues.IssueId -> Bool -> Int -> Tx.Transaction ()
 updateIssueClassification issueId isCritical breakingCount =
   Issues.updateIssueCriticality issueId isCritical
     $ if

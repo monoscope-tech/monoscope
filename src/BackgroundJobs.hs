@@ -3812,8 +3812,6 @@ enhanceIssuesWithLLM pid issueIds = do
                 enhancement <- ExceptT $ Enhancement.enhanceIssueWithLLM complete issue
                 classification <- if issue.issueType == Issues.ApiChange then pure Nothing else Just <$> ExceptT (Enhancement.classifyIssueCriticality complete issue)
                 analysis <- if issue.issueType /= Issues.RuntimeException then pure Nothing else Just <$> ExceptT (Enhancement.analyzeErrorPattern complete issue)
-                active <- lift $ Issues.routineRunActive pid execution.id
-                unless active $ throwError "Routine authorization withdrawn"
                 let body =
                       "# "
                         <> enhancement.enhancedTitle
@@ -3828,17 +3826,18 @@ enhanceIssuesWithLLM pid issueIds = do
                     findings = AE.object ["enhancement" AE..= enhancement, "classification" AE..= classification, "analysis" AE..= analysis]
                 required <- lift $ Investigations.conversationEvidencePermission pid convId
                 unless (required <= ProjectMembers.PView) $ throwError "Restricted conversation evidence cannot update shared issue metadata"
-                lift do
-                  Issues.updateIssueEnhancement issueId enhancement.enhancedTitle enhancement.recommendedAction enhancement.migrationComplexity
-                  for_ classification $ \(critical, breaking, _) -> Enhancement.updateIssueClassification issueId critical breaking
-                  for_ analysis $ \(cause, category) -> whenJustM (ErrorPatterns.getErrorPatternByHash pid issue.targetHash) $ \ep -> void $ ErrorPatterns.updateErrorPatternAnalysis ep.id cause category
-                  now <- Time.currentTime
-                  Hasql.interpExecute_ [HI.sql|UPDATE apis.issues SET llm_enhanced_at = #{now} WHERE id = #{issueId} AND project_id = #{pid}|]
-                pure $ Issues.reportAnswer body $ Just findings
-              active <- Issues.routineRunActive pid execution.id
+                errorPattern <- lift $ if isJust analysis then ErrorPatterns.getErrorPatternByHash pid issue.targetHash else pure Nothing
+                now <- lift Time.currentTime
+                let mutation = do
+                      Issues.updateIssueEnhancement now issueId enhancement.enhancedTitle enhancement.recommendedAction enhancement.migrationComplexity
+                      for_ classification $ \(critical, breaking, _) -> Enhancement.updateIssueClassification issueId critical breaking
+                      for_ ((,) <$> errorPattern <*> analysis) $ \(ep, (cause, category)) -> ErrorPatterns.updateErrorPatternAnalysis ep.id cause category
+                      Hasql.executeTx [HI.sql|UPDATE apis.issues SET llm_enhanced_at = #{now} WHERE id = #{issueId} AND project_id = #{pid}|]
+                pure (Issues.reportAnswer body $ Just findings, mutation)
               case outcome of
-                Right (Just (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer answer
+                Right (Just (Right (answer, mutation))) -> void $ Issues.completeRunWith mutation context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer answer
                 _ -> do
+                  active <- Issues.routineRunActive pid execution.id
                   let message = "Issue enrichment failed. A retry will create a new attempt."
                       failure = Issues.RunFailure message Issues.RunOnly
                       completion = if not active then Issues.CancelledResult Nothing else case outcome of Right Nothing -> Issues.TimedOutResult failure; _ -> Issues.FailedResult failure

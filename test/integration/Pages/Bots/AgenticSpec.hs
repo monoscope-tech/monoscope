@@ -1022,18 +1022,23 @@ spec = around withTestResources do
           let source = Issues.SlackCommand routine.conversationId
           Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId routine.requestedBy) Issues.StartRun routine.conversationId "Retain this result"
           context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.EventClaim source execution.id execution.startedAt
+          issueId <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "cancelled-native" "Original title" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId
           runQueryEffect tr $ case stop of
             "cancel" -> Issues.cancelRoutineRun testPid routine.conversationId
             "pause" -> Issues.pauseRoutine testPid routine.conversationId
             _ -> Issues.deleteConversation testPid routine.conversationId
+          void $ runTestBg frozenTime tr $ Issues.completeRunWith (Issues.updateIssueEnhancement frozenTime issueId "Must not change" "" "") context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "Stopped work" Nothing
           void $ runTestBg frozenTime tr $ Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Delivery interrupted" Issues.RunOnly
           runQueryEffect tr (Issues.getRoutineRun testPid execution.id) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)
           runQueryEffect tr (Issues.listRunArtifacts testPid execution.id) >>= (`shouldSatisfy` null)
+          runQueryEffect tr (Issues.selectIssueById testPid issueId) >>= (\issue -> fmap (.title) issue `shouldBe` Just "Original title")
 
       it "nativeCompletion_enrichmentRollsBackPublishedEvidenceWhenFinishFails" \tr -> do
         issueId <- runTestBg frozenTime tr do
           issue <- Issues.createQueryAlertIssue testPid "atomic-native" "Original title" "service == checkout" 100 200 Issues.Above
           Issues.insertIssueReturningId issue
+        let savedIssue = runQueryEffect tr $ Hasql.interpOneJson @AE.Value [HI.sql|SELECT to_jsonb(issue) FROM apis.issues issue WHERE project_id = #{testPid} AND id = #{issueId}|]
+        original <- savedIssue
         void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
         let model :: ATBackgroundCtx a -> ATBackgroundCtx a
             model = interpose @ELLM.LLM \_ -> \case
@@ -1057,6 +1062,7 @@ spec = around withTestResources do
         runQueryEffect tr (Issues.listRunArtifacts testPid interrupted.id) >>= (`shouldSatisfy` null)
         history <- runQueryEffect tr $ Issues.selectChatHistory testPid interrupted.conversationId
         filter ((== Issues.ChatAssistant) . (.role)) history `shouldSatisfy` null
+        savedIssue >>= (`shouldBe` original)
         execute
         Just completed <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment issueId
         completed.id `shouldBe` interrupted.id

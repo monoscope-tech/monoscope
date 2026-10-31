@@ -157,6 +157,7 @@ module Models.Apis.Issues (
   startInteractiveRun,
   InteractiveStart (..),
   completeRun,
+  completeRunWith,
   RunAnswer (..),
   reportAnswer,
   AnswerEvidence (..),
@@ -1042,10 +1043,9 @@ updateIssueWithNewAnomaly issueId anomalies = do
         WHERE id = #{issueId} |]
 
 
-updateIssueEnhancement :: (DB es, Time :> es) => IssueId -> Text -> Text -> Text -> Eff es ()
-updateIssueEnhancement issueId iTitle action complexity = do
-  now <- Time.currentTime
-  Hasql.interpExecute_
+updateIssueEnhancement :: UTCTime -> IssueId -> Text -> Text -> Text -> Tx.Transaction ()
+updateIssueEnhancement now issueId iTitle action complexity =
+  Hasql.executeTx
     [HI.sql|
       UPDATE apis.issues SET
         title = #{iTitle}, recommended_action = #{action},
@@ -1054,9 +1054,9 @@ updateIssueEnhancement issueId iTitle action complexity = do
 
 
 -- | Update issue criticality and severity
-updateIssueCriticality :: DB es => IssueId -> Bool -> IssueSeverity -> Eff es ()
+updateIssueCriticality :: IssueId -> Bool -> IssueSeverity -> Tx.Transaction ()
 updateIssueCriticality issueId isCritical sev =
-  Hasql.interpExecute_
+  Hasql.executeTx
     [HI.sql|
       UPDATE apis.issues SET critical = #{isCritical}, severity = #{sev} WHERE id = #{issueId} |]
 
@@ -2288,7 +2288,12 @@ data CompletionResult = CompletionRejected | RunCompleted RunTermination (Maybe 
 -- | Result evidence, conversation publication, terminal state and schedule advance
 -- share one transaction. The stored context fences stale or mismatched workers.
 completeRun :: (DB es, Time :> es) => RunContext -> RunCompletion -> Eff es CompletionResult
-completeRun context proposed = do
+completeRun = completeRunWith pass
+
+
+-- | Database effects commit only with an accepted successful result.
+completeRunWith :: (DB es, Time :> es) => Tx.Transaction () -> RunContext -> RunCompletion -> Eff es CompletionResult
+completeRunWith mutation context proposed = do
   now <- Time.currentTime
   let pid = context.projectId
       runId = context.id
@@ -2341,6 +2346,7 @@ completeRun context proposed = do
                 PullRequestReview{} -> "Production impact review"
                 IssueEnrichment{} -> "Issue enrichment"
         for_ response $ \answer -> do
+          mutation
           for_ title $ \label -> Hasql.executeTx $ saveRunResultSql context label answer.report
           case publication of
             PublishAnswer -> Hasql.executeTx $ runMessageSql pid runId ChatAssistant answer.content answer.widgets actions

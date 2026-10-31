@@ -2,6 +2,7 @@ module Pages.ErrorPatternsSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.Notify (Notification (..), SlackData (..))
 import Data.Map.Strict qualified as Map
@@ -16,6 +17,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Reader.Static qualified as Reader
+import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ErrorPatterns (ErrorState (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
@@ -126,7 +128,7 @@ spec = sequential $ aroundAll withTestResources do
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       ctxPattern <- patternOf tr "ContextError"
       let e = ctxPattern.errorData
-      void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternAnalysis ctxPattern.id "The cart line has no price" "data"
+      runTestBg frozenTime tr $ Hasql.transaction TxS.ReadCommitted TxS.Write $ ErrorPatterns.updateErrorPatternAnalysis ctxPattern.id "The cart line has no price" "data"
       (e.release, e.environment, e.handled, e.mechanism) `shouldBe` (Just "26.3.1", Just "production", Just False, Just ErrorPatterns.CMExceptionEvent)
       (e.browser, e.os, e.device, e.userAgent) `shouldBe` (Just "Chrome", Just "Windows", Just "Desktop", Just ua)
       (e.geoCountry, e.geoCity, e.threadName, e.attachments) `shouldBe` (Just "US", Just "Santa Clara", Just "main", Just ["https://cdn.example.com/shot.png"])

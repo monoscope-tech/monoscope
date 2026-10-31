@@ -695,6 +695,16 @@ The existing interrupted-read integration test first failed because completion d
 
 All 215 bot examples pass after this change. Formatting and diff checks pass. Repeated slice reviews found no material distillation, constraint-evasion, or client-behavior findings. Whole-branch reviews, release signoff, and controlled live Slack acceptance remain pending.
 
+### Native issue mutation and completion share a transaction (31 October)
+
+Extending the existing native completion regression reproduced an issue title changing even though run completion failed. The previous test checked only report and message rollback, leaving the business mutation outside its proof.
+
+The shared completion implementation now accepts database-only work and executes it only for an accepted successful result, inside the same transaction as the run status, report, and conversation message. Issue title, recommendation, complexity, severity, error-pattern analysis, and the enhancement timestamp compose as `Tx.Transaction` operations. These helpers no longer open independent effectful writes. The ordinary completion API delegates to this same implementation with no additional database work. Redundant successful-path activity checks are removed; the fenced completion query governs whether the updates execute.
+
+The regression now compares the complete issue before and after rejected completion. Existing pause, cancel, and deletion cases also submit a mutation and verify that the issue stays unchanged. Native capability-policy evaluation and operation-ledger attribution remain required; this transaction change does not claim to complete those parts.
+
+All 215 bot examples and 35 error-pattern examples pass. The latter includes the full enhancement, embedding, and merge pipeline. Formatting and diff checks pass. Repeated slice reviews found no further transaction-composition or type-safety shortcuts; the native capability and ledger work remains an explicit open requirement. No migration or new module was added.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
