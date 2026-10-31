@@ -307,7 +307,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           if documentationOnly
             then Reviews.finishRun run Nothing
             else do
-              result <- analyse run execution conn (filter ((== credential.id) . (.credentialId)) mappings) pr files
+              result <- analyse run execution context conn (filter ((== credential.id) . (.credentialId)) mappings) pr files
               requireActive run execution
               Issues.saveRunResult context "Production impact review" (renderReview cfg.hostUrl run True result)
               publish run execution context conn ref pr result
@@ -315,8 +315,8 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     sameRevision :: Git.PullRequest -> Git.PullRequest -> Bool
     sameRevision expected actual = expected.head == actual.head && expected.base == actual.base && actual.state == "open" && not actual.draft
 
-    analyse :: Reviews.ReviewRun -> Issues.EventRun -> Git.GitConn -> [CodeContext.CodeMapping] -> Git.PullRequest -> [Git.PullRequestFile] -> ReviewCtx ReviewResult
-    analyse run execution conn mappings pr files = do
+    analyse :: Reviews.ReviewRun -> Issues.EventRun -> Issues.RunContext -> Git.GitConn -> [CodeContext.CodeMapping] -> Git.PullRequest -> [Git.PullRequestFile] -> ReviewCtx ReviewResult
+    analyse run execution context conn mappings pr files = do
       requireActive run execution
       cfg <- (.config) <$> ask @AuthContext
       until <- Time.currentTime
@@ -342,7 +342,17 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                 $ Agent.reviewRepository
                   Agent.Request{projectId = run.projectId, runId = run.id, attemptId, repository = "https://github.com/" <> run.owner <> "/" <> run.repo <> ".git", base = pr.base.revision, head = pr.head.revision, gitToken = conn.token.reveal, prompt = execution.instructions <> "\n\n" <> prompt, provider = cfg.impactReviewProvider, model, thinkingLevel}
                   (requestEvidence run.projectId (requireActive run execution >> authorizedServices run mappings) from until)
-                  (requestKnowledge run.projectId attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence)
+                  ( \request -> do
+                      let capability = case request of
+                            Agent.ProjectMemory Memory.List -> Catalog.localPolicy Catalog.ListProjectMemory
+                            Agent.ProjectMemory Memory.Read{} -> Catalog.localPolicy Catalog.ReadProjectMemory
+                            Agent.ProjectMemory Memory.Write{} -> Catalog.localPolicy Catalog.WriteProjectMemory
+                            Agent.Recall{} -> Catalog.ReadOnly ProjectMembers.PView
+                            Agent.Remember{} -> Catalog.ConversationWrite
+                      AI.authorizeRunOperation context capability >>= \case
+                        Left denial -> pure $ Left $ AI.toolDenialMessage denial
+                        Right _ -> requestKnowledge run.projectId attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
+                  )
                   ( \call -> do
                       requireActive run execution
                       unlessM (Reviews.currentRun run) $ throwError $ ReviewFailure "Review authorization is no longer available"

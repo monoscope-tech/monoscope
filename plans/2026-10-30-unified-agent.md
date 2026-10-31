@@ -721,6 +721,16 @@ All 220 bot examples, 33 native review/SDK examples, 35 error-pattern examples, 
 
 Native wiki writes and other retained knowledge, operation-ledger attribution, Slack legacy adoption, and the rest of the plan remain open. These checks do not claim to supply action identity or exactly-once external publication.
 
+### Native wiki policy uses the catalog declaration (31 October)
+
+The native review-worker regression reproduced a successful wiki write under Observe. Native wiki callbacks now pass through the same authority and provenance evaluator as other agent capabilities. They retain the existing repository/service checks, wiki revision handling, and actual agent-attempt attribution.
+
+`localPolicy` is the single total declaration of local operation policies. Both tool descriptors and native wiki calls use it. Its explicit constructor cases force future local operations to receive a policy; there is no default read grant. A single descriptor constructor also applies that policy to both ordinary and memory tools. Native recall remains a read, while staged review conclusions remain conversation results.
+
+The extended application workflow passes: Autonomous wiki writes still read back correctly, Observe can list pages but cannot create one, and an Autonomous run loses wiki-write authority after a policy reduction during the worker call. Both denied cases leave the page count unchanged and make no GitHub write. All 220 bot and 75 API v1 examples pass after catalog consolidation. Formatting and diff checks pass. Repeated slice reviews found no further material distillation, type-safety, or client-behavior findings in these changes. The new catalog-policy doctest awaits the final doctest run. No migration or new module was added.
+
+Native mutations still need common operation identities, retained proposals/results, and interruption recovery through the action ledger. Generic conversation wiki writes also still need actual agent-attempt attribution. These remain part of the full plan.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

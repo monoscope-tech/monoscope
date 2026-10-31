@@ -2703,7 +2703,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Review run.id) legacy) `shouldReturn` True
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Review run.id) legacy{Agent.id = uid 997}) `shouldReturn` False
 
-  it "runs the checkout harness, publishes shared PNG evidence, and honors repository disable and links-only settings" \tr -> do
+  it "runs the checkout harness with publication recovery and Observe wiki reads without writes" \tr -> do
     parseUrlPiece @CodeContextPage.RepositoryTab "usage" `shouldSatisfy` isRight
     reviewPid <- createTestProject tr "Impact review isolation"
     setupProject tr reviewPid
@@ -3156,6 +3156,30 @@ spec = around withTestResources $ describe "Production impact reviews" do
     T.intercalate " " (map (decodeUtf8 . snd) metricsRequests) `shouldNotSatisfy` T.isInfixOf "No telemetry observed"
 
     Just routine <- runQueryEffect tr $ Issues.getEventRoutine reviewPid Issues.EventPullRequest
+    for_ [False, True] $ \withdraw -> do
+      runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId (if withdraw then Issues.Autonomous else Issues.Observe)
+      runQueryEffect tr $ Reviews.retryRun reviewPid run.id
+      beforePages <- runQueryEffect tr $ Memory.latestPages reviewPid
+      knowledgeResults <- newIORef Nothing
+      let observingAgent = interpose @Agent.CodeReview \env -> \case
+            Agent.ReviewRepository request _ knowledge _ _ _ _ _ -> localSeqUnliftIO env \unlift -> liftIO do
+              when withdraw $ runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Observe
+              title <- either (fail . toString) pure $ Memory.mkMemoryText "Must not be written"
+              body <- either (fail . toString) pure $ Memory.mkMemoryText "Observe policy does not authorize a wiki edit."
+              let page = case request.attemptId of UUIDId value -> UUIDId value
+              listed <- unlift $ knowledge $ Agent.ProjectMemory Memory.List
+              wikiSaved <- unlift $ knowledge $ Agent.ProjectMemory $ Memory.Write $ Memory.Edit page 0 $ Memory.Document title body
+              writeIORef knowledgeResults $ Just (listed, wikiSaved)
+              pure $ Right $ decodeUtf8 $ AE.encode result{Impact.findings = [], Impact.coverage = ["Observed without project changes"]}
+            _ -> liftIO $ fail "Unexpected agent request during Observe review"
+      (wikiRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ observingAgent $ Impact.reviewPullRequest run.id
+      readIORef knowledgeResults >>= \case
+        Just (listed, wikiSaved) -> do
+          listed `shouldSatisfy` isRight
+          wikiSaved `shouldSatisfy` isLeft
+        Nothing -> fail "Expected the review worker to try wiki reads and writes"
+      wikiRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/" . fst)
+      runQueryEffect tr (Memory.latestPages reviewPid) >>= (\pages -> length pages `shouldBe` length beforePages)
     runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Observe
     void $ withResource tr.trPool \conn -> execute conn "DELETE FROM projects.code_mappings WHERE project_id = ? AND service IS NOT NULL" (Only reviewPid)
     runQueryEffect tr $ Reviews.retryRun reviewPid run.id
