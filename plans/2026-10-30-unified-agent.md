@@ -1,16 +1,22 @@
 # Unified Monoscope agent
 
-Status: implementation in progress, 2026-10-31. Selected PR heads are integrated on this branch; continuation and final verification remain open.
+Status: implementation in progress, 2026-11-01. All twenty selected incoming PR heads and published #619 remain included. Native recovery, UX acceptance, and final verification are being consolidated locally; the remote PR has not been updated.
 This document controls future agent work on this branch.
 It combines the Slack consolidation work and the Slack coworker proposal.
 It incorporates the requested default of autonomous background work without repeated permission prompts.
 This document does not claim that unfinished features or live Slack acceptance are complete.
 
+Morning review priorities: keep one integrated conversation, run, review, and artifact experience with fewer separate pages. Prefer compiler-enforced invariants, small algebraic interfaces, and shared domain operations. Use existing libraries and internal eDSLs when they reduce total maintained code, including their setup. Remove replaced logic instead of leaving parallel paths. Preserve autonomous background operation as the default.
+
+Repeat `hs-distill`, `hs-evasion-review`, and `hs-lob-review` over each implementation and its revisions. Apply `emil-design-eng`, `better-interface`, and `better-ui` to the integrated agent flows. Verify real interactions, keyboard use, loading and failure states, both themes, and narrow layouts; record the exact boundary of browser and live-service evidence. These priorities remain active while the user is away and at the morning review.
+
 Evidence uses one typed audience and one evaluator across web navigation, threads, retained runs, artifacts, and agent access. Personal reads require ownership and current eligible project membership. Channel reads require current linked Slack membership. Shared mutations and publication reject private evidence.
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-The policy-configuration checkpoint `e638fb62e` passes 390 bot, 76 API, and 41 incident-delivery examples, plus authenticated Chrome checks for policy controls, saves, reloads, conditional fields, and visible validation in both themes at mobile and desktop widths. Earlier lifecycle verification also covers 35 error-pattern and seven focused native-review examples. Remote evidence reads and provenance have fixture coverage. Queued member web and issue conversations are covered below. Slash review continuation, native model-session continuation, live Slack acceptance, streaming, and final release checks remain unfinished.
+Current review boundary: web, issue, slash-command, scheduled, Slack-event, enrichment, incident, and retained PR-publication decisions resume their existing jobs. Native PR analysis now pairs its SDK transcript, live guest disk, original inputs, queried evidence, notes, and remaining budgets. The real-SDK/VM cases pass for approval, rejection, and expiry. All 42 native integration cases and 19 SDK worker tests pass on code checkpoint `d84b4a6bb`. The shared-panel change is committed as `ec35f5fd9`; its twelve focused cases and browser checks pass, with 450 bot cases passing before the final heading-only correction.
+
+Remaining work is explicit: native fix/admission/peer writes still need the shared ledger; streaming needs implementation and acceptance; Slack app eligibility, Slack Connect, and the silent private mention need live verification. The existing visual review now includes source `d84b4a6bb`, paired native recovery, and the shared decision panel. Whole-branch review, doctests, Linux/KVM coverage, local release signoff, and the canonical PR update remain open. Autonomous remains the default; these changes add no mandatory permission prompts.
 
 ## Queued web and issue conversations
 
@@ -22,7 +28,7 @@ Migration `0277_member_conversation_runs.sql` groups the new source constraints 
 
 The original regression failed with one model call during HTTP submission. The current implementation passes 420 bot, 76 API, 41 incident-delivery, 87 dashboard/widget, and 16 chart-cache examples. Six focused web cases cover admission, duplicate delivery, authority loss, approval, rejection, expiry, and enqueue rollback. The issue case verifies queued execution and retained context. Real authenticated Chrome checks at widths 390 and 1280 verify automatic answer display, terminal polling removal, and preservation of an unsent draft and its request ID. The temporary browser fixture was restored after acceptance. Formatting and diff checks pass. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material finding in this slice; HLint reports only the two pre-existing hints in unchanged AI code.
 
-The asynchronous title and retained slash binding are covered below. Remaining work includes native model-session and workspace continuation, streaming, live Slack acceptance, the final artifact refresh, and final branch reviews and release checks. This checkpoint does not establish completion of the unified plan.
+The asynchronous title and retained slash binding are covered below. Remaining work includes native fix/admission/peer consolidation, broader crash recovery, streaming, live Slack acceptance, and final branch reviews and release checks. This checkpoint does not establish completion of the unified plan.
 
 ## Queued slash commands and shared Slack publication
 
@@ -36,7 +42,7 @@ Failing-first regressions reproduced lost replies after deleting web history and
 
 Native events and slash commands share destination-bound Slack evidence reads. Channel requests cannot broaden their destination or use personal workspace search. DM requests use the existing DM-owner check. The same parameterized cases verify credentials, provenance, disconnection, membership loss, schema changes, wrong DM peers, invalid locators, and rejected broader searches for both adapters. Deletion, original-input recovery, and SQL immutability regressions pass. Formatting and diff checks pass; scoped HLint has no new findings. Repeated scoped distillation, constraint, and client-behavior reviews leave no material finding in this checkpoint.
 
-The asynchronous web title is covered below. Native production continuation, streaming, live Slack acceptance, the final visual artifact refresh, and final branch gates remain open.
+The asynchronous web title is covered below. Native fix/admission/peer consolidation, streaming, live Slack acceptance, and final branch gates remain open.
 
 ## Terminal queued failures
 
@@ -52,21 +58,46 @@ Title generation now finishes before the shared conversation finalizer marks the
 
 The existing queued-conversation regression first reproduced the missing header selection, then a title call observing `RunSucceeded` instead of `RunRunning`. It now verifies the corrected ordering, saved title, terminal polling, one model execution, and one published answer. All 450 bot, 76 API, and 41 incident-delivery examples pass on the final source. Chrome using HTML captured from the real handlers also verifies the header and document title, stopped polling, preserved draft, request ID, and keyboard focus, with light and dark themes at 390 and 1280 pixels. This browser check uses captured handler responses, not a live authenticated server. Formatting, diff checks, scoped HLint, and repeated scoped reviews leave no new findings.
 
-## Native SDK resume contract
+## Native PR analysis continuation
 
-The Pi adapter can now consume an owner-supplied SDK session manager. It resumes the exact pending tool calls through the SDK's existing runner and registered before/after hooks, retains their results, and continues the original transcript without adding a user prompt. Completed tool calls are skipped. The runner uses the current catalog and schema, so a removed or changed tool is refused before its host callback. The already-installed `pi-agent-core` 1.4.0 package is now declared directly for that public runner; no dependency version was upgraded.
+The production host now opens the existing Pi SDK session file rather than an in-memory session. On a selected-review wait, the same guest owner freezes the live disk and host-owned `/run/monoscope-*` inputs and logs. The host atomically publishes one typed checkpoint manifest after the immutable disk and transcript are durable. No new table, worker, VM manager, migration, or dependency is added.
 
-The failing-first regression reproduced a completed file append running twice. Four parameterized cases now pass with the real SDK and a restored-file fixture: approval, rejection, tool removal, and schema change. They retain one file edit, preserve the original host call identity, and use three model responses instead of repeating the first response. The complete worker suite passes 19 tests on Node 22.23.2; lockfile regeneration succeeds offline.
+`SessionIdentity` distinguishes isolated evaluation from a retained original request. `NativeProgress` distinguishes waiting work from an accepted finished draft. Hidden checkpoint constructors validate remaining query and submission budgets on decode. `ReviewContext` carries original refined source revisions, model configuration, prompt, evidence window, changed files, queried evidence, and notes. Current credentials and authority are resolved again; credentials are excluded from stored inputs. The clean verifier baseline stays separate from live edits.
 
-This is a resume primitive, not completed production continuation. The production host still creates an in-memory session. Durable SDK state must be paired with the live workspace, original request identity, callback evidence and notes, workflow budgets, and accepted-submission state before the production adapter can resume. Paired SDK and real-VM interruption and restoration acceptance remains required. The prepared dependency checkpoint alone does not contain later agent file edits. Streaming remains after that recovery work.
+Recovery restores a private verified disk copy and the matching frozen SDK transcript. It invokes the exact pending tool through the SDK runner and current schema hooks, skips completed tools, and resumes without another user prompt. A completed recovery revalidates the retained draft without starting a VM or calling the model. A different request or changed input cannot inherit the checkpoint. The checkout owner now propagates callback exceptions after cleanup instead of hiding a review wait as a checkout failure.
 
-## Live guest disk restoration
+Failing-first cases reproduced lost suspension, duplicate inference, missing `/run` tool logs, and discarded application evidence after a clock advance. The paired SDK/VM fixture now retains a completed file append and its full tool log, uses five model responses instead of seven, replays its finished result without inference, rejects changed input, and starts fresh for a different root. Three application cases exercise approval, rejection, and expiry through the real web decision handler, SQL, SDK, and VM. They preserve query citations and notes, publish once, and attribute the approved wiki revision to the original run. The worker suite passes all 19 tests on Node 22.23.2. The first broad native run exposed an unnecessary context lookup for unmapped repositories. Reusing the same mapped-service predicate for context and analysis restores their no-agent path without weakening the existing regression. The final full native suite passes all 42 cases, including fixes, independent review, calibration, screenshots, compaction, cache integrity, metering, and publication recovery. Formatting and diff checks pass; scoped HLint has only the two unchanged hints in publication code. Repeated scoped `hs-distill`, `hs-evasion-review`, and `hs-lob-review` passes leave no further material slice finding. Whole-branch reviews and release signoff remain pending.
 
-The shared guest owner now distinguishes a fresh role setup from an opaque suspended guest. Suspension uses the existing VM checkpoint command and retains a private disk fingerprint. Restoration verifies that fingerprint, the image build, the source revision, and the original prepared dependency baseline before starting a private copy. Fresh checkout and role setup run only for a fresh guest. The clean verifier baseline stays separate from live edits. This adds no migration, worker, VM manager, or dependency.
+This establishes selected-review interruption and continuation, not a snapshot after every arbitrary process crash. Only the current immutable snapshot generation is retained while waiting. After the accepted manifest is durable, obsolete suspended disks are removed; completed recovery retries cleanup. Transcript and accepted result remain. The failing-first real-SDK/VM resource regression passes; cleanup failure cannot undo a durable result. The fix/admission/peer paths remain open. `Pkg.ImpactReview.projectMemory` still writes directly for those roles; the PR-review ledger restriction does not make those other roles read-only. Consolidate their authority and receipts through typed links to the shared run ledger before claiming native mutation consolidation complete. Streaming follows recovery acceptance.
 
-The real-VM regression first reproduced a completed edit disappearing on reopening. It now passes with SDK checkpoint metadata serialized and restored, two independent resumes retaining the edit, discarded mutations in each resumed copy, unchanged retained-disk hashes, and rejection of a changed revision or corrupt disk before the agent callback. The server and test watcher compile the change, and all 38 native-review integration examples pass, including SDK admission, fixes, independent review, calibration, screenshot tools, compaction, prepared-baseline relocation, metering, and recovery. This test covers disk restoration; full native continuation still requires pairing the disk with the SDK transcript, original request, callback state, budgets, and accepted submission. The SDK checkpoint closes the guest and does not retain tmpfs contents such as `/run`; those host-owned inputs and retained tool logs also need restoration.
+## Shared review controls: interface review
 
-The native caller audit also found a remaining consolidation gap: `Pkg.ImpactReview.projectMemory` still handles wiki writes directly for fix and peer-review callbacks, while PR-review writes use the shared operation ledger. Those callers need shared authorization and receipts. The current ledger scope permits wiki writes only for PR-review sources; that restriction does not establish that the other native roles are read-only. Their workflow-state recovery must be checked when consolidating those writes.
+Full review scope: the shared run inspector's waiting, submitted, and failed-decision states. Stack: Lucid, HTMX 4, Tailwind/DaisyUI, existing semantic theme tokens. This is not a review of every agent screen or live Slack.
+
+| Domain | Evidence inspected | Result |
+| --- | --- | --- |
+| Accessibility | Named native buttons; keyboard Enter; disabled request state; visible focus in Chrome | Controls work at both widths; no screen-reader session performed |
+| Layout | Actual handler HTML at 390/1280, waiting and acknowledged states | No horizontal overflow; same scoped panel update |
+| Writing | Run heading, source label, pending and resolved action text | Misleading generic “Routine run” fallback replaced with “Run” |
+| Typography | Rendered headings, action names, deadline, details | Existing type hierarchy remains legible in both themes |
+| Colors | Rendered light/dark states and focus treatment | Sampled heading, secondary text, and decision labels exceed 4.5:1: minimum 5.79 light / 5.19 dark; not a full WCAG audit |
+| UI | Immediate acknowledgement, transient HTTP 500, polling boundaries | Both controls disable in flight and recover after failure; no added animation |
+
+| # | Severity | Domain | Location | Before | After | Why |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | HIGH | Accessibility | `src/Pages/AIThreads.hs:412` | Source whitelist hides web/slash review buttons | Render from pending state and current reviewer role | Supported requests could not be decided from their run panel |
+| 2 | MEDIUM | UI | `src/Pages/AIThreads.hs:419`, `:826` | Empty POST response leaves stale controls until polling | Return the shared renderer, morph its run panel, disable both buttons during POST | Makes a saved decision visible immediately and prevents competing submissions |
+| 3 | MEDIUM | Writing | `src/Pages/AIThreads.hs:350` | Untitled web run says “Routine run” | Shared fallback says “Run” | Source metadata already distinguishes web, schedule, Slack, and native work |
+
+| Location | Considered change | Rejected because |
+| --- | --- | --- |
+| `operationGetH` | Add a new combined review page | It already delegates to the canonical run page |
+| Shared decision form | Add a JavaScript refresh listener | HTMX and the existing renderer express the entire update |
+| Conversation polling | Refresh the entire page after a decision | Scoped morphing preserves the composer and draft |
+
+Verification: nine failing web/slash cases reproduced missing controls. Four subsequent cases reproduced the empty acknowledgement. All twelve focused review cases pass after their fixes. Chrome with real handler HTML and project assets verifies Enter submission, both buttons disabled in flight, retry after an injected HTTP 500, immediate Approved state, no overflow or page errors, both themes, and widths 390/1280. The desktop draft is preserved, the shared “Run” heading is visible, and sampled normal text has a minimum 5.79:1 light / 5.19:1 dark contrast ratio. The browser transport uses captured handler responses; backend decisions are separately exercised through real handlers and SQL. Earlier authenticated live-server acceptance is recorded below. Live Slack, physical mobile devices, screen-reader use, and a full WCAG audit are not verified here.
+
+Verdict: Approve — no actionable findings remain within this inspected run-decision flow. The broader agent implementation and release checks remain open.
 
 ## Retried Slack requests after authority loss
 
@@ -92,7 +123,7 @@ The existing progress card reads the canonical operation outcome. Ended notices 
 
 Failing-first regressions exposed missing immediate wake-up, delayed refresh, cancellation rollback on enqueue failure, and misleading claimed-action messaging. All eleven focused Slack review lifecycle examples now pass, covering decisions, expiry, recovery, signed stop, pause, cancel, stop during notice publication, a claimed action, repeated controls, unknown actors, injected queue failure, unchanged model-call count, and no duplicate mutation. The final source passes all 409 bot, 76 API, and 41 incident-delivery examples. Formatting and diff checks pass; HLint has no hints on changed production lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue. Whole-branch reviews and release gates remain pending.
 
-Queued web and slash continuation is implemented above. Native model-session and workspace continuation, streaming, and controlled live Slack acceptance remain unfinished. The hosted visual review includes these working and pending paths with exact source from `e48cfcbd7`.
+Queued web, slash, and paired native PR-analysis continuation are implemented above. Native fix/admission/peer consolidation, broader crash recovery, streaming, and controlled live Slack acceptance remain open. The hosted visual review includes these working and pending paths with exact source from `d84b4a6bb`.
 
 ## Routine pause and stop while awaiting review
 
@@ -128,9 +159,9 @@ The discovery regression first failed because Slack reads were absent from the c
 
 These are deterministic integration checks against a protocol fixture, not live Slack acceptance. Actual app eligibility, provider schemas, Slack Connect behavior, streaming acceptance, remaining review continuations, and final branch release gates remain open.
 
-The [visual review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a919) shows source snapshot `e48cfcbd7`. Its ten walkthroughs include queued member web and issue chat, durable slash intake, shared native/slash rendering and publication, retained command origins, destination-bound evidence, optional action review, signed stops, authority-loss cleanup, and recovery after a lost terminal callback. All 95 source excerpts match their recorded Git files and line positions. Chrome checks pass for every step at widths 390/768/1280, keyboard navigation, exact code display, and code panels. Text contrast ranges from 7.6:1 to 16.3:1.
+The [visual review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a919) shows source snapshot `d84b4a6bb`. Its eleven walkthroughs cover the existing conversation, Slack, authority, memory, review, and recovery paths, plus paired native PR-analysis continuation and immediate shared-panel decisions. All 102 source excerpts match their recorded Git files and line positions. Chrome checks pass for every step at widths 390/768/1280, keyboard navigation, exact code display, and collapsed code panels. Text contrast ranges from 7.6:1 to 16.3:1. The verification section is shortened; the same Page is retained.
 
-Hosted HTML matches the tested local artifact: 161,215 bytes, SHA-256 `964b4535194fd5424a58c4f02f35a3719584782d872597ef26e4e3ae330296ce`, Page sequence 44. Readback preserves the surrounding Page content. The current source passes 450 bot examples; fresh API and incident-delivery runs pass 76 and 41 examples. Separate authenticated-application checks verify queued answers, preserved drafts and request IDs, terminal polling removal, policy controls, and review decisions. Native model-session and workspace continuation, asynchronous web-title refresh, streaming, live Slack acceptance, and final release checks remain unfinished.
+The uploaded HTML is 168,250 bytes, SHA-256 `22c75fb0d4e845bb486607c0a50a70094da9310615866d349a53fd29d58cc669`. Page sequence 46 retains its original introduction, updates the snapshot date, and references the new 168,250-byte visualization. The final native suite passes all 42 cases; SDK tests pass all 19. The shared review UI passes twelve focused cases and captured-handler Chrome acceptance after the final heading correction. The preceding broad bot run passes 450 cases; earlier API and incident-delivery checks pass 76 and 41. Browser evidence boundaries are described above. Native fix/admission/peer consolidation, broader crash recovery, streaming, live Slack acceptance, whole-branch reviews, and final release checks remain open.
 
 ## Selective review ledger foundation
 
