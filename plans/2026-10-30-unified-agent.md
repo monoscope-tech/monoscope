@@ -54,6 +54,14 @@ The failing-first regression reproduced a completed file append running twice. F
 
 This is a resume primitive, not completed production continuation. The production host still creates an in-memory session. Durable SDK state must be paired with the live workspace, original request identity, callback evidence and notes, workflow budgets, and accepted-submission state before the production adapter can resume. Real VM interruption and restoration acceptance remains required. The prepared dependency checkpoint alone does not contain later agent file edits. Streaming remains after that recovery work.
 
+## Live guest disk restoration
+
+The shared guest owner now distinguishes a fresh role setup from an opaque suspended guest. Suspension uses the existing VM checkpoint command and retains a private disk fingerprint. Restoration verifies that fingerprint, the image build, the source revision, and the original prepared dependency baseline before starting a private copy. Fresh checkout and role setup run only for a fresh guest. The clean verifier baseline stays separate from live edits. This adds no migration, worker, VM manager, or dependency.
+
+The real-VM regression first reproduced a completed edit disappearing on reopening. It now passes with SDK checkpoint metadata serialized and restored, two independent resumes retaining the edit, discarded mutations in each resumed copy, unchanged retained-disk hashes, and rejection of a changed revision or corrupt disk before the agent callback. The server and test watcher compile the change. This test covers disk restoration; full native continuation still requires pairing the disk with the SDK transcript, original request, callback state, budgets, and accepted submission. The SDK checkpoint closes the guest and does not retain tmpfs contents such as `/run`; those host-owned inputs and retained tool logs also need restoration.
+
+The native caller audit also found a remaining consolidation gap: `Pkg.ImpactReview.projectMemory` still handles wiki writes directly for fix and peer-review callbacks, while PR-review writes use the shared operation ledger. Those callers need shared authorization and receipts. The current ledger scope permits wiki writes only for PR-review sources; that restriction does not establish that the other native roles are read-only. Their workflow-state recovery must be checked when consolidating those writes.
+
 ## Retried Slack requests after authority loss
 
 Before treating a retained receipt as new work, the adapter now loads its original actor through the existing event claim and evaluates current linked identity and shared run authority. A running request whose authority is unavailable closes through the common finalizer; an already-cancelled request only retries cleanup. Completed and failed attempts retain their existing delivery and recovery paths. No schema, authority evaluator, executor, or worker is added.

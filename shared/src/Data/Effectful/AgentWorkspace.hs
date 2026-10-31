@@ -1,4 +1,4 @@
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Exception qualified as Exception
@@ -341,8 +341,8 @@ data Prepared = Prepared {manifest :: Manifest, path :: FilePath}
 
 
 data CheckpointSummary = CheckpointSummary {sha256 :: Fingerprint, bytes :: Word64}
-  deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
+  deriving stock (Eq, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 checkpointSummary :: Leased -> CheckpointSummary
@@ -1486,6 +1486,28 @@ connectStorage remote = do
 
 storage :: Minio.MinioConn -> Minio.Minio a -> IO a
 storage connection action = either (const invalid) pure =<< Minio.runMinioWith connection action
+
+
+-- | Freeze a live disk independently of the pristine verifier baseline.
+captureSnapshot :: RPC -> ImageId -> FilePath -> IO Snapshot
+captureSnapshot rpc image path = do
+  checkpoint <- rpc $ Checkpoint path
+  ensure $ checkpoint.guestAssetBuildId == image
+  canonical path
+  Posix.setFileMode path 0o600
+  measured <- fingerprint path
+  sync path
+  sync $ takeDirectory path
+  pure $ Snapshot path measured.sha256
+
+
+-- | Resume a verified private copy; the retained disk remains immutable.
+restoreSnapshot :: RPC -> ImageId -> Sandbox -> Snapshot -> FilePath -> IO ()
+restoreSnapshot rpc image sandbox snapshot destination = do
+  copySnapshot snapshot destination
+  checkpoint <- rpc $ InspectCheckpoint destination
+  ensure $ checkpoint.guestAssetBuildId == image
+  rpc $ Resume (sandbox, destination)
 
 
 copySnapshot :: Snapshot -> FilePath -> IO ()

@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Data.Effectful.AgentWorkspace.Guest (Host (..), Workspace (..), Lease (..), Setup (Explore, ReviewEvidence, LockForReproduction), admissionSetup, Exec (..), Operation (..), Session (..), CacheReport, withGuest, runSession) where
+module Data.Effectful.AgentWorkspace.Guest (Host (..), Workspace (..), Lease (..), Setup (Explore, ReviewEvidence, LockForReproduction), Start (..), Suspended, admissionSetup, Exec (..), Operation (..), Session (..), CacheReport, withGuest, runSession) where
 
 import Conduit (await, leftover, runConduit, (.|))
 import Control.Exception (AsyncException (UserInterrupt))
@@ -51,6 +51,15 @@ data Lease = Lease {cacheDir :: FilePath, request :: AgentWorkspace.Request}
 data Setup = Explore | InspectAdmission TestArtifact | ReviewEvidence (Map Text ByteString) | LockForReproduction
 
 
+data Start = Fresh Setup | ResumeSession Suspended
+
+
+-- | Live edits and their original input identity, never a verifier baseline.
+data Suspended = Suspended {revision :: Revision, image :: ImageId, baseline :: Maybe AgentWorkspace.CheckpointSummary, disk :: AgentWorkspace.Snapshot}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 -- | Only a bounded, nonempty frozen artifact can enter admission preparation.
 admissionSetup :: TestArtifact -> Either Text Setup
 admissionSetup artifact = InspectAdmission <$> AgentWorkspace.mkTestArtifact artifact.script artifact.testPatch artifact.failureMessage
@@ -86,14 +95,14 @@ data CacheReport = CacheReport {state :: CacheState, durationMs :: Word64}
 -- | A running agent VM: Pi's file and shell calls, root copies into the guest, and verifier settings for fresh VMs.
 -- @output@ runs a command in /workspace and returns its exit status, retained bytes and whether the limit truncated them;
 -- @root@ and @place@ change the workspace or /run as root and throw on failure.
-data Session = Session {cache :: CacheReport, prepared :: Maybe AgentWorkspace.Leased, skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions, output :: NonEmpty Text -> Word32 -> IO (LogExit, ByteString, Bool), root :: NonEmpty Text -> IO (), place :: Text -> ByteString -> IO ()}
+data Session = Session {suspend :: FilePath -> IO Suspended, cache :: CacheReport, prepared :: Maybe AgentWorkspace.Leased, skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions, output :: NonEmpty Text -> Word32 -> IO (LogExit, ByteString, Bool), root :: NonEmpty Text -> IO (), place :: Text -> ByteString -> IO ()}
 
 
 -- | Owns the agent VM for the action's lifetime and records its allocation however it ends: @allocate@ after a
 -- completed run, @retain@ (journal only) when interrupted. Preparation failures are reported before the action
 -- starts; the action's own exceptions propagate. Allocation acknowledgement failures fail completed runs.
-withGuest :: Host -> Maybe (UUIDId "guest_image") -> FilePath -> Revision -> Setup -> Maybe Lease -> UUIDId "agent_attempt" -> (AllocationReceipt -> IO ()) -> (AllocationReceipt -> IO ()) -> (Session -> IO a) -> IO (Either Text a)
-withGuest host expected checkout revision setup lease attempt allocate retain action = withSystemTempDirectory "monoscope-agent-guest" \temporary -> withLease \leased -> mask \restore -> do
+withGuest :: Host -> Maybe (UUIDId "guest_image") -> FilePath -> Revision -> Start -> Maybe Lease -> UUIDId "agent_attempt" -> (AllocationReceipt -> IO ()) -> (AllocationReceipt -> IO ()) -> (Session -> IO a) -> IO (Either Text a)
+withGuest host expected checkout revision start lease attempt allocate retain action = withSystemTempDirectory "monoscope-agent-guest" \temporary -> withLease \leased -> mask \restore -> do
   let skills = temporary </> "skills"
       logs = temporary </> "logs"
   traverse_ createDirectory [skills, logs]
@@ -171,37 +180,43 @@ withGuest host expected checkout revision setup lease attempt allocate retain ac
       image <- rpc $ Resolve host.image
       for_ expected \(UUIDId build) -> unless (image.buildId == ImageId build) $ failure "Configured guest image differs from the pinned image"
       let sandbox = uncurry (Sandbox image.assetDir) agentResources OfflineCow $ Map.fromList [("/checkout", checkout), ("/run/monoscope-skills", skills)]
-      case leased of
-        Just held -> rpc $ Resume (sandbox, held.resumePath)
-        Nothing | any (isJust . (.dependencyArchive)) host.workspace -> failure "Configured dependency workspace has not been prepared for these pinned inputs"
-        Nothing -> rpc $ Create sandbox
-      rpc (GetIdentity ()) >>= writeIORef vmIdentity . Just
-      -- Gondolin mounts are root-only, so the agent account reads guest-owned copies.
-      traverse_ (run "/" . fromList) [["/bin/mkdir", "-p", "/workspace", "/skills", "/run/monoscope-review-output"], ["/bin/cp", "-R", "/run/monoscope-skills/.", "/skills"], ["/bin/chmod", "-R", "a+rX,go-w", "/skills"]]
-      AgentWorkspace.checkoutGuest (run "/") (isJust leased) (revisionText revision)
-      void $ workspace ["/bin/chown", "-hR", "1000:1000", "/workspace"]
-      account <- workspace $ toList $ agentCommand ["/usr/bin/id", "-u"]
-      unless (T.strip account == "1000") $ failure "Guest image requires the review-agent account and setpriv"
-      case setup of
-        Explore -> pass
-        InspectAdmission artifact -> do
-          lock
-          upload "/run/monoscope-admission.patch" $ encodeUtf8 artifact.testPatch
-          paths <- filter (not . T.null) . T.splitOn "\0" <$> workspace ["/usr/bin/git", "apply", "--recount", "--numstat", "-z", "/run/monoscope-admission.patch"]
-          unless (not (null paths) && length paths <= 100) $ failure "Regression patch requires between one and 100 paths"
-          void $ workspace ["/usr/bin/git", "-c", "core.hooksPath=/dev/null", "apply", "--recount", "--index", "/run/monoscope-admission.patch"]
-          upload "/run/monoscope-admission.json" $ toStrict $ AE.encode artifact
-          void $ workspace ["/bin/chmod", "0444", "/run/monoscope-admission.patch", "/run/monoscope-admission.json"]
-          lock
-        LockForReproduction -> lock
-        ReviewEvidence files -> do
-          lock
-          for_ (Map.toList files) \(destination, bytes) -> upload destination bytes >> workspace ["/bin/chmod", "0444", destination]
+      case start of
+        ResumeSession saved -> do
+          unless (saved.revision == revision && saved.image == image.buildId && saved.baseline == (AgentWorkspace.checkpointSummary <$> leased)) $ failure "Suspended guest inputs differ from the current workspace"
+          AgentWorkspace.restoreSnapshot rpc image.buildId sandbox saved.disk (temporary </> "resumed.qcow2")
+          rpc (GetIdentity ()) >>= writeIORef vmIdentity . Just
+        Fresh setup -> do
+          case leased of
+            Just held -> rpc $ Resume (sandbox, held.resumePath)
+            Nothing | any (isJust . (.dependencyArchive)) host.workspace -> failure "Configured dependency workspace has not been prepared for these pinned inputs"
+            Nothing -> rpc $ Create sandbox
+          rpc (GetIdentity ()) >>= writeIORef vmIdentity . Just
+          -- Gondolin mounts are root-only, so the agent account reads guest-owned copies.
+          traverse_ (run "/" . fromList) [["/bin/mkdir", "-p", "/workspace", "/skills", "/run/monoscope-review-output"], ["/bin/cp", "-R", "/run/monoscope-skills/.", "/skills"], ["/bin/chmod", "-R", "a+rX,go-w", "/skills"]]
+          AgentWorkspace.checkoutGuest (run "/") (isJust leased) (revisionText revision)
+          void $ workspace ["/bin/chown", "-hR", "1000:1000", "/workspace"]
+          account <- workspace $ toList $ agentCommand ["/usr/bin/id", "-u"]
+          unless (T.strip account == "1000") $ failure "Guest image requires the review-agent account and setpriv"
+          case setup of
+            Explore -> pass
+            InspectAdmission artifact -> do
+              lock
+              upload "/run/monoscope-admission.patch" $ encodeUtf8 artifact.testPatch
+              paths <- filter (not . T.null) . T.splitOn "\0" <$> workspace ["/usr/bin/git", "apply", "--recount", "--numstat", "-z", "/run/monoscope-admission.patch"]
+              unless (not (null paths) && length paths <= 100) $ failure "Regression patch requires between one and 100 paths"
+              void $ workspace ["/usr/bin/git", "-c", "core.hooksPath=/dev/null", "apply", "--recount", "--index", "/run/monoscope-admission.patch"]
+              upload "/run/monoscope-admission.json" $ toStrict $ AE.encode artifact
+              void $ workspace ["/bin/chmod", "0444", "/run/monoscope-admission.patch", "/run/monoscope-admission.json"]
+              lock
+            LockForReproduction -> lock
+            ReviewEvidence files -> do
+              lock
+              for_ (Map.toList files) \(destination, bytes) -> upload destination bytes >> workspace ["/bin/chmod", "0444", destination]
       pure image.buildId
     whenRight (Left "Agent sandbox could not be prepared") prepared \imageBuildId -> do
       ready <- getMonotonicTimeNSec
       let cache = CacheReport (maybe (if isJust host.workspace then Miss else Disabled) (Hit . AgentWorkspace.checkpointSummary) leased) ((ready - started) `div` 1000000)
-      Right <$> action (Session cache leased skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn (\artifacts -> RegressionOptions artifacts checkout host.image host.bridge) output (void . workspace . toList) upload)
+      Right <$> action (Session (fmap (Suspended revision imageBuildId (AgentWorkspace.checkpointSummary <$> leased)) . AgentWorkspace.captureSnapshot rpc imageBuildId) cache leased skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn (\artifacts -> RegressionOptions artifacts checkout host.image host.bridge) output (void . workspace . toList) upload)
   receipt <- measured
   case outcome of
     Left failed -> void (tryAny $ traverse_ allocate receipt) >> throwIO failed
@@ -238,7 +253,7 @@ runSession path = do
         let send :: AE.ToJSON a => a -> IO ()
             send value = putLBS (AE.encode value <> "\n") >> hFlush Relude.stdout
             record receipt = send $ AE.object ["event" AE..= ("agent_allocation" :: Text), "receipt" AE..= receipt]
-        result <- withGuest request.host request.expectedImageBuildId request.checkout request.head (if request.readOnly then LockForReproduction else Explore) request.lease request.attemptId record record $ \session -> do
+        result <- withGuest request.host request.expectedImageBuildId request.checkout request.head (Fresh $ if request.readOnly then LockForReproduction else Explore) request.lease request.attemptId record record $ \session -> do
           send $ Right @Text $ AE.object ["skills" AE..= session.skills, "prepared" AE..= session.prepared, "cache" AE..= session.cache]
           let line size chunks =
                 await >>= \case

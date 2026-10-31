@@ -252,7 +252,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       entered <- newIORef False
       receipts <- newIORef ([] :: [Agent.AllocationReceipt])
       let capture receipt = modifyIORef' receipts (<> [receipt])
-      result <- Guest.withGuest host Nothing directory base Guest.Explore Nothing (UUIDId UUID.nil) capture capture (const $ writeIORef entered True)
+      result <- Guest.withGuest host Nothing directory base (Guest.Fresh Guest.Explore) Nothing (UUIDId UUID.nil) capture capture (const $ writeIORef entered True)
       readIORef entered `shouldReturn` False
       result `shouldSatisfy` isLeft
       readIORef receipts >>= (`shouldSatisfy` null)
@@ -267,7 +267,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         let capture receipt = modifyIORef' receipts (<> [receipt])
             pendingCopy = readFileBS (directory </> "operations.log") >>= \bytes -> unless ("CopyFile" `BS.isInfixOf` bytes) (threadDelay 10000 >> pendingCopy)
             action session = if mode == "pending" then session.copyIn (directory </> "source") "/run/fixture" else MVar.putMVar ready () >> threadDelay 60000000
-        withAsync (Guest.withGuest host Nothing directory base Guest.Explore Nothing (UUIDId UUID.nil) capture capture action) \running -> do
+        withAsync (Guest.withGuest host Nothing directory base (Guest.Fresh Guest.Explore) Nothing (UUIDId UUID.nil) capture capture action) \running -> do
           Timeout.timeout 5000000 (if mode == "pending" then pendingCopy else MVar.takeMVar ready) `shouldReturn` Just ()
           cancel running
           stopped <- waitCatch running
@@ -1691,6 +1691,54 @@ spec = around withTestResources $ describe "Production impact reviews" do
       Workspace.maintenanceBudgetMet report `shouldBe` (budget == maxBound)
       status `shouldBe` if budget == maxBound then ExitSuccess else ExitFailure 1
       readFileBS unknown `shouldReturn` "Retain this unknown file."
+
+  it "nativeGuest_resumePreservesCompletedEdits" \_tr -> do
+    configured <- lookupEnv "IMPACT_REVIEW_TEST_PROFILE"
+    let selected = fromMaybe "impact-review-worker/.guest-monoscope" configured
+    available <- doesFileExist $ selected </> "manifest.json"
+    unless (available || isJust configured) $ pendingWith "Set IMPACT_REVIEW_TEST_PROFILE or build impact-review-worker/.guest-monoscope"
+    profile <- canonicalizePath selected
+    withSystemTempDirectory "native-guest-resume" \temporary -> do
+      directory <- canonicalizePath temporary
+      bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
+      let repository = directory </> "repository"
+          git args = toStrict <$> readProcessStdout_ (setWorkingDir repository $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] <> args)
+          host = Guest.Host (toText profile) bridge [] Nothing
+      createDirectoryIfMissing True repository
+      void $ git ["init", "--quiet"]
+      void $ git ["config", "user.name", "Resume fixture"]
+      void $ git ["config", "user.email", "fixture@example.invalid"]
+      writeFileBS (repository </> "completed.txt") "original\n"
+      void $ git ["add", "."]
+      void $ git ["commit", "--quiet", "-m", "base"]
+      commit <- T.strip . decodeUtf8 @Text <$> git ["rev-parse", "HEAD"]
+      base <- either (fail . show) pure $ Workspace.mkRevision commit
+      let open :: Guest.Start -> (Guest.Session -> IO a) -> IO (Either Text a)
+          open preparation = Guest.withGuest host Nothing repository base preparation Nothing (UUIDId UUID.nil) (const $ pure ()) (const $ pure ())
+      let disk = directory </> "suspended.qcow2"
+          digest = readProcessStdout_ $ proc "shasum" ["-a", "256", disk]
+      saved <- open (Guest.Fresh Guest.Explore) \session -> do
+        session.root ("/bin/sh" :| ["-c", "printf 'completed edit\\n' >> /workspace/completed.txt"])
+        session.suspend disk
+      suspended <- either (fail . toString) pure saved
+      restored <- either fail pure $ AE.eitherDecode @Guest.Suspended $ AE.encode suspended
+      originalHash <- digest
+      replicateM_ 2 do
+        resumed <- open (Guest.ResumeSession restored) \session -> do
+          contents <- session.output ("/bin/cat" :| ["/workspace/completed.txt"]) 1024
+          session.root ("/bin/sh" :| ["-c", "printf 'discarded edit\\n' >> /workspace/completed.txt"])
+          pure contents
+        fmap (\(_, bytes, truncated) -> (bytes, truncated)) resumed `shouldBe` Right ("original\ncompleted edit\n", False)
+        digest `shouldReturn` originalHash
+      entered <- newIORef False
+      changed <- either (fail . show) pure $ Workspace.mkRevision $ T.replicate 40 "1"
+      mismatched <- Guest.withGuest host Nothing repository changed (Guest.ResumeSession restored) Nothing (UUIDId UUID.nil) (const $ pure ()) (const $ pure ()) $ const $ writeIORef entered True
+      mismatched `shouldSatisfy` isLeft
+      readIORef entered `shouldReturn` False
+      writeFileBS disk "corrupted checkpoint"
+      rejected <- open (Guest.ResumeSession restored) $ const $ writeIORef entered True
+      rejected `shouldSatisfy` isLeft
+      readIORef entered `shouldReturn` False
 
   it "reuses native Haskell build checkpoints without mutating relocated baselines" \tr -> do
     configuredProfile <- lookupEnv "IMPACT_REVIEW_TEST_PROFILE"
