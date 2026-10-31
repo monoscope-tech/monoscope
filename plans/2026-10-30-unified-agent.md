@@ -947,6 +947,10 @@ The remaining adapters have concrete transport or context duties. `CLI.Resource`
 
 All 76 API examples pass, including exact catalog coverage, MCP HTTP routing, response equivalence, and metric discovery. The latest unchanged production code also passed all 267 bot examples. Formatting and diff checks pass. No production implementation, dependency, shared-package module, or migration was added in this audit. Whole-branch reviews and final release verification remain open.
 
+### Live Slack access remains an external acceptance requirement (31 October)
+
+A fresh connection probe found no Slack browser tab in Chrome or Arc. The Slack desktop app is running, but macOS rejects UI automation without assistive access. Plugin discovery confirms that the Slack integration is available and not connected in this session. Its existing recent suggestion was not repeated. The controlled workspace/channel target has been requested while independent implementation continues. No live Slack behavior is counted as verified by the signed HTTP fixtures or the local browser artifact checks.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
