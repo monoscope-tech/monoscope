@@ -205,7 +205,7 @@ pendingFollowups scope =
     <> [HI.sql|) AND processed_at IS NULL AND team_id = #{scope.teamId} AND payload->>'team_id' = #{scope.teamId}
       AND payload->'event'->>'channel' = #{scope.channelId}
       AND payload->'event'->>'thread_ts' = #{scope.threadTs}
-      AND payload->'event'->>'type' IN ('message', 'app_mention')
+      AND payload->'event'->>'type' IN ('message', 'app_mention', 'monoscope_message_shortcut')
       AND payload->'event'->>'subtype' IS NULL AND payload->'event'->>'bot_id' IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM apis.investigation_journal journal
@@ -861,7 +861,7 @@ commitProgress cursor scope checkpoint event
                     AND payload->'event'->>'thread_ts' = #{key.threadTs}
                     AND payload->'event'->>'ts' = #{followup.messageTs}
                     AND payload->'event'->>'user' = #{followup.slackUserId}
-                    AND payload->'event'->>'type' IN ('message', 'app_mention')
+                    AND payload->'event'->>'type' IN ('message', 'app_mention', 'monoscope_message_shortcut')
                     AND payload->'event'->>'subtype' IS NULL AND payload->'event'->>'bot_id' IS NULL
                   RETURNING id
                 ) INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)

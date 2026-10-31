@@ -2198,7 +2198,7 @@ startEventRun routine request continuation convId input = do
             (SELECT 1 FROM apis.slack_events receipt JOIN apis.slack_identities identity
               ON identity.team_id = receipt.team_id AND identity.slack_user_id = receipt.payload #>> '{event,user}' AND identity.user_id = #{member}
               WHERE receipt.id = #{receipt} AND receipt.payload #>> '{event,ts}' IS NOT NULL
-                AND receipt.payload #>> '{event,type}' IN ('message', 'app_mention')
+                AND receipt.payload #>> '{event,type}' IN ('message', 'app_mention', 'monoscope_message_shortcut')
                 AND receipt.payload #>> '{event,subtype}' IS NULL AND receipt.payload #>> '{event,bot_id}' IS NULL)
             THEN #{Observe} ELSE r.policy END|]
         (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}) -> [HI.sql|r.policy|]
@@ -2552,7 +2552,7 @@ getEventRun pid event = do
 -- Prefer an admitted request over receipt arrival order, including late commits.
 slackMessageIdentitySql :: Projects.ProjectId -> UUIDId "slack_event" -> HI.Sql
 slackMessageIdentitySql pid receipt =
-  [HI.sql|SELECT candidate.id FROM apis.slack_events received JOIN apis.slack_events candidate
+  [HI.sql|(SELECT candidate.id FROM apis.slack_events received JOIN apis.slack_events candidate
     ON candidate.team_id = received.team_id
       AND candidate.payload #>> '{event,channel}' = received.payload #>> '{event,channel}'
       AND candidate.payload #>> '{event,user}' = received.payload #>> '{event,user}'
@@ -2566,7 +2566,8 @@ slackMessageIdentitySql pid receipt =
       AND received.payload #>> '{event,subtype}' IS NULL AND received.payload #>> '{event,bot_id}' IS NULL
       AND candidate.payload #>> '{event,type}' IN ('message', 'app_mention')
       AND candidate.payload #>> '{event,subtype}' IS NULL AND candidate.payload #>> '{event,bot_id}' IS NULL
-    ORDER BY admitted.started_at NULLS LAST, candidate.received_at, candidate.id LIMIT 1|]
+    ORDER BY admitted.started_at NULLS LAST, candidate.received_at, candidate.id LIMIT 1)
+    UNION ALL SELECT id FROM apis.slack_events WHERE id = #{receipt} AND payload #>> '{event,type}' = 'monoscope_message_shortcut'|]
 
 
 runMessageSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ChatMessageKind -> Text -> Maybe AE.Value -> Maybe AE.Value -> HI.Sql

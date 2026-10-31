@@ -907,9 +907,20 @@ The manifest template removes static prompts, which Slack documents as incompati
 
 The onboarding regression first failed because a Messages visit sent only its account-link message. It now verifies prompt refresh on opening and reopening, one-time link delivery, linked and unlinked content, omitted legacy thread timestamps, receipt replay, and no investigation creation. The contextual prompt test also checks a Messages reopen retains the selected project context. All 246 bot examples pass. Formatting, focused HLint, manifest JSON checks, and diff checks pass. Repeated slice reviews reuse one refresh for both native and legacy surfaces and remove the required-context assumption, with no remaining material slice findings. Live manifest acceptance and final rollout checks remain pending.
 
+### Message shortcuts enter the canonical Slack receipt worker (31 October)
+
+The signed interactivity endpoint accepts `monoscope-investigate-message` and immediately stores its receipt and existing worker job together. It decodes a typed selected message and shortcut identity, retaining text, author, blocks, and original thread references. The normalized event has an explicit shortcut kind and a typed source. The worker rejects a normalized input that differs from that source. Callback, workspace, identity, and timestamp checks happen before queue insertion.
+
+The shortcut asks for investigation and quotes the selected message as untrusted evidence. The clicking member supplies authority; the selected author supplies none. A selected reply continues its original thread. The same project binding, identity-link guidance, routine activation, role ceilings, checkpoint, tool dispatcher, reply reservations, progress updates, stop checks, and reset worker handle the request. It adds no approval prompt or separate executor.
+
+The existing receipt insertion is shared with signed Events API intake. A stable shortcut trigger identifies retries. Shortcut identity uses that receipt directly; message/mention alias reconciliation keeps its original predicates and partial index. Shared admission and accepted-followup queries recognize the new request kind. No migration or index replacement is needed. Dashboard actions retain their existing implementation under the same signed route.
+
+The manifest declares the message shortcut and its callback. The rollout guide explains its thread and identity behavior. The handler regression first failed because message shortcuts were rejected with HTTP 400. Both root-message and selected-reply cases now pass through signed form intake, duplicate intake, queue processing, model context, run attribution, Autonomous policy, final thread publication, and receipt replay. They also verify quoted blocks, unknown callbacks, invalid timestamps, unlinked members, and revoked members, with no extra model calls for denied or replayed work. All 248 bot examples pass. Formatting, manifest checks, and diff checks pass. HLint reports the same one hint as the baseline across changed application modules, with none introduced. Repeated slice reviews retain typed source validation, keep the dashboard handler local to signed intake, narrow the shared receipt effect row, and preserve the existing alias index path, with no remaining material slice findings. Whole-branch reviews and live workspace acceptance remain pending.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
+- [Message shortcuts](https://docs.slack.dev/reference/interaction-payloads/shortcuts-interaction-payload/): signed invocation, selected-message context, and callback identity.
 - [Suggested prompts](https://docs.slack.dev/reference/methods/assistant.threads.setSuggestedPrompts/): Agent apps omit the legacy thread timestamp and provide at most four prompts.
 - [Agent session status](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/): initial titles are ignored once a session exists.
 - [Agent sessions](https://docs.slack.dev/ai/agent-sessions/): native status, renaming, and title-change events.

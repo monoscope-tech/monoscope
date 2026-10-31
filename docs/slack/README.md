@@ -207,3 +207,14 @@ history. It checks the app and publication ID before it records delivery. A
 missing observation or inaccessible history leaves the reservation pending.
 A timeout does not prove that Slack rejected a message. Check actual scopes,
 metadata delivery, and rate limits in the sandbox before rollout.
+
+Use the message shortcut **Ask Monoscope about this** to investigate a selected
+message in its original thread. For a reply, Monoscope continues the existing
+thread. The shortcut uses the clicking member's linked project and current access;
+the selected author does not grant authority. Message text and blocks are quoted
+as untrusted evidence. Signed deliveries enter the same receipt queue, run,
+checkpoint, and publication path as mentions. Repeating a delivery does not start
+another investigation. Unlinked and revoked users receive private account-link
+guidance. The template declares callback ID `monoscope-investigate-message` on
+the existing `/actions/slack` interactivity endpoint; apply it to the selected app
+before live acceptance.

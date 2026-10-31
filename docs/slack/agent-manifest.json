@@ -33,6 +33,14 @@
         "description": "Share a project dashboard",
         "should_escape": true
       }
+    ],
+    "shortcuts": [
+      {
+        "name": "Ask Monoscope about this",
+        "type": "message",
+        "callback_id": "monoscope-investigate-message",
+        "description": "Investigate this message in its Slack thread"
+      }
     ]
   },
   "oauth_config": {

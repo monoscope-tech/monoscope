@@ -78,7 +78,7 @@ createSlackLink linkId receiptId =
     [HI.sql|WITH request AS (
     INSERT INTO apis.slack_identity_requests (id, receipt_id)
     SELECT #{linkId}, id FROM apis.slack_events
-    WHERE id = #{receiptId} AND (payload #>> '{event,type}' IN ('message', 'app_mention')
+    WHERE id = #{receiptId} AND (payload #>> '{event,type}' IN ('message', 'app_mention', 'monoscope_message_shortcut')
       OR (payload #>> '{event,type}' = 'app_home_opened' AND payload #>> '{event,tab}' = 'messages'))
       AND COALESCE(payload #>> '{event,user}', '') <> ''
       AND COALESCE(payload #>> '{event,channel}', '') <> ''
