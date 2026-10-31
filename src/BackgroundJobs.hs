@@ -477,17 +477,22 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
     pure $ case result of
       Left err -> Issues.FailedResult $ Issues.RunFailure err (Issues.ConversationNotice $ "Routine failed: " <> err)
       Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ AI.prepareRunAnswer answer
-  completion <- case outcome of
-    Nothing -> do
-      Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
-      pure $ Issues.TimedOutResult $ Issues.RunFailure "Routine execution timed out" $ Issues.ConversationNotice "Routine timed out. It will run again at the next interval."
-    Just (Left err) -> do
-      Log.logAttention "AI routine run failed" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text err]
-      pure $ Issues.FailedResult $ Issues.RunFailure (show @Text err) $ Issues.ConversationNotice "Routine failed unexpectedly. It will run again at the next interval."
-    Just (Right result) -> pure result
-  Issues.completeRun context completion >>= \case
-    Issues.CompletionRejected -> pass
-    Issues.RunCompleted _ next -> for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
+  case outcome of
+    Just (Left err)
+      | Just (AI.AgentAwaitingReview identifier _) <- fromException err ->
+          Log.logInfo "AI routine is awaiting action review" $ AE.object ["routine_id" AE..= routineId, "operation_id" AE..= identifier]
+    _ -> do
+      completion <- case outcome of
+        Nothing -> do
+          Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
+          pure $ Issues.TimedOutResult $ Issues.RunFailure "Routine execution timed out" $ Issues.ConversationNotice "Routine timed out. It will run again at the next interval."
+        Just (Left err) -> do
+          Log.logAttention "AI routine run failed" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text err]
+          pure $ Issues.FailedResult $ Issues.RunFailure (show @Text err) $ Issues.ConversationNotice "Routine failed unexpectedly. It will run again at the next interval."
+        Just (Right result) -> pure result
+      Issues.completeRun context completion >>= \case
+        Issues.CompletionRejected -> pass
+        Issues.RunCompleted _ next -> for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.

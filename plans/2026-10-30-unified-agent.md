@@ -10,7 +10,7 @@ Evidence uses one typed audience and one evaluator across web navigation, thread
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-The latest bot suite passes 347 examples, including 27 Slack MCP cases and 18 review cases. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, optional review controls, streaming acceptance, and final release checks remain unfinished.
+The latest bot suite passes 350 examples, including 27 Slack MCP cases, 18 ledger/policy review cases, and three scheduled review cases. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, optional review controls, streaming acceptance, and final release checks remain unfinished.
 
 ## Slack MCP integration checkpoint
 
@@ -47,6 +47,17 @@ Migration `0276_agent_review_policy.sql` stores policies as JSONB and adds a mon
 The policy-selection regression first failed because a selected dashboard action executed immediately. Eighteen focused review cases now pass, including selected/unselected execution, approval and checkpoint resumption, policy tightening and relaxation, invalid storage, original-grant rewrite rejection, and reviewer authority changes. The final source passes all 347 bot, 76 API, and 38 incident-delivery examples. Policy codec doctests are added; their final suite still needs to run. Formatting and diff checks pass; scoped HLint has no suggestions on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material issue in this backend slice; human controls and waiting lifecycle remain required.
 
 The database policy column changes from text to JSONB. Deploy the updated server and schema together; older SQL decoders expect text. This is a rollout requirement, not deployment authorization. Human configuration controls, web/Slack decision controls, and durable waiting/resume lifecycle remain unfinished. Autonomous remains the default.
+
+
+## Scheduled review suspension
+
+A scheduled worker now returns normally when the shared interpreter retains an action for review. It leaves the run and tool checkpoint open instead of writing a failure or advancing the schedule. The existing operation record is the waiting state; no additional queue, worker, table, or migration is introduced.
+
+One lease predicate is shared by scheduled admission and recovery. Pending, unexpired review blocks admission even after the ordinary lease becomes stale. A decision or expiry makes the existing scheduled slot recoverable. The claim moves the lease beyond the operation creation time, so duplicate jobs cannot consume that wake-up again. Claim timestamps use the database wall clock after lock acquisition.
+
+The failing-first regression reproduced `RunFailed` on review suspension. Three focused cases now pass for approval, rejection, and expiry. They exercise the real dashboard tool, retained model checkpoint, recovery discovery, duplicate admission before execution, unchanged run identity, exactly two model calls, and at most one mutation. All 350 bot examples pass against the final source. Both watchers compile successfully. Formatting and diff checks pass; scoped HLint reports no suggestions on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material issue in this scheduled-worker slice.
+
+This connects scheduled work only. Event, Slack, and web suspension, decision controls, immediate enqueue after a decision, and the user-facing waiting summary remain unfinished. Until controls enqueue a scheduled continuation, the existing recovery sweep discovers ready work.
 
 ## Product contract
 

@@ -378,6 +378,53 @@ spec = around withTestResources do
             runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Reviewed dashboard'|]) >>= (`shouldBe` 1)
           readIORef calls >>= (`shouldBe` 2)
 
+      for_ [ApproveReview, DeclineReview, ExpireBeforeReview] $ \scenario ->
+        it ("scheduledReview_waitsWithoutFailureAndResumesTheSameCheckpoint: " <> show scenario) \tr -> do
+          calls <- newIORef (0 :: Int)
+          let conversation = UUIDId $ UUID.fromWords 0 0 0 282
+              user = (getResponse tr.trSessAndHeader).user.id
+              policy = Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+              call = LLM.ToolCall "scheduled-review-dashboard" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Scheduled reviewed dashboard" :: Text)])
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> do
+                  liftIO $ modifyIORef' calls (+ 1)
+                  pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                    [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [call]}
+                    _ -> LLM.Message LLM.Assistant "Review outcome recorded." LLM.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              execute config = provider $ AI.runAgenticChatWithHistory config{AI.projectTools = Just Routes.mcpProjectTools} "Create a dashboard" "model" "key"
+          Just slot <- runTestBg frozenTime tr do
+            void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+            Issues.insertChatMessage testPid conversation Issues.ChatUser "Create a dashboard" Nothing Nothing
+            scheduled <- Issues.upsertRoutine user testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
+            Issues.setRoutinePolicy user testPid conversation policy
+            pure scheduled
+          let executeOnce config = do
+                duplicate <- Issues.claimRoutine slot.id slot.scheduledAt
+                liftIO $ duplicate `shouldSatisfy` isNothing
+                execute config
+              run = runTestBgNoReset tr $ BackgroundJobs.runAIRoutineWith 5_000_000 executeOnce (\_ _ -> pass) tr.trATCtx slot.id slot.scheduledAt
+          run
+          [waiting] <- runQueryEffect tr $ Issues.listConversationRuns testPid conversation 10
+          waiting.status `shouldBe` Issues.RunRunning
+          waiting.error `shouldBe` Nothing
+          [entry] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
+          entry.outcome `shouldSatisfy` \case Investigations.OperationUnstarted -> True; _ -> False
+          runQueryEffect tr (Issues.claimRoutine slot.id slot.scheduledAt) >>= (`shouldSatisfy` isNothing)
+          runTestBgNoReset tr (Issues.recoverDueRoutines 100) >>= (\due -> map (.id) due `shouldNotContain` [slot.id])
+          if scenario == ExpireBeforeReview
+            then advanceTestTime tr (24 * 60 * 60 + 1)
+            else runTestBgNoReset tr (Investigations.decideOperationReview testPid user entry.id $ if scenario == DeclineReview then Investigations.ReviewRejected else Investigations.ReviewApproved) >>= (`shouldSatisfy` \case Investigations.ReviewSaved{} -> True; _ -> False)
+          advanceTestTime tr (15 * 60)
+          runTestBgNoReset tr (Issues.recoverDueRoutines 100) >>= (\due -> map (.id) due `shouldContain` [slot.id])
+          run
+          run
+          [finished] <- runQueryEffect tr $ Issues.listConversationRuns testPid conversation 10
+          (finished.id, finished.status) `shouldBe` (waiting.id, Issues.RunSucceeded)
+          readIORef calls >>= (`shouldBe` 2)
+          runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Scheduled reviewed dashboard'|]) >>= (`shouldBe` if scenario == ApproveReview then 1 else 0)
+
       for_ [ApproveReview, DeclineReview, ExpireAfterReview] $ \scenario ->
         it ("agentReview_nativeExecutionRetainsItsReviewAndResponseContract: " <> show scenario) \tr -> do
           issueId <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "review-native" "Original title" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId

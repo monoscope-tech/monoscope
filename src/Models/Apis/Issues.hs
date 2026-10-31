@@ -2248,9 +2248,9 @@ claimRoutine :: DB es => UUIDId "ai_routine" -> UTCTime -> Eff es (Maybe Claimed
 claimRoutine routineId scheduledAt =
   Hasql.interpOne
     ( [HI.sql|WITH identity AS (SELECT gen_random_uuid() AS id), claimed AS (
-        UPDATE apis.ai_routines SET running_since = now()
+        UPDATE apis.ai_routines AS routine SET running_since = clock_timestamp()
         WHERE id = #{routineId} AND active AND requested_by IS NOT NULL AND next_run_at = #{scheduledAt}
-          AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
+          AND (^{available})
           AND NOT EXISTS (SELECT 1 FROM apis.ai_routine_runs existing WHERE existing.routine_id = #{routineId}
             AND existing.scheduled_at = #{scheduledAt} AND existing.source = #{ScheduledRun}
             AND (existing.status <> #{RunRunning} OR existing.requested_by IS NULL))
@@ -2274,6 +2274,22 @@ claimRoutine routineId scheduledAt =
       SELECT run.id, run.requested_by, claimed.project_id, claimed.conversation_id, claimed.running_since, COALESCE(run.policy, #{Observe}), claimed.report_when, claimed.destination, claimed.timezone, run.instructions
       FROM claimed CROSS JOIN run|]
     )
+  where
+    available = routineLeaseAvailableSql [HI.sql|now() - interval '30 minutes'|]
+
+
+-- A review keeps its scheduled slot, but no worker. The next claim consumes the
+-- wake-up by moving its lease past the operation's creation time.
+routineLeaseAvailableSql :: HI.Sql -> HI.Sql
+routineLeaseAvailableSql staleAt =
+  [HI.sql|SELECT CASE WHEN COALESCE(bool_or(operation.review->>'tag' = 'ReviewPending'
+      AND (operation.review #>> '{contents,expiresAt}')::timestamptz > app_now()), FALSE)
+    THEN FALSE ELSE routine.running_since IS NULL OR routine.running_since < ^{staleAt}
+      OR COALESCE(bool_or(operation.created_at > routine.running_since), FALSE) END
+    FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id
+    WHERE run.routine_id = routine.id AND run.scheduled_at = routine.next_run_at
+      AND run.source = #{ScheduledRun} AND run.status = #{RunRunning}
+      AND operation.outcome = #{Aeson Investigations.OperationUnstarted}|]
 
 
 getEventRoutine :: DB es => Projects.ProjectId -> RoutineEvent -> Eff es (Maybe EventRoutine)
@@ -2810,6 +2826,7 @@ routineRunsSql pid =
 recoverDueRoutines :: (DB es, Time :> es) => Int -> Eff es [ScheduledRoutine]
 recoverDueRoutines limit = do
   now <- Time.currentTime
+  let available = routineLeaseAvailableSql [HI.sql|#{addUTCTime (-1800) now}|]
   Hasql.transaction TxS.ReadCommitted TxS.Write do
     finishRunRowsTx $ RetireUnownedWork UnownedInstallations
     finishRunRowsTx RetireAbandonedRuns
@@ -2825,8 +2842,8 @@ recoverDueRoutines limit = do
     due <-
       Hasql.queryTx @[ScheduledRoutine]
         [HI.sql|SELECT id, next_run_at
-      FROM apis.ai_routines WHERE active AND next_run_at <= #{now}
-        AND (running_since IS NULL OR running_since < #{addUTCTime (-1800) now})
+      FROM apis.ai_routines routine WHERE active AND next_run_at <= #{now}
+        AND (^{available})
       ORDER BY next_run_at LIMIT #{max 1 limit}|]
     pure $ recovered <> due
 
