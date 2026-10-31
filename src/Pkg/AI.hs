@@ -1093,7 +1093,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
     acceptFollowupsWith cursor step = case (cursor, journal) of
       (Just _, Just scope) | step.iteration < config.maxIterations -> do
         candidates <- Investigations.pendingFollowups scope
-        authorized <- filterM (\followup -> isJust <$> Integrations.resolveSlackPrincipal scope.teamId followup.slackUserId (Just scope.projectId)) candidates
+        authorized <- filterM (\followup -> any ((== scope.userId) . (.userId)) <$> Integrations.resolveSlackPrincipal scope.teamId followup.slackUserId (Just scope.projectId)) candidates
         forM (nonEmpty authorized) $ \followups -> do
           void $ requireConfigAccess config
           let followupMessages = map (\followup -> LLM.Message LLM.User ("Slack reply from <@" <> followup.slackUserId <> "> at " <> followup.messageTs <> ":\n" <> followup.text) LLM.defaultMessageData) $ toList followups

@@ -636,6 +636,15 @@ A subsequent isolated PostgreSQL 16 benchmark reproduced the scope-update cost w
 This work adds no approval prompts. Native business mutations still need the common operation ledger, event autonomy remains conservatively capped, optional selected review and broader Slack audiences remain unfinished, and controlled live Slack acceptance and final release signoff are still pending.
 
 
+### Requester-bound busy-thread followups (31 October)
+
+The existing interrupted Slack investigation regression now includes 21 earlier replies from other linked readers and administrators. Before the fix, those replies reached the model as user instructions inside the original requester's run. The regression failed on that exact cross-requester instruction injection.
+
+Pending-followup selection now requires the run's stored requesting member before applying the existing 20-message limit. The fresh Slack-principal check also requires that same member, so a relinked identity cannot enter the run between selection and acceptance. The original requester's steering still survives interruption and replay exactly once. Other members' receipts remain unprocessed for their own requests; their earlier replies cannot starve the requester's later followup. No new migration, permission prompt, executor, or message store was added.
+
+The focused regression and all 201 bot examples pass after the two-line runtime change. Formatting and diff checks pass; repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings. Existing already-accepted historical steering must still be considered at the event-autonomy transition: this change prevents new cross-requester acceptance, and does not rewrite old model checkpoints. The temporary event Observe ceiling remains until the effective owner/requester authority and transition behavior are verified.
+
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

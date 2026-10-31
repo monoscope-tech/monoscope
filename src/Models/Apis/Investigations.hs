@@ -184,7 +184,7 @@ pendingFollowups scope =
       JOIN users.users account ON account.id = identity.user_id
       JOIN projects.projects project ON project.id = member.project_id
       JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = identity.team_id
-      WHERE identity.team_id = #{scope.teamId} AND identity.slack_user_id = payload->'event'->>'user'|]
+      WHERE identity.team_id = #{scope.teamId} AND identity.slack_user_id = payload->'event'->>'user' AND member.user_id = #{scope.userId}|]
     <> Integrations.activeMembership
     <> [HI.sql|) AND processed_at IS NULL AND team_id = #{scope.teamId} AND payload->>'team_id' = #{scope.teamId}
       AND payload->'event'->>'channel' = #{scope.channelId}

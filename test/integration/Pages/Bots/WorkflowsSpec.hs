@@ -2588,8 +2588,14 @@ spec = around withTestResources do
         replayed `shouldBe` []
         length <$> readIORef observed >>= (`shouldBe` 3)
 
-      it "accepts authorized busy-thread steering durably and resumes it without duplicate answers" \tr -> do
+      it "busyThread_otherParticipantsCannotSteerTheRequestersRunOrStarveItsFollowup" \tr -> do
         setupSlackAgent tr testPid "T_SERIAL"
+        for_ ([(1, "U_OTHER_READER", PM.PView), (2, "U_OTHER_ADMIN", PM.PAdmin)] :: [(Word32, Text, PM.Permissions)]) \(number, slackUser, permission) -> do
+          let member = UUIDId (UUID.fromWords 0 0 45 number) :: Projects.UserId
+          withResource tr.trPool \conn -> do
+            void $ PGS.execute conn [sql|INSERT INTO users.users (id, email) VALUES (?, ?)|] (member, (slackUser <> "@example.test" :: Text))
+            void $ PGS.execute conn [sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (?, ?, ?)|] (testPid, member, permission)
+            void $ PGS.execute conn [sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id) VALUES ('T_SERIAL', ?, ?, ?)|] (slackUser, member, testPid)
         entered <- newEmptyMVar
         release <- newEmptyMVar
         histories <- newIORef []
@@ -2617,6 +2623,8 @@ spec = around withTestResources do
           unlinked <- receiveSlackEvent tr $ event "1735689602.000002" & key "event" . key "user" . _String .~ "U_UNLINKED" & key "event" . key "text" . _String .~ "Unlinked hypothesis"
           for_ ([10 .. 29] :: [Int]) $ \suffix ->
             void $ receiveSlackEvent tr $ event ("1735689601.0000" <> show suffix) & key "event" . key "user" . _String .~ "U_UNLINKED" & key "event" . key "text" . _String .~ "Unlinked hypothesis"
+          for_ ([30 .. 50] :: [Int]) $ \suffix ->
+            void $ receiveSlackEvent tr $ event ("1735689601.0000" <> show suffix) & key "event" . key "user" . _String .~ (if even suffix then "U_OTHER_READER" else "U_OTHER_ADMIN") & key "event" . key "text" . _String .~ "Other participant instructions"
           for_ [firstReceipt, secondReceipt] \receipt -> do
             replicateM_ 2 do
               (requests, outcome) <- work receipt
@@ -2637,6 +2645,7 @@ spec = around withTestResources do
           separateThread `shouldSatisfy` isRight
           putMVar release ()
           (_, completed) <- wait worker
+          readIORef histories >>= (\messages -> any (any $ T.isInfixOf "Other participant instructions") messages `shouldBe` False)
           completed `shouldSatisfy` isLeft
           pendingUnlinked <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT processed_at IS NULL FROM apis.slack_events WHERE id = ?|] (PGS.Only unlinked)
           pendingUnlinked `shouldBe` [PGS.Only True]
@@ -2653,6 +2662,13 @@ spec = around withTestResources do
         map (length . filter (== "Investigation evidence")) observed `shouldBe` [0, 0, 0, 0]
         map (length . filter (T.isInfixOf "Check tonight's deployment")) observed `shouldBe` [0, 0, 1, 1]
         observed `shouldSatisfy` all (all (not . T.isInfixOf "Unlinked hypothesis"))
+        observed `shouldSatisfy` all (all (not . T.isInfixOf "Other participant instructions"))
+        pendingOtherMembers <- withResource tr.trPool $ \conn ->
+          PGS.query_
+            conn
+            [sql|SELECT count(*) FILTER (WHERE processed_at IS NULL), count(*) FROM apis.slack_events
+            WHERE team_id = 'T_SERIAL' AND payload->'event'->>'user' IN ('U_OTHER_READER', 'U_OTHER_ADMIN')|]
+        pendingOtherMembers `shouldBe` [(21 :: Int64, 21 :: Int64)]
         savedFollowups <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.ai_chat_messages WHERE project_id = ? AND slack_message_ts = '1735689602.000001' AND role = 'user'|] (PGS.Only testPid)
         savedFollowups `shouldBe` [PGS.Only (1 :: Int)]
         for_ [firstReceipt, secondReceipt] \receipt -> do
