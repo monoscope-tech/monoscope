@@ -10,7 +10,7 @@ Evidence uses one typed audience and one evaluator across web navigation, thread
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-The latest bot suite passes 355 examples, including 27 Slack MCP cases, 18 ledger/policy review cases, three scheduled review cases, and five signed Slack review flows. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, policy configuration, remaining review lifecycle work, streaming acceptance, and final release checks remain unfinished.
+The latest bot suite passes 356 examples, including 27 Slack MCP cases, 18 ledger/policy review cases, three scheduled review cases, and six signed Slack review flows. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, policy configuration, remaining review lifecycle work, streaming acceptance, and final release checks remain unfinished.
 
 ## Slack MCP integration checkpoint
 
@@ -79,7 +79,14 @@ A waiting receipt remains unprocessed while the worker and thread lock return. I
 
 Failing-first regressions reproduced review being treated as a failed Slack investigation, a vote surviving a rejected enqueue, and an unconfirmed notice waiting until the review deadline. Five focused Slack cases now pass: approval, rejection, expiry, approval while the notice is publishing, and a definite publication rejection followed by retry. They cover signed bytes, wrong-workspace and unlinked-user denial, repeat clicks and receipt processing, real proposal inspection, unchanged run identity, exactly two model calls, and at most one dashboard mutation. The scheduled rollback cases also pass. The broader run reproduced a missing final progress update on asynchronous cancellation. The shared journal now uses the repository’s exception-cleanup combinator; the unchanged signed-stop regression passes. All 23 focused review examples pass. The final source passes all 355 bot, 76 API, and 38 incident-delivery examples. Policy/control codec doctests and final release checks remain pending. Formatting and diff checks pass; scoped HLint has no findings on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue in this slice.
 
-Policy configuration, suspension for web/slash/native sources, waiting stop/pause acceptance, review recovery across failed/replaced event attempts, and live Slack acceptance remain unfinished. This slice does not establish complete selected review or completion of the unified plan.
+Policy configuration, suspension for web/slash/native sources, waiting stop/pause acceptance and live Slack acceptance remain unfinished. This slice does not establish complete selected review or completion of the unified plan.
+
+
+## Review recovery across failed attempts
+
+Proposal links, review decisions, and continuation jobs now share one request-scoped lookup. It retains the proposal's original attempt while selecting the latest admitted attempt in the same project, conversation, and request root. A new vote requires a live attempt whose requester still matches the stored proposal. Completed proposal links resolve to the latest result; the inspector still links the original attempt for audit.
+
+The lookup uses the existing project/request-root index. No migration, queue, or executor is added. Failed-attempt recovery initially returned the old run ID from the proposal link. Six signed Slack scenarios now pass, including failure while waiting, denial before retry admission, recovery without new inference, original-actor/proposal retention, one real dashboard mutation, and completed-result inspection. The final source passes all 356 bot, 76 API, and 38 incident-delivery examples. Both watchers compile successfully. Formatting and diff checks pass; scoped HLint reports no findings on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue. Final branch checks and the other unfinished plan items remain pending.
 
 ## Product contract
 

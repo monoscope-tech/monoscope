@@ -156,13 +156,14 @@ reviewOperation project = Investigations.decideOperationReviewWith (enqueue proj
     enqueue targetProject operationId = do
       slots <-
         Hasql.queryTx @[(Issues.RoutineRunSource, UUIDId "ai_routine", UTCTime)]
-          [HI.sql|SELECT run.source, routine.id, run.scheduled_at
-          FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id
-          JOIN apis.ai_routines routine ON routine.id = run.routine_id
-          WHERE operation.id = #{operationId} AND operation.project_id = #{targetProject}
-            AND run.status = #{Issues.RunRunning} AND routine.active
-            AND ((run.source = #{Issues.ScheduledRun} AND routine.next_run_at = run.scheduled_at)
-              OR run.source #>> '{contents,tag}' = 'SlackMessage') FOR UPDATE OF operation|]
+          $ [HI.sql|SELECT run.source, run.routine_id, run.scheduled_at |]
+          <> Investigations.operationRunSql targetProject operationId
+          <> [HI.sql| AND run.status = #{Issues.RunRunning}
+            AND run.requested_by IS NOT DISTINCT FROM operation.requested_by
+            AND EXISTS (SELECT 1 FROM apis.ai_routines routine WHERE routine.id = run.routine_id
+              AND routine.project_id = run.project_id AND routine.active
+              AND ((run.source = #{Issues.ScheduledRun} AND routine.next_run_at = run.scheduled_at)
+                OR run.source #>> '{contents,tag}' = 'SlackMessage')) FOR UPDATE OF operation|]
       for_ slots $ \(source, routine, scheduled) -> do
         let continuation = case source of
               Issues.ScheduledRun -> Just $ AIRoutineRun routine scheduled

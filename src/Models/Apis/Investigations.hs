@@ -66,6 +66,7 @@ module Models.Apis.Investigations (
   atomicOperation,
   listOperations,
   getOperationRun,
+  operationRunSql,
   recordEvent,
   recentEvents,
   ProgressTarget (..),
@@ -761,7 +762,7 @@ decideOperationReview = decideOperationReviewWith (const pass)
 decideOperationReviewWith :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => (UUIDId "agent_operation" -> Tx.Transaction ()) -> Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> ReviewDecision -> Eff es ReviewResponse
 decideOperationReviewWith enqueue project reviewer identifier decision = do
   permission <- ProjectMembers.getUserPermission project reviewer
-  conversation <- Hasql.interpOne @(HI.OneColumn (UUIDId "conversation")) [HI.sql|SELECT run.conversation_id FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id AND run.project_id = operation.project_id WHERE operation.id = #{identifier} AND operation.project_id = #{project}|]
+  conversation <- Hasql.interpOne @(HI.OneColumn (UUIDId "conversation")) $ [HI.sql|SELECT run.conversation_id |] <> operationRunSql project identifier
   case (permission, conversation) of
     (Just role, Just (HI.OneColumn scope)) | role >= ProjectMembers.PEdit -> do
       visible <- canReadEvidence project role (MemberViewer reviewer) scope
@@ -772,9 +773,11 @@ decideOperationReviewWith enqueue project reviewer identifier decision = do
           Hasql.transaction TxS.ReadCommitted TxS.Write do
             entries <-
               Hasql.queryTx @[(OperationProposal AE.Value, Aeson OperationReview, Maybe (Aeson Catalog.ReviewSelection), Bool)]
-                [HI.sql|SELECT operation.proposal, operation.review, run.policy_limit->'review_selected', run.status = 'running' AND operation.outcome->>'tag' = 'OperationUnstarted'
-            FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id AND run.project_id = operation.project_id
-            WHERE operation.id = #{identifier} AND operation.project_id = #{project} FOR UPDATE OF operation|]
+                $ [HI.sql|SELECT operation.proposal, operation.review, run.policy_limit->'review_selected',
+                    run.status = 'running' AND run.requested_by IS NOT DISTINCT FROM operation.requested_by
+                      AND operation.outcome->>'tag' = 'OperationUnstarted' |]
+                <> operationRunSql project identifier
+                <> [HI.sql| FOR UPDATE OF operation|]
             current <-
               Hasql.queryTx @[HI.OneColumn ProjectMembers.Permissions]
                 $ [HI.sql|SELECT permission FROM (|]
@@ -812,7 +815,19 @@ decideOperationReviewWith enqueue project reviewer identifier decision = do
 
 
 getOperationRun :: DB es => Projects.ProjectId -> UUIDId "agent_operation" -> Eff es (Maybe (UUIDId "ai_routine_run"))
-getOperationRun project identifier = Hasql.interpOne [HI.sql|SELECT run_id FROM apis.ai_agent_operations WHERE id = #{identifier} AND project_id = #{project}|]
+getOperationRun project identifier = Hasql.interpOne $ [HI.sql|SELECT run.id |] <> operationRunSql project identifier
+
+
+-- Keep the proposal on its original attempt while resolving the request's latest attempt.
+operationRunSql :: Projects.ProjectId -> UUIDId "agent_operation" -> HI.Sql
+operationRunSql project identifier =
+  [HI.sql|FROM apis.ai_agent_operations operation
+    JOIN apis.ai_routine_runs origin ON origin.id = operation.run_id AND origin.project_id = operation.project_id
+    JOIN LATERAL (SELECT candidate.* FROM apis.ai_routine_runs candidate
+      WHERE candidate.root_run_id = origin.root_run_id AND candidate.project_id = origin.project_id
+        AND candidate.conversation_id = origin.conversation_id
+      ORDER BY candidate.attempt DESC, candidate.started_at DESC, candidate.id DESC LIMIT 1) run ON TRUE
+    WHERE operation.id = #{identifier} AND operation.project_id = #{project}|]
 
 
 listOperations :: (AE.FromJSON policy, DB es) => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es [OperationEntry policy]

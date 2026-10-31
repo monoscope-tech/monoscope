@@ -88,7 +88,7 @@ data LegacyFixture = PendingDashboard | PendingAppend | RecordedAppend | Pending
   deriving stock (Bounded, Enum, Eq, Show)
 
 
-data SlackReviewCase = ApproveSlackAction | DeclineSlackAction | ExpireSlackAction | ApproveDuringNotice | RejectFirstReviewNotice
+data SlackReviewCase = ApproveSlackAction | DeclineSlackAction | ExpireSlackAction | ApproveDuringNotice | RejectFirstReviewNotice | RecoverWaitingAction
   deriving stock (Bounded, Enum, Eq, Show)
 
 
@@ -1860,6 +1860,22 @@ spec = around withTestResources do
           Just execution <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt
           execution.status `shouldBe` Issues.RunRunning
           [operation] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid execution.id
+          current <-
+            if reviewCase == RecoverWaitingAction
+              then do
+                runTestBgNoReset tr do
+                  context <- AI.requireRunContext testPid $ Issues.EventClaim (Issues.SlackMessage receipt) execution.id execution.startedAt
+                  void $ Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Injected failure while awaiting review" Issues.RunOnly
+                runTestBgNoReset tr (JobQueue.reviewOperation testPid routine.requestedBy operation.id Investigations.ReviewApproved) >>= (`shouldBe` Investigations.ReviewUnavailable)
+                (_, resumed) <- work receipt
+                resumed `shouldSatisfy` isRight
+                Just recovered <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt
+                recovered.id `shouldNotBe` execution.id
+                recovered.status `shouldBe` Issues.RunRunning
+                runQueryEffect tr (Issues.getRoutineRun testPid execution.id) >>= (\original -> fmap (.status) original `shouldBe` Just Issues.RunFailed)
+                pure recovered
+              else pure execution
+          runQueryEffect tr (Investigations.getOperationRun testPid operation.id) >>= (`shouldBe` Just current.id)
           (_, details) <- testServant tr $ AIThreads.operationGetH testPid operation.id
           decodeUtf8 @Text (Lucid.renderBS $ Lucid.toHtml details) `shouldSatisfy` T.isInfixOf "Slack reviewed dashboard"
           let bodies = mapMaybe (AE.decode @AE.Value . snd) requests
@@ -1892,8 +1908,12 @@ spec = around withTestResources do
           repeated `shouldSatisfy` isRight
           readIORef calls >>= (`shouldBe` 2)
           Just retained <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt
-          (retained.id, retained.status) `shouldBe` (execution.id, Issues.RunSucceeded)
+          (retained.id, retained.status) `shouldBe` (current.id, Issues.RunSucceeded)
           runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Slack reviewed dashboard'|]) >>= (`shouldBe` if reviewCase `elem` [DeclineSlackAction, ExpireSlackAction] then 0 else 1)
+          [saved] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid current.id
+          (saved.id, saved.runId, saved.requestedBy, AE.toJSON saved.proposal) `shouldBe` (operation.id, operation.runId, operation.requestedBy, AE.toJSON operation.proposal)
+          (_, completedPage) <- testServant tr $ AIThreads.operationGetH testPid operation.id
+          decodeUtf8 @Text (Lucid.renderBS $ Lucid.toHtml completedPage) `shouldSatisfy` T.isInfixOf "Review outcome recorded."
           runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT processed_at IS NOT NULL FROM apis.slack_events WHERE id = #{receipt}|]) >>= (`shouldBe` True)
 
     describe "Thread/Conversation Context" do
