@@ -1,4 +1,13 @@
+{-# LANGUAGE NoFieldSelectors #-}
+
 module Pkg.TestUtils (
+  -- * Test prelude: what nearly every spec imports
+  module Relude,
+  module Test.Hspec,
+  sql,
+  Only (..),
+  def,
+  UUIDId (..),
   shouldContainAll,
   streamFrames,
   completeFrame,
@@ -52,6 +61,18 @@ module Pkg.TestUtils (
   deferredBody,
   shellHtml,
   renderT,
+  call,
+  tablePage,
+  dbExec,
+  dbQuery,
+  dbOne,
+  IssueSeed (..),
+  issueSeed,
+  seedIssue,
+  countIssues,
+  resetSchemaLearning,
+  goldenHtml,
+  goldenText,
   processMessagesAndBackgroundJobs,
   createTestSpans,
   -- OTLP/Telemetry helpers
@@ -106,7 +127,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue (..))
-import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
 import Data.Default (def)
@@ -133,10 +153,11 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (ConnectInfo (..), Connection, Only (..), close, connect, connectPostgreSQL, defaultConnectInfo, execute)
 import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types (Query (Query))
+import Database.PostgreSQL.Simple.Types (PGArray (..), Query (Query))
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
@@ -174,10 +195,12 @@ import OddJobs.Job (Job (..))
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
@@ -214,7 +237,7 @@ import Servant.Types.SourceT qualified as Source
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..), mkTwilioContentSid)
 import System.Config qualified as Config
-import System.Directory (getFileSize, listDirectory)
+import System.Directory (doesFileExist, getFileSize, listDirectory)
 import System.Envy (DefConfig (..), decodeWithDefaults, fromVar)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Logging
@@ -222,7 +245,8 @@ import System.Server qualified as Server
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest, effToServantHandlerTestHTTP)
-import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
+import Test.Hspec (Expectation, Spec, SpecWith, anyException, around, aroundAll, beforeWith, describe, expectationFailure, it, pendingWith, runIO, sequential, shouldBe, shouldContain, shouldMatchList, shouldNotBe, shouldNotContain, shouldNotSatisfy, shouldReturn, shouldSatisfy, shouldThrow)
+import Text.RE.TDFA.Text (ed, (*=~/))
 import Unsafe.Coerce (unsafeCoerce)
 import Utils (toXXHash)
 import Web.ApiHandlers qualified as ApiH
@@ -230,6 +254,7 @@ import Web.ApiTypes (ApiActor (..))
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.I18n qualified as I18n
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 
 
 migrationsDirr :: FilePath
@@ -1263,6 +1288,113 @@ shellHtml tr render = renderT . snd <$> testServant tr render
 
 renderT :: Lucid.ToHtml a => a -> Text
 renderT = toStrict . Lucid.renderText . Lucid.toHtml
+
+
+-- | A handler's typed payload, for specs that assert on data rather than headers.
+call :: TestResources -> ATAuthCtx (RespHeaders a) -> IO a
+call tr = fmap snd . testServant tr
+
+
+-- | The page of a full table response; a rows-only (load-more) fragment fails the test.
+tablePage :: Table.TableResponse a -> IO (PageCtx (Table.Table a))
+tablePage = \case
+  Table.TablePage p -> pure p
+  Table.TableRowsOnly _ -> fail "expected a full table page"
+
+
+-- | Raw SQL for fixtures and for state no handler exposes, on the test clock so
+-- @app_now()@ triggers stamp test time rather than wall time.
+dbExec :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO ()
+dbExec tr q args = withClockedConn tr \conn -> void $ PGS.execute conn q args
+
+
+dbQuery :: forall q r. (PGS.FromRow r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO [r]
+dbQuery tr q args = withClockedConn tr \conn -> PGS.query conn q args
+
+
+withClockedConn :: TestResources -> (Connection -> IO a) -> IO a
+withClockedConn tr f = withResource tr.trPool \conn -> do
+  now <- getTestTime tr.trTestClock
+  void $ PGS.query @_ @(Only Text) conn "SELECT set_config('app.current_time', ?::timestamptz::text, false)" (Only now)
+  f conn
+
+
+-- | The single column of the single row a query returns: a count, or an @INSERT … RETURNING@.
+dbOne :: forall q r. (FromField r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO r
+dbOne tr q args =
+  dbQuery tr q args >>= \case
+    [Only r] -> pure r
+    rows -> fail $ "dbOne: expected one row, got " <> show (length rows)
+
+
+-- | An @apis.issues@ row; 'issueSeed' fills the columns most fixtures leave alone.
+data IssueSeed = IssueSeed
+  { pid :: Projects.ProjectId
+  , issueType :: Issues.IssueType
+  , title :: Text
+  , hash :: Text
+  , service :: Maybe Text
+  , environment :: Maybe Text
+  , payload :: AE.Value
+  , at :: UTCTime
+  }
+
+
+issueSeed :: Issues.IssueType -> Text -> IssueSeed
+issueSeed ty h = IssueSeed testPid ty h h Nothing Nothing (AE.object []) frozenTime
+
+
+seedIssue :: TestResources -> IssueSeed -> IO Issues.IssueId
+seedIssue tr s =
+  UUIDId
+    <$> dbOne
+      tr
+      [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, environment, issue_data, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id |]
+      (s.pid, s.issueType, s.title, s.hash, s.service, s.environment, s.payload, s.at, s.at)
+
+
+countIssues :: TestResources -> Issues.IssueType -> IO Int
+countIssues tr ty = dbOne tr [sql| SELECT count(*)::int FROM apis.issues WHERE project_id = ? AND issue_type = ? |] (testPid, ty)
+
+
+-- | Empty the schema-learning tables for these projects, creating any project row they lack
+-- (catalog, summary and anomaly inserts reference it).
+resetSchemaLearning :: TestResources -> [Projects.ProjectId] -> IO ()
+resetSchemaLearning tr pids = do
+  dbExec
+    tr
+    [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+                  SELECT id, 'test', 'Free', true, NULL, false, false FROM unnest(?::uuid[]) AS id ON CONFLICT (id) DO NOTHING |]
+    (Only arr)
+  forM_ @[] ["schema_catalog", "schema_summary", "anomalies"] \t -> dbExec tr ("DELETE FROM apis." <> t <> " WHERE project_id = ANY(?::uuid[])") (Only arr)
+  where
+    arr = PGArray pids
+
+
+-- | Snapshot @tests/golden/html/<name>.html@, one tag per line, so the diff is reviewable.
+-- UUIDs, trace ids and issue numbers are scrubbed to keep it stable. Issue numbers gap
+-- because the seq-num trigger (migration 0051) consumes one per upsert attempt, a known
+-- product bug this scrub does not fix.
+goldenHtml :: Lucid.ToHtml a => FilePath -> a -> Expectation
+goldenHtml name html =
+  goldenText ("html/" <> name <> ".html")
+    $ T.replace "><" ">\n<" (renderT html)
+    *=~/ [ed|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}///<uuid>|]
+    *=~/ [ed|[0-9a-f]{32,}///<hex>|]
+    *=~/ [ed|>#[0-9]+///>#<n>|]
+
+
+-- | Compare against @tests/golden/<path>@; @UPDATE_GOLDEN=true@ (re)writes it, a missing file fails.
+goldenText :: FilePath -> Text -> Expectation
+goldenText name actual = do
+  let path = "./tests/golden/" <> name
+  update <- (== Just "true") <$> lookupEnv "UPDATE_GOLDEN"
+  exists <- doesFileExist path
+  if
+    | update -> writeFileText path actual
+    | exists -> readFileBS path >>= (actual `shouldBe`) . decodeUtf8
+    | otherwise -> expectationFailure $ "missing golden " <> path <> "; rerun with UPDATE_GOLDEN=true"
 
 
 -- | Every frame a streaming handler emitted, or the stream's own error.

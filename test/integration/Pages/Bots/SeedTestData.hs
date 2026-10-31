@@ -4,9 +4,7 @@ import Data.Aeson qualified as AE
 import Data.Pool (withResource)
 import Data.Time (UTCTime, addUTCTime)
 import Database.PostgreSQL.Simple (execute)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Pkg.TestUtils (TestResources (..))
-import Relude
+import Pkg.TestUtils
 import Relude.Unsafe qualified as Unsafe
 
 -- | Seed realistic telemetry data for agentic tests
@@ -73,9 +71,7 @@ seedTelemetryData tr = void $ withResource tr.trPool \conn -> do
 
 -- | Cleanup test data after tests
 cleanupTelemetryData :: TestResources -> IO ()
-cleanupTelemetryData tr = void $ withResource tr.trPool \conn ->
-  execute
-    conn
+cleanupTelemetryData tr = dbExec tr
     [sql|
       DELETE FROM otel_logs_and_spans
       WHERE project_id = '00000000-0000-0000-0000-000000000000'

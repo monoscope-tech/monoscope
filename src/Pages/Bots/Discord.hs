@@ -3,7 +3,6 @@ module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChan
 import Control.Lens ((^.))
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
 import Data.Effectful.Wreq (HTTP, defaults, getWith, postWith, responseBody)
 import Data.Text qualified as T
@@ -31,6 +30,7 @@ import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
+import "base16-bytestring" Data.ByteString.Base16 qualified as Base16
 import "cryptonite" Crypto.Error qualified as Crypto
 import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 

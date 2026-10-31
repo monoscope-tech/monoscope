@@ -622,6 +622,9 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
     data_type: 'text',
   });
   if (input.dataset.dashboardId) params.set('dashboard_id', input.dataset.dashboardId);
+  // The server's signature over query_sql: without it only an editor may run the statement.
+  const sqlSig = input.getAttribute('data-tagify-sql-sig');
+  if (sqlSig) params.set('sql_sig', sqlSig);
   // The statement belongs to one store. Omitting this routed postgres-only variable
   // queries (apis.endpoints) at TimeFusion, which answers "table not found".
   const dbSource = input.getAttribute('data-tagify-db-source');

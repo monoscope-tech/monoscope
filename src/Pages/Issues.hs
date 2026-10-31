@@ -18,6 +18,10 @@ module Pages.Issues (
   linkPostH,
   triagePostH,
   issueDetailGetH,
+  IssueDetail (..),
+  IssueView (..),
+  IssueSample (..),
+  IssueSampleResult (..),
   IssueBulkForm (..),
   issueAcknowledgeButton,
   issueArchiveButton,
@@ -366,11 +370,11 @@ issueBulkActionsPostH pid action durationM valueM items = do
       addRespHeaders Bulk
 
 
-issueDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe EventRef -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe EventRef -> ATAuthCtx (RespHeaders (PageCtx IssueDetail))
 issueDetailGetH pid issueId firstM sinceM fromM toM eventM = issueDetailCore pid firstM eventM (TimePicker.TimePicker sinceM fromM toM) $ Issues.selectIssueById pid issueId
 
 
-issueDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe EventRef -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe EventRef -> ATAuthCtx (RespHeaders (PageCtx IssueDetail))
 issueDetailHashGetH pid issueId firstM sinceM fromM toM eventM = issueDetailCore pid firstM eventM (TimePicker.TimePicker sinceM fromM toM) $ Issues.selectIssueByHash pid issueId Issues.AnyIssue
 
 
@@ -391,7 +395,7 @@ instance FromHttpApiData EventRef where
     _ -> Left "event: <trace_id>@<iso-8601 timestamp>"
 
 
-issueDetailCore :: Projects.ProjectId -> Maybe Text -> Maybe EventRef -> TimePicker.TimePicker -> ATAuthCtx (Maybe Issues.Issue) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailCore :: Projects.ProjectId -> Maybe Text -> Maybe EventRef -> TimePicker.TimePicker -> ATAuthCtx (Maybe Issues.Issue) -> ATAuthCtx (RespHeaders (PageCtx IssueDetail))
 issueDetailCore pid firstM eventM requestedRange fetchIssue = do
   (sess, project, bw) <- mkPageCtx pid
   issueM <- fetchIssue
@@ -400,12 +404,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
   let baseBwconf = bw{pageTitle = "Issues", menuItem = Just "Issues"}
   case issueM of
     Nothing ->
-      addRespHeaders
-        $ PageCtx baseBwconf{pageTitle = "Issue Not Found"}
-        $ emptyState_
-          def{icon = Just "circle-xmark", action = ESLink ("/p/" <> pid.toText <> "/issues") "Back to Issues"}
-          "Issue not found"
-          "This issue may have been resolved, merged, or the link may be outdated."
+      addRespHeaders $ PageCtx baseBwconf{pageTitle = "Issue Not Found"} $ IssueNotFound pid
     Just issue -> do
       requestId <- UUIDId <$> UUIDEff.genUUID
       -- The default window is anchored on the issue's own last activity rather than
@@ -545,11 +544,12 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
         changes <- ApiChanges.getAnomaliesVM pid d.anomalyHashes
         schemas <- SchemaCatalog.getByKeysBatch (V.singleton (pid, issue.targetHash))
         pure (changes, HM.lookup (pid, issue.targetHash) schemas)
+      secret <- (.env.apiKeyEncryptionSecretKey) <$> ask @AuthContext
       addRespHeaders
         $ PageCtx bwconf
-        $ issueDetailPage
-          requestId
-          IssueView{pid, issue, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom}
+        $ IssueFound
+        $ let view = IssueView{pid, requestId, issue, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom, rollupSqlSig = Nothing}
+           in view{rollupSqlSig = issueRollupSql view <&> \(sql, _) -> Widget.sqlSignature secret pid Nothing (Just sql)}
   where
     -- A lookup that only decides whether an optional panel renders: a throw or a 10s stall
     -- degrades to Nothing. A transient TF error used to 500 the whole issue, precisely
@@ -592,9 +592,10 @@ data IssueSampleResult
   | SampleUnavailable
   | SampleEmpty
   | SampleFound UTCTime (V.Vector Text) (Maybe Text)
+  deriving stock (Eq, Show)
 
 
-issueSampleGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+issueSampleGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders IssueSample)
 issueSampleGetH pid issueId sinceM fromM toM = do
   _ <- Projects.sessionAndProject pid
   issueM <- Issues.selectIssueById pid issueId
@@ -629,8 +630,17 @@ issueSampleGetH pid issueId sinceM fromM toM = do
                   )
               _ -> Exception.throwIO $ userError "Unable to read telemetry statement timeout"
       let sample = maybe SampleUnavailable (maybe SampleEmpty \(at, PGArray summary, sampleTraceId) -> SampleFound at (V.fromList summary) sampleTraceId) result
-      addRespHeaders $ issueSampleCard_ pid snapshot sample
-    _ -> addRespHeaders $ p_ [class_ "px-4 text-sm text-textWeak"] "This issue has no event sample."
+      addRespHeaders $ IssueSample pid snapshot sample
+    _ -> addRespHeaders NoIssueSample
+
+
+data IssueSample = IssueSample Projects.ProjectId (Maybe Text) IssueSampleResult | NoIssueSample
+
+
+instance ToHtml IssueSample where
+  toHtml (IssueSample pid snapshot sample) = toHtml $ issueSampleCard_ pid snapshot sample
+  toHtml NoIssueSample = p_ [class_ "px-4 text-sm text-textWeak"] "This issue has no event sample."
+  toHtmlRaw = toHtml
 
 
 issueSampleCard_ :: Projects.ProjectId -> Maybe Text -> IssueSampleResult -> Html ()
@@ -902,6 +912,20 @@ issueFactRow_ now issue errM patternM =
         ]
 
 
+data IssueDetail = IssueNotFound Projects.ProjectId | IssueFound IssueView
+
+
+instance ToHtml IssueDetail where
+  toHtml (IssueNotFound pid) =
+    toHtml
+      $ emptyState_
+        def{icon = Just "circle-xmark", action = ESLink ("/p/" <> pid.toText <> "/issues") "Back to Issues"}
+        "Issue not found"
+        "This issue may have been resolved, merged, or the link may be outdated."
+  toHtml (IssueFound v) = toHtml $ issueDetailPage v
+  toHtmlRaw = toHtml
+
+
 -- | Everything the issue detail page's sections read. Bundled because the
 -- values travelled together through every section as positional arguments.
 --
@@ -912,6 +936,7 @@ issueFactRow_ now issue errM patternM =
 -- error pattern rather than the issue row.
 data IssueView = IssueView
   { pid :: Projects.ProjectId
+  , requestId :: UUIDId "ai_routine_run"
   , issue :: Issues.Issue
   , apiEvidence :: Maybe ([ApiChanges.AnomalyVM], Maybe Catalog.CatalogEntry)
   , traceRef :: Maybe (Text, UTCTime)
@@ -929,6 +954,8 @@ data IssueView = IssueView
   -- ^ The error's tag distribution rollup (key, value, count), most common first per key.
   , errHourlyFrom :: Maybe UTCTime
   -- ^ The first hour 'ErrorPatterns.hourlyStatsFrom' holds for the error, if any.
+  , rollupSqlSig :: Maybe Text
+  -- ^ 'Widget.sqlSignature' of 'issueRollupSql', so a viewer's chart may run it.
   }
 
 
@@ -974,8 +1001,8 @@ issueEventsQuery v = case schemaSubjectFor v of
 -- workflow bar under it, then the evidence column beside a rail. In the evidence
 -- column the aggregate band (range, chart, context) comes first, then one event card
 -- whose navigator stays pinned while its sections scroll under it.
-issueDetailPage :: UUIDId "ai_routine_run" -> IssueView -> Html ()
-issueDetailPage requestId v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
+issueDetailPage :: IssueView -> Html ()
+issueDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
   div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto"] do
     issueHeader_ v
     div_ [class_ "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]"] do
@@ -1169,7 +1196,7 @@ issueAggregate_ v@IssueView{..} = do
             span_ [class_ "ml-2 text-sm text-textWeak break-all"] $ toHtml path
     Just (Issues.QueryAlertP d) -> do
       let below = d.thresholdType == Issues.Below
-          meetsThreshold = if below then d.actualValue <= d.thresholdValue else d.actualValue >= d.thresholdValue
+          meetsThreshold = Issues.meetsThreshold d.thresholdType d.thresholdValue d.actualValue
       sideBySide_ (issueChartCard_ "Alert Query" "h-56" (Just d.thresholdValue) Nothing d.queryExpression)
         $ contextCard_ "p-4 flex flex-col gap-4" "Recorded evaluation" do
           div_ [class_ "flex items-start gap-6"] do
@@ -1245,6 +1272,7 @@ issueAggregate_ v@IssueView{..} = do
               , Widget.showTooltip = Just True
               , Widget.query = Just chartQuery
               , Widget.rollupSql = fst <$> rollupM
+              , Widget.sqlSig = rollupSqlSig <* rollupM
               , Widget.rollupFrom = isoT . snd <$> rollupM
               , Widget._projectId = Just issue.projectId
               , Widget.hideLegend = Just True
@@ -1260,24 +1288,29 @@ issueAggregate_ v@IssueView{..} = do
     issueVolumeChart_ :: Text -> Html ()
     issueVolumeChart_ chartTitle = whenJust (issueHashKey issue) \key ->
       issueChartCard_ chartTitle "h-24" Nothing issueHourlySql $ "hashes[*]==\"" <> key <> "\" | summarize count(*) by bin_auto(timestamp)"
-    -- The volume chart's series from the hourly counts ingest already keeps. The KQL
-    -- form scans every row in the window on TimeFusion (@hashes@ has no index there),
-    -- 4-27s for a day; this is an index lookup. Paired with the first hour the table can
-    -- answer. A signal counted since it first appeared has no gap, since it had no events
-    -- before then. Otherwise pattern stats start at their retention horizon, and error
-    -- stats where the error's counting did. See 'Web.Routes.rollupRoute'.
-    issueHourlySql = case Issues.issuePayload issue of
-      Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
-      Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
-      _ ->
-        errM >>= \e ->
-          errHourlyFrom <&> \counted ->
-            (hourlyRollupSql "apis.error_hourly_stats" $ "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId), coveredFrom (zonedTimeToUTC e.base.createdAt) counted)
-      where
-        logPattern sf h = Just (hourlyRollupSql "apis.log_pattern_hourly_stats" $ "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h, maybe horizon (\p -> coveredFrom (zonedTimeToUTC p.firstSeenAt) horizon) patternM)
-        horizon = addUTCTime (fromIntegral $ -(3600 * LogPatterns.hourlyStatsRetentionHours)) now
-        -- Counting that began within the hour of the first event leaves nothing uncounted.
-        coveredFrom firstEvent countedFrom = bool countedFrom (POSIX.posixSecondsToUTCTime 0) (countedFrom <= addUTCTime 3600 firstEvent)
+    issueHourlySql = issueRollupSql v
+
+
+-- | The volume chart's series from the hourly counts ingest already keeps. The KQL
+-- form scans every row in the window on TimeFusion (@hashes@ has no index there),
+-- 4-27s for a day; this is an index lookup. Paired with the first hour the table can
+-- answer. A signal counted since it first appeared has no gap, since it had no events
+-- before then. Otherwise pattern stats start at their retention horizon, and error
+-- stats where the error's counting did. See 'Web.Routes.rollupRoute'. Top-level so the
+-- handler can sign exactly the statement the view renders.
+issueRollupSql :: IssueView -> Maybe (Text, UTCTime)
+issueRollupSql IssueView{..} = case Issues.issuePayload issue of
+  Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
+  Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
+  _ ->
+    errM >>= \e ->
+      errHourlyFrom <&> \counted ->
+        (hourlyRollupSql "apis.error_hourly_stats" $ "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId), coveredFrom (zonedTimeToUTC e.base.createdAt) counted)
+  where
+    logPattern sf h = Just (hourlyRollupSql "apis.log_pattern_hourly_stats" $ "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h, maybe horizon (\p -> coveredFrom (zonedTimeToUTC p.firstSeenAt) horizon) patternM)
+    horizon = addUTCTime (fromIntegral $ -(3600 * LogPatterns.hourlyStatsRetentionHours)) now
+    -- Counting that began within the hour of the first event leaves nothing uncounted.
+    coveredFrom firstEvent countedFrom = bool countedFrom (POSIX.posixSecondsToUTCTime 0) (countedFrom <= addUTCTime 3600 firstEvent)
 
 
 -- | One card for everything about the sampled event. Its navigator is the only sticky

@@ -1,21 +1,15 @@
 module Pkg.KqlSeriesSpec (spec) where
 
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (execute, execute_)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Charts qualified as Charts
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import Relude
-import Test.Hspec (Spec, SpecWith, around, describe, it, shouldBe, shouldReturn)
 import Text.Read (read)
 
 
@@ -31,11 +25,10 @@ at s = toText $ iso8601Show $ addUTCTime s baseTime
 -- 100/s ("a" restarts at +120s), a DELTA counter at 100/s, and two gauges.
 -- Written straight to Postgres, so 'seriesSpec' reads Postgres even when TimeFusion is wired in.
 seed :: TestResources -> Projects.ProjectId -> IO ()
-seed tr pid = withResource tr.trPool \conn ->
-  void
-    $ execute
-      conn
-      [sql| INSERT INTO otel_metrics (project_id, timestamp, start_timestamp, id, series_id, metric_name, metric_type, aggregation_temporality, attributes, value)
+seed tr pid =
+  dbExec
+    tr
+    [sql| INSERT INTO otel_metrics (project_id, timestamp, start_timestamp, id, series_id, metric_name, metric_type, aggregation_temporality, attributes, value)
             SELECT ?, ?::timestamptz + make_interval(secs => s), CASE WHEN m.temporality = 'DELTA' THEN ?::timestamptz + make_interval(secs => s - 30) END,
                    gen_random_uuid(), m.series, m.name, m.mtype, m.temporality, jsonb_build_object('t', m.t),
                    CASE m.series WHEN 'ca' THEN CASE WHEN s < 120 THEN 100 * (s + 600) ELSE 100 * (s - 90) END
@@ -43,7 +36,7 @@ seed tr pid = withResource tr.trPool \conn ->
             FROM generate_series(-600, 600, 30) AS s,
                  (VALUES ('ca', 'c.total', 'SUM', 'CUMULATIVE', 'a'), ('cb', 'c.total', 'SUM', 'CUMULATIVE', 'b'), ('d', 'd.total', 'SUM', 'DELTA', 'a'),
                          ('g1', 'g.bytes', 'GAUGE', NULL, 'a'), ('g2', 'g.bytes', 'GAUGE', NULL, 'b')) AS m(series, name, mtype, temporality, t) |]
-      (pid.toText, baseTime, baseTime)
+    (pid.toText, baseTime, baseTime)
 
 
 spec :: Spec
@@ -101,7 +94,7 @@ ratioSpec = it "rateif / lastif divide filtered series by metric name or attribu
         pure $ map (V.toList . V.drop 1) (V.toList md.dataset)
   for_ (Hasql.SqlPostgres : [Hasql.SqlTimefusion | isJust tfUrl]) \db -> do
     -- The chart cache is keyed on the query, not the backend.
-    withResource tr.trPool \conn -> void $ execute_ conn "DELETE FROM query_cache"
+    dbExec tr "DELETE FROM query_cache" ()
     -- A post-summarize extend computes from the named aggregates and is the charted series.
     chart db ("hits = rateif(value, " <> isHit <> "), total = rate(value)") " | extend hit_pct = 100.0 * hits / total" `shouldReturn` replicate 5 [Just 40]
     chart db "100.0 * rateif(value, attributes.tier == \"a\") / rate(value)" "" `shouldReturn` replicate 5 [Just 70]

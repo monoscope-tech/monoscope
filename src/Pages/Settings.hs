@@ -65,7 +65,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Default
@@ -82,6 +81,7 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Hasql.Interpolate qualified as HI
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 
 import BackgroundJobs (errorTrendChartUrl)
 import BackgroundJobs qualified as BJ
@@ -1057,7 +1057,7 @@ data WebhookData = WebhookData
 -- | LS signs a hex-encoded HMAC-SHA256 of the raw body in the X-Signature header.
 --
 -- >>> import "monoscope" Pages.Settings qualified as PS
--- >>> import Data.ByteString.Base16 qualified as B16
+-- >>> import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 -- >>> import Data.ByteArray qualified as BA
 -- >>> import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 -- >>> import "cryptonite" Crypto.Hash (SHA256)

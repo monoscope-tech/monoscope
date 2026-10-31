@@ -1,6 +1,5 @@
 module CLI.CLISpec (spec) where
 
-import Data.Default (def)
 import Relude hiding (get, put)
 
 import Control.Lens ((.~), (^.))
@@ -17,7 +16,6 @@ import Network.Wreq qualified as Wreq
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.TestUtils
-import Test.Hspec
 
 timeAt :: Int -> Text
 timeAt offsetSeconds = toText $ iso8601Show $ addUTCTime (fromIntegral offsetSeconds) frozenTime
@@ -115,8 +113,8 @@ spec = around withTestResources do
       ingestLog tr key "test log entry" frozenTime
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
-      (_, pg) <-
-        testServant tr $
+      pg <-
+        call tr $
           Log.logExplorerDataH testPid def{Log.from = Just $ timeAt (-3600), Log.to = Just $ timeAt 3600}
       checkJsonValue (AE.toJSON pg) $ \obj ->
         shouldHaveKeys obj ["cols", "logsData", "count", "serviceColors", "hasMore"]

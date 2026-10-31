@@ -7,12 +7,10 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Base64.URL qualified as B64URL
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
-import Data.Default (def)
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -21,7 +19,6 @@ import Data.UUID.Quasi (uuid)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
@@ -36,11 +33,9 @@ import Pages.Monitors (AlertUpsertForm (..), alertUpsertPostH, convertToQueryMon
 import Pages.Projects qualified as ProjectPages
 import Pages.Settings qualified as Settings
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Mail qualified as Mail
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
-import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Environment qualified as Env
 import Test.Hspec
@@ -149,7 +144,7 @@ spec = sequential $ aroundAll withTestResources do
         $ Dashboards.dashboardsPostH
           testPid
           Dashboards.DashboardForm{Dashboards.title = "Widget Monitor Lifecycle", Dashboards.file = "widget-monitor.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
-      (_, dashboardsPage) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])
+      dashboardsPage <- call tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])
       dashboardId <- case dashboardsPage of
         Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) ->
           maybe (fail "the dashboard was not saved") (pure . (.id)) $ V.find ((== "Widget Monitor Lifecycle") . (.title)) dashboards
@@ -157,8 +152,8 @@ spec = sequential $ aroundAll withTestResources do
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
       isNothing <$> runTestBgNoReset tr (DashboardModel.getDashboardByProjectId otherPid dashboardId) `shouldReturn` True
 
-      (_, savedWidget) <-
-        testServant tr
+      savedWidget <-
+        call tr
           $ Dashboards.dashboardWidgetPutH
             testPid
             dashboardId
@@ -189,17 +184,16 @@ spec = sequential $ aroundAll withTestResources do
               , stopAfter = Just 1
               , teams = []
               }
-      void $ withResource tr.trPool \conn ->
-        PGS.execute
-          conn
-          [sql|UPDATE projects.teams
+      dbExec
+        tr
+        [sql|UPDATE projects.teams
                 SET notify_emails = ARRAY['alerts@example.com'],
                     discord_channels = ARRAY['C_MONITOR'],
                     phone_numbers = ARRAY['+15550001111'],
                     pagerduty_services = ARRAY['widget-monitor-test'],
                     disabled_channels = '{}'
                 WHERE project_id = ? AND handle = 'everyone'|]
-          (PGS.Only testPid)
+        (PGS.Only testPid)
       -- Regression: a raw-SQL widget posts an empty query, which compiled to an all-traffic count.
       void (toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm{Dashboards.query = ""}) `shouldThrow` anyIOException
       void (toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm{Dashboards.alertThreshold = Nothing}) `shouldThrow` anyIOException
@@ -208,7 +202,7 @@ spec = sequential $ aroundAll withTestResources do
       createdMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId
       ((.alertConfig.title) <$> createdMonitor) `shouldBe` Just "Checkout errors · Widget Monitor Lifecycle"
       ((.alertConfig.emailAll) <$> createdMonitor) `shouldBe` Just True
-      (_, overview) <- testServant tr $ unifiedMonitorOverviewH testPid (maybe "" (.id.toText) createdMonitor)
+      overview <- call tr $ unifiedMonitorOverviewH testPid (maybe "" (.id.toText) createdMonitor)
       (renderT overview) `shouldSatisfy` T.isInfixOf ("href=\"" <> widgetUrl <> "\"")
       setupSlackData tr testPid "T_MONITOR_SIM"
       setupDiscordData tr testPid "G_MONITOR_SIM"
@@ -300,8 +294,7 @@ spec = sequential $ aroundAll withTestResources do
       -- A webhook accepts the root without returning its timestamp. Simulate
       -- capture of the app's own message before delivering lifecycle replies.
       Just monitor <- pure firedMonitor
-      [PGS.Only rootId] <- withResource tr.trPool \conn ->
-        PGS.query conn [sql|SELECT r.id FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.project_id = ? AND e.source_id = ? AND r.channel_id = 'C_NOTIF_CHANNEL'|] (testPid, monitor.id)
+      [PGS.Only rootId] <- dbQuery tr [sql|SELECT r.id FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.project_id = ? AND e.source_id = ? AND r.channel_id = 'C_NOTIF_CHANNEL'|] (testPid, monitor.id)
       receipt <- receiveSlackEvent tr $ slackRootEvent "EvMonitorRoot" "T_MONITOR_SIM" "C_NOTIF_CHANNEL" rootId "1788900000.000001" "A_TEST"
       runTestBgNoReset tr (Incidents.captureSlackRoot "A_TEST" receipt) `shouldReturn` True
       (refresh, _) <- captureNotifs tr runSlackIncidentDeliveries
@@ -343,7 +336,7 @@ spec = sequential $ aroundAll withTestResources do
       let copyDashboardId = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef1
       sourceDashboardVM <- maybe (fail "the source dashboard disappeared") pure savedDash
       void $ runTestBgNoReset tr $ DashboardModel.insert sourceDashboardVM{DashboardModel.id = copyDashboardId, DashboardModel.title = "Widget Monitor Copy", DashboardModel.schema = Just (def :: DashboardModel.Dashboard){DashboardModel.title = Just "Widget Monitor Copy"}, DashboardModel.filePath = Nothing}
-      (_, copyWidget) <- testServant tr $ Dashboards.dashboardDuplicateWidgetPostH testPid copyDashboardId widgetId (Just dashboardId)
+      copyWidget <- call tr $ Dashboards.dashboardDuplicateWidgetPostH testPid copyDashboardId widgetId (Just dashboardId)
       copyWidgetId <- maybe (fail "the copied widget has no id") pure copyWidget.id
       copyMonitor <- runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just copyDashboardId) copyWidgetId) >>= maybe (fail "the copied widget has no monitor") pure
       copyMonitor.notificationCount `shouldBe` 0
@@ -431,8 +424,7 @@ spec = sequential $ aroundAll withTestResources do
         Nothing -> error "Monitor not found"
 
       -- Update status to alerting via direct DB update (simulating alert trigger)
-      _ <- withResource tr.trPool \conn ->
-        PGS.execute conn [sql|UPDATE monitors.query_monitors SET current_status = 'alerting', current_value = 110 WHERE id = '11111111-1111-1111-1111-111111111111'|] ()
+      _ <- dbExec tr [sql|UPDATE monitors.query_monitors SET current_status = 'alerting', current_value = 110 WHERE id = '11111111-1111-1111-1111-111111111111'|] ()
 
       -- Verify status was updated
       monitorM' <- runTestBg frozenTime tr $ Monitors.queryMonitorById (Monitors.QueryMonitorId [uuid|11111111-1111-1111-1111-111111111111|])
@@ -448,16 +440,16 @@ spec = sequential $ aroundAll withTestResources do
 
     it "freeTier_teamMonitor_onlyEmailsOwner_andPreservesPaidRecipients" \_ -> withTestResources \tr -> do
       insertPipelineMonitor tr pipelineMonId "" 100 Nothing "above" Nothing Nothing
-      withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = ?|] (PGS.Only testPid)
+      dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = ?|] (PGS.Only testPid)
       owner <- runQueryEffect tr (ProjectMembers.selectActiveProjectMembers testPid) >>= maybe (fail "Owner missing") pure . listToMaybe
       let ownerEmail = CI.original owner.email
-      withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.teams SET notify_emails = ARRAY[?, 'nonowner@example.com'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (ownerEmail, testPid)
+      dbExec tr [sql|UPDATE projects.teams SET notify_emails = ARRAY[?, 'nonowner@example.com'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (ownerEmail, testPid)
       (testEmails, _) <- testServantWithNotifications tr $ Settings.notificationsTestPostH testPid (Settings.TestForm "new_endpoint" Settings.TCEmail Nothing)
       [email.receiver | EmailNotification email <- testEmails] `shouldBe` [ownerEmail]
       free <- evalMonitorValueWithNotifs t0 tr pipelineMonId 150
       [email.receiver | EmailNotification email <- free] `shouldBe` [ownerEmail]
       void $ evalMonitorValueWithNotifs (addUTCTime 60 t0) tr pipelineMonId 50
-      withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (PGS.Only testPid)
+      dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (PGS.Only testPid)
       paid <- evalMonitorValueWithNotifs (addUTCTime 120 t0) tr pipelineMonId 150
       [email.receiver | EmailNotification email <- paid] `shouldMatchList` [ownerEmail, "nonowner@example.com"]
 
@@ -575,9 +567,9 @@ spec = sequential $ aroundAll withTestResources do
     it "Warning → Alerting transition with hysteresis" \tr -> do
       let hystMonId = Monitors.QueryMonitorId [uuid|33333333-3333-3333-3333-333333333333|]
       let assertIssue expectedThreshold expectedValue notifications = do
-            rows <- withResource tr.trPool \conn ->
-              PGS.query
-                conn
+            rows <-
+              dbQuery
+                tr
                 [sql| SELECT id, title, issue_data FROM apis.issues
                       WHERE project_id = ? AND target_hash = ? AND issue_type = 'query_alert'
                         AND acknowledged_at IS NULL AND archived_at IS NULL |]
@@ -597,8 +589,7 @@ spec = sequential $ aroundAll withTestResources do
       m1.currentStatus `shouldBe` Monitors.MSWarning
       assertIssue 80 90 warningNotifications
       -- Existing issues can carry a threshold-bearing title from an earlier release.
-      void $ withResource tr.trPool \conn ->
-        PGS.execute conn [sql|UPDATE apis.issues SET title = 'Pipeline Test Monitor threshold above 80' WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey hystMonId)
+      dbExec tr [sql|UPDATE apis.issues SET title = 'Pipeline Test Monitor threshold above 80' WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey hystMonId)
 
       -- Value 110 → MSAlerting
       alertNotifications <- evalMonitorValueWithNotifs (addUTCTime 120 t0) tr hystMonId 110
@@ -619,11 +610,10 @@ spec = sequential $ aroundAll withTestResources do
     it "Monitor with interval not yet elapsed is skipped" \tr -> do
       let skipMonId = Monitors.QueryMonitorId [uuid|44444444-4444-4444-4444-444444444444|]
       insertPipelineMonitor tr skipMonId "SELECT 150::float8" 100 Nothing "above" Nothing Nothing
-      void $ withResource tr.trPool \conn ->
-        PGS.execute
-          conn
-          [sql|UPDATE monitors.query_monitors SET check_interval_mins = 60, last_evaluated = ? WHERE id = ?|]
-          (addUTCTime (-1800) t0, skipMonId)
+      dbExec
+        tr
+        [sql|UPDATE monitors.query_monitors SET check_interval_mins = 60, last_evaluated = ? WHERE id = ?|]
+        (addUTCTime (-1800) t0, skipMonId)
       evalMonitorsAt t0 tr
       m <- fetchMonitor tr skipMonId
       m.currentStatus `shouldBe` Monitors.MSNormal
@@ -680,8 +670,7 @@ spec = sequential $ aroundAll withTestResources do
           siblingId = Monitors.QueryMonitorId [uuid|aaaaaaaa-9999-4999-8999-999999999999|]
       insertPipelineMonitor tr neverId "" 0 Nothing "above" Nothing Nothing
       insertPipelineMonitor tr siblingId "" 0 Nothing "above" Nothing Nothing
-      void $ withResource tr.trPool \conn ->
-        PGS.execute conn [sql|UPDATE monitors.query_monitors SET last_evaluated = NULL WHERE id = ?|] (PGS.Only neverId)
+      dbExec tr [sql|UPDATE monitors.query_monitors SET last_evaluated = NULL WHERE id = ?|] (PGS.Only neverId)
 
       -- The read itself is what used to throw, taking every monitor down with it.
       actives <- runTestBg t0 tr Monitors.getActiveQueryMonitors
@@ -699,8 +688,7 @@ spec = sequential $ aroundAll withTestResources do
       let renotifyMonId = Monitors.QueryMonitorId [uuid|55555555-5555-5555-5555-555555555555|]
 
       it "delivers reminders only when due, stops at the limit, and always reports recovery" \tr -> do
-        void $ withResource tr.trPool \conn ->
-          PGS.execute conn [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only renotifyMonId)
+        dbExec tr [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only renotifyMonId)
         insertRenotifyMonitor tr renotifyMonId "SELECT 150::float8" 100
         notifs1 <- evalMonitorValueWithNotifs t0 tr renotifyMonId 150
         m1 <- fetchMonitor tr renotifyMonId
@@ -754,19 +742,17 @@ spec = sequential $ aroundAll withTestResources do
       it "suppresses delivery while muted and resumes after the window" \tr -> do
         let muteMonId = Monitors.QueryMonitorId [uuid|66666666-6666-6666-6666-666666666666|]
             evalT = addUTCTime (200 * 60) t0
-        void $ withResource tr.trPool \conn ->
-          PGS.execute conn [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only muteMonId)
+        dbExec tr [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only muteMonId)
         insertRenotifyMonitor tr muteMonId "SELECT 150::float8" 100
         setMonitorRenotifyConfig tr muteMonId Nothing Nothing 0
 
         notifs0 <- evalMonitorValueWithNotifs evalT tr muteMonId 150
         length notifs0 `shouldSatisfy` (> 0)
 
-        void $ withResource tr.trPool \conn ->
-          PGS.execute
-            conn
-            [sql|UPDATE monitors.query_monitors SET muted_until = ?, notification_count = 0, alert_last_triggered = NULL WHERE id = ?|]
-            (addUTCTime 3600 evalT, muteMonId)
+        dbExec
+          tr
+          [sql|UPDATE monitors.query_monitors SET muted_until = ?, notification_count = 0, alert_last_triggered = NULL WHERE id = ?|]
+          (addUTCTime 3600 evalT, muteMonId)
 
         resetLastEvaluated tr muteMonId
         notifs30 <- evalMonitorValueWithNotifs (addUTCTime 1800 evalT) tr muteMonId 150
@@ -812,8 +798,7 @@ insertPipelineMonitor tr monId _ threshold warnThreshold direction alertRecovery
           }
   void $ runTestBg frozenTime tr $ Monitors.queryMonitorUpsert monitor
   -- Ensure it's evaluatable: set lastEvaluated far in the past
-  void $ withResource tr.trPool \conn ->
-    PGS.execute conn [sql|UPDATE monitors.query_monitors SET last_evaluated = '2020-01-01'::timestamptz WHERE id = ?|] (PGS.Only monId)
+  dbExec tr [sql|UPDATE monitors.query_monitors SET last_evaluated = '2020-01-01'::timestamptz WHERE id = ?|] (PGS.Only monId)
 
 
 -- | Run checkTriggeredQueryMonitors at a specific frozen time
@@ -829,14 +814,12 @@ evalMonitorValueAt t tr monId value = do
 
 -- | Reset lastEvaluated to far past so the monitor gets re-evaluated
 resetLastEvaluated :: TestResources -> Monitors.QueryMonitorId -> IO ()
-resetLastEvaluated tr monId = void $ withResource tr.trPool \conn ->
-  PGS.execute conn [sql|UPDATE monitors.query_monitors SET last_evaluated = '2020-01-01'::timestamptz WHERE id = ?|] (PGS.Only monId)
+resetLastEvaluated tr monId = dbExec tr [sql|UPDATE monitors.query_monitors SET last_evaluated = '2020-01-01'::timestamptz WHERE id = ?|] (PGS.Only monId)
 
 
 -- | Replace source KQL and reset lastEvaluated (used by query-failure tests).
 setMonitorQuery :: TestResources -> Monitors.QueryMonitorId -> Text -> IO ()
-setMonitorQuery tr monId q = void $ withResource tr.trPool \conn ->
-  PGS.execute conn [sql|UPDATE monitors.query_monitors SET log_query = ?, last_evaluated = '2020-01-01'::timestamptz WHERE id = ?|] (q, monId)
+setMonitorQuery tr monId q = dbExec tr [sql|UPDATE monitors.query_monitors SET log_query = ?, last_evaluated = '2020-01-01'::timestamptz WHERE id = ?|] (q, monId)
 
 
 -- | Fetch a monitor by ID (asserts it exists)
@@ -850,8 +833,7 @@ fetchMonitor tr monId = do
 insertRenotifyMonitor :: TestResources -> Monitors.QueryMonitorId -> Text -> Double -> IO ()
 insertRenotifyMonitor tr monId sqlQuery threshold = do
   insertPipelineMonitor tr monId sqlQuery threshold Nothing "above" Nothing Nothing
-  void $ withResource tr.trPool \conn ->
-    PGS.execute conn [sql|UPDATE projects.teams SET pagerduty_services = ARRAY['test-integration-key'] WHERE project_id = ? AND handle = 'everyone'|] (PGS.Only testPid)
+  dbExec tr [sql|UPDATE projects.teams SET pagerduty_services = ARRAY['test-integration-key'] WHERE project_id = ? AND handle = 'everyone'|] (PGS.Only testPid)
 
 
 evalMonitorValueWithNotifs :: UTCTime -> TestResources -> Monitors.QueryMonitorId -> Double -> IO [Notification]
@@ -862,14 +844,13 @@ evalMonitorValueWithNotifs t tr monId value = do
 
 -- | Set renotify config columns via direct SQL
 setMonitorRenotifyConfig :: TestResources -> Monitors.QueryMonitorId -> Maybe Int -> Maybe Int -> Int -> IO ()
-setMonitorRenotifyConfig tr monId renotifyMins stopAfter notifCount = void $ withResource tr.trPool \conn ->
-  PGS.execute
-    conn
+setMonitorRenotifyConfig tr monId renotifyMins stopAfter notifCount =
+  dbExec
+    tr
     [sql|UPDATE monitors.query_monitors SET renotify_interval_mins = ?, stop_after_count = ?, notification_count = ? WHERE id = ?|]
     (renotifyMins, stopAfter, notifCount, monId)
 
 
 -- | Set alertLastTriggered timestamp
 setAlertLastTriggered :: TestResources -> Monitors.QueryMonitorId -> Maybe UTCTime -> IO ()
-setAlertLastTriggered tr monId t = void $ withResource tr.trPool \conn ->
-  PGS.execute conn [sql|UPDATE monitors.query_monitors SET alert_last_triggered = ? WHERE id = ?|] (t, monId)
+setAlertLastTriggered tr monId t = dbExec tr [sql|UPDATE monitors.query_monitors SET alert_last_triggered = ? WHERE id = ?|] (t, monId)

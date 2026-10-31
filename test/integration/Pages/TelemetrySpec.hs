@@ -8,7 +8,6 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Numeric (showHex)
@@ -17,7 +16,6 @@ import Pages.Telemetry (metricDetailUrl, metricExpandUrl)
 import Pages.Telemetry qualified as Trace
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
-import Relude
 import System.Config (AuthContext (metricCatalogBuffer))
 import Test.Hspec
 
@@ -45,7 +43,7 @@ spec = do
       ingestMetric tr apiKey [] [] "datapoint.recent" 1 (addUTCTime (-1800) frozenTime)
       runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
 
-      (_, overview) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      overview <- call tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case overview of
         Trace.MetricsOVDataPointMain (PageCtx _ (_, datapoints, _, countUrl, page, pageUrl, _)) -> do
           countUrl `shouldBe` "/p/" <> testPid.toText <> "/metrics/datapoints/counts?since=1H"
@@ -56,7 +54,7 @@ spec = do
           Map.lookup "datapoint.stale" counts `shouldBe` Just Nothing
         _ -> expectationFailure "expected the datapoints overview"
 
-      (_, expanded) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing (Just "datapoint.current") Nothing Nothing Nothing
+      expanded <- call tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing (Just "datapoint.current") Nothing Nothing Nothing
       let overviewHtml = renderT overview
           drawerMarkup = T.take 200 $ snd $ T.breakOn "id=\"global-data-drawer\"" $ renderT expanded
       T.count "placeholder=\"Search metrics\"" overviewHtml `shouldBe` 1
@@ -67,15 +65,15 @@ spec = do
       overviewHtml `shouldSatisfy` T.isInfixOf "data-hx-push-url"
       drawerMarkup `shouldSatisfy` T.isInfixOf "checked"
 
-      (_, countCells) <- testServant tr $ Trace.dataPointCountsGetH testPid Nothing Nothing Nothing
+      countCells <- call tr $ Trace.dataPointCountsGetH testPid Nothing Nothing Nothing
       let countsHtml = renderT countCells
       for_ ["metric-datapoint-count-datapoint.current", "metric-datapoint-count-datapoint.stale", "hx-swap-oob", ">1<", ">0<"] \text -> countsHtml `shouldSatisfy` T.isInfixOf text
 
       -- A cleared picker submits since=&from=&to=; that must read as "no range" and take the
       -- default window, not collapse to now..now and report every metric as empty.
-      (_, blankCells) <- testServant tr $ Trace.dataPointCountsGetH testPid (Just "") (Just "") (Just "")
+      blankCells <- call tr $ Trace.dataPointCountsGetH testPid (Just "") (Just "") (Just "")
       renderT blankCells `shouldBe` countsHtml
-      (_, blankOverview) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") (Just "") (Just "") (Just "") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      blankOverview <- call tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") (Just "") (Just "") (Just "") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case blankOverview of
         Trace.MetricsOVDataPointMain (PageCtx _ (_, _, _, countUrl, _, pageUrl, _)) -> do
           countUrl `shouldBe` "/p/" <> testPid.toText <> "/metrics/datapoints/counts?since=1H"
@@ -96,7 +94,7 @@ spec = do
                 (testPid, svc :: Text)
       for_ ["source-1", "source-2", "source-3", "source-4"] seedSvc
 
-      (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      page <- call tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let pageHtml = renderT page
       for_ ["source-1", "source-2", "source-3", "View 1 more source in details", metricDetailUrl testPid "source.overflow" "all" Nothing] \text -> pageHtml `shouldSatisfy` T.isInfixOf text
       pageHtml `shouldSatisfy` not . T.isInfixOf "source-4"
@@ -115,7 +113,7 @@ spec = do
                 (testPid, "page.metric." <> show n :: Text)
       for_ ([1 .. 30] :: [Int]) seed
 
-      (_, firstPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      firstPage <- call tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let firstHtml = renderT firstPage
       firstHtml `shouldSatisfy` not . T.isInfixOf "page.metric.30"
       -- `&amp;`, not `&`: this is the pager's rendered href, and Lucid escapes the
@@ -123,7 +121,7 @@ spec = do
       -- the per-row `…&cursor=0&expand=…` hrefs.
       firstHtml `shouldSatisfy` T.isInfixOf "&amp;cursor=1\""
 
-      (_, secondPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing (Just 1) Nothing Nothing Nothing Nothing
+      secondPage <- call tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing (Just 1) Nothing Nothing Nothing Nothing
       renderT secondPage `shouldSatisfy` T.isInfixOf "page.metric.30"
 
   around withTestResources $ describe "metric details" do
@@ -142,12 +140,12 @@ spec = do
       seed "process.cpu.usage" ["state"]
       seed "process.cpu.time" ["state"]
 
-      (_, detail) <- testServant tr $ Trace.metricDetailsGetH testPid "process.cpu.usage" Nothing Nothing Nothing Nothing Nothing
+      detail <- call tr $ Trace.metricDetailsGetH testPid "process.cpu.usage" Nothing Nothing Nothing Nothing Nothing
       let detailHtml = renderT detail
       detailHtml `shouldSatisfy` T.isInfixOf "metric-related-content"
       detailHtml `shouldSatisfy` not . T.isInfixOf "process.cpu.time"
 
-      (_, related) <- testServant tr $ Trace.metricRelatedGetH testPid "process.cpu.usage" Nothing
+      related <- call tr $ Trace.metricRelatedGetH testPid "process.cpu.usage" Nothing
       renderT related `shouldSatisfy` T.isInfixOf "process.cpu.time"
 
   -- Regression guard: the trace-overlay projection selected neither `kind` nor
@@ -179,7 +177,7 @@ spec = do
       V.length (V.filter (\s -> s.status == Just Telemetry.SSError) spans) `shouldBe` 1
 
       -- The page still renders end-to-end with the widened projection.
-      (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing Nothing
+      page <- call tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing Nothing
       let html = renderT page
       for_ ["Waterfall", "GET /checkout", "pg.query", ">Errors</", ">1<"] \text ->
         html `shouldSatisfy` T.isInfixOf text
@@ -210,7 +208,7 @@ spec = do
           []
           (addUTCTime (fromIntegral i / 1000) frozenTime)
 
-      (_, firstPage) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing (Just 50)
+      firstPage <- call tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing (Just 50)
       case firstPage of
         Trace.TraceDetails _ _ spans _ moreUrl -> do
           V.length spans `shouldBe` 50
@@ -224,7 +222,7 @@ spec = do
       firstHtml `shouldSatisfy` T.isInfixOf "Load more spans"
 
       -- Following it yields the whole trace, and the offer goes away.
-      (_, fullPage) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing (Just 100)
+      fullPage <- call tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing (Just 100)
       case fullPage of
         Trace.TraceDetails _ _ spans _ moreUrl -> do
           V.length spans `shouldBe` 60
@@ -234,7 +232,7 @@ spec = do
 
       -- A span past the first page is still findable: nav looks a span up by id,
       -- so capping it at the render page would anchor the panel on the root.
-      (_, navToLate) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) (Just "000000000000003b") (Just "next") Nothing (Just 50)
+      navToLate <- call tr $ Trace.traceH testPid trId (Just frozenTime) (Just "000000000000003b") (Just "next") Nothing (Just 50)
       case navToLate of
         Trace.SpanDetails _ target _ -> target.name `shouldBe` Just "span-59"
         _ -> expectationFailure "expected the 59th span, not a fallback to the root"
@@ -242,9 +240,9 @@ spec = do
       -- ...and a Load more pull doesn't re-arm the auto-open marker, which would
       -- drag the detail panel back to the first span on every click.
       let embeddedHtml p' = renderT p'
-      (_, firstEmbedded) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing (Just "true") Nothing
+      firstEmbedded <- call tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing (Just "true") Nothing
       embeddedHtml firstEmbedded `shouldSatisfy` T.isInfixOf "load[document.getElementById(&#39;trace_span_container&#39;).clientWidth"
-      (_, moreEmbedded) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing (Just "true") (Just 100)
+      moreEmbedded <- call tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing (Just "true") (Just 100)
       embeddedHtml moreEmbedded `shouldSatisfy` not . T.isInfixOf "load[document.getElementById(&#39;trace_span_container&#39;).clientWidth"
 
   -- 'getMetricChartListData' dominates the /metrics page (640ms of ~850ms before the
@@ -345,7 +343,7 @@ spec = do
       map (.metricName) (V.toList literal.active) `shouldBe` ["literal%_&+"]
       groups <- runTestBg frozenTime tr $ Telemetry.getMetricGroups testPid
       groups `shouldContain` ["runtime."]
-      (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "charts") Nothing Nothing (Just "6H") Nothing Nothing Nothing Nothing Nothing (Just "%_&+") Nothing
+      page <- call tr $ Trace.metricsOverViewGetH testPid (Just "charts") Nothing Nothing (Just "6H") Nothing Nothing Nothing Nothing Nothing (Just "%_&+") Nothing
       let markup = renderT page
       markup `shouldSatisfy` T.isInfixOf "q=%25_%26%2B"
       markup `shouldSatisfy` not . T.isInfixOf "a.unrelated"
@@ -376,7 +374,7 @@ spec = do
         withPool tr.trPool
           $ void
           $ DBT.execute [sql| UPDATE otel_metrics_meta SET metric_labels = ? WHERE project_id = ? AND metric_name = 'request.duration' |] (PGArray labels, testPid)
-        (_, card) <- testServant tr $ Trace.metricCardGetH testPid "request.duration" requested (Just "checkout")
+        card <- call tr $ Trace.metricCardGetH testPid "request.duration" requested (Just "checkout")
         let markup = renderT card
         for_ ["sum(distribution_sum) / sum(distribution_count)", "distribution_count &gt; 0", "resource.service.name", "checkout", "&quot;hideValue&quot;:true"] \text ->
           markup `shouldSatisfy` T.isInfixOf text
@@ -403,7 +401,7 @@ spec = do
            metric_labels,first_seen_at,last_seen_at,first_timestamp,last_timestamp)
           VALUES (?,'victim.secret','GAUGE','1','','checkout','test','{attributes.region}',now(),now(),now(),now()) |]
           (Only victim)
-      (_, card) <- testServant tr $ Trace.metricCardGetH victim "victim.secret" Nothing Nothing
+      card <- call tr $ Trace.metricCardGetH victim "victim.secret" Nothing Nothing
       renderT card `shouldSatisfy` T.isInfixOf "victim.secret"
       assertNonMemberDenied tr victim $ Trace.metricCardGetH victim "victim.secret" Nothing Nothing
       assertNonMemberDenied tr victim $ Trace.metricBreakdownGetH victim "victim.secret" Nothing
@@ -432,13 +430,13 @@ spec = do
       matched <- runTestBg frozenTime tr $ Telemetry.getMetricServiceNames testPid (Just "billing") 50
       matched `shouldBe` ["billing-api"]
 
-      (_, opts) <- testServant tr $ Trace.metricServicesGetH testPid (Just "billing") Nothing
+      opts <- call tr $ Trace.metricServicesGetH testPid (Just "billing") Nothing
       let optsHtml = renderT opts
       optsHtml `shouldSatisfy` T.isInfixOf "billing-api"
       optsHtml `shouldSatisfy` T.isInfixOf "All Services"
 
       -- The page itself ships the picker, not the services.
-      (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      page <- call tr $ Trace.metricsOverViewGetH testPid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let pageHtml = renderT page
       pageHtml `shouldSatisfy` T.isInfixOf "/metrics/services"
       pageHtml `shouldSatisfy` T.isInfixOf "gap-x-4 gap-y-5 pb-4"

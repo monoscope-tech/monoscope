@@ -13,9 +13,7 @@ import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Slack (slackInteractionsH)
 import Pkg.TestUtils
-import Relude
 import Servant.Server (ServerError (errHTTPCode))
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 spec :: Spec

@@ -14,7 +14,6 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -32,9 +31,11 @@ import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful.Error.Static (catchError)
 import GHC.Clock (getMonotonicTime)
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
 import Network.GRPC.Common.Protobuf (Proto (..))
@@ -46,14 +47,13 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as Issues
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (browserKql, parseQueryToAST)
+import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.TestClock (getTestTime, setTestTime)
-import Pkg.TestUtils
+import Pkg.TestUtils hiding (sql)
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
-import Relude
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config qualified as Config
@@ -96,9 +96,10 @@ partialHtml = \case
 
 
 rumLocation :: TestResources -> Projects.ProjectId -> [Text] -> [(Text, Maybe Text)] -> IO Text
-rumLocation tr pid view ps = runAuthHandler tr (Dashboards.rumRedirectH pid view ps) >>= \h -> case lookupResponseHeader @"Location" h of
-  Header l -> pure l
-  _ -> fail "redirect carried no Location header"
+rumLocation tr pid view ps =
+  runAuthHandler tr (Dashboards.rumRedirectH pid view ps) >>= \h -> case lookupResponseHeader @"Location" h of
+    Header l -> pure l
+    _ -> fail "redirect carried no Location header"
 
 
 explorerLinkParams :: Projects.ProjectId -> Text -> [[(Text, Text)]]
@@ -143,13 +144,13 @@ noFilters = Dashboards.DashboardFilters{tag = []}
 -- template and is private to the file, so clearing is safe.
 newDashboard :: TestResources -> Text -> Text -> IO DashboardModel.DashboardId
 newDashboard tr file title = do
-  (_, existing) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
+  existing <- call tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
   case existing of
     Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) ->
       for_ dashboards \d -> void $ testServant tr $ Dashboards.dashboardDeleteH testPid d.id
     _ -> pass
   _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = title, Dashboards.file = file, Dashboards.teams = [], Dashboards.fileDir = Nothing}
-  (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
+  pg <- call tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
   case pg of
     Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) ->
       maybe (fail $ "dashboard not found after creating it: " <> toString title) (pure . (.id)) $ V.find (\d -> d.title == title) dashboards
@@ -209,12 +210,12 @@ spec = sequential $ aroundAll withTestResources do
       let params = [("var-browser", Just "Safari"), ("since", Just "7D"), ("activeTabSlug", Just "errors")]
           root = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/errors"
       form <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.DashboardViewForm "name=Mobile+Safari&var-browser=Safari&since=7D&activeTabSlug=errors"
-      (_, saved) <- testServant tr $ Dashboards.dashboardViewPostH testPid did form
+      saved <- call tr $ Dashboards.dashboardViewPostH testPid did form
       linkParams root (renderT saved) `shouldSatisfy` any (\ps -> lookup "var-browser" ps == Just "Safari" && lookup "since" ps == Just "7D")
       (vm, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
       vm.schema `shouldSatisfy` isNothing
       map (.name) (V.toList vm.savedViews) `shouldBe` ["Mobile Safari"]
-      (_, deleted) <- testServant tr $ Dashboards.dashboardViewDeleteH testPid did "Mobile Safari" params
+      deleted <- call tr $ Dashboards.dashboardViewDeleteH testPid did "Mobile Safari" params
       renderT deleted `shouldNotSatisfy` T.isInfixOf ">Mobile Safari</a>"
 
     it "rendersConfiguredViews_andTabScopedVariables_onAnyDashboard" \tr -> do
@@ -229,9 +230,9 @@ spec = sequential $ aroundAll withTestResources do
       _ <- testServant tr $ Dashboards.dashboardViewPostH testPid did form
       (saved, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
       map (.variables) (V.toList saved.savedViews) `shouldBe` [Map.fromList [("service", "worker"), ("region", "us")]]
-      (_, overridden) <- testServant tr $ Dashboards.dashboardViewPostH testPid did form{Dashboards.name = "Europe API"}
+      overridden <- call tr $ Dashboards.dashboardViewPostH testPid did form{Dashboards.name = "Europe API"}
       renderT overridden `shouldNotSatisfy` T.isInfixOf "var-region=eu"
-      (_, revealed) <- testServant tr $ Dashboards.dashboardViewDeleteH testPid did "Europe API" form.params
+      revealed <- call tr $ Dashboards.dashboardViewDeleteH testPid did "Europe API" form.params
       renderT revealed `shouldSatisfy` T.isInfixOf "var-region=eu"
       reloaded <- getTab tr did "overview" (Just "div#dashboard-tabs-content") [("since", Just "24H")]
       let root = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/overview"
@@ -259,7 +260,7 @@ spec = sequential $ aroundAll withTestResources do
         let root = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/" <> slug
         linkParams root html `shouldSatisfy` any (\ps -> lookup "var-service" ps == Just "" && lookup "var-database" ps == Just "")
       form <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.DashboardViewForm "name=API&var-service=api&since=7D&activeTabSlug=logs"
-      (_, saved) <- testServant tr $ Dashboards.dashboardViewPostH testPid did form
+      saved <- call tr $ Dashboards.dashboardViewPostH testPid did form
       renderT saved `shouldSatisfy` T.isInfixOf "Saved views: API"
 
     it "concurrentSaves_keepOtherViews_andReplaceTheSameNameOnce" \tr -> do
@@ -363,10 +364,10 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldContainAll` ["aria-label=\"Expand widget\"", "gap-0.5 flex flex-col", "min-h-8 px-1", "min-h-0 p-3"]
 
       _ <- newDashboard tr "overview.yaml" "Widget destination"
-      (_, picker) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "metric-widget") Nothing Nothing noFilters
+      picker <- call tr $ Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "metric-widget") Nothing Nothing noFilters
       -- Rows PUT to the widget upsert, whose response carries the "Widget added" toast.
       renderT picker `shouldSatisfy` T.isInfixOf "hx-put=\"/p/"
-      (_, dashboards) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
+      dashboards <- call tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
       renderT dashboards
         `shouldSatisfy` T.isInfixOf "aria-label=\"Add dashboard to favorites\""
 
@@ -449,7 +450,7 @@ spec = sequential $ aroundAll withTestResources do
                 "title: Tabbed\nwidgets: []\ntabs:\n  - name: First Tab\n    widgets:\n      - type: timeseries\n        id: first-widget\n        title: First\n        layout: { x: 0, y: 0, w: 3, h: 3 }\n  - name: Second Tab\n    widgets:\n      - type: stat\n        id: second-widget\n        title: Second\n        layout: { x: 0, y: 0, w: 3, h: 3 }\n"
             }
         tabWidgets tr dashId slug = do
-          (_, dash) <- testServant tr (Dashboards.getDashAndVM testPid dashId Nothing >>= addRespHeaders . snd)
+          dash <- call tr (Dashboards.getDashAndVM testPid dashId Nothing >>= addRespHeaders . snd)
           pure $ maybe [] (.widgets) $ find (\t -> slugify t.name == slug) (fold dash.tabs)
         newTabbedDashboard tr = do
           dashId <- newDashboard tr "overview.yaml" "Tabbed"
@@ -479,7 +480,7 @@ spec = sequential $ aroundAll withTestResources do
     -- `widgets: []`) showed 0 and group children were never counted.
     it "the dashboard list counts tab and group widgets" \tr -> do
       _ <- newDashboard tr "_overview.yaml" "Tabbed Count"
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
+      pg <- call tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) -> do
           let leaves = filter ((/= Widget.WTGroup) . (.wType)) $ foldMap DashboardModel.allWidgets $ V.toList d.dashboards >>= maybeToList . loadDashboardFromVM d.dashTemplates
@@ -557,7 +558,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "the widget-order form reports a failed save instead of losing it silently" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Save Failure Signal"
-      (_, pg) <- testServant tr $ Dashboards.dashboardGetH testPid dashId Nothing Nothing Nothing Nothing Nothing []
+      pg <- call tr $ Dashboards.dashboardGetH testPid dashId Nothing Nothing Nothing Nothing Nothing []
       let rendered = case pg of PageCtx _ d -> renderT d
           formTag = T.takeWhile (/= '>') $ snd $ T.breakOn "id=\"widget-order-trigger\"" rendered
 
@@ -567,7 +568,7 @@ spec = sequential $ aroundAll withTestResources do
   describe "The add-widget experience" do
     it "widget chart thresholds are editable in Edit and Monitors" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Widget Display Thresholds"
-      (_, newEditor) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
+      newEditor <- call tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
       let newHtml = renderT newEditor
       newHtml `shouldContainAll` ["Chart thresholds", "Widget name", "page-drawer-tab-monitors", "Add widget and monitor"]
       snd (T.breakOn "Name your widget" newHtml) `shouldSatisfy` T.isInfixOf "Chart thresholds"
@@ -575,10 +576,10 @@ spec = sequential $ aroundAll withTestResources do
       let widget = (widgetOf Widget.WTTimeseries "Thresholded"){Widget.alertThreshold = Just 10, Widget.warningThreshold = Just 7, Widget.unit = Just "requests/s"}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing widget
       wid <- firstWidgetId =<< storedWidgets tr dashId
-      (_, editEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid Nothing
+      editEditor <- call tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid Nothing
       let editHtml = renderT editEditor
       T.take 120 (snd $ T.breakOn "group/thresholds" editHtml) `shouldSatisfy` T.isInfixOf "open"
-      (_, monitorEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid (Just "alerts")
+      monitorEditor <- call tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid (Just "alerts")
       T.take 180 (snd $ T.breakOn "page-drawer-tab-monitors" $ renderT monitorEditor) `shouldSatisfy` T.isInfixOf "checked"
       editHtml `shouldContainAll` ["Chart thresholds", "Monitors", "Measurement unit", "widgetJSON.alert_threshold", "widgetJSON.warning_threshold", "name=\"alertThreshold\"", "Create monitor"]
       editHtml `shouldNotSatisfy` T.isInfixOf "Save thresholds"
@@ -589,13 +590,13 @@ spec = sequential $ aroundAll withTestResources do
       tableDashId <- newDashboard tr "overview.yaml" "Table Without Thresholds"
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid tableDashId Nothing Nothing (widgetOf Widget.WTTable "Rows")
       tableId <- firstWidgetId =<< storedWidgets tr tableDashId
-      (_, tableEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid tableDashId tableId Nothing
+      tableEditor <- call tr $ Dashboards.dashboardWidgetExpandGetH testPid tableDashId tableId Nothing
       renderT tableEditor `shouldNotSatisfy` T.isInfixOf ">Chart thresholds</strong>"
 
       sqlDashId <- newDashboard tr "overview.yaml" "SQL Chart Thresholds"
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid sqlDashId Nothing Nothing (widgetOf Widget.WTTimeseries "SQL Chart"){Widget.query = Nothing, Widget.sql = Just "SELECT 1"}
       sqlId <- firstWidgetId =<< storedWidgets tr sqlDashId
-      (_, sqlEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid sqlDashId sqlId Nothing
+      sqlEditor <- call tr $ Dashboards.dashboardWidgetExpandGetH testPid sqlDashId sqlId Nothing
       let sqlHtml = renderT sqlEditor
       sqlHtml `shouldContainAll` ["Chart thresholds", "Monitors evaluate a KQL query"]
 
@@ -604,7 +605,7 @@ spec = sequential $ aroundAll withTestResources do
     -- most expensive one to render.
     it "defaults to a timeseries chart, not the logs table" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Add Widget Default"
-      (_, html) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
+      html <- call tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
       -- Assert on the seeded `widgetJSON` rather than on which radio carries `checked`:
       -- that object is what the save actually posts, and every tab's inline hyperscript
       -- mentions `checked` anyway, so the markup is not a reliable signal.
@@ -618,7 +619,7 @@ spec = sequential $ aroundAll withTestResources do
     -- not be decoded on save — the tab looked available and simply did not work.
     it "offers only visualizations the API can actually store as a widget" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Add Widget Tabs"
-      (_, html) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
+      html <- call tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
       let rendered = renderT html
           offered = [T.takeWhile (/= '"') seg | seg <- drop 1 (T.splitOn "id=\"viz-" rendered)]
       offered `shouldSatisfy` (not . null)
@@ -637,7 +638,7 @@ spec = sequential $ aroundAll withTestResources do
       copySqlBlock `shouldNotSatisfy` T.isInfixOf "widgetData.sql or widgetData.query"
 
     it "translates a KQL query into real SQL, not an echo of the input" \tr -> do
-      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid (Just "status_code == \"ERROR\"") Nothing Nothing Nothing Nothing
+      sql <- call tr $ Dashboards.widgetSqlTextGetH testPid (Just "status_code == \"ERROR\"") Nothing Nothing Nothing Nothing
       T.toUpper sql `shouldSatisfy` T.isInfixOf "SELECT"
       sql `shouldNotBe` "status_code == \"ERROR\""
 
@@ -658,13 +659,13 @@ spec = sequential $ aroundAll withTestResources do
       dashboardSql `shouldNotSatisfy` T.isInfixOf "resource___service___name"
 
     it "copies the chart query with its category grouping" \tr -> do
-      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid (Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)") Nothing Nothing Nothing Nothing
+      sql <- call tr $ Dashboards.widgetSqlTextGetH testPid (Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)") Nothing Nothing Nothing Nothing
       sql `shouldNotSatisfy` T.isInfixOf "jsonb_build_array"
       let groupBy = snd $ T.breakOn "GROUP BY" sql
       groupBy `shouldContainAll` ["status_code", "level"]
 
     it "reports a clear message instead of blank/failing when no query is given" \tr -> do
-      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid Nothing Nothing Nothing Nothing Nothing
+      sql <- call tr $ Dashboards.widgetSqlTextGetH testPid Nothing Nothing Nothing Nothing Nothing
       sql `shouldBe` "No query provided"
 
   -- A raw-SQL widget renders whatever its query selects, so the text decoder must accept
@@ -722,6 +723,64 @@ spec = sequential $ aroundAll withTestResources do
       scoped <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just testPid) Nothing (Just raw) (Just "24H") Nothing Nothing Nothing Nothing scope
       scoped.error `shouldBe` Nothing
       scoped.dataText `shouldBe` V.singleton (V.singleton "checkout")
+
+    -- The SQL executor's tenant boundary was a check that `project_id='<pid>'` appeared somewhere
+    -- in the text, so `... OR TRUE` read every project. Each tenant table must reach the
+    -- statement already filtered to the project, on both stores; a statement that cannot be
+    -- scoped (it reuses a tenant table's name for its own CTE) may fail instead.
+    it "userSql_readsOnlyItsOwnProject_onPostgresAndTimefusion" \tr -> do
+      otherPid <- createTestProject tr "Other tenant"
+      mine <- createTestAPIKey tr testPid "tenant-scope-mine"
+      theirs <- createTestAPIKey tr otherPid "tenant-scope-theirs"
+      ingestTrace tr mine "GET /tenant-scope" frozenTime
+      ingestTrace tr theirs "GET /tenant-scope" frozenTime
+      let own = "project_id='" <> testPid.toText <> "'"
+          projects = fmap \rows -> ordNub [v | row <- V.toList rows, AE.String v <- V.toList row]
+          run source sql = projects <$> runQueryEffect tr (LogQueries.executeSecuredQuery True testPid (LogQueries.SecuredSql source sql) 100)
+      for_ ([LogQueries.SqlPostgres, LogQueries.SqlTimefusion] :: [LogQueries.SqlSource]) \source -> do
+        for_
+          [ "SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE"
+          , "SELECT p FROM (SELECT project_id::text AS p, project_id FROM otel_logs_and_spans) s WHERE " <> own <> " OR TRUE"
+          , "SELECT project_id::text FROM otel_logs_and_spans WHERE name = 'GET /tenant-scope' AND (" <> own <> " OR project_id IN (SELECT project_id FROM otel_logs_and_spans))"
+          ]
+          \sql -> run source sql `shouldReturn` Right [testPid.toText]
+        run source ("WITH otel_logs_and_spans AS (SELECT * FROM otel_logs_and_spans) SELECT project_id::text FROM otel_logs_and_spans WHERE " <> own <> " OR TRUE")
+          >>= (`shouldSatisfy` either (const True) (== [testPid.toText]))
+
+    -- Every statement a template ships must still scope, or its widget errors now that user
+    -- SQL is scoped; and on Postgres a tenant CTE read twice must inline, not materialize into
+    -- a full-project scan that the statement's time filter never reaches.
+    it "templateSql_allScope_andPostgresInlinesTheTenantCte" \tr -> do
+      templates <- DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+      let fill = fillQueryTemplate SqlTemplate (variablePresets def testPid.toText Nothing Nothing [] frozenTime <> Map.fromList [("query_ast_filters", "TRUE"), ("table_sort", "1")])
+          statements =
+            [ (fromMaybe "" d.file, s)
+            | d <- templates
+            , s <- mapMaybe (.sql) (DashboardModel.allWidgets d) <> [c.statement | v <- fold d.variables, Just c <- [v.sql]] <> [c.statement | k <- fold d.constants, Just c <- [k.sql]]
+            ]
+      statements `shouldSatisfy` (not . null)
+      for_ statements \(file, s) -> for_ [True, False] \postgres ->
+        (file, s, LogQueries.scopeUserSql postgres testPid (fill s)) `shouldSatisfy` \(_, _, r) -> isRight r
+      let twice = "SELECT count(*) FROM otel_logs_and_spans a WHERE timestamp > now() - interval '1 hour' AND EXISTS (SELECT 1 FROM otel_logs_and_spans b WHERE b.timestamp > now() - interval '1 hour')"
+      scoped <- either (fail . toString) pure $ LogQueries.scopeUserSql True testPid twice
+      plan <- withResource tr.trPool \conn -> PG.query_ conn (fromString $ toString $ "EXPLAIN " <> scoped) :: IO [PG.Only Text]
+      [l | PG.Only l <- plan, "CTE Scan" `T.isInfixOf` l] `shouldBe` []
+
+    -- /chart_data ran whatever SQL the browser sent, guarded only by a project_id substring,
+    -- so a viewer (or the anonymous demo guest) could hand it any statement. Only SQL the
+    -- server rendered may run for them; an editor can still preview their own.
+    it "chartData_clientSql_runsOnlyWhenSignedOrForEditors" \tr -> do
+      let sql = "SELECT 'x'::text FROM otel_logs_and_spans WHERE project_id='" <> testPid.toText <> "' LIMIT 1"
+          userId = (Servant.getResponse tr.trSessAndHeader).user.id
+          setPermission p = dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (p, testPid, userId)
+          chart source params = toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Routes.chartsDataGetH (Just source) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
+          signed = [("sql_sig", Just $ Widget.sqlSignature tr.trATCtx.env.apiKeyEncryptionSecretKey testPid (Just sql) Nothing)]
+      [PG.Only original] <- dbQuery tr "SELECT permission FROM projects.project_members WHERE project_id = ? AND user_id = ?" (testPid, userId)
+      for_ [Hasql.SqlPostgres, Hasql.SqlTimefusion] \source -> do
+        (.error) <$> chart source [] `shouldReturn` Nothing
+        E.bracket_ (setPermission ProjectMembers.PView) (setPermission (original :: ProjectMembers.Permissions)) do
+          E.try @E.SomeException (chart source []) >>= (`shouldSatisfy` isLeft)
+          (.error) <$> chart source signed `shouldReturn` Nothing
 
     -- A dashboard supplies its own service variable, while non-dashboard charts still use
     -- the sticky selector. Both keep the authenticated environment boundary.
@@ -796,7 +855,7 @@ spec = sequential $ aroundAll withTestResources do
     -- being dropped. (The guard the same route applies to client SQL is doctested on
     -- 'Web.Routes.clientPostgresSqlRejection'.)
     it "routes the statement at the store the variable declared" \tr -> do
-      (_, md) <- testServant tr $ addRespHeaders =<< Routes.chartsDataGetH (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just endpointsSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      md <- call tr $ addRespHeaders =<< Routes.chartsDataGetH (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just endpointsSql) (Just "24H") Nothing Nothing Nothing Nothing []
       md.error `shouldBe` Nothing
 
     -- The issue volume chart's KQL scans every row of its window on TimeFusion (4-27s
@@ -804,7 +863,7 @@ spec = sequential $ aroundAll withTestResources do
     -- window is answered from the hourly rollup instead.
     it "answers a covered window from the hourly rollup and an uncovered one from the query" \tr -> do
       now <- getTestTime tr.trTestClock
-      _ <- withResource tr.trPool \conn -> PG.execute conn [SqlQQ.sql|INSERT INTO apis.log_pattern_hourly_stats (project_id, pattern_hash, hour_bucket, event_count) VALUES (?, 'rollup-route', date_trunc('hour', ?::timestamptz) - interval '2 hours', 7)|] (testPid, now)
+      _ <- dbExec tr [SqlQQ.sql|INSERT INTO apis.log_pattern_hourly_stats (project_id, pattern_hash, hour_bucket, event_count) VALUES (?, 'rollup-route', date_trunc('hour', ?::timestamptz) - interval '2 hours', 7)|] (testPid, now)
       let rollup = Issues.hourlyRollupSql "apis.log_pattern_hourly_stats" "pattern_hash = 'rollup-route'"
           total coveredFor since = testServant tr (addRespHeaders =<< Routes.chartsDataGetH Nothing (Just Charts.DTMetric) (Just testPid) (Just "hashes[*]==\"pat:rollup-route\" | summarize count(*) by bin_auto(timestamp)") Nothing (Just since) Nothing Nothing Nothing Nothing [("rollup_sql", Just rollup), ("rollup_from", Just $ Utils.isoT $ addUTCTime (-coveredFor) now)]) <&> \(_, md) -> sum (md.dataset >>= V.catMaybes . V.drop 1)
       -- A window reaching before the rollup's coverage (pruned hours) must not read it as zero.
@@ -813,13 +872,11 @@ spec = sequential $ aroundAll withTestResources do
   describe "Scalar monitor charts" do
     it "scalarMonitor_plotsMaxPerBucketInsteadOfCountingTheAggregate" \tr -> do
       now <- getTestTime tr.trTestClock
-      withResource tr.trPool \conn ->
-        void
-          $ PG.execute
-            conn
-            [SqlQQ.sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value)
+      dbExec
+        tr
+        [SqlQQ.sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value)
                     VALUES (?, ?, gen_random_uuid(), 'monitor-chart', 'timefusion.mem_buffer.oldest_bucket_age_seconds', 'GAUGE', 42) |]
-            (testPid, now)
+        (testPid, now)
       let widget = (widgetOf Widget.WTTimeseries "Query Results"){Widget.query = Just "metrics | where metric_name == \"timefusion.mem_buffer.oldest_bucket_age_seconds\" | summarize max(value)"}
           (query, decoder) = Widget.chartQuery widget
           rendered = renderT $ Widget.widget_ widget
@@ -893,7 +950,7 @@ spec = sequential $ aroundAll withTestResources do
             | otherwise = maybe (AE.String value) AE.toJSON $ readMaybe @Double $ toString value
           row label lo hi = V.fromList [AE.String label, AE.toJSON (lo :: Double), AE.toJSON (hi :: Double)]
       for_ (Hasql.SqlPostgres : [Hasql.SqlTimefusion | isJust tfUrl]) \db -> do
-        withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache"
+        dbExec tr "DELETE FROM query_cache" ()
         result <- runQueryEffect tr $ Charts.queryMetrics (Just db) (Just Charts.DTText) (Just pid) (Just query) Nothing (Just "24h") Nothing Nothing Nothing Nothing []
         result.error `shouldBe` Nothing
         (V.imap cell <$> result.dataText) `shouldBe` V.fromList [row "null" 9 11, row "beta" 7 7, row "alpha" 2 4]
@@ -918,7 +975,7 @@ spec = sequential $ aroundAll withTestResources do
             | T.null value = AE.Null
             | otherwise = maybe (AE.String value) AE.toJSON $ readMaybe @Double $ toString value
       for_ (Hasql.SqlPostgres : [Hasql.SqlTimefusion | isJust tfUrl]) \db -> do
-        withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache"
+        dbExec tr "DELETE FROM query_cache" ()
         result <- runQueryEffect tr $ Charts.queryMetrics (Just db) (Just Charts.DTText) (Just pid) Nothing sql (Just "24h") Nothing Nothing Nothing Nothing []
         result.error `shouldBe` Nothing
         (V.imap cell <$> result.dataText) `shouldBe` V.fromList [row "cpu-only" (Just 75) Nothing 1, row "paired" (Just 25) (Just 0.4) 2, row "memory-only" Nothing (Just 0.6) 1]
@@ -1037,7 +1094,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "round-trips the widget through the compressed parameter the URL now uses" \tr -> do
       let widgetZ = snd $ T.breakOnEnd "widgetZ=" $ Widget.widgetFetchUrl bigSqlWidget
-      (_, got) <- testServant tr $ Routes.widgetGetH testPid Nothing (Just widgetZ) (Just "24H") Nothing Nothing []
+      got <- call tr $ Routes.widgetGetH testPid Nothing (Just widgetZ) (Just "24H") Nothing Nothing []
       got.sql `shouldBe` bigSqlWidget.sql
       got.title `shouldBe` bigSqlWidget.title
 
@@ -1050,9 +1107,9 @@ spec = sequential $ aroundAll withTestResources do
   -- explorer showed the traffic. Reported by a customer for dellyman.com/api/v3.0/GetQuotes.
   describe "Endpoint Analytics covers outgoing endpoints" do
     let outgoingHash = "ba3431d5"
-        seedClientSpan tr = withResource tr.trPool \conn ->
-          PG.execute
-            conn
+        seedClientSpan tr =
+          dbExec
+            tr
             [SqlQQ.sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, date, name, kind, status_code, duration, hashes, summary)
                   VALUES (gen_random_uuid(), ?, ?, ?, ?, 'POST', 'client', '200', 5000000, ARRAY[?], ARRAY['POST']) |]
             (testPid.toText, frozenTime, frozenTime, frozenTime, outgoingHash)
@@ -1117,8 +1174,8 @@ spec = sequential $ aroundAll withTestResources do
             , Endpoints.hash = "faa041ff"
             , Endpoints.outgoing = True
             }
-      (_, response) <-
-        testServant tr
+      response <-
+        call tr
           $ Dashboards.dashboardTabGetH
             testPid
             dashId
@@ -1187,10 +1244,12 @@ spec = sequential $ aroundAll withTestResources do
       (mapWidget >>= (.cta) <&> (.url)) `shouldBe` Just ("/p/" <> testPid.toText <> "/service_map?endpoint_hash=endpoint%20%2F%20hash&since=24H")
       (mapWidget >>= (.html)) `shouldSatisfy` maybe False (T.isInfixOf "No direct dependencies in this range" . toStrict)
 
+  -- The probe counts real executions (each run advances the sequence), so a cache hit shows as
+  -- a repeated value. It was a read of query_cache itself, which user SQL may no longer reach.
   describe "Endpoint Analytics complete-result SQL cache" do
     it "reuses a successful complete result and isolates endpoint keys" \tr -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
+      dbExec tr "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe" ()
+      let sql = "SELECT (nextval('raw_cache_probe') - 1)::double precision"
           fetch endpoint =
             runQueryEffect tr
               $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just endpoint)]
@@ -1202,8 +1261,8 @@ spec = sequential $ aroundAll withTestResources do
       otherEndpoint.dataFloat `shouldBe` Just 1
 
     it "shares complete results between streaming and JSON requests" \tr -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
+      dbExec tr "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe" ()
+      let sql = "SELECT (nextval('raw_cache_probe') - 1)::double precision"
           params = [("var-endpointHash", Just "stream-cache")]
           fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
           stream = completeFrame @Charts.MetricsData =<< runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params)
@@ -1211,12 +1270,12 @@ spec = sequential $ aroundAll withTestResources do
       cachedJson <- fetch
       repeatedStream <- stream
       map (.dataFloat) [initialStream, cachedJson, repeatedStream] `shouldBe` replicate 3 (Just 0)
-      rows <- withResource tr.trPool \conn -> PG.query_ conn "SELECT count(*)::bigint FROM query_cache WHERE source = 'raw-sql'" :: IO [PG.Only Int]
+      rows <- dbQuery tr "SELECT count(*)::bigint FROM query_cache WHERE source = 'raw-sql'" () :: IO [PG.Only Int]
       rows `shouldBe` [PG.Only 1]
 
     it "expires fixed-window results so late telemetry can replace a cached result" \tr -> E.bracket (getTestTime tr.trTestClock) (setTestTime tr.trTestClock) \_ -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") Nothing Nothing [("var-endpointHash", Just "expiry")]
+      dbExec tr "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe" ()
+      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT (nextval('raw_cache_probe') - 1)::double precision") Nothing (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") Nothing Nothing [("var-endpointHash", Just "expiry")]
       initial <- fetch
       advanceTestTime tr 59
       fresh <- fetch
@@ -1227,8 +1286,8 @@ spec = sequential $ aroundAll withTestResources do
       runQueryEffect tr QueryCache.cleanupExpiredCache `shouldReturn` 1
 
     it "reuses the default live range when time parameters are omitted" \tr -> E.bracket (getTestTime tr.trTestClock) (setTestTime tr.trTestClock) \_ -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing Nothing Nothing Nothing Nothing [("var-endpointHash", Just "default-range")]
+      dbExec tr "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe" ()
+      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT (nextval('raw_cache_probe') - 1)::double precision") Nothing Nothing Nothing Nothing Nothing [("var-endpointHash", Just "default-range")]
       -- Both snapshots are within the same fifteen-second cache boundary.
       initial <- fetch
       advanceTestTime tr 0.001
@@ -1239,10 +1298,10 @@ spec = sequential $ aroundAll withTestResources do
       let setup = withResource tr.trPool \conn -> do
             void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; CREATE SEQUENCE cache_race_calls"
             void $ PG.execute_ conn "CREATE FUNCTION slow_cache_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.5); RETURN NEW; END $$; CREATE TRIGGER slow_cache_write BEFORE INSERT ON query_cache FOR EACH ROW EXECUTE FUNCTION slow_cache_write()"
-          cleanup = withResource tr.trPool \conn -> void $ PG.execute_ conn "DROP TRIGGER slow_cache_write ON query_cache; DROP FUNCTION slow_cache_write(); DROP SEQUENCE cache_race_calls"
+          cleanup = dbExec tr "DROP TRIGGER slow_cache_write ON query_cache; DROP FUNCTION slow_cache_write(); DROP SEQUENCE cache_race_calls" ()
           fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT nextval('cache_race_calls')::double precision") (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "write-race")]
           waitForWrite = do
-            sleeping <- withResource tr.trPool \conn -> PG.query_ conn "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'PgSleep')" :: IO [PG.Only Bool]
+            sleeping <- dbQuery tr "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'PgSleep')" () :: IO [PG.Only Bool]
             unless (sleeping == [PG.Only True]) $ threadDelay 10000 >> waitForWrite
       E.bracket_ setup cleanup $ withAsync fetch \leader -> do
         timeout 5000000 waitForWrite `shouldReturn` Just ()
@@ -1252,7 +1311,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "returns results when the cache is unavailable and excludes oversized entries" \tr -> do
       let fetch sql = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "cache-fallback")]
-          rename sql = withResource tr.trPool \conn -> void $ PG.execute_ conn sql
+          rename sql = dbExec tr sql ()
       E.bracket_ (rename "ALTER TABLE query_cache RENAME TO unavailable_query_cache") (rename "ALTER TABLE unavailable_query_cache RENAME TO query_cache") do
         result <- fetch "SELECT 'still available'::text"
         result.error `shouldBe` Nothing
@@ -1261,11 +1320,11 @@ spec = sequential $ aroundAll withTestResources do
       large <- fetch "SELECT repeat('x', 1048576)"
       large.error `shouldBe` Nothing
       V.map (V.map T.length) large.dataText `shouldBe` V.singleton (V.singleton 1048576)
-      rows <- withResource tr.trPool \conn -> PG.query_ conn "SELECT count(*)::bigint FROM query_cache WHERE source = 'raw-sql'" :: IO [PG.Only Int]
+      rows <- dbQuery tr "SELECT count(*)::bigint FROM query_cache WHERE source = 'raw-sql'" () :: IO [PG.Only Int]
       rows `shouldBe` [PG.Only 0]
 
     it "measures cold and cached requests with one backend execution per window" \tr -> do
-      let execute statement = withResource tr.trPool \conn -> void $ PG.execute_ conn statement
+      let execute statement = dbExec tr statement ()
           sql = "SELECT q.call::text, n::text, repeat('x', 80) FROM (SELECT nextval('cache_benchmark_calls') AS call, pg_sleep(0.1)) q CROSS JOIN generate_series(1, 1000) n"
           params = [("var-endpointHash", Just "benchmark")]
           fetch window streaming =
@@ -1303,12 +1362,12 @@ spec = sequential $ aroundAll withTestResources do
               )
 
     it "never stores failed endpoint SQL" \tr -> do
-      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
+      dbExec tr "DELETE FROM query_cache WHERE source = 'raw-sql'; DROP SEQUENCE IF EXISTS raw_cache_probe; CREATE SEQUENCE raw_cache_probe" ()
       failed <-
         runQueryEffect tr
           $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT missing_cache_column::double precision") (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "endpoint-failure")]
       failed.error `shouldSatisfy` isJust
-      rows <- withResource tr.trPool \conn -> PG.query_ conn "SELECT count(*)::bigint FROM query_cache WHERE source = 'raw-sql'" :: IO [PG.Only Int]
+      rows <- dbQuery tr "SELECT count(*)::bigint FROM query_cache WHERE source = 'raw-sql'" () :: IO [PG.Only Int]
       rows `shouldBe` [PG.Only 0]
 
   -- The variable picker replaces the tab's content, so every widget the render produced
@@ -1395,7 +1454,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "dashboardTab_sidebarNavigationFromSessions_keepsMainContent" \tr -> do
       dashId <- newDashboard tr "rum.yaml" "RUM sidebar navigation"
-      (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#main-content") []
+      response <- call tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "div#main-content") []
       case response of
         NavigationFull page -> do
           let html = renderT page
@@ -1462,12 +1521,12 @@ spec = sequential $ aroundAll withTestResources do
       -- Each page row's hidden Explorer query finds the events it counted, and the rendered
       -- link carries it with the dashboard's window while the column itself stays off screen.
       forM_ (table results "Top pages") \row -> do
-        (_, events) <- testServant tr $ Log.logExplorerDataH projectId def{Log.query = row V.!? 3, Log.from = Just from, Log.to = Just to}
+        events <- call tr $ Log.logExplorerDataH projectId def{Log.query = row V.!? 3, Log.from = Just from, Log.to = Just to}
         (row V.!? 0, events.error, events.queryResultCount) `shouldBe` (row V.!? 0, Nothing, 1)
       -- The browser filter exists twice, as SQL for widgets and KQL for the Explorer; both must
       -- select the same rows, and a backend span neither.
       ingestTrace tr apiKey "GET /backend-only" frozenTime
-      (_, sessions) <- testServant tr $ Log.logExplorerDataH projectId def{Log.query = Just browserKql, Log.from = Just from, Log.to = Just to}
+      sessions <- call tr $ Log.logExplorerDataH projectId def{Log.query = Just browserKql, Log.from = Just from, Log.to = Just to}
       viaSql <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just projectId) Nothing (Just "SELECT count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}}") Nothing (Just from) (Just to) Nothing Nothing []
       (sessions.error, sessions.queryResultCount, viaSql.dataFloat) `shouldBe` (Nothing, 2, Just 2)
       topPages <- widgetNamed "Top pages"
@@ -1501,7 +1560,7 @@ spec = sequential $ aroundAll withTestResources do
       map (V.toList . V.take 3) (V.toList users) `shouldBe` [["alice@example.com", "1", "1"]]
       forM_ ([([("var-browser", Just "Safari")], 2), ([("var-os", Just "iOS"), ("var-device", Just "Mobile")], 2), ([("var-browser", Just "Unknown")], 1), ([("var-errors", Just "true")], 2)] :: [([(Text, Maybe Text)], Int)]) \(params, expected) -> do
         query <- (lookup "query" <=< listToMaybe) . explorerLinkParams pid <$> rumLocation tr pid ["sessions"] params
-        (_, events) <- testServant tr $ Log.logExplorerDataH pid def{Log.query = query, Log.from = Just from, Log.to = Just to}
+        events <- call tr $ Log.logExplorerDataH pid def{Log.query = query, Log.from = Just from, Log.to = Just to}
         (events.error, events.queryResultCount) `shouldBe` (Nothing, expected)
       readTable [("var-app", Just "missing-app")] "Browsers" `shouldReturn` V.empty
       readTable [("environment", Just "prod")] "Browsers" `shouldReturn` V.empty

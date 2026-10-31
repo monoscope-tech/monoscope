@@ -10,7 +10,6 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Models.Telemetry.ServiceGraph (Collapse (..), EdgeSample (..), EndpointRollupEdge (..), MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), buildServiceGraph, drawnEdges, drawnNodes, endpointDependencyGraphForRange, projectsWithSpansInRange, rollupEndpointDependencyEdges, rollupServiceEdges, serviceGraphForRange, serviceMapFanout, serviceMapNodeCap, singletonLatency, upsertEndpointDependencyEdges, upsertServiceDependencyEdges)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
@@ -19,7 +18,6 @@ import Pages.Telemetry qualified as Trace
 import Pkg.TestClock (setTestTime)
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
-import Relude
 import System.Config qualified as Config
 import Test.Hspec
 
@@ -222,7 +220,7 @@ spec = around withTestResources do
       -- advances first for the same reason the page test does it: the handler's 1H window is
       -- relative to now, and a bucket sitting exactly at now falls outside a half-open range.
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") (Just "prod") Nothing
+      page <- call tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") (Just "prod") Nothing
       let html = renderT page
       html `shouldContainAll` ["?env=prod", "?env=staging", ">All<"]
 
@@ -312,14 +310,14 @@ spec = around withTestResources do
       -- The shareable broader-map URL keeps the endpoint scope rather than falling back to
       -- the project's entire topology, and its empty state says what is absent.
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
-      (_, scopedPage) <- testServant tr $ ServiceMap.serviceMapGetH pid Nothing Nothing (Just "1H") Nothing (Just endpointHash)
+      scopedPage <- call tr $ ServiceMap.serviceMapGetH pid Nothing Nothing (Just "1H") Nothing (Just endpointHash)
       let ServiceMap.ServiceMapPage (PageCtx scopedConf scoped) = scopedPage
           scopedHtml = renderT scopedPage
       scopedConf.pageTitle `shouldBe` "Endpoint Dependency Map"
       edgePairs scoped.graph `shouldBe` [("endpoint:" <> endpointHash, "checkout")]
       scopedHtml `shouldContainAll` ["endpoint-service-map-data", "Selected endpoint", "checkout", "Dependencies (1)"]
 
-      (_, emptyPage) <- testServant tr $ ServiceMap.serviceMapGetH pid Nothing Nothing (Just "1H") Nothing (Just "no-such-endpoint")
+      emptyPage <- call tr $ ServiceMap.serviceMapGetH pid Nothing Nothing (Just "1H") Nothing (Just "no-such-endpoint")
       let emptyHtml = renderT emptyPage
       emptyHtml `shouldSatisfy` T.isInfixOf "No direct dependencies in this range"
 
@@ -377,7 +375,7 @@ spec = around withTestResources do
       -- Rolled buckets are always in the past (the dispatcher lags 10 minutes), and the read
       -- range is half-open, so advance the clock rather than querying a bucket at exactly now.
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing Nothing
+      page <- call tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing Nothing
       let ServiceMap.ServiceMapPage (PageCtx conf pd) = page
           html = renderT page
       conf.pageTitle `shouldBe` "Explorer"
@@ -406,7 +404,7 @@ spec = around withTestResources do
     -- prod. The input now calls the filter directly from hx-on:input; keep asserting no
     -- dashed send can sneak back in.
     it "serviceMapFilter_wiresTheInputWithoutADashedSend" \tr -> do
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing Nothing
+      page <- call tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing Nothing
       let html = renderT page
       html `shouldContainAll` ["window.serviceMapFilter(this.value)", "aria-label=\"Filter services\""]
       T.isInfixOf "service-map-filter&quot;(" html `shouldBe` False
@@ -426,7 +424,7 @@ spec = around withTestResources do
       span' coSid (Just gwClientSid) "POST /checkout" PT.Span'SPAN_KIND_SERVER (svc "checkout") []
       span' dbSid (Just coSid) "pg.query" PT.Span'SPAN_KIND_CLIENT (svc "checkout") [mkAttr "db.system.name" "postgresql", mkAttr "db.namespace" "orders"]
 
-      (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing Nothing
+      page <- call tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing Nothing
       let html = renderT page
 
       -- The tab sits beside the existing three and must stay wired to the panel it reveals.

@@ -297,6 +297,7 @@ extra-source-files:
     static/migrations/0256_ai_artifacts.sql
     static/migrations/0257_ad_attribution.sql
     static/migrations/0257_event_routines_and_run_artifacts.sql
+    static/migrations/0258_app_now_inlinable_created_at_defaults.sql
     static/migrations/0258_issue_enrichment_routine.sql
     static/migrations/0259_agent_run_checkpoints.sql
     static/migrations/0260_interactive_agent_runs.sql

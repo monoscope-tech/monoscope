@@ -1,7 +1,6 @@
 module Pages.Projects.IntegrationsSpec (spec) where
 
 import Data.Aeson qualified as AE
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
@@ -18,9 +17,7 @@ import Pages.Settings (TestChannel (..), TestForm (..), TestStatus (..))
 import Pages.Settings qualified as Integrations
 import Pkg.Mail qualified as Mail
 import Pkg.TestUtils
-import Relude
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
 
 
 spec :: Spec
@@ -138,7 +135,7 @@ spec = sequential $ aroundAll withTestResources $ do
         setupSlackData tr testPid "T_HISTORY_TEST"
         void $ testServant tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" TCSlack Nothing)
 
-        (_, html) <- testServant tr $ Integrations.notificationsTestHistoryGetH testPid
+        html <- call tr $ Integrations.notificationsTestHistoryGetH testPid
         let htmlText = show html
         htmlText `shouldSatisfy` T.isInfixOf "runtime_exception"
 

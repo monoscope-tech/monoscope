@@ -8,16 +8,13 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64.URL qualified as B64URL
-import Data.Default (def)
 import Data.Effectful.Notify (EmailData (..), Notification (..))
 import Data.List (lookup)
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Issues (ReportListItem (..))
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
@@ -29,11 +26,9 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Reports qualified as Reports
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as Email
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, parseQueryToAST, parseQueryToComponents)
 import Pkg.TestUtils
-import Relude
 import Test.Hspec
 import UnliftIO.Async (concurrently)
 import Utils (formatWithCommas)
@@ -43,7 +38,7 @@ spec :: Spec
 spec = around withTestResources do
   describe "Report Notification Lifecycle" do
     it "delivers enabled daily and weekly reports, records a muted report, and isolates report details" \tr -> do
-      (_, initialPage) <- testServant tr $ Reports.reportsGetH testPid Nothing Nothing Nothing
+      initialPage <- call tr $ Reports.reportsGetH testPid Nothing Nothing Nothing
       case initialPage of
         Reports.ReportsGetMain (PageCtx _ (pid, _, _)) -> pid `shouldBe` testPid
         _ -> fail "the reports page did not load"
@@ -52,13 +47,12 @@ spec = around withTestResources do
 
       void $ testServant tr $ Reports.reportsPostH testPid Projects.RTDaily
       void $ testServant tr $ Reports.reportsPostH testPid Projects.RTWeekly
-      void $ withResource tr.trPool \conn ->
-        PGS.execute
-          conn
-          [sql|UPDATE projects.teams
+      dbExec
+        tr
+        [sql|UPDATE projects.teams
                 SET discord_channels = ARRAY['daily-reports'], disabled_channels = '{}'
                 WHERE project_id = ? AND handle = 'everyone'|]
-          (PGS.Only testPid)
+        (PGS.Only testPid)
 
       sent <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.DailyReports testPid)
       sent `shouldSatisfy` any (\case DiscordNotification{} -> True; _ -> False)
@@ -81,7 +75,7 @@ spec = around withTestResources do
         email.subject `shouldSatisfy` T.isPrefixOf "Weekly system report"
         email.htmlBody `shouldContainAll` ["Services", "Infrastructure", "Monitors", headline]
 
-      (_, reportsPage) <- testServant tr $ Reports.reportsGetH testPid Nothing Nothing Nothing
+      reportsPage <- call tr $ Reports.reportsGetH testPid Nothing Nothing Nothing
       reportId <- case reportsPage of
         Reports.ReportsGetMain (PageCtx _ (_, reports, _)) -> do
           V.length reports `shouldBe` 3
@@ -94,7 +88,7 @@ spec = around withTestResources do
           V.any ((== Projects.RTWeekly) . (.reportType)) reports `shouldBe` True
           maybe (fail "the daily report was not listed") (pure . (.id)) $ V.find ((== Projects.RTDaily) . (.reportType)) reports
         _ -> fail "the reports page did not load after generation"
-      (_, reportPage) <- testServant tr $ Reports.singleReportGetH testPid reportId Nothing
+      reportPage <- call tr $ Reports.singleReportGetH testPid reportId Nothing
       case reportPage of
         Reports.ReportsGetSingle (PageCtx _ (reportType, dateLabel, emailHtml)) -> do
           reportType `shouldBe` "daily"
@@ -114,7 +108,7 @@ spec = around withTestResources do
       tzSubject `shouldNotBe` ""
 
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-      (_, otherProjectPage) <- testServant tr $ Reports.singleReportGetH otherPid reportId Nothing
+      otherProjectPage <- call tr $ Reports.singleReportGetH otherPid reportId Nothing
       case otherProjectPage of
         Reports.ReportsGetSingle (PageCtx _ (reportType, dateLabel, emailHtml)) ->
           (reportType, dateLabel, emailHtml) `shouldBe` ("unknown", "Report not found", "")
@@ -126,23 +120,22 @@ spec = around withTestResources do
             "spanTypeStats": [], "slowDbQueries": [{"query": "SELECT legacy", "averageDuration": 1250000000, "totalEvents": 34}],
             "errorDataset": {"source": []}, "eventsDataset": {"source": []}, "issues": []
           }|]
-      void $ withResource tr.trPool $ \conn -> PGS.execute conn [sql|UPDATE apis.reports SET report_json = ? WHERE id = ?|] (legacyJson, reportId)
-      (_, legacyPage) <- testServant tr $ Reports.singleReportGetH testPid reportId Nothing
+      dbExec tr [sql|UPDATE apis.reports SET report_json = ? WHERE id = ?|] (legacyJson, reportId)
+      legacyPage <- call tr $ Reports.singleReportGetH testPid reportId Nothing
       case legacyPage of
         Reports.ReportsGetSingle (PageCtx _ (_, _, html)) -> html `shouldContainAll` ["Historical report", "Daily system report", "1,234", "SELECT legacy", "1250.0 ms", "34"]
         _ -> fail "the legacy report detail did not load"
 
     it "counts the complete service period, separates request metrics, and retains missing baselines" \tr -> do
       let start = addUTCTime (-(7 * 86400)) frozenTime
-          addRow at service env kind status duration = withResource tr.trPool $ \conn ->
-            void
-              $ PGS.execute
-                conn
-                [sql| INSERT INTO otel_logs_and_spans
+          addRow at service env kind status duration =
+            dbExec
+              tr
+              [sql| INSERT INTO otel_logs_and_spans
                 (id, project_id, timestamp, start_time, resource___service___name,
                  resource___deployment___environment___name, kind, status_code, duration, context, summary)
                 VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, ?, ?, ?, '{}'::jsonb, '{}') |]
-                (testPid, at, at, service :: Maybe Text, env :: Maybe Text, kind :: Text, status :: Text, duration :: Int64)
+              (testPid, at, at, service :: Maybe Text, env :: Maybe Text, kind :: Text, status :: Text, duration :: Int64)
       addRow (addUTCTime (-1) start) (Just "api") (Just "prod") "server" "OK" 100000000
       addRow start (Just "api") (Just "prod") "server" "ERROR" 250000000
       addRow (addUTCTime 1 start) (Just "api") (Just "prod") "client" "OK" 900000000
@@ -164,23 +157,21 @@ spec = around withTestResources do
           boundary = addUTCTime 86400 trendStart
       addRow (addUTCTime (-1) boundary) (Just "api") Nothing "log" "OK" 0
       addRow boundary (Just "api") Nothing "log" "OK" 0
-      void $ withResource tr.trPool $ \conn ->
-        PGS.execute
-          conn
-          [sql|UPDATE otel_logs_and_spans
+      dbExec
+        tr
+        [sql|UPDATE otel_logs_and_spans
           SET events = '[{"event_name":"exception","event_attributes":{"exception":{"type":"EmbeddedError"}}}]'::jsonb
           WHERE project_id = ? AND timestamp = ?|]
-          (testPid, boundary)
+        (testPid, boundary)
       trends <- runTestBg frozenTime tr $ Report.trendStats False testPid trendStart frozenTime
       (sum $ map (.events) trends, sum $ map (.errors) trends) `shouldBe` (4, 2)
       length (map (.epochSeconds) trends) `shouldBe` length (ordNub $ map (.epochSeconds) trends)
 
     it "queries HTTP, database, and workload evidence without mixing their duration units" \tr -> do
       let start = addUTCTime (-(7 * 86400)) frozenTime
-      void $ withResource tr.trPool $ \conn ->
-        PGS.execute
-          conn
-          [sql| INSERT INTO otel_logs_and_spans
+      dbExec
+        tr
+        [sql| INSERT INTO otel_logs_and_spans
           (id, project_id, timestamp, start_time, kind, resource___service___name,
            resource___deployment___environment___name, attributes___http___request___method,
            attributes___url___path, attributes___server___address, attributes___db___query___text,
@@ -191,7 +182,7 @@ spec = around withTestResources do
                        ('server', 'POST', NULL, 750000000::bigint),
                        ('client', NULL, 'SELECT secret FROM users', 1250000000::bigint),
                        ('log', NULL, NULL, 0::bigint)) AS fixtures(kind, method, statement, duration) |]
-          (testPid, start, start)
+        (testPid, start, start)
       endpoints <- runTestBg frozenTime tr $ Report.endpointStats False testPid start frozenTime
       fmap (\e -> (e.service, e.environment, e.method, e.path, e.requests, e.averageMs)) endpoints
         `shouldBe` [(Just "api", Just "production", "POST", "/orders", 2, Just 500)]
@@ -209,10 +200,9 @@ spec = around withTestResources do
       it ("follows report service, endpoint, and database links with " <> show (service, environment, host)) \tr -> do
         project <- maybe (fail "test project missing") pure =<< runTestBg frozenTime tr (Projects.projectById testPid)
         let start = addUTCTime (-60) frozenTime
-        void $ withResource tr.trPool \conn ->
-          PGS.execute
-            conn
-            [sql| INSERT INTO otel_logs_and_spans
+        dbExec
+          tr
+          [sql| INSERT INTO otel_logs_and_spans
               (id, project_id, timestamp, start_time, kind, resource___service___name,
                resource___deployment___environment___name, attributes___http___request___method,
                attributes___url___path, attributes___server___address, attributes___db___query___text,
@@ -220,7 +210,7 @@ spec = around withTestResources do
               SELECT gen_random_uuid(), ?, ?, ?, kind, ?, ?, 'GET', '/cart??item="a"&b=2', ?, statement,
                      1250000000::bigint, '{}'::jsonb, '{}'
               FROM (VALUES ('server', NULL), ('client', 'SELECT 1')) AS fixtures(kind, statement) |]
-            (testPid, start, start, service, environment, if host == fromMaybe "" service then Nothing else Just host)
+          (testPid, start, start, service, environment, if host == fromMaybe "" service then Nothing else Just host)
         base <- runTestBg frozenTime tr $ Reports.collectSystemReport testPid start frozenTime
         let snapshot =
               base
@@ -238,14 +228,14 @@ spec = around withTestResources do
           query <- maybe (fail "report link omitted its query") pure $ join $ lookup "query" params
           from <- maybe (fail "report link omitted its start") pure $ join $ lookup "from" params
           to <- maybe (fail "report link omitted its end") pure $ join $ lookup "to" params
-          (_, events) <- testServant tr $ Log.logExplorerDataH testPid def{Log.query = Just query, Log.from = Just from, Log.to = Just to}
+          events <- call tr $ Log.logExplorerDataH testPid def{Log.query = Just query, Log.from = Just from, Log.to = Just to}
           events.error `shouldBe` Nothing
           (_, components) <- either (fail . toString) pure $ parseQueryToComponents (defSqlQueryCfg testPid frozenTime Nothing Nothing){targetsTimefusion = True} query
           components.whereClause `shouldSatisfy` maybe False (T.isInfixOf "resource___service___name")
           components.whereClause `shouldSatisfy` maybe False (not . T.isInfixOf "service->")
           events.queryResultCount `shouldBe` expectedCount
           let retainedQuery = T.replace "resource.service.name" "service.name" query
-          (_, retained) <- testServant tr $ Log.logExplorerDataH testPid def{Log.query = Just retainedQuery, Log.from = Just from, Log.to = Just to}
+          retained <- call tr $ Log.logExplorerDataH testPid def{Log.query = Just retainedQuery, Log.from = Just from, Log.to = Just to}
           retained.error `shouldBe` Nothing
           V.toList retained.logsData `shouldMatchList` V.toList events.logsData
           (_, retainedComponents) <- either (fail . toString) pure $ parseQueryToComponents (defSqlQueryCfg testPid frozenTime Nothing Nothing){targetsTimefusion = True} retainedQuery
@@ -311,22 +301,22 @@ spec = around withTestResources do
       token <- case catMaybes [firstClaim, secondClaim] of
         [owner] -> pure owner
         _ -> fail "preview generation was not claimed exactly once"
-      (_, pendingPage) <- testServant tr $ Reports.reportsLiveGetH testPid (Just "true")
+      pendingPage <- call tr $ Reports.reportsLiveGetH testPid (Just "true")
       (renderT pendingPage) `shouldContainAll` ["Preparing your system report", "every 2s", "live-report-preview"]
       runTestBg frozenTime tr $ Report.finishPreview testPid token (Report.PreviewReady snapshot)
       runTestBg frozenTime tr (Report.getPreview testPid) >>= (`shouldBe` Just (Report.PreviewReady snapshot))
       runTestBg frozenTime tr (Report.getPreview $ UUIDId $ UUID.fromWords 9 8 7 6) >>= (`shouldBe` Nothing)
-      (_, readyPage) <- testServant tr $ Reports.reportsLiveGetH testPid (Just "true")
+      readyPage <- call tr $ Reports.reportsLiveGetH testPid (Just "true")
       let readyHtml = renderT readyPage
       readyHtml `shouldContainAll` ["live-report-preview", "srcdoc", "Infrastructure", "Monitors"]
       readyHtml `shouldSatisfy` (not . T.isInfixOf "every 2s")
-      void $ withResource tr.trPool $ \conn -> PGS.execute conn [sql|UPDATE apis.report_previews SET expires_at = now() - interval '1 second' WHERE project_id = ?|] (PGS.Only testPid)
+      dbExec tr [sql|UPDATE apis.report_previews SET expires_at = now() - interval '1 second' WHERE project_id = ?|] (PGS.Only testPid)
       retryToken <- maybe (fail "expired preview could not be retried") pure =<< runTestBg frozenTime tr (Report.claimPreview testPid)
       -- An old worker finishing after a retry must not overwrite the new lease.
       runTestBg frozenTime tr $ Report.finishPreview testPid token (Report.PreviewReady snapshot)
       runTestBg frozenTime tr (Report.getPreview testPid) >>= (`shouldBe` Just Report.PreviewBuilding)
       runTestBg frozenTime tr $ Report.finishPreview testPid retryToken Report.PreviewFailed
-      (_, failedPage) <- testServant tr $ Reports.reportsLiveGetH testPid (Just "true")
+      failedPage <- call tr $ Reports.reportsLiveGetH testPid (Just "true")
       (renderT failedPage) `shouldContainAll` ["The report could not be prepared", "every 60s", "View saved reports"]
       (_, _, email) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot
       (_, _, full) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" True snapshot
@@ -367,10 +357,9 @@ spec = around withTestResources do
 
     it "counts issue lifecycle states before selecting the highest-priority evidence" \tr -> do
       let start = addUTCTime (-(7 * 86400)) frozenTime
-      void $ withResource tr.trPool $ \conn ->
-        PGS.execute
-          conn
-          [sql|
+      dbExec
+        tr
+        [sql|
         INSERT INTO apis.issues (project_id, issue_type, target_hash, title, service, created_at, critical, severity, affected_requests, acknowledged_at, archived_at)
         SELECT ?, 'runtime_exception', gen_random_uuid()::text, title, 'api', ?, critical, severity, impact, ack, archived
         FROM (VALUES ('critical from severity', false, 'critical', 1, NULL::timestamptz, NULL::timestamptz),
@@ -379,7 +368,7 @@ spec = around withTestResources do
                      ('acknowledged', false, 'info', 1, ?::timestamptz, NULL),
                      ('archived', false, 'info', 1, NULL, ?::timestamptz)) AS fixtures(title, critical, severity, impact, ack, archived)
         |]
-          (testPid, start, start, start)
+        (testPid, start, start, start)
       issues <- runTestBg frozenTime tr $ Report.issueStats testPid start frozenTime
       (issues.newIssues, issues.openIssues, issues.criticalOpen, issues.acknowledged, issues.archivedInPeriod) `shouldBe` (5, 3, 2, 1, 1)
       map (.title) issues.priorities `shouldBe` ["critical from flag", "critical from severity", "high-volume warning"]

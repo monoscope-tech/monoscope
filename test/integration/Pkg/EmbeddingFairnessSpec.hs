@@ -6,13 +6,10 @@ import Data.Effectful.LLM qualified as LLM
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple qualified as PG
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Dispatch.Dynamic (interpose)
 import Langchain.DocumentLoader.Core qualified as Doc
 import Pkg.TestUtils
-import Relude
 import System.Timeout (timeout)
-import Test.Hspec
 import UnliftIO.Async (cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 

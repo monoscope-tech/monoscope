@@ -10,6 +10,7 @@ module Models.Apis.LogQueries (
   SessionSummary (..),
   normalizeUrlPath,
   SqlSource (..),
+  scopeUserSql,
   SecuredSql (..),
   selectLogTable,
   executeSecuredQuery,
@@ -37,7 +38,7 @@ where
 import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
-import Data.Char (isDigit)
+import Data.Char (isAlpha, isAlphaNum, isDigit)
 import Data.Default
 import Data.Effectful.Hasql (Hasql, SecuredSql (..), SqlSource (..))
 import Data.Effectful.Hasql qualified as Hasql
@@ -204,13 +205,112 @@ executeSecuredQuery :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Proj
 executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
   | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
-  | otherwise = do
-      let wrapped = rawSql ("SELECT jsonb_build_array(sub.*) FROM (" <> userQuery <> ") sub") <> [HI.sql| LIMIT #{limit}|]
-          routeToTimefusion = case source of
-            SqlPostgres -> False
-            SqlTimefusion -> useTimefusion
-      resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion (jsonArrayRows <$> Hasql.interp wrapped)
-      pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
+  | otherwise = case scopeUserSql (source == SqlPostgres || not useTimefusion) pid userQuery of
+      Left err -> pure $ Left err
+      Right scoped -> do
+        let wrapped = rawSql ("SELECT jsonb_build_array(sub.*) FROM (" <> scoped <> ") sub") <> [HI.sql| LIMIT #{limit}|]
+            routeToTimefusion = case source of
+              SqlPostgres -> False
+              SqlTimefusion -> useTimefusion
+        resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion (jsonArrayRows <$> Hasql.interp wrapped)
+        pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
+
+
+-- | Tables user SQL may read. Each is replaced by the project's slice of itself before the
+-- statement runs, so no predicate the statement writes can widen what it reads.
+tenantTables :: [Text]
+tenantTables = ["otel_logs_and_spans", "otel_metrics", "apis.endpoints", "apis.endpoint_dependency_edges", "apis.error_hourly_stats", "apis.log_pattern_hourly_stats", "projects.replay_sessions"]
+
+
+data SqlTok = SqlLit Text | SqlName [Text] Text | SqlOther Char
+
+
+-- | Scope a user statement to its project at every tenant table it reads: a CTE filtering the
+-- table by @project_id@ goes ahead of the statement's own (spliced into its WITH, so its
+-- ORDER BY still holds). A bare name is shadowed by a CTE of the same name, which both
+-- Postgres and DataFusion resolve ahead of the table, in subqueries too; a qualified name is
+-- renamed to its CTE. String literals are left alone and comments are dropped, so neither
+-- can hide a name. Refused rather than run: WITH RECURSIVE, names with three or more parts, any other schema-qualified name (a prefix
+-- reaches past the shadow) and public tables that are not tenant data. On Postgres the CTE is
+-- NOT MATERIALIZED: one read twice would otherwise be materialized as a full-project scan
+-- instead of inlining the statement's own time filter into each read.
+--
+-- >>> import Data.UUID qualified as UUID
+-- >>> import Pkg.DeriveUtils (UUIDId (..))
+-- >>> let pid = UUIDId UUID.nil
+-- >>> scopeUserSql False pid "SELECT name FROM otel_logs_and_spans WHERE name <> 'apis.endpoints' ORDER BY 1"
+-- Right "WITH otel_logs_and_spans AS (SELECT * FROM otel_logs_and_spans WHERE project_id = '00000000-0000-0000-0000-000000000000') SELECT name FROM otel_logs_and_spans WHERE name <> 'apis.endpoints' ORDER BY 1"
+-- >>> scopeUserSql False pid "with x as (select host from apis . endpoints e) select e.host from x e"
+-- Right "with tenant_apis_endpoints AS (SELECT * FROM apis.endpoints WHERE project_id = '00000000-0000-0000-0000-000000000000'), x as (select host from tenant_apis_endpoints e) select e.host from x e"
+-- >>> scopeUserSql True pid "SELECT 1 FROM otel_metrics"
+-- Right "WITH otel_metrics AS NOT MATERIALIZED (SELECT * FROM otel_metrics WHERE project_id = '00000000-0000-0000-0000-000000000000') SELECT 1 FROM otel_metrics"
+-- >>> scopeUserSql False pid "SELECT 1 -- FROM users.users\nFROM otel_metrics /* x */"
+-- Right "WITH otel_metrics AS (SELECT * FROM otel_metrics WHERE project_id = '00000000-0000-0000-0000-000000000000') SELECT 1  \nFROM otel_metrics  "
+-- >>> map (isLeft . scopeUserSql False pid) (["SELECT * FROM users.users", "SELECT * FROM \"public\".otel_logs_and_spans", "SELECT * FROM datafusion.public.otel_logs_and_spans", "SELECT * FROM background_jobs", "WITH RECURSIVE r AS (SELECT 1) SELECT * FROM r", "SELECT 1 FROM users/**/.users"] :: [Text])
+-- [True,True,True,True,True,True]
+scopeUserSql :: Bool -> Projects.ProjectId -> Text -> Either Text Text
+scopeUserSql postgres pid sql = do
+  let toks = tokenizeSql sql
+      names = [ps | SqlName ps _ <- toks]
+  Relude.when (["with", "recursive"] `elem` zipWith (<>) names (drop 1 names)) $ Left "Recursive queries are not supported"
+  whenJust (find disallowed names) \ps -> Left $ T.intercalate "." ps <> " is not available to queries"
+  let used = filter (\t -> any ((== t) . T.intercalate ".") names) tenantTables
+      cte t = alias t <> bool " AS (" " AS NOT MATERIALIZED (" postgres <> "SELECT * FROM " <> t <> " WHERE project_id = '" <> pid.toText <> "')"
+      render = foldMap \case
+        SqlLit l -> l
+        SqlOther c -> one c
+        SqlName ps raw -> let t = T.intercalate "." ps in if length ps > 1 && t `elem` tenantTables then alias t else raw
+      (lead, rest) = break isName toks
+      isName = \case SqlName{} -> True; _ -> False
+      ctes = T.intercalate ", " (cte <$> used)
+  pure
+    $ if
+      | null used -> render toks
+      | (SqlName ["with"] w : more) <- rest -> render lead <> w <> " " <> ctes <> "," <> render more
+      | otherwise -> "WITH " <> ctes <> " " <> render toks
+  where
+    alias t = bool t ("tenant_" <> T.replace "." "_" t) ("." `T.isInfixOf` t)
+    schemas = ["apis", "monitors", "projects", "telemetry", "tests", "users", "public", "information_schema"]
+    disallowed = \case
+      [n] -> n `elem` ["background_jobs", "otel_metrics_meta", "query_cache", "rum_panel_cache", "schema_migrations"] || ("otel_" `T.isPrefixOf` n && n `notElem` tenantTables)
+      [q, n] -> (q `elem` schemas || any (`T.isPrefixOf` q) ["pg_", "_timescaledb", "timescaledb"]) && (q <> "." <> n) `notElem` tenantTables
+      _ -> True
+
+
+-- | Split SQL into string literals, (possibly dotted, possibly quoted) names lowercased, and
+-- every other character, so rewriting never touches a literal. Comments become a space.
+tokenizeSql :: Text -> [SqlTok]
+tokenizeSql t = case T.uncons t of
+  Nothing -> []
+  Just ('\'', _) -> let (lit, rest) = quoted '\'' t in SqlLit lit : tokenizeSql rest
+  _ | Just rest <- T.stripPrefix "--" t -> SqlOther ' ' : tokenizeSql (T.dropWhile (/= '\n') rest)
+  _ | Just rest <- T.stripPrefix "/*" t -> SqlOther ' ' : tokenizeSql (T.drop 2 $ snd $ T.breakOn "*/" rest)
+  Just (c, rest)
+    | c == '"' || isAlpha c || c == '_' -> let (ps, rest') = dotted t in SqlName ps (T.take (T.length t - T.length rest') t) : tokenizeSql rest'
+    | otherwise -> SqlOther c : tokenizeSql rest
+  where
+    quoted q s = let rest = closeAt q (T.drop 1 s) in (T.take (T.length s - T.length rest) s, rest)
+    closeAt q s = case T.break (== q) s of
+      (_, r)
+        | T.null r -> ""
+        | T.replicate 2 (one q) `T.isPrefixOf` r -> closeAt q (T.drop 2 r)
+        | otherwise -> T.drop 1 r
+    part s = case T.uncons s of
+      Just ('"', _) -> let (lit, r) = quoted '"' s in Just (T.toLower $ T.dropEnd 1 $ T.drop 1 lit, r)
+      Just (c, _) | isAlpha c || c == '_' -> let (p, r) = T.span (\x -> isAlphaNum x || x `elem` ['_', '$']) s in Just (T.toLower p, r)
+      _ -> Nothing
+    dotted s = case part s of
+      Nothing -> ([], s)
+      Just (p, r) -> case T.stripPrefix "." (gap r) of
+        Just afterDot | Just _ <- part (gap afterDot) -> first (p :) (dotted (gap afterDot))
+        _ -> ([p], r)
+    -- What SQL treats as whitespace around a dot: spaces and comments alike.
+    gap s
+      | Just c <- T.stripPrefix "--" s' = gap (T.dropWhile (/= '\n') c)
+      | Just c <- T.stripPrefix "/*" s' = gap (T.drop 2 $ snd $ T.breakOn "*/" c)
+      | otherwise = s'
+      where
+        s' = T.stripStart s
 
 
 -- | Each query path projects a single jsonb-array column per row (via

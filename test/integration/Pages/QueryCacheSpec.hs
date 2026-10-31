@@ -3,35 +3,24 @@ module Pages.QueryCacheSpec (spec) where
 import Control.Exception qualified as E
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Pool (defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (execute_)
 import Database.PostgreSQL.Simple qualified as PG
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Models.Projects.Projects qualified as Projects
+import GHC.Clock (getMonotonicTimeNSec)
 import Pages.Charts.Charts qualified as Charts
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (currentTime, dateRange, defSqlQueryCfg, environment, parseQueryToAST, service)
 import Pkg.Parser.Expr (ToQueryText (..))
-import GHC.Clock (getMonotonicTimeNSec)
 import Pkg.QueryCache qualified as QC
 import Pkg.TestUtils
-import Relude
 import Servant qualified
 import System.Config (AuthContext (..))
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy)
 import Text.Read (read)
 import Utils (toXXHash)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
 
 
 baseTime :: UTCTime
@@ -39,8 +28,7 @@ baseTime = read "2025-01-01 00:00:00 UTC"
 
 
 clearCache :: TestResources -> IO ()
-clearCache tr = withResource tr.trPool \conn ->
-  void $ execute_ conn [sql|DELETE FROM query_cache WHERE project_id = '00000000-0000-0000-0000-000000000000'|]
+clearCache tr = dbExec tr [sql|DELETE FROM query_cache WHERE project_id = '00000000-0000-0000-0000-000000000000'|] ()
 
 
 clearAllTestData :: TestResources -> IO ()
@@ -51,7 +39,7 @@ clearAllTestData tr = withResource tr.trPool \conn -> do
 
 queryMetrics :: TestResources -> Text -> Text -> Text -> IO Charts.MetricsData
 queryMetrics tr query timeFrom timeTo =
-  runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just query) Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") Nothing []
+  runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just query) Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") Nothing []
 
 
 -- Format time offset from baseTime as ISO8601 string
@@ -76,8 +64,8 @@ cachedToFor tr key = withResource tr.trPool \conn -> do
 seedCache :: TestResources -> Text -> (UTCTime, UTCTime, UTCTime) -> IO QC.CacheKey
 seedCache tr q (t0, t1, t2) = do
   sections <- either (fail . toString) pure (parseQueryToAST q)
-  let cfg = (defSqlQueryCfg pid baseTime Nothing Nothing){dateRange = (Just t0, Just t2)}
-      key = QC.generateCacheKey pid Nothing sections cfg
+  let cfg = (defSqlQueryCfg testPid baseTime Nothing Nothing){dateRange = (Just t0, Just t2)}
+      key = QC.generateCacheKey testPid Nothing sections cfg
       seedTs = realToFrac (utcTimeToPOSIXSeconds t0) :: Double
       seed = def{Charts.dataset = V.singleton (V.fromList [Just seedTs, Just 5]), Charts.headers = V.fromList ["timestamp", "count"], Charts.rowsCount = 1}
   runQueryEffect tr $ QC.updateCache key (t0, t1) seed q
@@ -92,7 +80,7 @@ withoutTelemetryTable tr =
     (rename "ALTER TABLE otel_logs_and_spans RENAME TO chart_test_unavailable")
     (rename "ALTER TABLE chart_test_unavailable RENAME TO otel_logs_and_spans")
   where
-    rename sqlQuery = withResource tr.trPool $ \conn -> void $ execute_ conn sqlQuery
+    rename sqlQuery = dbExec tr sqlQuery ()
 
 
 -- | Rejected by the parser before any SQL is built.
@@ -131,11 +119,11 @@ spec = around withTestResources do
       let q = predicate <> " | summarize count(*) by bin(timestamp, 1h)"
           end = addUTCTime 3600 baseTime
       sections <- either (fail . toString) pure $ parseQueryToAST q
-      let cfg = (defSqlQueryCfg pid baseTime Nothing Nothing){dateRange = (Just baseTime, Just end)}
-          key = QC.generateCacheKey pid Nothing sections cfg
+      let cfg = (defSqlQueryCfg testPid baseTime Nothing Nothing){dateRange = (Just baseTime, Just end)}
+          key = QC.generateCacheKey testPid Nothing sections cfg
           legacyKey = key{QC.queryHash = toXXHash $ toQText sections <> "\NULenvironment=\NULservice="} :: QC.CacheKey
           stale = def{Charts.dataset = V.singleton (V.fromList [Just $ realToFrac $ utcTimeToPOSIXSeconds baseTime, Just 5]), Charts.headers = V.fromList ["timestamp", "count"], Charts.rowsCount = 1}
-      QC.generateCacheKey pid Nothing sections cfg{currentTime = end} `shouldBe` key
+      QC.generateCacheKey testPid Nothing sections cfg{currentTime = end} `shouldBe` key
       runQueryEffect tr $ QC.updateCache legacyKey (baseTime, end) stale q
       actual <- queryMetrics tr q (timeAt 0) (timeAt 3600)
       actual.dataset `shouldBe` V.empty
@@ -143,13 +131,13 @@ spec = around withTestResources do
 
     it "distinguishes service scope in generated cache keys" $ \_ -> do
       sections <- either (fail . toString) pure $ parseQueryToAST "summarize count(*) by bin(timestamp, 1h)"
-      let cfg service = (defSqlQueryCfg pid baseTime Nothing Nothing){dateRange = (Just baseTime, Just $ addUTCTime 3600 baseTime), environment = Just "production", service = Just service}
-      QC.generateCacheKey pid Nothing sections (cfg "checkout") `shouldNotBe` QC.generateCacheKey pid Nothing sections (cfg "catalog")
+      let cfg service = (defSqlQueryCfg testPid baseTime Nothing Nothing){dateRange = (Just baseTime, Just $ addUTCTime 3600 baseTime), environment = Just "production", service = Just service}
+      QC.generateCacheKey testPid Nothing sections (cfg "checkout") `shouldNotBe` QC.generateCacheKey testPid Nothing sections (cfg "catalog")
 
   describe "Streaming cache and chunk boundaries" do
     it "recovers a generated chart read when multiple idle pooled connections close" $ \tr -> do
       clearAllTestData tr
-      key <- createTestAPIKey tr pid "closed-chart-connection"
+      key <- createTestAPIKey tr testPid "closed-chart-connection"
       ingestLog tr key "one event" (addUTCTime 3600 baseTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       let createPool = newPool $ setNumStripes (Just 1) $ defaultPoolConfig (PG.connectPostgreSQL tr.trConnStr) PG.close 1800 3
@@ -159,7 +147,7 @@ spec = around withTestResources do
             [PG.Only backend] <- PG.query_ conn "SELECT pg_backend_pid()" :: IO [PG.Only Int]
             withResource tr.trPool $ \control -> void (PG.query control "SELECT pg_terminate_backend(?, 5000)" (PG.Only backend) :: IO [PG.Only Bool])
         let resources = tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}
-        response <- runQueryEffect resources $ Charts.queryMetricsStream (Just Hasql.SqlTimefusion) (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin(timestamp, 1h)") Nothing Nothing (Just $ timeAt 0) (Just $ timeAt 259200) (Just "spans") Nothing []
+        response <- runQueryEffect resources $ Charts.queryMetricsStream (Just Hasql.SqlTimefusion) (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin(timestamp, 1h)") Nothing Nothing (Just $ timeAt 0) (Just $ timeAt 259200) (Just "spans") Nothing []
         frames <- streamFrames response >>= either fail pure
         case viaNonEmpty last frames of
           Just (AE.Object obj) -> do
@@ -173,18 +161,18 @@ spec = around withTestResources do
     -- burst as partials only made every chart redraw three times.
     it "streams a sub-24h chart's single query as one data frame" $ \tr -> do
       clearAllTestData tr
-      key <- createTestAPIKey tr pid "single-query-frames"
+      key <- createTestAPIKey tr testPid "single-query-frames"
       forM_ [60, 1200, 2400, 3500] \offset -> ingestLog tr key ("event " <> show offset) (addUTCTime (fromIntegral offset) baseTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       clearCache tr
-      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin(timestamp, 10m)") Nothing Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin(timestamp, 10m)") Nothing Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []
       frames <- streamFrames response >>= either fail pure
       let dataFrames = [kind | AE.Object o <- frames, Just kind <- [KM.lookup "type" o], Just (AE.Object d) <- [KM.lookup "data" o], Just (AE.Array ds) <- [KM.lookup "dataset" d], not (null ds)]
       dataFrames `shouldBe` [AE.String "complete"]
 
     it "keeps a slow query's response active until completion" $ \tr -> do
       let slowSql = "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM pg_sleep(6)"
-      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just pid) Nothing (Just slowSql) Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just slowSql) Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []
       values <- streamFrames response
       frames <- either fail pure values
       let kind = \case AE.Object obj -> KM.lookup "type" obj; _ -> Nothing
@@ -193,13 +181,13 @@ spec = around withTestResources do
 
     it "matches a whole query, populates the cache, and serves a hit without reading telemetry" $ \tr -> do
       clearAllTestData tr
-      key <- createTestAPIKey tr pid "stream-cache-boundaries"
+      key <- createTestAPIKey tr testPid "stream-cache-boundaries"
       forM_ [17, 3599, 3600, 86400, 172800, 259200] $ \offset ->
         ingestLog tr key ("boundary " <> show offset) (addUTCTime (fromIntegral offset) baseTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       let q = "summarize count(*) by bin(timestamp, 1h)"
           runStream = do
-            response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just $ timeAt 17) (Just $ timeAt 259200) (Just "spans") Nothing []
+            response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) (Just q) Nothing Nothing (Just $ timeAt 17) (Just $ timeAt 259200) (Just "spans") Nothing []
             values <- streamFrames response
             either fail pure values
           final :: [AE.Value] -> IO Charts.MetricsData
@@ -217,7 +205,7 @@ spec = around withTestResources do
       actual.dataset `shouldBe` expected.dataset
       actual.headers `shouldBe` expected.headers
       actual.rowsCount `shouldBe` expected.rowsCount
-      withResource tr.trPool $ \conn -> void $ execute_ conn [sql|DELETE FROM otel_logs_and_spans WHERE project_id = '00000000-0000-0000-0000-000000000000'|]
+      dbExec tr [sql|DELETE FROM otel_logs_and_spans WHERE project_id = '00000000-0000-0000-0000-000000000000'|] ()
       cachedFrames <- runStream
       length cachedFrames `shouldBe` 1
       cached <- final cachedFrames
@@ -235,14 +223,14 @@ spec = around withTestResources do
       cached <- withoutTelemetryTable tr fetch
       cached.error `shouldBe` Nothing
       cached.dataset `shouldBe` V.empty
-      withResource tr.trPool $ \conn -> void $ execute_ conn [sql|UPDATE query_cache SET cached_data = jsonb_set(cached_data, '{error}', '"old failure"') WHERE project_id = '00000000-0000-0000-0000-000000000000'|]
+      dbExec tr [sql|UPDATE query_cache SET cached_data = jsonb_set(cached_data, '{error}', '"old failure"') WHERE project_id = '00000000-0000-0000-0000-000000000000'|] ()
       recovered <- fetch
       recovered.error `shouldBe` Nothing
       recovered.dataset `shouldBe` V.empty
 
     it "cache hit returns same results as fresh query" $ \tr -> do
       clearAllTestData tr
-      key <- createTestAPIKey tr pid "cache-key-1"
+      key <- createTestAPIKey tr testPid "cache-key-1"
       forM_ [0 .. 19] \i -> ingestLog tr key ("Log " <> show i) (addUTCTime (fromIntegral $ i * 60) baseTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
@@ -258,7 +246,7 @@ spec = around withTestResources do
 
     it "partial hit merge returns same results as fresh query with correct ordering" $ \tr -> do
       clearAllTestData tr
-      key <- createTestAPIKey tr pid "cache-key-2"
+      key <- createTestAPIKey tr testPid "cache-key-2"
 
       -- Phase 1: initial data, populate cache
       forM_ [0 .. 9] \i -> ingestLog tr key ("Log1 " <> show i) (addUTCTime (fromIntegral $ i * 60 - 600) baseTime)
@@ -281,7 +269,7 @@ spec = around withTestResources do
 
     it "multi-column grouping calculates correct stats after partial hit merge" $ \tr -> do
       clearAllTestData tr
-      key <- createTestAPIKey tr pid "cache-key-3"
+      key <- createTestAPIKey tr testPid "cache-key-3"
 
       -- Phase 1: initial multi-column data (logs + traces create different 'kind' values)
       forM_ [0 .. 4] \i -> do
@@ -337,7 +325,7 @@ spec = around withTestResources do
       let q = "summarize count(*) by bin_auto(timestamp)"
           times@(_, t1, _) = (addUTCTime (-1800) baseTime, baseTime, addUTCTime 1800 baseTime)
       key <- seedCache tr q times
-      result <- withoutTelemetryTable tr $ runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
+      result <- withoutTelemetryTable tr $ runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
       result.error `shouldSatisfy` isJust
       cachedToFor tr key `shouldReturn` Just t1
 
@@ -345,7 +333,7 @@ spec = around withTestResources do
       clearAllTestData tr
       result <- withoutTelemetryTable tr $ queryMetrics tr "summarize count(*) by bin_auto(timestamp)" (timeAt (-1800)) (timeAt 1800)
       result.error `shouldSatisfy` isJust
-      rows <- withResource tr.trPool $ \conn -> PG.query_ conn [sql|SELECT count(*) FROM query_cache WHERE project_id = '00000000-0000-0000-0000-000000000000'|]
+      rows <- dbQuery tr [sql|SELECT count(*) FROM query_cache WHERE project_id = '00000000-0000-0000-0000-000000000000'|] ()
       rows `shouldBe` [PG.Only (0 :: Int64)]
 
     -- Counterpart to the guard above: a delta that *succeeds* but legitimately
@@ -356,7 +344,7 @@ spec = around withTestResources do
           times@(_, _, t2) = (addUTCTime (-1800) baseTime, baseTime, addUTCTime 1800 baseTime)
       key <- seedCache tr q times
       -- No telemetry ingested, so the delta over (t1, t2] succeeds with 0 rows.
-      _ <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
+      _ <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
       cachedToFor tr key `shouldReturn` Just t2
 
   describe "Shared query cache" do
@@ -365,5 +353,5 @@ spec = around withTestResources do
       key <- ("shared-cache-spec-" <>) . show <$> getMonotonicTimeNSec
       let read' = runQueryEffect tr $ QC.withSharedCache key 300 (liftIO $ atomicModifyIORef' calls \n -> (n + 1, n + 1))
       (,) <$> read' <*> read' `shouldReturn` (1, 1)
-      withResource tr.trPool \conn -> void $ PG.execute conn "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute' WHERE cache_key = ?" (PG.Only $ toXXHash key)
+      dbExec tr "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute' WHERE cache_key = ?" (PG.Only $ toXXHash key)
       read' `shouldReturn` 2

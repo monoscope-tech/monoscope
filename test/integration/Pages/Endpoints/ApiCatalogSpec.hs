@@ -2,27 +2,23 @@ module Pages.Endpoints.ApiCatalogSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
-import Data.Effectful.Notify (EmailData (..), Notification (..))
-import Data.UUID.V4 (nextRandom)
 import Data.Aeson.KeyMap qualified as KM
-import Data.Default (def)
+import Data.Effectful.Notify (EmailData (..), Notification (..))
 import Data.Text qualified as T
 import Data.Time (addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
+import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
 import Pkg.TestUtils hiding (testPid)
-import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy)
 import Utils (toUriStr, toXXHash)
 
 
@@ -31,35 +27,22 @@ import Utils (toUriStr, toXXHash)
 -- Helper function to get endpoint stats
 getEndpointStats :: TestResources -> Projects.ProjectId -> Maybe Text -> Maybe Text -> IO (V.Vector ApiCatalog.EnpReqStatsVM)
 getEndpointStats tr testPid filterParam hostM = do
-  (_, resp) <-
-    testServant tr
-      $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
-  case resp of
-    Table.TablePage (PageCtx _ tbl) -> pure tbl.rows
-    _ -> error "Unexpected response from endpointListGetH"
+  PageCtx _ tbl <- tablePage =<< call tr (ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true"))
+  pure tbl.rows
 
 
 -- | Fetch a specific page from the endpoints handler and return rows + total.
 getEndpointsPage :: TestResources -> Projects.ProjectId -> Text -> Int -> Int -> IO (V.Vector ApiCatalog.EnpReqStatsVM, Int)
 getEndpointsPage tr testPid host page perPage = do
-  (_, resp) <-
-    testServant tr
-      $ ApiCatalog.endpointListGetH testPid (Just (show page)) (Just (show perPage)) Nothing Nothing (Just host) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
-  case resp of
-    Table.TablePage (PageCtx _ tbl) ->
-      pure (tbl.rows, maybe 0 (.totalCount) tbl.features.pagination)
-    _ -> error "Unexpected response from endpointListGetH"
+  PageCtx _ tbl <- tablePage =<< call tr (ApiCatalog.endpointListGetH testPid (Just (show page)) (Just (show perPage)) Nothing Nothing (Just host) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true"))
+  pure (tbl.rows, maybe 0 (.totalCount) tbl.features.pagination)
 
 
 -- | The endpoints table as a user sees it, for asserting on rendered links.
 getEndpointsHtml :: TestResources -> Projects.ProjectId -> Maybe Text -> IO Text
 getEndpointsHtml tr testPid filterParam = do
-  (_, resp) <-
-    testServant tr
-      $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
-  case resp of
-    Table.TablePage (PageCtx _ tbl) -> pure $ renderT tbl
-    _ -> error "Unexpected response from endpointListGetH"
+  PageCtx _ tbl <- tablePage =<< call tr (ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true"))
+  pure $ renderT tbl
 
 
 -- Helper function to verify endpoint creation
@@ -117,13 +100,8 @@ spec :: Spec
 spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject tr "api-catalog" >>= \testPid -> f (tr, testPid)) do
   describe "API Catalog and Endpoints" do
     it "returns empty list when no data exists" \(tr, testPid) -> do
-      (_, catalogList) <-
-        testServant tr
-          $ ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      case catalogList of
-        Table.TablePage (PageCtx _ tbl) ->
-          length tbl.rows `shouldBe` 0
-        _ -> expectationFailure "Expected TablePage"
+      PageCtx _ tbl <- tablePage =<< call tr (ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
+      length tbl.rows `shouldBe` 0
 
     it "creates endpoints from processed spans" \(tr, testPid) -> do
       -- First verify the demo project exists
@@ -185,27 +163,17 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
       verifyEndpointsCreated tr testPid
 
     it "returns hosts list after processing messages" \(tr, testPid) -> do
-      (_, catalogList) <-
-        testServant tr
-          $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
-      case catalogList of
-        Table.TablePage (PageCtx _ tbl) ->
-          length tbl.rows `shouldBe` 2
-        _ -> expectationFailure "Expected TablePage"
+      PageCtx _ tbl <- tablePage =<< call tr (ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing)
+      length tbl.rows `shouldBe` 2
 
     it "attributes events to the correct host (no cross-host inflation)" \(tr, testPid) -> do
       -- Each host got 100 spans in prepareTestMessages. A regression where the
       -- query joined spans to endpoints by (url_path, method) only — the bug
       -- that produced "every host shows the same total" — is caught here.
-      (_, catalogList) <-
-        testServant tr
-          $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true")
-      case catalogList of
-        Table.TablePage (PageCtx _ tbl) -> do
-          let countOf host = sum [vm.events.eventCount | vm <- V.toList tbl.rows, vm.events.host == host]
-          countOf "172.31.29.11" `shouldBe` 100
-          countOf "api.test.com" `shouldBe` 100
-        _ -> expectationFailure "Expected TablePage"
+      PageCtx _ tbl <- tablePage =<< call tr (ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true"))
+      let countOf host = sum [vm.events.eventCount | vm <- V.toList tbl.rows, vm.events.host == host]
+      countOf "172.31.29.11" `shouldBe` 100
+      countOf "api.test.com" `shouldBe` 100
 
     -- Perf guard: the default page load must not pay for the telemetry aggregate that
     -- scans a full window of spans (measured at 20-107s on a busy project). It renders
@@ -213,24 +181,17 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
     -- that HTMX fetches afterwards. If someone makes the first load compute stats again,
     -- eventCount becomes non-zero here and the page goes back to being unusably slow.
     it "apiCatalog_defaultLoad_rendersShellWithoutTelemetryStats" \(tr, testPid) -> do
-      (_, shell) <-
-        testServant tr
-          $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
-      (_, withStats) <-
-        testServant tr
-          $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true")
-      case (shell, withStats) of
-        (Table.TablePage (PageCtx _ shellTbl), Table.TablePage (PageCtx _ statsTbl)) -> do
-          let counts tbl = map (.events.eventCount) $ V.toList tbl.rows
-          -- Same hosts in both, but only the deferred response carries traffic. Asserted
-          -- as a relationship, not absolute totals, so this stays a guard on the
-          -- shell/stats split rather than a second copy of the per-host count test.
-          length shellTbl.rows `shouldBe` length statsTbl.rows
-          counts shellTbl `shouldSatisfy` all (== 0)
-          counts statsTbl `shouldSatisfy` all (> 0)
-          shellTbl.config.deferredUrl `shouldSatisfy` maybe False ("stats=true" `T.isInfixOf`)
-          statsTbl.config.deferredUrl `shouldBe` Nothing
-        _ -> expectationFailure "Expected TablePage"
+      PageCtx _ shellTbl <- tablePage =<< call tr (ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing)
+      PageCtx _ statsTbl <- tablePage =<< call tr (ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true"))
+      let counts tbl = map (.events.eventCount) $ V.toList tbl.rows
+      -- Same hosts in both, but only the deferred response carries traffic. Asserted
+      -- as a relationship, not absolute totals, so this stays a guard on the
+      -- shell/stats split rather than a second copy of the per-host count test.
+      length shellTbl.rows `shouldBe` length statsTbl.rows
+      counts shellTbl `shouldSatisfy` all (== 0)
+      counts statsTbl `shouldSatisfy` all (> 0)
+      shellTbl.config.deferredUrl `shouldSatisfy` maybe False ("stats=true" `T.isInfixOf`)
+      statsTbl.config.deferredUrl `shouldBe` Nothing
 
     it "creates anomalies automatically via database triggers" \(tr, testPid) -> do
       -- Verify anomalies were created by triggers
@@ -334,7 +295,6 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
       html `shouldSatisfy` T.isInfixOf (toUriStr "attributes.server.address==\"api.test.com\"")
       html `shouldSatisfy` (not . T.isInfixOf "net.host.name")
 
-
     it "creates shape and field anomalies alongside endpoint anomalies" \(tr, testPid) -> do
       -- First ensure endpoints are created and anomalies are generated
       msgs <- prepareTestMessages testPid
@@ -366,11 +326,8 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
 
     describe "host archiving" do
       let listHosts tr testPid reqType filt = do
-            (_, cat) <- testServant tr $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just reqType) Nothing Nothing filt Nothing
-            case cat of
-              Table.TablePage (PageCtx _ tbl) ->
-                pure $ V.toList $ V.map (.events.host) tbl.rows
-              _ -> expectationFailure "Expected TablePage" $> []
+            PageCtx _ tbl <- tablePage =<< call tr (ApiCatalog.apiCatalogH testPid Nothing Nothing (Just reqType) Nothing Nothing filt Nothing)
+            pure $ V.toList $ V.map (.events.host) tbl.rows
           bulk tr testPid action reqType hosts =
             testServant tr
               $ ApiCatalog.apiCatalogBulkActionH testPid action (Just reqType) (ApiCatalog.HostBulk{itemId = hosts})
@@ -481,7 +438,6 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
           all3 = hashes page0Rows <> hashes page1Rows <> hashes page2Rows
       length all3 `shouldBe` 12
       length (ordNub all3) `shouldBe` 12 -- pages are disjoint
-
     it "service scope hides zero-traffic hosts and endpoints before pagination" \(tr, testPid) -> do
       let alphaService = "catalog-scope-alpha"
           alphaHost = "scope-alpha.example"

@@ -3,25 +3,16 @@ module BackgroundJobs.NotificationsSpec (spec) where
 import BackgroundJobs qualified
 import Data.Pool (withResource)
 import Data.Time (UTCTime, addUTCTime)
-import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Time qualified as Time
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Projects qualified as ProjectPages
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.TestUtils
-import Relude
 import Servant qualified
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
 
 
 -- Seed slack creds + enable error alerts so notify paths don't short-circuit.
@@ -32,14 +23,14 @@ seedSlackChannel tr = withResource tr.trPool \conn -> do
     [sql| INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token)
           VALUES (?, 'T_TEST', 'C_TEST', 'TestTeam', 'xoxb-test')
           ON CONFLICT (project_id) DO UPDATE SET channel_id = 'C_TEST', bot_token = 'xoxb-test' |]
-    (PGS.Only pid)
+    (PGS.Only testPid)
   void $ PGS.execute conn
     [sql| UPDATE projects.teams SET slack_channels = ARRAY['C_TEST']::text[], disabled_channels = '{}'
           WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL |]
-    (PGS.Only pid)
+    (PGS.Only testPid)
   void $ PGS.execute conn
     [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |]
-    (PGS.Only pid)
+    (PGS.Only testPid)
 
 
 spec :: Spec
@@ -49,7 +40,7 @@ spec = around withTestResources do
     it "1. Project settings disable and restore delivery for an orphaned runtime error" \tr -> do
       seedSlackChannel tr
       saveErrorAlerts tr True
-      apiKey <- createTestAPIKey tr pid "notif-orphan-key"
+      apiKey <- createTestAPIKey tr testPid "notif-orphan-key"
       -- Ingest an error 3h before frozenTime so processOneMinuteErrors's inline notify window (15 min) misses it.
       let stack = "TypeError: x is undefined\n    at f (/a.js:1:1)"
       ingestTraceWithException tr apiKey "GET /a" "TypeError" "x is undefined" stack (addUTCTime (-3 * 3600) frozenTime)
@@ -57,27 +48,24 @@ spec = around withTestResources do
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       -- Simulate the orphan state: last_notified_at=NULL (as happened in prod).
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE project_id = ? |]
-          (PGS.Only pid)
+          (PGS.Only testPid)
 
       (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
-        $ BackgroundJobs.sweepErrorSubscriptions pid
+        $ BackgroundJobs.sweepErrorSubscriptions testPid
       notifs `shouldSatisfy` (not . null)
 
       -- last_notified_at must get stamped so the next sweep tick doesn't double-fire.
-      stamped <- withResource tr.trPool \conn ->
-        PGS.query conn
+      stamped <- dbQuery tr
           [sql| SELECT COUNT(*)::INT FROM apis.error_patterns WHERE project_id = ? AND last_notified_at IS NOT NULL |]
-          (PGS.Only pid) :: IO [PGS.Only Int]
+          (PGS.Only testPid) :: IO [PGS.Only Int]
       case stamped of
         [PGS.Only n] -> n `shouldSatisfy` (> 0)
         _ -> expectationFailure "stamped count query returned no row"
 
-      let clearNotified = withResource tr.trPool \conn ->
-            void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE project_id = ? |] (PGS.Only pid)
-          sweep = fst <$> captureNotifs tr (BackgroundJobs.sweepErrorSubscriptions pid)
+      let clearNotified = dbExec tr [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE project_id = ? |] (PGS.Only testPid)
+          sweep = fst <$> captureNotifs tr (BackgroundJobs.sweepErrorSubscriptions testPid)
       saveErrorAlerts tr False
       clearNotified
       sweep `shouldReturn` []
@@ -89,46 +77,44 @@ spec = around withTestResources do
     it "2. Rate limit enforces 20/hr; overflow lands in notification_digest_queue" \tr -> do
       seedSlackChannel tr
       -- Purge any existing bookkeeping to keep this test deterministic.
-      withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql| DELETE FROM apis.notification_rate_limit WHERE project_id = ? |] (PGS.Only pid)
-        void $ PGS.execute conn [sql| DELETE FROM apis.notification_digest_queue WHERE project_id = ? |] (PGS.Only pid)
+      dbExec tr [sql| DELETE FROM apis.notification_rate_limit WHERE project_id = ? |] (PGS.Only testPid)
+      dbExec tr [sql| DELETE FROM apis.notification_digest_queue WHERE project_id = ? |] (PGS.Only testPid)
 
       -- 22 consume attempts: first 20 succeed, last 2 are blocked.
       results <- runTestBg frozenTime tr $ forM ([1 .. 22] :: [Int]) \_ ->
-        BackgroundJobs.consumeNotificationToken pid frozenTime
+        BackgroundJobs.consumeNotificationToken testPid frozenTime
       length (filter id results) `shouldBe` 20
       length (filter not results) `shouldBe` 2
 
     -- Same hour bucket → cap holds across mid-hour advances; new hour bucket → resets.
     it "3a. Hourly rate-limit token bucket rolls over on test clock" \tr -> do
       runTestBg frozenTime tr pass
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn [sql| DELETE FROM apis.notification_rate_limit WHERE project_id = ? |] (PGS.Only pid)
+      dbExec tr [sql| DELETE FROM apis.notification_rate_limit WHERE project_id = ? |] (PGS.Only testPid)
 
       -- Saturate the hour bucket (20/hr cap)
       now0 <- runTestBgNoReset tr $ do
         t <- Time.currentTime
-        forM_ ([1 .. 20] :: [Int]) \_ -> void $ BackgroundJobs.consumeNotificationToken pid t
+        forM_ ([1 .. 20] :: [Int]) \_ -> void $ BackgroundJobs.consumeNotificationToken testPid t
         pure t
-      blocked <- runTestBgNoReset tr $ BackgroundJobs.consumeNotificationToken pid now0
+      blocked <- runTestBgNoReset tr $ BackgroundJobs.consumeNotificationToken testPid now0
       blocked `shouldBe` False
 
       -- 30 minutes later, still the same hour bucket → still blocked.
       advanceMinutes tr 30
       blocked2 <- runTestBgNoReset tr $ do
         t <- Time.currentTime
-        BackgroundJobs.consumeNotificationToken pid t
+        BackgroundJobs.consumeNotificationToken testPid t
       blocked2 `shouldBe` False
 
       -- 31 minutes more (total +61m): next hour bucket → allowed again.
       advanceMinutes tr 31
       allowed <- runTestBgNoReset tr $ do
         t <- Time.currentTime
-        BackgroundJobs.consumeNotificationToken pid t
+        BackgroundJobs.consumeNotificationToken testPid t
       allowed `shouldBe` True
 
     it "3. Same Warp transport error from different stacks groups to one pattern (fingerprint regression)" \tr -> do
-      apiKey <- createTestAPIKey tr pid "notif-transport-key"
+      apiKey <- createTestAPIKey tr testPid "notif-transport-key"
       let msg = "Warp: Client closed connection prematurely"
           sA = "at Warp.run (Server.hs:42:1)\nat handle (/app/x.hs:7:3)"
           sB = "at Warp.run (Server.hs:42:1)\nat different_caller (/app/y.hs:9:5)"
@@ -137,7 +123,7 @@ spec = around withTestResources do
       drainExtractionWorker tr
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
-      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 50 0
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns testPid Nothing 50 0
       let warpPats = filter (\p -> p.errorType == "InvalidRequest") patterns
       length warpPats `shouldBe` 1
 
@@ -146,18 +132,16 @@ spec = around withTestResources do
     -- silence the issue for exactly its window, then hand it back.
     it "4. Acknowledging silences notifications for its window, then they resume" \tr -> do
       seedSlackChannel tr
-      apiKey <- createTestAPIKey tr pid "notif-ack-key"
+      apiKey <- createTestAPIKey tr testPid "notif-ack-key"
       ingestTraceWithException tr apiKey "GET /acked" "AckError" "boom" "at f (/a.js:1:1)" (addUTCTime (-600) frozenTime)
       drainExtractionWorker tr
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
-      let clearNotified = withResource tr.trPool \conn ->
-            void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE project_id = ? |] (PGS.Only pid)
-          sweep = fst <$> captureNotifs tr (BackgroundJobs.sweepErrorSubscriptions pid)
-      issueIds <- withResource tr.trPool \conn ->
-        PGS.query conn
+      let clearNotified = dbExec tr [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE project_id = ? |] (PGS.Only testPid)
+          sweep = fst <$> captureNotifs tr (BackgroundJobs.sweepErrorSubscriptions testPid)
+      issueIds <- dbQuery tr
           [sql| SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'runtime_exception' ORDER BY created_at DESC LIMIT 1 |]
-          (PGS.Only pid) :: IO [PGS.Only Issues.IssueId]
+          (PGS.Only testPid) :: IO [PGS.Only Issues.IssueId]
       issueId <- case issueIds of
         (PGS.Only i : _) -> pure i
         _ -> expectationFailure "no runtime_exception issue created" >> error "unreachable"
@@ -165,7 +149,7 @@ spec = around withTestResources do
       -- Acknowledged for an hour: the sweep must stay silent even though the
       -- pattern is otherwise due.
       let uid = (Servant.getResponse tr.trSessAndHeader).user.id
-      runTestBg frozenTime tr $ void $ Issues.setAckState pid [issueId] $ Just Issues.AckSet{at = frozenTime, by = Just uid, window = Issues.AckFor 60}
+      runTestBg frozenTime tr $ void $ Issues.setAckState testPid [issueId] $ Just Issues.AckSet{at = frozenTime, by = Just uid, window = Issues.AckFor 60}
       clearNotified
       silenced <- sweep
       silenced `shouldBe` []
@@ -178,8 +162,7 @@ spec = around withTestResources do
 
       -- ...and the expiry sweep hands the issue back to the Inbox with a trail.
       runTestBgNoReset tr BackgroundJobs.expireLapsedAcks
-      back <- withResource tr.trPool \conn ->
-        PGS.query conn
+      back <- dbQuery tr
           [sql| SELECT i.acknowledged_at IS NULL, EXISTS (SELECT 1 FROM apis.issue_activity_log a WHERE a.issue_id = i.id AND a.event = 'ack_expired')
                 FROM apis.issues i WHERE i.id = ? |]
           (PGS.Only issueId) :: IO [(Bool, Bool)]
@@ -192,7 +175,7 @@ spec = around withTestResources do
     -- bound — i.e. for as long as the error kept re-occurring.
     it "5. An explicit subscription is still swept after its error ages past 24h" \tr -> do
       seedSlackChannel tr
-      apiKey <- createTestAPIKey tr pid "notif-subscribed-key"
+      apiKey <- createTestAPIKey tr testPid "notif-subscribed-key"
       ingestTraceWithException tr apiKey "GET /old-sub" "StaleError" "still here" "at f (/a.js:1:1)" (addUTCTime (-600) frozenTime)
       drainExtractionWorker tr
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
@@ -200,13 +183,12 @@ spec = around withTestResources do
       -- created_at is compared against SQL now() by the project-selection query,
       -- so age it on the real clock; the cadence itself is compared against the
       -- app clock, so last_notified_at is an hour back on frozenTime.
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| UPDATE apis.error_patterns
                 SET created_at = now() - interval '3 days', subscribed = TRUE,
                     notify_every_minutes = 30, last_notified_at = ?
                 WHERE project_id = ? |]
-          (addUTCTime (-3600) frozenTime, pid)
+          (addUTCTime (-3600) frozenTime, testPid)
 
       (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
         $ BackgroundJobs.runNotificationSweep frozenTime
@@ -222,7 +204,7 @@ spec = around withTestResources do
       saveEndpointAlerts tr False
       iid <- insertApiChangeIssue tr "endpoint-gate-hash"
       let row = ET.EndpointAlertRow{label = "GET /gated", host = Nothing, service = Nothing, environment = Nothing}
-          send = fst <$> captureNotifs tr (BackgroundJobs.sendNewEndpointAlerts pid "endpoint-gate-hash" [(iid, row)])
+          send = fst <$> captureNotifs tr (BackgroundJobs.sendNewEndpointAlerts testPid "endpoint-gate-hash" [(iid, row)])
 
       send `shouldReturn` []
       notifiedAt tr iid `shouldReturn` [PGS.Only Nothing]
@@ -243,22 +225,19 @@ saveEndpointAlerts tr = saveAlertToggle tr \form v -> form{ProjectPages.endpoint
 -- Round-trips the real settings form so the toggle is written the way the UI writes it.
 saveAlertToggle :: TestResources -> (ProjectPages.CreateProjectForm -> Maybe Text -> ProjectPages.CreateProjectForm) -> Bool -> IO ()
 saveAlertToggle tr set enabled = do
-  (_, ProjectPages.CreateProject (PageCtx _ (_, _, _, _, _, form, _, _))) <- testServant tr $ ProjectPages.projectSettingsGetH pid
-  void $ testServant tr $ ProjectPages.createProjectPostH pid $ set form $ bool Nothing (Just "on") enabled
+  (_, ProjectPages.CreateProject (PageCtx _ (_, _, _, _, _, form, _, _))) <- testServant tr $ ProjectPages.projectSettingsGetH testPid
+  void $ testServant tr $ ProjectPages.createProjectPostH testPid $ set form $ bool Nothing (Just "on") enabled
 
 
 insertApiChangeIssue :: TestResources -> Text -> IO Issues.IssueId
-insertApiChangeIssue tr hash = withResource tr.trPool \conn ->
-  PGS.query
-    conn
+insertApiChangeIssue tr hash = dbQuery tr
     [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, endpoint_hash)
           VALUES (?, 'api_change', 'GET /gated', ?, ?) RETURNING id |]
-    (pid, hash, hash)
+    (testPid, hash, hash)
     <&> \case
       [PGS.Only iid] -> iid
       _ -> error "insertApiChangeIssue returned no row"
 
 
 notifiedAt :: TestResources -> Issues.IssueId -> IO [PGS.Only (Maybe UTCTime)]
-notifiedAt tr iid = withResource tr.trPool \conn ->
-  PGS.query conn [sql| SELECT last_notified_at FROM apis.issues WHERE id = ? |] (PGS.Only iid)
+notifiedAt tr iid = dbQuery tr [sql| SELECT last_notified_at FROM apis.issues WHERE id = ? |] (PGS.Only iid)

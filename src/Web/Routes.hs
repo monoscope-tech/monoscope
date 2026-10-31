@@ -4,7 +4,6 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Builder (Builder)
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
@@ -118,6 +117,7 @@ import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, au
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.MCP qualified as MCP
+import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 
@@ -514,14 +514,14 @@ data IssuesRoutes' mode = IssuesRoutes'
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> QueryParam "value" Text :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders (Table.TableResponse IssuesPage.IssueVM))
   , stepGet :: mode :- Capture "issueID" Issues.IssueId :> "step" :> QueryParam "dir" Telemetry.EventStep :> QueryParam "event" IssuesPage.EventRef :> LocationRedirect NoContent
-  , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx IssuesPage.IssueDetail))
+  , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx IssuesPage.IssueDetail))
   , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] IssuesPage.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
   , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> QueryFlag "next_release" :> Post '[HTML] (RespHeaders (Html ()))
   , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] IssuesPage.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] IssuesPage.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatHistoryGet :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
-  , sampleGet :: mode :- Capture "issueID" Issues.IssueId :> "sample" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
+  , sampleGet :: mode :- Capture "issueID" Issues.IssueId :> "sample" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders IssuesPage.IssueSample)
   , activityGet :: mode :- Capture "issueID" Issues.IssueId :> "activity" :> QPT "trace_id" :> QPU "trace_ts" :> Get '[HTML] (RespHeaders (Html ()))
   , errorGroupMembersGet :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "group_members" :> Get '[HTML] (RespHeaders (Html ()))
   , errorUnmergePost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "unmerge" :> Post '[HTML] (RespHeaders (Html ()))
@@ -1166,6 +1166,10 @@ chartsDataStreamGetH = chartDataH Charts.queryMetricsStream
 -- client SQL (see 'clientPostgresSqlRejection') before either runner sees it.
 chartDataH :: ChartDataH a -> ChartDataH a
 chartDataH run dbSource0 dt pid q qSql0 since fromD toD src density params = do
+  let param k = join $ L.lookup k params
+  case pid of
+    Just p -> Dashboards.authorizeClientSql p qSql0 (param "rollup_sql") (param "sql_sig")
+    Nothing -> when (isJust $ Utils.nonEmptyT qSql0 <|> Utils.nonEmptyT (param "rollup_sql")) $ Error.throwError err400{errBody = "SQL needs a project"}
   scopedParams <- chartScopeParams pid params
   now <- Time.currentTime
   let (dbSource, qSql) = rollupRoute now (TimePicker.TimePicker since fromD toD) scopedParams (dbSource0, qSql0)
@@ -1192,6 +1196,7 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   widget <-
     AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJson)
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
+  Dashboards.authorizeClientSql pid widget.sql widget.rollupSql widget.sqlSig
   now <- Time.currentTime
   let scopeMarker = ("dashboard_id",) . Just <$> widget._dashboardId
   scopedParams <- chartScopeParams (Just pid) $ maybeToList scopeMarker <> allParams

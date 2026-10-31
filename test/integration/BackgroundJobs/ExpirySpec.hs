@@ -5,16 +5,7 @@ import Data.Pool (withResource)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
 
 
 countShareRow :: TestResources -> UUID.UUID -> IO Int
@@ -42,11 +33,10 @@ spec = around withTestResources do
       runTestBg frozenTime tr pass  -- reset clock for this test
       i <- UUID.nextRandom
       ev <- UUID.nextRandom
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| INSERT INTO apis.share_events (id, project_id, created_at, event_id, event_type, event_created_at)
                 VALUES (?, ?, ?, ?, 'log', ?) |]
-          (i, pid, frozenTime, ev, frozenTime)
+          (i, testPid, frozenTime, ev, frozenTime)
 
       -- At +31d the share row is still inside the 32d retention window.
       advanceDays tr 31
@@ -65,12 +55,11 @@ spec = around withTestResources do
     it "ExpireReplayData respects 30d retention boundary on test clock" \tr -> do
       runTestBg frozenTime tr pass  -- reset clock for this test
       sid <- UUID.nextRandom
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| INSERT INTO projects.replay_sessions
                   (session_id, project_id, last_event_at)
                 VALUES (?, ?, ?) |]
-          (sid, pid, frozenTime)
+          (sid, testPid, frozenTime)
 
       advanceDays tr 29
       runTestBgNoReset tr $ BackgroundJobs.processBackgroundJob tr.trATCtx BackgroundJobs.ExpireReplayData

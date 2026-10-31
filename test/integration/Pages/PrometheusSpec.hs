@@ -2,7 +2,6 @@ module Pages.PrometheusSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Time (addUTCTime)
@@ -10,9 +9,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Error.Static (catchError)
 import Lucid (renderText, toHtml)
 import Models.Apis.Issues qualified as Issues
@@ -24,7 +20,6 @@ import Pages.Monitors qualified as Monitors
 import Pages.Settings (PrometheusForm (..), prometheusPostH)
 import Pages.Settings qualified as Settings
 import Pkg.TestUtils
-import Relude
 import Servant (ServerError (..), getResponse)
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Types (RespHeaders)
@@ -52,7 +47,7 @@ spec = around withTestResources do
       [saved] <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKPrometheus)
       let uid = (getResponse tr.trSessAndHeader).user.id
           form = PrometheusForm "Replacement target" "https://metrics.example.com/replacement" Nothing (Just "Bearer replacement-secret") Nothing Nothing
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ? |] (testPid, uid)
+      dbExec tr [sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ? |] (testPid, uid)
       requests <- newIORef (0 :: Int)
       statuses <- forM
         [ void $ Settings.prometheusPostH testPid form
@@ -66,7 +61,7 @@ spec = around withTestResources do
       readIORef requests `shouldReturn` 0
       [retained] <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKPrometheus)
       (retained.name, retained.url, retained.enabled, retained.authHeader) `shouldBe` (saved.name, saved.url, saved.enabled, saved.authHeader)
-      (_, page) <- testServant tr $ Settings.prometheusGetH testPid
+      page <- call tr $ Settings.prometheusGetH testPid
       let html = renderText $ toHtml page
       html `shouldSatisfy` TL.isInfixOf "Saved target"
       for_ ["Add target", "Edit Prometheus target", "hx-patch", "hx-delete", "saved-secret"] \private -> html `shouldNotSatisfy` TL.isInfixOf private
@@ -117,7 +112,7 @@ spec = around withTestResources do
       (probed.consecutiveFailures, fmap ("request failed" `T.isPrefixOf`) probed.lastStatus) `shouldBe` (1, Just True)
 
     it "cron monitors: a check-in keeps it healthy, a missed window and an error run open issues, a later check-in resolves" \tr -> do
-      (_, added) <- testServant tr $ Monitors.cronMonitorPostH testPid (Monitors.CronForm "nightly-billing" "Nightly billing" 3600 300)
+      added <- call tr $ Monitors.cronMonitorPostH testPid (Monitors.CronForm "nightly-billing" "Nightly billing" 3600 300)
       renderText added `shouldSatisfy` \h -> all (`TL.isInfixOf` h) ["value name=\"slug\"", "hx-target:inherited=\"this\"", "hx-swap:inherited=\"outerHTML\""]
       (dupH, _) <- testServant tr $ Monitors.cronMonitorPostH testPid (Monitors.CronForm "nightly-billing" "Again" 3600 300)
       reswapOf dupH `shouldBe` Just "none"

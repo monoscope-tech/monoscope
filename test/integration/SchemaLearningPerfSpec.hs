@@ -14,40 +14,13 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types (PGArray (..))
-import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
+import Pkg.DeriveUtils (AesonText (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils (TestResources (..), frozenTime, runHasqlEffect, withTestResources)
+import Pkg.TestUtils
 import ProcessMessage qualified
-import Relude
-import Test.Hspec (Spec, aroundAll, sequential, describe, it, shouldBe, shouldSatisfy)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
-
-
-clearAll :: TestResources -> IO ()
-clearAll tr = withPool tr.trPool $ do
-  let arr = PGArray [pid]
-      exec q ps = void (DBT.execute q ps)
-  exec
-    [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-          SELECT id, 'perf-test', 'Free', true, NULL, false, false
-          FROM unnest(?::uuid[]) AS id
-          ON CONFLICT (id) DO NOTHING |]
-    (Only arr)
-  exec [sql| DELETE FROM apis.schema_catalog WHERE project_id = ANY(?::uuid[]) |] (Only arr)
-  exec [sql| DELETE FROM apis.schema_summary WHERE project_id = ANY(?::uuid[]) |] (Only arr)
-  exec [sql| DELETE FROM apis.anomalies WHERE project_id = ANY(?::uuid[]) |] (Only arr)
 
 
 -- | A synthetic HTTP-server span with stable shape (one of N "endpoints")
@@ -58,7 +31,7 @@ mkSpan ix =
       method = "GET" :: Text
    in Telemetry.OtelLogsAndSpans
         { id = UUID.toText UUID.nil
-        , project_id = pid.toText
+        , project_id = testPid.toText
         , timestamp = frozenTime
         , parent_id = Nothing
         , observed_timestamp = Nothing
@@ -115,14 +88,16 @@ mkWideSpan ix fieldCount =
 observe :: V.Vector Telemetry.OtelLogsAndSpans -> IORef Hot.SchemaShardState -> IO ()
 observe spans ref = do
   let obs = V.map (ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier) spans
-  Hot.observeSpans ref Hot.defaultPolicy pid obs
+  Hot.observeSpans ref Hot.defaultPolicy testPid obs
 
 
 spec :: Spec
-spec = sequential $ aroundAll withTestResources $
-  describe "SchemaLearning efficiency" $ do
+spec = sequential
+  $ aroundAll withTestResources
+  $ describe "SchemaLearning efficiency"
+  $ do
     it "10k spans through the real walker keep shard bytes under the policy budget" $ \tr -> do
-      clearAll tr
+      resetSchemaLearning tr [testPid]
       ref <- newIORef Hot.emptySchemaShardState
       let spans = V.generate 10_000 mkSpan
       observe spans ref
@@ -134,19 +109,19 @@ spec = sequential $ aroundAll withTestResources $
       HM.size st.entries `shouldSatisfy` (<= Hot.defaultPolicy.maxKeysPerProject)
 
     it "per-entry field cap drops overflow paths without crashing" $ \tr -> do
-      clearAll tr
+      resetSchemaLearning tr [testPid]
       ref <- newIORef Hot.emptySchemaShardState
       let widePolicy = Hot.defaultPolicy{Hot.maxFieldsPerEntry = 100}
           obs = V.singleton (ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier (mkWideSpan 0 5_000))
       -- Direct call so we can pass a tight policy without rebuilding config.
-      Hot.observeSpans ref widePolicy pid obs
+      Hot.observeSpans ref widePolicy testPid obs
       st <- readIORef ref
       case HM.elems st.entries of
         [e] -> HM.size e.template.fields `shouldSatisfy` (<= 100)
         xs -> fail $ "expected exactly one entry, got " <> show (length xs)
 
     it "second flush of an unchanged shard skips the summary upsert entirely" $ \tr -> do
-      clearAll tr
+      resetSchemaLearning tr [testPid]
       ref <- newIORef Hot.emptySchemaShardState
       observe (V.generate 200 mkSpan) ref
       r1 <- runHasqlEffect tr (Worker.flushDirty ref)
@@ -160,7 +135,7 @@ spec = sequential $ aroundAll withTestResources $
       r2.summariesUpdated `shouldBe` 0
 
     it "anomaly diff on a second flush reuses the in-memory snapshot (no extra DB lookup)" $ \tr -> do
-      clearAll tr
+      resetSchemaLearning tr [testPid]
       ref <- newIORef Hot.emptySchemaShardState
       observe (V.singleton (mkSpan 0)) ref
       _ <- runHasqlEffect tr (Worker.flushDirty ref)
@@ -209,11 +184,11 @@ spec = sequential $ aroundAll withTestResources $
               , timestamp = frozenTime
               }
       -- First batch: one span, learnPhase fires, walk forced (1 field).
-      Hot.observeSpans ref policy pid (V.singleton (mkObs (0 :: Int)))
+      Hot.observeSpans ref policy testPid (V.singleton (mkObs (0 :: Int)))
       -- 499 subsequent single-span batches: sampleCount > threshold,
       -- bump-only path, walk thunks never invoked.
       forM_ [1 .. 499] $ \i ->
-        Hot.observeSpans ref policy pid (V.singleton (mkObs (i :: Int)))
+        Hot.observeSpans ref policy testPid (V.singleton (mkObs (i :: Int)))
       st <- readIORef ref
       case HM.elems st.entries of
         [e] -> do

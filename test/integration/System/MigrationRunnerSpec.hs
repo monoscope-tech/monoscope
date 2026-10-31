@@ -15,13 +15,10 @@ import Data.Aeson.Types (Pair)
 import Data.Pool (withResource)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Pkg.TestUtils
-import Relude
 import System.Config (runPendingMigrations)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 
 
 -- | Distinct table names per file so "did this migration run?" is answerable by looking for

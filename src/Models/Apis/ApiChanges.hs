@@ -176,6 +176,8 @@ from
                                   AND c.key_hash = split_part(an.target_hash, ':', 1)
 where
   an.project_id=#{pid} AND an.target_hash=ANY(#{hash})
+-- Anomalies detected together share created_at; target_hash keeps their order stable.
+ORDER BY an.created_at, an.target_hash
       |]
 
 

@@ -2,28 +2,16 @@ module Lifecycle.LogPatternIncidentSpec (spec) where
 
 import BackgroundJobs qualified
 import Control.Exception (try)
-import Data.Default (def)
 import Data.Effectful.Notify (Notification (..))
-import Data.Pool (withResource)
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Pages.Projects qualified as ProjectPages
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import Relude
 import Servant qualified
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
 
 
 spec :: Spec
@@ -31,44 +19,43 @@ spec = around withTestResources do
   describe "Log Pattern Incident Lifecycle" do
     it "updates baselines across batches without touching merged or inactive patterns" \tr -> do
       runTestBg frozenTime tr pass
-      withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, first_seen_at)
-                SELECT ?, 'baseline fixture', 'batch-' || n, 'summary', ? FROM generate_series(1,1001) n |]
-            (pid, frozenTime)
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, first_seen_at)
-                SELECT ?, 'baseline fixture', hash, field, ? FROM
-                (VALUES ('batch-1','body'), ('no-stats','summary'), ('expired','summary'), ('merged','summary')) v(hash,field) |]
-            (pid, frozenTime)
-        void
-          $ PGS.execute
-            conn
-            [sql| UPDATE apis.log_patterns SET canonical_id =
-                (SELECT id FROM apis.log_patterns WHERE project_id = ? AND pattern_hash='batch-1' AND source_field='summary')
-                WHERE project_id = ? AND pattern_hash='merged' |]
-            (pid, pid)
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
-                SELECT project_id, source_field, pattern_hash,
-                  ?::timestamptz - CASE WHEN pattern_hash='expired' THEN interval '49 hours' ELSE interval '1 hour' END,
-                  CASE WHEN source_field='body' THEN 100 ELSE 600 END
-                FROM apis.log_patterns WHERE project_id = ? AND pattern_hash <> 'no-stats' |]
-            (frozenTime, pid)
-      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
-      actual <- withResource tr.trPool \conn ->
-        PGS.query
-          conn
+      void
+        $ dbExec
+          tr
+          [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, first_seen_at)
+              SELECT ?, 'baseline fixture', 'batch-' || n, 'summary', ? FROM generate_series(1,1001) n |]
+          (testPid, frozenTime)
+      void
+        $ dbExec
+          tr
+          [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, first_seen_at)
+              SELECT ?, 'baseline fixture', hash, field, ? FROM
+              (VALUES ('batch-1','body'), ('no-stats','summary'), ('expired','summary'), ('merged','summary')) v(hash,field) |]
+          (testPid, frozenTime)
+      void
+        $ dbExec
+          tr
+          [sql| UPDATE apis.log_patterns SET canonical_id =
+              (SELECT id FROM apis.log_patterns WHERE project_id = ? AND pattern_hash='batch-1' AND source_field='summary')
+              WHERE project_id = ? AND pattern_hash='merged' |]
+          (testPid, testPid)
+      void
+        $ dbExec
+          tr
+          [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
+              SELECT project_id, source_field, pattern_hash,
+                ?::timestamptz - CASE WHEN pattern_hash='expired' THEN interval '49 hours' ELSE interval '1 hour' END,
+                CASE WHEN source_field='body' THEN 100 ELSE 600 END
+              FROM apis.log_patterns WHERE project_id = ? AND pattern_hash <> 'no-stats' |]
+          (frozenTime, testPid)
+      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines testPid
+      actual <-
+        dbQuery
+          tr
           [sql| SELECT source_field, baseline_state, baseline_volume_hourly_mean, baseline_samples, count(*)::bigint
                 FROM apis.log_patterns WHERE project_id = ?
                 GROUP BY 1,2,3,4 ORDER BY 1,2,3 NULLS LAST |]
-          (Only pid)
+          (Only testPid)
           :: IO [(Text, Text, Maybe Double, Int, Int64)]
       actual `shouldBe` [("body", "learning", Just 100, 1, 1), ("summary", "established", Just 600, 1, 1001), ("summary", "learning", Nothing, 0, 3)]
 
@@ -84,7 +71,7 @@ spec = around withTestResources do
         $ runTestBg frozenTime tr
         $ LogPatterns.upsertLogPattern
           LogPatterns.UpsertPattern
-            { projectId = pid
+            { projectId = testPid
             , logPattern = "Lifecycle <*> pattern"
             , hash = patHash
             , sourceField = srcField
@@ -99,48 +86,48 @@ spec = around withTestResources do
         void
           $ runTestBg frozenTime tr
           $ LogPatterns.upsertHourlyStat
-            pid
+            testPid
             srcField
             patHash
             (addUTCTime (fromIntegral h * 3600) frozenTime)
             600
-      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
+      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines testPid
 
       -- 2. Spike in the current hour: raw 600 -> projected 600*4 = 2400 vs baseline ~600
-      void $ runTestBg frozenTime tr $ LogPatterns.upsertHourlyStat pid srcField patHash frozenTime 600
-      runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
-      runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertHourlyStat testPid srcField patHash frozenTime 600
+      runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes testPid frozenTime tr.trATCtx
+      runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes testPid frozenTime tr.trATCtx
 
-      issues1 <- withResource tr.trPool \conn ->
-        PGS.query
-          conn
+      issues1 <-
+        dbQuery
+          tr
           [sql| SELECT id FROM apis.issues
                 WHERE project_id = ? AND target_hash = ? AND issue_type = 'log_pattern_rate_change'
                   AND acknowledged_at IS NULL
                 ORDER BY created_at DESC LIMIT 1 |]
-          (pid, patHash)
+          (testPid, patHash)
           :: IO [Only Issues.IssueId]
       let issueId = case issues1 of (Only iid : _) -> iid; _ -> error "no issue fired on initial spike"
 
       -- 3. Acknowledge for 24h -> silenced for exactly that window
       tAck <- getTestTime tr.trTestClock
-      runTestBgNoReset tr $ void $ Issues.setAckState pid [issueId] $ Just Issues.AckSet{at = tAck, by = Just uid, window = Issues.AckFor (24 * 60)}
+      runTestBgNoReset tr $ void $ Issues.setAckState testPid [issueId] $ Just Issues.AckSet{at = tAck, by = Just uid, window = Issues.AckFor (24 * 60)}
 
       -- 4. +12h: seed fresh spike in the new hour; the ack should suppress it
       advanceHours tr 12
       t12 <- getTestTime tr.trTestClock
-      void $ runTestBgNoReset tr $ LogPatterns.upsertHourlyStat pid srcField patHash t12 600
-      runTestBgNoReset tr $ BackgroundJobs.detectLogPatternSpikes pid t12 tr.trATCtx
-      runTestBgNoReset tr $ BackgroundJobs.detectLogPatternSpikes pid t12 tr.trATCtx
+      void $ runTestBgNoReset tr $ LogPatterns.upsertHourlyStat testPid srcField patHash t12 600
+      runTestBgNoReset tr $ BackgroundJobs.detectLogPatternSpikes testPid t12 tr.trATCtx
+      runTestBgNoReset tr $ BackgroundJobs.detectLogPatternSpikes testPid t12 tr.trATCtx
       countAfter12 <- countOpenIssues tr patHash
       countAfter12 `shouldBe` 0
 
       -- 5. +25h since ack: the window lapsed, a new spike fires again
       advanceHours tr 13
       t25 <- getTestTime tr.trTestClock
-      void $ runTestBgNoReset tr $ LogPatterns.upsertHourlyStat pid srcField patHash t25 600
-      runTestBgNoReset tr $ BackgroundJobs.detectLogPatternSpikes pid t25 tr.trATCtx
-      runTestBgNoReset tr $ BackgroundJobs.detectLogPatternSpikes pid t25 tr.trATCtx
+      void $ runTestBgNoReset tr $ LogPatterns.upsertHourlyStat testPid srcField patHash t25 600
+      runTestBgNoReset tr $ BackgroundJobs.detectLogPatternSpikes testPid t25 tr.trATCtx
+      runTestBgNoReset tr $ BackgroundJobs.detectLogPatternSpikes testPid t25 tr.trATCtx
       countAfter25 <- countOpenIssues tr patHash
       countAfter25 `shouldSatisfy` (>= 1)
 
@@ -150,7 +137,7 @@ spec = around withTestResources do
           monitor =
             def
               { Monitors.id = monitorId
-              , Monitors.projectId = pid
+              , Monitors.projectId = testPid
               , -- A real KQL query, not a canned logQueryAsSql: evaluateQueryMonitor
                 -- re-parses logQuery on every run so parser fixes reach existing
                 -- monitors, so the stored SQL is never what actually executes. An empty
@@ -170,41 +157,39 @@ spec = around withTestResources do
               , Monitors.alertConfig = def{Monitors.title = "Deleted project guard"}
               }
 
-      apiKey <- createTestAPIKey tr pid "deleted-project-ingest"
+      apiKey <- createTestAPIKey tr testPid "deleted-project-ingest"
       ingestLog tr apiKey "before project deletion" frozenTime
       countLogs tr "before project deletion" `shouldReturn` 1
 
       void $ runTestBg frozenTime tr $ Monitors.queryMonitorUpsert monitor
-      void $ withResource tr.trPool \conn ->
-        PGS.execute
-          conn
-          [sql|
+      dbExec
+        tr
+        [sql|
             UPDATE projects.teams
             SET pagerduty_services = ARRAY['deleted-project-test'],
                 disabled_channels = array_remove(disabled_channels, 'pagerduty')
             WHERE project_id = ? AND handle = 'everyone'
           |]
-          (Only pid)
+        (Only testPid)
 
       before <- fst <$> captureNotifs tr BackgroundJobs.checkTriggeredQueryMonitors
       before `shouldSatisfy` any (\case PagerdutyNotification{} -> True; _ -> False)
 
-      void $ testServant tr $ ProjectPages.deleteProjectGetH pid
+      void $ testServant tr $ ProjectPages.deleteProjectGetH testPid
       void $ try @SomeException $ ingestLog tr apiKey "after project deletion" (addUTCTime 1 frozenTime)
       countLogs tr "after project deletion" `shouldReturn` 0
-      isNothing <$> runTestBgNoReset tr (Projects.activeProjectById pid) `shouldReturn` True
+      isNothing <$> runTestBgNoReset tr (Projects.activeProjectById testPid) `shouldReturn` True
       reportsBefore <- countReports tr
-      reportNotifs <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.DailyReports pid)
+      reportNotifs <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.DailyReports testPid)
       reportNotifs `shouldBe` []
       countReports tr `shouldReturn` reportsBefore
-      void $ withResource tr.trPool \conn ->
-        PGS.execute
-          conn
-          [sql|UPDATE monitors.query_monitors
+      dbExec
+        tr
+        [sql|UPDATE monitors.query_monitors
                 SET current_status = 'normal', alert_last_triggered = NULL,
                     notification_count = 0, last_evaluated = '2020-01-01'
                 WHERE id = ?|]
-          (Only monitorId)
+        (Only monitorId)
 
       after <- fst <$> captureNotifs tr BackgroundJobs.checkTriggeredQueryMonitors
       after `shouldBe` []
@@ -212,28 +197,24 @@ spec = around withTestResources do
 
 countOpenIssues :: TestResources -> Text -> IO Int
 countOpenIssues tr h =
-  countQuery
+  dbOne @_ @Int
     tr
     [sql| SELECT COUNT(*)::INT FROM apis.issues
           WHERE project_id = ? AND target_hash = ? AND issue_type = 'log_pattern_rate_change'
             AND acknowledged_at IS NULL |]
-    (pid, h)
+    (testPid, h)
 
 
 countLogs :: TestResources -> Text -> IO Int
 countLogs tr marker =
-  countQuery
+  dbOne @_ @Int
     tr
     [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans
           WHERE project_id = ? AND body::text LIKE '%' || ? || '%' |]
-    (pid, marker)
+    (testPid, marker)
 
 
 countReports :: TestResources -> IO Int
-countReports tr = countQuery tr [sql|SELECT COUNT(*)::INT FROM apis.reports WHERE project_id = ?|] (Only pid)
+countReports tr = dbOne @_ @Int tr [sql|SELECT COUNT(*)::INT FROM apis.reports WHERE project_id = ?|] (Only testPid)
 
 
-countQuery :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO Int
-countQuery tr query params = withResource tr.trPool \conn -> do
-  [Only n] <- PGS.query conn query params
-  pure n

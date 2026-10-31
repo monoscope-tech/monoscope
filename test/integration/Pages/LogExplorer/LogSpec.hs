@@ -2,7 +2,6 @@ module Pages.LogExplorer.LogSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
@@ -15,8 +14,6 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries qualified as LogQueries
@@ -33,14 +30,12 @@ import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.LogExplorer.QueryLibrary qualified as QueryLibrary
 import Pages.Telemetry qualified as TelemetryPage
 import Pkg.Components.LogQueryBox qualified as LogQueryBox
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser qualified as Parser
 import Pkg.Parser.Stats (Sources (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import ProcessMessage qualified
-import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.QueryParam.Record (RecordParam)
@@ -842,7 +837,7 @@ databaseSpec = do
   -- user reloads. Deleting the attribute reintroduces that with every JS test still green.
   describe "Detail panel request sync" do
     it "logExplorerH_detailsContainer_replacesTheInFlightRequest" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      page <- call tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = renderT page
       -- Scoped to the container's own tag, not the page: `lazyLoad_` and the widget loader
       -- already carry the same attribute, so a page-wide search passes with this one deleted.
@@ -857,7 +852,7 @@ databaseSpec = do
   -- an AI answer selected — never redrew.
   describe "Visualization type switching" do
     it "apiLogH_widgetContainerReadsItsTypeFromMutableWidgetJSON" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "timeseries_line") Nothing Nothing Nothing
+      page <- call tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "timeseries_line") Nothing Nothing Nothing
       let html = renderT page
       html `shouldSatisfy` T.isInfixOf "var widgetJSON = {"
       html `shouldSatisfy` T.isInfixOf "\"type\":\"timeseries_line\""
@@ -867,7 +862,7 @@ databaseSpec = do
     -- Chart modes hide the log list, so preloading its rows ran a summarize query nobody saw.
     it "apiLogH_chartVizSkipsTheHiddenLogListPreload" \tr -> do
       let preloads viz = do
-            (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing viz Nothing Nothing Nothing
+            page <- call tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing viz Nothing Nothing Nothing
             pure $ T.isInfixOf "window.logDataPromise" $ renderT page
       preloads (Just "timeseries") `shouldReturn` False
       preloads (Just "timeseries_line") `shouldReturn` False
@@ -875,14 +870,14 @@ databaseSpec = do
 
   describe "Trace fullscreen scrolling" do
     it "apiLogH_traceOverlayDoesNotCreateAScrollContainer" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      page <- call tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = renderT page
       find (T.isInfixOf "id=\"trace_expanded_view\"") (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "overflow-hidden")
 
   describe "Query editor skeleton" do
     it "apiLogH_rendersAnEmptyQueryAsANativePlaceholder" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      page <- call tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = renderT page
       let input = find (T.isInfixOf "data-query-input") (T.splitOn "<" html)
       input `shouldSatisfy` maybe False (T.isPrefixOf "textarea ")
@@ -991,7 +986,7 @@ databaseSpec = do
     -- create → rename → delete round-trip through the DB.
     it "saves, renames, then deletes a query library item" \tr -> do
       title <- ("saved-" <>) . UUID.toText <$> nextRandom
-      (_, saved1) <- testServant tr $ QueryLibrary.saveQueryH testPid (QueryLibrary.SaveQueryForm (Just "status_code == \"200\"") Nothing (Just title))
+      saved1 <- call tr $ QueryLibrary.saveQueryH testPid (QueryLibrary.SaveQueryForm (Just "status_code == \"200\"") Nothing (Just title))
       let itemsOf (QueryLibrary.QueryLibraryView (s, _)) = s
           found :: Text -> QueryLibrary.QueryLibraryView -> Maybe Projects.QueryLibItem
           found t v = V.find (\q -> q.title == Just t) (itemsOf v)
@@ -999,11 +994,11 @@ databaseSpec = do
 
       let qid = maybe (error "saved item missing") (\q -> q.id.toText) (found title saved1)
       newTitle <- ("renamed-" <>) . UUID.toText <$> nextRandom
-      (_, saved2) <- testServant tr $ QueryLibrary.saveQueryH testPid (QueryLibrary.SaveQueryForm (Just "status_code == \"200\"") (Just qid) (Just newTitle))
+      saved2 <- call tr $ QueryLibrary.saveQueryH testPid (QueryLibrary.SaveQueryForm (Just "status_code == \"200\"") (Just qid) (Just newTitle))
       found newTitle saved2 `shouldSatisfy` isJust
       found title saved2 `shouldSatisfy` isNothing
 
-      (_, saved3) <- testServant tr $ QueryLibrary.deleteQueryH testPid qid
+      saved3 <- call tr $ QueryLibrary.deleteQueryH testPid qid
       found newTitle saved3 `shouldSatisfy` isNothing
 
   describe "Aggregate viz endpoints (logPatternsH/logSessionsH)" do
@@ -1013,7 +1008,7 @@ databaseSpec = do
       void $ runTestBackground frozenTime tr.trATCtx $ processMessages [("pm1", toStrict $ AE.encode reqMsg)] HashMap.empty
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      (_, pv) <- testServant tr $ Log.logPatternsH testPid Nothing fromTime Nothing toTime (Just "spans") Nothing Nothing
+      pv <- call tr $ Log.logPatternsH testPid Nothing fromTime Nothing toTime (Just "spans") Nothing Nothing
       case pv of { Log.PatternsView total _ _ _ -> total `shouldSatisfy` (>= 0) }
       -- The JSON envelope carries the shared aggregate columns + the pattern total.
       let j = decodeUtf8 (toStrict (AE.encode pv)) :: Text
@@ -1023,10 +1018,10 @@ databaseSpec = do
     it "sessions endpoint returns a well-formed aggregate envelope" \tr -> do
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      (_, sv) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing Nothing
+      sv <- call tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing Nothing
       case sv of { Log.SessionsView total _ summ -> (total >= 0, isJust summ) `shouldBe` (True, True) }
       -- A live poll (cursor set) merges into a list that already has a header: no summary.
-      (_, poll) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing fromTime
+      poll <- call tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing fromTime
       case poll of { Log.SessionsView _ _ summ -> summ `shouldSatisfy` isNothing }
 
     -- The RUM page listed recordings whose spans never arrived; folding RUM into this view
@@ -1044,7 +1039,7 @@ databaseSpec = do
   describe "Log Explorer page shell" do
     it "renders Common facets with the page and leaves other groups lazy" \tr -> do
       seedFacetSummary tr
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      page <- call tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = renderT page
           eagerUrl = "hx-get=\"/p/" <> testPid.toText <> "/log_explorer/facets\""
       html `shouldSatisfy` T.isInfixOf "data-field=\"resource.service.name\""
@@ -1054,7 +1049,7 @@ databaseSpec = do
       html `shouldNotSatisfy` T.isInfixOf eagerUrl
 
     it "queryEditor_keepsRestingBoundariesQuietUntilFocus" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      page <- call tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = renderT page
       html `shouldSatisfy` T.isInfixOf "bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2"
       html `shouldSatisfy` T.isInfixOf "focus-within:ring-2 focus-within:ring-strokeBrand-weak"
@@ -1065,7 +1060,7 @@ databaseSpec = do
       html `shouldSatisfy` T.isInfixOf "hx-live:aria-disabled"
 
     it "timeTransport_usesExplicitDividersAroundNextButton" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      page <- call tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = renderT page
       find (T.isInfixOf "data-next-window") (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "disabled:bg-transparent disabled:text-textDisabled")
@@ -1075,7 +1070,7 @@ databaseSpec = do
     -- was discarded when arriving from another page. The table then raced its
     -- fallback worker fetch against chart requests and could render an empty list.
     it "keeps the initial log-data preload inside the HTMX swap target" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      page <- call tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = renderT page
           indexOf needle = T.length $ fst $ T.breakOn needle html
       html `shouldSatisfy` T.isInfixOf "id=\"main-content\""
@@ -1091,7 +1086,7 @@ databaseSpec = do
     -- spinner. Both paths must now use the same trace-shaped loading state.
     it "renders a reusable trace skeleton for shared and in-app trace loads" \tr -> do
       let traceRef = "774115aaa715abf80d93fc629c2269a4/?timestamp=2026-07-15T18:59:16.952128Z"
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just traceRef) Nothing Nothing Nothing Nothing
+      page <- call tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just traceRef) Nothing Nothing Nothing Nothing
       let html = renderT page
       html `shouldSatisfy` T.isInfixOf "trace-loading-skeleton"
       html `shouldSatisfy` T.isInfixOf "Loading trace"
@@ -1139,7 +1134,7 @@ databaseSpec = do
 
   describe "Alert form endpoint (alertFormH)" do
     it "renders the create-monitor form" \tr -> do
-      (_, html) <- testServant tr $ Log.alertFormH testPid Nothing
+      html <- call tr $ Log.alertFormH testPid Nothing
       let rendered = renderT html
       rendered `shouldSatisfy` T.isInfixOf "Create monitor"
       rendered `shouldContainAll` ["Scope", "name=\"environment\"", "name=\"service\""]
@@ -1230,7 +1225,7 @@ databaseSpec = do
             (testPid, trId)
           :: IO (V.Vector (UUID.UUID, UTCTime))
       (rid, ts) <- maybe (error "ingested span missing") pure (rows V.!? 0)
-      (_, item) <- testServant tr $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
+      item <- call tr $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
       let html = renderT item
       for_ ([("Session ID", "sess-9f2"), ("User ID", "usr-4471"), ("User Email", "ada@example.com"), ("Tenant ID", "acme-eu"), ("Workspace ID", "ws-12")] :: [(Text, Text)]) \(label, value) -> do
         html `shouldSatisfy` T.isInfixOf (label <> ": " <> value)
@@ -1269,7 +1264,7 @@ databaseSpec = do
             _ -> expectationFailure "expected SpanItemExpanded anchored on the request span"
 
       -- Clicking the request span: bodies borrowed from the nested SDK span.
-      (_, rootItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req") Nothing False
+      rootItem <- call tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req") Nothing False
       assertAnchored rootItem
       let rootHtml = renderT rootItem
       rootHtml `shouldSatisfy` T.isInfixOf "subtab=htab-req"
@@ -1280,22 +1275,22 @@ databaseSpec = do
       -- being true the moment curl started carrying it — one occurrence still proves the
       -- panel didn't inline a second.
       T.count "apple" rootHtml `shouldBe` 1
-      (_, reqBodyTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req") (Just "htab-req") True
+      reqBodyTab <- call tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req") (Just "htab-req") True
       let reqBodyHtml = renderT reqBodyTab
       reqBodyHtml `shouldSatisfy` T.isInfixOf "req_content"
       reqBodyHtml `shouldSatisfy` T.isInfixOf "apple"
       reqBodyHtml `shouldNotSatisfy` T.isInfixOf "intersect once"
 
       -- An unknown ?tab= deep link clamps to a real tab (a checked radio must exist).
-      (_, bogusTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-nonexistent") Nothing False
+      bogusTab <- call tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-nonexistent") Nothing False
       renderT bogusTab `shouldSatisfy` T.isInfixOf "checked"
 
       -- Clicking the SDK span: panel anchors on the parent request, bodies intact.
-      (_, sdkItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid sdkId sdkTs Nothing (Just "tab-req") Nothing False
+      sdkItem <- call tr $ LogItem.expandAPIlogItemH testPid sdkId sdkTs Nothing (Just "tab-req") Nothing False
       assertAnchored sdkItem
 
       -- Waterfall keyboard-nav onto the SDK span also anchors on the parent request.
-      (_, navDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) (Just sdkStoredSid) (Just "next") Nothing Nothing
+      navDetails <- call tr $ TelemetryPage.traceH testPid trId (Just rootTs) (Just sdkStoredSid) (Just "next") Nothing Nothing
       case navDetails of
         TelemetryPage.SpanDetails _ target sdkM -> do
           target.name `shouldBe` Just "GET /api/orders"
@@ -1303,7 +1298,7 @@ databaseSpec = do
         _ -> expectationFailure "expected SpanDetails anchored on the request span"
 
       -- The waterfall collapses the redundant SDK row into its parent.
-      (_, traceDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing
+      traceDetails <- call tr $ TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing
       case traceDetails of
         TelemetryPage.TraceDetails{} -> do
           let traceHtml = renderT traceDetails

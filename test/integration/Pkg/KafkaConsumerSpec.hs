@@ -14,7 +14,6 @@ import Kafka.Producer qualified as KP
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.Queue qualified as Queue
 import Pkg.TestUtils
-import Relude
 import System.Config qualified as Config
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx, runBackground)

@@ -58,7 +58,7 @@ import Log qualified
 import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (DB)
-import Pkg.TestClock (TestClock, runMutableTime)
+import Pkg.TestClock (TestClock, runHasqlPoolSynced, runMutableTime)
 import Relude
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
 import Servant qualified
@@ -211,7 +211,7 @@ effToServantHandlerTestHTTP http clock uuidRef env logger tp app =
     & runStaticUUIDRef uuidRef
     & runNoSleep
     & http
-    & runHasqlPool env.hasqlPool
+    & runHasqlPoolSynced clock env.hasqlPool
     & runLabeled @"timefusion" (runHasqlPool env.hasqlTimefusionPool)
     & runMutableTime clock
     & Logging.runLog (show env.config.environment) logger env.config.logLevel
