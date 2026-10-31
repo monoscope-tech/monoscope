@@ -844,11 +844,8 @@ captureProgress appId receiptId =
 conversationEvidencePermission :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ProjectMembers.Permissions
 conversationEvidencePermission project conversation = do
   classifyLegacyEvidence project (Just conversation)
-  roles <-
-    Hasql.interp @[HI.OneColumn ProjectMembers.Permissions]
-      [HI.sql|SELECT evidence_permission FROM apis.ai_conversations WHERE project_id = #{project} AND conversation_id = #{conversation}
-      UNION ALL SELECT evidence_permission FROM apis.ai_routine_runs WHERE project_id = #{project} AND conversation_id = #{conversation}|]
-  pure $ foldl' max ProjectMembers.PView (map HI.getOneColumn roles)
+  Hasql.interpScalar
+    [HI.sql|SELECT COALESCE(apis.conversation_evidence_permission(#{project}, #{conversation}), 'view'::projects.project_permissions)|]
 
 
 -- | Locks match completion's run-before-conversation order. Updates are monotonic.

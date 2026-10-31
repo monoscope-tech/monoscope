@@ -692,11 +692,12 @@ spec = around withTestResources do
             FROM unnest(#{roles}::projects.project_permissions[]) viewer CROSS JOIN unnest(#{roles}::projects.project_permissions[]) required|]
         comparisons `shouldSatisfy` \rows -> length rows == length roles * length roles && all (\(viewer, required, allowed) -> allowed == (viewer >= required)) rows
         void $ interactiveInvocation tr testPid conversation "Retain private evidence" Issues.Observe
-        runQueryEffect tr do
-          Investigations.retainEvidencePermission testPid [conversation] ProjectMembers.PAdmin
-          Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_conversations SET evidence_permission = 'view' WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]
-          Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET evidence_permission = 'view' WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]
-        runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` ProjectMembers.PAdmin)
+        for_ [ProjectMembers.PEdit, ProjectMembers.PAdmin] \required -> do
+          runQueryEffect tr do
+            Investigations.retainEvidencePermission testPid [conversation] required
+            Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_conversations SET evidence_permission = 'view' WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]
+            Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET evidence_permission = 'view' WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]
+          runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` required)
         runTestBg frozenTime tr do
           Issues.deleteConversation testPid conversation
           void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
