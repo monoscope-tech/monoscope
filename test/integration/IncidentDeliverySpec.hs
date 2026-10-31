@@ -19,11 +19,13 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.ErrorPatterns qualified as Errors
 import Models.Apis.Incidents qualified as I
+import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
-import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupSlackData, slackRootEvent, withHTTPResponses)
+import Pages.Bots.BotFixtures (slackCallbackEnvelope)
+import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupLinkedSlackData, setupSlackData, slackRootEvent, withHTTPResponses)
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Issues qualified as IssuesPage
 import Pkg.DeriveUtils (UUIDId (..))
@@ -666,7 +668,7 @@ spec = around withTestResources do
     -- so the issue page's chat and the Slack thread are one conversation.
     it "resolves an alert thread to its issue's conversation, and a loose thread to the thread's own" \tr -> do
       update <- setupWithIssue tr
-      setupSlackData tr testPid "T1"
+      setupLinkedSlackData tr testPid "T1"
       Just issueId <- pure update.issueId
       void $ runTestBgNoReset tr $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
       [root] <- runTestBgNoReset tr $ I.claimSlackDeliveries update.observedAt
@@ -677,6 +679,15 @@ spec = around withTestResources do
       -- No alert root behind it: there is no issue to belong to.
       runTestBgNoReset tr (I.threadConversationId testPid "T1" "C1" "1788900000.000099")
         `shouldReturn` Issues.slackScopedConversationId testPid "T1" "C1" "1788900000.000099"
+      let conversation = UUIDId issueId.unUUIDId
+      principal <- runQueryEffect tr (Integrations.resolveSlackPrincipal "T1" "U0123ABCDEF" $ Just testPid) >>= maybe (fail "Missing linked principal") pure
+      runQueryEffect tr do
+        void $ Integrations.bindSlackInvestigation principal "T1" "C1" "1788900000.000009"
+        void $ Issues.getOrCreateConversation testPid conversation Issues.CTAnomaly (AE.object [])
+        Issues.setConversationTitle testPid conversation "Generated issue title"
+      void $ receiveSlackEvent tr $ slackCallbackEnvelope "T1" "EvIncidentTitle" $ AE.object ["type" AE..= ("agent_session_title_changed" :: Text), "team_id" AE..= ("T1" :: Text), "channel" AE..= ("C1" :: Text), "thread_ts" AE..= ("1788900000.000009" :: Text), "user" AE..= ("U0123ABCDEF" :: Text), "event_ts" AE..= ("1788900001.000009" :: Text), "title" AE..= ("Operator incident title" :: Text)]
+      runQueryEffect tr (Issues.getConversation testPid conversation) >>= (\thread -> fmap (.title) thread `shouldBe` Just "Operator incident title")
+      runQueryEffect tr (Issues.getConversation testPid $ Issues.slackScopedConversationId testPid "T1" "C1" "1788900000.000009") >>= (`shouldSatisfy` isNothing)
 
     it "captures only this app's signed root in the original workspace and channel" \tr -> do
       update <- setupWithIssue tr

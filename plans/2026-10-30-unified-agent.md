@@ -865,9 +865,25 @@ All 242 bot examples pass. The strengthened account-deletion cases and native re
 
 Interactive and detached orphan attempts, historical orphan attempts outside the current scheduled slot, and terminal-run lease recovery remain open, along with the remaining plan phases and final release checks.
 
+### Slack sessions share generated titles and preserve human renames (31 October)
+
+Slack and ordinary chat use the same `ensureConversationTitle` helper, model selection, usage attribution, and access checks. A Slack investigation names an untitled conversation before starting its native session. The existing status call carries that title only as initial session metadata. Slack documents that this field is ignored for an existing session, so an automatic title cannot replace a human's Slack rename. This replaces the proposal's after-answer rename with a creation-only operation; no title-delivery ledger or migration is needed.
+
+An existing name avoids another model call. A manual name already recorded before app conversation creation seeds that conversation. Report retrieval uses a request-derived title without introducing model calls. Recovery uses the retained run input for naming and query dispatch. The superseded title-presence query is removed.
+
+Accepted signed Slack rename events update the thread metadata and app conversation title in one transaction, both at intake and through the existing queued worker. The existing incident/thread resolver now has a transaction form, so an alert rename reaches the issue's conversation too. Duplicate, older, unlinked, and revoked-member events cannot reapply a name. A failed conversation write rolls back the metadata update; the retained receipt and existing job allow recovery.
+
+The opaque `SlackSessionTitle` type parses the 1–200-character, nonblank, null-free contract at JSON and database boundaries. The same type is used in native status payloads. Cleanup status updates omit the title field. The original Monoscope title writer keeps its existing 100-character normalization and conditional generated-title update, so a rename during inference wins. Authority is checked again before the native status call.
+
+The regressions first failed because analysis started before a shared title existed and a conversation-write rejection did not affect Slack metadata. The focused checks now cover generation, a rename during inference, a name recorded before conversation creation, one successful generation call, replay without further HTTP, malformed signed titles, ordered and authorized renames, and atomic rollback. All 245 bot, 75 API v1, and 23 incident-delivery examples pass, including signed rename propagation to an existing issue conversation without a parallel Slack conversation. Formatting and diff checks pass. HLint reports the same two hints as the baseline across the changed application modules, with none introduced. Repeated slice reviews removed the obsolete title-presence query, retained canonical thread mapping, and kept inference and dispatch on the saved run input, with no remaining material slice findings. The new codec doctest awaits final doctest verification.
+
+Dynamic prompts, shortcut intake, session-lifecycle acceptance, streaming, proactive work, Slack evidence audiences, controlled live Slack acceptance, and final release checks remain open.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
+- [Agent session status](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/): initial titles are ignored once a session exists.
+- [Agent sessions](https://docs.slack.dev/ai/agent-sessions/): native status, renaming, and title-change events.
 - [Stream start](https://docs.slack.dev/reference/methods/chat.startStream/): stream arguments and recipient requirements.
 - [Stream completion](https://docs.slack.dev/reference/methods/chat.stopStream/): final blocks and metadata.
 

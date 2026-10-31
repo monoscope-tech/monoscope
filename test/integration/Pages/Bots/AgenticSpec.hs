@@ -1256,9 +1256,9 @@ spec = around withTestResources do
 
       it "lists titled threads and schedules and pauses their routine" \tr -> do
         let convId = UUIDId UUID.nil
-        (needsTitle, summary, listed, scheduled, paused, resumed, deleted) <- runTestBg frozenTime tr do
+        (initialTitle, summary, listed, scheduled, paused, resumed, deleted) <- runTestBg frozenTime tr do
           void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-          needsTitle <- Issues.conversationNeedsTitle testPid convId
+          initialTitle <- Issues.getConversationTitle testPid convId
           Issues.insertChatMessage testPid convId Issues.ChatUser "Send a daily reliability brief to Slack" Nothing Nothing
           Issues.setConversationTitle testPid convId "Daily reliability brief"
           summary <- Issues.getConversation testPid convId
@@ -1269,8 +1269,8 @@ spec = around withTestResources do
           resumed <- Issues.resumeRoutine (getResponse tr.trSessAndHeader).user.id testPid convId
           Issues.deleteRoutine testPid convId
           deleted <- Issues.getConversation testPid convId
-          pure (needsTitle, summary, listed, scheduled, paused, resumed, deleted)
-        needsTitle `shouldBe` True
+          pure (initialTitle, summary, listed, scheduled, paused, resumed, deleted)
+        initialTitle `shouldBe` Nothing
         (.title) <$> summary `shouldBe` Just "Daily reliability brief"
         map (.conversationId) listed `shouldContain` [convId]
         (.scheduledAt) <$> scheduled `shouldBe` Just (addUTCTime 900 frozenTime)

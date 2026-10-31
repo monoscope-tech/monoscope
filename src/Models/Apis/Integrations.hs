@@ -29,20 +29,28 @@ module Models.Apis.Integrations (
   resolveSlackPrincipal,
   slackThreadProject,
   bindSlackInvestigation,
-  recordSlackSessionEvent,
+  SlackSessionTitle,
+  mkSlackSessionTitle,
+  slackSessionTitleText,
+  SlackTitleChange (..),
+  recordSlackSessionEventTx,
+  slackThreadTitle,
   slackInvestigationStopped,
 ) where
 
+import Data.Aeson qualified as Aeson
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as AE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
 import Models.Projects.ProjectMembers (activeMembership)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId, enumLit)
+import Pkg.DeriveUtils (UUIDId, enumLit, refineText)
 import Relude
 import System.Types (DB)
 
@@ -190,19 +198,57 @@ bindSlackInvestigation principal teamId channelId threadTs = do
   pure $ isJust result
 
 
--- | Only an authenticated, linked project member can change an existing thread.
--- Source identity and coordinates come from the stored signed receipt.
-recordSlackSessionEvent :: DB es => Text -> Text -> Eff es ()
-recordSlackSessionEvent teamId eventId =
-  Hasql.interpExecute_
-    $ [HI.sql|UPDATE apis.slack_investigation_threads thread
+newtype SlackSessionTitle = SlackSessionTitle Text
+  deriving stock (Eq, Show)
+  deriving newtype (AE.ToJSON)
+
+
+-- $setup
+-- >>> import Data.Aeson qualified as Aeson
+-- >>> import Data.Text qualified as T
+-- >>> import Relude
+
+
+-- | Slack session titles contain 1–200 characters and no null bytes.
+-- >>> let title :: Maybe SlackSessionTitle; title = mkSlackSessionTitle "Checkout"
+-- >>> fmap slackSessionTitleText title
+-- Just "Checkout"
+-- >>> map (isNothing . mkSlackSessionTitle) ["", " ", T.replicate 201 "x", "a\NULb"]
+-- [True,True,True,True]
+-- >>> (Aeson.decode . Aeson.encode =<< title) == title
+-- True
+mkSlackSessionTitle :: Text -> Maybe SlackSessionTitle
+mkSlackSessionTitle value = SlackSessionTitle value <$ guard (not (T.null $ T.strip value) && T.length value <= 200 && not (T.any (== '\NUL') value))
+
+
+slackSessionTitleText :: SlackSessionTitle -> Text
+slackSessionTitleText (SlackSessionTitle value) = value
+
+
+instance Aeson.FromJSON SlackSessionTitle where
+  parseJSON = Aeson.withText "Slack session title" $ maybe (fail "Enter 1–200 characters without null bytes") pure . mkSlackSessionTitle
+
+
+instance HI.DecodeValue SlackSessionTitle where
+  decodeValue = refineText "Slack session title" mkSlackSessionTitle
+
+
+data SlackTitleChange = SlackTitleChange {projectId :: Projects.ProjectId, channelId :: Text, threadTs :: Text, title :: SlackSessionTitle}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | Only a linked current member can update a thread; return newly accepted titles.
+recordSlackSessionEventTx :: Text -> Text -> Tx.Transaction [SlackTitleChange]
+recordSlackSessionEventTx teamId eventId =
+  Hasql.queryTx
+    $ [HI.sql|WITH changed AS (UPDATE apis.slack_investigation_threads thread
     SET stopped_through = CASE WHEN receipt.payload->'event'->>'type' = 'agent_session_stopped'
           THEN GREATEST(thread.stopped_through, (receipt.payload->'event'->>'event_ts')::numeric) ELSE thread.stopped_through END,
         title = CASE WHEN receipt.payload->'event'->>'type' = 'agent_session_title_changed'
-          AND (thread.title_event_ts IS NULL OR thread.title_event_ts < (receipt.payload->'event'->>'event_ts')::numeric)
           THEN receipt.payload->'event'->>'title' ELSE thread.title END,
         title_event_ts = CASE WHEN receipt.payload->'event'->>'type' = 'agent_session_title_changed'
-          THEN GREATEST(thread.title_event_ts, (receipt.payload->'event'->>'event_ts')::numeric) ELSE thread.title_event_ts END
+          THEN (receipt.payload->'event'->>'event_ts')::numeric ELSE thread.title_event_ts END
     FROM apis.slack_events receipt
     JOIN apis.slack_identities identity ON identity.team_id = receipt.team_id AND identity.slack_user_id = receipt.payload->'event'->>'user'
     JOIN projects.project_members member ON member.user_id = identity.user_id
@@ -216,6 +262,19 @@ recordSlackSessionEvent teamId eventId =
       AND thread.channel_id = receipt.payload->'event'->>'channel'
       AND thread.thread_ts = receipt.payload->'event'->>'thread_ts'|]
     <> ProjectMembers.activeMembership
+    <> [HI.sql| AND (receipt.payload->'event'->>'type' <> 'agent_session_title_changed'
+      OR thread.title_event_ts IS NULL OR thread.title_event_ts < (receipt.payload->'event'->>'event_ts')::numeric)
+      RETURNING thread.project_id, thread.channel_id, thread.thread_ts, thread.title,
+        receipt.payload->'event'->>'type' AS kind)
+      SELECT project_id, channel_id, thread_ts, title FROM changed WHERE kind = 'agent_session_title_changed'|]
+
+
+slackThreadTitle :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Eff es (Maybe SlackSessionTitle)
+slackThreadTitle pid team channel thread =
+  (HI.getOneColumn =<<)
+    <$> Hasql.interpOne @(HI.OneColumn (Maybe SlackSessionTitle))
+      [HI.sql|SELECT title FROM apis.slack_investigation_threads
+      WHERE project_id = #{pid} AND team_id = #{team} AND channel_id = #{channel} AND thread_ts = #{thread}|]
 
 
 slackInvestigationStopped :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es Bool

@@ -19,6 +19,7 @@ module Models.Apis.Incidents (
   getEpisode,
   listEpisodes,
   threadConversationId,
+  threadConversationIdTx,
   InvestigationContext (..),
   slackInvestigationContext,
   RelatedIncidentMatch (..),
@@ -253,10 +254,14 @@ listEpisodes pid phase limit =
 -- only valid if it equals what this returns for the thread it claims to be in.
 -- It must therefore stay the single place that mapping is computed.
 threadConversationId :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Eff es (UUIDId "conversation")
-threadConversationId pid teamId channelId threadTs =
+threadConversationId pid teamId channelId threadTs = Hasql.transaction TxS.ReadCommitted TxS.Read $ threadConversationIdTx pid teamId channelId threadTs
+
+
+threadConversationIdTx :: Projects.ProjectId -> Text -> Text -> Text -> Tx.Transaction (UUIDId "conversation")
+threadConversationIdTx pid teamId channelId threadTs =
   maybe (Issues.slackScopedConversationId pid teamId channelId threadTs) (\iid -> UUIDId iid.unUUIDId)
     . join
-    <$> Hasql.interpOne @(Maybe Issues.IssueId)
+    <$> Hasql.queryTx @(Maybe (Maybe Issues.IssueId))
       [HI.sql|SELECT episode.issue_id FROM apis.slack_incident_roots root
         JOIN apis.incident_episodes episode ON episode.id = root.episode_id
         WHERE root.team_id = #{teamId} AND root.channel_id = #{channelId}

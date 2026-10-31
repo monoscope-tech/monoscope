@@ -706,7 +706,7 @@ data SlackAppContextEvent = SlackAppContextEvent {channel :: Text, user :: Text,
   deriving anyclass (AE.FromJSON)
 
 
-data SlackTitleEvent = SlackTitleEvent {channel :: Text, thread_ts :: Text, user :: Text, title :: Text, team_id :: Text, event_ts :: Text}
+data SlackTitleEvent = SlackTitleEvent {channel :: Text, thread_ts :: Text, user :: Text, title :: Integrations.SlackSessionTitle, team_id :: Text, event_ts :: Text}
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 
@@ -811,9 +811,17 @@ slackEventsPostH body timestamp signature = do
         ) INSERT INTO background_jobs (run_at, status, payload)
           SELECT now(), 'queued', #{job} FROM receipt|]
       case kind of
-        AgentSessionStopped _ -> Integrations.recordSlackSessionEvent team_id event_id
-        (UserMessage _; AppMention _; AgentSessionTitleChanged _; AppContextChanged _; AppHomeOpened _; BotMessage; MessageEdit; AssistantStarted _; AssistantContextChanged _; UnknownEvent _) -> pass
+        (AgentSessionStopped _; AgentSessionTitleChanged _) -> recordSlackSessionEvent team_id event_id
+        (UserMessage _; AppMention _; AppContextChanged _; AppHomeOpened _; BotMessage; MessageEdit; AssistantStarted _; AssistantContextChanged _; UnknownEvent _) -> pass
       pure $ AE.object []
+
+
+recordSlackSessionEvent :: DB es => Text -> Text -> Eff es ()
+recordSlackSessionEvent team eventId = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  changes <- Integrations.recordSlackSessionEventTx team eventId
+  for_ changes \change -> do
+    conversation <- Incidents.threadConversationIdTx change.projectId team change.channelId change.threadTs
+    Issues.renameConversationTx change.projectId conversation $ Integrations.slackSessionTitleText change.title
 
 
 processSlackEvent :: UUIDId "slack_event" -> ATBackgroundCtx ()
@@ -858,7 +866,7 @@ processSlackEventWithTools projectTools receiptId =
 
     handleEventCallback envCfg kind workspaceId eventId =
       case kind of
-        (AgentSessionStopped _; AgentSessionTitleChanged _) -> Integrations.recordSlackSessionEvent workspaceId eventId
+        (AgentSessionStopped _; AgentSessionTitleChanged _) -> recordSlackSessionEvent workspaceId eventId
         AppContextChanged change -> saveAppContext workspaceId change
         AppHomeOpened home
           | home.tab == Just "messages" -> do
@@ -937,7 +945,8 @@ processSlackEventWithTools projectTools receiptId =
       whenJustM (Issues.startEventRun routine (Issues.SlackMessageRequest receiptId principal.userId) Issues.ContinueRun convId event.text) \run ->
         when (run.status == Issues.RunRunning) do
           context <- AI.requireRunContext slackData.projectId $ Issues.BackgroundClaim principal.userId convId run.id run.startedAt
-          let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts
+          let requestText = fromMaybe event.text context.input
+              access = AI.SlackInvestigationAccess $ AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts
               turn = Investigations.Turn slackData.projectId convId principal.userId event.ts
               requireRunAccess = do
                 void $ AI.requireEvidenceAccess access slackData.projectId convId
@@ -961,7 +970,7 @@ processSlackEventWithTools projectTools receiptId =
                     >>= maybe
                       ( do
                           rendered <- newIORef []
-                          void $ runBotQueryWithTools projectTools (AI.DurableRun context) Slack (\reply -> modifyIORef' rendered (<> [botReplyPayload reply])) envCfg access slackData.projectId event.text resolveThread
+                          void $ runBotQueryWithTools projectTools (AI.DurableRun context) Slack (\reply -> modifyIORef' rendered (<> [botReplyPayload reply])) envCfg access slackData.projectId requestText resolveThread
                           replies <- readIORef rendered >>= maybe (throwIO $ ErrorCall "Slack query produced no reply") pure . nonEmpty
                           let link = "<" <> envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/ai/" <> convId.toText <> "|View runs and artifacts>"
                               linked reply = case reply ^? key "blocks" . _Array of
@@ -990,11 +999,25 @@ processSlackEventWithTools projectTools receiptId =
             tryAny
               $ ( do
                     requireRunAccess
+                    whenJustM (Integrations.slackThreadTitle slackData.projectId workspaceId event.channel threadTs) $ \title ->
+                      Issues.setConversationTitle slackData.projectId convId $ Integrations.slackSessionTitleText title
+                    initialTitle <- case detectReportIntent requestText of
+                      GeneralQueryIntent ->
+                        AI.ensureConversationTitle
+                          (AI.defaultAgenticConfig slackData.projectId){AI.access = access, AI.conversationId = Just convId, AI.sourceConfig = Just envCfg, AI.invocationMode = AI.DurableRun context}
+                          requestText
+                          envCfg.openaiModel
+                          envCfg.openaiApiKey
+                          Nothing
+                      ReportIntent{} -> do
+                        Issues.setConversationTitle slackData.projectId convId requestText
+                        Issues.getConversationTitle slackData.projectId convId
                     let resetJob = BgJobs.ResetSlackSession slackData.projectId principal.userId receiptId
                     slackRetryTime 60 >>= scheduleSessionReset receiptId resetJob
                     bracket
                       ( do
-                          status <- tryAny $ setSessionStatus slackData.botToken event.channel threadTs Processing
+                          requireRunAccess
+                          status <- tryAny $ setSessionStatus slackData.botToken event.channel threadTs Processing (initialTitle >>= Integrations.mkSlackSessionTitle)
                           case status of
                             Right () -> pure True
                             Left err -> do
@@ -1002,7 +1025,7 @@ processSlackEventWithTools projectTools receiptId =
                               clearQueuedSlackJob resetJob
                               pure False
                       )
-                      ( \started -> when started $ whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active >> clearQueuedSlackJob resetJob) \_ ->
+                      ( \started -> when started $ whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active Nothing >> clearQueuedSlackJob resetJob) \_ ->
                           Log.logAttention "Slack session status cleanup remains queued" $ AE.object ["receipt_id" AE..= receiptId, "channel_id" AE..= event.channel, "thread_ts" AE..= threadTs]
                       )
                       ( \_ ->
@@ -1025,7 +1048,7 @@ processSlackEventWithTools projectTools receiptId =
               case answer of
                 Just result -> do
                   finish $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer result
-                Nothing -> case detectReportIntent event.text of
+                Nothing -> case detectReportIntent requestText of
                   GeneralQueryIntent -> finish $ Issues.FailedResult $ Issues.RunFailure "The agent did not produce an answer." Issues.RunOnly
                   ReportIntent{} -> do
                     batch <- Investigations.loadReplyBatch turn
@@ -1116,7 +1139,7 @@ resetSlackSession projectId userId receiptId = do
           AI.requireAgentAccess (AI.SlackAccess team_id message.user userId) projectId
           connection <- getProjectSlackData projectId >>= maybe (throwIO AI.AgentAccessDenied) pure
           unless (connection.teamId == team_id) $ throwIO AI.AgentAccessDenied
-          setSessionStatus connection.botToken message.channel thread Active
+          setSessionStatus connection.botToken message.channel thread Active Nothing
           clearQueuedSlackJob job
   for_ (leftToMaybe outcome) $ \err -> case fromException @RateLimit.SlackRateLimited err of
     Just (RateLimit.SlackRateLimited retryAt) -> defer retryAt
@@ -1452,16 +1475,17 @@ data SlackSessionUpdate = SlackSessionUpdate
   { channel_id :: Text
   , thread_ts :: Text
   , status :: SlackSessionStatus
+  , title :: Maybe Integrations.SlackSessionTitle
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.ToJSON)
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] SlackSessionUpdate
 
 
 -- | The agent's "working" indicator — @agents.sessions.setStatus@ from the
 -- Agents surface, not the older @assistant.threads.setStatus@.
-setSessionStatus :: (HTTP :> es, IOE :> es) => Text -> Text -> Text -> SlackSessionStatus -> Eff es ()
-setSessionStatus token channel thread status =
-  slackApiOrThrow "Slack session status" token "agents.sessions.setStatus" $ AE.toJSON $ SlackSessionUpdate channel thread status
+setSessionStatus :: (HTTP :> es, IOE :> es) => Text -> Text -> Text -> SlackSessionStatus -> Maybe Integrations.SlackSessionTitle -> Eff es ()
+setSessionStatus token channel thread status title =
+  slackApiOrThrow "Slack session status" token "agents.sessions.setStatus" $ AE.toJSON $ SlackSessionUpdate channel thread status title
 
 
 saveAppContext :: DB es => Text -> SlackAppContextEvent -> Eff es ()

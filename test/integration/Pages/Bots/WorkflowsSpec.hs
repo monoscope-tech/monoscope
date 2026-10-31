@@ -81,6 +81,10 @@ data LegacyFixture = PendingDashboard | PendingAppend | RecordedAppend | Pending
   deriving stock (Bounded, Enum, Eq, Show)
 
 
+data SessionTitleCase = GenerateTitle | ExistingTitle | RacingTitle
+  deriving stock (Eq, Show)
+
+
 agentConfig :: Projects.ProjectId -> AI.AgenticConfig
 agentConfig pid = (AI.defaultAgenticConfig pid){AI.projectTools = Just Routes.mcpProjectTools}
 
@@ -853,8 +857,18 @@ spec = around withTestResources do
           status <- toBaseServantResponse resources $ catchError @ServerError (slackEventsPostH body (Just "1735689600") (Just $ signSlackBody "1735689600" body) $> 200) (\_ err -> pure err.errHTTPCode)
           status `shouldBe` 400
 
+        for_ ["", " ", T.replicate 201 "x", "a\NULb"] \invalid -> do
+          let event = AE.object ["type" AE..= ("agent_session_title_changed" :: Text), "event_ts" AE..= ("1735689601.000001" :: Text), "team_id" AE..= ("T_NATIVE" :: Text), "channel" AE..= ("C_NATIVE" :: Text), "user" AE..= ("U_NATIVE" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "title" AE..= invalid]
+              body = toStrict $ AE.encode $ slackCallbackEnvelope "T_NATIVE" "InvalidTitle" event
+          status <- toBaseServantResponse resources $ catchError @ServerError (slackEventsPostH body (Just "1735689600") (Just $ signSlackBody "1735689600" body) $> 200) (\_ err -> pure err.errHTTPCode)
+          status `shouldBe` 400
+
       it "orders native navigation and authorized titles without starting investigations" \tr -> do
         setupSlackAgent tr testPid "T_NATIVE"
+        let conversation = Issues.slackScopedConversationId testPid "T_NATIVE" "C_NATIVE" "1735689600.000001"
+        runQueryEffect tr do
+          void $ Issues.getOrCreateConversation testPid conversation Issues.CTSlackThread (AE.object [])
+          Issues.setConversationTitle testPid conversation "Generated title"
         principal <- toBaseServantResponse tr (Slack.resolveSlackPrincipal "T_NATIVE" "U0123ABCDEF" $ Just testPid) >>= maybe (fail "Missing linked principal") pure
         toBaseServantResponse tr (Slack.bindSlackInvestigation principal "T_NATIVE" "C_NATIVE" "1735689600.000001") >>= (`shouldBe` True)
         let callback = slackCallbackEnvelope
@@ -874,6 +888,16 @@ spec = around withTestResources do
         process "T_NATIVE" "ContextDelayed" $ context "U0123ABCDEF" "1735689602.000001" hints
         contexts :: [(Text, Text, Aeson AE.Value)] <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT team_id, user_id, context FROM apis.slack_app_contexts ORDER BY team_id, user_id|]
         contexts `shouldBe` [("T_NATIVE", "U0123ABCDEF", Aeson $ AE.object []), ("T_NATIVE", "U_OTHER", Aeson hints), ("T_OTHER", "U0123ABCDEF", Aeson hints)]
+        let ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+        bracket_
+          (ddl "ALTER TABLE apis.ai_conversations ADD CONSTRAINT reject_slack_title CHECK (title <> 'Checkout errors') NOT VALID")
+          (ddl "ALTER TABLE apis.ai_conversations DROP CONSTRAINT reject_slack_title")
+          (tryAny (process "T_NATIVE" "TitleNew" $ title "U0123ABCDEF" "1735689603.000001" "Checkout errors") >>= (`shouldSatisfy` isLeft))
+        runQueryEffect tr (Issues.getConversation testPid conversation) >>= (\thread -> fmap (.title) thread `shouldBe` Just "Generated title")
+        withResource tr.trPool (\conn -> PGS.query_ conn [sql|SELECT title IS NULL FROM apis.slack_investigation_threads WHERE team_id = 'T_NATIVE'|]) >>= (`shouldBe` [PGS.Only True])
+        process "T_NATIVE" "TitleNew" $ title "U0123ABCDEF" "1735689603.000001" "Checkout errors"
+        runQueryEffect tr (Issues.getConversation testPid conversation) >>= (\thread -> fmap (.title) thread `shouldBe` Just "Checkout errors")
+        runQueryEffect tr $ Issues.renameConversation testPid conversation "Edited in Monoscope"
         process "T_NATIVE" "TitleNew" $ title "U0123ABCDEF" "1735689603.000001" "Checkout errors"
         process "T_NATIVE" "TitleOld" $ title "U0123ABCDEF" "1735689601.000001" "Old title"
         process "T_NATIVE" "TitleUnlinked" $ title "U_OTHER" "1735689604.000001" "Unauthorized title"
@@ -883,7 +907,8 @@ spec = around withTestResources do
         titles `shouldBe` [PGS.Only ("Checkout errors" :: Text)]
         toBaseServantResponse tr (Slack.slackInvestigationStopped testPid "T_NATIVE" "C_NATIVE" "1735689600.000001" "1735689601.000001") >>= (`shouldBe` False)
         conversations <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.ai_conversations WHERE conversation_type = 'slack_thread'|]
-        conversations `shouldBe` [PGS.Only (0 :: Int64)]
+        conversations `shouldBe` [PGS.Only (1 :: Int64)]
+        runQueryEffect tr (Issues.getConversation testPid conversation) >>= (\thread -> fmap (.title) thread `shouldBe` Just "Edited in Monoscope")
         toBaseServantResponse tr (Slack.slackThreadProject "T_NATIVE" "C_NATIVE" "1735689600.000001") >>= (`shouldBe` Just testPid)
 
       it "preserves non-message events and orders assistant context independently of receipt order" \tr -> do
@@ -2258,6 +2283,49 @@ spec = around withTestResources do
           result `shouldSatisfy` isRight
           [body | (url, body) <- requests, url == "https://slack.com/api/chat.postEphemeral"] `shouldSatisfy` (not . null)
           runQueryEffect tr (Issues.listRoutineRuns testPid 10) >>= (`shouldSatisfy` null)
+
+      for_ [GenerateTitle, ExistingTitle, RacingTitle] \scenario ->
+        it ("slackSessionTitle_usesTheSharedTitleOnlyAtCreation: " <> show scenario) \tr -> do
+          setupSlackAgent tr testPid "T_TITLE"
+          calls <- newIORef (0 :: Int)
+          renameReceipt <- newIORef Nothing
+          let conversation = Issues.slackScopedConversationId testPid "T_TITLE" "C_TITLE" "1735689600.000001"
+              expected = if scenario == GenerateTitle then "Checkout retries" else "Human title"
+              rename = do
+                receipt <- receiveSlackEvent tr $ slackCallbackEnvelope "T_TITLE" "EvHumanTitle" $ AE.object ["type" AE..= ("agent_session_title_changed" :: Text), "team_id" AE..= ("T_TITLE" :: Text), "channel" AE..= ("C_TITLE" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= ("U0123ABCDEF" :: Text), "event_ts" AE..= ("1735689601.000001" :: Text), "title" AE..= ("Human title" :: Text)]
+                writeIORef renameReceipt $ Just receipt
+              provider :: ATBackgroundCtx a -> ATBackgroundCtx a
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallLLM{} -> do
+                  liftIO $ modifyIORef' calls (+ 1)
+                  when (scenario == RacingTitle) $ liftIO rename
+                  pure $ Right "\"Checkout retries\""
+                ELLM.CallAgenticChat{} -> do
+                  title <- Issues.getConversation testPid conversation
+                  liftIO $ fmap (.title) title `shouldBe` Just expected
+                  pure $ Right $ Chat.Message Chat.Assistant "Checkout evidence retained." Chat.defaultMessageData
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+              transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
+          when (scenario == ExistingTitle) do
+            principal <- runQueryEffect tr (Slack.resolveSlackPrincipal "T_TITLE" "U0123ABCDEF" $ Just testPid) >>= maybe (fail "Missing linked principal") pure
+            runQueryEffect tr (Slack.bindSlackInvestigation principal "T_TITLE" "C_TITLE" "1735689600.000001") >>= (`shouldBe` True)
+            rename
+          receipt <- receiveSlackEvent tr $ slackEventCallback "T_TITLE" "C_TITLE" "Investigate checkout retries" "1735689600.000001" Nothing & key "event" . key "type" . _String .~ "app_mention"
+          (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt
+          result `shouldSatisfy` isRight
+          let statuses = [value | (url, body) <- requests, url == "https://slack.com/api/agents.sessions.setStatus", Just value <- [AE.decode @AE.Value body]]
+          [value ^? key "title" . _String | value <- statuses, value ^? key "status" . _String == Just "processing"] `shouldBe` [Just expected]
+          [value ^? key "title" | value <- statuses, value ^? key "status" . _String == Just "active"] `shouldBe` [Nothing]
+          map fst requests `shouldSatisfy` (notElem "https://slack.com/api/agents.sessions.rename")
+          readIORef calls >>= (`shouldBe` if scenario == ExistingTitle then 0 else 1)
+          (replayed, _) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ processSlackEvent receipt
+          replayed `shouldBe` []
+          pending <- readIORef renameReceipt
+          for_ pending \pendingRename -> do
+            runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT processed_at IS NULL FROM apis.slack_events WHERE id = #{pendingRename}|]) >>= (`shouldBe` True)
+            (renamedRequests, _) <- runTestBgRecordingHTTP frozenTime tr $ processSlackEvent pendingRename
+            renamedRequests `shouldBe` []
+          runQueryEffect tr (Issues.getConversation testPid conversation) >>= (\thread -> fmap (.title) thread `shouldBe` Just expected)
 
       it "firstPrivateMention_recordsVisibleRoutineRunAndArtifactWhenAgentStatusIsUnavailable" \tr -> do
         setupSlackAgent tr testPid "T_FIRST_MENTION"

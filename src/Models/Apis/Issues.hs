@@ -201,9 +201,10 @@ module Models.Apis.Issues (
   listVisibleRoutineRuns,
   getConversation,
   conversationIssueId,
-  conversationNeedsTitle,
+  getConversationTitle,
   setConversationTitle,
   renameConversation,
+  renameConversationTx,
   deleteConversation,
   upsertRoutine,
   installRoutineTemplate,
@@ -2007,11 +2008,6 @@ conversationIssueId conversation = case conversation.conversationType of
   _ -> Nothing
 
 
-conversationNeedsTitle :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es Bool
-conversationNeedsTitle pid convId =
-  fromMaybe False <$> Hasql.interpOne [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId} AND title IS NULL)::boolean|]
-
-
 setConversationTitle :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Eff es ()
 setConversationTitle pid convId title =
   Hasql.interpExecute_
@@ -2019,9 +2015,18 @@ setConversationTitle pid convId title =
       WHERE project_id = #{pid} AND conversation_id = #{convId} AND title IS NULL|]
 
 
+getConversationTitle :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe Text)
+getConversationTitle pid conversation =
+  (HI.getOneColumn =<<) <$> Hasql.interpOne @(HI.OneColumn (Maybe Text)) [HI.sql|SELECT title FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{conversation}|]
+
+
 renameConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Eff es ()
-renameConversation pid convId title =
-  Hasql.interpExecute_
+renameConversation pid convId title = Hasql.transaction TxS.ReadCommitted TxS.Write $ renameConversationTx pid convId title
+
+
+renameConversationTx :: Projects.ProjectId -> UUIDId "conversation" -> Text -> Tx.Transaction ()
+renameConversationTx pid convId title =
+  Hasql.executeTx
     [HI.sql|UPDATE apis.ai_conversations SET title = #{T.take 100 $ T.strip title}
       WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
