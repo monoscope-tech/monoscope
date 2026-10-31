@@ -78,7 +78,7 @@ saveConversationArtifact tr conversation args = do
     _ -> fail "Expected a successful durable invocation"
 
 
-data AbandonedRun = DeletedRequester | DetachedSchedule | DetachedEvent | HistoricalRequester
+data AbandonedRun = DeletedRequester | DetachedSchedule | DetachedEvent | HistoricalRequester | ReauthorizedRequester
   deriving stock (Eq, Show)
 
 
@@ -1457,7 +1457,54 @@ spec = around withTestResources do
           (evidence >>= (.input)) `shouldBe` Just "Send a daily reliability brief to Slack"
           (evidence >>= (.instructions)) `shouldBe` Just "Send a daily reliability brief to Slack"
 
-      for_ [DeletedRequester, DetachedSchedule, DetachedEvent, HistoricalRequester] \fixture ->
+      for_ ([(Issues.RunRunning, Nothing)] <> [(status, Just $ addUTCTime 1200 frozenTime) | status <- [Issues.RunSucceeded, Issues.RunNoFindings, Issues.RunFailed, Issues.RunTimedOut, Issues.RunCancelled]] <> [(Issues.RunCancelled, Nothing)]) \(status, finishedAt) ->
+        for_ [False, True] \paused ->
+          it ("routineRecovery_advancesOnlyTheFinishedSlotLease: " <> show (status, paused, isJust finishedAt)) \tr -> do
+            let conversation = UUIDId UUID.nil
+                user = (getResponse tr.trSessAndHeader).user.id
+                nextAt = addUTCTime 4500 frozenTime
+                previousFinish = addUTCTime (-900) frozenTime
+            Just slot <- runTestBg frozenTime tr do
+              void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+              Issues.insertChatMessage testPid conversation Issues.ChatUser "Keep the cadence" Nothing Nothing
+              Issues.upsertRoutine user testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
+            Just original <- runQueryEffect tr $ Issues.claimRoutine slot.id slot.scheduledAt
+            runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET status = #{status}, finished_at = #{finishedAt} WHERE id = #{original.runId}|]
+            runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET last_run_at = #{previousFinish} WHERE id = #{slot.id}|]
+            let refreshedLease = status == Issues.RunCancelled && not paused && isNothing finishedAt
+            when refreshedLease $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET running_since = now() - interval '31 minutes' WHERE id = #{slot.id}|]
+            when paused $ runQueryEffect tr $ Issues.pauseRoutine testPid conversation
+            advanceTestTime tr 3600
+            let leaseState = runQueryEffect tr $ Hasql.interpOne @(Maybe UTCTime, Maybe UTCTime, Maybe UTCTime, Bool) [HI.sql|SELECT running_since, next_run_at, last_run_at, active FROM apis.ai_routines WHERE id = #{slot.id}|]
+                ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+            before <- leaseState
+            when refreshedLease do
+              runQueryEffect tr (Issues.claimRoutine slot.id slot.scheduledAt) >>= (`shouldSatisfy` isNothing)
+              leaseState >>= (`shouldBe` before)
+            when (status == Issues.RunSucceeded && not paused)
+              $ bracket_
+                (ddl "ALTER TABLE apis.ai_routines ADD CONSTRAINT reject_lease_recovery CHECK (running_since IS NOT NULL) NOT VALID")
+                (ddl "ALTER TABLE apis.ai_routines DROP CONSTRAINT reject_lease_recovery")
+                do
+                  tryAny (runQueryEffect tr $ Issues.recoverDueRoutines 100) >>= (`shouldSatisfy` isLeft)
+                  leaseState >>= (`shouldBe` before)
+            recovered <- runQueryEffect tr $ Issues.recoverDueRoutines 100
+            if status == Issues.RunRunning
+              then leaseState >>= (`shouldBe` before)
+              else do
+                map (\next -> (next.id, next.scheduledAt)) recovered `shouldBe` [(slot.id, nextAt) | not paused]
+                leaseState >>= (`shouldBe` Just (Nothing, if paused then Nothing else Just nextAt, finishedAt <|> Just previousFinish, not paused))
+                runQueryEffect tr (Issues.recoverDueRoutines 100) >>= (`shouldSatisfy` null)
+                runQueryEffect tr (Issues.claimRoutine slot.id slot.scheduledAt) >>= (`shouldSatisfy` isNothing)
+                unless paused do
+                  advanceTestTime tr 900
+                  Just next <- runQueryEffect tr $ Issues.claimRoutine slot.id nextAt
+                  next.runId `shouldSatisfy` (/= original.runId)
+                  next.requestedBy `shouldBe` user
+                  next.policy `shouldBe` Issues.Autonomous
+            runQueryEffect tr (Issues.getRoutineRun testPid original.runId) >>= (\run -> fmap (.status) run `shouldBe` Just status)
+
+      for_ [DeletedRequester, DetachedSchedule, DetachedEvent, HistoricalRequester, ReauthorizedRequester] \fixture ->
         it ("routineRecovery_retiresAbandonedAttemptsWithoutChangingHealthyGrants: " <> show fixture) \tr -> do
           let conversation = UUIDId $ UUID.fromWords 0 0 113 1
               healthyConversation = UUIDId $ UUID.fromWords 0 0 113 2
@@ -1487,12 +1534,13 @@ spec = around withTestResources do
                 claimed <- Issues.claimRoutine slot.id slot.scheduledAt >>= maybe (throwIO $ ErrorCall "Missing scheduled run") pure
                 case fixture of
                   DetachedSchedule -> Issues.deleteRoutine testPid conversation
+                  ReauthorizedRequester -> void $ Issues.resumeRoutine user testPid conversation
                   HistoricalRequester ->
                     Hasql.interpExecute_
                       [HI.sql|UPDATE apis.ai_routines SET requested_by = #{user}, authority_version = authority_version + 1,
                     running_since = NULL, next_run_at = #{slot.scheduledAt} + interval '15 minutes' WHERE id = #{slot.id}|]
                 pure claimed.runId
-            when (fixture `elem` [DeletedRequester, HistoricalRequester]) $ Hasql.interpExecute_ [HI.sql|DELETE FROM users.users WHERE id = #{actor.id}|]
+            when (fixture `elem` [DeletedRequester, HistoricalRequester, ReauthorizedRequester]) $ Hasql.interpExecute_ [HI.sql|DELETE FROM users.users WHERE id = #{actor.id}|]
             pure (actor.id, run)
           let proposal = Investigations.OperationProposal (Operation.ModelCall $ LLM.ToolCall "pending" "function" $ LLM.ToolFunction "save_artifact" mempty) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Autonomous ProjectMembers.PEdit
           runQueryEffect tr do
@@ -1502,6 +1550,12 @@ spec = around withTestResources do
                 [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
                 VALUES (gen_random_uuid(), #{testPid}, #{abandoned}, #{actor}, #{revision}, #{Aeson proposal}, #{Aeson outcome})|]
           before <- runQueryEffect tr $ Hasql.interp @[(UUIDId "ai_routine", Bool, Maybe UTCTime, Maybe UTCTime, Maybe Projects.UserId)] [HI.sql|SELECT id, active, next_run_at, running_since, requested_by FROM apis.ai_routines WHERE project_id = #{testPid}|]
+          when (fixture == ReauthorizedRequester) do
+            runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET running_since = now() - interval '31 minutes' WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]
+            captured <- runQueryEffect tr $ Hasql.interpOne @(UUIDId "ai_routine", UTCTime, UTCTime) [HI.sql|SELECT id, next_run_at, running_since FROM apis.ai_routines WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]
+            for_ captured \(rid, scheduled, leased) -> do
+              runQueryEffect tr (Issues.claimRoutine rid scheduled) >>= (`shouldSatisfy` isNothing)
+              runQueryEffect tr (Hasql.interpScalar @UTCTime [HI.sql|SELECT running_since FROM apis.ai_routines WHERE id = #{rid}|]) >>= (`shouldBe` leased)
           let ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
           bracket_
             (ddl "ALTER TABLE apis.ai_agent_operations ADD CONSTRAINT reject_abandoned_retirement CHECK (outcome->>'tag' <> 'OperationUnknown') NOT VALID")
@@ -1514,11 +1568,16 @@ spec = around withTestResources do
           runQueryEffect tr (Issues.getRoutineRun testPid abandoned) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)
           runQueryEffect tr (Issues.getRoutineRun testPid healthyRun) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunRunning)
           after <- runQueryEffect tr $ Hasql.interp @[(UUIDId "ai_routine", Bool, Maybe UTCTime, Maybe UTCTime, Maybe Projects.UserId)] [HI.sql|SELECT id, active, next_run_at, running_since, requested_by FROM apis.ai_routines WHERE project_id = #{testPid}|]
-          after `shouldBe` before
+          if fixture == ReauthorizedRequester
+            then do
+              let grant (rid, active, _, _, owner) = (rid, active, owner)
+              map grant after `shouldBe` map grant before
+              [(next, lease) | (_, _, next, lease, _) <- after] `shouldBe` [(Just $ addUTCTime 1800 frozenTime, Nothing)]
+            else after `shouldBe` before
           entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid abandoned
           map (.requestedBy) entries `shouldBe` [actor, actor]
           sort [AE.toJSON entry.outcome ^? key "tag" . _String | entry <- entries] `shouldBe` [Just "OperationReturned", Just "OperationUnknown"]
-          runQueryEffect tr (Issues.getRoutineRunEvidence testPid abandoned) >>= (\evidence -> (evidence >>= (.requestedBy)) `shouldBe` if fixture `elem` [DeletedRequester, HistoricalRequester] then Nothing else Just actor)
+          runQueryEffect tr (Issues.getRoutineRunEvidence testPid abandoned) >>= (\evidence -> (evidence >>= (.requestedBy)) `shouldBe` if fixture `elem` [DeletedRequester, HistoricalRequester, ReauthorizedRequester] then Nothing else Just actor)
           runQueryEffect tr (Issues.listRunArtifacts testPid abandoned) >>= (\artifacts -> map (.content) artifacts `shouldBe` [Just "Original observation"])
 
       it "routineRecovery_retiresUnownedWorkWithoutInventingAnActorOrDeletingEvidence" \tr -> do

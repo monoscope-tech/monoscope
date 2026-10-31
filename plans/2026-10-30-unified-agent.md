@@ -925,6 +925,18 @@ The existing finalizer marks unresolved operations unknown and snapshots retaine
 
 Four failing-first regressions use actual account deletion or installation deletion, and an independent healthy interactive attempt. Each now passes cancellation, rollback on operation-result rejection, actor preservation, known-response preservation, artifact retention, repeated maintenance, and unchanged healthy grants. All 252 bot examples pass. Formatting, focused HLint, and diff checks pass. Repeated slice reviews retain the existing finalizer and transaction, distinguish healthy interactive work from detached installation work, and preserve healthy replacement grants, with no remaining material slice findings. Final release checks and terminal-run lease recovery remain open.
 
+### Normal completion and maintenance share schedule advancement (31 October)
+
+A finished scheduled run could retain its routine's lease and original scheduled instant. Retrying that instant could not restart the terminal run, but did refresh the routine lease. The maintenance sweep now repairs the finished slot, including leases already refreshed by older code. `claimRoutine` rejects terminal or actorless slots before changing their lease.
+
+Normal completion and recovery use one `advanceRoutineScheduleTx` interpreter and the existing interval/calendar calculation. `ScheduleCompletion` carries the routine id, scheduled instant, captured lease, and optional historical finish time. Both paths lock the routine and compare its slot and lease before advancing. Recovery preserves a known completion timestamp; if an old record lacks that timestamp, the previous known value remains. Paused installations release their lease without scheduling another run. Live attempts retain their current lease.
+
+The recovery function uses the clock effect for its cadence and due/stale queries. It skips missed intervals, returns the repaired future slot to the existing queue, and does not enqueue it again on a repeated sweep. Abandoned-attempt retirement and lease repair commit in the same maintenance transaction. No scheduler, migration, or alternate timing implementation was added.
+
+Fourteen parameterized cases cover all terminal outcomes, live attempts, paused installations, missing historical finish times, skipped intervals, rollback, repeated recovery, and a fresh authorized next run. Twelve initially failed. Further regressions reproduced rejected stale claims refreshing their lease for both terminal and actorless attempts. The focused cases now pass. The real account-deletion fixture also covers reauthorization retaining an active lease, followed by one sweep cancelling the abandoned run and advancing that slot without changing its replacement grant. All 267 bot examples pass, including the previous orphan, reauthorization, stale-worker, native completion, and interval/calendar regressions. Formatting, focused HLint, and diff checks pass. Repeated slice reviews share schedule advancement, preserve known historical times, mirror reclaim eligibility before changing a lease, and keep recovery on the existing clock and queue, with no remaining material slice findings. Whole-branch reviews, live acceptance, and final release checks remain pending.
+
+The refreshed inventory still lists 28 open pull requests, with no new, closed, or changed heads. All twenty selected incoming heads and published #619 remain ancestors of this branch. No additional selected merge is required.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

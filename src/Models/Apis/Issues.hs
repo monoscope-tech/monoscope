@@ -2135,6 +2135,9 @@ claimRoutine routineId scheduledAt =
         UPDATE apis.ai_routines SET running_since = now()
         WHERE id = #{routineId} AND active AND requested_by IS NOT NULL AND next_run_at = #{scheduledAt}
           AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
+          AND NOT EXISTS (SELECT 1 FROM apis.ai_routine_runs existing WHERE existing.routine_id = #{routineId}
+            AND existing.scheduled_at = #{scheduledAt} AND existing.source = #{ScheduledRun}
+            AND (existing.status <> #{RunRunning} OR existing.requested_by IS NULL))
         RETURNING requested_by, project_id, conversation_id, running_since, policy, authority_version, report_when, destination, timezone, instructions, template_version
       ), eligible_members AS (|]
         <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id IN (SELECT project_id FROM claimed)|]
@@ -2440,20 +2443,35 @@ completeRunTx now mutation context proposed = do
         ConversationNotice body -> Hasql.executeTx $ runMessageSql pid runId ChatExecutionEvent body Nothing Nothing
       finishRunRowsTx $ FinishRun context status findings actions reason
 
-      next <- forM schedule $ \slot -> do
-        timing <- decodeRoutineTiming <$> Hasql.oneTx (routineTimingSql [HI.sql|id = #{slot.id}|])
-        let nextAt = timing >>= \(definition, zone) -> nextRoutineAt definition zone slot.scheduledAt now
-        at <-
-          Hasql.oneTx @(HI.OneColumn (Maybe UTCTime))
-            [HI.sql|UPDATE apis.ai_routines SET last_run_at = #{now}, running_since = NULL, cancelled_at = NULL,
-            next_run_at = CASE WHEN active THEN #{nextAt} END
-            WHERE id = #{slot.id} AND next_run_at = #{slot.scheduledAt} AND running_since = #{context.startedAt}
-            RETURNING CASE WHEN active THEN next_run_at END|]
-        pure $ ScheduledRoutine slot.id <$> HI.getOneColumn at
+      next <- forM schedule \slot -> advanceRoutineScheduleTx now $ ScheduleCompletion slot.id slot.scheduledAt context.startedAt $ Just now
       pure $ RunCompleted status $ join next
     [HI.OneColumn RunSucceeded] | context.source /= ScheduledRun -> pure $ RunCompleted CompletedSucceeded Nothing
     [HI.OneColumn RunNoFindings] | context.source /= ScheduledRun -> pure $ RunCompleted CompletedNoFindings Nothing
     _ -> pure CompletionRejected
+
+
+data ScheduleCompletion = ScheduleCompletion
+  { id :: UUIDId "ai_routine"
+  , scheduledAt :: UTCTime
+  , leasedAt :: UTCTime
+  , finishedAt :: Maybe UTCTime
+  }
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
+advanceRoutineScheduleTx :: UTCTime -> ScheduleCompletion -> Tx.Transaction (Maybe ScheduledRoutine)
+advanceRoutineScheduleTx now completion = do
+  timing <- decodeRoutineTiming <$> Hasql.oneTx (routineTimingSql [HI.sql|id = #{completion.id}|])
+  let nextAt = timing >>= \(definition, zone) -> nextRoutineAt definition zone completion.scheduledAt now
+  at <-
+    Hasql.oneTx @(HI.OneColumn (Maybe UTCTime))
+      [HI.sql|UPDATE apis.ai_routines
+    SET last_run_at = COALESCE(#{completion.finishedAt}, last_run_at), running_since = NULL, cancelled_at = NULL,
+      next_run_at = CASE WHEN active THEN #{nextAt} END
+    WHERE id = #{completion.id} AND next_run_at = #{completion.scheduledAt} AND running_since = #{completion.leasedAt}
+    RETURNING CASE WHEN active THEN next_run_at END|]
+  pure $ ScheduledRoutine completion.id <$> HI.getOneColumn at
 
 
 routineRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
@@ -2612,15 +2630,28 @@ routineRunsSql pid =
 
 -- | Recovery source for a queue insertion lost to a crash. Duplicate enqueues are safe:
 -- 'claimRoutine' admits exactly one worker for each scheduled instant.
-recoverDueRoutines :: DB es => Int -> Eff es [ScheduledRoutine]
-recoverDueRoutines limit = Hasql.transaction TxS.ReadCommitted TxS.Write do
-  finishRunRowsTx $ RetireUnownedWork UnownedInstallations
-  finishRunRowsTx RetireAbandonedRuns
-  Hasql.queryTx
-    [HI.sql|SELECT id, next_run_at
-      FROM apis.ai_routines WHERE active AND next_run_at <= now()
-        AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
+recoverDueRoutines :: (DB es, Time :> es) => Int -> Eff es [ScheduledRoutine]
+recoverDueRoutines limit = do
+  now <- Time.currentTime
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    finishRunRowsTx $ RetireUnownedWork UnownedInstallations
+    finishRunRowsTx RetireAbandonedRuns
+    completed <-
+      Hasql.queryTx @[ScheduleCompletion]
+        [HI.sql|SELECT routine.id, run.scheduled_at, routine.running_since, run.finished_at
+      FROM apis.ai_routines routine JOIN apis.ai_routine_runs run ON run.routine_id = routine.id
+        AND run.project_id = routine.project_id AND run.conversation_id = routine.conversation_id
+        AND routine.next_run_at = run.scheduled_at
+      WHERE routine.running_since IS NOT NULL AND run.source = #{ScheduledRun} AND run.status <> #{RunRunning}
+      FOR UPDATE OF routine|]
+    recovered <- catMaybes <$> traverse (advanceRoutineScheduleTx now) completed
+    due <-
+      Hasql.queryTx @[ScheduledRoutine]
+        [HI.sql|SELECT id, next_run_at
+      FROM apis.ai_routines WHERE active AND next_run_at <= #{now}
+        AND (running_since IS NULL OR running_since < #{addUTCTime (-1800) now})
       ORDER BY next_run_at LIMIT #{max 1 limit}|]
+    pure $ recovered <> due
 
 
 data RunFinalization
