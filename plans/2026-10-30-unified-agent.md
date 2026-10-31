@@ -631,6 +631,8 @@ A handler regression reproduced a private administrator-derived answer remaining
 
 The first handler failure, native instruction failure, activation failure, historical-instruction failure, and title-return failure were reproduced before their fixes. Ten focused disclosure regressions pass. They also cover role changes during inference, cached-answer and document access, late completion cancellation, navigation titles, project isolation, legacy unknown schemas, scope preservation, and ordinary denied reads that must not make a public conversation private. The broader suites pass 201 bot, 75 API v1, 45 issue, and 33 native review/SDK examples. All three Chrome scenarios pass against the current WAI application and an isolated database, including the new role-downgrade case. The temporary browser launcher is removed. Formatting and diff checks pass. Final whole-branch review, doctests, release signoff, and controlled live Slack acceptance remain pending.
 
+Before release, benchmark the scope lookups and inheritance against realistic retained-run histories; their scans and pending-classification queries still need that production-size check.
+
 This work adds no approval prompts. Native business mutations still need the common operation ledger, event autonomy remains conservatively capped, optional selected review and broader Slack audiences remain unfinished, and controlled live Slack acceptance and final release signoff are still pending.
 
 
