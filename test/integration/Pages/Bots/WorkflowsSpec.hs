@@ -1473,12 +1473,19 @@ spec = around withTestResources do
           readIORef posts >>= (`shouldBe` 0)
           [entry] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid admitted.id
           entry.outcome `shouldSatisfy` \case Investigations.OperationUnstarted -> True; _ -> False
+          (_, reviewPage) <- testServant tr $ transport $ AIThreads.operationGetH testPid entry.id
+          let reviewHtml = decodeUtf8 @Text $ Lucid.renderBS $ Lucid.toHtml reviewPage
+          ("Approve action" `T.isInfixOf` reviewHtml && "Decline action" `T.isInfixOf` reviewHtml) `shouldBe` True
           case scenario of
             "expire" -> advanceTestTime tr (24 * 60 * 60 + 1)
             "revoke" -> runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM projects.project_members WHERE project_id = #{testPid} AND user_id = #{user}|]
             "unlink" -> runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM apis.slack_identities WHERE team_id = 'T_SLASH_REVIEW' AND user_id = #{user}|]
             "pause" -> runQueryEffect tr $ Issues.pauseRoutine testPid routine.conversationId
-            _ -> void $ runAuthHandler tr $ transport $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm $ if scenario == "approve" then Investigations.ReviewApproved else Investigations.ReviewRejected
+            _ -> do
+              (_, updated) <- testServant tr $ transport $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm $ if scenario == "approve" then Investigations.ReviewApproved else Investigations.ReviewRejected
+              let updatedHtml = decodeUtf8 @Text $ Lucid.renderBS updated
+              ("id=\"routine-run\"" `T.isInfixOf` updatedHtml && not ("name=\"decision\"" `T.isInfixOf` updatedHtml)) `shouldBe` True
+              readIORef calls >>= (`shouldBe` 1)
           execute
           execute
           Just completed <- runQueryEffect tr $ Issues.getEventRun testPid source

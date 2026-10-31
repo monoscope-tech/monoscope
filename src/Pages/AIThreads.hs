@@ -347,7 +347,7 @@ threadPageGetH pid convId docM runM hxTarget = do
         ([id_ "routine-run", class_ "space-y-5"] <> [attribute | run.status == Issues.RunRunning, attribute <- [hxGet_ $ runUrl pid run.id <> "?conversation=" <> convId.toText, hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxTarget_ "this", hxSwap_ "outerMorph", term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]])
         do
           header_ [class_ "space-y-2"] do
-            h2_ [class_ "text-base font-semibold text-textStrong break-words"] $ toHtml $ fromMaybe "Routine run" run.title
+            h2_ [class_ "text-base font-semibold text-textStrong break-words"] $ toHtml $ fromMaybe "Run" run.title
             div_ [class_ "flex flex-wrap items-center gap-3 text-sm text-textWeak"] do
               span_ [role_ "status"] $ uncurry tonePill_ $ runStatus run.status
               span_ $ toHtml $ case run.source of
@@ -409,15 +409,14 @@ threadPageGetH pid convId docM runM hxTarget = do
                   when (operation.review /= Investigations.NoReview) $ pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.review
                 else p_ [class_ "text-xs text-textWeak"] $ toHtml $ "Action details require " <> toText (encodeEnumSC @"P" required) <> " permission."
               case (run.status, operation.outcome, operation.review) of
-                (Issues.RunRunning, Investigations.OperationUnstarted, Investigations.ReviewPending request)
-                  | (Issues.ScheduledRun; Issues.TriggeredRun (Issues.SlackMessage _; Issues.IssueEnrichment _; Issues.PullRequestReview _; Issues.IncidentEvent _ _)) <- run.source -> do
-                      p_ [class_ "text-xs text-textWeak"] do
-                        "Review deadline: "
-                        localTimeFmt_ "MMM d, HH:mm" request.expiresAt
-                      when (viewerPermission >= max required (Catalog.approverPermission request.approver))
-                        $ form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/operations/" <> operation.id.toText <> "/review", hxSwap_ "none", class_ "flex flex-wrap gap-2"] do
-                          button_ [type_ "submit", name_ "decision", value_ "approved", class_ "btn btn-sm btn-primary"] "Approve action"
-                          button_ [type_ "submit", name_ "decision", value_ "rejected", class_ "btn btn-sm btn-ghost"] "Decline action"
+                (Issues.RunRunning, Investigations.OperationUnstarted, Investigations.ReviewPending request) -> do
+                  p_ [class_ "text-xs text-textWeak"] do
+                    "Review deadline: "
+                    localTimeFmt_ "MMM d, HH:mm" request.expiresAt
+                  when (viewerPermission >= max required (Catalog.approverPermission request.approver))
+                    $ form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/operations/" <> operation.id.toText <> "/review", hxTarget_ "closest #routine-run", hxSelect_ "#routine-run", hxSwap_ "outerMorph", term "hx-disable" $ "#operation-" <> operation.id.toText <> " button", class_ "flex flex-wrap gap-2"] do
+                      button_ [type_ "submit", name_ "decision", value_ "approved", class_ "btn btn-sm btn-primary"] "Approve action"
+                      button_ [type_ "submit", name_ "decision", value_ "rejected", class_ "btn btn-sm btn-ghost"] "Decline action"
                 _ -> pass
               time_ [datetime_ $ show operation.createdAt, class_ "text-xs text-textWeak"] $ localTimeFmt_ "MMM d, HH:mm" operation.createdAt
               when (operation.runId /= run.id)
@@ -833,7 +832,7 @@ operationReviewPostH pid identifier form = do
     Investigations.ReviewExpired -> addErrorToast "This action's review deadline has passed." Nothing
     Investigations.ReviewAlreadyDecided{} -> addSuccessToast "This action already has a decision." Nothing
     Investigations.ReviewSaved{} -> addSuccessToast "Decision saved." Nothing
-  addRespHeaders mempty
+  fmap (.content) <$> operationGetH pid identifier
 
 
 runStatus :: Issues.RoutineRunStatus -> (BadgeColor, Text)

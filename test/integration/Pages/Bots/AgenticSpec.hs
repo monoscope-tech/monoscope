@@ -1068,11 +1068,18 @@ spec = around withTestResources do
           (waiting.status, waiting.error) `shouldBe` (Issues.RunRunning, Nothing)
           [entry] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid request
           entry.outcome `shouldSatisfy` \case Investigations.OperationUnstarted -> True; _ -> False
+          (_, reviewPage) <- testServant tr $ AIThreads.operationGetH testPid entry.id
+          let reviewHtml = renderT reviewPage
+          ("Approve action" `T.isInfixOf` reviewHtml && "Decline action" `T.isInfixOf` reviewHtml) `shouldBe` True
           pending <- runQueryEffect tr $ Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM background_jobs WHERE payload = #{Aeson $ BackgroundJobs.RunConversation testPid request} AND status = 'queued'|]
           pending `shouldBe` 1
           case scenario of
             ExpireBeforeReview -> advanceTestTime tr (24 * 60 * 60 + 1)
-            _ -> void $ testServant tr $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm $ if scenario == ApproveReview then Investigations.ReviewApproved else Investigations.ReviewRejected
+            _ -> do
+              (_, updated) <- testServant tr $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm $ if scenario == ApproveReview then Investigations.ReviewApproved else Investigations.ReviewRejected
+              let updatedHtml = renderT updated
+              ("id=\"routine-run\"" `T.isInfixOf` updatedHtml && not ("name=\"decision\"" `T.isInfixOf` updatedHtml)) `shouldBe` True
+              readIORef calls >>= (`shouldBe` 1)
           execute
           execute
           Just completed <- runQueryEffect tr $ Issues.getRoutineRun testPid request
