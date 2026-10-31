@@ -937,6 +937,16 @@ Fourteen parameterized cases cover all terminal outcomes, live attempts, paused 
 
 The refreshed inventory still lists 28 open pull requests, with no new, closed, or changed heads. All twenty selected incoming heads and published #619 remain ancestors of this branch. No additional selected merge is required.
 
+### API, MCP, CLI, and contextual capability inventory (31 October)
+
+The coverage audit verifies 75 published API operations, three MCP workflows, and 23 contextual agent tools. Their 101 names are distinct. Browser replay ingestion remains the one explicit conversational exclusion, leaving 100 classified discoverable capabilities. Native wiki writes reuse the wiki capability; issue enrichment and PR comment publication retain their typed native intents and the same policy and operation ledger.
+
+The permanent generated-spec regression compares every published HTTP method/path, excluding the MCP endpoint itself, with both the emitted MCP bindings and the canonical metadata map. It catches missing or stale descriptors and name collisions that a key-only registry check could miss. It also requires one descriptor for every constructor in the local operation algebra and checks the CLI's nine resource-list families against the same published paths. The existing agent-adapter regression now compares the complete structured response with its direct API result, and pins POST event queries as reads.
+
+The remaining adapters have concrete transport or context duties. `CLI.Resource` selects paths and terminal rendering while calling the public API; its binary remains independent of the server library. CLI credentials, local files, completion, picking, and ingestion remain client operations. Local KQL/SQL tools preserve the current run's time range, limits, and formatted result while reusing the existing query interpreter. Cached facet context needs no new query. Thread history, incident context, repository evidence, conversation artifacts, and wiki tools retain their explicit conversation or project boundaries. Composite workflows bundle reads or inference under the caller's effects. These adapters add no second domain mutation implementation.
+
+All 76 API examples pass, including exact catalog coverage, MCP HTTP routing, response equivalence, and metric discovery. The latest unchanged production code also passed all 267 bot examples. Formatting and diff checks pass. No production implementation, dependency, shared-package module, or migration was added in this audit. Whole-branch reviews and final release verification remain open.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

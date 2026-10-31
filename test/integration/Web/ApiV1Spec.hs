@@ -1,5 +1,6 @@
 module Web.ApiV1Spec (spec) where
 
+import CLI.Resource qualified as Resource
 import Control.Lens (ix, (^.), (^..), (^?), _Just)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
@@ -31,6 +32,7 @@ import Pages.Charts.Types (MetricsData (..))
 import Pages.Dashboards qualified as DashPage
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.AI qualified as AI
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
@@ -768,6 +770,8 @@ spec = around withTestResources do
         result <- toBaseServantResponse tr $ AI.invoke backend ApiT.ApiKeyPrincipal testPid "get_project" Map.empty
         (result ^? key "isError") `shouldBe` Just (AE.Bool False)
         (result ^? key "structuredContent" . key "summary" . key "id" . _String) `shouldBe` Just testPid.toText
+        direct <- toBaseServantResponse tr $ ApiH.apiProjectGet testPid
+        result ^? key "structuredContent" `shouldBe` Just (AE.toJSON direct)
 
       it "registry uses verb-first canonical tool names" $ \_tr -> do
         Map.member "search_events" reg `shouldBe` True
@@ -783,12 +787,32 @@ spec = around withTestResources do
         Map.member "list_metrics" reg `shouldBe` True
         Map.member "get_incident" reg `shouldBe` True
 
+      it "catalog covers every published operation once and shares the CLI resource routes" $ \_tr -> do
+        let documented =
+              S.fromList
+                [ (H.renderStdMethod method, AEK.toText path)
+                | Just (AE.Object paths) <- [specJson ^? key "paths"]
+                , (path, AE.Object methods) <- AEKM.toList paths
+                , (verb, _) <- AEKM.toList methods
+                , Right method <- [H.parseMethod $ encodeUtf8 $ T.toUpper $ AEK.toText verb]
+                , (H.renderStdMethod method, AEK.toText path) /= (H.methodPost, "/mcp")
+                ]
+            exposed = S.fromList [(binding.method, binding.path) | tool <- Map.elems reg, MCP.ViaOpenApi binding <- [tool.dispatch]]
+            names = map (fst . snd) (Map.toList Catalog.apiOperations) <> map (.name) Catalog.compositeTools <> map (.name) (Map.elems Catalog.localTools)
+        exposed `shouldBe` documented
+        Map.keysSet Catalog.apiOperations `shouldBe` documented
+        length names `shouldBe` S.size (S.fromList names)
+        Map.size Catalog.localTools `shouldBe` length [minBound .. maxBound :: Catalog.LocalOperation]
+        for_ [Resource.Monitors, Resource.Dashboards, Resource.ApiKeys, Resource.Teams, Resource.Members, Resource.Issues, Resource.Incidents, Resource.Endpoints, Resource.LogPatterns] \kind ->
+          ((H.methodGet,) <$> T.stripPrefix "/api/v1" (Resource.resourcePath kind)) `shouldSatisfy` maybe False (`S.member` documented)
+
       it "requires an explicit Agent policy or exclusion for every MCP operation" $ \_tr -> do
         let policies = Map.mapMaybe (.agentPolicy) reg
             covered = Map.keysSet policies `S.union` Map.keysSet MCP.agentExclusions
         Map.keysSet reg `shouldBe` covered
         Map.keysSet policies `S.intersection` Map.keysSet MCP.agentExclusions `shouldBe` S.empty
         Map.lookup "list_metrics" policies `shouldBe` Just (MCP.ReadOnly PM.PView)
+        Map.lookup "search_events" policies `shouldBe` Just (MCP.ReadOnly PM.PView)
         Map.lookup "create_monitor" policies `shouldBe` Just (MCP.ProjectWrite)
         for_ (["bulk_monitors", "remove_member", "delete_dashboard"] :: [Text]) \name -> Map.lookup name policies `shouldBe` Just (MCP.Administration PM.PView)
         for_ (["create_api_key", "activate_api_key", "deactivate_api_key", "delete_api_key"] :: [Text]) \name -> Map.lookup name policies `shouldBe` Just (MCP.Administration PM.PAdmin)
