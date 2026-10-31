@@ -12,6 +12,12 @@ Requester-bound OAuth, encryption, rotating-token refresh, and revocation share 
 
 The policy-configuration checkpoint `e638fb62e` passes 390 bot, 76 API, and 41 incident-delivery examples, plus authenticated Chrome checks for policy controls, saves, reloads, conditional fields, and visible validation in both themes at mobile and desktop widths. Earlier lifecycle verification also covers 35 error-pattern and seven focused native-review examples. Remote evidence reads and provenance have fixture coverage. Remaining web/slash review continuations, native model-session continuation, live Slack acceptance, streaming, and final release checks remain unfinished.
 
+## Slash delivery and web visibility contract
+
+Slash-command replies explicitly request `in_channel` delivery. The same conversation is readable on the web by currently linked members of that Slack channel. Durable command intake and publication must preserve this audience and destination through the existing receipt and publication systems.
+
+The existing real-handler regression now records the asynchronous callback before its HTTP recorder closes. It checks automatic dashboard creation, successful and rejected delivery, actual `response_type`, another linked channel administrator’s web access, and fresh denial after channel membership is removed. The focused case passes with the production implementation unchanged. This establishes the transport contract for consolidation; durable web/slash admission and continuation remain unfinished.
+
 ## Retried Slack requests after authority loss
 
 Before treating a retained receipt as new work, the adapter now loads its original actor through the existing event claim and evaluates current linked identity and shared run authority. A running request whose authority is unavailable closes through the common finalizer; an already-cancelled request only retries cleanup. Completed and failed attempts retain their existing delivery and recovery paths. No schema, authority evaluator, executor, or worker is added.
