@@ -1,4 +1,4 @@
-module Pkg.AgentOperation (OperationCall (..), NativeOperation (..), WikiWrite (..), sameOperation) where
+module Pkg.AgentOperation (OperationCall (..), NativeOperation (..), WikiWrite (..), ReviewComment (..), sameOperation) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
@@ -22,7 +22,12 @@ data WikiWrite = WikiWrite {attemptId :: UUIDId "agent_attempt", edit :: Memory.
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data NativeOperation = WriteWiki WikiWrite
+data ReviewComment = ReviewComment {reviewId :: UUIDId "pr_review", body :: Text}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data NativeOperation = WriteWiki WikiWrite | PublishPullRequestComment ReviewComment
   deriving stock (Eq, Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.TagSingleConstructors] NativeOperation
 
@@ -55,4 +60,5 @@ instance AE.FromJSON OperationCall where
 sameOperation :: OperationCall -> OperationCall -> Bool
 sameOperation (ModelCall left) (ModelCall right) = left.toolCallFunction == right.toolCallFunction
 sameOperation (NativeCall (WriteWiki left)) (NativeCall (WriteWiki right)) = left.edit == right.edit
+sameOperation (NativeCall left) (NativeCall right) = left == right
 sameOperation _ _ = False

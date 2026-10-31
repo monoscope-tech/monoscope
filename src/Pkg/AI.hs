@@ -55,6 +55,7 @@ module Pkg.AI (
   toolDenialMessage,
   authorizeRunOperation,
   executeNativeOperation,
+  OperationExecution (..),
   defaultLimits,
 
   -- * Message Conversion
@@ -1214,12 +1215,16 @@ operationResponse project = \case
       (Just $ AE.object ["operation_id" AE..= identifier, "run_id" AE..= run, "outcome" AE..= Investigations.OperationUnknown])
 
 
-data ToolRecovery = ReplayReads | AtomicInRun | RetainInRun
+data ToolRecovery = ReplayReads | AtomicInRun | RetainInRun | ReconcileInRun
   deriving stock (Generic, Show)
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" ToolRecovery
 
 
-data ToolExecution es = EffectfulTool (Eff es ToolResult) | AtomicTool (Tx.Transaction ToolResult)
+data OperationExecution es result
+  = EffectfulOperation (Eff es result)
+  | AtomicOperation (Tx.Transaction result)
+  | ReconcilableOperation (Eff es result) (Operation.OperationCall -> Eff es (Maybe result))
+  deriving stock (Functor)
 
 
 data AgentOperationUncertain = AgentOperationUncertain (UUIDId "agent_operation") (UUIDId "ai_routine_run")
@@ -1231,7 +1236,7 @@ executeNativeOperation
   :: (DB es, IOE :> es)
   => Issues.RunContext
   -> Operation.NativeOperation
-  -> (Operation.NativeOperation -> Eff es (Either Text AE.Value))
+  -> (Operation.NativeOperation -> OperationExecution es (Either Text AE.Value))
   -> Eff es (Either Text AE.Value)
 executeNativeOperation context proposed perform =
   authorizeRunOperation context (Catalog.nativePolicy proposed) >>= \case
@@ -1244,10 +1249,8 @@ executeNativeOperation context proposed perform =
       authorizeRunOperation context (Catalog.nativePolicy frozen) >>= \case
         Left denial -> pure $ Left $ toolDenialMessage denial
         Right snapshot -> do
-          let action = do
-                result <- perform frozen
-                pure $ ToolResult (either Relude.id (const "Response saved.") result) $ Just $ AE.toJSON result
-          recordedOperation context cursor (Operation.NativeCall frozen) snapshot (EffectfulTool action) >>= \case
+          let response result = ToolResult (either Relude.id (const "Response saved.") result) $ Just $ AE.toJSON result
+          recordedOperation context cursor (Operation.NativeCall frozen) snapshot (response <$> perform frozen) >>= \case
             Investigations.UncertainResult identifier run -> throwIO $ AgentOperationUncertain identifier run
             Investigations.RecordedResult result -> do
               void $ Investigations.commitProgress (Just cursor) Nothing Investigations.NativeReady Nothing
@@ -1262,22 +1265,38 @@ executeNativeOperation context proposed perform =
             [HI.sql|SELECT TRUE FROM projects.pr_review_attempts
           WHERE id = #{write.attemptId} AND project_id = #{context.projectId} AND run_id = #{review}|]
         unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
+      (Issues.TriggeredRun (Issues.PullRequestReview review), Operation.PublishPullRequestComment comment) -> do
+        permitted <-
+          Hasql.interpOne @(HI.OneColumn Bool)
+            [HI.sql|SELECT TRUE FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+          WHERE r.id = #{review} AND r.id = #{comment.reviewId} AND t.project_id = #{context.projectId}|]
+        unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
       _ -> throwIO Investigations.OperationScopeMismatch
 
 
-recordedOperation :: DB es => Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> ToolExecution es -> Eff es Investigations.OperationResult
-recordedOperation context cursor call snapshot execution = do
-  let lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
-      proposal = Investigations.OperationProposal call snapshot
-  case execution of
-    AtomicTool action -> Investigations.atomicOperation lease cursor proposal action
-    EffectfulTool action ->
+recordedOperation :: DB es => Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
+recordedOperation context cursor call snapshot execution = case execution of
+  AtomicOperation action -> Investigations.atomicOperation lease cursor proposal action
+  EffectfulOperation action -> recorded action (const $ pure Nothing)
+  ReconcilableOperation action reconcile -> recorded action reconcile
+  where
+    lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
+    proposal = Investigations.OperationProposal call snapshot
+    recorded action reconcile =
       Investigations.beginOperation lease cursor proposal >>= \case
-        Investigations.RetainedOperation retained -> pure retained
+        Investigations.RetainedOperation retained -> pure $ Investigations.RecordedResult retained
         Investigations.ExecuteOperation claim -> do
           result <- action
           Investigations.completeOperation claim result
           pure $ Investigations.RecordedResult result
+        Investigations.ReconcileOperation claim original run ->
+          reconcile original >>= \case
+            Nothing -> pure $ Investigations.UncertainResult (Investigations.operationId claim) run
+            Just result -> do
+              Investigations.completeOperation claim result
+              if Operation.sameOperation original call
+                then pure $ Investigations.RecordedResult result
+                else recordedOperation context cursor call snapshot execution
 
 
 data ToolDenial = AuthorityDenied Issues.CapabilityDenial | EvidenceRetentionRequired | AudienceRequired ProjectMembers.Permissions | RestrictedPublication
@@ -1331,7 +1350,7 @@ executeToolAt cursor config tc = do
         authorizeOperation config authority policy >>= \case
           Left denial -> pure $ Investigations.RecordedResult $ noRaw $ toolDenialMessage denial
           Right snapshot -> recorded snapshot $ case tool.dispatch of
-            ProjectOperation backend -> EffectfulTool $ runProjectTool backend funcName args
+            ProjectOperation backend -> EffectfulOperation $ runProjectTool backend funcName args
             LocalOperation operation -> executeLocal operation args
   void $ requireConfigAccess config
   let response = operationResponse config.projectId result
@@ -1343,12 +1362,13 @@ executeToolAt cursor config tc = do
       (_, Just position, Just context) -> recordedOperation context position (Operation.ModelCall tc) snapshot execution
       _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable checkpoint."
     perform = \case
-      EffectfulTool action -> action
-      AtomicTool action -> Hasql.transaction TxS.ReadCommitted TxS.Write action
+      EffectfulOperation action -> action
+      AtomicOperation action -> Hasql.transaction TxS.ReadCommitted TxS.Write action
+      ReconcilableOperation action _ -> action
 
     noRaw t = ToolResult t Nothing
     executeLocal operation args = case operation of
-      SearchProjectTools -> EffectfulTool $ pure $ noRaw $ decodeUtf8 $ AE.encode $ case getTextArg "query" args of
+      SearchProjectTools -> EffectfulOperation $ pure $ noRaw $ decodeUtf8 $ AE.encode $ case getTextArg "query" args of
         Nothing -> AE.object ["error" AE..= ("query is required" :: Text)]
         Just query ->
           let summaries = [(tool.name, tool.description) | tool <- Map.elems $ discoverableCatalog config]
@@ -1356,21 +1376,21 @@ executeToolAt cursor config tc = do
               score (name, description) = sum [4 | term <- terms, term `T.isInfixOf` T.toCaseFold name] + sum [1 | term <- terms, term `T.isInfixOf` T.toCaseFold description]
               matches = sortWith (Down . fst) [(score tool, tool) | tool <- summaries, score tool > 0]
            in AE.object ["tools" AE..= map (\(_, (name, description)) -> AE.object ["name" AE..= name, "description" AE..= description]) (take 12 matches), "total" AE..= length matches, "has_more" AE..= (length matches > 12)]
-      GetProjectToolSchema -> EffectfulTool $ pure $ noRaw $ encodeText $ case getTextArg "name" args >>= (\name -> Map.lookup name $ discoverableCatalog config) of
+      GetProjectToolSchema -> EffectfulOperation $ pure $ noRaw $ encodeText $ case getTextArg "name" args >>= (\name -> Map.lookup name $ discoverableCatalog config) of
         Nothing -> AE.object ["error" AE..= ("unknown project operation" :: Text)]
         Just tool ->
           AE.object
             $ ["name" AE..= tool.name, "description" AE..= tool.description, "input_schema" AE..= tool.inputSchema, "agent_recovery" AE..= recovery tool]
             <> maybe [] (\policy -> ["minimum_permission" AE..= MCP.minimumPermission policy, "evidence_permission" AE..= Catalog.disclosurePermission policy, "action" AE..= MCP.actionName policy]) tool.agentPolicy
-      ListProjectMemory -> EffectfulTool $ noRaw . encodeText . map Memory.summarize <$> Memory.latestPages config.projectId
-      ReadProjectMemory -> EffectfulTool $ noRaw <$> readMemory args
-      WriteProjectMemory -> EffectfulTool $ noRaw <$> writeMemory args
-      GetInvestigationHistory -> EffectfulTool $ noRaw <$> slackThread "Investigation history requires an authorized Slack investigation." \run -> encodeText <$> Investigations.recentEvents config.projectId run.teamId run.channelId run.threadTs
-      GetIncidentContext -> EffectfulTool $ noRaw <$> slackThread "Incident context requires an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackInvestigationContext config.projectId run.teamId run.channelId run.threadTs
-      GetRelatedIncidents -> EffectfulTool $ noRaw <$> slackThread "Related incidents require an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackRelatedIncidents config.projectId run.teamId run.channelId run.threadTs
-      GetLinkedRepositories -> EffectfulTool $ noRaw . encodeText <$> CodeContext.getLinkedRepositories config.projectId (getTextArg "service" args)
+      ListProjectMemory -> EffectfulOperation $ noRaw . encodeText . map Memory.summarize <$> Memory.latestPages config.projectId
+      ReadProjectMemory -> EffectfulOperation $ noRaw <$> readMemory args
+      WriteProjectMemory -> EffectfulOperation $ noRaw <$> writeMemory args
+      GetInvestigationHistory -> EffectfulOperation $ noRaw <$> slackThread "Investigation history requires an authorized Slack investigation." \run -> encodeText <$> Investigations.recentEvents config.projectId run.teamId run.channelId run.threadTs
+      GetIncidentContext -> EffectfulOperation $ noRaw <$> slackThread "Incident context requires an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackInvestigationContext config.projectId run.teamId run.channelId run.threadTs
+      GetRelatedIncidents -> EffectfulOperation $ noRaw <$> slackThread "Related incidents require an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackRelatedIncidents config.projectId run.teamId run.channelId run.threadTs
+      GetLinkedRepositories -> EffectfulOperation $ noRaw . encodeText <$> CodeContext.getLinkedRepositories config.projectId (getTextArg "service" args)
       GetDeployments ->
-        EffectfulTool
+        EffectfulOperation
           $ noRaw
           <$> case config.sourceConfig of
             Just cfg ->
@@ -1381,27 +1401,27 @@ executeToolAt cursor config tc = do
                 . idFromText
             _ -> pure "Deployment evidence is unavailable for this conversation."
       ListRunbooks ->
-        EffectfulTool
+        EffectfulOperation
           $ noRaw
           <$> case (config.sourceConfig, parseMaybe AE.parseJSON $ AE.toJSON args) of
             (Just cfg, Just query) -> encodeText <$> CodeContext.listRunbooks cfg config.projectId query
             _ -> pure "Runbook discovery requires a repository mapping ID and a full commit hash."
       ReadRunbook ->
-        EffectfulTool
+        EffectfulOperation
           $ noRaw
           <$> case (config.sourceConfig, parseMaybe AE.parseJSON $ AE.toJSON args) of
             (Just cfg, Just query) -> encodeText <$> CodeContext.readRunbook cfg config.projectId query
             _ -> pure "Runbook reads require a repository mapping ID, full commit hash and document path."
-      GetCodeContext -> EffectfulTool $ noRaw <$> executeGetCodeContext config args
-      GetFieldValues -> EffectfulTool $ noRaw <$> executeGetFieldValues config args
-      GetServices -> EffectfulTool $ noRaw <$> executeGetServices config
-      CountQuery -> EffectfulTool $ noRaw <$> executeCountQuery config args
-      SampleLogs -> EffectfulTool $ noRaw <$> executeSampleLogs config args
-      GetFacets -> EffectfulTool $ pure $ noRaw $ executeGetFacets config
-      RunQuery -> EffectfulTool $ executeRunQuery config args
-      RunSqlQuery -> EffectfulTool $ noRaw <$> executeSqlQuery config args
+      GetCodeContext -> EffectfulOperation $ noRaw <$> executeGetCodeContext config args
+      GetFieldValues -> EffectfulOperation $ noRaw <$> executeGetFieldValues config args
+      GetServices -> EffectfulOperation $ noRaw <$> executeGetServices config
+      CountQuery -> EffectfulOperation $ noRaw <$> executeCountQuery config args
+      SampleLogs -> EffectfulOperation $ noRaw <$> executeSampleLogs config args
+      GetFacets -> EffectfulOperation $ pure $ noRaw $ executeGetFacets config
+      RunQuery -> EffectfulOperation $ executeRunQuery config args
+      RunSqlQuery -> EffectfulOperation $ noRaw <$> executeSqlQuery config args
       -- A successful save carries its key as rawData, so renderers need not parse the message.
-      SaveArtifact -> AtomicTool $ inConversation \convId -> either (pure . noRaw) Relude.id do
+      SaveArtifact -> AtomicOperation $ inConversation \convId -> either (pure . noRaw) Relude.id do
         key' <- maybeToRight (toolError "save_artifact" "missing 'key'" args) (getTextArg "key" args) >>= Issues.mkArtifactKey
         body <- maybeToRight (toolError "save_artifact" "missing 'content'" args) (getTextArg "content" args)
         when (T.length body > 100_000) $ Left "content must be at most 100000 characters per write."
@@ -1412,11 +1432,11 @@ executeToolAt cursor config tc = do
             Right doc -> ToolResult ("Saved document '" <> toText doc.key <> "' (" <> doc.title <> ", " <> show doc.characters <> " characters).") (Just $ AE.toJSON doc.key)
             Left Issues.ArtifactFull -> noRaw $ "Document '" <> toText key' <> "' is full. Continue in a new document with a different key."
             Left Issues.ArtifactLimitReached -> noRaw $ "This conversation already holds " <> show Issues.maxArtifactsPerConversation <> " documents. Rewrite an existing one instead; read_artifact without a key lists them."
-      ReadArtifact -> EffectfulTool $ inConversation \convId ->
+      ReadArtifact -> EffectfulOperation $ inConversation \convId ->
         noRaw <$> case getTextArg "key" args of
           Nothing -> Issues.listArtifacts config.projectId convId Nothing <&> \docs -> encodeText [AE.object ["key" AE..= d.key, "title" AE..= d.title, "updated_at" AE..= d.updatedAt, "characters" AE..= d.characters] | d <- docs]
           Just k -> maybe ("No document with key '" <> k <> "' in this conversation.") readable . asum . map (.content) <$> Issues.listArtifacts config.projectId convId (rightToMaybe $ Issues.mkArtifactKey k)
-      SendToSlack -> EffectfulTool $ case getTextArg "message" args of
+      SendToSlack -> EffectfulOperation $ case getTextArg "message" args of
         Just message
           | not (T.null $ T.strip message) && T.length message <= 4000 ->
               Integrations.getProjectSlackData config.projectId
@@ -1438,8 +1458,9 @@ executeToolAt cursor config tc = do
       _ -> case tool.dispatch of
         ProjectOperation{} -> RetainInRun
         LocalOperation operation -> case executeLocal operation mempty of
-          AtomicTool{} -> AtomicInRun
-          EffectfulTool{} -> RetainInRun
+          AtomicOperation{} -> AtomicInRun
+          EffectfulOperation{} -> RetainInRun
+          ReconcilableOperation{} -> ReconcileInRun
     -- Keeps both ends: routines append, so the newest sections are at the end of a long document.
     readable content
       | T.length content <= maxReadChars = content

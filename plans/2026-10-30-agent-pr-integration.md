@@ -5,6 +5,8 @@ The remote branch has not been updated. Combined verification and unified-plan i
 This review covers all 28 open PRs returned by GitHub at the review snapshot.
 It maps dependencies and inspects relevant source changes. It is not a merge approval or full correctness review.
 
+The 31 October GitHub recheck still lists 28 open PRs. All twenty selected incoming heads remain ancestors of the local branch, including the impact stack through #709, divergent runtime #692, production evidence #661, Slack delivery #571, and health budget #568. The published #619 head is also retained. No selected head needs another merge, and the open PR set is unchanged at this recheck. This confirms integration identity, not a correctness verdict; the combined behavior still requires the tests and release checks below.
+
 ## Recommendation
 
 Reconcile existing agent work before implementing the [unified plan](2026-10-30-unified-agent.md).

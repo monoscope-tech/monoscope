@@ -2726,7 +2726,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- Throwaway RSA fixture generated only for these JWT tests; never registered with a GitHub App.
     pem <- readFileBS "test/fixtures/github-app-test.pem"
     let cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem, impactReviewUsageDir = Just "fixture-usage", impactReviewCacheDir = Just "fixture-cache", impactReviewProvider = "fixture", openaiModel = "gpt-5.6-luna#high"}
-        pr = AE.object ["head" AE..= AE.object ["sha" AE..= revision], "base" AE..= AE.object ["sha" AE..= T.replicate 40 "d"], "state" AE..= ("open" :: Text), "draft" AE..= False, "changed_files" AE..= length files, "updated_at" AE..= ("2025-01-01T00:00:00Z" :: Text)]
+        prAt reviewedHead = AE.object ["head" AE..= AE.object ["sha" AE..= (reviewedHead :: Text)], "base" AE..= AE.object ["sha" AE..= T.replicate 40 "d"], "state" AE..= ("open" :: Text), "draft" AE..= False, "changed_files" AE..= length files, "updated_at" AE..= ("2025-01-01T00:00:00Z" :: Text)]
+        pr = prAt revision
         files :: [Git.PullRequestFile]
         files = [Git.PullRequestFile ("unrelated-" <> show n <> ".hs") "modified" (Just "@@ -1 +1 @@\n-old\n+new") | n <- [1 :: Int .. 100]] <> [Git.PullRequestFile "checkout.hs" "modified" (Just "@@ -1 +1 @@\n-old\n+new")]
         marker = "<!-- monoscope-impact:" <> reviewPid.toText <> " -->"
@@ -2801,6 +2802,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       runQueryEffect tr (Issues.listArtifacts reviewPid visible.conversationId Nothing) >>= (`shouldSatisfy` (not . null))
       (_, detail) <- testServant tr $ AIThreads.routineRunGetH reviewPid visible.id Nothing
       unless (T.isInfixOf "write project memory" $ decodeUtf8 $ Lucid.renderBS $ Lucid.toHtml detail) $ fail "Native wiki write is missing from the run's action history"
+      unless (T.isInfixOf "publish pull request comment" $ decodeUtf8 $ Lucid.renderBS $ Lucid.toHtml detail) $ fail "Native GitHub publication is missing from the run's action history"
     let comments = filter (T.isInfixOf "/issues/comments/99" . fst) requests
     length comments `shouldBe` 1
     let published = T.intercalate " " $ map (decodeUtf8 . snd) comments
@@ -3056,11 +3058,49 @@ spec = around withTestResources $ describe "Production impact reviews" do
           if "/issues/comments/99" `T.isSuffixOf` toText endpoint
             then throwIO $ userError "Publication transport interrupted"
             else pure Nothing
-    rejected <- tryAny $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ rejectedPublication $ transport True $ fakeAgent result $ Impact.reviewPullRequest run.id
+    (rejectedRequests, rejected) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ rejectedPublication $ transport True $ fakeAgent result $ tryAny $ Impact.reviewPullRequest run.id
     rejected `shouldSatisfy` isLeft
-    rejectedRun <- runQueryEffect tr $ Issues.getEventRun reviewPid (Issues.PullRequestReview run.id)
-    fmap (.status) rejectedRun `shouldBe` Just Issues.RunFailed
-    for_ rejectedRun \visible -> runQueryEffect tr (Issues.listRunArtifacts reviewPid visible.id) >>= (`shouldSatisfy` (not . null))
+    Just rejectedRun <- runQueryEffect tr $ Issues.getEventRun reviewPid (Issues.PullRequestReview run.id)
+    rejectedRun.status `shouldBe` Issues.RunFailed
+    runQueryEffect tr (Issues.listRunArtifacts reviewPid rejectedRun.id) >>= (`shouldSatisfy` (not . null))
+    [(_, encodedComment)] <- pure $ filter (T.isInfixOf "/issues/comments/99" . fst) rejectedRequests
+    retainedBody <- either fail pure $ AE.eitherDecode encodedComment >>= AET.parseEither (AE.withObject "Comment payload" (AE..: "body"))
+    let observedComment app body = withHTTPResponses \_ endpoint ->
+          pure
+            $ if "/issues/7/comments?" `T.isInfixOf` toText endpoint
+              then Just $ AE.encode @[AE.Value] [AE.object ["id" AE..= (99 :: Int), "body" AE..= (body :: Text), "performed_via_github_app" AE..= AE.object ["id" AE..= (app :: Int)]]]
+              else Nothing
+        recoverPublication app body = runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ observedComment app body $ interpose @Agent.CodeReview (\_ _ -> liftIO $ fail "Publication recovery reran the review agent") $ tryAny $ Impact.reviewPullRequest run.id
+        publicationEntries =
+          runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy reviewPid rejectedRun.id) >>= \entries ->
+            pure [entry | entry <- entries, Operation.NativeCall Operation.PublishPullRequestComment{} <- [entry.proposal.call]]
+    publicationEntries >>= (\entries -> map (\entry -> case entry.outcome of Investigations.OperationUnknown -> True; _ -> False) entries `shouldBe` [True])
+    for_ @[] [(456 :: Int, retainedBody), (123, retainedBody <> "\nEdited")] \(app, body) -> do
+      (uncertainRequests, uncertain) <- recoverPublication app body
+      uncertain `shouldSatisfy` isLeft
+      uncertainRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/comments/99" . fst)
+    (reconciledRequests, reconciled) <- recoverPublication 123 retainedBody
+    reconciled `shouldSatisfy` isRight
+    reconciledRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/comments/99" . fst)
+    runQueryEffect tr (Reviews.getRun run.id) >>= (\stored -> fmap (.state) stored `shouldBe` Just Reviews.Completed)
+    publicationEntries >>= (\entries -> map (\entry -> case entry.outcome of Investigations.OperationReturned{} -> True; _ -> False) entries `shouldBe` [True])
+    Just reconciledRun <- runQueryEffect tr $ Issues.getEventRun reviewPid $ Issues.PullRequestReview run.id
+    withResource tr.trPool \conn -> do
+      void $ execute conn "UPDATE projects.pr_review_runs SET state = 'incomplete' WHERE id = ?" (Only run.id)
+      void $ execute conn "UPDATE apis.ai_routine_runs SET status = 'failed' WHERE id = ?" (Only reconciledRun.id)
+      void $ execute conn "DELETE FROM apis.slack_turn_checkpoints WHERE project_id = ? AND run_id = (SELECT root_run_id FROM apis.ai_routine_runs WHERE id = ?)" (reviewPid, reconciledRun.id)
+    (cachedRequests, cached) <- recoverPublication 123 retainedBody
+    cached `shouldSatisfy` isRight
+    cachedRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/comments/99" . fst)
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
+    (lostRequests, lostResponse) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ rejectedPublication $ transport True $ fakeAgent result $ tryAny $ Impact.reviewPullRequest run.id
+    lostResponse `shouldSatisfy` isLeft
+    [(_, lostPayload)] <- pure $ filter (T.isInfixOf "/issues/comments/99" . fst) lostRequests
+    lostBody <- either fail pure $ AE.eitherDecode lostPayload >>= AET.parseEither (AE.withObject "Comment payload" (AE..: "body"))
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
+    (freshRequests, freshResult) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ observedComment 123 lostBody $ fakeAgent result $ tryAny $ Impact.reviewPullRequest run.id
+    freshResult `shouldSatisfy` isRight
+    length (filter (T.isInfixOf "/issues/comments/99" . fst) freshRequests) `shouldBe` 1
 
     -- Billing changes during a worker attempt must not move its later receipts.
     void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET customer_id = 'cus_before_attempt' WHERE id = ?" (Only reviewPid)
@@ -3173,19 +3213,22 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 wikiInput = Operation.WikiWrite request.attemptId $ Memory.Edit page 0 $ Memory.Document title body
                 operation = Operation.WriteWiki wikiInput
                 target = Investigations.RunCheckpoint $ Investigations.RunTurn reviewPid runContext.conversationId runContext.requestedBy runContext.rootId
-            rejectedActor <- tryAny $ runTestBg frozenTime tr $ AI.executeNativeOperation runContext (Operation.WriteWiki wikiInput{Operation.attemptId = UUIDId UUID.nil}) \_ -> do
-              liftIO $ modifyIORef' nativeWrites (+ 1)
-              pure $ Right AE.Null
-            rejectedActor `shouldSatisfy` isLeft
+            for_ @[] [Operation.WriteWiki wikiInput{Operation.attemptId = UUIDId UUID.nil}, Operation.PublishPullRequestComment $ Operation.ReviewComment (UUIDId UUID.nil) "Wrong review"] \invalidRequest -> do
+              rejectedActor <- tryAny $ runTestBg frozenTime tr $ AI.executeNativeOperation runContext invalidRequest \_ -> AI.EffectfulOperation do
+                liftIO $ modifyIORef' nativeWrites (+ 1)
+                pure $ Right AE.Null
+              rejectedActor `shouldSatisfy` isLeft
             readIORef nativeWrites `shouldReturn` 0
             runQueryEffect tr (Investigations.loadCheckpointFor target) >>= (`shouldSatisfy` isNothing)
             committed <- MVar.newEmptyMVar
             release <- MVar.newEmptyMVar
-            let perform (Operation.WriteWiki write) = do
-                  invocation <- liftIO $ atomicModifyIORef' nativeWrites (\count -> (count + 1, count + 1))
-                  stored <- Memory.writePage reviewPid write.edit.pageId write.edit.version Nothing write.edit.document $ Memory.Agent write.attemptId
-                  when (invocation == 1) $ liftIO $ MVar.putMVar committed () >> MVar.takeMVar release
-                  pure $ first show $ AE.toJSON <$> stored
+            let perform = \case
+                  Operation.WriteWiki write -> AI.EffectfulOperation do
+                    invocation <- liftIO $ atomicModifyIORef' nativeWrites (\count -> (count + 1, count + 1))
+                    stored <- Memory.writePage reviewPid write.edit.pageId write.edit.version Nothing write.edit.document $ Memory.Agent write.attemptId
+                    when (invocation == 1) $ liftIO $ MVar.putMVar committed () >> MVar.takeMVar release
+                    pure $ first show $ AE.toJSON <$> stored
+                  Operation.PublishPullRequestComment{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
                 executeWrite = runTestBg frozenTime tr $ AI.executeNativeOperation runContext operation perform
             late <- withAsync executeWrite \worker -> do
               reached <- Timeout.timeout (10 * 1000000) $ MVar.takeMVar committed
@@ -3237,15 +3280,18 @@ spec = around withTestResources $ describe "Production impact reviews" do
     observedRun.status `shouldBe` Issues.RunSucceeded
     runQueryEffect tr (Issues.listRunArtifacts reviewPid observedRun.id) >>= (\artifacts -> T.intercalate " " (mapMaybe (.content) artifacts) `shouldSatisfy` T.isInfixOf "Observe policy: the GitHub comment was not updated.")
 
-    for_ (["policy", "evidence"] :: [Text]) $ \restriction -> do
+    for_ (["policy", "revision", "evidence"] :: [Text]) $ \restriction -> do
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Autonomous
       runQueryEffect tr $ Reviews.retryRun reviewPid run.id
+      revisionChanged <- newIORef False
       let restrictBeforePublication = withHTTPResponses \_ endpoint -> do
-            when ("/issues/7/comments?" `T.isInfixOf` toText endpoint) $ runQueryEffect tr $ case restriction of
-              "policy" -> Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Observe
-              _ -> Investigations.retainEvidencePermission reviewPid [observedRun.conversationId] ProjectMembers.PAdmin
-            pure Nothing
-      (restrictedRequests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ restrictBeforePublication $ transport True $ tryAny $ Impact.reviewPullRequest run.id
+            when ("/issues/7/comments?" `T.isInfixOf` toText endpoint) $ case restriction of
+              "policy" -> runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Observe
+              "revision" -> writeIORef revisionChanged True
+              _ -> runQueryEffect tr $ Investigations.retainEvidencePermission reviewPid [observedRun.conversationId] ProjectMembers.PAdmin
+            changed <- readIORef revisionChanged
+            pure $ if changed && "/pulls/7" `T.isSuffixOf` toText endpoint then Just $ AE.encode $ prAt $ T.replicate 40 "e" else Nothing
+      (restrictedRequests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ restrictBeforePublication $ tryAny $ Impact.reviewPullRequest run.id
       outcome `shouldSatisfy` isLeft
       restrictedRequests `shouldSatisfy` any (T.isInfixOf "/issues/7/comments?" . fst)
       restrictedRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/comments/99" . fst)

@@ -42,6 +42,7 @@ module Models.Apis.Investigations (
   ToolResult (..),
   OperationProposal (..),
   OperationClaim,
+  operationId,
   OperationDecision (..),
   OperationResult (..),
   OperationOutcome (..),
@@ -126,11 +127,18 @@ newtype OperationClaim = OperationClaim (UUIDId "agent_operation")
   deriving stock (Show)
 
 
+operationId :: OperationClaim -> UUIDId "agent_operation"
+operationId (OperationClaim identifier) = identifier
+
+
 data OperationResult = RecordedResult ToolResult | UncertainResult (UUIDId "agent_operation") (UUIDId "ai_routine_run")
   deriving stock (Show)
 
 
-data OperationDecision = ExecuteOperation OperationClaim | RetainedOperation OperationResult
+data OperationDecision
+  = ExecuteOperation OperationClaim
+  | RetainedOperation ToolResult
+  | ReconcileOperation OperationClaim Operation.OperationCall (UUIDId "ai_routine_run")
   deriving stock (Show)
 
 
@@ -563,6 +571,8 @@ beginOperationTx lease cursor proposal = runExceptT do
         Operation.NativeCall (Operation.WriteWiki write) ->
           [HI.sql|operation.proposal #>> '{call,contents,tag}' = 'WriteWiki'
           AND operation.proposal #> '{call,contents,contents,edit}' = #{Aeson write.edit}|]
+        Operation.NativeCall operation@Operation.PublishPullRequestComment{} ->
+          [HI.sql|operation.proposal->'call' = #{Aeson $ Operation.NativeCall operation}|]
   prior <-
     lift
       $ Hasql.queryTx @[OperationEntry policy]
@@ -591,11 +601,11 @@ beginOperationTx lease cursor proposal = runExceptT do
     unresolved entry = case entry.outcome of OperationRunning -> True; OperationUnknown -> True; OperationReturned{} -> False
     reuse :: OperationEntry policy -> ExceptT OperationConflict Tx.Transaction OperationDecision
     reuse entry = case entry.outcome of
-      OperationReturned response -> pure $ RetainedOperation $ RecordedResult response
+      OperationReturned response -> pure $ RetainedOperation response
       OperationRunning -> do
         lift $ Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET outcome = #{Aeson OperationUnknown}, updated_at = clock_timestamp() WHERE id = #{entry.id}|]
-        pure $ RetainedOperation $ UncertainResult entry.id entry.runId
-      OperationUnknown -> pure $ RetainedOperation $ UncertainResult entry.id entry.runId
+        pure $ ReconcileOperation (OperationClaim entry.id) entry.proposal.call entry.runId
+      OperationUnknown -> pure $ ReconcileOperation (OperationClaim entry.id) entry.proposal.call entry.runId
 
 
 -- | The mutation and its retained outcome commit together. A failed transaction
@@ -606,7 +616,8 @@ atomicOperation lease cursor proposal action = do
     outcome <-
       beginOperationTx lease cursor proposal >>= \case
         Left conflict -> pure $ Left conflict
-        Right (RetainedOperation retained) -> pure $ Right retained
+        Right (RetainedOperation retained) -> pure $ Right $ RecordedResult retained
+        Right (ReconcileOperation claim _ run) -> pure $ Right $ UncertainResult (operationId claim) run
         Right (ExecuteOperation claim) -> do
           response <- action
           fmap (RecordedResult response <$) $ completeOperationTx claim response
@@ -696,8 +707,10 @@ startCheckpointFor target checkpoint = do
           [] -> do
             created <-
               Hasql.oneTx
-                [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, message_ts, run_id, checkpoint)
-              VALUES (#{project}, #{conversation}, #{user}, #{message}, #{run}, #{Aeson checkpoint})
+                [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, message_ts, run_id, checkpoint, revision)
+              SELECT #{project}, #{conversation}, #{user}, #{message}, #{run}, #{Aeson checkpoint}, coalesce(max(operation.checkpoint_revision) + 1, 0)
+              FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs origin ON origin.id = operation.run_id
+              WHERE origin.root_run_id = #{run}
               ON CONFLICT (project_id, conversation_id, user_id, message_ts, run_id)
               DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
             case checkpoint of

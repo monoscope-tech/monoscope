@@ -3,6 +3,7 @@
 module Pkg.ImpactReview (reviewPullRequest, fixIssue, ReviewResult (..), ReviewDraft, Finding (..), Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Default (def)
@@ -12,6 +13,7 @@ import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as LLM
+import Data.Effectful.Wreq qualified as HTTP
 import Data.List.Extra (lookup, nubOrd)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
@@ -308,7 +310,9 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           if documentationOnly
             then Reviews.finishRun run Nothing
             else do
-              result <- analyse run execution context conn (filter ((== credential.id) . (.credentialId)) mappings) pr files
+              result <- case run.result of
+                Nothing -> analyse run execution context conn (filter ((== credential.id) . (.credentialId)) mappings) pr files
+                Just retained -> require $ first toText $ AET.parseEither AE.parseJSON retained
               requireActive run execution
               Issues.saveRunResult context "Production impact review" (renderReview cfg.hostUrl run True result)
               publish run execution context conn ref pr result
@@ -355,7 +359,11 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                         Right _ -> case request of
                           Agent.ProjectMemory (Memory.Write edit) ->
                             AI.executeNativeOperation context (Operation.WriteWiki $ Operation.WikiWrite attemptId edit) \case
-                              Operation.WriteWiki write -> projectMemory run.projectId write.attemptId (not . null <$> (requireActive run execution >> authorizedServices run mappings)) $ Memory.Write write.edit
+                              Operation.WriteWiki write ->
+                                AI.ReconcilableOperation
+                                  (projectMemory run.projectId write.attemptId (not . null <$> (requireActive run execution >> authorizedServices run mappings)) $ Memory.Write write.edit)
+                                  (reconcileComment run conn)
+                              Operation.PublishPullRequestComment{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
                           (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}) ->
                             requestKnowledge run.projectId attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
                   )
@@ -407,8 +415,6 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
         Right _ -> do
           cfg <- (.config) <$> ask @AuthContext
           whenM (Reviews.currentRun run) do
-            current <- require =<< Git.getPullRequest conn ref run.number
-            unless (sameRevision pr current) $ throwError $ ReviewFailure "PR changed before publication"
             settings <- Reviews.repositorySettings run.projectId
             let includeEvidence = maybe False (.includeEvidence) $ find (\s -> s.owner == run.owner && s.repo == run.repo) settings
                 marker = "<!-- monoscope-impact:" <> run.projectId.toText <> " -->"
@@ -416,10 +422,36 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
             appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
             let existing = (.id) <$> find (\c -> fmap (.id) c.performedViaGithubApp == Just appId && marker `T.isInfixOf` c.body) comments
             whenM (Reviews.currentRun run) do
+              current <- require =<< Git.getPullRequest conn ref run.number
+              unless (sameRevision pr current) $ throwError $ ReviewFailure "PR changed before publication"
               void $ require =<< first AI.toolDenialMessage <$> AI.authorizeRunOperation context Catalog.ExternalPublication
-              let runLink = "\n\n[Run and artifacts](" <> T.dropWhileEnd (== '/') cfg.hostUrl <> "/p/" <> run.projectId.toText <> "/ai/runs/" <> execution.id.toText <> ")"
-              cid <- require =<< Git.publishPullRequestComment conn ref run.number existing (marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink)
+              let runLink = "\n\n[Run and artifacts](" <> T.dropWhileEnd (== '/') cfg.hostUrl <> "/p/" <> run.projectId.toText <> "/ai/runs/" <> context.rootId.toText <> ")"
+                  body = marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink
+                  comment = Operation.ReviewComment run.id body
+              response <-
+                require =<< AI.executeNativeOperation context (Operation.PublishPullRequestComment comment) \case
+                  Operation.PublishPullRequestComment frozen ->
+                    AI.ReconcilableOperation
+                      ( do
+                          unless (frozen == comment) $ throwIO Investigations.OperationProposalChanged
+                          requireActive run execution
+                          void $ require =<< first AI.toolDenialMessage <$> AI.authorizeRunOperation context Catalog.ExternalPublication
+                          published <- require =<< Git.publishPullRequestComment conn ref run.number existing frozen.body
+                          pure $ Right $ AE.toJSON published
+                      )
+                      (reconcileComment run conn)
+                  Operation.WriteWiki{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+              cid <- require $ first toText $ AET.parseEither AE.parseJSON response
               Reviews.finishRun run (Just cid)
+    reconcileComment :: (Error ReviewFailure :> es, HTTP.HTTP :> es, Reader AuthContext :> es) => Reviews.ReviewRun -> Git.GitConn -> Operation.OperationCall -> Eff es (Maybe (Either Text AE.Value))
+    reconcileComment run conn = \case
+      Operation.NativeCall (Operation.PublishPullRequestComment retained) | retained.reviewId == run.id -> do
+        cfg <- (.config) <$> ask @AuthContext
+        appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
+        observed <- either (throwError . ReviewFailure) pure =<< Git.listPullRequestComments conn (Git.RepoRef run.owner run.repo run.revision) run.number
+        pure $ Right . AE.toJSON . (.id) <$> find (\comment -> fmap (.id) comment.performedViaGithubApp == Just appId && comment.body == retained.body) observed
+      _ -> pure Nothing
+
     requireActive :: (DB es, Error ReviewFailure :> es) => Reviews.ReviewRun -> Issues.EventRun -> Eff es ()
     requireActive run execution = do
       unlessM (Issues.routineRunActive run.projectId execution.id) $ throwError $ ReviewFailure "Routine paused, stopped, or requester access revoked"

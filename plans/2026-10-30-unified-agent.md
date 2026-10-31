@@ -745,6 +745,23 @@ Adding the module exposed stale watcher state: both watchers reran tests against
 
 Native GitHub publication and issue enrichment still need operation identities in this same ledger. Slack legacy adoption, selected review, actual attempt attribution for generic conversation wiki writes, and the remaining phases stay in scope.
 
+### Native GitHub publication and shared reconciliation (31 October)
+
+A handler regression reproduced GitHub comment publication missing from action history. `PublishPullRequestComment` now retains a typed review ID and the exact proposed body in the same operation ledger as wiki and model mutations. Scope checks bind it to the stored project's PR review. No model tool call or new migration is needed.
+
+`OperationExecution` generalizes the existing execution representation over its result. Its constructors distinguish a database transaction, an external action without reconciliation, and an external action with a reconciler. A derived `Functor` preserves those semantics while adapting native results to the retained wire response. Claimed, retained, and unresolved decisions are separate constructors; a retained decision can only carry a known response.
+
+A lost GitHub response remains uncertain. Reconciliation reads comments from the stored repository and PR, then requires the configured GitHub App and exact retained body. A wrong app or edited body cannot close the record. Both native wiki and publication use this same reconciler, so a fresh request can resolve an earlier publication before making another change. A matching proposal returns its observed receipt directly; another proposal proceeds through the ordinary claim path. Actions without an observed receipt stay stopped.
+
+Automatic publication recovery reuses the saved validated review instead of invoking the agent again. Explicit Retry clears that saved result and requests fresh analysis. Comment links use the stable request root. Recreated checkpoints start above the request's recorded operation positions; this fixes a failing case where revision zero collided with an earlier wiki operation after checkpoint loss. Existing model proposal JSON stays unchanged.
+
+The application workflow passes after first reproducing missing history, checkpoint collision, and fresh-retry dependencies. It verifies wrong-app and edited-body rejection, exact-body recovery without another agent or GitHub write, cached publication after checkpoint deletion, and one new update for an explicit fresh request. Both invalid wiki attempts and invalid review IDs are rejected before checkpoint creation.
+
+A further failing timing case changed the PR head during comment lookup. The existing revision check now runs after that lookup and before the operation is claimed. The policy, revision, and restricted-evidence timing cases all reach their intended boundary and make no subsequent write. All 220 bot, 75 API v1, and 33 native review/SDK examples pass. Formatting and diff checks pass. Repeated slice reviews found no further material distillation, constraint-evasion, or client-behavior findings. The redundant DeriveFunctor pragma was removed because GHC2024 already enables it; the focused workflow passes after that cleanup. Whole-branch review and final release checks remain pending.
+
+Issue enrichment still needs operation-ledger attribution. Atomic wiki mutation/result composition, generic conversation agent-attempt attribution, Slack legacy adoption, selected review, and the remaining plan phases stay in scope. HTTP fixtures prove application behavior; they do not claim live GitHub or Slack acceptance.
+
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
