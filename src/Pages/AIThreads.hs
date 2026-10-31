@@ -317,6 +317,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 Issues.TriggeredRun (Issues.SlackCommand _) -> "Slack command"
                 Issues.TriggeredRun (Issues.PullRequestReview _) -> "Pull request"
                 Issues.TriggeredRun (Issues.IssueEnrichment _) -> "New issue"
+                Issues.TriggeredRun (Issues.IncidentEvent _ _) -> "Incident event"
               span_ $ toHtml $ "Attempt " <> show @Text run.attempt
               span_ [title_ "Role upgrades apply to new requests. Current access can restrict this run further."] $ toHtml $ "Role limit: " <> toText (encodeEnumSC @"P" evidence.permissionCeiling)
               whenJust requestedBy $ \user -> do

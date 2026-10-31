@@ -17,8 +17,10 @@ Do not construct an OAuth URL with a project ID as `state`; the callback rejects
 
 Each request uses the linked member's current project access. The routine also
 checks the access of the member who activated it. If that member loses edit
-permission, another editor must resume the routine. Slack investigations cannot
-change project resources through AI tools.
+permission, another editor must resume the routine. New installations use
+Autonomous: requested project changes use the linked member's current role and
+the shared action ledger. Existing Observe installations keep their policy until
+an editor changes it. Channel replies cannot use private administrative evidence.
 
 The routine stores the request, requester, instructions, status, results, and
 artifacts. Each retry keeps a separate attempt. Changes to instructions apply to
@@ -30,6 +32,25 @@ screens, close the panel or press Escape to return to the conversation.
 Pause the routine to stop future investigations. Use **Stop active runs** to
 stop current work. If the routine is absent or paused, Slack returns private
 activation instructions. Notification delivery remains connected.
+
+## Enable incident investigations in a channel
+
+1. Link your Monoscope account and choose a channel that receives incident alerts.
+2. As a project editor or admin, run `/monoscope incidents on` in that channel.
+3. Follow the returned link to review the channel routine, instructions, and run history.
+4. To allow automatic project changes, explicitly change its policy to **Autonomous**.
+
+Each channel has its own installation and owner. New incident routines start in
+Observe. They investigate recorded alerts automatically and post a short summary
+in the incident thread, with a link to the complete retained result. A recorded
+recovery or explicit resolution triggers a closing report. Missing errors or
+measurements do not establish recovery.
+
+Run `/monoscope incidents off` to pause this channel's incident routine. The
+existing routine controls also pause work, stop active runs, and change policy.
+The worker checks current access during execution and before report delivery.
+Retries reuse retained results and delivery identities. A lost Slack
+acknowledgement is reconciled before another reply can be sent.
 
 ## Activate pull request reviews
 

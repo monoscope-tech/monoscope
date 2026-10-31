@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -302,6 +302,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     ProcessSlackEvent eventId -> Slack.processSlackEventWithTools projectTools eventId
     RefreshSlackProgress publicationId -> Slack.refreshSlackProgress publicationId
     AIRoutineRun routineId scheduledAt -> runAIRoutine authCtx projectTools routineId scheduledAt
+    InvestigateIncident pid eventId rootId -> investigateIncident pid eventId rootId
     ResetSlackSession pid uid receiptId -> Slack.resetSlackSession pid uid receiptId
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
@@ -360,6 +361,50 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
     UsageAuditReport -> runUsageAuditReport authCtx
     AdConversion conv -> AdConversions.sendConversion authCtx conv
   where
+    investigateIncident pid eventId rootId = do
+      acquired <- withXactLease authCtx ("incident-investigation:" <> rootId.toText)
+        $ whenJustM (Incidents.getIncidentEventContext pid eventId rootId) \incident ->
+          for_ (rightToMaybe $ Issues.incidentChannel incident.teamId incident.channelId) \channel ->
+            whenJustM (Issues.getIncidentRoutine pid channel) \routine -> do
+              let conversation = UUIDId incident.issueId.unUUIDId
+                  source = Issues.IncidentEvent eventId rootId
+                  input = "Investigate this recorded incident event. Its phase is the phase at the event time, not a claim about later measurements.\n" <> decodeUtf8 (AE.encode incident)
+              void $ Issues.getOrCreateConversation pid conversation Issues.CTAnomaly (AE.object [])
+              whenJustM (Issues.startEventRun routine (Issues.IncidentEventRequest eventId rootId) Issues.ContinueRun conversation input) \execution -> do
+                when (execution.status == Issues.RunRunning) do
+                  context <- AI.requireRunContext pid $ Issues.EventClaim source execution.id execution.startedAt
+                  let config =
+                        (AI.defaultAgenticConfig pid)
+                          { AI.conversationId = Just conversation
+                          , AI.conversationType = Just Issues.CTAnomaly
+                          , AI.access = AI.MemberAccess AI.SharedMember execution.requestedBy
+                          , AI.invocationMode = AI.DurableRun context
+                          , AI.projectTools = projectTools
+                          , AI.sourceConfig = Just authCtx.config
+                          , AI.useTimefusion = authCtx.env.enableTimefusionReads
+                          }
+                      failRun finish reason = do
+                        active <- Issues.routineRunActive pid execution.id
+                        completed <- Issues.completeRun context $ if active then finish $ Issues.RunFailure reason Issues.RunOnly else Issues.CancelledResult Nothing
+                        case completed of
+                          Issues.RunCompleted (Issues.CompletedFailed; Issues.CompletedTimedOut) _ -> throwIO $ CE.ErrorCall $ toString reason
+                          (Issues.CompletionRejected; Issues.RunCompleted (Issues.CompletedSucceeded; Issues.CompletedNoFindings; Issues.CompletedCancelled) _) -> pass
+                  ( do
+                      outcome <-
+                        Timeout.timeout (120 * 1_000_000)
+                          $ tryAny
+                          $ AI.runAgenticChatWithHistory config input authCtx.config.openaiModel authCtx.config.openaiApiKey
+                      case outcome of
+                        Nothing -> failRun Issues.TimedOutResult "Incident investigation timed out."
+                        Just (Left _) -> failRun Issues.FailedResult "Incident investigation was interrupted before completion."
+                        Just (Right (Left _)) -> failRun Issues.FailedResult "Incident investigation did not return a report."
+                        Just (Right (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer answer
+                    )
+                    `finally` void (Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Incident investigation worker stopped before recording its result." Issues.RunOnly)
+                now <- Time.currentTime
+                Incidents.queueIncidentReport now authCtx.env.hostUrl pid eventId rootId execution.id
+      when (isNothing acquired) $ throwIO $ CE.ErrorCall "Another investigation is using this incident thread."
+
     analyzeRepository :: Projects.ProjectId -> GitSync.RepositoryId -> ATBackgroundCtx ()
     analyzeRepository pid rid = whenJustM (GitSync.getRepository pid rid) \repository -> do
       ctx <- ask @Config.AuthContext
@@ -4930,13 +4975,14 @@ runSlackIncidentDeliveries = do
                 Incidents.PostRoot -> (Notify.SlackPost, Nothing)
                 Incidents.PostStandalone -> (Notify.SlackPost, Nothing)
                 Incidents.PostReply ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
+                Incidents.PostAnalysis ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
               message =
                 Notify.SlackData
                   { Notify.channelId = delivery.channelId
                   , Notify.botToken = sd.botToken
                   , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery $ case delivery.operation of
-                      Incidents.PostReply _ -> delivery.payload
+                      (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> delivery.payload
                       Incidents.PostRoot -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
                       Incidents.PostStandalone -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
                       Incidents.UpdateRoot _ -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
@@ -4945,19 +4991,26 @@ runSlackIncidentDeliveries = do
                   , Notify.projectIdCtx = delivery.projectId.toText
                   , Notify.teamIdCtx = sd.teamId
                   }
-          Notify.deliverSlack operation message <&> \case
-            Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
-            -- Without a bot token nothing can ever recover the timestamp.
-            Notify.SlackAccepted ->
-              Incidents.WebhookAccepted $ if T.null sd.botToken then Incidents.Threadless else Incidents.ThreadCapable
-            Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
-            Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
-            Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"
+          allowed <- case delivery.operation of
+            Incidents.PostAnalysis _ runId -> Issues.incidentReportAllowed delivery.projectId runId
+            (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}) -> pure True
+          if not allowed
+            then pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
+            else
+              Notify.deliverSlack operation message <&> \case
+                Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
+                -- Without a bot token nothing can ever recover the timestamp.
+                Notify.SlackAccepted ->
+                  Incidents.WebhookAccepted $ if T.null sd.botToken then Incidents.Threadless else Incidents.ThreadCapable
+                Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
+                Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
+                Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"
         _ -> pure $ Incidents.DeliveryRejected "installation_replaced_or_removed"
       finishedAt <- Time.currentTime
       saved <- Incidents.finishSlackDelivery finishedAt delivery outcome
       unless saved $ Log.logAttention "Slack delivery completion did not match its lease or root" (delivery.id, delivery.rootId)
     Slack.reconcileIncidentDeliveries
+    Incidents.enqueueIncidentInvestigations
 
 
 -- | An unavailable evaluation changes evidence availability, not the alert state.

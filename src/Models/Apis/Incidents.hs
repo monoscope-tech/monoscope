@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Models.Apis.Incidents (
   EpisodeId,
   IncidentEventId,
@@ -16,6 +18,10 @@ module Models.Apis.Incidents (
   RecordConflict (..),
   recordIncidentEvent,
   recordIncidentEventTx,
+  IncidentEventContext (..),
+  getIncidentEventContext,
+  enqueueIncidentInvestigations,
+  queueIncidentReport,
   getEpisode,
   listEpisodes,
   threadConversationId,
@@ -59,8 +65,9 @@ import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
 import Effectful.Exception (throwIO)
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
@@ -210,6 +217,7 @@ deliveryOperation =
     WHEN d.operation = 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
     WHEN d.operation = 'post_reply' AND r.threadless THEN jsonb_build_object('tag', 'PostStandalone')
     WHEN d.operation = 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
+    WHEN d.operation = 'post_analysis' THEN jsonb_build_object('tag', 'PostAnalysis', 'contents', jsonb_build_array(r.message_ts, d.agent_run_id))
     WHEN d.operation = 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
   END|]
 
@@ -451,6 +459,73 @@ recordIncidentEvent :: DB es => IncidentUpdate -> Eff es RecordResult
 recordIncidentEvent = Hasql.transaction TxS.ReadCommitted TxS.Write . recordIncidentEventTx
 
 
+data IncidentEventContext timestamp = IncidentEventContext
+  { eventId :: IncidentEventId
+  , rootId :: SlackRootId
+  , episodeId :: EpisodeId
+  , issueId :: Issues.IssueId
+  , phase :: EpisodePhase
+  , observedAt :: UTCTime
+  , teamId :: Text
+  , channelId :: Text
+  , threadTs :: timestamp
+  , notification :: SlackPayload
+  }
+  deriving stock (Foldable, Functor, Generic, Show, Traversable)
+  deriving anyclass (AE.ToJSON, HI.DecodeRow)
+
+
+getIncidentEventContext :: DB es => Projects.ProjectId -> IncidentEventId -> SlackRootId -> Eff es (Maybe (IncidentEventContext SlackTimestamp))
+getIncidentEventContext pid eventId rootId = do
+  saved <-
+    Hasql.interpOne @(IncidentEventContext Text)
+      [HI.sql|SELECT event.id, root.id, episode.id, episode.issue_id,
+      CASE event.event_kind WHEN 'alert' THEN 'active' WHEN 'recovered' THEN 'recovered' ELSE 'resolved' END,
+      event.observed_at, root.team_id, root.channel_id, root.message_ts, event.reply_payload
+      FROM apis.incident_events event JOIN apis.slack_incident_roots root ON root.episode_id = event.episode_id
+      JOIN apis.incident_episodes episode ON episode.id = root.episode_id
+      WHERE event.id = #{eventId} AND root.id = #{rootId} AND event.project_id = #{pid} AND episode.project_id = #{pid}
+        AND episode.issue_id IS NOT NULL AND event.event_kind IN ('alert', 'recovered', 'resolved')
+        AND root.message_ts IS NOT NULL AND NOT root.threadless|]
+  pure $ saved >>= traverse slackTimestamp
+
+
+enqueueIncidentInvestigations :: (DB es, Time.Time :> es) => Eff es ()
+enqueueIncidentInvestigations = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql|INSERT INTO background_jobs (run_at, status, payload)
+      SELECT #{now}, 'queued', identity.payload FROM apis.incident_events event
+      JOIN apis.slack_incident_roots root ON root.episode_id = event.episode_id
+      JOIN apis.ai_routines routine ON routine.project_id = event.project_id AND routine.schedule_kind = 'incident'
+        AND routine.incident_team_id = root.team_id AND routine.incident_channel_id = root.channel_id
+      CROSS JOIN LATERAL (SELECT
+        jsonb_build_object('tag', 'InvestigateIncident', 'contents', jsonb_build_array(event.project_id, event.id, root.id)) AS payload,
+        jsonb_build_object('tag', 'TriggeredRun', 'contents', jsonb_build_object('tag', 'IncidentEvent', 'contents', jsonb_build_array(event.id, root.id))) AS source) identity
+      WHERE routine.active AND event.observed_at >= routine.incident_enabled_at
+        AND root.message_ts IS NOT NULL AND NOT root.threadless AND event.event_kind IN ('alert', 'recovered', 'resolved')
+        AND NOT EXISTS (SELECT 1 FROM apis.ai_routine_runs run WHERE run.project_id = event.project_id AND run.source = identity.source)
+        AND NOT EXISTS (SELECT 1 FROM background_jobs job WHERE job.payload ->> 'tag' = 'InvestigateIncident' AND job.payload = identity.payload)
+      ORDER BY event.observed_at, event.id, root.id LIMIT 50 ON CONFLICT DO NOTHING|]
+
+
+queueIncidentReport :: DB es => UTCTime -> Text -> Projects.ProjectId -> IncidentEventId -> SlackRootId -> UUIDId "ai_routine_run" -> Eff es ()
+queueIncidentReport now host pid eventId rootId runId =
+  whenM (Issues.incidentReportAllowed pid runId)
+    $ Hasql.interpExecute_
+      [HI.sql|INSERT INTO apis.slack_incident_deliveries
+      (root_id, episode_id, event_id, operation, available_at, history_retry_at, agent_run_id, agent_payload)
+      SELECT root.id, root.episode_id, event.id, 'post_analysis', #{now}, #{now}, run.id,
+        jsonb_build_object('text', 'AI incident analysis' || E'\n\n' || left(artifact.content, 3000) || E'\n\n' || #{host} || 'p/' || #{pid.toText} || '/ai/runs/' || #{runId.toText})
+      FROM apis.slack_incident_roots root JOIN apis.incident_events event ON event.episode_id = root.episode_id
+      JOIN apis.ai_routine_runs run ON run.id = #{runId} AND run.project_id = event.project_id
+      JOIN apis.ai_routines routine ON routine.id = run.routine_id AND routine.destination = 'slack'
+      JOIN apis.ai_routine_run_artifacts artifact ON artifact.run_id = run.id AND artifact.key = 'latest-result'
+      WHERE root.id = #{rootId} AND event.id = #{eventId} AND event.project_id = #{pid} AND run.status = 'succeeded'
+        AND run.source = #{Issues.TriggeredRun $ Issues.IncidentEvent eventId rootId}
+      ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
+
+
 -- | Export the transaction as well as its interpreter so the monitor can commit
 -- its status, event, and delivery outbox in one database transaction.
 -- No network operation occurs while this source lock is held.
@@ -600,7 +675,7 @@ slackTimestampText (SlackTimestamp value) = value
 -- | 'PostStandalone' is a reply with no thread to join. It posts like a root but
 -- is not one: it can never own the root's timestamp, and only 'PostRoot' may wait
 -- on one (@CHECK (operation = 'post_root' OR state <> 'waiting_root')@).
-data DeliveryOperation timestamp = PostRoot | PostStandalone | PostReply timestamp | UpdateRoot timestamp
+data DeliveryOperation timestamp = PostRoot | PostStandalone | PostReply timestamp | PostAnalysis timestamp (UUIDId "ai_routine_run") | UpdateRoot timestamp
   deriving stock (Eq, Foldable, Functor, Generic, Show, Traversable)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson (DeliveryOperation timestamp)
@@ -718,7 +793,7 @@ claimSlackDeliveriesTx now = do
       FROM candidates c WHERE d.id = c.id RETURNING d.*
     ) SELECT d.id, d.root_id, d.episode_id, e.project_id, r.team_id, r.channel_id, |]
     <> deliveryOperation
-    <> [HI.sql|, CASE WHEN d.operation = 'post_reply' THEN e.reply_payload ELSE e.root_payload END,
+    <> [HI.sql|, CASE WHEN d.operation = 'post_analysis' THEN d.agent_payload WHEN d.operation = 'post_reply' THEN e.reply_payload ELSE e.root_payload END,
         initial.root_payload,
         d.lease_token, d.attempts
       FROM claimed d JOIN apis.incident_events e ON e.id = d.event_id
@@ -772,7 +847,7 @@ correlateSlackDelivery delivery (SlackPayload payload) =
         PostRoot -> "monoscope_incident_root"
         -- Not a root: a Slack event carrying it must not claim the root's timestamp.
         PostStandalone -> "monoscope_incident_delivery"
-        PostReply _ -> "monoscope_incident_delivery"
+        (PostReply _; PostAnalysis _ _) -> "monoscope_incident_delivery"
         UpdateRoot _ -> "monoscope_incident_root"
    in SlackPayload
         $ KM.insert
@@ -891,6 +966,7 @@ confirmIncidentSearch search timestamp = case search.operation of
   -- it would need a root timestamp that by definition does not exist.
   PostStandalone -> pure False
   PostReply root -> confirmAt root
+  PostAnalysis root _ -> confirmAt root
   UpdateRoot root -> confirmAt root
   where
     confirmAt root =
@@ -902,7 +978,7 @@ confirmIncidentSearch search timestamp = case search.operation of
         WHERE d.id = #{search.id} AND d.root_id = #{search.rootId} AND r.id = d.root_id AND e.id = r.episode_id
           AND e.project_id = #{search.projectId} AND r.team_id = #{search.teamId} AND r.channel_id = #{search.channelId}
           AND r.message_ts = #{root} AND d.history_lease_token = #{search.leaseToken} AND d.state IN ('uncertain', 'sending')
-          AND ((d.operation = 'update_root' AND #{timestamp} = r.message_ts) OR (d.operation = 'post_reply' AND #{timestamp} <> r.message_ts))
+          AND ((d.operation = 'update_root' AND #{timestamp} = r.message_ts) OR (d.operation IN ('post_reply', 'post_analysis') AND #{timestamp} <> r.message_ts))
         RETURNING TRUE|]
 
 

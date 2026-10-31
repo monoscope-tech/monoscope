@@ -959,7 +959,23 @@ The installer accepts a catalog template or a typed incident channel. Both use o
 
 The regression first failed because activation created no routine. It now covers replay, two separate channels, pause/resume, retained titles and instructions, explicit autonomous policy retention, reader and unlinked-member denial, replacement ownership, invalid database bindings, restricted-evidence denial, and no execution during activation. All 268 bot examples pass, including the existing template, authority, cancellation, schedule recovery, and Slack delivery regressions. Formatting, focused HLint, and diff checks pass. Repeated slice reviews found no remaining material distillation, type-evasion, or client-behavior findings. Doctests, whole-branch review, and final release checks remain pending.
 
-This completes the channel installation portion of slice 8. Incident-event admission, shared execution, closing updates, and reconciled publication are still required. Those must use real incident event/root identities and public-audience evidence, preserve Observe for fixed reports, recheck authority before publication, and leave incident recovery to recorded measurements or explicit resolution. This installation work does not establish live Slack acceptance or release readiness.
+The execution and delivery portion follows below. Channel installation alone does not establish live Slack acceptance or release readiness.
+
+### Proactive incidents share execution and delivery (31 October)
+
+Opted-in channels now receive automatic incident analysis and closing reports. The existing incident-delivery pass queues a typed `InvestigateIncident` job after the real root timestamp is known. Queue identities are unique; completed or already queued events do not consume each subsequent batch. Activation timestamps exclude older events and reset when the channel is resumed or reauthorized. There is no new scheduler.
+
+`IncidentEvent` retains the real event and root IDs. Fresh and resumed attempts use one admission query. The source must belong to the installation's project, workspace, channel, and issue conversation, with a current Slack installation and public evidence scope. Only alert, measured recovery, and explicit resolution events qualify. A data gap cannot create a closing report. The same binding is rechecked during execution and before publication.
+
+The worker uses the existing thread lease, run-root checkpoint, agent executor, capability catalog, operation ledger, and completion transaction. Its member context limits evidence to the shared audience. Observe permits analysis and its fixed report; it does not enable arbitrary write tools. An explicit Autonomous grant uses the existing API handlers and action receipts for remediation. Runs and changes retain the authorizing member, including across recovery.
+
+Completion retains the full result and conversation answer. An idempotent insert then adds a typed analysis reply to the existing incident outbox. If that insert fails, recovery loads the completed result without another model call. Slack receives a bounded summary and run link. The existing sender rechecks current authority; the existing metadata and history reconciliation handles lost acknowledgements. Completed-result checks do not make completed runs eligible to execute more operations.
+
+One coherent migration, `0270_incident_agent_delivery.sql`, adds the activation boundary, report/run link and payload constraint, delivery variant, and unique queue identity. It leaves the already applied channel-installation migration unchanged. Report reconciliation uses the clock effect for its initial retry time.
+
+All 38 incident-delivery, 268 bot, and 76 API examples pass against the current implementation. New coverage includes both closing sources, opt-out silence, private-evidence denial in both policies, attributed autonomous remediation, interruption after a real mutation, failure after completion but before outbox insertion, source/context forgery, resumed-request validation, pause and revocation during work or before delivery, installation replacement, bounded summaries with full retained artifacts, and ambiguous-send reconciliation without duplicate inference or publication. The missing worker, revoked-worker retry, reconciliation clock, and resumed-admission regressions each failed before their fixes. Formatting and diff checks pass. Scoped HLint has no new findings; existing hints in the AI and routine-page modules remain unchanged. Repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings.
+
+Controlled Slack acceptance and final whole-branch checks remain open. Optional selected review, streaming, and user-authorized Slack evidence are separate unfinished slices. No push, merge, deployment, or live Slack configuration change is included in this slice.
 
 ## External references
 

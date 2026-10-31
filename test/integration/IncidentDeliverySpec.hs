@@ -1,12 +1,15 @@
 module IncidentDeliverySpec (spec) where
 
 import BackgroundJobs (checkTriggeredQueryMonitors, evaluateQueryMonitorValue, notifyErrorSubscriptions, processProjectErrors, runSlackIncidentDeliveries)
+import BackgroundJobs qualified as Jobs
+import Control.Exception (ErrorCall (..), bracket_)
 import Control.Lens ((.~), (^.), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Lens (key, _String)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
+import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified as Notify
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -15,19 +18,24 @@ import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Langchain.LLM.Core qualified as Chat
 import Models.Apis.ErrorPatterns qualified as Errors
 import Models.Apis.Incidents qualified as I
 import Models.Apis.Integrations qualified as Integrations
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
+import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
-import Pages.Bots.BotFixtures (slackCallbackEnvelope)
+import Pages.Bots.BotFixtures (slackCallbackEnvelope, slackInteraction)
 import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupLinkedSlackData, setupSlackData, slackRootEvent, withHTTPResponses)
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Issues qualified as IssuesPage
+import Pkg.AI qualified as AI
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
@@ -36,11 +44,252 @@ import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 import Test.Hspec
 import UnliftIO.Async (concurrently)
+import UnliftIO.Exception (throwIO, tryAny)
+import Web.Routes qualified as Routes
 
 
 spec :: Spec
 spec = around withTestResources do
   describe "Incident delivery" do
+    for_ [("recovery", const I.IncidentRecovered), ("resolution", I.IncidentResolved)] \(label, closing) ->
+      it ("proactiveIncident_runsOneAnalysisPerEventAndReportsOnlyRecordedRecovery: " <> label) \tr -> do
+        update <- setupWithIssue tr
+        let user = (Servant.getResponse tr.trSessAndHeader).user.id
+        setupLinkedSlackData tr testPid "T1"
+        void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
+        I.Recorded episode _ <- runTestBgNoReset tr $ I.recordIncidentEvent update
+        calls <- newIORef (0 :: Int)
+        let model :: ATBackgroundCtx a -> ATBackgroundCtx a
+            model = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                modifyIORef' calls (+ 1)
+                let recovered = any (\message -> T.isInfixOf "\"phase\":\"recovered\"" message.content || T.isInfixOf "\"phase\":\"resolved\"" message.content) $ toList history
+                pure $ Right $ Chat.Message Chat.Assistant (if recovered then "Recorded closing summary." else "Recorded alert analysis.") Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            drain = do
+              queued <- liftIO $ withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT payload FROM background_jobs WHERE payload ->> 'tag' = 'InvestigateIncident' ORDER BY id|]
+              for_ queued \(PGS.Only (Aeson job)) -> Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx job
+            work = captureNotifs tr $ model do
+              runSlackIncidentDeliveries
+              replicateM_ 2 $ drain >> runSlackIncidentDeliveries
+            reports notifications = [sd | Notify.SlackNotification sd <- notifications, maybe False (T.isPrefixOf "AI incident analysis") (sd.payload ^? key "text" . _String)]
+        (opened, _) <- work
+        runs <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.ai_routine_runs WHERE project_id = ?|] (PGS.Only testPid)
+        (runs :: [PGS.Only Int64]) `shouldBe` [PGS.Only 1]
+        readIORef calls `shouldReturn` 1
+        map (.channelId) (reports opened) `shouldBe` ["C1"]
+        map (.threadTs) (reports opened) `shouldSatisfy` all isJust
+        (replayed, _) <- work
+        reports replayed `shouldSatisfy` null
+        readIORef calls `shouldReturn` 1
+        advanceMinutes tr 1
+        at <- getTestTime tr.trTestClock
+        void $ runTestBgNoReset tr $ I.recordIncidentEvent update{I.observedAt = at, I.change = I.IncidentDataUnavailable}
+        (gap, _) <- work
+        reports gap `shouldSatisfy` null
+        readIORef calls `shouldReturn` 1
+        Just stillActive <- runTestBgNoReset tr $ I.getEpisode testPid episode.id
+        stillActive.phase `shouldBe` I.EpisodeActive
+        advanceMinutes tr 1
+        recoveredAt <- getTestTime tr.trTestClock
+        void $ runTestBgNoReset tr $ I.recordIncidentEvent update{I.observedAt = recoveredAt, I.change = closing user}
+        (closed, _) <- work
+        map (.channelId) (reports closed) `shouldBe` ["C1"]
+        mapMaybe (\sd -> sd.payload ^? key "text" . _String) (reports closed) `shouldSatisfy` all (T.isInfixOf "Recorded closing summary.")
+        readIORef calls `shouldReturn` 2
+
+        (closedReplay, _) <- work
+        reports closedReplay `shouldSatisfy` null
+        readIORef calls `shouldReturn` 2
+
+    for_ [(Issues.Observe, False), (Issues.Autonomous, False), (Issues.Autonomous, True)] \(policy, interrupted) ->
+      it ("proactiveIncident_usesSharedPolicyAndRejectsPrivateEvidence: " <> show (policy, interrupted)) \tr -> do
+        update <- setupWithIssue tr
+        setupLinkedSlackData tr testPid "T1"
+        void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
+        channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+        Just routine <- runTestBgNoReset tr $ Issues.getIncidentRoutine testPid channel
+        runTestBgNoReset tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId policy
+        I.Recorded _ event <- runTestBgNoReset tr $ I.recordIncidentEvent update
+        void $ captureNotifs tr runSlackIncidentDeliveries
+        [PGS.Only root] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
+        invoked <- newIORef ([] :: [Text])
+        interrupt <- newIORef interrupted
+        let original = Routes.mcpProjectTools
+            backend = original{AI.invoke = \actor pid tool arguments -> modifyIORef' invoked (<> [tool]) >> AI.invoke original actor pid tool arguments}
+            model :: ATBackgroundCtx a -> ATBackgroundCtx a
+            model = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                let hasTools = any ((== Chat.Tool) . (.role)) history
+                when hasTools do
+                  stop <- atomicModifyIORef' interrupt (\once -> (False, once))
+                  when stop $ throwIO $ ErrorCall "Interrupted after the durable mutation"
+                pure
+                  $ Right
+                  $ if hasTools
+                    then Chat.Message Chat.Assistant "Incident evidence and permitted changes are retained." Chat.defaultMessageData
+                    else
+                      Chat.Message
+                        Chat.Assistant
+                        ""
+                        Chat.defaultMessageData
+                          { Chat.toolCalls =
+                              Just
+                                [ Chat.ToolCall "private" "function" $ Chat.ToolFunction "list_api_keys" mempty
+                                , Chat.ToolCall "remediate" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Incident remediation dashboard" :: Text)])
+                                ]
+                          }
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            execute = runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just backend) tr.trATCtx $ Jobs.InvestigateIncident testPid event root
+        when interrupted do
+          tryAny execute >>= (`shouldSatisfy` isLeft)
+          readIORef invoked `shouldReturn` ["create_dashboard"]
+          Just failed <- runTestBgNoReset tr $ Issues.getEventRun testPid $ Issues.IncidentEvent event root
+          failed.status `shouldBe` Issues.RunFailed
+        replicateM_ 2 execute
+        readIORef invoked `shouldReturn` if policy == Issues.Autonomous then ["create_dashboard"] else []
+        dashboards <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT title, created_by FROM projects.dashboards WHERE project_id = ? AND title = 'Incident remediation dashboard'|] (PGS.Only testPid)
+        (dashboards :: [(Text, Projects.UserId)]) `shouldBe` if policy == Issues.Autonomous then [("Incident remediation dashboard", routine.requestedBy)] else []
+        Just run <- runTestBgNoReset tr $ Issues.getEventRun testPid $ Issues.IncidentEvent event root
+        run.status `shouldBe` Issues.RunSucceeded
+        run.attempt `shouldBe` if interrupted then 2 else 1
+
+    for_ [minBound .. maxBound] \interruption ->
+      it ("proactiveIncident_withholdsWorkAndPublication: " <> show interruption) \tr -> do
+        update <- setupWithIssue tr
+        setupLinkedSlackData tr testPid "T1"
+        let command = (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
+            user = (Servant.getResponse tr.trSessAndHeader).user.id
+            revoke = liftIO $ withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = false WHERE project_id = ? AND user_id = ?|] (testPid, user)
+        unless (interruption == NoIncidentOptIn) $ void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH command
+        channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+        let installation = Issues.incidentRoutineConversationId testPid channel
+        I.Recorded episode event <- runTestBgNoReset tr $ I.recordIncidentEvent update
+        issue <- maybe (fail "Fixture episode has no issue") pure episode.issueId
+        void $ captureNotifs tr runSlackIncidentDeliveries
+        [PGS.Only root] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
+        calls <- newIORef (0 :: Int)
+        let model :: ATBackgroundCtx a -> ATBackgroundCtx a
+            model = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> do
+                modifyIORef' calls (+ 1)
+                when (interruption == PauseDuringIncidentModel) $ Issues.pauseRoutine testPid installation
+                when (interruption == RevokeDuringIncidentModel) revoke
+                when (interruption == RestrictDuringIncidentModel) $ Investigations.retainEvidencePermission testPid [UUIDId issue.unUUIDId] PM.PAdmin
+                pure $ Right $ Chat.Message Chat.Assistant "This result must stay in the run history." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        when (interruption == PauseBeforeIncidentRun) $ runTestBgNoReset tr $ Issues.pauseRoutine testPid installation
+        outcome <- runTestBgNoReset tr $ model $ tryAny $ Jobs.processBackgroundJob tr.trATCtx $ Jobs.InvestigateIncident testPid event root
+        outcome `shouldSatisfy` isRight
+        runTestBgNoReset tr do
+          when (interruption == PauseBeforeIncidentReport) $ Issues.pauseRoutine testPid installation
+          when (interruption == RevokeBeforeIncidentReport) revoke
+          when (interruption == ReplaceBeforeIncidentReport) $ EHasql.interpExecute_ [HI.sql|UPDATE apis.slack SET team_id = 'T_REPLACED' WHERE project_id = #{testPid}|]
+        (sent, _) <- captureNotifs tr runSlackIncidentDeliveries
+        sent `shouldSatisfy` null
+        readIORef calls `shouldReturn` if interruption `elem` [NoIncidentOptIn, PauseBeforeIncidentRun] then 0 else 1
+        result <- runTestBgNoReset tr $ Issues.getEventRun testPid $ Issues.IncidentEvent event root
+        fmap (.status) result
+          `shouldBe` if interruption `elem` [NoIncidentOptIn, PauseBeforeIncidentRun]
+            then Nothing
+            else Just $ if interruption `elem` [PauseDuringIncidentModel, RevokeDuringIncidentModel, RestrictDuringIncidentModel] then Issues.RunCancelled else Issues.RunSucceeded
+
+    it "proactiveIncident_admissionRejectsForgedContextAndRechecksResumedRequests" \tr -> do
+      update <- setupWithIssue tr
+      setupLinkedSlackData tr testPid "T1"
+      void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
+      channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+      Just routine <- runTestBgNoReset tr $ Issues.getIncidentRoutine testPid channel
+      I.Recorded episode event <- runTestBgNoReset tr $ I.recordIncidentEvent update
+      issue <- maybe (fail "Fixture episode has no issue") pure episode.issueId
+      void $ captureNotifs tr runSlackIncidentDeliveries
+      [PGS.Only root, PGS.Only otherRoot] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? ORDER BY channel_id|] (PGS.Only event)
+      let conversation = UUIDId issue.unUUIDId
+          otherConversation = UUIDId $ UUID.fromWords 0 0 0 983
+          run :: ATBackgroundCtx a -> IO a
+          run = runTestBgNoReset tr
+          start source destination continuation = run $ Issues.startEventRun routine source continuation destination "Stored incident input"
+      for_ [conversation, otherConversation] \conv -> void $ run $ Issues.getOrCreateConversation testPid conv Issues.CTAnomaly (AE.object [])
+      I.Recorded _ gap <- run $ I.recordIncidentEvent update{I.observedAt = addUTCTime 60 frozenTime, I.change = I.IncidentDataUnavailable}
+      for_ [(UUIDId UUID.nil, root, conversation), (event, otherRoot, conversation), (event, root, otherConversation), (gap, root, conversation)] \(source, parent, destination) ->
+        start (Issues.IncidentEventRequest source parent) destination Issues.StartRun >>= (`shouldSatisfy` isNothing)
+      Just claimed <- start (Issues.IncidentEventRequest event root) conversation Issues.StartRun
+      run (Issues.routineRunActive testPid claimed.id) `shouldReturn` True
+      run $ EHasql.interpExecute_ [HI.sql|UPDATE apis.slack SET team_id = 'T_REPLACED' WHERE project_id = #{testPid}|]
+      run (Issues.routineRunActive testPid claimed.id) `shouldReturn` False
+      start (Issues.IncidentEventRequest event root) conversation Issues.ContinueRun >>= (`shouldSatisfy` isNothing)
+
+    it "proactiveIncident_reconcilesAnAmbiguousReportWithoutRepeatingTheModelOrReply" \tr -> do
+      update <- setupWithIssue tr
+      let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_TEST"}}}
+          run :: ATBackgroundCtx a -> IO a
+          run = runTestBgNoReset resources
+      setupLinkedSlackData tr testPid "T1"
+      void $ toBaseServantResponse resources $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
+      I.Recorded _ event <- run $ I.recordIncidentEvent update
+      void $ captureNotifs resources runSlackIncidentDeliveries
+      [PGS.Only root] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
+      calls <- newIORef (0 :: Int)
+      let report = T.replicate 5000 "r"
+          model :: ATBackgroundCtx a -> ATBackgroundCtx a
+          model = interpose @ELLM.LLM \_ -> \case
+            ELLM.CallAgenticChat{} -> modifyIORef' calls (+ 1) $> Right (Chat.Message Chat.Assistant report Chat.defaultMessageData)
+            ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+            ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+          work = run $ model $ Jobs.processBackgroundJob resources.trATCtx $ Jobs.InvestigateIncident testPid event root
+          ddl statement = withResource tr.trPool \conn -> void $ PGS.execute_ conn statement
+      bracket_
+        (ddl [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_agent_report CHECK (operation <> 'post_analysis') NOT VALID|])
+        (ddl [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_agent_report|])
+        (tryAny work >>= (`shouldSatisfy` isLeft))
+      Just completed <- run $ Issues.getEventRun testPid $ Issues.IncidentEvent event root
+      completed.status `shouldBe` Issues.RunSucceeded
+      work
+      now <- getTestTime tr.trTestClock
+      [delivery] <- run $ I.claimSlackDeliveries now
+      I.PostAnalysis parent reportRun <- pure delivery.operation
+      Just summary <- pure $ AE.toJSON delivery.payload ^? key "text" . _String
+      T.length summary `shouldSatisfy` (< 3500)
+      summary `shouldSatisfy` T.isInfixOf reportRun.toText
+      retained <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT content FROM apis.ai_routine_run_artifacts WHERE run_id = ? AND key = 'latest-result'|] (PGS.Only reportRun)
+      (retained :: [PGS.Only Text]) `shouldBe` [PGS.Only report]
+      run (I.finishSlackDelivery now delivery $ I.DeliveryUncertain "lost_ack") `shouldReturn` True
+      searches <- run $ I.claimIncidentSearches now
+      length searches `shouldBe` 1
+      [abandoned] <- pure searches
+      advanceMinutes tr 3
+      observed <- timestamp "1788900100.000001"
+      let message =
+            AE.object
+              [ "ts" AE..= I.slackTimestampText observed
+              , "thread_ts" AE..= I.slackTimestampText parent
+              , "app_id" AE..= ("A_TEST" :: Text)
+              , "bot_id" AE..= ("B_TEST" :: Text)
+              , "metadata" AE..= (AE.toJSON (I.correlateSlackDelivery delivery delivery.payload) ^? key "metadata")
+              ]
+      at <- getTestTime tr.trTestClock
+      (requests, _) <-
+        runTestBgRecordingHTTP at resources
+          $ withHTTPResponses
+            ( \opts endpoint -> do
+                endpoint `shouldBe` "https://slack.com/api/conversations.replies"
+                opts ^. Wreq.param "channel" `shouldBe` ["C1"]
+                opts ^. Wreq.param "ts" `shouldBe` [I.slackTimestampText parent]
+                pure $ Just $ AE.encode $ AE.object ["ok" AE..= True, "messages" AE..= ([message] :: [AE.Value])]
+            )
+            SlackPage.reconcileIncidentDeliveries
+      map fst requests `shouldBe` ["https://slack.com/api/conversations.replies"]
+      run (I.confirmIncidentSearch abandoned observed) `shouldReturn` False
+      work
+      (sent, _) <- captureNotifs resources runSlackIncidentDeliveries
+      sent `shouldSatisfy` null
+      readIORef calls `shouldReturn` 1
+      stored <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT state, message_ts FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only delivery.id)
+      (stored :: [(Text, Maybe Text)]) `shouldBe` [("delivered", Just $ I.slackTimestampText observed)]
+
     it "commits ingested error notification claims with two destination roots and retries an outbox failure" \tr -> do
       setupSlackData tr testPid "T1"
       withResource tr.trPool \conn -> do
@@ -794,6 +1043,7 @@ spec = around withTestResources do
             I.UpdateRoot _ -> pure ("conversations.history", "1788900000.000001", Nothing)
             I.PostRoot -> fail "Expected a lifecycle delivery"
             I.PostStandalone -> fail "Expected a lifecycle delivery"
+            I.PostAnalysis{} -> fail "Expected an incident fact delivery"
           Just metadata <- pure $ AE.toJSON (I.correlateSlackDelivery delivery delivery.payload) ^? key "metadata"
           let message = AE.object ["ts" AE..= (expectedTs :: Text), "thread_ts" AE..= I.slackTimestampText parent, "app_id" AE..= ("A_TEST" :: Text), "bot_id" AE..= ("B_TEST" :: Text), "metadata" AE..= metadata]
               page messages cursor = AE.object ["ok" AE..= True, "messages" AE..= (messages :: [AE.Value]), "response_metadata" AE..= AE.object ["next_cursor" AE..= fromMaybe "" (cursor :: Maybe Text)]]
@@ -812,6 +1062,7 @@ spec = around withTestResources do
                         opts ^. Wreq.param "include_all_metadata" `shouldBe` ["true"]
                         case delivery.operation of
                           I.PostReply _ -> opts ^. Wreq.param "ts" `shouldBe` [I.slackTimestampText parent]
+                          I.PostAnalysis{} -> fail "Expected an incident fact delivery"
                           I.UpdateRoot _ -> do
                             opts ^. Wreq.param "oldest" `shouldBe` [I.slackTimestampText parent]
                             opts ^. Wreq.param "latest" `shouldBe` [I.slackTimestampText parent]
@@ -841,6 +1092,18 @@ spec = around withTestResources do
           readIORef pages >>= (`shouldBe` [])
         completedAt <- getTestTime tr.trTestClock
         run (I.claimSlackDeliveries completedAt) `shouldReturn` []
+
+
+data IncidentInterruption
+  = NoIncidentOptIn
+  | PauseBeforeIncidentRun
+  | PauseDuringIncidentModel
+  | RevokeDuringIncidentModel
+  | RestrictDuringIncidentModel
+  | PauseBeforeIncidentReport
+  | RevokeBeforeIncidentReport
+  | ReplaceBeforeIncidentReport
+  deriving stock (Bounded, Enum, Eq, Show)
 
 
 setup :: TestResources -> IO I.IncidentUpdate

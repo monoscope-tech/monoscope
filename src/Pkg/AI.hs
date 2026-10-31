@@ -512,7 +512,7 @@ defaultLimits =
     }
 
 
-data MemberContext = ProjectMember | WebSession
+data MemberContext = ProjectMember | WebSession | SharedMember
   deriving stock (Eq, Generic, Show)
 
 
@@ -571,7 +571,7 @@ agentPermission :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> Ef
 agentPermission ServiceAccess _ = pure ProjectMembers.PView
 agentPermission (MemberAccess context userId) projectId = do
   permission <- case context of
-    ProjectMember -> ProjectMembers.getUserPermission projectId userId
+    (ProjectMember; SharedMember) -> ProjectMembers.getUserPermission projectId userId
     WebSession -> do
       member <- ProjectMembers.getSessionPermission projectId userId
       public <- if projectId == Projects.demoProjectId then isJust <$> Projects.projectById projectId else pure False
@@ -591,6 +591,7 @@ agentPermission (SlackInvestigationAccess run) projectId = do
 -- | Transport audiences cannot inherit a member's private administrative evidence.
 evidenceAudience :: AgentAccess -> ProjectMembers.Permissions -> ProjectMembers.Permissions
 evidenceAudience access role = case access of
+  MemberAccess SharedMember _ -> ProjectMembers.PView
   MemberAccess{} -> role
   (ServiceAccess; SlackAccess{}; SlackInvestigationAccess{}) -> ProjectMembers.PView
 

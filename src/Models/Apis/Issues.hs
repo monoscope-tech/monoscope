@@ -144,8 +144,10 @@ module Models.Apis.Issues (
   EventRequest (..),
   RunContinuation (..),
   getEventRoutine,
+  getIncidentRoutine,
   startEventRun,
   routineRunActive,
+  incidentReportAllowed,
   ExecutionPolicy (..),
   RunClaim (..),
   RunContext,
@@ -1610,7 +1612,7 @@ data RoutineEvent = EventSlackMessage | EventPullRequest | EventIssueEnrichment 
   deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "Event" RoutineEvent
 
 
-data RoutineEventSource = SlackMessage (UUIDId "slack_event") | SlackCommand (UUIDId "conversation") | PullRequestReview (UUIDId "pr_review") | IssueEnrichment IssueId
+data RoutineEventSource = SlackMessage (UUIDId "slack_event") | SlackCommand (UUIDId "conversation") | PullRequestReview (UUIDId "pr_review") | IssueEnrichment IssueId | IncidentEvent (UUIDId "incident_event") (UUIDId "slack_incident_root")
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -1733,7 +1735,7 @@ slackTurnForRun context = case context.source of
   TriggeredRun (SlackMessage receipt) ->
     fmap (Investigations.Turn context.projectId context.conversationId context.requestedBy . HI.getOneColumn)
       <$> Hasql.interpOne @(HI.OneColumn Text) [HI.sql|SELECT payload #>> '{event,ts}' FROM apis.slack_events WHERE id = #{receipt} AND payload #>> '{event,ts}' IS NOT NULL|]
-  (ScheduledRun; InteractiveRun{}; TriggeredRun (SlackCommand{}; PullRequestReview{}; IssueEnrichment{})) -> pure Nothing
+  (ScheduledRun; InteractiveRun{}; TriggeredRun (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}; IncidentEvent{})) -> pure Nothing
 
 
 runContextScopeSql :: RunContext -> HI.Sql
@@ -1766,6 +1768,7 @@ data EventRequest
   | SlackCommandRequest (UUIDId "conversation") Projects.UserId
   | PullRequestReviewRequest (UUIDId "pr_review")
   | IssueEnrichmentRequest IssueId
+  | IncidentEventRequest (UUIDId "incident_event") (UUIDId "slack_incident_root")
 
 
 data RunContinuation = StartRun | ContinueRun | RestartRun
@@ -2133,6 +2136,7 @@ installRoutine requestedBy pid convId timezone installation = do
           , DestinationSlack
           )
       (teamId, channelId) = maybe (Nothing, Nothing) (\c -> (Just c.teamId, Just c.channelId)) channel
+      enabledAt = now <$ channel
       (kind, intervalMinutes, hour, minute, weekday) = scheduleColumns template.schedule
       zone = if isJust (TZ.tzByName $ encodeUtf8 timezone) then timezone else "UTC"
       nextRunAt = nextRoutineAt template.schedule zone now now
@@ -2141,9 +2145,9 @@ installRoutine requestedBy pid convId timezone installation = do
     Hasql.queryTx
       [HI.sql|WITH installed AS (INSERT INTO apis.ai_routines AS routine
       (requested_by, project_id, conversation_id, interval_minutes, timezone, next_run_at, template_key, template_version,
-       schedule_kind, schedule_hour, schedule_minute, schedule_weekday, report_when, destination, policy, instructions, incident_team_id, incident_channel_id)
+       schedule_kind, schedule_hour, schedule_minute, schedule_weekday, report_when, destination, policy, instructions, incident_team_id, incident_channel_id, incident_enabled_at)
       SELECT #{requestedBy}, #{pid}, #{convId}, #{intervalMinutes}, #{zone}, #{nextRunAt}, #{templateKey}, #{template.version},
-             #{kind}, #{hour}, #{minute}, #{weekday}, #{template.reportWhen}, #{destination}, #{policy}, #{template.prompt}, #{teamId}, #{channelId}
+             #{kind}, #{hour}, #{minute}, #{weekday}, #{template.reportWhen}, #{destination}, #{policy}, #{template.prompt}, #{teamId}, #{channelId}, #{enabledAt}
       FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
       ON CONFLICT (project_id, conversation_id) DO UPDATE SET
         authority_version = routine.authority_version + CASE WHEN routine.requested_by IS DISTINCT FROM EXCLUDED.requested_by THEN 1 ELSE 0 END,
@@ -2155,6 +2159,8 @@ installRoutine requestedBy pid convId timezone installation = do
         schedule_weekday = EXCLUDED.schedule_weekday, report_when = EXCLUDED.report_when,
         destination = EXCLUDED.destination, cancelled_at = NULL,
         instructions = CASE WHEN EXCLUDED.schedule_kind = 'incident' THEN routine.instructions ELSE EXCLUDED.instructions END,
+        incident_enabled_at = CASE WHEN routine.active AND routine.requested_by IS NOT DISTINCT FROM EXCLUDED.requested_by
+          AND routine.schedule_kind = EXCLUDED.schedule_kind THEN routine.incident_enabled_at ELSE EXCLUDED.incident_enabled_at END,
         incident_team_id = EXCLUDED.incident_team_id, incident_channel_id = EXCLUDED.incident_channel_id
       RETURNING id, next_run_at) SELECT id, next_run_at FROM installed WHERE next_run_at IS NOT NULL|]
   where
@@ -2227,15 +2233,29 @@ claimRoutine routineId scheduledAt =
 
 
 getEventRoutine :: DB es => Projects.ProjectId -> RoutineEvent -> Eff es (Maybe EventRoutine)
-getEventRoutine pid event = do
+getEventRoutine pid event = getEventRoutineFor pid event [HI.sql| AND r.template_key IS NOT NULL|]
+
+
+getIncidentRoutine :: DB es => Projects.ProjectId -> IncidentChannel -> Eff es (Maybe EventRoutine)
+getIncidentRoutine pid channel =
+  getEventRoutineFor
+    pid
+    EventIncident
+    [HI.sql| AND r.incident_team_id = #{channel.teamId} AND r.incident_channel_id = #{channel.channelId}
+    AND EXISTS (SELECT 1 FROM apis.slack s WHERE s.project_id = r.project_id AND s.team_id = r.incident_team_id)|]
+
+
+getEventRoutineFor :: DB es => Projects.ProjectId -> RoutineEvent -> HI.Sql -> Eff es (Maybe EventRoutine)
+getEventRoutineFor pid event scope = do
   Investigations.classifyLegacyEvidence pid Nothing
   Hasql.interpOne
     $ [HI.sql|SELECT r.id, r.project_id, r.schedule_kind, r.conversation_id, r.requested_by, r.instructions, r.template_version::bigint
       FROM apis.ai_routines r JOIN projects.project_members member ON member.project_id = r.project_id AND member.user_id = r.requested_by
       JOIN users.users account ON account.id = member.user_id
       JOIN projects.projects project ON project.id = member.project_id
-      WHERE r.project_id = #{pid} AND r.schedule_kind = #{event} AND r.template_key IS NOT NULL AND r.active AND member.permission IN ('admin', 'edit') |]
+      WHERE r.project_id = #{pid} AND r.schedule_kind = #{event} AND r.active AND member.permission IN ('admin', 'edit') |]
     <> ProjectMembers.activeMembership
+    <> scope
 
 
 -- | Recovery retains one request's actor, instructions, input, and authority.
@@ -2249,9 +2269,15 @@ startEventRun routine request continuation convId input = do
         SlackCommandRequest conversation user -> (SlackCommand conversation, Just user)
         PullRequestReviewRequest review -> (PullRequestReview review, Nothing)
         IssueEnrichmentRequest issue -> (IssueEnrichment issue, Nothing)
+        IncidentEventRequest eventId rootId -> (IncidentEvent eventId rootId, Nothing)
       restart = continuation == RestartRun
       resume = continuation /= StartRun
-      kind = case event of SlackMessage{} -> EventSlackMessage; SlackCommand{} -> EventSlackMessage; PullRequestReview{} -> EventPullRequest; IssueEnrichment{} -> EventIssueEnrichment
+      kind = case event of SlackMessage{} -> EventSlackMessage; SlackCommand{} -> EventSlackMessage; PullRequestReview{} -> EventPullRequest; IssueEnrichment{} -> EventIssueEnrichment; IncidentEvent{} -> EventIncident
+      admission = case event of
+        IncidentEvent eventId rootId ->
+          [HI.sql| AND owner.permission IN ('admin', 'edit') AND actor.user_id IS NOT NULL AND |]
+            <> incidentEventBindingSql [HI.sql|#{eventId.toText}|] [HI.sql|#{rootId.toText}|] [HI.sql|#{convId}|]
+        (SlackMessage{}; SlackCommand{}; PullRequestReview{}; IssueEnrichment{}) -> mempty
       legacyState = case event of
         SlackMessage receipt ->
           [HI.sql|SELECT count(*) > 0 AS retained, coalesce(bool_or(legacy.user_id IS DISTINCT FROM #{member}), FALSE) AS other_actor FROM (
@@ -2260,7 +2286,7 @@ startEventRun routine request continuation convId input = do
           ) legacy JOIN apis.slack_events event ON event.id = #{receipt}
           WHERE legacy.project_id = #{routine.projectId} AND legacy.conversation_id = #{convId}
             AND legacy.message_ts = event.payload #>> '{event,ts}'|]
-        (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}) -> [HI.sql|SELECT FALSE AS retained, FALSE AS other_actor|]
+        (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}; IncidentEvent{}) -> [HI.sql|SELECT FALSE AS retained, FALSE AS other_actor|]
       initialPolicy = case event of
         SlackMessage receipt ->
           [HI.sql|CASE WHEN (SELECT retained FROM legacy) OR NOT EXISTS
@@ -2270,7 +2296,7 @@ startEventRun routine request continuation convId input = do
                 AND receipt.payload #>> '{event,type}' IN ('message', 'app_mention', 'monoscope_message_shortcut')
                 AND receipt.payload #>> '{event,subtype}' IS NULL AND receipt.payload #>> '{event,bot_id}' IS NULL)
             THEN #{Observe} ELSE r.policy END|]
-        (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}) -> [HI.sql|r.policy|]
+        (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}; IncidentEvent{}) -> [HI.sql|r.policy|]
   Hasql.transaction TxS.ReadCommitted TxS.Write do
     installation <-
       Hasql.queryTx @[UUIDId "ai_routine"]
@@ -2282,7 +2308,7 @@ startEventRun routine request continuation convId input = do
           SlackMessage receipt -> do
             saved <- Hasql.queryTx @[HI.OneColumn (UUIDId "slack_event")] $ slackMessageIdentitySql routine.projectId receipt
             pure $ SlackMessage $ maybe receipt HI.getOneColumn $ listToMaybe saved
-          (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}) -> pure event
+          (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}; IncidentEvent{}) -> pure event
         let source = TriggeredRun canonical
         Hasql.queryTx
           ( [HI.sql|WITH identity AS (SELECT gen_random_uuid() AS id), previous AS (
@@ -2294,7 +2320,18 @@ startEventRun routine request continuation convId input = do
               <> legacyState
               <> [HI.sql|), eligible_members AS (|]
               <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{routine.projectId}|]
-              <> [HI.sql|), inserted AS (
+              <> [HI.sql|), admitted AS (
+        SELECT r.*, owner.permission AS owner_permission, actor.permission AS actor_permission,
+          installation.evidence_permission AS installation_permission
+        FROM apis.ai_routines r
+        JOIN apis.ai_conversations installation ON installation.project_id = r.project_id AND installation.conversation_id = r.conversation_id
+        LEFT JOIN eligible_members owner ON owner.user_id = r.requested_by
+        LEFT JOIN eligible_members actor ON actor.user_id = COALESCE(#{member}, r.requested_by)
+        WHERE r.id = #{routine.id} AND r.project_id = #{routine.projectId} AND r.schedule_kind = #{kind} AND r.active
+          ^{admission}
+          AND NOT (SELECT other_actor FROM legacy)
+          AND EXISTS (SELECT 1 FROM apis.ai_conversations WHERE project_id = r.project_id AND conversation_id = #{convId})
+      ), inserted AS (
         INSERT INTO apis.ai_routine_runs
           (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, source, attempt,
            requested_by, input, instructions, template_version, policy, authority_version, permission_ceiling, evidence_permission)
@@ -2308,21 +2345,15 @@ startEventRun routine request continuation convId input = do
           CASE WHEN #{restart} OR original.id IS NULL THEN ^{initialPolicy} ELSE original.policy END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.authority_version ELSE original.authority_version END,
           CASE WHEN #{restart} OR original.id IS NULL THEN
-            CASE WHEN (SELECT retained FROM legacy) THEN #{ProjectMembers.PView} ELSE apis.least_permission(owner.permission, actor.permission) END
+            CASE WHEN (SELECT retained FROM legacy) THEN #{ProjectMembers.PView} ELSE apis.least_permission(r.owner_permission, r.actor_permission) END
             ELSE original.permission_ceiling END,
           (SELECT permission FROM (
-            SELECT COALESCE(installation.evidence_permission, #{ProjectMembers.PAdmin}) AS permission
+            SELECT COALESCE(r.installation_permission, #{ProjectMembers.PAdmin}) AS permission
             UNION ALL SELECT CASE WHEN #{restart} OR original.id IS NULL THEN #{ProjectMembers.PView}
               ELSE COALESCE(original.evidence_permission, #{ProjectMembers.PAdmin}) END
           ) scopes ORDER BY apis.evidence_permission_rank(permission) DESC LIMIT 1)
-        FROM apis.ai_routines r CROSS JOIN identity LEFT JOIN original ON TRUE
-        JOIN apis.ai_conversations installation ON installation.project_id = r.project_id AND installation.conversation_id = r.conversation_id
-        LEFT JOIN eligible_members owner ON owner.user_id = r.requested_by
-        LEFT JOIN eligible_members actor ON actor.user_id = COALESCE(#{member}, r.requested_by)
-        WHERE r.id = #{routine.id} AND r.project_id = #{routine.projectId} AND r.schedule_kind = #{kind} AND r.active
-          AND NOT (SELECT other_actor FROM legacy)
-          AND EXISTS (SELECT 1 FROM apis.ai_conversations WHERE project_id = r.project_id AND conversation_id = #{convId})
-          AND (#{restart} OR original.id IS NULL OR (original.routine_id = r.id AND original.requested_by IS NOT NULL
+        FROM admitted r CROSS JOIN identity LEFT JOIN original ON TRUE
+        WHERE (#{restart} OR original.id IS NULL OR (original.routine_id = r.id AND original.requested_by IS NOT NULL
             AND (#{member} IS NULL OR original.requested_by = #{member})
             AND original.conversation_id = #{convId} AND original.input IS NOT NULL AND original.instructions IS NOT NULL))
           AND NOT EXISTS (SELECT 1 FROM previous WHERE (status = 'running' AND routine_id = #{routine.id}) OR (NOT #{restart} AND status IN ('succeeded', 'no_findings', 'cancelled')))
@@ -2330,7 +2361,7 @@ startEventRun routine request continuation convId input = do
         RETURNING id, started_at, status, requested_by, instructions
       ) SELECT id, started_at, status, requested_by, instructions FROM inserted
         UNION ALL SELECT id, started_at, status, requested_by, instructions FROM previous
-          WHERE #{resume} AND NOT EXISTS (SELECT 1 FROM inserted) AND requested_by IS NOT NULL
+          WHERE #{resume} AND EXISTS (SELECT 1 FROM admitted) AND NOT EXISTS (SELECT 1 FROM inserted) AND requested_by IS NOT NULL
             AND (#{member} IS NULL OR requested_by = #{member})
             AND conversation_id = #{convId} AND routine_id = #{routine.id} LIMIT 1|]
           )
@@ -2498,6 +2529,7 @@ completeRunTx now mutation context proposed = do
               SlackCommand{} -> "Slack command result"
               PullRequestReview{} -> "Production impact review"
               IssueEnrichment{} -> "Issue enrichment"
+              IncidentEvent{} -> "Incident investigation"
       for_ response $ \answer -> do
         sequence_ mutation
         for_ title $ \label -> Hasql.executeTx $ saveRunResultSql context label answer.report
@@ -2544,14 +2576,44 @@ routineRunActive :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Ef
 routineRunActive pid runId = isJust <$> readRunAuthority (routineRunAccessSql pid runId mempty)
 
 
+incidentEventBindingSql :: HI.Sql -> HI.Sql -> HI.Sql -> HI.Sql
+incidentEventBindingSql eventId rootId conversation =
+  [HI.sql|EXISTS (SELECT 1 FROM apis.incident_events event
+    JOIN apis.slack_incident_roots root ON root.episode_id = event.episode_id
+    JOIN apis.incident_episodes episode ON episode.id = root.episode_id
+    JOIN apis.slack s ON s.project_id = event.project_id AND s.team_id = root.team_id
+    JOIN apis.ai_conversations target ON target.project_id = event.project_id AND target.conversation_id = ^{conversation}
+    WHERE event.id::text = ^{eventId} AND root.id::text = ^{rootId} AND event.project_id = r.project_id
+      AND episode.issue_id = target.conversation_id AND event.event_kind IN ('alert', 'recovered', 'resolved')
+      AND event.observed_at >= r.incident_enabled_at
+      AND root.message_ts IS NOT NULL AND NOT root.threadless
+      AND root.team_id = r.incident_team_id AND root.channel_id = r.incident_channel_id
+      AND COALESCE(apis.conversation_evidence_permission(r.project_id, r.conversation_id), #{ProjectMembers.PAdmin}) = #{ProjectMembers.PView}
+      AND COALESCE(apis.conversation_evidence_permission(r.project_id, target.conversation_id), #{ProjectMembers.PAdmin}) = #{ProjectMembers.PView})|]
+
+
 routineRunAccessSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql -> HI.Sql
-routineRunAccessSql pid runId scope =
+routineRunAccessSql = routineRunAccessWithStatus RunRunning
+
+
+incidentReportAllowed :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es Bool
+incidentReportAllowed pid runId =
+  isJust
+    <$> readRunAuthority
+      (routineRunAccessWithStatus RunSucceeded pid runId [HI.sql| AND run.source #>> '{contents,tag}' = 'IncidentEvent'|])
+
+
+routineRunAccessWithStatus :: RoutineRunStatus -> Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql -> HI.Sql
+routineRunAccessWithStatus status pid runId scope =
   [HI.sql|WITH eligible_members AS (|]
     <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{pid}|]
     <> [HI.sql|)|]
     <> [HI.sql|SELECT CASE
       WHEN r.id IS NULL OR NOT r.active OR (r.cancelled_at IS NOT NULL AND r.cancelled_at >= run.started_at)
         OR (run.source = #{ScheduledRun} AND (r.next_run_at IS DISTINCT FROM run.scheduled_at OR r.running_since IS DISTINCT FROM run.started_at)) THEN #{Stopped}
+      WHEN run.source #>> '{contents,tag}' = 'IncidentEvent' AND NOT (|]
+    <> incidentEventBindingSql [HI.sql|run.source #>> '{contents,contents,0}'|] [HI.sql|run.source #>> '{contents,contents,1}'|] [HI.sql|run.conversation_id|]
+    <> [HI.sql|) THEN #{Stopped}
       WHEN owner.user_id IS NULL OR owner.permission NOT IN ('admin', 'edit') OR actor.user_id IS NULL
         OR apis.evidence_permission_rank(authority.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
       WHEN run.policy = #{Autonomous} AND r.policy = #{Autonomous} AND run.authority_version = r.authority_version THEN #{Allowed Autonomous}
@@ -2561,7 +2623,7 @@ routineRunAccessSql pid runId scope =
       LEFT JOIN eligible_members owner ON owner.project_id = r.project_id AND owner.user_id = r.requested_by
       LEFT JOIN eligible_members actor ON actor.project_id = run.project_id AND actor.user_id = run.requested_by
       CROSS JOIN LATERAL (SELECT apis.least_permission(owner.permission, actor.permission, run.permission_ceiling) AS permission) authority
-      WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running'|]
+      WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = #{status}|]
     <> scope
 
 
@@ -2627,7 +2689,7 @@ getEventRun pid event = do
     SlackMessage receipt -> do
       saved <- Hasql.interpOne @(HI.OneColumn (UUIDId "slack_event")) $ slackMessageIdentitySql pid receipt
       pure $ SlackMessage $ maybe receipt HI.getOneColumn saved
-    (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}) -> pure event
+    (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}; IncidentEvent{}) -> pure event
   Hasql.interpOne
     $ routineRunsSql pid
     <> [HI.sql|AND run.source = #{TriggeredRun canonical} ORDER BY run.started_at DESC, run.attempt DESC LIMIT 1|]

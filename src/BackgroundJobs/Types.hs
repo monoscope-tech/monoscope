@@ -41,6 +41,7 @@ data BgJobs
   | ProcessSlackEvent (UUIDId "slack_event")
   | RefreshSlackProgress (UUIDId "slack_progress")
   | AIRoutineRun (UUIDId "ai_routine") UTCTime
+  | InvestigateIncident Projects.ProjectId (UUIDId "incident_event") (UUIDId "slack_incident_root")
   | ResetSlackSession Projects.ProjectId Projects.UserId (UUIDId "slack_event")
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
