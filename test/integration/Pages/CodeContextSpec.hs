@@ -29,6 +29,7 @@ import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Models.Projects.ProjectApiKeys qualified as Keys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
@@ -586,6 +587,30 @@ spec = do
           html `shouldSatisfy` T.isInfixOf "team/checkout"
           html `shouldNotSatisfy` T.isInfixOf "name=\"credentialId\""
           for_ ["Unlink", "Link repository", "Save review settings", "Install GitHub App", "Connect with token"] \control -> html `shouldNotSatisfy` T.isInfixOf control
+
+      it "credentialEncryption_usesFreshNoncesAuthenticatesCiphertextAndReadsLegacyTokens" \tr -> do
+        let encKey = BS.replicate 32 7
+            token = "same-provider-token"
+        Just alpha <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "alpha" Nothing (Just token)
+        Just beta <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "beta" Nothing (Just token)
+        let firstToken = alpha.accessToken :: Maybe Text
+            secondToken = beta.accessToken :: Maybe Text
+        firstToken `shouldNotBe` secondToken
+        for_ [alpha, beta] \credential -> do
+          recovered <- runQueryEffect tr $ GitSync.getGitHubCredential encKey testPid credential.id
+          fmap (.accessToken) recovered `shouldBe` Just (Just token)
+        encoded <- maybe (fail "Missing encrypted credential") pure firstToken
+        body <- maybe (fail "Missing authenticated envelope") pure $ T.stripPrefix "v1:" encoded
+        bytes <- either (fail . toString) pure $ B64.decodeBase64Untyped $ encodeUtf8 body
+        let corrupt = "v1:" <> extractBase64 (B64.encodeBase64 $ BS.map (`xor` 1) bytes)
+            legacy = extractBase64 $ B64.encodeBase64 $ Keys.encryptAPIKey encKey $ encodeUtf8 token
+        withResource tr.trPool \conn -> do
+          void $ PG.execute conn "UPDATE projects.git_credentials SET access_token = ? WHERE id = ?" (corrupt, alpha.id)
+          void $ PG.execute conn "UPDATE projects.git_credentials SET access_token = ? WHERE id = ?" (legacy, beta.id)
+        runQueryEffect tr (GitSync.getGitHubCredential encKey testPid alpha.id) >>= (`shouldSatisfy` isNothing)
+        old <- runQueryEffect tr $ GitSync.getGitHubCredential encKey testPid beta.id
+        fmap (.accessToken) old `shouldBe` Just (Just token)
+        runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "empty" "" Nothing) `shouldThrow` (== Keys.EmptySecret)
 
       it "repositoryConnections_githubCasingDoesNotDuplicateConnectionsOrSyncs" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey

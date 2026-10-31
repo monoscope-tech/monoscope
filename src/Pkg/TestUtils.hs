@@ -117,7 +117,7 @@ import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.Sleep (runNoSleep)
-import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
+import Data.Effectful.UUID (UUIDEff, runStaticUUID, runStaticUUIDRef, runUUID)
 import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPRecord, runHTTPWreq)
 import Data.Either.Extra
 import Data.Generics.Product.Fields (field)
@@ -1061,11 +1061,12 @@ runAsBaseRecordingHTTP TestResources{..} k = do
 -- | Run a query effect (like Charts.queryMetrics) in test context
 -- This is for effects that return data directly (not wrapped in RespHeaders)
 -- Uses frozen time to match background job context
-runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time :> es, Tracing :> es) => Eff es a) -> IO a
+runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO a
 runQueryEffect TestResources{..} action = do
   tp <- getGlobalTracerProvider
   withSharedLogger \logger ->
     action
+      & runStaticUUIDRef trUUIDRef
       & runErrorNoCallStack @ServantS.ServerError
       & Effectful.Reader.Static.runReader trATCtx
       & runLabeled @"timefusion" (runHasqlPool trATCtx.hasqlTimefusionPool)

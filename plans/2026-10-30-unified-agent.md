@@ -950,7 +950,7 @@ All 76 API examples pass, including exact catalog coverage, MCP HTTP routing, re
 
 ### Live Slack access remains an external acceptance requirement (31 October)
 
-A fresh connection probe found no Slack browser tab in Chrome or Arc. The Slack desktop app is running, but macOS rejects UI automation without assistive access. Plugin discovery confirms that the Slack integration is available and not connected in this session. Its existing recent suggestion was not repeated. The controlled workspace/channel target has been requested while independent implementation continues. No live Slack behavior is counted as verified by the signed HTTP fixtures or the local browser artifact checks.
+Plugin discovery confirms that the Slack integration is available and not connected in this session. The desktop app rejects UI automation without assistive access. A subsequent browser navigation confirmed a signed-in Monoscope Slack workspace; absence of an existing Slack tab was insufficient evidence that browser access was unavailable. The controlled workspace/channel target has been requested while independent implementation continues. No live agent behavior is counted as verified by the signed HTTP fixtures or the local browser artifact checks.
 
 ### Channel-scoped incident installations (31 October)
 
@@ -977,6 +977,14 @@ One coherent migration, `0270_incident_agent_delivery.sql`, adds the activation 
 All 38 incident-delivery, 268 bot, and 76 API examples pass against the current implementation. New coverage includes both closing sources, opt-out silence, private-evidence denial in both policies, attributed autonomous remediation, interruption after a real mutation, failure after completion but before outbox insertion, source/context forgery, resumed-request validation, pause and revocation during work or before delivery, installation replacement, bounded summaries with full retained artifacts, and ambiguous-send reconciliation without duplicate inference or publication. The missing worker, revoked-worker retry, reconciliation clock, and resumed-admission regressions each failed before their fixes. Formatting and diff checks pass. Scoped HLint has no new findings; existing hints in the AI and routine-page modules remain unchanged. Repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings.
 
 Controlled Slack acceptance and final whole-branch checks remain open. Optional selected review, streaming, and user-authorized Slack evidence are separate unfinished slices. No push, merge, deployment, or live Slack configuration change is included in this slice.
+
+### Shared authenticated credential storage (31 October)
+
+Slack user authorization will use the shared provider-secret helper rather than introduce another encryption implementation. Existing Git credential writes now use AES-256-GCM with a fresh nonce from the UUID effect, an authenticated version marker, and typed failures for invalid keys, empty secrets, malformed envelopes, and authentication failure. Existing API-key encoding remains unchanged. Git credential reads retain legacy encrypted-token compatibility; unknown secret versions and corrupted authenticated tokens fail closed. No migration or credential rewrite is needed.
+
+The integration regression first exposed identical ciphertext for repeated plaintext, then exposed the empty-secret invariant lost by envelope encoding. Both failures are fixed. All 63 code-context, 268 bot, 76 API, and 38 incident-delivery examples pass with the new helper and shared deterministic UUID interpreter. Scoped HLint, formatting, and diff checks pass. Repeated slice reviews found no material distillation, constraint-evasion, or client-behavior issue. New invariant doctests and final whole-branch gates remain pending.
+
+This is the storage prerequisite, not completed Slack evidence support. User OAuth, requester-bound credential lifecycle, remote MCP reads, revocation, and audience containment remain unfinished. Slack's current metadata advertises its user-only authorization endpoint, confidential client-secret POST exchange, and S256 PKCE; app eligibility and live MCP configuration still require acceptance evidence.
 
 ## External references
 
