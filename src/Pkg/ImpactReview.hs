@@ -29,6 +29,7 @@ import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 import Effectful.Timeout qualified as Timeout
 import Hasql.Interpolate qualified as HI
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (selectLogTable)
 import Models.Projects.AgentUsage qualified as Usage
@@ -36,6 +37,7 @@ import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as Reviews
 import Models.Projects.IssueFixes qualified as Fixes
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types.URI (urlEncode)
@@ -395,7 +397,10 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           cid <- require =<< Git.publishPullRequestComment conn ref run.number existing (marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink)
           Reviews.finishRun run (Just cid)
     requireActive :: (DB es, Error ReviewFailure :> es) => Reviews.ReviewRun -> Issues.EventRun -> Eff es ()
-    requireActive run execution = unlessM (Issues.routineRunActive run.projectId execution.id) $ throwError $ ReviewFailure "Routine paused, stopped, or requester access revoked"
+    requireActive run execution = do
+      unlessM (Issues.routineRunActive run.projectId execution.id) $ throwError $ ReviewFailure "Routine paused, stopped, or requester access revoked"
+      required <- Investigations.conversationEvidencePermission run.projectId (UUIDId run.threadId.unUUIDId)
+      unless (required <= ProjectMembers.PView) $ throwError $ ReviewFailure "Restricted conversation evidence cannot be published to this review's shared destinations"
 
     require :: Either Text a -> ReviewCtx a
     require = either (throwError . ReviewFailure) pure

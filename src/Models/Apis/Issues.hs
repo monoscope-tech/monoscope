@@ -164,6 +164,7 @@ module Models.Apis.Issues (
   ResultStatus (..),
   Publication (..),
   CompletionResult (..),
+  RunTermination (..),
   saveRunResult,
   listRunArtifacts,
   getRoutineRun,
@@ -189,6 +190,8 @@ module Models.Apis.Issues (
   ConversationType (..),
   getOrCreateConversation,
   listConversations,
+  listVisibleConversations,
+  listVisibleRoutineRuns,
   getConversation,
   conversationIssueId,
   conversationNeedsTitle,
@@ -1694,9 +1697,14 @@ runContextAccessSql :: RunContext -> HI.Sql
 runContextAccessSql context = case context.source of
   InteractiveRun{} ->
     [HI.sql|SELECT CASE WHEN conversation.conversation_id IS NULL THEN #{Stopped}
+        WHEN actor.permission IS NULL AND run.project_id = #{Projects.demoProjectId} AND run.evidence_permission = #{ProjectMembers.PView} THEN #{Allowed Observe}
+        WHEN actor.permission IS NULL OR apis.evidence_permission_rank(actor.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
         WHEN run.policy = #{Autonomous} THEN #{Allowed Autonomous} ELSE #{Allowed Observe} END
       FROM apis.ai_routine_runs run LEFT JOIN apis.ai_conversations conversation
         ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
+      LEFT JOIN LATERAL (|]
+      <> ProjectMembers.sessionPermissionSql context.projectId context.requestedBy
+      <> [HI.sql|) actor ON TRUE
       WHERE run.id = #{context.id} AND run.project_id = #{context.projectId} AND run.status IN ('running', 'succeeded')|]
       <> runContextScopeSql context
   (ScheduledRun; TriggeredRun{}) -> routineRunAccessSql context.projectId context.id (runContextScopeSql context)
@@ -1752,9 +1760,9 @@ data RoutineRunStatus = RunRunning | RunSucceeded | RunNoFindings | RunFailed | 
   deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Run" RoutineRunStatus
 
 
-data RoutineRunCompletion = CompletedSucceeded | CompletedNoFindings | CompletedFailed | CompletedTimedOut | CompletedCancelled
+data RunTermination = CompletedSucceeded | CompletedNoFindings | CompletedFailed | CompletedTimedOut | CompletedCancelled
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Completed" RoutineRunCompletion
+  deriving (HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Completed" RunTermination
 
 
 data RoutineCategory = CategoryReliability | CategoryTelemetryQuality | CategoryDelivery | CategoryIncidents | CategoryCost | CategorySecurity
@@ -1906,6 +1914,18 @@ getOrCreateConversation pid convId convType ctx = do
 
 listConversations :: DB es => Projects.ProjectId -> Eff es [ConversationSummary]
 listConversations pid = Hasql.interp $ conversationSummarySql "AI conversation" [HI.sql|WHERE c.project_id = #{pid} ORDER BY (r.id IS NOT NULL) DESC, c.updated_at DESC|]
+
+
+listVisibleConversations :: DB es => Projects.ProjectId -> ProjectMembers.Permissions -> Eff es [ConversationSummary]
+listVisibleConversations pid role = do
+  visible <- Investigations.visibleConversationIds pid role
+  Hasql.interp $ conversationSummarySql "AI conversation" [HI.sql|WHERE c.project_id = #{pid} AND c.conversation_id = ANY(#{visible}) ORDER BY (r.id IS NOT NULL) DESC, c.updated_at DESC|]
+
+
+listVisibleRoutineRuns :: DB es => Projects.ProjectId -> ProjectMembers.Permissions -> Int -> Eff es [RoutineRun]
+listVisibleRoutineRuns pid role limit = do
+  visible <- Investigations.visibleConversationIds pid role
+  Hasql.interp $ routineRunsSql pid <> [HI.sql|AND run.conversation_id = ANY(#{visible}) ORDER BY run.started_at DESC, run.attempt DESC LIMIT #{max 1 $ min 100 limit}|]
 
 
 getConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ConversationSummary)
@@ -2077,7 +2097,8 @@ claimRoutine routineId scheduledAt =
 
 
 getEventRoutine :: DB es => Projects.ProjectId -> RoutineEvent -> Eff es (Maybe EventRoutine)
-getEventRoutine pid event =
+getEventRoutine pid event = do
+  Investigations.classifyLegacyEvidence pid Nothing
   Hasql.interpOne
     $ [HI.sql|SELECT r.id, r.project_id, r.schedule_kind, r.conversation_id, r.requested_by, r.instructions, r.template_version::bigint
       FROM apis.ai_routines r JOIN projects.project_members member ON member.project_id = r.project_id AND member.user_id = r.requested_by
@@ -2118,7 +2139,7 @@ startEventRun routine request continuation convId input = do
       ), inserted AS (
         INSERT INTO apis.ai_routine_runs
           (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, source, attempt,
-           requested_by, input, instructions, template_version, policy, authority_version)
+           requested_by, input, instructions, template_version, policy, authority_version, evidence_permission)
         SELECT identity.id, CASE WHEN #{restart} OR original.id IS NULL THEN identity.id ELSE original.id END,
           r.id, r.project_id, #{convId}, #{now}, clock_timestamp(), 'running', #{source},
           COALESCE((SELECT attempt + 1 FROM previous), 1),
@@ -2127,8 +2148,14 @@ startEventRun routine request continuation convId input = do
           CASE WHEN #{restart} OR original.id IS NULL THEN r.instructions ELSE original.instructions END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.template_version ELSE original.template_version END,
           CASE WHEN #{restart} OR original.id IS NULL THEN #{Observe} ELSE original.policy END,
-          CASE WHEN #{restart} OR original.id IS NULL THEN r.authority_version ELSE original.authority_version END
+          CASE WHEN #{restart} OR original.id IS NULL THEN r.authority_version ELSE original.authority_version END,
+          (SELECT permission FROM (
+            SELECT COALESCE(installation.evidence_permission, #{ProjectMembers.PAdmin}) AS permission
+            UNION ALL SELECT CASE WHEN #{restart} OR original.id IS NULL THEN #{ProjectMembers.PView}
+              ELSE COALESCE(original.evidence_permission, #{ProjectMembers.PAdmin}) END
+          ) scopes ORDER BY apis.evidence_permission_rank(permission) DESC LIMIT 1)
         FROM apis.ai_routines r CROSS JOIN identity LEFT JOIN original ON TRUE
+        JOIN apis.ai_conversations installation ON installation.project_id = r.project_id AND installation.conversation_id = r.conversation_id
         WHERE r.id = #{routine.id} AND r.project_id = #{routine.projectId} AND r.schedule_kind = #{kind} AND r.active
           AND EXISTS (SELECT 1 FROM apis.ai_conversations WHERE project_id = r.project_id AND conversation_id = #{convId})
           AND (#{restart} OR original.id IS NULL OR (original.routine_id = r.id AND original.requested_by IS NOT NULL
@@ -2221,7 +2248,7 @@ data RunCompletion
   | CancelledResult (Maybe Text)
 
 
-data CompletionResult = CompletionRejected | RunCompleted (Maybe ScheduledRoutine)
+data CompletionResult = CompletionRejected | RunCompleted RunTermination (Maybe ScheduledRoutine)
   deriving stock (Show)
 
 
@@ -2313,8 +2340,9 @@ completeRun context proposed = do
               WHERE id = #{slot.id} AND next_run_at = #{slot.scheduledAt} AND running_since = #{context.startedAt}
               RETURNING CASE WHEN active THEN next_run_at END|]
           pure $ ScheduledRoutine slot.id <$> HI.getOneColumn at
-        pure $ RunCompleted $ join next
-      [HI.OneColumn (RunSucceeded; RunNoFindings)] | context.source /= ScheduledRun -> pure $ RunCompleted Nothing
+        pure $ RunCompleted status $ join next
+      [HI.OneColumn RunSucceeded] | context.source /= ScheduledRun -> pure $ RunCompleted CompletedSucceeded Nothing
+      [HI.OneColumn RunNoFindings] | context.source /= ScheduledRun -> pure $ RunCompleted CompletedNoFindings Nothing
       _ -> pure CompletionRejected
 
 
@@ -2330,10 +2358,13 @@ routineRunAccessSql pid runId scope =
       JOIN projects.projects project ON project.id = member.project_id
       WHERE member.project_id = #{pid} |]
     <> ProjectMembers.activeMembership
-    <> [HI.sql|) SELECT CASE
+    <> [HI.sql|)|]
+    <> [HI.sql|SELECT CASE
       WHEN r.id IS NULL OR NOT r.active OR (r.cancelled_at IS NOT NULL AND r.cancelled_at >= run.started_at)
         OR (run.source = #{ScheduledRun} AND (r.next_run_at IS DISTINCT FROM run.scheduled_at OR r.running_since IS DISTINCT FROM run.started_at)) THEN #{Stopped}
-      WHEN owner.user_id IS NULL OR owner.permission NOT IN ('admin', 'edit') OR actor.user_id IS NULL THEN #{Unavailable}
+      WHEN owner.user_id IS NULL OR owner.permission NOT IN ('admin', 'edit') OR actor.user_id IS NULL
+        OR apis.evidence_permission_rank(actor.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin}))
+        OR apis.evidence_permission_rank(owner.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
       WHEN run.policy = #{Autonomous} AND r.policy = #{Autonomous} AND run.authority_version = r.authority_version THEN #{Allowed Autonomous}
       ELSE #{Allowed Observe} END
       FROM apis.ai_routine_runs run LEFT JOIN apis.ai_routines r ON r.id = run.routine_id

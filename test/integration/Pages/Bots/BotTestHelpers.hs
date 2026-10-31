@@ -8,6 +8,7 @@ module Pages.Bots.BotTestHelpers (
   scheduledInvocation,
   interactiveInvocation,
   completeTestRun,
+  resetLegacyEvidenceScope,
   withHTTPResponses,
   withSlackReplyResponses,
   receiveSlackEvent,
@@ -110,6 +111,17 @@ import "cryptonite" Crypto.Error qualified as Crypto
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
+
+
+-- | Reproduce pre-migration evidence atomically, restoring trigger state on failure.
+resetLegacyEvidenceScope :: TestResources -> Projects.ProjectId -> UUIDId "conversation" -> IO ()
+resetLegacyEvidenceScope tr project conversation = withResource tr.trPool $ \conn -> PGS.withTransaction conn do
+  void $ PGS.execute_ conn "ALTER TABLE apis.ai_conversations DISABLE TRIGGER conversation_evidence_permission"
+  void $ PGS.execute_ conn "ALTER TABLE apis.ai_routine_runs DISABLE TRIGGER run_evidence_permission"
+  void $ PGS.execute conn [sql|UPDATE apis.ai_conversations SET evidence_permission = NULL WHERE project_id = ? AND conversation_id = ?|] (project, conversation)
+  void $ PGS.execute conn [sql|UPDATE apis.ai_routine_runs SET evidence_permission = NULL WHERE project_id = ? AND conversation_id = ?|] (project, conversation)
+  void $ PGS.execute_ conn "ALTER TABLE apis.ai_conversations ENABLE TRIGGER conversation_evidence_permission"
+  void $ PGS.execute_ conn "ALTER TABLE apis.ai_routine_runs ENABLE TRIGGER run_evidence_permission"
 
 
 completeTestRun :: (DB es, IOE :> es, Time :> es) => Projects.ProjectId -> Issues.RunClaim -> Issues.RunCompletion -> Eff es ()

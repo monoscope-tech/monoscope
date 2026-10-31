@@ -115,7 +115,7 @@ newtype TitleForm = TitleForm {conversationTitle :: Text}
 threadsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 threadsGetH pid = do
   (_, _, bw) <- mkAIPageCtx pid
-  allConversations <- Issues.listConversations pid
+  allConversations <- visibleConversations pid
   let pageConfig =
         bw
           { pageTitle = "Conversations"
@@ -148,7 +148,8 @@ routinesGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ()))
 routinesGetH pid = do
   canEdit <- canEditRoutines pid
   (_, _, bw) <- mkAIPageCtx pid
-  (conversations, runs) <- concurrently (Issues.listConversations pid) (Issues.listRoutineRuns pid 12)
+  role <- currentViewerPermission pid
+  (conversations, runs) <- concurrently (Issues.listVisibleConversations pid role) (Issues.listVisibleRoutineRuns pid role 12)
   let installed = filter (isJust . (.routineKind)) conversations
       pageConfig =
         bw
@@ -256,13 +257,17 @@ threadPageGetH :: Projects.ProjectId -> UUIDId "conversation" -> Maybe Issues.Ar
 threadPageGetH pid convId docM runM hxTarget = do
   requestId <- UUIDId <$> UUID.genUUID
   canEdit <- canEditRoutines pid
-  (viewer, _, bw) <- mkAIPageCtx pid
+  (_, _, bw) <- mkAIPageCtx pid
+  viewerPermission <- currentViewerPermission pid
+  for_ (convId : map (.conversationId) (maybeToList runM)) $ \conversation -> do
+    required <- Investigations.conversationEvidencePermission pid conversation
+    unless (viewerPermission >= required) $ throwError Servant.err403
   -- The open document's refresh keeps only #ai-document (htmx 4 sends `tag#id`), so skip what it discards.
   let unlessRefresh :: Applicative f => f [a] -> f [a]
       unlessRefresh q = if any ("#ai-document" `T.isSuffixOf`) hxTarget then pure [] else q
   (conversations, (conversationM, (selectedMessages, artifacts))) <-
     concurrently
-      (unlessRefresh $ Issues.listConversations pid)
+      (unlessRefresh $ visibleConversations pid)
       $ concurrently (Issues.getConversation pid convId)
       $ concurrently (unlessRefresh $ Issues.selectChatHistory pid convId) (Issues.listArtifacts pid convId docM)
   instructions <- Issues.getRoutineInstructions pid convId
@@ -272,7 +277,6 @@ threadPageGetH pid convId docM runM hxTarget = do
     requestedBy <- maybe (pure Nothing) Projects.userById evidence.requestedBy
     runArtifacts <- Issues.listRunArtifacts pid run.id
     operations <- Investigations.listOperations @AI.OperationPolicy pid run.id
-    viewerPermission <- fromMaybe ProjectMembers.PView <$> ProjectMembers.getSessionPermission pid viewer.user.id
     pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts viewerPermission operations
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
@@ -548,7 +552,11 @@ routineInstallPostH pid form = do
     Just template -> do
       existing <- find ((== Just template.key) . (.templateKey)) <$> Issues.listConversations pid
       case existing of
-        Just conversation -> redirectToThread pid conversation.conversationId
+        Just conversation -> do
+          role <- currentViewerPermission pid
+          required <- Investigations.conversationEvidencePermission pid conversation.conversationId
+          unless (role >= required) $ throwError Servant.err403
+          redirectToThread pid conversation.conversationId
         Nothing -> do
           convId <- UUIDId <$> UUID.genUUID
           void $ Issues.getOrCreateConversation pid convId Issues.CTWeb (AE.object ["routine_template" AE..= template.key])
@@ -733,3 +741,13 @@ canEditRoutines :: Projects.ProjectId -> ATAuthCtx Bool
 canEditRoutines pid = do
   (sess, _) <- Projects.sessionAndProject pid
   maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid sess.user.id
+
+
+currentViewerPermission :: Projects.ProjectId -> ATAuthCtx ProjectMembers.Permissions
+currentViewerPermission pid = do
+  (session, _) <- Projects.sessionAndProject pid
+  fromMaybe ProjectMembers.PView <$> ProjectMembers.getSessionPermission pid session.user.id
+
+
+visibleConversations :: Projects.ProjectId -> ATAuthCtx [Issues.ConversationSummary]
+visibleConversations pid = currentViewerPermission pid >>= Issues.listVisibleConversations pid

@@ -270,7 +270,7 @@ slackInteractionsHWithTools projectTools interaction = do
               for_ run \execution -> forkBackground authCtx.backgroundScope ("Slack command routine " <> execution.id.toText) do
                 context <- AI.requireRunContext principal.projectId $ Issues.BackgroundClaim principal.userId convId execution.id execution.startedAt
                 let requireRun = do
-                      AI.requireAgentAccess access principal.projectId
+                      AI.requireEvidenceAccess access principal.projectId convId
                       unlessM (Issues.routineRunActive principal.projectId execution.id) $ throwIO AI.AgentStopped
                     finish = void . Issues.completeRun context
                     runLink = "<" <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/runs/" <> execution.id.toText <> "|View run and artifacts>"
@@ -940,7 +940,7 @@ processSlackEventWithTools projectTools receiptId =
           let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts
               turn = Investigations.Turn slackData.projectId convId principal.userId event.ts
               requireRunAccess = do
-                AI.requireAgentAccess access slackData.projectId
+                AI.requireEvidenceAccess access slackData.projectId convId
                 unlessM (Issues.routineRunActive slackData.projectId run.id) $ throwIO AI.AgentStopped
               finish = void . Issues.completeRun context
               addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])

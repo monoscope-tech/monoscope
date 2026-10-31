@@ -298,6 +298,12 @@ extra-source-files:
     static/migrations/0257_ad_attribution.sql
     static/migrations/0257_event_routines_and_run_artifacts.sql
     static/migrations/0258_issue_enrichment_routine.sql
+    static/migrations/0259_agent_run_checkpoints.sql
+    static/migrations/0260_interactive_agent_runs.sql
+    static/migrations/0261_agent_operations.sql
+    static/migrations/0262_unified_routine_authority.sql
+    static/migrations/0263_agent_request_roots.sql
+    static/migrations/0264_agent_evidence_scope.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs
@@ -439,6 +445,7 @@ library
       Pages.Share
       Pages.Telemetry
       Pkg.AdConversions
+      Pkg.AgentCatalog
       Pkg.AI
       Pkg.AssetManifestFingerprint
       Pkg.Components.Facets
@@ -1104,6 +1111,7 @@ test-suite test-dev
       Pages.Share
       Pages.Telemetry
       Pkg.AdConversions
+      Pkg.AgentCatalog
       Pkg.AI
       Pkg.AssetManifestFingerprint
       Pkg.Components.Facets

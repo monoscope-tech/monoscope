@@ -13,6 +13,7 @@ module Models.Projects.ProjectMembers (
   getUserPermission,
   activeMembership,
   getSessionPermission,
+  sessionPermissionSql,
   sessionAndProjectAtLeast,
   updateProjectMembersPermissons,
   softDeleteProjectMembers,
@@ -225,16 +226,22 @@ getUserPermission pid uid =
 
 
 getSessionPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
-getSessionPermission pid user = do
-  member <- getUserPermission pid user
-  case member of
-    Just permission -> pure $ Just permission
-    Nothing -> do
-      principal <- Projects.userById user
-      project <- Projects.projectById pid
-      pure $ case principal of
-        Just account | account.active && isNothing account.deletedAt && account.isSudo && isJust project -> Just PAdmin
-        _ -> Nothing
+getSessionPermission pid user = Hasql.interp $ sessionPermissionSql pid user
+
+
+sessionPermissionSql :: Projects.ProjectId -> Projects.UserId -> HI.Sql
+sessionPermissionSql pid user =
+  [HI.sql|WITH member_permission AS (
+      SELECT member.permission FROM projects.project_members member
+      JOIN users.users account ON account.id = member.user_id
+      JOIN projects.projects project ON project.id = member.project_id
+      WHERE member.project_id = #{pid} AND member.user_id = #{user}|]
+    <> activeMembership
+    <> [HI.sql|) SELECT permission FROM member_permission
+      UNION ALL SELECT #{PAdmin} FROM users.users account
+      WHERE account.id = #{user} AND account.active AND account.deleted_at IS NULL AND account.is_sudo
+        AND EXISTS (SELECT 1 FROM projects.projects WHERE id = #{pid})
+        AND NOT EXISTS (SELECT 1 FROM member_permission)|]
 
 
 -- | 'Projects.sessionAndProject' (members only), then at least @perm@ on the project. A membership's

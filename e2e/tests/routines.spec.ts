@@ -215,3 +215,36 @@ test('action history and policy controls preserve drafts and check current roles
     sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
   }
 });
+
+test('restricted conversation evidence is not served after a role downgrade', async ({ page, baseURL }) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID(), run = randomUUID();
+  const secret = 'restricted-evidence-browser-canary';
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Evidence acceptance');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
+       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, title, evidence_permission)
+         VALUES ('${pid}', '${conversation}', 'web', 'Restricted administrative findings', 'admin');
+       INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content)
+         VALUES ('${pid}', '${conversation}', 'assistant', '${secret}');
+       INSERT INTO apis.ai_routine_runs (id, root_run_id, project_id, conversation_id, scheduled_at, started_at, finished_at, status, source, requested_by, input, evidence_permission)
+         VALUES ('${run}', '${run}', '${pid}', '${conversation}', now(), now(), now(), 'succeeded',
+           '{"tag":"InteractiveRun","contents":{"tag":"WebMessage"}}', '${uid}', 'Inspect administrative evidence', 'admin');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    await page.goto(`/p/${pid}/ai/${conversation}`);
+    await expect(page.locator('#ai-thread-messages')).toContainText(secret);
+    sql(`UPDATE projects.project_members SET permission = 'view' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
+    for (const path of [`/p/${pid}/ai/${conversation}`, `/p/${pid}/ai/runs/${run}`]) {
+      const response = await page.request.get(path);
+      expect(response.status()).toBe(403);
+      expect(await response.text()).not.toContain(secret);
+      await page.goto(path).catch(error => expect(error.message).toContain('ERR_HTTP_RESPONSE_CODE_FAILURE'));
+      await expect(page.locator('body')).not.toContainText(secret);
+    }
+    await page.goto(`/p/${pid}/ai`);
+    await expect(page.getByText('Restricted administrative findings', { exact: true })).toHaveCount(0);
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});

@@ -22,6 +22,7 @@ import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxPushU
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
@@ -62,13 +63,14 @@ mkProjectPageCtx = mkPageCtxWithScope False
 mkPageCtxWithScope :: Bool -> Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project, BWConfig)
 mkPageCtxWithScope withScope pid = do
   (sess, project, bw) <- mkAIPageCtx pid
+  viewerPermission <- fromMaybe ProjectMembers.PView <$> ProjectMembers.getSessionPermission pid sess.user.id
   let now = bw.shellNow
   (facetsM, (activationProgressM, conversations)) <-
     concurrently
       (if withScope then SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now else pure Nothing)
       ( concurrently
           (if V.elem "checklist_dismissed" project.onboardingStepsCompleted then pure Nothing else Just <$> activationProgress pid (V.elem (show Integration) project.onboardingStepsCompleted))
-          (Issues.listConversations pid)
+          (Issues.listVisibleConversations pid viewerPermission)
       )
   let options field = V.fromList $ sort [v.value | SchemaCatalog.FacetData m <- (.facetJson) <$> maybeToList facetsM, v <- HM.findWithDefault [] field m, not (T.null v.value)]
   pure (sess, project, bw{activationProgressM, conversations, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True})

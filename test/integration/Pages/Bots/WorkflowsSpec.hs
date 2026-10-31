@@ -2097,8 +2097,15 @@ spec = around withTestResources do
         void $ runTestBg frozenTime tr $ AI.executeToolCall config $ Chat.ToolCall "public-read" "function" $ Chat.ToolFunction "get_project" mempty
         readIORef invoked >>= (`shouldBe` True)
         writeIORef invoked False
-        void $ runTestBg frozenTime tr $ AI.executeToolCall config{AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id} call
+        let member = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id
+            conversation = UUIDId UUID.nil
+        unbound <- runTestBg frozenTime tr $ AI.executeToolCall config{AI.access = member} call
+        unbound.formatted `shouldSatisfy` T.isInfixOf "durable conversation run"
+        readIORef invoked >>= (`shouldBe` False)
+        mode <- interactiveInvocation tr testPid conversation "Inspect administrative evidence" Issues.Observe
+        void $ runTestBg frozenTime tr $ AI.executeToolCall config{AI.access = member, AI.conversationId = Just conversation, AI.invocationMode = mode} call
         readIORef invoked >>= (`shouldBe` True)
+        runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` PM.PAdmin)
 
       for_ (["interactive", "scheduled", "event"] :: [Text]) \origin -> for_ (["actor", "conversation"] :: [Text]) \changed ->
         it ("sharedAuthority_rejectsChanged" <> toString changed <> "In" <> toString origin <> "Work") \tr -> do
@@ -2371,28 +2378,29 @@ spec = around withTestResources do
             project `shouldSatisfy` T.isInfixOf testPid.toText
           _ -> expectationFailure "Expected catalog, denied administrative read, and shared project read"
 
-      it "denies an MCP admin read to a view-only linked Slack member" \tr -> do
-        setupSlackAgent tr testPid "T_MCP_VIEW"
-        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ?|] (PGS.Only testPid)
-        invoked <- newIORef False
-        let backend =
-              AI.ProjectTools
-                { AI.catalog = Map.singleton "get_api_key" $ MCP.Tool "get_api_key" "Read an API key" (AE.object []) (Just $ MCP.ReadOnly PM.PAdmin) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
-                , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
-                }
-            userId = (getResponse tr.trSessAndHeader).user.id
-            config = (agentConfig testPid){AI.projectTools = Just backend, AI.access = AI.SlackAccess "T_MCP_VIEW" "U0123ABCDEF" userId}
-            provider = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
-                [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "admin" "function" (Chat.ToolFunction "get_api_key" mempty)]}
-                results -> Chat.Message Chat.Assistant (T.intercalate "\n" results) Chat.defaultMessageData
-              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
-              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-        outcome <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Inspect an API key" "model" "key"
-        readIORef invoked >>= (`shouldBe` False)
-        outcome `shouldSatisfy` \case
-          Right answer -> T.isInfixOf "project role" answer.response
-          _ -> False
+      for_ [PM.PView, PM.PAdmin] $ \role ->
+        it ("evidenceDisclosure_deniesRestrictedReadsToASharedSlackAudience: " <> show role) \tr -> do
+          setupSlackAgent tr testPid "T_MCP_VIEW"
+          withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = ? WHERE project_id = ?|] (role, testPid)
+          invoked <- newIORef False
+          let backend =
+                AI.ProjectTools
+                  { AI.catalog = Map.singleton "get_api_key" $ MCP.Tool "get_api_key" "Read an API key" (AE.object []) (Just $ MCP.ReadOnly PM.PAdmin) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+                  , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
+                  }
+              userId = (getResponse tr.trSessAndHeader).user.id
+              config = (agentConfig testPid){AI.projectTools = Just backend, AI.access = AI.SlackAccess "T_MCP_VIEW" "U0123ABCDEF" userId}
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
+                  [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "admin" "function" (Chat.ToolFunction "get_api_key" mempty)]}
+                  results -> Chat.Message Chat.Assistant (T.intercalate "\n" results) Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+          outcome <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Inspect an API key" "model" "key"
+          readIORef invoked >>= (`shouldBe` False)
+          outcome `shouldSatisfy` \case
+            Right answer -> T.isInfixOf (if role == PM.PView then "project role" else "destination") answer.response
+            _ -> False
 
       it "rechecks in-app membership after access is revoked" \tr -> do
         let userId = (getResponse tr.trSessAndHeader).user.id

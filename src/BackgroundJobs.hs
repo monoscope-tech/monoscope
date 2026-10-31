@@ -76,6 +76,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Integrations
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -438,7 +439,7 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
     Just (Right result) -> pure result
   Issues.completeRun context completion >>= \case
     Issues.CompletionRejected -> pass
-    Issues.RunCompleted next -> for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
+    Issues.RunCompleted _ next -> for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.
@@ -3825,6 +3826,8 @@ enhanceIssuesWithLLM pid issueIds = do
                         <> foldMap (\(critical, _, _) -> "\n\nSeverity assessment: " <> bool "Not critical" "Critical" critical) classification
                         <> foldMap (\(cause, category) -> "\n\n## Error analysis\n" <> cause <> "\n\nCategory: " <> category) analysis
                     findings = AE.object ["enhancement" AE..= enhancement, "classification" AE..= classification, "analysis" AE..= analysis]
+                required <- lift $ Investigations.conversationEvidencePermission pid convId
+                unless (required <= ProjectMembers.PView) $ throwError "Restricted conversation evidence cannot update shared issue metadata"
                 lift do
                   Issues.updateIssueEnhancement issueId enhancement.enhancedTitle enhancement.recommendedAction enhancement.migrationComplexity
                   for_ classification $ \(critical, breaking, _) -> Enhancement.updateIssueClassification issueId critical breaking

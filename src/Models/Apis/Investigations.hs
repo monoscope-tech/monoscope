@@ -61,6 +61,10 @@ module Models.Apis.Investigations (
   rejectProgress,
   captureProgress,
   recentProgressEvents,
+  conversationEvidencePermission,
+  retainEvidencePermission,
+  classifyLegacyEvidence,
+  visibleConversationIds,
 ) where
 
 import Data.Aeson qualified as AE
@@ -79,11 +83,14 @@ import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
 import Models.Apis.Integrations qualified as Integrations
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.Types (DB)
+import Prelude (until)
 
 
 data Scope = Scope
@@ -831,3 +838,106 @@ captureProgress appId receiptId =
       AND (se.payload #>> '{event,ts}') ~ '^[0-9]+\.[0-9]+$'
       AND (p.progress_ts IS NULL OR p.progress_ts = se.payload #>> '{event,ts}')
     RETURNING to_jsonb(p), p.progress_ts|]
+
+
+-- | A conversation and its retained runs share the strongest evidence requirement.
+conversationEvidencePermission :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ProjectMembers.Permissions
+conversationEvidencePermission project conversation = do
+  classifyLegacyEvidence project (Just conversation)
+  roles <-
+    Hasql.interp @[HI.OneColumn ProjectMembers.Permissions]
+      [HI.sql|SELECT evidence_permission FROM apis.ai_conversations WHERE project_id = #{project} AND conversation_id = #{conversation}
+      UNION ALL SELECT evidence_permission FROM apis.ai_routine_runs WHERE project_id = #{project} AND conversation_id = #{conversation}|]
+  pure $ foldl' max ProjectMembers.PView (map HI.getOneColumn roles)
+
+
+-- | Locks match completion's run-before-conversation order. Updates are monotonic.
+retainEvidencePermission :: DB es => Projects.ProjectId -> [UUIDId "conversation"] -> ProjectMembers.Permissions -> Eff es ()
+retainEvidencePermission project conversations permission = unless (null conversations) $ Hasql.transaction TxS.ReadCommitted TxS.Write do
+  void
+    $ Hasql.queryTx @[UUIDId "ai_routine_run"]
+      [HI.sql|SELECT id FROM apis.ai_routine_runs WHERE project_id = #{project} AND conversation_id = ANY(#{conversations})
+      AND (evidence_permission IS NULL OR apis.evidence_permission_rank(evidence_permission) < apis.evidence_permission_rank(#{permission})) ORDER BY id FOR UPDATE|]
+  Hasql.executeTx
+    [HI.sql|UPDATE apis.ai_routine_runs SET evidence_permission = #{permission}
+    WHERE project_id = #{project} AND conversation_id = ANY(#{conversations})
+      AND (evidence_permission IS NULL OR apis.evidence_permission_rank(evidence_permission) < apis.evidence_permission_rank(#{permission}))|]
+  Hasql.executeTx
+    [HI.sql|UPDATE apis.ai_conversations SET evidence_permission = #{permission}
+    WHERE project_id = #{project} AND conversation_id = ANY(#{conversations})
+      AND (evidence_permission IS NULL OR apis.evidence_permission_rank(evidence_permission) < apis.evidence_permission_rank(#{permission}))|]
+
+
+-- | Classify historical tool evidence and copied instructions through the shared catalog.
+-- Unknown/malformed historical evidence remains administrator-only.
+classifyLegacyEvidence :: DB es => Projects.ProjectId -> Maybe (UUIDId "conversation") -> Eff es ()
+classifyLegacyEvidence project selected = do
+  pending <-
+    Hasql.interp @[UUIDId "conversation"]
+      [HI.sql|WITH RECURSIVE subjects(conversation_id) AS (
+      SELECT conversation_id FROM (
+        SELECT conversation_id FROM apis.ai_conversations WHERE project_id = #{project} AND evidence_permission IS NULL
+        UNION SELECT conversation_id FROM apis.ai_routine_runs WHERE project_id = #{project} AND evidence_permission IS NULL
+      ) legacy WHERE #{selected} IS NULL OR conversation_id = #{selected}
+      UNION SELECT routine.conversation_id FROM subjects
+        JOIN apis.ai_routine_runs run ON run.project_id = #{project} AND run.conversation_id = subjects.conversation_id
+        JOIN apis.ai_routines routine ON routine.id = run.routine_id AND routine.project_id = #{project}
+    ) SELECT conversation_id FROM subjects|]
+  unless (null pending) do
+    existing <-
+      Hasql.interp @[(UUIDId "conversation", ProjectMembers.Permissions)]
+        [HI.sql|SELECT conversation_id, evidence_permission FROM apis.ai_conversations
+        WHERE project_id = #{project} AND conversation_id = ANY(#{pending}) AND evidence_permission IS NOT NULL
+        UNION ALL SELECT conversation_id, evidence_permission FROM apis.ai_routine_runs
+        WHERE project_id = #{project} AND conversation_id = ANY(#{pending}) AND evidence_permission IS NOT NULL|]
+    sources <-
+      Hasql.interp @[(UUIDId "conversation", Maybe (UUIDId "conversation"))]
+        [HI.sql|SELECT DISTINCT run.conversation_id, routine.conversation_id FROM apis.ai_routine_runs run
+        LEFT JOIN apis.ai_routines routine ON routine.id = run.routine_id AND routine.project_id = #{project}
+        WHERE run.project_id = #{project} AND run.conversation_id = ANY(#{pending}) AND run.source->>'tag' <> 'InteractiveRun'|]
+    calls <-
+      Hasql.interp @[(UUIDId "conversation", Aeson AE.Value)]
+        [HI.sql|SELECT conversation_id, metadata FROM apis.ai_chat_messages
+        WHERE project_id = #{project} AND conversation_id = ANY(#{pending}) AND role = 'assistant' AND metadata IS NOT NULL
+        UNION ALL SELECT conversation_id, actions FROM apis.ai_routine_runs
+        WHERE project_id = #{project} AND conversation_id = ANY(#{pending}) AND actions IS NOT NULL|]
+    checkpoints <-
+      Hasql.interp @[(UUIDId "conversation", Aeson AE.Value)]
+        [HI.sql|SELECT conversation_id, checkpoint FROM apis.slack_turn_checkpoints
+        WHERE project_id = #{project} AND conversation_id = ANY(#{pending})|]
+    operations <-
+      Hasql.interp @[(UUIDId "conversation", Aeson AE.Value)]
+        [HI.sql|SELECT run.conversation_id, operation.proposal->'call' FROM apis.ai_agent_operations operation
+        JOIN apis.ai_routine_runs run ON run.id = operation.run_id
+        WHERE run.project_id = #{project} AND run.conversation_id = ANY(#{pending})|]
+    let policies =
+          Map.fromListWith max
+            $ [(conversation, ProjectMembers.PView) | conversation <- pending]
+            <> existing
+            <> [(conversation, parsed (map (.name) :: [ToolCallInfo] -> [Text]) payload) | (conversation, Aeson payload) <- calls]
+            <> [(conversation, parsed checkpointNames payload) | (conversation, Aeson payload) <- checkpoints]
+            <> [(conversation, parsed (pure . LLM.toolFunctionName . LLM.toolCallFunction) payload) | (conversation, Aeson payload) <- operations]
+        inherit roles = Map.unionWith max roles $ Map.fromListWith max [(target, maybe ProjectMembers.PAdmin (\source -> Map.findWithDefault ProjectMembers.PAdmin source roles) origin) | (target, origin) <- sources]
+        resolved = until (\roles -> inherit roles == roles) inherit policies
+    for_ (Map.toList $ Map.fromListWith (<>) [(role, [conversation]) | (conversation, role) <- Map.toList resolved]) $ \(role, conversations) -> retainEvidencePermission project conversations role
+  where
+    parsed :: AE.FromJSON value => (value -> [Text]) -> AE.Value -> ProjectMembers.Permissions
+    parsed names value = case AE.fromJSON value of
+      AE.Error _ -> ProjectMembers.PAdmin
+      AE.Success stored -> foldl' max ProjectMembers.PView $ map toolPermission $ names stored
+    toolPermission name = maybe ProjectMembers.PAdmin Catalog.disclosurePermission $ join $ Map.lookup name Catalog.policiesByName
+    checkpointNames = \case
+      AnswerReady answer -> map (.name) answer.toolCalls
+      ModelPending step -> map (.name) step.toolCalls
+      ToolsPending step _ completed pending -> map (.name) step.toolCalls <> map (LLM.toolFunctionName . LLM.toolCallFunction) (map fst completed <> pending)
+
+
+visibleConversationIds :: DB es => Projects.ProjectId -> ProjectMembers.Permissions -> Eff es [UUIDId "conversation"]
+visibleConversationIds project permission = do
+  classifyLegacyEvidence project Nothing
+  Hasql.interp
+    [HI.sql|SELECT conversation_id FROM (
+        SELECT conversation_id, evidence_permission FROM apis.ai_conversations WHERE project_id = #{project}
+        UNION ALL SELECT conversation_id, evidence_permission FROM apis.ai_routine_runs WHERE project_id = #{project}
+      ) scopes GROUP BY conversation_id
+      HAVING max(apis.evidence_permission_rank(evidence_permission)) <= apis.evidence_permission_rank(#{permission})|]

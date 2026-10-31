@@ -9,6 +9,7 @@ import Data.Aeson.Lens (key, values, _Array, _String)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
+import Data.Effectful.UUID qualified as UUIDEff
 import Data.IORef qualified as IORef
 import Data.Map qualified as Map
 import Data.Pool (withResource)
@@ -28,9 +29,10 @@ import Langchain.LLM.Core qualified as LLM
 import Models.Apis.Investigations (ToolCallInfo (..), ToolResult (..))
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.AIThreads qualified as AIThreads
-import Pages.Bots.BotTestHelpers (assertJsonGolden, completeTestRun, getOpenAIKey, getOpenAIModel, interactiveInvocation, scheduledInvocation, setupSlackData, withHTTPResponses)
+import Pages.Bots.BotTestHelpers (assertJsonGolden, completeTestRun, getOpenAIKey, getOpenAIModel, interactiveInvocation, resetLegacyEvidenceScope, scheduledInvocation, setupSlackData, withHTTPResponses)
 import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
 import Pages.Bots.Utils (processAIQuery)
 import Pages.Issues qualified as IssuePage
@@ -516,6 +518,198 @@ spec = around withTestResources do
         void $ testServant tr $ AIThreads.routinePostH testPid conversation.conversationId (AIThreads.RoutineForm $ fromRightShow $ Issues.mkRoutineInterval 15)
         unchanged <- runQueryEffect tr $ Issues.getConversation testPid conversation.conversationId
         (unchanged >>= (.routineKind)) `shouldBe` Just Issues.ScheduleSlackMessage
+
+      for_ [False, True] $ \legacy ->
+        it ("evidenceDisclosure_adminReadRestrictsItsConversationAfterRoleChange: " <> show legacy) \tr -> do
+          let conversation = UUIDId $ UUID.fromWords 0 0 44 1
+              user = (getResponse tr.trSessAndHeader).user.id
+              secret = "administrator-evidence-canary"
+          runQueryEffect tr (ProjectMembers.getSessionPermission testPid user) >>= (`shouldBe` Just ProjectMembers.PAdmin)
+          mode <- interactiveInvocation tr testPid conversation "Inspect project credentials" Issues.Autonomous
+          let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.WebSession user, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.projectTools = Just Routes.mcpProjectTools}
+              provider :: ATBackgroundCtx a -> ATBackgroundCtx a
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                  [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "credentials" "function" $ LLM.ToolFunction "list_api_keys" mempty]}
+                  [_] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "document" "function" $ LLM.ToolFunction "save_artifact" $ Map.fromList [("key", AE.String "admin-evidence"), ("title", AE.String "Administrative findings"), ("content", AE.String secret)]]}
+                  _ -> LLM.Message LLM.Assistant secret LLM.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Right "Credential inventory"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+          runTestBg frozenTime tr $ provider do
+            answer <- AI.runAgenticChatWithHistory config "Inspect project credentials" "model" "key" >>= either (throwIO . ErrorCall . toString) pure
+            liftIO $ map (.name) answer.toolCalls `shouldBe` ["list_api_keys", "save_artifact"]
+            liftIO $ map (.rawData) answer.toolCalls `shouldSatisfy` all isJust
+            liftIO $ map (.resultPreview) answer.toolCalls `shouldSatisfy` all (not . T.isInfixOf "Tool failed:")
+            void $ AI.completeAgenticResponse config "Inspect project credentials" "model" "key" answer
+          runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` ProjectMembers.PAdmin)
+          (_, administratorView) <- testServant tr $ AIThreads.threadGetH testPid conversation Nothing Nothing
+          renderT administratorView `shouldSatisfy` T.isInfixOf secret
+          for_ ["send_to_slack", "write_project_memory"] $ \name -> do
+            denied <- runTestBg frozenTime tr $ AI.executeToolCall config (LLM.ToolCall "shared-destination" "function" $ LLM.ToolFunction name mempty)
+            denied.formatted `shouldSatisfy` T.isInfixOf "restricted evidence"
+          when legacy $ resetLegacyEvidenceScope tr testPid conversation
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+          (status, readerView) <- runAuthHandler tr $ ((\response -> (200, renderT $ getResponse response)) <$> AIThreads.threadGetH testPid conversation Nothing Nothing) `catchError` \_ (err :: ServerError) -> pure (err.errHTTPCode, "")
+          readerView `shouldSatisfy` (not . T.isInfixOf secret)
+          status `shouldBe` 403
+          for_ [AIThreads.threadsGetH testPid, AIThreads.routinesGetH testPid] $ \handler -> do
+            (_, page) <- testServant tr handler
+            renderT page `shouldSatisfy` (not . T.isInfixOf "Credential inventory")
+          replay <- tryAny $ runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Read the saved private answer" "model" "key"
+          replay `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
+          document <- tryAny $ runTestBg frozenTime tr $ AI.executeToolCall config (LLM.ToolCall "read-private-document" "function" $ LLM.ToolFunction "read_artifact" $ Map.fromList [("key", AE.String "admin-evidence")])
+          document `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
+          case mode of
+            AI.DurableRun context -> do
+              runStatus <- runAuthHandler tr $ (AIThreads.routineRunGetH testPid context.id Nothing $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+              runStatus `shouldBe` 403
+            AI.InteractiveReadOnly -> expectationFailure "Expected a durable private run"
+          runQueryEffect tr do
+            Hasql.interpExecute_ [HI.sql|UPDATE users.users SET is_sudo = TRUE WHERE id = #{user}|]
+            Hasql.interpExecute_ [HI.sql|DELETE FROM projects.project_members WHERE project_id = #{testPid} AND user_id = #{user}|]
+          recovered <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Read the private result as a sudo session" "model" "key"
+          fmap (.response) recovered `shouldBe` Right secret
+          memberOnly <- tryAny $ runTestBg frozenTime tr $ AI.requireEvidenceAccess (AI.MemberAccess AI.ProjectMember user) testPid conversation
+          memberOnly `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
+
+      it "evidenceDisclosure_titleInferenceRechecksAccessBeforeReturningAnAnswer" \tr -> do
+        let conversation = UUIDId $ UUID.fromWords 0 0 44 9
+            user = (getResponse tr.trSessAndHeader).user.id
+        mode <- interactiveInvocation tr testPid conversation "Inspect project credentials" Issues.Observe
+        let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.WebSession user, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.projectTools = Just Routes.mcpProjectTools}
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "credentials" "function" $ LLM.ToolFunction "list_api_keys" mempty]}
+                _ -> LLM.Message LLM.Assistant "Private credential findings" LLM.defaultMessageData
+              ELLM.CallLLM{} -> do
+                Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+                pure $ Right "Private title"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+        outcome <- tryAny $ runTestBg frozenTime tr $ provider do
+          answer <- AI.runAgenticChatWithHistory config "Inspect project credentials" "model" "key" >>= either (throwIO . ErrorCall . toString) pure
+          AI.completeAgenticResponse config "Inspect project credentials" "model" "key" answer
+        outcome `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
+
+      it "evidenceDisclosure_roleChangeDuringInferenceCannotPublishOrPoisonAnotherConversation" \tr -> do
+        let conversation = UUIDId $ UUID.fromWords 0 0 44 3
+            user = (getResponse tr.trSessAndHeader).user.id
+            secret = "private-inflight-answer"
+            configuration mode target = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.WebSession user, AI.conversationId = Just target, AI.invocationMode = mode, AI.projectTools = Just Routes.mcpProjectTools}
+        mode <- interactiveInvocation tr testPid conversation "Inspect restricted evidence" Issues.Observe
+        let provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> case [message.content | message <- toList history, message.role == LLM.Tool] of
+                [] -> pure $ Right $ LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "credentials" "function" $ LLM.ToolFunction "list_api_keys" mempty]}
+                _ -> do
+                  Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+                  pure $ Right $ LLM.Message LLM.Assistant secret LLM.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected title request"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+        outcome <- tryAny $ runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory (configuration mode conversation) "Inspect restricted evidence" "model" "key"
+        outcome `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
+        case mode of
+          AI.DurableRun context -> do
+            recorded <- runQueryEffect tr $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult secret []
+            recorded `shouldSatisfy` \case Issues.RunCompleted Issues.CompletedCancelled Nothing -> True; _ -> False
+            runQueryEffect tr (Issues.getRoutineRun testPid context.id) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)
+            runQueryEffect tr (Issues.listRunArtifacts testPid context.id) >>= (`shouldSatisfy` null)
+          AI.InteractiveReadOnly -> expectationFailure "Expected a durable request"
+        history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+        [message.content | message <- history, message.role == Issues.ChatAssistant] `shouldBe` []
+        let publicConversation = UUIDId $ UUID.fromWords 0 0 44 4
+        public <- interactiveInvocation tr testPid publicConversation "Ordinary reader request" Issues.Observe
+        denied <- runTestBg frozenTime tr $ AI.executeToolCall (configuration public publicConversation) (LLM.ToolCall "denied-read" "function" $ LLM.ToolFunction "list_api_keys" mempty)
+        denied.formatted `shouldSatisfy` T.isInfixOf "required admin permission"
+        runQueryEffect tr (Investigations.conversationEvidencePermission testPid publicConversation) >>= (`shouldBe` ProjectMembers.PView)
+
+      it "evidenceDisclosure_publicDemoRequestsRetainTheirReadOnlySessionAuthority" \tr -> do
+        let conversation = UUIDId $ UUID.fromWords 0 0 44 5
+        (user, mode) <- runTestBg frozenTime tr do
+          actor <- Projects.createUser "Public" "Visitor" "" "public-agent-visitor@example.test"
+          Projects.insertUser actor
+          request <- UUIDId <$> UUIDEff.genUUID
+          void $ Issues.startInteractiveRun testPid conversation actor.id request "Read public demo evidence" Issues.Observe Issues.WebConversation
+          invocation <- AI.DurableRun <$> AI.requireRunContext testPid (Issues.InteractiveClaim actor.id conversation request)
+          pure (actor.id, invocation)
+        let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.WebSession user, AI.conversationId = Just conversation, AI.invocationMode = mode}
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> pure $ Right $ LLM.Message LLM.Assistant "Public demo evidence" LLM.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "No title required"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+        runTestBg frozenTime tr $ provider do
+          answer <- AI.runAgenticChatWithHistory config "Read public demo evidence" "model" "key" >>= either (throwIO . ErrorCall . toString) pure
+          void $ AI.completeAgenticResponse config "Read public demo evidence" "model" "key" answer
+        history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+        [message.content | message <- history, message.role == Issues.ChatAssistant] `shouldBe` ["Public demo evidence"]
+
+      it "evidenceDisclosure_nativeInputsInheritInstallationScopeWithoutDuplicateActivation" \tr -> do
+        void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
+        installed <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventIssueEnrichment) >>= maybe (fail "Missing enrichment installation") pure
+        runQueryEffect tr do
+          Issues.setRoutineInstructions testPid installed.conversationId "Administrative evidence in the routine instructions."
+          Investigations.retainEvidencePermission testPid [installed.conversationId] ProjectMembers.PAdmin
+        let conversation = UUIDId $ UUID.fromWords 0 0 44 6
+            source = Issues.IssueEnrichment $ UUIDId UUID.nil
+        runTestBg frozenTime tr do
+          void $ Issues.getOrCreateConversation testPid conversation Issues.CTAnomaly (AE.object [])
+          void $ Issues.startEventRun installed (Issues.IssueEnrichmentRequest $ UUIDId UUID.nil) Issues.StartRun conversation "Enrich this issue"
+        runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` ProjectMembers.PAdmin)
+        execution <- runQueryEffect tr (Issues.getEventRun testPid source) >>= maybe (fail "Missing native run") pure
+        (_, page) <- testServant tr $ AIThreads.routineRunGetH testPid execution.id Nothing
+        renderT page `shouldSatisfy` T.isInfixOf "Administrative evidence in the routine instructions."
+        resetLegacyEvidenceScope tr testPid conversation
+        runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` ProjectMembers.PAdmin)
+        let user = (getResponse tr.trSessAndHeader).user.id
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = #{testPid} AND user_id = #{user}|]
+        status <- runAuthHandler tr $ (AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment") $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+        status `shouldBe` 403
+        installations <- runQueryEffect tr $ Issues.listConversations testPid
+        length (filter ((== Just "issue-enrichment") . (.templateKey)) installations) `shouldBe` 1
+        runTestBg frozenTime tr $ Issues.deleteConversation testPid installed.conversationId
+        resetLegacyEvidenceScope tr testPid conversation
+        runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` ProjectMembers.PAdmin)
+
+      it "evidenceDisclosure_unrecognizedLegacyEvidenceRemainsRestricted" \tr -> do
+        let cases = [(7, AE.toJSON ([ToolCallInfo "retired-sensitive-operation" mempty "Historical result" Nothing] :: [ToolCallInfo])), (8, AE.object ["unrecognized_schema" AE..= True])] :: [(Word32, AE.Value)]
+            user = (getResponse tr.trSessAndHeader).user.id
+        for_ cases $ \(suffix, metadata) -> do
+          let conversation = UUIDId $ UUID.fromWords 0 0 44 suffix
+          runTestBg frozenTime tr do
+            void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+            Issues.insertChatMessage testPid conversation Issues.ChatAssistant "Unclassified historical evidence" Nothing (Just metadata)
+          resetLegacyEvidenceScope tr testPid conversation
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+          status <- runAuthHandler tr $ (AIThreads.threadGetH testPid conversation Nothing Nothing $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+          status `shouldBe` 403
+          runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` ProjectMembers.PAdmin)
+
+      it "evidenceDisclosure_permissionOrderAndRecreatedConversationsRetainTheirScope" \tr -> do
+        let conversation = UUIDId $ UUID.fromWords 0 0 44 2
+            roles = [minBound .. maxBound] :: [ProjectMembers.Permissions]
+        comparisons <-
+          runQueryEffect tr
+            $ Hasql.interp @[(ProjectMembers.Permissions, ProjectMembers.Permissions, Bool)]
+              [HI.sql|SELECT viewer, required, apis.evidence_permission_rank(viewer) >= apis.evidence_permission_rank(required)
+            FROM unnest(#{roles}::projects.project_permissions[]) viewer CROSS JOIN unnest(#{roles}::projects.project_permissions[]) required|]
+        comparisons `shouldSatisfy` \rows -> length rows == length roles * length roles && all (\(viewer, required, allowed) -> allowed == (viewer >= required)) rows
+        void $ interactiveInvocation tr testPid conversation "Retain private evidence" Issues.Observe
+        runQueryEffect tr do
+          Investigations.retainEvidencePermission testPid [conversation] ProjectMembers.PAdmin
+          Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_conversations SET evidence_permission = 'view' WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]
+          Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET evidence_permission = 'view' WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]
+        runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` ProjectMembers.PAdmin)
+        runTestBg frozenTime tr do
+          Issues.deleteConversation testPid conversation
+          void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+        void $ interactiveInvocation tr testPid conversation "A new request cannot lower the scope" Issues.Observe
+        recorded <-
+          runQueryEffect tr
+            $ Hasql.interp @[HI.OneColumn ProjectMembers.Permissions]
+              [HI.sql|SELECT evidence_permission FROM apis.ai_conversations WHERE project_id = #{testPid} AND conversation_id = #{conversation}
+            UNION ALL SELECT evidence_permission FROM apis.ai_routine_runs WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]
+        map HI.getOneColumn recorded `shouldBe` replicate 3 ProjectMembers.PAdmin
+        other <- createTestProject tr "Other evidence project"
+        void $ runTestBg frozenTime tr $ Issues.getOrCreateConversation other conversation Issues.CTWeb (AE.object [])
+        runQueryEffect tr (Investigations.conversationEvidencePermission other conversation) >>= (`shouldBe` ProjectMembers.PView)
 
       for_ [("issue-enrichment", Issues.EventIssueEnrichment, Issues.IssueEnrichment $ UUIDId UUID.nil, Issues.IssueEnrichmentRequest $ UUIDId UUID.nil), ("production-impact-review", Issues.EventPullRequest, Issues.PullRequestReview $ UUIDId UUID.nil, Issues.PullRequestReviewRequest $ UUIDId UUID.nil)] $ \(template, kind, source, request) ->
         it ("nativeRequestRecovery_ownerChangeRetainsOriginalActor: " <> template) \tr -> do
@@ -1021,7 +1215,7 @@ spec = around withTestResources do
           runQueryEffect tr (Issues.routineRunPolicyFor testPid run.runId user conversation) >>= (`shouldBe` Just Issues.Observe)
         context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation run.runId run.claimedAt
         runTestBg slot.scheduledAt tr (Issues.completeRun context $ Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult "No findings" []) >>= \case
-          Issues.RunCompleted (Just next) -> do
+          Issues.RunCompleted Issues.CompletedNoFindings (Just next) -> do
             future <- runQueryEffect tr (Issues.claimRoutine next.id next.scheduledAt) >>= maybe (fail "Expected a future run") pure
             future.policy `shouldBe` Issues.Autonomous
             runQueryEffect tr (Issues.routineRunPolicyFor testPid future.runId user conversation) >>= (`shouldBe` Just Issues.Autonomous)
@@ -1060,7 +1254,7 @@ spec = around withTestResources do
             context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.BackgroundClaim (getResponse tr.trSessAndHeader).user.id convId lease.runId lease.claimedAt
             next <-
               runTestBg slot.scheduledAt tr (Issues.completeRun context $ Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult "No findings" []) >>= \case
-                Issues.RunCompleted (Just value) -> pure value
+                Issues.RunCompleted Issues.CompletedNoFindings (Just value) -> pure value
                 _ -> fail "Expected the next scheduled instant"
             future <- runQueryEffect tr (Issues.claimRoutine next.id next.scheduledAt) >>= maybe (fail "Expected a future run") pure
             future.policy `shouldBe` Issues.Autonomous
@@ -1193,7 +1387,7 @@ spec = around withTestResources do
         context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation lease.runId lease.claimedAt
         runQueryEffect tr $ Issues.deleteConversation testPid conversation
         result <- runTestBg frozenTime tr $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult "Must not be published" []
-        result `shouldSatisfy` (\case Issues.RunCompleted Nothing -> True; _ -> False)
+        result `shouldSatisfy` (\case Issues.RunCompleted Issues.CompletedCancelled Nothing -> True; _ -> False)
         runQueryEffect tr (Issues.getRoutineRun testPid lease.runId) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)
         runQueryEffect tr (Issues.listRunArtifacts testPid lease.runId) >>= (`shouldSatisfy` null)
         runQueryEffect tr (Issues.selectChatHistory testPid conversation) >>= (`shouldSatisfy` null)
@@ -1220,7 +1414,7 @@ spec = around withTestResources do
         lease <- IORef.readIORef recovered >>= maybe (fail "Expected the replacement lease") pure
         context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation lease.runId lease.claimedAt
         result <- runTestBg frozenTime tr $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer $ AI.AgenticChatResult "Current report" []
-        result `shouldSatisfy` (\case Issues.RunCompleted (Just _) -> True; _ -> False)
+        result `shouldSatisfy` (\case Issues.RunCompleted Issues.CompletedSucceeded (Just _) -> True; _ -> False)
         historyAfter <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
         [message.content | message <- historyAfter, message.role == Issues.ChatAssistant] `shouldBe` ["Current report"]
 
