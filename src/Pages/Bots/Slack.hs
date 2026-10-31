@@ -518,8 +518,26 @@ slackActionsH action = do
                 , ("shortcut", AE.toJSON shortcut)
                 ]
       acceptSlackEvent $ EventCallback shortcut.team.id ("shortcut:" <> shortcut.trigger_id) envCfg.slackAppId event
+    Just "block_actions" | wire ^? key "actions" . values . key "action_id" . _String == Just "monoscope_review_details" -> pure $ AE.object []
+    Just "block_actions"
+      | Just actionId <- wire ^? key "actions" . values . key "action_id" . _String
+      , Just decision <- Progress.reviewDecision actionId -> do
+          (workspace, user, identifier) <- either (const $ throwError err400) pure $ AE.parseEither parseReview wire
+          project <- Hasql.interpOne @(UUIDId "project") [HI.sql|SELECT operation.project_id FROM apis.ai_agent_operations operation JOIN apis.slack installation ON installation.project_id = operation.project_id AND installation.team_id = #{workspace} WHERE operation.id = #{identifier}|] >>= maybe (throwError err403) pure
+          principal <- Integrations.resolveSlackPrincipal workspace user (Just project) >>= maybe (throwError err403) pure
+          result <- BgJobs.reviewOperation project principal.userId identifier decision
+          case result of
+            Investigations.ReviewUnavailable -> throwError err403
+            (Investigations.ReviewSaved{}; Investigations.ReviewAlreadyDecided{}; Investigations.ReviewExpired) -> pure $ AE.object []
     _ -> either (const $ throwError err400) dashboardActionsH $ AE.parseEither AE.parseJSON wire
   where
+    parseReview = AE.withObject "Operation review" \o -> do
+      workspace <- o AE..: "team" >>= (AE..: "id")
+      user <- o AE..: "user" >>= (AE..: "id")
+      [button] <- o AE..: "actions" :: AE.Parser [AE.Object]
+      identifier <- button AE..: "value"
+      pure (workspace, user, identifier)
+
     dashboardActionsH :: SlackAction -> ATBaseCtx AE.Value
     dashboardActionsH slackAction = do
       envCfg <- asks env
@@ -987,10 +1005,29 @@ processSlackEvent = processSlackEventWithTools Nothing
 
 processSlackEventWithTools :: Maybe AI.ProjectTools -> UUIDId "slack_event" -> ATBackgroundCtx ()
 processSlackEventWithTools projectTools receiptId =
-  runReceipt `catches` [Handler \(RateLimit.SlackRateLimited retryAt) -> defer retryAt, Handler \SlackWorkerBusy -> retryAfter 1, Handler \SlackPublicationPending -> retryAfter 60]
+  runReceipt `catches` [Handler \(RateLimit.SlackRateLimited retryAt) -> defer retryAt, Handler \SlackWorkerBusy -> retryAfter 1, Handler \SlackPublicationPending -> retryAfter 60, Handler \(AI.AgentAwaitingReview identifier expiresAt) -> deferReview identifier expiresAt]
   where
     retryAfter seconds = slackRetryTime seconds >>= defer
     defer = scheduleSlackJob (Hasql.queryTx @[UUIDId "slack_event"] [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL FOR UPDATE|]) (BgJobs.ProcessSlackEvent receiptId)
+
+    deferReview identifier expiresAt = do
+      now <- Time.currentTime
+      delivered <-
+        Hasql.interpScalar @Bool
+          [HI.sql|SELECT EXISTS (
+        SELECT 1 FROM apis.slack_investigation_progress progress JOIN apis.slack_events receipt ON receipt.id = #{receiptId}
+        WHERE progress.team_id = receipt.team_id AND progress.channel_id = receipt.payload #>> '{event,channel}'
+          AND progress.thread_ts = COALESCE(receipt.payload #>> '{event,thread_ts}', receipt.payload #>> '{event,ts}')
+          AND progress.message_ts = receipt.payload #>> '{event,ts}' AND progress.progress_ts IS NOT NULL)|]
+      scheduleSlackJob
+        ( Hasql.queryTx @[UUIDId "slack_event"]
+            [HI.sql|SELECT receipt.id FROM apis.slack_events receipt
+          JOIN apis.ai_agent_operations operation ON operation.id = #{identifier}
+          WHERE receipt.id = #{receiptId} AND receipt.processed_at IS NULL
+            AND operation.review->>'tag' = 'ReviewPending' FOR UPDATE OF operation, receipt|]
+        )
+        (BgJobs.ProcessSlackEvent receiptId)
+        (if delivered then expiresAt else min expiresAt $ addUTCTime 60 now)
 
     runReceipt = do
       pending <-
@@ -1007,7 +1044,7 @@ processSlackEventWithTools projectTools receiptId =
                   Investigations.captureReplyPublication envCfg.slackAppId receiptId
                   observedProgress <- Investigations.captureProgress envCfg.slackAppId receiptId
                   for_ observedProgress $ \(target, timestamp) ->
-                    withInvestigationLock target.teamId target.channelId target.threadTs $ refreshObservedProgress target timestamp
+                    withInvestigationLock target.teamId target.channelId target.threadTs $ refreshObservedProgress envCfg.hostUrl target timestamp
                   captured <- Incidents.captureSlackRoot envCfg.slackAppId receiptId
                   when (Just "monoscope_incident_root" == (AE.toJSON event ^? key "metadata" . key "event_type" . _String) && not captured)
                     $ Log.logAttention "Slack root observation did not match the configured app or incident destination" (AE.object ["receipt_id" AE..= receiptId])
@@ -1238,7 +1275,7 @@ processSlackEventWithTools projectTools receiptId =
                       ( \_ ->
                           race_
                             (forever $ requireRunAuthority >> Concurrent.threadDelay 500_000)
-                            (withInvestigationProgress slackData access deliverAnswer)
+                            (withInvestigationProgress envCfg.hostUrl slackData access deliverAnswer)
                       )
                     pure True
                 )
@@ -1247,7 +1284,7 @@ processSlackEventWithTools projectTools receiptId =
                 sendSlackChatMessage slackData.botToken (addThread $ AE.object ["text" AE..= ("Investigation stopped. Send another message to continue." :: Text)]) $> False
           case outcome of
             Left err -> do
-              finish $ Issues.FailedResult $ Issues.RunFailure "Slack investigation interrupted; delivery will retry." Issues.RunOnly
+              unless (isJust $ fromException @AI.AgentAwaitingReview err) $ finish $ Issues.FailedResult $ Issues.RunFailure "Slack investigation interrupted; delivery will retry." Issues.RunOnly
               throwIO err
             Right False -> finish $ Issues.CancelledResult Nothing
             Right True -> do
@@ -1367,6 +1404,7 @@ slackRetryTime seconds =
 
 refreshSlackProgress :: UUIDId "slack_progress" -> ATBackgroundCtx ()
 refreshSlackProgress publicationId = do
+  envCfg <- asks env
   let retryAfter seconds = slackRetryTime seconds >>= scheduleProgressRefresh publicationId
   outcome <-
     tryAny
@@ -1375,7 +1413,7 @@ refreshSlackProgress publicationId = do
         withInvestigationLock target.teamId target.channelId target.threadTs
           $ RateLimit.withRateLimits target.teamId do
             recovered <- maybe (reconcileProgressHistory target publicationId) (pure . Just) timestamp
-            maybe (retryAfter 60) (refreshObservedProgress target) recovered
+            maybe (retryAfter 60) (refreshObservedProgress envCfg.hostUrl target) recovered
   for_ (leftToMaybe outcome) $ \err ->
     case fromException @RateLimit.SlackRateLimited err of
       Just (RateLimit.SlackRateLimited retryAt) -> scheduleProgressRefresh publicationId retryAt
@@ -1553,8 +1591,8 @@ data SlackPublishedMessage = SlackPublishedMessage
 -- | Poll only committed activity. The thread lock serializes publication and
 -- retries reuse an acknowledged progress message. Progress failure does not
 -- discard a completed investigation answer.
-withInvestigationProgress :: (Concurrent :> es, DB es, HTTP :> es, IOE :> es, Log.Log :> es) => SlackData -> AI.AgentAccess -> Eff es () -> Eff es ()
-withInvestigationProgress slackData access action = case access of
+withInvestigationProgress :: (Concurrent :> es, DB es, HTTP :> es, IOE :> es, Log.Log :> es) => Text -> SlackData -> AI.AgentAccess -> Eff es () -> Eff es ()
+withInvestigationProgress hostUrl slackData access action = case access of
   AI.SlackInvestigationAccess run -> do
     previous <- newIORef Nothing
     let target = Investigations.ProgressTarget slackData.projectId run.teamId run.channelId run.threadTs run.messageTs run.userId run.slackUserId
@@ -1565,7 +1603,8 @@ withInvestigationProgress slackData access action = case access of
           for_ (Progress.snapshot run.messageTs history) $ \progress -> do
             old <- readIORef previous
             when (old /= Just progress) do
-              let body = mergeSlackContent (Progress.payload progress) $ AE.object ["channel" AE..= run.channelId]
+              let canCreate = allowCreate || isJust progress.review
+                  body = mergeSlackContent (Progress.payload hostUrl slackData.projectId progress) $ AE.object ["channel" AE..= run.channelId]
                   remembered = writeIORef previous $ Just progress
               existing <- Investigations.loadProgress target
               AI.requireAgentAccess progressAccess slackData.projectId
@@ -1576,7 +1615,7 @@ withInvestigationProgress slackData access action = case access of
                     slackApiOrThrow "Slack progress update" slackData.botToken "chat.update" $ mergeSlackContent body $ AE.object ["ts" AE..= ts]
                     remembered
                 Nothing ->
-                  when allowCreate
+                  when canCreate
                     $ Investigations.claimProgress target
                     >>= traverse_ \publication -> do
                       publishReservedMessage
@@ -1601,8 +1640,8 @@ withInvestigationProgress slackData access action = case access of
 
 -- | Late observations can arrive after the answer receipt is complete. Refresh
 -- that turn directly, checking its original requester's current authorization.
-refreshObservedProgress :: (DB es, HTTP :> es, IOE :> es) => Investigations.ProgressTarget -> Text -> Eff es ()
-refreshObservedProgress target timestamp = do
+refreshObservedProgress :: (DB es, HTTP :> es, IOE :> es) => Text -> Investigations.ProgressTarget -> Text -> Eff es ()
+refreshObservedProgress hostUrl target timestamp = do
   AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
   slackData <- getProjectSlackData target.projectId
   for_ slackData $ \connection -> when (connection.teamId == target.teamId) do
@@ -1611,7 +1650,7 @@ refreshObservedProgress target timestamp = do
       AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
       slackApiOrThrow "Slack progress refresh" connection.botToken "chat.update"
         $ mergeSlackContent
-          (Progress.payload progress)
+          (Progress.payload hostUrl target.projectId progress)
           (AE.object ["channel" AE..= target.channelId, "ts" AE..= timestamp])
 
 

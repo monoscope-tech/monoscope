@@ -429,6 +429,8 @@ spec = around withTestResources do
               (ddl "ALTER TABLE background_jobs DROP CONSTRAINT reject_review_wakeup")
               $ void (testServant tr $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm Investigations.ReviewApproved)
               `shouldThrow` (\(err :: SomeException) -> "reject_review_wakeup" `T.isInfixOf` toText (displayException err))
+            [rolledBack] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
+            rolledBack.review `shouldBe` entry.review
           when (scenario == ExpireBeforeReview) $ advanceTestTime tr (24 * 60 * 60 + 1)
           replicateM_ 2 $ void $ testServant tr $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm $ if scenario == DeclineReview then Investigations.ReviewRejected else Investigations.ReviewApproved
           [reviewed] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id

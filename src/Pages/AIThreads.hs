@@ -1,4 +1,6 @@
-module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH) where
+{-# LANGUAGE OrPatterns #-}
+
+module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH) where
 
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
@@ -363,15 +365,16 @@ threadPageGetH pid convId docM runM hxTarget = do
                   pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.outcome
                   when (operation.review /= Investigations.NoReview) $ pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.review
                 else p_ [class_ "text-xs text-textWeak"] $ toHtml $ "Action details require " <> toText (encodeEnumSC @"P" required) <> " permission."
-              case (run.source, run.status, operation.outcome, operation.review) of
-                (Issues.ScheduledRun, Issues.RunRunning, Investigations.OperationUnstarted, Investigations.ReviewPending request) -> do
-                  p_ [class_ "text-xs text-textWeak"] do
-                    "Review deadline: "
-                    localTimeFmt_ "MMM d, HH:mm" request.expiresAt
-                  when (viewerPermission >= max required (Catalog.approverPermission request.approver))
-                    $ form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/operations/" <> operation.id.toText <> "/review", hxSwap_ "none", class_ "flex flex-wrap gap-2"] do
-                      button_ [type_ "submit", name_ "decision", value_ "approved", class_ "btn btn-sm btn-primary"] "Approve action"
-                      button_ [type_ "submit", name_ "decision", value_ "rejected", class_ "btn btn-sm btn-ghost"] "Decline action"
+              case (run.status, operation.outcome, operation.review) of
+                (Issues.RunRunning, Investigations.OperationUnstarted, Investigations.ReviewPending request)
+                  | (Issues.ScheduledRun; Issues.TriggeredRun (Issues.SlackMessage _)) <- run.source -> do
+                      p_ [class_ "text-xs text-textWeak"] do
+                        "Review deadline: "
+                        localTimeFmt_ "MMM d, HH:mm" request.expiresAt
+                      when (viewerPermission >= max required (Catalog.approverPermission request.approver))
+                        $ form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/operations/" <> operation.id.toText <> "/review", hxSwap_ "none", class_ "flex flex-wrap gap-2"] do
+                          button_ [type_ "submit", name_ "decision", value_ "approved", class_ "btn btn-sm btn-primary"] "Approve action"
+                          button_ [type_ "submit", name_ "decision", value_ "rejected", class_ "btn btn-sm btn-ghost"] "Decline action"
                 _ -> pass
               time_ [datetime_ $ show operation.createdAt, class_ "text-xs text-textWeak"] $ localTimeFmt_ "MMM d, HH:mm" operation.createdAt
               when (operation.runId /= run.id)
@@ -732,6 +735,12 @@ routinePolicyPostH pid conversation form = do
   Issues.setRoutinePolicy session.user.id pid conversation form.policy
   addSuccessToast "Execution policy saved." Nothing
   addRespHeaders mempty
+
+
+operationGetH :: Projects.ProjectId -> UUIDId "agent_operation" -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+operationGetH pid identifier = do
+  run <- Investigations.getOperationRun pid identifier >>= maybe (throwError Servant.err404) pure
+  routineRunGetH pid run Nothing
 
 
 operationReviewPostH :: Projects.ProjectId -> UUIDId "agent_operation" -> OperationReviewForm -> ATAuthCtx (RespHeaders (Html ()))

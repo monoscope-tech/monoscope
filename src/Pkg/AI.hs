@@ -139,7 +139,7 @@ import Relude
 import System.Config qualified as Config
 import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
-import UnliftIO.Exception (onException, throwIO)
+import UnliftIO.Exception (throwIO, withException)
 import Utils (encodeText, nonEmptyT, unwrapJsonPrimValue)
 import Web.ApiTypes (ApiActor (..))
 import Web.MCP qualified as MCP
@@ -1170,7 +1170,11 @@ withInvestigationJournal config userQuery model action = do
       runId <- UUIDId <$> genUUID
       let scope = Investigations.Scope runId config.projectId run.userId run.teamId run.channelId run.threadTs run.messageTs
       Investigations.recordEvent scope $ Investigations.InvestigationStarted userQuery model
-      result <- action (Just scope) `onException` Investigations.recordEvent scope Investigations.InvestigationInterrupted
+      result <-
+        action (Just scope) `withException` \(err :: SomeException) ->
+          Investigations.recordEvent scope $ case fromException err of
+            Just (AgentAwaitingReview identifier expiresAt) -> Investigations.InvestigationAwaitingReview identifier expiresAt
+            Nothing -> Investigations.InvestigationInterrupted
       Investigations.recordEvent scope $ either (const Investigations.InvestigationFailed) (const Investigations.InvestigationFinished) result
       pure result
     MemberAccess{} -> action Nothing

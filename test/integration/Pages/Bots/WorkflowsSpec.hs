@@ -4,6 +4,7 @@
 module Pages.Bots.WorkflowsSpec (spec) where
 
 import BackgroundJobs qualified as Jobs
+import BackgroundJobs.Types qualified as JobQueue
 import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), bracket_, throwIO)
 import Control.Lens (ix, toListOf, (.~), (?~), (^.), (^..), (^?))
@@ -24,6 +25,7 @@ import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
@@ -83,6 +85,10 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 data LegacyFixture = PendingDashboard | PendingAppend | RecordedAppend | PendingRead
+  deriving stock (Bounded, Enum, Eq, Show)
+
+
+data SlackReviewCase = ApproveSlackAction | DeclineSlackAction | ExpireSlackAction | ApproveDuringNotice | RejectFirstReviewNotice
   deriving stock (Bounded, Enum, Eq, Show)
 
 
@@ -1822,6 +1828,73 @@ spec = around withTestResources do
           PGS.query_ conn [sql|SELECT count(*) FROM apis.slack_events WHERE team_id = 'T_ROLLBACK'|]
         (receipts :: Int64) `shouldBe` 0
         accept >>= (`shouldBe` AE.object [])
+
+      for_ [minBound .. maxBound] $ \reviewCase ->
+        it ("slackReview_signedDecisionsResumeTheRetainedActionWithoutHoldingTheThread: " <> show reviewCase) \tr -> do
+          setupSlackAgent tr testPid "T_REVIEW"
+          Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventSlackMessage
+          runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+          calls <- newIORef (0 :: Int)
+          notices <- newIORef (0 :: Int)
+          let provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> do
+                  modifyIORef' calls (+ 1)
+                  pure $ Right $ case [message.content | message <- toList history, message.role == Chat.Tool] of
+                    [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "reviewed-dashboard" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Slack reviewed dashboard" :: Text)])]}
+                    _ -> Chat.Message Chat.Assistant "Review outcome recorded." Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+              transport = withHTTPResponses \_ endpoint -> do
+                number <- if endpoint == "https://slack.com/api/chat.postMessage" then atomicModifyIORef' notices (\n -> (n + 1, n)) else pure (-1)
+                when (reviewCase == ApproveDuringNotice && number == 0) do
+                  Just identifier <- runQueryEffect tr $ Hasql.interpOne @(UUIDId "agent_operation") [HI.sql|SELECT id FROM apis.ai_agent_operations WHERE project_id = #{testPid} AND outcome->>'tag' = 'OperationUnstarted'|]
+                  void $ runTestBgNoReset tr $ JobQueue.reviewOperation testPid routine.requestedBy identifier Investigations.ReviewApproved
+                pure $ Just $ if reviewCase == RejectFirstReviewNotice && number == 0 then "{\"ok\":false,\"error\":\"not_in_channel\"}" else "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
+              work receipt = do
+                now <- getTestTime tr.trTestClock
+                runTestBgRecordingHTTP now tr $ transport $ provider $ tryAny $ SlackPage.processSlackEventWithTools (Just Routes.mcpProjectTools) receipt
+          receipt <- receiveSlackEvent tr $ slackThreadedEvent "T_REVIEW" "C_REVIEW" "Create a dashboard" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt} AND status = 'queued'|]
+          (requests, waiting) <- work receipt
+          waiting `shouldSatisfy` isRight
+          Just execution <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt
+          execution.status `shouldBe` Issues.RunRunning
+          [operation] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid execution.id
+          (_, details) <- testServant tr $ AIThreads.operationGetH testPid operation.id
+          decodeUtf8 @Text (Lucid.renderBS $ Lucid.toHtml details) `shouldSatisfy` T.isInfixOf "Slack reviewed dashboard"
+          let bodies = mapMaybe (AE.decode @AE.Value . snd) requests
+          bodies `shouldSatisfy` any (\body -> "monoscope_review_approved" `T.isInfixOf` decodeUtf8 (AE.encode body))
+          runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT processed_at IS NULL FROM apis.slack_events WHERE id = #{receipt}|]) >>= (`shouldBe` True)
+          when (reviewCase `elem` [ApproveDuringNotice, RejectFirstReviewNotice]) do
+            let deadline = addUTCTime (if reviewCase == ApproveDuringNotice then 0 else 60) frozenTime
+            runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT bool_or(run_at <= #{deadline}) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt} AND status = 'queued'|]) >>= (`shouldBe` True)
+          when (reviewCase == RejectFirstReviewNotice) do
+            (_, retried) <- work receipt
+            retried `shouldSatisfy` isRight
+            readIORef calls >>= (`shouldBe` 1)
+          when (reviewCase == ExpireSlackAction) $ advanceTestTime tr (24 * 60 * 60 + 1)
+          let cfg = tr.trATCtx.env{Config.slackSigningSecret = "test-slack-signing-secret"}
+              signed = tr{trATCtx = tr.trATCtx{Config.env = cfg}}
+              payload workspace user = AE.object ["type" AE..= ("block_actions" :: Text), "team" AE..= AE.object ["id" AE..= (workspace :: Text)], "user" AE..= AE.object ["id" AE..= (user :: Text)], "actions" AE..= AE.Array [AE.object ["action_id" AE..= (if reviewCase == DeclineSlackAction then "monoscope_review_rejected" else "monoscope_review_approved" :: Text), "value" AE..= operation.id]]]
+              click workspace user = do
+                now <- getTestTime tr.trTestClock
+                let timestamp = show @Text (floor (utcTimeToPOSIXSeconds now) :: Integer)
+                    bytes = renderSimpleQuery False [("payload", toStrict $ AE.encode $ payload workspace user)]
+                toBaseServantResponse signed $ catchError @ServerError (SlackPage.slackFormPostH SlackPage.slackActionsH bytes (Just timestamp) (Just $ signSlackBody timestamp bytes) $> 200) (\_ err -> pure err.errHTTPCode)
+          click "T_OTHER" "U0123ABCDEF" >>= (`shouldBe` 403)
+          click "T_REVIEW" "U_UNKNOWN" >>= (`shouldBe` 403)
+          replicateM_ 2 $ click "T_REVIEW" "U0123ABCDEF" >>= (`shouldBe` 200)
+          now <- getTestTime tr.trTestClock
+          runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT bool_or(run_at <= #{now}) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt} AND status = 'queued'|]) >>= (`shouldBe` True)
+          (_, finished) <- work receipt
+          finished `shouldSatisfy` isRight
+          (_, repeated) <- work receipt
+          repeated `shouldSatisfy` isRight
+          readIORef calls >>= (`shouldBe` 2)
+          Just retained <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt
+          (retained.id, retained.status) `shouldBe` (execution.id, Issues.RunSucceeded)
+          runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Slack reviewed dashboard'|]) >>= (`shouldBe` if reviewCase `elem` [DeclineSlackAction, ExpireSlackAction] then 0 else 1)
+          runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT processed_at IS NOT NULL FROM apis.slack_events WHERE id = #{receipt}|]) >>= (`shouldBe` True)
 
     describe "Thread/Conversation Context" do
       it "persists Slack cooldowns, releases rejected progress, and defers answer delivery without repeating the model" \tr -> do

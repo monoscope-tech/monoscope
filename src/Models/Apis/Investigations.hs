@@ -60,10 +60,12 @@ module Models.Apis.Investigations (
   ReviewRefusal (..),
   reviewRefusalMessage,
   decideOperationReview,
+  decideOperationReviewWith,
   beginOperation,
   completeOperation,
   atomicOperation,
   listOperations,
+  getOperationRun,
   recordEvent,
   recentEvents,
   ProgressTarget (..),
@@ -305,6 +307,7 @@ data Event
     -- ToolStarted event retains the call ID and arguments.
     InvestigationHistoryRead Int
   | FollowupsAccepted Int (NonEmpty Followup)
+  | InvestigationAwaitingReview (UUIDId "agent_operation") UTCTime
   | InvestigationFinished
   | InvestigationFailed
   | InvestigationInterrupted
@@ -752,7 +755,11 @@ completeOperationTx (OperationClaim identifier) result = do
 
 
 decideOperationReview :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> ReviewDecision -> Eff es ReviewResponse
-decideOperationReview project reviewer identifier decision = do
+decideOperationReview = decideOperationReviewWith (const pass)
+
+
+decideOperationReviewWith :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => (UUIDId "agent_operation" -> Tx.Transaction ()) -> Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> ReviewDecision -> Eff es ReviewResponse
+decideOperationReviewWith enqueue project reviewer identifier decision = do
   permission <- ProjectMembers.getUserPermission project reviewer
   conversation <- Hasql.interpOne @(HI.OneColumn (UUIDId "conversation")) [HI.sql|SELECT run.conversation_id FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id AND run.project_id = operation.project_id WHERE operation.id = #{identifier} AND operation.project_id = #{project}|]
   case (permission, conversation) of
@@ -782,7 +789,7 @@ decideOperationReview project reviewer identifier decision = do
                     ProjectMembers.PView -> Nothing
                     ProjectMembers.PEdit -> Just ReviewEditors
                     ProjectMembers.PAdmin -> Just ReviewAdministrators
-            case entries of
+            result <- case entries of
               [(proposal, Aeson review, selection, live)] -> case review of
                 NoReview -> pure ReviewUnavailable
                 ReviewResolved request receipt -> pure $ if isJust (permitted selection request proposal) then ReviewAlreadyDecided receipt else ReviewUnavailable
@@ -797,7 +804,15 @@ decideOperationReview project reviewer identifier decision = do
                             pure $ ReviewSaved receipt
                   _ -> pure ReviewUnavailable
               _ -> pure ReviewUnavailable
+            case result of
+              ReviewUnavailable -> pass
+              (ReviewSaved{}; ReviewAlreadyDecided{}; ReviewExpired) -> enqueue identifier
+            pure result
     _ -> pure ReviewUnavailable
+
+
+getOperationRun :: DB es => Projects.ProjectId -> UUIDId "agent_operation" -> Eff es (Maybe (UUIDId "ai_routine_run"))
+getOperationRun project identifier = Hasql.interpOne [HI.sql|SELECT run_id FROM apis.ai_agent_operations WHERE id = #{identifier} AND project_id = #{project}|]
 
 
 listOperations :: (AE.FromJSON policy, DB es) => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es [OperationEntry policy]

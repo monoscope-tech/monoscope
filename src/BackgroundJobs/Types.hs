@@ -11,7 +11,6 @@ import Data.Vector qualified as V
 import Effectful (Eff, (:>))
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
-import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
@@ -150,26 +149,30 @@ insertJob :: DB es => BgJobs -> Eff es ()
 insertJob job = Hasql.interpExecute_ [HI.sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{HI.AsJsonb job}) |]
 
 
--- Review submissions retain the same decision and wake the existing worker.
--- Repeated delivery also repairs a decision whose enqueue was interrupted.
+-- Retain the human decision and its continuation in one transaction.
 reviewOperation :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> Investigations.ReviewDecision -> Eff es Investigations.ReviewResponse
-reviewOperation project reviewer identifier decision = do
-  result <- Investigations.decideOperationReview project reviewer identifier decision
-  case result of
-    Investigations.ReviewUnavailable -> pass
-    (Investigations.ReviewSaved{}; Investigations.ReviewAlreadyDecided{}; Investigations.ReviewExpired) -> Hasql.transaction TxS.ReadCommitted TxS.Write do
+reviewOperation project = Investigations.decideOperationReviewWith (enqueue project) project
+  where
+    enqueue targetProject operationId = do
       slots <-
-        Hasql.queryTx @[(UUIDId "ai_routine", UTCTime)]
-          [HI.sql|SELECT routine.id, run.scheduled_at
+        Hasql.queryTx @[(Issues.RoutineRunSource, UUIDId "ai_routine", UTCTime)]
+          [HI.sql|SELECT run.source, routine.id, run.scheduled_at
           FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id
           JOIN apis.ai_routines routine ON routine.id = run.routine_id
-          WHERE operation.id = #{identifier} AND operation.project_id = #{project}
-            AND run.status = #{Issues.RunRunning} AND run.source = #{Issues.ScheduledRun}
-            AND routine.active AND routine.next_run_at = run.scheduled_at FOR UPDATE OF operation|]
-      for_ slots $ \(routine, scheduled) -> do
-        let job = HI.AsJsonb $ AIRoutineRun routine scheduled
-        Hasql.executeTx
-          [HI.sql|INSERT INTO background_jobs (run_at, status, payload)
-          SELECT app_now(), 'queued', #{job} WHERE NOT EXISTS (
-            SELECT 1 FROM background_jobs WHERE payload = #{job} AND status IN ('queued', 'retry'))|]
-  pure result
+          WHERE operation.id = #{operationId} AND operation.project_id = #{targetProject}
+            AND run.status = #{Issues.RunRunning} AND routine.active
+            AND ((run.source = #{Issues.ScheduledRun} AND routine.next_run_at = run.scheduled_at)
+              OR run.source #>> '{contents,tag}' = 'SlackMessage') FOR UPDATE OF operation|]
+      for_ slots $ \(source, routine, scheduled) -> do
+        let continuation = case source of
+              Issues.ScheduledRun -> Just $ AIRoutineRun routine scheduled
+              Issues.TriggeredRun (Issues.SlackMessage receipt) -> Just $ ProcessSlackEvent receipt
+              (Issues.TriggeredRun{}; Issues.InteractiveRun{}) -> Nothing
+        for_ continuation $ \resume -> do
+          let job = HI.AsJsonb resume
+          Hasql.executeTx
+            [HI.sql|WITH ready AS (
+              UPDATE background_jobs SET run_at = LEAST(run_at, app_now())
+              WHERE payload = #{job} AND status IN ('queued', 'retry') RETURNING id
+            ) INSERT INTO background_jobs (run_at, status, payload)
+              SELECT app_now(), 'queued', #{job} WHERE NOT EXISTS (SELECT 1 FROM ready)|]
