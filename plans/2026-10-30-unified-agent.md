@@ -687,6 +687,14 @@ All 215 bot examples, 75 API v1 examples, and 33 native review/SDK examples pass
 The event Observe ceiling remains intentionally temporary. Legacy Slack checkpoints can predate event roots and can contain an unrecorded pending mutation, including the append-capable artifact tool present on `origin/master`. Their adoption must not gain authority or blindly repeat a prior write. Native business mutations still need the shared operation ledger and capability decision; a run being active is not itself permission to mutate resources. The rest of the nine-part plan remains in scope.
 
 
+### Retain completed Slack answers in their checkpoint (31 October)
+
+Slack previously copied `AnswerReady` into `slack_turn_answers` and deleted its checkpoint. Completed answers now remain in the checkpoint, as they do for other durable conversations. The historical answer table remains readable, but receives no new production writes. Recording the conversation message is idempotent and runs on cached answers too, so an interruption between checkpoint completion and message insertion recovers without another model call.
+
+The existing interrupted-read integration test first failed because completion deleted the checkpoint. It now also checks that a new answer creates no historical-table row, cached replay restores a missing conversation message exactly once, and historical answers remain readable without model replay. This slice adds no migration. Applied migrations through `0266` remain immutable; future schema changes should be grouped by a coherent invariant before application rather than added one column at a time. Slack request-root identity and legacy pending-mutation adoption remain separate unfinished work.
+
+All 215 bot examples pass after this change. Formatting and diff checks pass. Repeated slice reviews found no material distillation, constraint-evasion, or client-behavior findings. Whole-branch reviews, release signoff, and controlled live Slack acceptance remain pending.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

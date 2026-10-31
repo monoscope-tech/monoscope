@@ -311,31 +311,23 @@ data Turn = Turn
 
 loadAnswer :: DB es => Turn -> Eff es (Maybe AgenticChatResult)
 loadAnswer turn =
-  Hasql.interpOneJson
-    [HI.sql|SELECT answer FROM apis.slack_turn_answers
-    WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
+  loadCheckpoint turn >>= \case
+    Just SavedCheckpoint{checkpoint = AnswerReady answer} -> pure $ Just answer
+    _ ->
+      Hasql.interpOneJson
+        [HI.sql|SELECT answer FROM apis.slack_turn_answers
+      WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+        AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
 
 
--- | Save the complete result and its conversation message together. A competing
--- writer receives the already committed answer rather than replacing it.
+-- | The checkpoint retains the answer; recording its message is replay-safe.
 saveAnswer :: DB es => Turn -> AgenticChatResult -> Eff es AgenticChatResult
 saveAnswer turn answer =
-  Hasql.interpOneJsonOrThrow
-    "Saving a Slack answer"
-    [HI.sql|WITH saved AS (
-      INSERT INTO apis.slack_turn_answers (project_id, conversation_id, user_id, message_ts, answer)
-      VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson answer})
-      ON CONFLICT (project_id, conversation_id, user_id, message_ts)
-      DO UPDATE SET answer = slack_turn_answers.answer RETURNING answer
-    ), message AS (
-      INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
-      SELECT #{turn.projectId}, #{turn.conversationId}, 'assistant', answer->>'response', #{turn.messageTs}, clock_timestamp() FROM saved
-      ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING
-    ), cleared AS (
-      DELETE FROM apis.slack_turn_checkpoints WHERE project_id = #{turn.projectId}
-        AND conversation_id = #{turn.conversationId} AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}
-    ) SELECT answer FROM saved|]
+  Hasql.interpExecute_
+    [HI.sql|INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
+    VALUES (#{turn.projectId}, #{turn.conversationId}, 'assistant', #{answer.response}, #{turn.messageTs}, clock_timestamp())
+    ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING|]
+    $> answer
 
 
 -- | Freeze every rendered part before the first send. A confirmed part is never

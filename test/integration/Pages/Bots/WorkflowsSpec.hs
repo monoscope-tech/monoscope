@@ -1240,9 +1240,25 @@ spec = around withTestResources do
             lastContext `shouldBe` firstContext
             map (\params -> params ^? key "model" . _String) [firstParams, lastParams] `shouldBe` [Just "checkpoint-original", Just "checkpoint-original"]
           _ -> fail "Expected one initial decision and one final model response"
-        runQueryEffect tr (Investigations.loadCheckpoint turn) >>= (`shouldSatisfy` isNothing)
+        finished <- runQueryEffect tr $ Investigations.loadCheckpoint turn
+        case finished of
+          Just Investigations.SavedCheckpoint{checkpoint = Investigations.AnswerReady answer} -> length answer.toolCalls `shouldBe` 2
+          _ -> fail "Expected the completed answer to remain in its checkpoint"
+        withResource tr.trPool (\conn -> PGS.query conn [sql|SELECT count(*) FROM apis.slack_turn_answers WHERE project_id = ? AND conversation_id = ?|] (testPid, convId)) >>= (`shouldBe` [PGS.Only (0 :: Int)])
         run "checkpoint-changed" >>= (`shouldSatisfy` isRight)
         length <$> readIORef modelContexts >>= (`shouldBe` 2)
+        -- A worker can stop after committing AnswerReady but before recording the message.
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|DELETE FROM apis.ai_chat_messages WHERE project_id = ? AND conversation_id = ? AND role = 'assistant'|] (testPid, convId)
+        run "checkpoint-changed" >>= (`shouldSatisfy` isRight)
+        runQueryEffect tr (Issues.selectChatHistory testPid convId) >>= (\messages -> map (.role) messages `shouldBe` [Issues.ChatUser, Issues.ChatAssistant])
+        -- Answers written before checkpoint retention remain readable without model replay.
+        Just answer <- runQueryEffect tr $ Investigations.loadAnswer turn
+        withResource tr.trPool \conn -> do
+          void $ PGS.execute conn [sql|INSERT INTO apis.slack_turn_answers (project_id, conversation_id, user_id, message_ts, answer) VALUES (?, ?, ?, ?, ?)|] (testPid, convId, userId, turn.messageTs, Aeson answer)
+          void $ PGS.execute conn [sql|DELETE FROM apis.slack_turn_checkpoints WHERE project_id = ? AND conversation_id = ?|] (testPid, convId)
+        run "checkpoint-changed" >>= (`shouldSatisfy` isRight)
+        length <$> readIORef modelContexts >>= (`shouldBe` 2)
+        runQueryEffect tr (Issues.selectChatHistory testPid convId) >>= (\messages -> map (.role) messages `shouldBe` [Issues.ChatUser, Issues.ChatAssistant])
 
       for_ ([("missing timestamp", False), ("transport exception", True)] :: [(String, Bool)]) $ \(scenario, failTransport) ->
         it ("waits for matching signed evidence after a lost reply acknowledgement: " <> scenario) $ \tr -> do

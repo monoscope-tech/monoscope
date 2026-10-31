@@ -213,7 +213,7 @@ completeAgenticResponse :: (DB es, ELLM.LLM :> es, IOE :> es, Time.Time :> es) =
 completeAgenticResponse config userQuery model apiKey answer = do
   void $ requireConfigAccess config
   case (config.access, config.conversationId) of
-    (SlackInvestigationAccess{}, _) -> pass -- Saved atomically with the replayable answer.
+    (SlackInvestigationAccess{}, _) -> pass -- Recorded by the replayable Slack turn.
     (_, Nothing) -> pass
     (_, Just convId) -> do
       let message = prepareRunAnswer answer
@@ -969,20 +969,21 @@ runAgenticChatWithHistory initialConfig requestedInput model apiKey = do
       expected <- Incidents.threadConversationId config.projectId investigation.teamId investigation.channelId investigation.threadTs
       unless (convId == expected) $ throwIO AgentAccessDenied
       let turn = Investigations.Turn config.projectId convId investigation.userId investigation.messageTs
-      Investigations.loadAnswer turn >>= \case
-        Just answer -> requireConfigAccess config $> Right answer
-        Nothing -> do
-          checkpoint <-
-            Investigations.loadCheckpoint turn
-              >>= maybe
-                ( do
-                    start <- initial <$> Issues.prepareSlackTurn config.projectId convId investigation.messageTs userQuery
-                    Investigations.startCheckpoint turn start
-                )
-                pure
-          result <- run (Just $ Investigations.CheckpointCursor (Investigations.SlackCheckpoint turn) checkpoint.revision) checkpoint.checkpoint
-          void $ requireConfigAccess config
-          traverse (Investigations.saveAnswer turn) result
+      result <-
+        Investigations.loadAnswer turn >>= \case
+          Just answer -> pure $ Right answer
+          Nothing -> do
+            checkpoint <-
+              Investigations.loadCheckpoint turn
+                >>= maybe
+                  ( do
+                      start <- initial <$> Issues.prepareSlackTurn config.projectId convId investigation.messageTs userQuery
+                      Investigations.startCheckpoint turn start
+                  )
+                  pure
+            run (Just $ Investigations.CheckpointCursor (Investigations.SlackCheckpoint turn) checkpoint.revision) checkpoint.checkpoint
+      void $ requireConfigAccess config
+      traverse (Investigations.saveAnswer turn) result
     (access, Just convId)
       | Just context <- invocationContext config.invocationMode
       , Just user <- accessMember access -> do
