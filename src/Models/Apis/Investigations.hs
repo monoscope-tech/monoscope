@@ -1162,13 +1162,13 @@ data EvidenceAudience = ProjectAudience | PersonalAudience Projects.UserId | Sla
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data EvidenceViewer = ProjectViewer | MemberViewer Projects.UserId | ChannelViewer Projects.UserId Integrations.SlackChannel
+data EvidenceViewer = ProjectViewer | MemberViewer Projects.UserId | ChannelViewer Projects.UserId Integrations.SlackChannel | DirectMessageViewer Projects.UserId Text Text Text
 
 
 canReadEvidence :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> ProjectMembers.Permissions -> EvidenceViewer -> UUIDId "conversation" -> Eff es Bool
 canReadEvidence project permission viewer conversation = do
   required <- conversationEvidencePermission project conversation
-  audience <- conversationEvidenceAudience project conversation
+  Aeson audience <- Hasql.interpScalar $ conversationReadAudienceSql project [HI.sql|#{conversation}|]
   if permission < required then pure False else audienceVisible project viewer audience
 
 
@@ -1178,6 +1178,7 @@ audienceVisible project viewer = \case
   NoAudience -> pure False
   PersonalAudience owner -> case viewer of
     MemberViewer member | owner == member -> isJust <$> ProjectMembers.getUserPermission project member
+    DirectMessageViewer member team user channel | owner == member -> Integrations.slackDirectMessageOwner project member team user channel
     _ -> pure False
   SlackChannelAudience channel -> case viewer of
     MemberViewer member -> Integrations.slackChannelMember project member channel
@@ -1208,6 +1209,46 @@ conversationEvidenceAudience :: DB es => Projects.ProjectId -> UUIDId "conversat
 conversationEvidenceAudience project conversation = do
   Aeson audience <- Hasql.interpScalar [HI.sql|SELECT apis.conversation_evidence_audience(#{project}, #{conversation})|]
   pure audience
+
+
+-- | Transcript provenance restricts readers without treating a member's request as fetched evidence.
+conversationReadAudienceSql :: Projects.ProjectId -> HI.Sql -> HI.Sql
+conversationReadAudienceSql project conversation =
+  [HI.sql|WITH receipts AS (
+    SELECT event.team_id AS team, event.payload #>> '{event,channel}' AS channel
+    FROM apis.ai_routine_runs run LEFT JOIN apis.slack_events event
+      ON event.id = CASE WHEN run.source #>> '{contents,tag}' = 'SlackMessage'
+        THEN (run.source #>> '{contents,contents}')::uuid END
+    WHERE run.project_id = #{project} AND run.conversation_id = ^{conversation}
+      AND run.source->>'tag' = 'TriggeredRun' AND run.source #>> '{contents,tag}' = 'SlackMessage'
+  ), roots AS (
+    SELECT * FROM receipts
+    UNION ALL
+    SELECT context->>'team_id', context->>'channel_id'
+    FROM apis.ai_conversations WHERE project_id = #{project} AND conversation_id = ^{conversation}
+      AND conversation_type = 'slack_thread' AND NOT EXISTS (SELECT 1 FROM receipts)
+  ), owner AS (
+    SELECT count(DISTINCT user_id) AS count, min(user_id::text) AS id,
+      COALESCE(bool_or(user_id IS NULL), true) AS unknown FROM (
+      SELECT requested_by AS user_id FROM apis.ai_routine_runs WHERE project_id = #{project} AND conversation_id = ^{conversation}
+      UNION ALL SELECT user_id FROM apis.slack_turn_checkpoints
+        WHERE project_id = #{project} AND conversation_id = ^{conversation} AND message_ts IS NOT NULL
+      UNION ALL SELECT user_id FROM apis.slack_turn_answers
+        WHERE project_id = #{project} AND conversation_id = ^{conversation}
+    ) authors
+  ) SELECT apis.meet_evidence_audiences(audience) FROM (
+    SELECT apis.conversation_evidence_audience(#{project}, ^{conversation}) AS audience
+    UNION ALL
+    SELECT CASE WHEN apis.valid_evidence_audience(channel.audience) THEN channel.audience
+      WHEN roots.channel ~ '^D[A-Z0-9]+$' AND length(btrim(roots.team)) > 0
+        AND owner.count = 1 AND NOT owner.unknown
+      THEN jsonb_build_object('tag', 'PersonalAudience', 'contents', owner.id)
+      ELSE #{Aeson NoAudience} END
+    FROM roots CROSS JOIN owner CROSS JOIN LATERAL (
+      SELECT jsonb_build_object('tag', 'SlackChannelAudience', 'contents',
+        jsonb_build_object('teamId', roots.team, 'channelId', roots.channel)) AS audience
+    ) channel
+  ) scopes|]
 
 
 retainEvidenceAudience :: DB es => Projects.ProjectId -> UUIDId "conversation" -> EvidenceAudience -> Eff es Bool
@@ -1321,13 +1362,18 @@ classifyLegacyEvidence project selected = do
 visibleConversationIds :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> ProjectMembers.Permissions -> EvidenceViewer -> Eff es [UUIDId "conversation"]
 visibleConversationIds project permission viewer = do
   classifyLegacyEvidence project Nothing
+  let readAudience = conversationReadAudienceSql project [HI.sql|eligible.conversation_id|]
   scopes <-
     Hasql.interp @[(UUIDId "conversation", Aeson EvidenceAudience)]
-      [HI.sql|SELECT conversation_id, apis.meet_evidence_audiences(evidence_audience) FROM (
-        SELECT conversation_id, evidence_permission, evidence_audience FROM apis.ai_conversations WHERE project_id = #{project}
-        UNION ALL SELECT conversation_id, evidence_permission, evidence_audience FROM apis.ai_routine_runs WHERE project_id = #{project}
-      ) scopes GROUP BY conversation_id
-      HAVING max(apis.evidence_permission_rank(evidence_permission)) <= apis.evidence_permission_rank(#{permission})|]
+      [HI.sql|SELECT eligible.conversation_id, audience.audience FROM (
+        SELECT conversation_id FROM (
+          SELECT conversation_id, evidence_permission FROM apis.ai_conversations WHERE project_id = #{project}
+          UNION ALL SELECT conversation_id, evidence_permission FROM apis.ai_routine_runs WHERE project_id = #{project}
+        ) scopes GROUP BY conversation_id
+        HAVING max(apis.evidence_permission_rank(evidence_permission)) <= apis.evidence_permission_rank(#{permission})
+      ) eligible CROSS JOIN LATERAL (
+        ^{readAudience}
+      ) audience(audience)|]
   visible <- S.fromList <$> filterM (audienceVisible project viewer) (ordNub [audience | (_, Aeson audience) <- scopes])
   pure [conversation | (conversation, Aeson audience) <- scopes, audience `S.member` visible]
 

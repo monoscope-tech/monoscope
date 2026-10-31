@@ -612,15 +612,10 @@ canReadEvidence access project conversation = do
   viewer <- case access of
     MemberAccess ProjectMember member -> pure $ Investigations.MemberViewer member
     MemberAccess WebSession member -> pure $ Investigations.MemberViewer member
+    SlackAccess _ _ member -> pure $ Investigations.MemberViewer member
     SlackInvestigationAccess run -> case Integrations.slackChannel run.teamId run.channelId of
       Right channel -> pure $ Investigations.ChannelViewer run.userId channel
-      Left _
-        | "D" `T.isPrefixOf` run.channelId ->
-            Investigations.conversationEvidenceAudience project conversation >>= \case
-              Investigations.PersonalAudience owner | owner == run.userId -> do
-                own <- Integrations.slackDirectMessageOwner project run.userId run.teamId run.slackUserId run.channelId
-                pure $ if own then Investigations.MemberViewer run.userId else Investigations.ProjectViewer
-              _ -> pure Investigations.ProjectViewer
+      Left _ | "D" `T.isPrefixOf` run.channelId -> pure $ Investigations.DirectMessageViewer run.userId run.teamId run.slackUserId run.channelId
       Left _ -> pure Investigations.ProjectViewer
     _ -> pure Investigations.ProjectViewer
   Investigations.canReadEvidence project (evidenceAudience access permission) viewer conversation

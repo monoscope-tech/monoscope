@@ -6,12 +6,14 @@ import BackgroundJobs qualified
 import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), bracket_)
 import Control.Lens ((^..), (^?))
+import Control.Lens qualified as Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, values, _Array, _String)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID qualified as UUIDEff
+import Data.Generics.Product.Fields qualified as Generic
 import Data.IORef qualified as IORef
 import Data.Map qualified as Map
 import Data.Pool (withResource)
@@ -1030,6 +1032,66 @@ spec = around withTestResources do
         unchanged <- runQueryEffect tr $ Issues.getConversation testPid conversation.conversationId
         (unchanged >>= (.routineKind)) `shouldBe` Just Issues.ScheduleSlackMessage
 
+      for_ [True, False] $ \direct ->
+        it ("initialSlackTranscript_privateReadersDoNotDisableAutonomousProjectActions: direct=" <> show direct) \tr -> do
+          setupSlackAgent tr testPid "T_INITIAL_DM"
+          let user = (getResponse tr.trSessAndHeader).user.id
+              channel = if direct then "D123INITIAL" else "G123INITIAL"
+              other = UUIDId $ UUID.fromWords 0 0 44 60
+              conversation = Issues.slackScopedConversationId testPid "T_INITIAL_DM" channel "1735689600.000001"
+              prompt = "Create the initial DM dashboard"
+              secret = "Initial private transcript notes"
+              artifact = fromRightShow $ Issues.mkArtifactKey "private-request-notes"
+          runQueryEffect tr do
+            Hasql.interpExecute_ [HI.sql|INSERT INTO users.users (id, email) VALUES (#{other}, 'initial-dm-other@example.test')|]
+            Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{other}, 'admin')|]
+          receipt <- receiveSlackEvent tr $ slackThreadedEvent "T_INITIAL_DM" channel prompt "1735689601.000001" "1735689600.000001"
+          Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventSlackMessage
+          runTestBg frozenTime tr do
+            Issues.setRoutinePolicy user testPid routine.conversationId Issues.Autonomous
+            void $ Issues.getOrCreateConversation testPid conversation Issues.CTSlackThread $ AE.object ["team_id" AE..= ("T_INITIAL_DM" :: Text), "channel_id" AE..= channel]
+            Issues.insertChatMessage testPid conversation Issues.ChatUser prompt Nothing Nothing
+          Just run <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackMessageRequest receipt user) Issues.StartRun conversation prompt
+          context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation run.id run.startedAt
+          let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = AI.DurableRun context, AI.projectTools = Just Routes.mcpProjectTools}
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                  [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "initial-dashboard" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= prompt])]}
+                  [_] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "private-notes" "function" $ LLM.ToolFunction "save_artifact" $ Map.fromList [("key", AE.String "private-request-notes"), ("title", AE.String "Private request notes"), ("content", AE.String secret)]]}
+                  _ -> LLM.Message LLM.Assistant "Initial DM dashboard created." LLM.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+          answer <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config prompt "model" "key"
+          fmap (.response) answer `shouldBe` Right "Initial DM dashboard created."
+          runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = #{prompt}|]) >>= (`shouldBe` 1)
+          runQueryEffect tr (Investigations.conversationEvidenceAudience testPid conversation) >>= (`shouldBe` Investigations.ProjectAudience)
+          (_, ownerPage) <- testServant tr $ AIThreads.threadGetH testPid conversation Nothing Nothing
+          renderT ownerPage `shouldSatisfy` T.isInfixOf prompt
+          (_, ownerArtifact) <- testServant tr $ AIThreads.threadGetH testPid conversation (Just artifact) Nothing
+          renderT ownerArtifact `shouldSatisfy` T.isInfixOf secret
+          runTestBg frozenTime tr (Investigations.canReadEvidence testPid ProjectMembers.PAdmin (Investigations.MemberViewer other) conversation) >>= (`shouldBe` False)
+          let otherResources = tr{trSessAndHeader = fmap (Lens.set (Generic.field @"user" . Generic.field @"id") other) tr.trSessAndHeader}
+          for_ [False, True] $ \recreated -> do
+            when recreated $ runTestBg frozenTime tr do
+              Issues.deleteConversation testPid conversation
+              void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+            for_
+              [ AIThreads.threadGetH testPid conversation Nothing Nothing $> ()
+              , AIThreads.threadGetH testPid conversation (Just artifact) Nothing $> ()
+              , AIThreads.threadTitlePostH testPid conversation (AIThreads.TitleForm "Exposed title") $> ()
+              , AIThreads.routineRunGetH testPid run.id Nothing $> ()
+              ]
+              $ \handler -> do
+                status <- runAuthHandler otherResources $ (handler $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+                status `shouldBe` 403
+            visible <- runTestBg frozenTime tr $ Investigations.visibleConversationIds testPid ProjectMembers.PAdmin (Investigations.MemberViewer other)
+            visible `shouldNotContain` [conversation]
+            for_ [AIThreads.threadsGetH testPid, AIThreads.routinesGetH testPid] $ \handler -> do
+              (_, page) <- testServant otherResources handler
+              renderT page `shouldSatisfy` (not . T.isInfixOf prompt)
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = #{testPid} AND user_id = #{user}|]
+          runTestBg frozenTime tr (Investigations.canReadEvidence testPid ProjectMembers.PAdmin (Investigations.MemberViewer user) conversation) >>= (`shouldBe` False)
+
       it "legacySlackAudience_upgradeProtectsStoredHistoryWithoutCurrentIdentityLinks" \tr -> do
         setupSlackAgent tr testPid "T_LEGACY_SCOPE"
         let user = (getResponse tr.trSessAndHeader).user.id
@@ -1042,7 +1104,7 @@ spec = around withTestResources do
           runTestBg frozenTime tr do
             void $ Issues.getOrCreateConversation testPid conversation kind metadata
             Issues.insertChatMessage testPid conversation Issues.ChatAssistant "Legacy Slack history canary" Nothing Nothing
-          void $ interactiveInvocation tr testPid conversation "Resume legacy evidence" Issues.Observe
+          unless (suffix == 41) $ void $ interactiveInvocation tr testPid conversation "Resume legacy evidence" Issues.Observe
           when (kind == Issues.CTSlackThread)
             $ runQueryEffect tr
             $ Hasql.interpExecute_
@@ -1394,19 +1456,19 @@ spec = around withTestResources do
         void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
         (routine, run) <- runTestBg frozenTime tr do
           routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (throwIO $ ErrorCall "Missing routine") pure
-          run <- Issues.startEventRun routine (Issues.SlackMessageRequest (UUIDId UUID.nil) (getResponse tr.trSessAndHeader).user.id) Issues.ContinueRun routine.conversationId "Investigate checkout" >>= maybe (throwIO $ ErrorCall "Missing run") pure
-          context <- AI.requireRunContext testPid $ Issues.EventClaim (Issues.SlackMessage $ UUIDId UUID.nil) run.id run.startedAt
+          run <- Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId (getResponse tr.trSessAndHeader).user.id) Issues.ContinueRun routine.conversationId "Investigate checkout" >>= maybe (throwIO $ ErrorCall "Missing run") pure
+          context <- AI.requireRunContext testPid $ Issues.EventClaim (Issues.SlackCommand routine.conversationId) run.id run.startedAt
           Issues.saveRunResult context "Investigation" "Original evidence"
           pure (routine, run)
         void $ testServant tr $ AIThreads.routineCancelPostH testPid routine.conversationId
         active <- runQueryEffect tr $ Issues.routineRunActive testPid run.id
         active `shouldBe` False
-        runQueryEffect tr $ completeTestRun testPid (Issues.EventClaim (Issues.SlackMessage $ UUIDId UUID.nil) run.id run.startedAt) $ Issues.CancelledResult $ Just "Cancelled by member"
+        runQueryEffect tr $ completeTestRun testPid (Issues.EventClaim (Issues.SlackCommand routine.conversationId) run.id run.startedAt) $ Issues.CancelledResult $ Just "Cancelled by member"
         void $ testServant tr $ AIThreads.routineInstructionsPostH testPid routine.conversationId (AIThreads.RoutineInstructionsForm "Check the new deployment first.")
         void $ testServant tr $ AIThreads.routineResumePostH testPid routine.conversationId
         retry <- runTestBg frozenTime tr do
-          retry <- Issues.startEventRun routine (Issues.SlackMessageRequest (UUIDId UUID.nil) (getResponse tr.trSessAndHeader).user.id) Issues.RestartRun routine.conversationId "Investigate checkout again" >>= maybe (throwIO $ ErrorCall "Missing retry") pure
-          completeTestRun testPid (Issues.EventClaim (Issues.SlackMessage $ UUIDId UUID.nil) retry.id retry.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "Revised evidence" Nothing
+          retry <- Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId (getResponse tr.trSessAndHeader).user.id) Issues.RestartRun routine.conversationId "Investigate checkout again" >>= maybe (throwIO $ ErrorCall "Missing retry") pure
+          completeTestRun testPid (Issues.EventClaim (Issues.SlackCommand routine.conversationId) retry.id retry.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "Revised evidence" Nothing
           pure retry
         (original, revised, oldInstructions, newInstructions, runs, duplicate) <-
           runTestBg frozenTime tr
@@ -1416,7 +1478,7 @@ spec = around withTestResources do
             <*> Issues.getRoutineRunEvidence testPid run.id
             <*> Issues.getRoutineRunEvidence testPid retry.id
             <*> Issues.listConversationRuns testPid routine.conversationId 20
-            <*> Issues.startEventRun routine (Issues.SlackMessageRequest (UUIDId UUID.nil) (getResponse tr.trSessAndHeader).user.id) Issues.ContinueRun routine.conversationId "Replay"
+            <*> Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId (getResponse tr.trSessAndHeader).user.id) Issues.ContinueRun routine.conversationId "Replay"
         map (.content) original `shouldBe` [Just "Original evidence"]
         map (.content) revised `shouldBe` [Just "Revised evidence"]
         (oldInstructions >>= (.instructions)) `shouldBe` Just routine.instructions
@@ -1429,8 +1491,8 @@ spec = around withTestResources do
         filter (not . (`T.isInfixOf` html)) ["Original evidence", "Cancelled", "Investigate checkout", "Instructions used for this run"] `shouldBe` []
         (snd $ T.breakOn "id=\"routine-run\"" html) `shouldSatisfy` (not . T.isInfixOf "Revised evidence")
         failed <- runTestBg frozenTime tr do
-          failed <- Issues.startEventRun routine (Issues.SlackMessageRequest (UUIDId UUID.nil) (getResponse tr.trSessAndHeader).user.id) Issues.RestartRun routine.conversationId "Try again" >>= maybe (throwIO $ ErrorCall "Missing failed attempt") pure
-          completeTestRun testPid (Issues.EventClaim (Issues.SlackMessage $ UUIDId UUID.nil) failed.id failed.startedAt) $ Issues.FailedResult $ Issues.RunFailure "Model unavailable" Issues.RunOnly
+          failed <- Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId (getResponse tr.trSessAndHeader).user.id) Issues.RestartRun routine.conversationId "Try again" >>= maybe (throwIO $ ErrorCall "Missing failed attempt") pure
+          completeTestRun testPid (Issues.EventClaim (Issues.SlackCommand routine.conversationId) failed.id failed.startedAt) $ Issues.FailedResult $ Issues.RunFailure "Model unavailable" Issues.RunOnly
           Issues.listRunArtifacts testPid failed.id
         map (.content) failed `shouldBe` []
         other <- createTestProject tr "Other routine project"
@@ -1438,10 +1500,10 @@ spec = around withTestResources do
         hidden `shouldBe` 404
         pending <-
           runTestBg frozenTime tr
-            $ Issues.startEventRun routine (Issues.SlackMessageRequest (UUIDId UUID.nil) (getResponse tr.trSessAndHeader).user.id) Issues.RestartRun routine.conversationId "Work finishing during deletion"
+            $ Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId (getResponse tr.trSessAndHeader).user.id) Issues.RestartRun routine.conversationId "Work finishing during deletion"
             >>= maybe (throwIO $ ErrorCall "Missing pending attempt") pure
         runQueryEffect tr do
-          completeTestRun testPid (Issues.EventClaim (Issues.SlackMessage $ UUIDId UUID.nil) pending.id pending.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "The published result survives conversation deletion." Nothing
+          completeTestRun testPid (Issues.EventClaim (Issues.SlackCommand routine.conversationId) pending.id pending.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "The published result survives conversation deletion." Nothing
           Issues.deleteConversation testPid routine.conversationId
         retainedArtifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid pending.id
         map (.content) retainedArtifacts `shouldBe` [Just "The published result survives conversation deletion."]

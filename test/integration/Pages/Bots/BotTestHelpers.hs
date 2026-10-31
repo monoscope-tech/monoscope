@@ -238,7 +238,7 @@ withSlackMCPResponses fixture = interpose @HTTP.HTTP \_ -> \case
 -- Retain the underlying recorder so assertions inspect actual request payloads.
 withSlackReplyResponses :: (HTTP.HTTP :> es, IOE :> es) => IO LByteString -> Eff es a -> Eff es a
 withSlackReplyResponses fixture =
-  withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689609.000001\"}")
+  withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689609.000001\",\"members\":[\"U0123ABCDEF\"]}")
     . interpose @HTTP.HTTP
       ( \_ -> \case
           HTTP.PostWith opts "https://slack.com/api/chat.postMessage" value -> do
