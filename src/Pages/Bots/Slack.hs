@@ -985,10 +985,20 @@ acceptSlackEvent payload = case payload of
         ) INSERT INTO background_jobs (run_at, status, payload)
           SELECT now(), 'queued', #{job} FROM receipt|]
     case kind of
-      (AgentSessionStopped _; AgentSessionTitleChanged _) -> recordSlackSessionEvent team_id event_id
+      AgentSessionStopped _ -> recordSlackStop team_id event_id
+      AgentSessionTitleChanged _ -> recordSlackSessionEvent team_id event_id
       TokensRevoked users -> Integrations.recordSlackTokenRevocation team_id event_id users
       (UserMessage _; AppMention _; MessageShortcut _; AppContextChanged _; AppHomeOpened _; BotMessage; MessageEdit; AssistantSession _; UnknownEvent _) -> pass
     pure $ AE.object []
+
+
+recordSlackStop :: DB es => Text -> Text -> Eff es ()
+recordSlackStop team eventId = do
+  let scope = Issues.StopSlackSession team eventId
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    void $ Integrations.recordSlackSessionEventTx team eventId
+    Issues.stopRunsTx scope
+  BgJobs.wakeStoppedReviews scope
 
 
 recordSlackSessionEvent :: DB es => Text -> Text -> Eff es ()
@@ -1059,7 +1069,8 @@ processSlackEventWithTools projectTools receiptId =
 
     handleEventCallback envCfg kind workspaceId eventId =
       case kind of
-        (AgentSessionStopped _; AgentSessionTitleChanged _) -> recordSlackSessionEvent workspaceId eventId
+        AgentSessionStopped _ -> recordSlackStop workspaceId eventId
+        AgentSessionTitleChanged _ -> recordSlackSessionEvent workspaceId eventId
         TokensRevoked users -> Integrations.recordSlackTokenRevocation workspaceId eventId users
         AppContextChanged change -> saveAppContext workspaceId change
         AppHomeOpened home
@@ -1143,27 +1154,34 @@ processSlackEventWithTools projectTools receiptId =
             Just principal -> do
               bound <- Integrations.bindSlackInvestigation principal workspaceId event.channel threadTs
               unless bound $ throwError err403{errBody = "Slack investigation thread belongs to another project"}
-              unlessM (Investigations.isAcceptedFollowup principal.projectId workspaceId event.channel threadTs event.ts) $ void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
-                if Integrations.slackAgentScopesGranted slackData
-                  then
-                    Issues.getEventRoutine principal.projectId Issues.EventSlackMessage >>= \case
-                      Just routine -> processThreadedEvent routine principal envCfg slackData event workspaceId threadTs
-                      Nothing ->
-                        slackApiOrThrow "Slack routine activation" slackData.botToken "chat.postEphemeral"
-                          $ AE.object
-                            [ "channel" AE..= event.channel
-                            , "user" AE..= event.user
-                            , "text" AE..= ("Ask a project editor to activate or resume Slack investigation in <" <> envCfg.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/routines|AI routines>. Notifications remain connected.")
-                            ]
-                  else do
-                    AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) principal.projectId
-                    void
-                      $ sendRecoveryNotice "Slack reconnect notice" slackData event.channel event.user
-                      $ "Reconnect Slack from <"
-                      <> envCfg.hostUrl
-                      <> "p/"
-                      <> principal.projectId.toText
-                      <> "/settings/integrations|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect."
+              retained <- Issues.getEventRun principal.projectId $ Issues.SlackMessage receiptId
+              cancelled <- case retained of
+                Just run | run.status == Issues.RunCancelled -> Issues.runContextFor principal.projectId $ Issues.BackgroundClaim principal.userId run.conversationId run.id run.startedAt
+                _ -> pure Nothing
+              case cancelled of
+                Just _ -> queueCancelledProgress $ Investigations.ProgressTarget principal.projectId workspaceId event.channel threadTs event.ts principal.userId event.user
+                Nothing ->
+                  unlessM (Investigations.isAcceptedFollowup principal.projectId workspaceId event.channel threadTs event.ts) $ void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
+                    if Integrations.slackAgentScopesGranted slackData
+                      then
+                        Issues.getEventRoutine principal.projectId Issues.EventSlackMessage >>= \case
+                          Just routine -> processThreadedEvent routine principal envCfg slackData event workspaceId threadTs
+                          Nothing ->
+                            slackApiOrThrow "Slack routine activation" slackData.botToken "chat.postEphemeral"
+                              $ AE.object
+                                [ "channel" AE..= event.channel
+                                , "user" AE..= event.user
+                                , "text" AE..= ("Ask a project editor to activate or resume Slack investigation in <" <> envCfg.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/routines|AI routines>. Notifications remain connected.")
+                                ]
+                      else do
+                        AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) principal.projectId
+                        void
+                          $ sendRecoveryNotice "Slack reconnect notice" slackData event.channel event.user
+                          $ "Reconnect Slack from <"
+                          <> envCfg.hostUrl
+                          <> "p/"
+                          <> principal.projectId.toText
+                          <> "/settings/integrations|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect."
         else Log.logTrace "Slack message is outside an active investigation" (AE.object ["team_id" AE..= workspaceId, "channel_id" AE..= event.channel])
 
     processThreadedEvent routine principal envCfg slackData event workspaceId threadTs = do
@@ -1281,7 +1299,9 @@ processSlackEventWithTools projectTools receiptId =
             Left err -> do
               unless (isJust $ fromException @AI.AgentAwaitingReview err) $ finish $ Issues.FailedResult $ Issues.RunFailure "Slack investigation interrupted; delivery will retry." Issues.RunOnly
               throwIO err
-            Right False -> finish $ Issues.CancelledResult Nothing
+            Right False -> do
+              finish $ Issues.CancelledResult Nothing
+              queueCancelledProgress $ Investigations.ProgressTarget slackData.projectId workspaceId event.channel threadTs event.ts principal.userId event.user
             Right True -> do
               answer <- Investigations.loadAnswer turn
               case answer of
@@ -1583,6 +1603,26 @@ data SlackPublishedMessage = SlackPublishedMessage
   deriving anyclass (AE.FromJSON)
 
 
+queueCancelledProgress :: DB es => Investigations.ProgressTarget -> Eff es ()
+queueCancelledProgress target = do
+  publication <- Investigations.loadProgress target
+  for_ publication $ \saved -> BgJobs.wakeJob $ BgJobs.RefreshSlackProgress saved.publicationId
+
+
+-- A suspended worker has no terminal journal event. Read its authoritative run state.
+loadProgressSnapshot :: DB es => Investigations.ProgressTarget -> Eff es (Maybe Progress.Snapshot)
+loadProgressSnapshot target = do
+  history <- Investigations.recentProgressEvents target
+  forM (Progress.snapshot target.messageTs history) $ \progress -> do
+    case progress.review of
+      Just notice@(Progress.PendingNotice identifier _) -> do
+        retained <- Hasql.interpOne @(Issues.RoutineRunStatus, Maybe UTCTime, Aeson Investigations.OperationOutcome) $ [HI.sql|SELECT run.status, run.finished_at, operation.outcome |] <> Investigations.operationRunSql target.projectId identifier
+        pure $ case retained of
+          Just (Issues.RunCancelled, finishedAt, Aeson outcome) -> Progress.endReview notice finishedAt outcome progress
+          _ -> progress
+      (Nothing; Just Progress.EndedNotice{}) -> pure progress
+
+
 -- | Poll only committed activity. The thread lock serializes publication and
 -- retries reuse an acknowledged progress message. Progress failure does not
 -- discard a completed investigation answer.
@@ -1594,11 +1634,14 @@ withInvestigationProgress hostUrl slackData access action = case access of
         publish allowCreate = do
           let progressAccess = if allowCreate then access else AI.SlackAccess run.teamId run.slackUserId run.userId
           AI.requireAgentAccess progressAccess slackData.projectId
-          history <- Investigations.recentProgressEvents target
-          for_ (Progress.snapshot run.messageTs history) $ \progress -> do
+          snapshot <- loadProgressSnapshot target
+          for_ snapshot $ \progress -> do
             old <- readIORef previous
             when (old /= Just progress) do
-              let canCreate = allowCreate || isJust progress.review
+              let canCreate =
+                    allowCreate || case progress.review of
+                      Just Progress.PendingNotice{} -> True
+                      (Nothing; Just Progress.EndedNotice{}) -> False
                   body = mergeSlackContent (Progress.payload hostUrl slackData.projectId progress) $ AE.object ["channel" AE..= run.channelId]
                   remembered = writeIORef previous $ Just progress
               existing <- Investigations.loadProgress target
@@ -1640,8 +1683,8 @@ refreshObservedProgress hostUrl target timestamp = do
   AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
   slackData <- getProjectSlackData target.projectId
   for_ slackData $ \connection -> when (connection.teamId == target.teamId) do
-    history <- Investigations.recentProgressEvents target
-    for_ (Progress.snapshot target.messageTs history) $ \progress -> do
+    snapshot <- loadProgressSnapshot target
+    for_ snapshot $ \progress -> do
       AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
       slackApiOrThrow "Slack progress refresh" connection.botToken "chat.update"
         $ mergeSlackContent

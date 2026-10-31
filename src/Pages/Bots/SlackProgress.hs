@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.Bots.SlackProgress (Snapshot (..), Task (..), TaskStatus (..), snapshot, payload, reviewDecision) where
+module Pages.Bots.SlackProgress (Snapshot (..), Task (..), TaskStatus (..), ReviewNotice (..), snapshot, endReview, payload, reviewDecision) where
 
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
@@ -36,7 +36,11 @@ data TaskKind = Decision | HistoryRead | FollowupRead | Evidence Text
   deriving stock (Eq, Show)
 
 
-data Snapshot = Snapshot {title :: Text, tasks :: [Task], observedAt :: UTCTime, limited :: Bool, review :: Maybe (UUIDId "agent_operation", UTCTime)}
+data ReviewNotice = PendingNotice (UUIDId "agent_operation") UTCTime | EndedNotice (UUIDId "agent_operation")
+  deriving stock (Eq, Show)
+
+
+data Snapshot = Snapshot {title :: Text, tasks :: [Task], observedAt :: UTCTime, limited :: Bool, review :: Maybe ReviewNotice}
   deriving stock (Eq, Show)
 
 
@@ -67,7 +71,7 @@ snapshot messageTs history = do
         (Investigations.InvestigationStarted{}; Investigations.ModelStarted{}; Investigations.ModelReturned{}; Investigations.ToolStarted{}; Investigations.ToolReturned{}; Investigations.InvestigationHistoryRead{}; Investigations.FollowupsAccepted{}) -> "Investigating"
   guard $ not $ null tasks
   pure $ Snapshot title tasks latest.observedAt history.limitReached $ case latest.event of
-    Investigations.InvestigationAwaitingReview identifier expiresAt -> Just (identifier, expiresAt)
+    Investigations.InvestigationAwaitingReview identifier expiresAt -> Just (PendingNotice identifier expiresAt)
     _ -> Nothing
   where
     update prior entry =
@@ -111,6 +115,26 @@ snapshot messageTs history = do
       _ -> "Check an evidence request"
 
 
+-- | Retain the history link after stopping; a claimed action may have taken effect.
+endReview :: ReviewNotice -> Maybe UTCTime -> Investigations.OperationOutcome -> Snapshot -> Snapshot
+endReview notice finishedAt outcome progress =
+  progress{title = "Investigation stopped" <> suffix, review = Just $ EndedNotice $ noticeOperation notice, observedAt = fromMaybe progress.observedAt finishedAt, tasks = map stopTask progress.tasks}
+  where
+    (status, suffix) = case outcome of
+      (Investigations.OperationRunning; Investigations.OperationUnknown) -> (Error, " (outcome uncertain)")
+      (Investigations.OperationUnstarted; Investigations.OperationRefused{}) -> (Error, " (not completed)")
+      Investigations.OperationReturned{} -> (Complete, "")
+    stopTask task = case task.status of
+      (Pending; InProgress) -> task{status = status, title = task.title <> suffix}
+      (Complete; Error) -> task
+
+
+noticeOperation :: ReviewNotice -> UUIDId "agent_operation"
+noticeOperation = \case
+  PendingNotice identifier _ -> identifier
+  EndedNotice identifier -> identifier
+
+
 -- | Decode only this app's typed review controls.
 --
 -- >>> reviewDecision "monoscope_review_approved"
@@ -141,12 +165,16 @@ payload hostUrl project progress =
                 ]
             ]
               <> foldMap
-                ( \(identifier, _) ->
-                    V.singleton
-                      $ AE.object
-                        [ "type" AE..= ("actions" :: Text)
-                        , "elements" AE..= AE.Array [AE.object ["type" AE..= ("button" :: Text), "action_id" AE..= ("monoscope_review_details" :: Text), "url" AE..= (T.dropWhileEnd (== '/') hostUrl <> "/p/" <> project.toText <> "/ai/operations/" <> identifier.toText), "text" AE..= AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= ("Review details" :: Text)]], button Investigations.ReviewApproved "Approve action" identifier, button Investigations.ReviewRejected "Decline action" identifier]
-                        ]
+                ( \notice ->
+                    let identifier = noticeOperation notice
+                        decisions = case notice of
+                          PendingNotice{} -> [button Investigations.ReviewApproved "Approve action" identifier, button Investigations.ReviewRejected "Decline action" identifier]
+                          EndedNotice{} -> []
+                     in V.singleton
+                          $ AE.object
+                            [ "type" AE..= ("actions" :: Text)
+                            , "elements" AE..= AE.Array ([AE.object ["type" AE..= ("button" :: Text), "action_id" AE..= ("monoscope_review_details" :: Text), "url" AE..= (T.dropWhileEnd (== '/') hostUrl <> "/p/" <> project.toText <> "/ai/operations/" <> identifier.toText), "text" AE..= AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= ("Review details" :: Text)]]] <> decisions)
+                            ]
                 )
                 progress.review
           )

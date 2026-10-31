@@ -88,7 +88,7 @@ data LegacyFixture = PendingDashboard | PendingAppend | RecordedAppend | Pending
   deriving stock (Bounded, Enum, Eq, Show)
 
 
-data SlackReviewCase = ApproveSlackAction | DeclineSlackAction | ExpireSlackAction | ApproveDuringNotice | RejectFirstReviewNotice | RecoverWaitingAction
+data SlackReviewCase = ApproveSlackAction | DeclineSlackAction | ExpireSlackAction | ApproveDuringNotice | RejectFirstReviewNotice | RecoverWaitingAction | StopWaitingAction | PauseWaitingRoutine | CancelWaitingRoutine | StopDuringNotice | StopClaimedAction
   deriving stock (Bounded, Enum, Eq, Show)
 
 
@@ -1850,6 +1850,7 @@ spec = around withTestResources do
                 when (reviewCase == ApproveDuringNotice && number == 0) do
                   Just identifier <- runQueryEffect tr $ Hasql.interpOne @(UUIDId "agent_operation") [HI.sql|SELECT id FROM apis.ai_agent_operations WHERE project_id = #{testPid} AND outcome->>'tag' = 'OperationUnstarted'|]
                   void $ runTestBgNoReset tr $ JobQueue.reviewOperation testPid routine.requestedBy identifier Investigations.ReviewApproved
+                when (reviewCase == StopDuringNotice && number == 0) $ void $ receiveSlackEvent tr $ slackCallbackEnvelope "T_REVIEW" "StopDuringNotice" $ AE.object ["type" AE..= ("agent_session_stopped" :: Text), "user" AE..= ("U0123ABCDEF" :: Text), "channel" AE..= ("CREVIEW" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "event_ts" AE..= ("1735689603.000001" :: Text)]
                 pure $ Just $ if reviewCase == RejectFirstReviewNotice && number == 0 then "{\"ok\":false,\"error\":\"not_in_channel\"}" else "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
               work receipt = do
                 now <- getTestTime tr.trTestClock
@@ -1859,7 +1860,7 @@ spec = around withTestResources do
           (requests, waiting) <- work receipt
           waiting `shouldSatisfy` isRight
           Just execution <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt
-          execution.status `shouldBe` Issues.RunRunning
+          execution.status `shouldBe` if reviewCase == StopDuringNotice then Issues.RunCancelled else Issues.RunRunning
           [operation] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid execution.id
           current <-
             if reviewCase == RecoverWaitingAction
@@ -1889,33 +1890,93 @@ spec = around withTestResources do
             (_, retried) <- work receipt
             retried `shouldSatisfy` isRight
             readIORef calls >>= (`shouldBe` 1)
-          when (reviewCase == ExpireSlackAction) $ advanceTestTime tr (24 * 60 * 60 + 1)
-          let cfg = tr.trATCtx.env{Config.slackSigningSecret = "test-slack-signing-secret"}
-              signed = tr{trATCtx = tr.trATCtx{Config.env = cfg}}
-              payload workspace user = AE.object ["type" AE..= ("block_actions" :: Text), "team" AE..= AE.object ["id" AE..= (workspace :: Text)], "user" AE..= AE.object ["id" AE..= (user :: Text)], "actions" AE..= AE.Array [AE.object ["action_id" AE..= (if reviewCase == DeclineSlackAction then "monoscope_review_rejected" else "monoscope_review_approved" :: Text), "value" AE..= operation.id]]]
-              click workspace user = do
-                now <- getTestTime tr.trTestClock
-                let timestamp = show @Text (floor (utcTimeToPOSIXSeconds now) :: Integer)
-                    bytes = renderSimpleQuery False [("payload", toStrict $ AE.encode $ payload workspace user)]
-                toBaseServantResponse signed $ catchError @ServerError (SlackPage.slackFormPostH SlackPage.slackActionsH bytes (Just timestamp) (Just $ signSlackBody timestamp bytes) $> 200) (\_ err -> pure err.errHTTPCode)
-          click "T_OTHER" "U0123ABCDEF" >>= (`shouldBe` 403)
-          click "T_REVIEW" "U_UNKNOWN" >>= (`shouldBe` 403)
-          replicateM_ 2 $ click "T_REVIEW" "U0123ABCDEF" >>= (`shouldBe` 200)
-          now <- getTestTime tr.trTestClock
-          runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT bool_or(run_at <= #{now}) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt} AND status = 'queued'|]) >>= (`shouldBe` True)
-          (_, finished) <- work receipt
-          finished `shouldSatisfy` isRight
-          (_, repeated) <- work receipt
-          repeated `shouldSatisfy` isRight
-          readIORef calls >>= (`shouldBe` 2)
-          Just retained <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt
-          (retained.id, retained.status) `shouldBe` (current.id, Issues.RunSucceeded)
-          runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Slack reviewed dashboard'|]) >>= (`shouldBe` if reviewCase `elem` [DeclineSlackAction, ExpireSlackAction] then 0 else 1)
-          [saved] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid current.id
-          (saved.id, saved.runId, saved.requestedBy, AE.toJSON saved.proposal) `shouldBe` (operation.id, operation.runId, operation.requestedBy, AE.toJSON operation.proposal)
-          (_, completedPage) <- testServant tr $ AIThreads.operationGetH testPid operation.id
-          decodeUtf8 @Text (Lucid.renderBS $ Lucid.toHtml completedPage) `shouldSatisfy` T.isInfixOf "Review outcome recorded."
-          runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT processed_at IS NOT NULL FROM apis.slack_events WHERE id = #{receipt}|]) >>= (`shouldBe` True)
+          if reviewCase `elem` [StopWaitingAction, PauseWaitingRoutine, CancelWaitingRoutine, StopDuringNotice, StopClaimedAction]
+            then do
+              now <- getTestTime tr.trTestClock
+              let ready = runQueryEffect tr $ Hasql.interpScalar @Bool [HI.sql|SELECT COALESCE(bool_or(run_at <= #{now}), FALSE) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt} AND status IN ('queued', 'retry')|]
+                  stop user eventId = receiveSlackEvent tr $ slackCallbackEnvelope "T_REVIEW" eventId $ AE.object ["type" AE..= ("agent_session_stopped" :: Text), "user" AE..= (user :: Text), "channel" AE..= ("CREVIEW" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "event_ts" AE..= ("1735689603.000001" :: Text)]
+              [publication] <- runQueryEffect tr $ Hasql.interp @[UUIDId "slack_progress"] [HI.sql|SELECT publication_id FROM apis.slack_investigation_progress WHERE project_id = #{testPid} AND channel_id = 'CREVIEW' AND message_ts = '1735689602.000001'|]
+              when (reviewCase == StopWaitingAction) do
+                let later = addUTCTime (24 * 60 * 60) now
+                runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|INSERT INTO background_jobs (run_at, status, payload) VALUES (#{later}, 'queued', #{Aeson $ AE.toJSON $ Jobs.RefreshSlackProgress publication})|]
+              ready >>= (`shouldBe` (reviewCase == StopDuringNotice))
+              when (reviewCase == StopClaimedAction) do
+                runTestBgNoReset tr (Investigations.decideOperationReview testPid routine.requestedBy operation.id Investigations.ReviewApproved) >>= (`shouldSatisfy` \case Investigations.ReviewSaved{} -> True; _ -> False)
+                let turn = Investigations.RunTurn testPid current.conversationId routine.requestedBy current.id
+                    target = Investigations.RunCheckpoint turn
+                Just saved <- runQueryEffect tr $ Investigations.loadCheckpointFor target
+                runQueryEffect tr (Investigations.beginOperation (Investigations.RunLease turn current.startedAt) (Investigations.CheckpointCursor target saved.revision) operation.proposal Nothing) >>= (`shouldSatisfy` \case Investigations.ExecuteOperation{} -> True; _ -> False)
+              [beforeStop] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid current.id
+              case reviewCase of
+                StopClaimedAction -> void $ stop "U0123ABCDEF" "ReviewStopClaimed"
+                StopWaitingAction -> do
+                  void $ stop "U_UNKNOWN" "ReviewStopUnknown"
+                  ready >>= (`shouldBe` False)
+                  runQueryEffect tr (Issues.getEventRun testPid $ Issues.SlackMessage receipt) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunRunning)
+                  let rejectWake = withResource tr.trPool $ \connection -> void $ PGS.execute connection [sql|ALTER TABLE background_jobs ADD CONSTRAINT reject_stop_wake CHECK (payload <> ? OR run_at > ?) NOT VALID|] (Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt, addUTCTime 1 now)
+                      allowWake = withResource tr.trPool $ \connection -> void $ PGS.execute_ connection "ALTER TABLE background_jobs DROP CONSTRAINT reject_stop_wake"
+                  bracket_ rejectWake allowWake (void $ stop "U0123ABCDEF" "ReviewStopAccepted") `shouldThrow` (\(err :: SomeException) -> "reject_stop_wake" `T.isInfixOf` toText (displayException err))
+                  runQueryEffect tr (Issues.getEventRun testPid $ Issues.SlackMessage receipt) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)
+                  runQueryEffect tr (Slack.slackInvestigationStopped testPid "T_REVIEW" "CREVIEW" "1735689600.000001" "1735689602.000001") >>= (`shouldBe` True)
+                  runTestBgNoReset tr (Investigations.decideOperationReview testPid routine.requestedBy operation.id Investigations.ReviewApproved) >>= (`shouldBe` Investigations.ReviewUnavailable)
+                  ready >>= (`shouldBe` False)
+                  replicateM_ 2 $ void $ stop "U0123ABCDEF" "ReviewStopAccepted"
+                PauseWaitingRoutine -> void $ testServant tr $ AIThreads.routinePausePostH testPid routine.conversationId
+                CancelWaitingRoutine -> void $ testServant tr $ AIThreads.routineCancelPostH testPid routine.conversationId
+                StopDuringNotice -> runTestBgNoReset tr $ JobQueue.deferOperationReview testPid operation.id $ addUTCTime (24 * 60 * 60) now
+                _ -> fail "Expected a stop case"
+              ready >>= (`shouldBe` True)
+              (_, finished) <- work receipt
+              finished `shouldSatisfy` isRight
+              readIORef calls >>= (`shouldBe` 1)
+              Just stopped <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt
+              (stopped.id, stopped.status) `shouldBe` (current.id, Issues.RunCancelled)
+              [closed] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid current.id
+              closed.outcome `shouldSatisfy` \case
+                Investigations.OperationUnknown -> reviewCase == StopClaimedAction
+                Investigations.OperationRefused Investigations.ReviewRequestEnded -> reviewCase /= StopClaimedAction
+                _ -> False
+              (AE.toJSON closed.proposal, closed.review) `shouldBe` (AE.toJSON beforeStop.proposal, beforeStop.review)
+              runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Slack reviewed dashboard'|]) >>= (`shouldBe` 0)
+              runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT EXISTS (SELECT 1 FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.RefreshSlackProgress publication} AND status IN ('queued', 'retry') AND run_at <= #{now})|]) >>= (`shouldBe` True)
+              runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.RefreshSlackProgress publication} AND status IN ('queued', 'retry')|]) >>= (`shouldBe` 1)
+              (updates, refreshed) <- runTestBgRecordingHTTP now tr $ transport $ tryAny $ SlackPage.refreshSlackProgress publication
+              refreshed `shouldSatisfy` isRight
+              let cards = [decodeUtf8 @Text bytes | (url, bytes) <- updates, url == "https://slack.com/api/chat.update"]
+              cards `shouldSatisfy` (not . null)
+              cards `shouldSatisfy` any (T.isInfixOf "Investigation stopped")
+              cards `shouldSatisfy` any (T.isInfixOf $ if reviewCase == StopClaimedAction then "outcome uncertain" else "not completed")
+              cards `shouldSatisfy` all (\card -> all (not . (`T.isInfixOf` card)) ["monoscope_review_approved", "monoscope_review_rejected"])
+              cards `shouldSatisfy` any (T.isInfixOf $ "/ai/operations/" <> operation.id.toText)
+              runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT processed_at IS NOT NULL FROM apis.slack_events WHERE id = #{receipt}|]) >>= (`shouldBe` True)
+            else do
+              when (reviewCase == ExpireSlackAction) $ advanceTestTime tr (24 * 60 * 60 + 1)
+              let cfg = tr.trATCtx.env{Config.slackSigningSecret = "test-slack-signing-secret"}
+                  signed = tr{trATCtx = tr.trATCtx{Config.env = cfg}}
+                  payload workspace user = AE.object ["type" AE..= ("block_actions" :: Text), "team" AE..= AE.object ["id" AE..= (workspace :: Text)], "user" AE..= AE.object ["id" AE..= (user :: Text)], "actions" AE..= AE.Array [AE.object ["action_id" AE..= (if reviewCase == DeclineSlackAction then "monoscope_review_rejected" else "monoscope_review_approved" :: Text), "value" AE..= operation.id]]]
+                  click workspace user = do
+                    now <- getTestTime tr.trTestClock
+                    let timestamp = show @Text (floor (utcTimeToPOSIXSeconds now) :: Integer)
+                        bytes = renderSimpleQuery False [("payload", toStrict $ AE.encode $ payload workspace user)]
+                    toBaseServantResponse signed $ catchError @ServerError (SlackPage.slackFormPostH SlackPage.slackActionsH bytes (Just timestamp) (Just $ signSlackBody timestamp bytes) $> 200) (\_ err -> pure err.errHTTPCode)
+              click "T_OTHER" "U0123ABCDEF" >>= (`shouldBe` 403)
+              click "T_REVIEW" "U_UNKNOWN" >>= (`shouldBe` 403)
+              replicateM_ 2 $ click "T_REVIEW" "U0123ABCDEF" >>= (`shouldBe` 200)
+              now <- getTestTime tr.trTestClock
+              runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT bool_or(run_at <= #{now}) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt} AND status = 'queued'|]) >>= (`shouldBe` True)
+              (_, finished) <- work receipt
+              finished `shouldSatisfy` isRight
+              (_, repeated) <- work receipt
+              repeated `shouldSatisfy` isRight
+              readIORef calls >>= (`shouldBe` 2)
+              Just retained <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt
+              (retained.id, retained.status) `shouldBe` (current.id, Issues.RunSucceeded)
+              runQueryEffect tr (Hasql.interpScalar @Int [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Slack reviewed dashboard'|]) >>= (`shouldBe` if reviewCase `elem` [DeclineSlackAction, ExpireSlackAction] then 0 else 1)
+              [saved] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid current.id
+              (saved.id, saved.runId, saved.requestedBy, AE.toJSON saved.proposal) `shouldBe` (operation.id, operation.runId, operation.requestedBy, AE.toJSON operation.proposal)
+              (_, completedPage) <- testServant tr $ AIThreads.operationGetH testPid operation.id
+              decodeUtf8 @Text (Lucid.renderBS $ Lucid.toHtml completedPage) `shouldSatisfy` T.isInfixOf "Review outcome recorded."
+              runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT processed_at IS NOT NULL FROM apis.slack_events WHERE id = #{receipt}|]) >>= (`shouldBe` True)
 
     describe "Thread/Conversation Context" do
       it "persists Slack cooldowns, releases rejected progress, and defers answer delivery without repeating the model" \tr -> do

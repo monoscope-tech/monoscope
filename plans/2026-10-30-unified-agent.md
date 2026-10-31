@@ -12,6 +12,18 @@ Requester-bound OAuth, encryption, rotating-token refresh, and revocation share 
 
 The policy-configuration checkpoint `e638fb62e` passes 390 bot, 76 API, and 41 incident-delivery examples, plus authenticated Chrome checks for policy controls, saves, reloads, conditional fields, and visible validation in both themes at mobile and desktop widths. Earlier lifecycle verification also covers 35 error-pattern and seven focused native-review examples. Remote evidence reads and provenance have fixture coverage. Remaining review worker paths, signed Slack stop and waiting revocation behavior, native model-session continuation, live Slack acceptance, streaming, and final release checks remain unfinished.
 
+## Signed Slack stop and waiting-notice cleanup
+
+Signed stop intake now records the authorized stop marker and cancels covered requests in the same transaction. Routine controls and signed stops use the same run finalizer. Its scope comes from retained signed receipts and the authorized thread marker; an unlinked stop actor cannot expand that scope. Cancellation closes unstarted actions and preserves uncertain started effects, original proposals, review decisions, and artifacts.
+
+Cleanup uses the existing source worker and progress refresh job. One typed queue timing helper pulls waiting jobs forward or defers them, replacing the duplicated queue SQL. A paused routine can finish notice cleanup without regaining execution authority. Cleanup does not call the model or replay an action. Wake-up runs after cancellation commits: a queue failure remains retryable but cannot restore execution authority.
+
+The existing progress card reads the canonical operation outcome. Ended notices retain a read-only history link and remove voting controls. A started action says its outcome is uncertain; an unstarted action says it was not completed. The typed pending/ended notice view adds no stored state, worker, table, or migration.
+
+Failing-first regressions exposed missing immediate wake-up, delayed refresh, cancellation rollback on enqueue failure, and misleading claimed-action messaging. All eleven focused Slack review lifecycle examples now pass, covering decisions, expiry, recovery, signed stop, pause, cancel, stop during notice publication, a claimed action, repeated controls, unknown actors, injected queue failure, unchanged model-call count, and no duplicate mutation. The final source passes all 409 bot, 76 API, and 41 incident-delivery examples. Formatting and diff checks pass; HLint has no hints on changed production lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue. Whole-branch reviews and release gates remain pending.
+
+Waiting revocation, web/slash continuation, native model-session continuation, streaming, and controlled live Slack acceptance remain unfinished. The hosted visual review still predates this slice.
+
 ## Routine pause and stop while awaiting review
 
 Routine pause and stop now cancel running requests before returning. The routine update and shared run finalizer commit together. Unstarted actions receive the existing request-ended refusal; already-started effects retain an uncertain outcome. Original proposals, review receipts, and artifact snapshots remain available for audit.

@@ -219,6 +219,9 @@ module Models.Apis.Issues (
   claimRoutine,
   listRoutineRuns,
   recoverDueRoutines,
+  RunStop (..),
+  stopRunsTx,
+  runStopScopeSql,
   pauseRoutine,
   cancelRoutineRun,
   resumeRoutine,
@@ -2852,7 +2855,7 @@ data RunFinalization
   = FinishRun RunContext RunTermination (Maybe AE.Value) (Maybe AE.Value) (Maybe Text)
   | RetireUnownedWork RoutineRetirement
   | RetireAbandonedRuns
-  | StopRoutineRuns Projects.ProjectId (UUIDId "conversation")
+  | StopRuns RunStop
 
 
 data RoutineRetirement = UnownedInstallations | ReauthorizingRoutine Projects.ProjectId (UUIDId "conversation")
@@ -2893,14 +2896,13 @@ finishRunRowsTx finalization =
           WHERE id = #{context.id} AND started_at = #{context.startedAt} AND status = #{RunRunning}
           RETURNING id, project_id, conversation_id, root_run_id, #{requestEnded} AS request_ended
         )|]
-      StopRoutineRuns pid conversation ->
+      StopRuns scope ->
         [HI.sql|WITH finished AS (
           UPDATE apis.ai_routine_runs run SET status = #{RunCancelled}, finished_at = clock_timestamp(),
             error = 'Run cancelled by a project member.'
-          FROM apis.ai_routines routine
-          WHERE run.routine_id = routine.id AND run.project_id = #{pid} AND routine.project_id = #{pid}
-            AND routine.conversation_id = #{conversation} AND run.status = #{RunRunning}
-          RETURNING run.id, run.project_id, run.conversation_id, run.root_run_id, TRUE AS request_ended
+          WHERE run.status = #{RunRunning} AND |]
+          <> runStopScopeSql scope
+          <> [HI.sql| RETURNING run.id, run.project_id, run.conversation_id, run.root_run_id, TRUE AS request_ended
         )|]
       RetireAbandonedRuns ->
         [HI.sql|WITH finished AS (
@@ -2943,13 +2945,39 @@ prepareRoutineGrantTx pid conversation = do
   pure timing
 
 
+data RunStop = StopRoutine Projects.ProjectId (UUIDId "conversation") | StopSlackSession Text Text
+
+
+stopRunsTx :: RunStop -> Tx.Transaction ()
+stopRunsTx = finishRunRowsTx . StopRuns
+
+
+runStopScopeSql :: RunStop -> HI.Sql
+runStopScopeSql = \case
+  StopRoutine project conversation ->
+    [HI.sql|run.project_id = #{project} AND EXISTS (SELECT 1 FROM apis.ai_routines routine
+      WHERE routine.id = run.routine_id AND routine.project_id = #{project} AND routine.conversation_id = #{conversation})|]
+  StopSlackSession team eventId ->
+    [HI.sql|EXISTS (SELECT 1 FROM apis.slack_events question
+      JOIN apis.slack_investigation_threads thread ON thread.project_id = run.project_id
+        AND thread.team_id = question.team_id AND thread.channel_id = question.payload #>> '{event,channel}'
+        AND thread.thread_ts = COALESCE(question.payload #>> '{event,thread_ts}', question.payload #>> '{event,ts}')
+      JOIN apis.slack_events stopped ON stopped.team_id = thread.team_id
+        AND stopped.payload #>> '{event,channel}' = thread.channel_id AND stopped.payload #>> '{event,thread_ts}' = thread.thread_ts
+      WHERE question.id = CASE WHEN run.source #>> '{contents,tag}' = 'SlackMessage'
+        THEN (run.source #>> '{contents,contents}')::uuid END
+        AND run.source->>'tag' = 'TriggeredRun' AND stopped.team_id = #{team} AND stopped.event_id = #{eventId}
+        AND stopped.payload #>> '{event,type}' = 'agent_session_stopped'
+        AND thread.stopped_through >= (question.payload #>> '{event,ts}')::numeric)|]
+
+
 pauseRoutine :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
 pauseRoutine pid convId = Hasql.transaction TxS.ReadCommitted TxS.Write do
   Hasql.executeTx
     [HI.sql|UPDATE apis.ai_routines SET active = FALSE,
         next_run_at = CASE WHEN running_since IS NULL THEN NULL ELSE next_run_at END
         WHERE project_id = #{pid} AND conversation_id = #{convId}|]
-  finishRunRowsTx $ StopRoutineRuns pid convId
+  stopRunsTx $ StopRoutine pid convId
 
 
 cancelRoutineRun :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
@@ -2959,7 +2987,7 @@ cancelRoutineRun pid convId = Hasql.transaction TxS.ReadCommitted TxS.Write do
       WHERE project_id = #{pid} AND conversation_id = #{convId}
         AND (running_since IS NOT NULL OR EXISTS
           (SELECT 1 FROM apis.ai_routine_runs run WHERE run.routine_id = apis.ai_routines.id AND run.status = 'running'))|]
-  finishRunRowsTx $ StopRoutineRuns pid convId
+  stopRunsTx $ StopRoutine pid convId
 
 
 resumeRoutine :: (DB es, Time :> es) => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ScheduledRoutine)
