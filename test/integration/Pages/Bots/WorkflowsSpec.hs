@@ -89,6 +89,35 @@ spec :: Spec
 spec = around withTestResources do
   describe "Complete Bot Workflows" do
     describe "project wiki tools" do
+      it "wikiDiscovery_filtersCurrentRevisionsWithoutLeakingOtherProjects" \tr -> do
+        otherProject <- createTestProject tr "Private discovery"
+        let user = (getResponse tr.trSessAndHeader).user.id
+            page = UUIDId UUID.nil
+            distractor = UUIDId $ UUID.fromWords 0 0 0 1
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user}
+            save project identifier version title body = do
+              let document = fromRightShow $ Memory.Document <$> Memory.mkMemoryText title <*> Memory.mkMemoryText body
+              runQueryEffect tr (Memory.writePage project identifier version Nothing document $ Memory.Member user) >>= (`shouldSatisfy` isRight)
+            list arguments = runTestBg frozenTime tr $ AI.executeToolCall config $ Chat.ToolCall "discover" "function" $ Chat.ToolFunction "list_project_memory" arguments
+            search query = list $ one ("query", AE.String query)
+        save testPid page 0 "Checkout retries" "Old retry hypothesis"
+        save testPid page 1 "Checkout retries" "Idempotency keys use a literal %_ marker."
+        save testPid distractor 0 "Unrelated note" "Nothing about payments"
+        save otherProject page 0 "Checkout retries" "Private project body"
+        for_ ["CHECKOUT", "idempotency", page.toText, "%_"] \query -> do
+          found <- search query
+          let summaries = fromRightShow $ AE.eitherDecodeStrict @[AE.Value] $ encodeUtf8 found.formatted
+          map (^? key "id" . _String) summaries `shouldBe` [Just page.toText]
+          found.formatted `shouldSatisfy` T.isInfixOf "Checkout retries"
+          found.formatted `shouldSatisfy` (not . T.isInfixOf "Unrelated note")
+          found.formatted `shouldSatisfy` (not . T.isInfixOf "Private project body")
+        search "Old retry hypothesis" >>= (\found -> found.formatted `shouldBe` "[]")
+        list mempty >>= (\found -> found.formatted `shouldSatisfy` T.isInfixOf "Unrelated note")
+        for_ [AE.String "", AE.String (T.replicate 201 "x"), AE.Number 1] \invalid -> do
+          found <- list $ one ("query", invalid)
+          found.formatted `shouldSatisfy` T.isInfixOf "query"
+          found.formatted `shouldSatisfy` (not . T.isInfixOf "Checkout retries")
+
       it "wikiRecovery_attributesTheActualRunAndLinksItsActionHistory" \tr -> do
         otherProject <- createTestProject tr "Private wiki"
         let conversation = UUIDId UUID.nil

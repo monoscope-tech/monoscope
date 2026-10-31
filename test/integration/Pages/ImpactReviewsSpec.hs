@@ -998,7 +998,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           , bash "set -eu; test \"$(bash tests/review-probe.sh)\" = retained-probe; test ! -e /checkout/tests/review-probe.sh; echo guest-file-tools-isolated"
           , tool "write" $ AE.object ["path" AE..= ("/checkout/AGENTS.md" :: Text), "content" AE..= ("must not replace host instructions" :: Text)]
           ]
-        reviewPlan limitScript afterSubmit = prefix <> fileTools <> [tool "list_project_memory" $ AE.object [], tool "read_project_memory" $ AE.object ["pageId" AE..= page], tool "write_project_memory" $ AE.object ["pageId" AE..= page, "version" AE..= (0 :: Int), "document" AE..= document], tool "recall_knowledge" $ AE.object ["service" AE..= ("test-service" :: Text)], tool "remember_knowledge" $ AE.object ["service" AE..= ("test-service" :: Text), "summary" AE..= ("Recheck the retry hypothesis." :: Text), "evidenceKeys" AE..= (["telemetry-1"] :: [Text])], check regression, check "set -eu\ngit update-index --assume-unchanged src/runtime.sh\nprintf changed > src/runtime.sh\n", check limitScript, check "exit 0", tool "submit_review" $ draft 1 [], tool "submit_review" $ draft 2 ["telemetry-1"], tool "submit_review" accepted] <> afterSubmit
+        reviewPlan searchTerm limitScript afterSubmit = prefix <> fileTools <> [tool "list_project_memory" $ AE.object ["query" AE..= value | value <- maybeToList searchTerm], tool "read_project_memory" $ AE.object ["pageId" AE..= page], tool "write_project_memory" $ AE.object ["pageId" AE..= page, "version" AE..= (0 :: Int), "document" AE..= document], tool "recall_knowledge" $ AE.object ["service" AE..= ("test-service" :: Text)], tool "remember_knowledge" $ AE.object ["service" AE..= ("test-service" :: Text), "summary" AE..= ("Recheck the retry hypothesis." :: Text), "evidenceKeys" AE..= (["telemetry-1"] :: [Text])], check regression, check "set -eu\ngit update-index --assume-unchanged src/runtime.sh\nprintf changed > src/runtime.sh\n", check limitScript, check "exit 0", tool "submit_review" $ draft 1 [], tool "submit_review" $ draft 2 ["telemetry-1"], tool "submit_review" accepted] <> afterSubmit
         next results = do
           writeIORef replies results
           step <- atomicModifyIORef' plan \case [] -> ([], const $ pure $ SdkText "Review submitted."); action : rest -> (rest, action)
@@ -1034,14 +1034,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   )
             (,,,,,) result <$> readIORef checks <*> readIORef allocations <*> readIORef submissions <*> readIORef memories <*> readIORef replies
       for_ ([(1, "exec monoscope-unavailable-regression-command", []), (3, "yes regression-output", [readPath "/workspace/src/helper.txt"])] :: [(Word32, Text, [[AE.Value] -> IO SdkReply])]) \(n, limitScript, afterSubmit) -> do
-        (result, checks, allocations, submissions, memories, results) <- run n $ reviewPlan limitScript afterSubmit
+        (result, checks, allocations, submissions, memories, results) <- run n $ reviewPlan ("retry" <$ guard (n /= 1) :: Maybe Text) limitScript afterSubmit
         if n == 1 then either (fail . toString) (\value -> either fail pure (AE.eitherDecodeStrict $ encodeUtf8 value) >>= (`shouldBe` accepted)) result else isLeft result `shouldBe` True
         map (.status) checks `shouldBe` [Agent.Passed, Agent.Failed, Agent.Invalidated, Agent.Invalidated] <> if n == 1 then [Agent.Blocked, Agent.Blocked] else [Agent.OutputLimit, Agent.OutputLimit]
         map (.exitCode) (take 2 checks) `shouldBe` [Just 0, Just 1]
         when (n == 1) $ map (.exitCode) (drop 4 checks) `shouldBe` [Just 127, Just 127]
         when (n /= 1) $ map (.logBytes) checks `shouldSatisfy` all (<= 1024 * 1024)
         submissions `shouldBe` [draft 2 ["telemetry-1"], accepted]
-        memories `shouldBe` [AE.object ["tag" AE..= ("List" :: Text)], AE.object ["tag" AE..= ("Read" :: Text), "contents" AE..= page], AE.object ["tag" AE..= ("Write" :: Text), "contents" AE..= AE.object ["pageId" AE..= page, "version" AE..= (0 :: Int), "document" AE..= document]]]
+        memories `shouldBe` [if n == 1 then AE.object ["tag" AE..= ("List" :: Text)] else AE.object ["tag" AE..= ("Search" :: Text), "contents" AE..= ("retry" :: Text)], AE.object ["tag" AE..= ("Read" :: Text), "contents" AE..= page], AE.object ["tag" AE..= ("Write" :: Text), "contents" AE..= AE.object ["pageId" AE..= page, "version" AE..= (0 :: Int), "document" AE..= document]]]
         length allocations `shouldBe` 1
         for_ allocations \allocation -> do
           Agent.allocationAttempt allocation `shouldBe` request.attemptId
@@ -3289,14 +3289,17 @@ spec = around withTestResources $ describe "Production impact reviews" do
               body <- either (fail . toString) pure $ Memory.mkMemoryText "Observe policy does not authorize a wiki edit."
               let page = case request.attemptId of UUIDId value -> UUIDId value
               listed <- unlift $ knowledge $ Agent.ProjectMemory Memory.List
+              searchTerm <- either (fail . toString) pure $ Memory.mkMemoryText "no-wiki-matches-this-observation"
+              searched <- unlift $ knowledge $ Agent.ProjectMemory $ Memory.Search searchTerm
               wikiSaved <- unlift $ knowledge $ Agent.ProjectMemory $ Memory.Write $ Memory.Edit page 0 $ Memory.Document title body
-              writeIORef knowledgeResults $ Just (listed, wikiSaved)
+              writeIORef knowledgeResults $ Just (listed, searched, wikiSaved)
               pure $ Right $ decodeUtf8 $ AE.encode result{Impact.findings = [], Impact.coverage = ["Observed without project changes"]}
             _ -> liftIO $ fail "Unexpected agent request during Observe review"
       (wikiRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ observingAgent $ Impact.reviewPullRequest run.id
       readIORef knowledgeResults >>= \case
-        Just (listed, wikiSaved) -> do
+        Just (listed, searched, wikiSaved) -> do
           listed `shouldSatisfy` isRight
+          searched `shouldBe` Right (AE.toJSON ([] :: [AE.Value]))
           wikiSaved `shouldSatisfy` isLeft
         Nothing -> fail "Expected the review worker to try wiki reads and writes"
       wikiRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/" . fst)

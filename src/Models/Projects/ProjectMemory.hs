@@ -1,6 +1,7 @@
-module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), PageFilter (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), Edit (..), Request (..), Summary (..), summarize, pageLimit, latestPages, pageHistory, writePage, writePageTx) where
+module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), PageFilter (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), Edit (..), Request (..), parsePageQuery, discoverPages, Summary (..), summarize, pageLimit, latestPages, pageHistory, writePage, writePageTx) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Data.Char (isAlphaNum, isAscii)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
@@ -141,9 +142,19 @@ data Edit = Edit {pageId :: PageId, version :: Word32, document :: Document}
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data Request = List | Read PageId | Write Edit
+data Request = List | Search (MemoryText 200) | Read PageId | Write Edit
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+parsePageQuery :: AE.Value -> AET.Parser (Maybe (MemoryText 200))
+parsePageQuery = AE.withObject "Wiki listing" (AE..:? "query")
+
+
+discoverPages :: DB es => UUIDId "project" -> Maybe (MemoryText 200) -> Eff es [Page]
+discoverPages pid = \case
+  Nothing -> latestPages pid
+  Just query -> take pageLimit <$> pageWindow pid (Matching $ memoryText query) Nothing
 
 
 data Summary = Summary {id :: PageId, version :: Int64, title :: MemoryText 120, author :: Author, updatedAt :: UTCTime, path :: PagePath}

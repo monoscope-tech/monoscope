@@ -572,7 +572,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                     Policy.QueryTelemetry -> parsed AE.parseJSON callbacks.respond
                                     Policy.RecallKnowledge -> property "service" $ callbacks.knowledge . Recall
                                     Policy.RememberKnowledge -> parsed AE.parseJSON $ callbacks.knowledge . Remember
-                                    Policy.ListProjectMemory -> callbacks.knowledge $ ProjectMemory Memory.List
+                                    Policy.ListProjectMemory -> parsed Memory.parsePageQuery $ callbacks.knowledge . ProjectMemory . maybe Memory.List Memory.Search
                                     Policy.ReadProjectMemory -> property "pageId" $ callbacks.knowledge . ProjectMemory . Memory.Read
                                     Policy.WriteProjectMemory -> parsed AE.parseJSON $ callbacks.knowledge . ProjectMemory . Memory.Write
                                     _ -> pure $ Left "This tool requires a native workflow handler"

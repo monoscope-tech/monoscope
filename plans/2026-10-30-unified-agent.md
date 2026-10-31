@@ -305,7 +305,7 @@ Record actual grants, subscriptions, app eligibility, session behavior, and publ
 ## Implementation evidence
 
 The [visual review](../docs/reviews/2026-10-30-unified-agent.html) shows the architecture, request flows, source excerpts, and remaining work.
-It describes code snapshot `9198633ba`, including shared completion and typed capability policies.
+Each source panel identifies its reviewed commit, including shared completion and typed capability policies.
 The review now uses one main diagram, a guided request walkthrough, and collapsed code comparisons.
 Text contrast exceeds 7:1 for the tested color pairs. The layout passes browser checks at 390, 768, and 1280 pixels.
 
@@ -828,6 +828,16 @@ All 234 bot, 75 API v1, and 35 error-pattern pipeline examples pass. The native 
 
 The test watcher was restarted once after it demonstrably continued running an old test name and old source locations. The corrected failure and subsequent passing evidence come from the refreshed module graph. Existing warnings in unrelated test files remain unchanged. Whole-branch reviews, final doctests, controlled live Slack acceptance, and the remaining plan phases stay open.
 
+
+### Relevant wiki discovery shares the existing list tool (31 October)
+
+The existing `list_project_memory` capability accepts an optional bounded query. It returns at most 100 current-page summaries matching a case-insensitive literal substring in the title, path, or body. An omitted query preserves the recent-page listing. Search uses the wiki browser's existing `pageWindow` query across the project, rather than filtering the latest 100 results in memory.
+
+Chat, scheduled conversations, and native reviews use one parser and lookup. A typed `Search (MemoryText 200)` request carries the parsed native query; existing `List` requests and their JSON remain valid. Search uses the existing viewer-read policy, with native access rechecked before returning results. It adds no tool name, index, migration, search service, or authorization mode.
+
+The regression first reproduced an ignored query returning an unrelated page. It covers title, body, path, literal wildcard characters, current revisions, another project's page with the same ID, omitted queries, and rejected malformed or oversized input. Native review passes search under Observe, including a policy reduction during execution. The real SDK exploration test passes both legacy list and typed search requests through the shared schema and parser.
+
+All 235 bot and 75 API v1 examples pass. Formatting and diff checks pass. HLint reports the same four hints as the baseline across the changed application modules, with none introduced. Repeated slice reviews consolidated native listing and search response handling and found no remaining material distillation, constraint-evasion, or client-behavior findings. A fresh inventory still lists 28 open PRs, with no changed heads or additional selected integration work. Whole-branch reviews, controlled live Slack acceptance, final release checks, and the remaining plan phases stay open.
 
 ## External references
 

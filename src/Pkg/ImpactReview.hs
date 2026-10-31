@@ -349,7 +349,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                   (requestEvidence run.projectId (requireActive run execution >> authorizedServices run mappings) from until)
                   ( \request -> do
                       let capability = case request of
-                            Agent.ProjectMemory Memory.List -> Catalog.localPolicy Catalog.ListProjectMemory
+                            (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Search{}) -> Catalog.localPolicy Catalog.ListProjectMemory
                             Agent.ProjectMemory Memory.Read{} -> Catalog.localPolicy Catalog.ReadProjectMemory
                             Agent.ProjectMemory Memory.Write{} -> Catalog.localPolicy Catalog.WriteProjectMemory
                             Agent.Recall{} -> Catalog.ReadOnly ProjectMembers.PView
@@ -367,7 +367,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                                     (AI.AtomicOperation $ memoryResponse <$> Memory.writePageTx run.projectId write.edit.pageId write.edit.version Nothing write.edit.document (Memory.Run context.id))
                                     (\original -> reconcileComment run conn original <* unlessM (not . null <$> authorizedServices run mappings) (throwError $ ReviewFailure "Project memory authorization is no longer available"))
                                 (Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
-                          (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}) ->
+                          (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Search{}; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}) ->
                             requestKnowledge run.projectId attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
                   )
                   ( \call -> do
@@ -634,9 +634,8 @@ projectMemory pid attempt authorized request = do
   if not permitted
     then pure $ Left "Project memory authorization is no longer available"
     else case request of
-      Memory.List -> do
-        pages <- Memory.latestPages pid
-        visible $ AE.toJSON $ map Memory.summarize pages
+      Memory.List -> listing Nothing
+      Memory.Search query -> listing $ Just query
       Memory.Read page -> do
         history <- Memory.pageHistory pid page
         case viaNonEmpty head history of
@@ -644,6 +643,7 @@ projectMemory pid attempt authorized request = do
           Just current -> visible $ AE.toJSON current
       Memory.Write edit -> memoryResponse <$> Memory.writePage pid edit.pageId edit.version Nothing edit.document (Memory.Agent attempt)
   where
+    listing query = Memory.discoverPages pid query >>= visible . AE.toJSON . map Memory.summarize
     visible value = do
       permitted <- authorized
       pure $ if permitted then Right value else Left "Project memory authorization is no longer available"

@@ -1374,7 +1374,9 @@ executeToolAt cursor config tc = do
           AE.object
             $ ["name" AE..= tool.name, "description" AE..= tool.description, "input_schema" AE..= tool.inputSchema, "agent_recovery" AE..= recovery tool]
             <> maybe [] (\policy -> ["minimum_permission" AE..= MCP.minimumPermission policy, "evidence_permission" AE..= Catalog.disclosurePermission policy, "action" AE..= MCP.actionName policy]) tool.agentPolicy
-      ListProjectMemory -> EffectfulOperation $ noRaw . encodeText . map Memory.summarize <$> Memory.latestPages config.projectId
+      ListProjectMemory -> EffectfulOperation $ case parseEither Memory.parsePageQuery $ AE.toJSON args of
+        Left err -> pure $ noRaw $ toolError "list_project_memory" ("invalid 'query': " <> toText err) args
+        Right query -> noRaw . encodeText . map Memory.summarize <$> Memory.discoverPages config.projectId query
       ReadProjectMemory -> EffectfulOperation $ noRaw <$> readMemory args
       WriteProjectMemory -> AtomicOperation $ noRaw <$> writeMemory args
       GetInvestigationHistory -> EffectfulOperation $ noRaw <$> slackThread "Investigation history requires an authorized Slack investigation." \run -> encodeText <$> Investigations.recentEvents config.projectId run.teamId run.channelId run.threadTs
