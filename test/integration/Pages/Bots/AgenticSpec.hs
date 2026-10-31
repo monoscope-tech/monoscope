@@ -180,63 +180,111 @@ spec = around withTestResources do
         runQueryEffect tr (Issues.routineRunPolicyFor testPid execution.runId user conversation) >>= (`shouldBe` Nothing)
 
     describe "Web conversation persistence" do
-      for_ (["checkpoint", "uncertain", "repeat"] :: [Text]) \boundary ->
-        it ("agentOperation_dashboardCreationIsNotRepeatedFor" <> toString boundary) \tr -> do
-          calls <- IORef.newIORef (0 :: Int)
-          interrupt <- IORef.newIORef True
-          let request = UUIDId $ UUID.fromWords 0 0 0 198
-              form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm "query=Create+a+durable+dashboard&mode=chat&allowActions=true&requestId=00000000-0000-0000-0000-0000000000c6"
-              original = Routes.mcpProjectTools
-              backend =
-                original
-                  { AI.invoke = \principal pid name args -> do
-                      liftIO $ IORef.modifyIORef' calls (+ 1)
-                      result <- AI.invoke original principal pid name args
-                      when (boundary == "uncertain") $ liftIO do
-                        wasFirst <- IORef.atomicModifyIORef' interrupt (\old -> (False, old))
-                        when wasFirst $ throwIO $ ErrorCall "Worker interrupted after dashboard creation"
-                      pure result
-                  }
-              provider :: ATAuthCtx a -> ATAuthCtx a
-              provider = interpose @ELLM.LLM \_ -> \case
-                ELLM.CallAgenticChat history _ _ -> do
-                  let evidence = [message.content | message <- toList history, message.role == LLM.Tool]
-                  pure $ Right $ case evidence of
-                    [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall identifier "function" (LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Durable action regression" :: Text)])) | identifier <- if boundary == "repeat" then ["create", "duplicate"] else ["create"]]}
-                    [_] | boundary == "uncertain" -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "try-again" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Durable action regression" :: Text)])]}
-                    _ -> LLM.Message LLM.Assistant "The dashboard was created." LLM.defaultMessageData
-                ELLM.CallLLM{} -> pure $ Right "Durable dashboard request"
-                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
-              execute = tryAny $ void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just backend) testPid form
-              ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
-              count = runQueryEffect tr $ Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Durable action regression'|]
-          if boundary == "checkpoint"
-            then
-              bracket_
-                (ddl "ALTER TABLE apis.slack_turn_checkpoints ADD CONSTRAINT reject_tool_completion CHECK (NOT (checkpoint->>'tag' = 'ToolsPending' AND jsonb_array_length(checkpoint->'contents'->2) > 0)) NOT VALID")
-                (ddl "ALTER TABLE apis.slack_turn_checkpoints DROP CONSTRAINT reject_tool_completion")
-                (execute >>= (`shouldSatisfy` isLeft))
-            else execute >>= (`shouldSatisfy` if boundary == "repeat" then isRight else isLeft)
-          count >>= (`shouldBe` 1)
-          result <- execute
-          result `shouldSatisfy` isRight
-          count >>= (`shouldBe` 1)
-          IORef.readIORef calls >>= (`shouldBe` 1)
-          saved <- runQueryEffect tr $ Issues.getRoutineRun testPid request
-          fmap (.status) saved `shouldBe` Just Issues.RunSucceeded
-          (_, page) <- testServant tr $ AIThreads.routineRunGetH testPid request Nothing
-          let html = renderT page
-          html `shouldSatisfy` T.isInfixOf "Action history"
-          html `shouldSatisfy` T.isInfixOf (if boundary == "uncertain" then "Outcome uncertain" else "Response saved")
-          html `shouldSatisfy` T.isInfixOf "hx-target=\"#routine-run\""
-          html `shouldSatisfy` T.isInfixOf "Proposal and outcome"
-          let user = (getResponse tr.trSessAndHeader).user.id
-          runQueryEffect tr do
-            Hasql.interpExecute_ [HI.sql|UPDATE users.users SET is_sudo = FALSE WHERE id = #{user}|]
-            Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
-          (_, viewerPage) <- testServant tr $ AIThreads.routineRunGetH testPid request Nothing
-          renderT viewerPage `shouldSatisfy` T.isInfixOf "Action details require edit permission."
-          renderT viewerPage `shouldSatisfy` (not . T.isInfixOf "Proposal and outcome")
+      for_ (["create_dashboard", "delete_dashboard"] :: [Text]) \operation ->
+        for_ (["checkpoint", "uncertain", "repeat"] :: [Text]) \boundary ->
+          it ("agentOperation_dashboardMutationIsNotRepeatedFor" <> toString operation <> toString boundary) \tr -> do
+            calls <- IORef.newIORef (0 :: Int)
+            interrupt <- IORef.newIORef True
+            let request = UUIDId $ UUID.fromWords 0 0 0 198
+                user = (getResponse tr.trSessAndHeader).user.id
+                dashboard = UUIDId (UUID.fromWords 0 0 47 1) :: UUIDId "dashboard"
+                administrative = operation == "delete_dashboard"
+                expectedCount = if administrative then 0 else 1
+                arguments = if administrative then one ("dashboard_id", AE.toJSON dashboard) else one ("body", AE.object ["title" AE..= ("Durable action regression" :: Text)])
+                form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm "query=Apply+a+durable+dashboard+operation&mode=chat&allowActions=true&requestId=00000000-0000-0000-0000-0000000000c6"
+                original = Routes.mcpProjectTools
+                backend =
+                  original
+                    { AI.invoke = \principal pid name args -> do
+                        liftIO $ IORef.modifyIORef' calls (+ 1)
+                        result <- AI.invoke original principal pid name args
+                        when (boundary == "uncertain") $ liftIO do
+                          wasFirst <- IORef.atomicModifyIORef' interrupt (\old -> (False, old))
+                          when wasFirst $ throwIO $ ErrorCall "Worker interrupted after dashboard mutation"
+                        pure result
+                    }
+                provider :: ATAuthCtx a -> ATAuthCtx a
+                provider = interpose @ELLM.LLM \_ -> \case
+                  ELLM.CallAgenticChat history _ _ -> do
+                    let evidence = [message.content | message <- toList history, message.role == LLM.Tool]
+                    pure $ Right $ case evidence of
+                      [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall identifier "function" (LLM.ToolFunction operation arguments) | identifier <- if boundary == "repeat" then ["create", "duplicate"] else ["create"]]}
+                      [_] | boundary == "uncertain" -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "try-again" "function" $ LLM.ToolFunction operation arguments]}
+                      _ -> LLM.Message LLM.Assistant "The dashboard operation completed." LLM.defaultMessageData
+                  ELLM.CallLLM{} -> pure $ Right "Durable dashboard request"
+                  ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
+                execute = tryAny $ void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just backend) testPid form
+                ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+                count = runQueryEffect tr $ Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Durable action regression'|]
+            when administrative
+              $ runQueryEffect tr
+              $ Hasql.interpExecute_
+                [HI.sql|INSERT INTO projects.dashboards (id, project_id, created_by, title)
+              VALUES (#{dashboard}, #{testPid}, #{user}, 'Durable action regression')|]
+            if boundary == "checkpoint"
+              then
+                bracket_
+                  (ddl "ALTER TABLE apis.slack_turn_checkpoints ADD CONSTRAINT reject_tool_completion CHECK (NOT (checkpoint->>'tag' = 'ToolsPending' AND jsonb_array_length(checkpoint->'contents'->2) > 0)) NOT VALID")
+                  (ddl "ALTER TABLE apis.slack_turn_checkpoints DROP CONSTRAINT reject_tool_completion")
+                  (execute >>= (`shouldSatisfy` isLeft))
+              else execute >>= (`shouldSatisfy` if boundary == "repeat" then isRight else isLeft)
+            count >>= (`shouldBe` expectedCount)
+            result <- execute
+            result `shouldSatisfy` isRight
+            count >>= (`shouldBe` expectedCount)
+            IORef.readIORef calls >>= (`shouldBe` 1)
+            saved <- runQueryEffect tr $ Issues.getRoutineRun testPid request
+            fmap (.status) saved `shouldBe` Just Issues.RunSucceeded
+            (_, page) <- testServant tr $ AIThreads.routineRunGetH testPid request Nothing
+            let html = renderT page
+            html `shouldSatisfy` T.isInfixOf "Action history"
+            html `shouldSatisfy` T.isInfixOf (if boundary == "uncertain" then "Outcome uncertain" else "Response saved")
+            html `shouldSatisfy` T.isInfixOf "hx-target=\"#routine-run\""
+            html `shouldSatisfy` T.isInfixOf "Proposal and outcome"
+            runQueryEffect tr do
+              Hasql.interpExecute_ [HI.sql|UPDATE users.users SET is_sudo = FALSE WHERE id = #{user}|]
+              Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+            (_, viewerPage) <- testServant tr $ AIThreads.routineRunGetH testPid request Nothing
+            renderT viewerPage `shouldSatisfy` T.isInfixOf (if administrative then "Action details require admin permission." else "Action details require edit permission.")
+            renderT viewerPage `shouldSatisfy` (not . T.isInfixOf "Proposal and outcome")
+            when administrative $ for_ saved \run -> do
+              runQueryEffect tr
+                $ Hasql.interpExecute_
+                  [HI.sql|UPDATE apis.ai_agent_operations
+                SET proposal = jsonb_set(proposal, '{policy,capability}', '{"tag":"Administration"}'::jsonb)
+                WHERE run_id = #{request}|]
+              resetLegacyEvidenceScope tr testPid run.conversationId
+              runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid request) >>= (\operations -> length operations `shouldBe` 1)
+              runQueryEffect tr (Investigations.conversationEvidencePermission testPid run.conversationId) >>= (`shouldBe` ProjectMembers.PAdmin)
+
+      it "agentOperation_privateAdministratorCreationRetainsItsCredentialWithoutRepeatingTheWrite" \tr -> do
+        let conversation = UUIDId $ UUID.fromWords 0 0 47 2
+            user = (getResponse tr.trSessAndHeader).user.id
+        mode <- interactiveInvocation tr testPid conversation "Create a private API key" Issues.Autonomous
+        calls <- IORef.newIORef (0 :: Int)
+        let original = Routes.mcpProjectTools
+            backend = original{AI.invoke = \actor project name args -> liftIO (IORef.modifyIORef' calls (+ 1)) >> AI.invoke original actor project name args}
+            config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.projectTools = Just backend}
+            provider :: ATBackgroundCtx a -> ATBackgroundCtx a
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "private-key" "function" $ LLM.ToolFunction "create_api_key" $ one ("body", AE.object ["title" AE..= ("Retained private administrator key" :: Text)])]}
+                results -> LLM.Message LLM.Assistant (T.intercalate "\n" results) LLM.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding"
+            execute = runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Create a private API key" "model" "key"
+        answer <- execute >>= either (fail . toString) pure
+        case answer.toolCalls of
+          [call] -> (call.rawData >>= (^? key "structuredContent" . key "key" . _String)) `shouldSatisfy` maybe False (not . T.null)
+          _ -> expectationFailure "Expected one retained private creation result"
+        runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` ProjectMembers.PAdmin)
+        replay <- execute >>= either (fail . toString) pure
+        replay.response `shouldBe` answer.response
+        runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.project_api_keys WHERE project_id = #{testPid} AND title = 'Retained private administrator key'|]) >>= (`shouldBe` 1)
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+        denied <- tryAny execute
+        denied `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
+        IORef.readIORef calls >>= (`shouldBe` 1)
 
       it "agentOperation_atomicArtifactAppendRollsBackWithItsOutcome" \tr -> do
         let conversation = UUIDId UUID.nil
@@ -367,9 +415,11 @@ spec = around withTestResources do
         let conversation = UUIDId UUID.nil
             config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.projectTools = Just Routes.mcpProjectTools}
         void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
-        for_ ([("get_project", "replay_reads"), ("save_artifact", "atomic_in_run"), ("send_to_slack", "retain_in_run")] :: [(Text, Text)]) \(name, expected) -> do
+        for_ ([("get_project", "replay_reads", ProjectMembers.PView, ProjectMembers.PView), ("save_artifact", "atomic_in_run", ProjectMembers.PView, ProjectMembers.PView), ("send_to_slack", "retain_in_run", ProjectMembers.PEdit, ProjectMembers.PView), ("delete_dashboard", "retain_in_run", ProjectMembers.PAdmin, ProjectMembers.PView), ("create_api_key", "retain_in_run", ProjectMembers.PAdmin, ProjectMembers.PAdmin)] :: [(Text, Text, ProjectMembers.Permissions, ProjectMembers.Permissions)]) \(name, expected, role, audience) -> do
           result <- runTestBg frozenTime tr $ AI.executeToolCall config $ LLM.ToolCall "schema" "function" $ LLM.ToolFunction "get_project_tool_schema" $ one ("name", AE.String name)
           (AE.decode @AE.Value (encodeUtf8 result.formatted) >>= (^? key "agent_recovery" . _String)) `shouldBe` Just expected
+          for_ ([("minimum_permission", role), ("evidence_permission", audience)] :: [(AE.Key, ProjectMembers.Permissions)]) \(field, permission) ->
+            (AE.decode @AE.Value (encodeUtf8 result.formatted) >>= (^? key field)) `shouldBe` Just (AE.toJSON permission)
 
       it "requires an explicit per-message grant for project changes" \tr -> do
         let absent = urlDecodeAsForm @AIThreads.AIChatForm "query=check+metrics&mode=chat"
@@ -532,16 +582,26 @@ spec = around withTestResources do
                 ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
                   [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "credentials" "function" $ LLM.ToolFunction "list_api_keys" mempty]}
                   [_] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "document" "function" $ LLM.ToolFunction "save_artifact" $ Map.fromList [("key", AE.String "admin-evidence"), ("title", AE.String "Administrative findings"), ("content", AE.String secret)]]}
+                  [_, _] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "public-dashboard" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= secret])]}
+                  [_, _, _] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "public-team" "function" $ LLM.ToolFunction "create_team" $ one ("body", AE.object ["name" AE..= secret, "handle" AE..= ("private-evidence-canary" :: Text)])]}
                   _ -> LLM.Message LLM.Assistant secret LLM.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Right "Credential inventory"
                 ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
           runTestBg frozenTime tr $ provider do
             answer <- AI.runAgenticChatWithHistory config "Inspect project credentials" "model" "key" >>= either (throwIO . ErrorCall . toString) pure
-            liftIO $ map (.name) answer.toolCalls `shouldBe` ["list_api_keys", "save_artifact"]
-            liftIO $ map (.rawData) answer.toolCalls `shouldSatisfy` all isJust
-            liftIO $ map (.resultPreview) answer.toolCalls `shouldSatisfy` all (not . T.isInfixOf "Tool failed:")
+            liftIO $ map (.name) answer.toolCalls `shouldBe` ["list_api_keys", "save_artifact", "create_dashboard", "create_team"]
+            liftIO $ map (.rawData) (take 2 answer.toolCalls) `shouldSatisfy` all isJust
+            liftIO $ map (.resultPreview) (take 2 answer.toolCalls) `shouldSatisfy` all (not . T.isInfixOf "Tool failed:")
             void $ AI.completeAgenticResponse config "Inspect project credentials" "model" "key" answer
           runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` ProjectMembers.PAdmin)
+          runQueryEffect
+            tr
+            ( Hasql.interpScalar @Int64
+                [HI.sql|SELECT
+            (SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = #{secret}) +
+            (SELECT count(*) FROM projects.teams WHERE project_id = #{testPid} AND name = #{secret})|]
+            )
+            >>= (`shouldBe` 0)
           (_, administratorView) <- testServant tr $ AIThreads.threadGetH testPid conversation Nothing Nothing
           renderT administratorView `shouldSatisfy` T.isInfixOf secret
           for_ ["send_to_slack", "write_project_memory"] $ \name -> do

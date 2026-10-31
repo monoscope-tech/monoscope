@@ -658,6 +658,19 @@ All three owner/requester combinations pass: administrator/editor and editor/adm
 The broader event-autonomy transition remains incomplete. It must preserve immutable role/policy ceilings through recovery and account for pre-upgrade Slack checkpoints that already contain accepted steering. `origin/master` has the legacy Slack checkpoint/followup implementation without the new event-run root; a first new event run must not silently give such retained work broader authority. Native mutation-ledger integration and administrative result visibility also remain release work. The temporary event Observe ceiling has not been removed in this slice.
 
 
+### Automatic administrative operations and protected mutation audiences (31 October)
+
+The existing durable dashboard-mutation regression now covers both editor creation and administrator deletion. Administrator deletion initially failed because of the blanket administrative-action ban. It now uses the same Autonomous policy, current effective role, operation identity, retained outcome, and uncertain-recovery stop as other mutations. No additional approval mechanism or action executor was added; the obsolete `ActionRecoveryRequired` denial is removed.
+
+`Administration` carries the visibility of its resources and results. Its minimum execution role remains fixed at administrator regardless of that visibility. Ordinary project administration retains project-readable results. The API-key lifecycle retains an administrator-only scope, including credential creation. The existing descriptor provides this distinction to authorization, historical classification, and schema discovery; discovery now reports `evidence_permission` separately from `minimum_permission`.
+
+Legacy administrative snapshots used a constructor without an audience. Their decoder retains the administrator requirement, and historical classification now combines the stored capability policy with the current catalog requirement. A failing regression caught a downgrade to viewer scope after a legacy operation was reclassified; the same cases now decode and retain administrator scope. Unknown policies remain conservative.
+
+An expanded failing model/tool regression also reproduced restricted content being copied into a project-visible dashboard and team. The executor's existing publication check now covers every project mutation, using the descriptor's resource/result visibility. Conversation documents remain within their conversation scope. The fixed regression observes zero leaked resources for both current and legacy histories; this adds no separate taint store or per-tool privacy list.
+
+All six creation/deletion recovery cases pass: lost checkpoint, uncertain response, and repeated model call for each operation. The shared-audience cases cover a reader's denial, Observe denial, private administrator-read/credential denial, and permitted public administrative dispatch. A real private API-key creation test verifies credential retention, cached replay without another write, and denial after role downgrade. All 212 bot and 75 API v1 examples pass after these changes. Formatting and diff checks pass; repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings. New codec doctests await the final doctest run. Original role ceilings, legacy event-checkpoint adoption, native operation-ledger integration, broader Slack audiences, and final release checks remain open.
+
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

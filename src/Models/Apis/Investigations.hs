@@ -903,25 +903,27 @@ classifyLegacyEvidence project selected = do
         [HI.sql|SELECT conversation_id, checkpoint FROM apis.slack_turn_checkpoints
         WHERE project_id = #{project} AND conversation_id = ANY(#{pending})|]
     operations <-
-      Hasql.interp @[(UUIDId "conversation", Aeson AE.Value)]
-        [HI.sql|SELECT run.conversation_id, operation.proposal->'call' FROM apis.ai_agent_operations operation
-        JOIN apis.ai_routine_runs run ON run.id = operation.run_id
+      Hasql.interp @[(UUIDId "conversation", Aeson AE.Value, Aeson AE.Value)]
+        [HI.sql|SELECT run.conversation_id, COALESCE(operation.proposal->'call', 'null'::jsonb),
+          COALESCE(operation.proposal #> '{policy,capability}', 'null'::jsonb)
+        FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id
         WHERE run.project_id = #{project} AND run.conversation_id = ANY(#{pending})|]
     let policies =
           Map.fromListWith max
             $ [(conversation, ProjectMembers.PView) | conversation <- pending]
             <> existing
-            <> [(conversation, parsed (map (.name) :: [ToolCallInfo] -> [Text]) payload) | (conversation, Aeson payload) <- calls]
-            <> [(conversation, parsed checkpointNames payload) | (conversation, Aeson payload) <- checkpoints]
-            <> [(conversation, parsed (pure . LLM.toolFunctionName . LLM.toolCallFunction) payload) | (conversation, Aeson payload) <- operations]
+            <> [(conversation, parsed (toolsPermission . (map (.name) :: [ToolCallInfo] -> [Text])) payload) | (conversation, Aeson payload) <- calls]
+            <> [(conversation, parsed (toolsPermission . checkpointNames) payload) | (conversation, Aeson payload) <- checkpoints]
+            <> [(conversation, max (parsed (toolPermission . LLM.toolFunctionName . LLM.toolCallFunction) call) (parsed Catalog.disclosurePermission capability)) | (conversation, Aeson call, Aeson capability) <- operations]
         inherit roles = Map.unionWith max roles $ Map.fromListWith max [(target, maybe ProjectMembers.PAdmin (\source -> Map.findWithDefault ProjectMembers.PAdmin source roles) origin) | (target, origin) <- sources]
         resolved = until (\roles -> inherit roles == roles) inherit policies
     for_ (Map.toList $ Map.fromListWith (<>) [(role, [conversation]) | (conversation, role) <- Map.toList resolved]) $ \(role, conversations) -> retainEvidencePermission project conversations role
   where
-    parsed :: AE.FromJSON value => (value -> [Text]) -> AE.Value -> ProjectMembers.Permissions
-    parsed names value = case AE.fromJSON value of
+    parsed :: AE.FromJSON value => (value -> ProjectMembers.Permissions) -> AE.Value -> ProjectMembers.Permissions
+    parsed permission value = case AE.fromJSON value of
       AE.Error _ -> ProjectMembers.PAdmin
-      AE.Success stored -> foldl' max ProjectMembers.PView $ map toolPermission $ names stored
+      AE.Success stored -> permission stored
+    toolsPermission = foldl' max ProjectMembers.PView . map toolPermission
     toolPermission name = maybe ProjectMembers.PAdmin Catalog.disclosurePermission $ join $ Map.lookup name Catalog.policiesByName
     checkpointNames = \case
       AnswerReady answer -> map (.name) answer.toolCalls

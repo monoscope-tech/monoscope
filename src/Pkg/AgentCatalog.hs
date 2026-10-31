@@ -26,7 +26,10 @@ import Relude
 
 
 -- $setup
+-- >>> import Relude
 -- >>> import Models.Projects.ProjectMembers qualified as ProjectMembers
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Data.Either (isLeft)
 
 
 data Tool operation = Tool
@@ -47,16 +50,30 @@ data AgentPolicy
   | ProjectMemoryWrite
   | ProjectWrite
   | ExternalPublication
-  | Administration
+  | Administration ProjectMembers.Permissions
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (AE.ToJSON)
+
+
+-- | Historical administration snapshots did not describe their result audience.
+--
+-- >>> AE.eitherDecode @AgentPolicy "{\"tag\":\"Administration\"}"
+-- Right (Administration PAdmin)
+-- >>> AE.fromJSON (AE.toJSON (Administration ProjectMembers.PView)) == AE.Success (Administration ProjectMembers.PView)
+-- True
+-- >>> isLeft (AE.eitherDecode @AgentPolicy "{\"tag\":\"Administration\",\"contents\":\"owner\"}")
+-- True
+instance AE.FromJSON AgentPolicy where
+  parseJSON (AE.Object fields)
+    | KM.lookup "tag" fields == Just (AE.String "Administration"), not (KM.member "contents" fields) = pure $ Administration ProjectMembers.PAdmin
+  parseJSON value = AE.genericParseJSON AE.defaultOptions value
 
 
 -- | Mutation classes fix their minimum roles; callers cannot choose a weaker one.
 --
--- >>> map minimumPermission [ConversationWrite, ProjectMemoryWrite, ProjectWrite, ExternalPublication, Administration]
+-- >>> map minimumPermission [ConversationWrite, ProjectMemoryWrite, ProjectWrite, ExternalPublication, Administration ProjectMembers.PView]
 -- [PView,PEdit,PEdit,PEdit,PAdmin]
--- >>> minimumPermission (ReadOnly (minimumPermission Administration))
+-- >>> minimumPermission (ReadOnly (minimumPermission (Administration ProjectMembers.PView)))
 -- PAdmin
 minimumPermission :: AgentPolicy -> ProjectMembers.Permissions
 minimumPermission = \case
@@ -65,7 +82,7 @@ minimumPermission = \case
   ProjectMemoryWrite -> ProjectMembers.PEdit
   ProjectWrite -> ProjectMembers.PEdit
   ExternalPublication -> ProjectMembers.PEdit
-  Administration -> ProjectMembers.PAdmin
+  Administration{} -> ProjectMembers.PAdmin
 
 
 actionName :: AgentPolicy -> Text
@@ -75,18 +92,18 @@ actionName = \case
   ProjectMemoryWrite -> "ProjectMemoryWrite"
   ProjectWrite -> "ProjectWrite"
   ExternalPublication -> "ExternalPublication"
-  Administration -> "Administration"
+  Administration{} -> "Administration"
 
 
 -- | Mutation permission does not make ordinary project results private.
--- Administrative results and restricted reads retain their stronger audience.
+-- Administrative commands declare resource and result visibility independently of their required role.
 --
--- >>> map disclosurePermission [ReadOnly ProjectMembers.PView, ReadOnly ProjectMembers.PAdmin, ProjectWrite, Administration]
--- [PView,PAdmin,PView,PAdmin]
+-- >>> map disclosurePermission [ReadOnly ProjectMembers.PView, ReadOnly ProjectMembers.PAdmin, ProjectWrite, Administration ProjectMembers.PView, Administration ProjectMembers.PAdmin]
+-- [PView,PAdmin,PView,PView,PAdmin]
 disclosurePermission :: AgentPolicy -> ProjectMembers.Permissions
 disclosurePermission = \case
   ReadOnly role -> role
-  Administration -> ProjectMembers.PAdmin
+  Administration permission -> permission
   (ConversationWrite; ProjectMemoryWrite; ProjectWrite; ExternalPublication) -> ProjectMembers.PView
 
 
@@ -137,11 +154,11 @@ apiOperations =
     , (("POST", "/dashboards/bulk"), admin "bulk_dashboards")
     , -- API keys
       (("GET", "/api_keys"), adminRead "list_api_keys")
-    , (("POST", "/api_keys"), admin "create_api_key")
+    , (("POST", "/api_keys"), privateAdmin "create_api_key")
     , (("GET", "/api_keys/{key_id}"), adminRead "get_api_key")
-    , (("DELETE", "/api_keys/{key_id}"), admin "delete_api_key")
-    , (("POST", "/api_keys/{key_id}/activate"), admin "activate_api_key")
-    , (("POST", "/api_keys/{key_id}/deactivate"), admin "deactivate_api_key")
+    , (("DELETE", "/api_keys/{key_id}"), privateAdmin "delete_api_key")
+    , (("POST", "/api_keys/{key_id}/activate"), privateAdmin "activate_api_key")
+    , (("POST", "/api_keys/{key_id}/deactivate"), privateAdmin "deactivate_api_key")
     , -- /me + project
       (("GET", "/me"), view "whoami")
     , (("GET", "/project"), view "get_project")
@@ -186,7 +203,8 @@ apiOperations =
     view name = (name, Just $ ReadOnly ProjectMembers.PView)
     adminRead name = (name, Just $ ReadOnly ProjectMembers.PAdmin)
     edit name = (name, Just $ ProjectWrite)
-    admin name = (name, Just $ Administration)
+    admin name = (name, Just $ Administration ProjectMembers.PView)
+    privateAdmin name = (name, Just $ Administration ProjectMembers.PAdmin)
 
 
 data LocalOperation

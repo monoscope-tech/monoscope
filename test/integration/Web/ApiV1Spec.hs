@@ -790,8 +790,8 @@ spec = around withTestResources do
         Map.keysSet policies `S.intersection` Map.keysSet MCP.agentExclusions `shouldBe` S.empty
         Map.lookup "list_metrics" policies `shouldBe` Just (MCP.ReadOnly PM.PView)
         Map.lookup "create_monitor" policies `shouldBe` Just (MCP.ProjectWrite)
-        Map.lookup "bulk_monitors" policies `shouldBe` Just (MCP.Administration)
-        Map.lookup "remove_member" policies `shouldBe` Just (MCP.Administration)
+        for_ (["bulk_monitors", "remove_member", "delete_dashboard"] :: [Text]) \name -> Map.lookup name policies `shouldBe` Just (MCP.Administration PM.PView)
+        for_ (["create_api_key", "activate_api_key", "deactivate_api_key", "delete_api_key"] :: [Text]) \name -> Map.lookup name policies `shouldBe` Just (MCP.Administration PM.PAdmin)
 
       it "does not expose the MCP endpoint as its own tool" $ \_tr -> do
         Map.member "post_mcp" reg `shouldBe` False

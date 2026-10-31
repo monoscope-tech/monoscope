@@ -1214,7 +1214,7 @@ data ToolRecovery = ReplayReads | AtomicInRun | RetainInRun
 data ToolExecution es = EffectfulTool (Eff es ToolResult) | AtomicTool (Tx.Transaction ToolResult)
 
 
-data ToolDenial = RoleRequired ProjectMembers.Permissions | ActionGrantRequired | ActionRecoveryRequired | EvidenceRetentionRequired | AudienceRequired ProjectMembers.Permissions | RestrictedPublication
+data ToolDenial = RoleRequired ProjectMembers.Permissions | ActionGrantRequired | EvidenceRetentionRequired | AudienceRequired ProjectMembers.Permissions | RestrictedPublication
 
 
 executeToolCall :: ProjectToolCtx es => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
@@ -1236,7 +1236,6 @@ executeToolAt cursor config tc = do
           Left denial -> pure $ Investigations.RecordedResult $ noRaw $ case denial of
             RoleRequired permission -> "This run's project role does not meet the required " <> toText (encodeEnumSC @"P" permission) <> " permission."
             ActionGrantRequired -> "Project changes require an Autonomous execution policy."
-            ActionRecoveryRequired -> "Administrative operations are unavailable until durable action recovery is enabled."
             EvidenceRetentionRequired -> "Restricted evidence requires a durable conversation run."
             AudienceRequired permission -> "This destination cannot receive evidence requiring " <> toText (encodeEnumSC @"P" permission) <> " permission."
             RestrictedPublication -> "This conversation contains restricted evidence and cannot publish it to a shared destination."
@@ -1255,26 +1254,19 @@ executeToolAt cursor config tc = do
           requireActions = unless (execution == Issues.Autonomous) $ Except.throwError ActionGrantRequired
       unless (permission >= MCP.minimumPermission policy) $ Except.throwError $ RoleRequired (MCP.minimumPermission policy)
       case policy of
-        MCP.ReadOnly{} -> pass
-        MCP.ConversationWrite -> pass
-        MCP.Administration -> Except.throwError ActionRecoveryRequired
-        MCP.ProjectWrite -> requireActions
-        MCP.ExternalPublication -> requireActions
-        MCP.ProjectMemoryWrite -> requireActions
+        (MCP.ReadOnly{}; MCP.ConversationWrite) -> pass
+        (MCP.Administration{}; MCP.ProjectWrite; MCP.ExternalPublication; MCP.ProjectMemoryWrite) -> requireActions
       let disclosure = Catalog.disclosurePermission policy
       when (disclosure > evidenceAudience config.access permission) $ Except.throwError $ AudienceRequired disclosure
       when (disclosure > ProjectMembers.PView) $ case (invocationContext config.invocationMode, config.conversationId) of
         (Just _, Just conversation) -> lift $ Investigations.retainEvidencePermission config.projectId [conversation] disclosure
         _ -> Except.throwError EvidenceRetentionRequired
       case policy of
-        MCP.ExternalPublication -> sharedAudience
-        MCP.ProjectMemoryWrite -> sharedAudience
-        _ -> pass
-      pure $ OperationPolicy policy execution permission
-      where
-        sharedAudience = for_ config.conversationId $ \conversation -> do
+        (MCP.ReadOnly{}; MCP.ConversationWrite) -> pass
+        (MCP.ExternalPublication; MCP.ProjectMemoryWrite; MCP.ProjectWrite; MCP.Administration{}) -> for_ config.conversationId $ \conversation -> do
           required <- lift $ Investigations.conversationEvidencePermission config.projectId conversation
-          when (required > ProjectMembers.PView) $ Except.throwError RestrictedPublication
+          when (required > disclosure) $ Except.throwError RestrictedPublication
+      pure $ OperationPolicy policy execution permission
 
     recorded snapshot execution = case (snapshot.capability, cursor, invocationContext config.invocationMode) of
       (MCP.ReadOnly{}, _, _) -> Investigations.RecordedResult <$> perform execution
@@ -1310,7 +1302,7 @@ executeToolAt cursor config tc = do
         Just tool ->
           AE.object
             $ ["name" AE..= tool.name, "description" AE..= tool.description, "input_schema" AE..= tool.inputSchema, "agent_recovery" AE..= recovery tool]
-            <> maybe [] (\policy -> ["minimum_permission" AE..= MCP.minimumPermission policy, "action" AE..= MCP.actionName policy]) tool.agentPolicy
+            <> maybe [] (\policy -> ["minimum_permission" AE..= MCP.minimumPermission policy, "evidence_permission" AE..= Catalog.disclosurePermission policy, "action" AE..= MCP.actionName policy]) tool.agentPolicy
       ListProjectMemory -> EffectfulTool $ noRaw . encodeText . map Memory.summarize <$> Memory.latestPages config.projectId
       ReadProjectMemory -> EffectfulTool $ noRaw <$> readMemory args
       WriteProjectMemory -> EffectfulTool $ noRaw <$> writeMemory args
