@@ -65,6 +65,8 @@ test('routine detail panels preserve conversation drafts, run history, and artif
     await expect(page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().getByText('Succeeded', { exact: true })).toBeVisible();
     await expect(page.locator('#routine-run')).not.toHaveAttribute('hx-trigger');
     await expect(page.getByText('Original checkout evidence.', { exact: true })).toBeVisible();
+    await expect(page.locator('#ai-thread-messages')).toContainText('I saved the checkout evidence. Continue the investigation here.');
+    await expect(inspector).not.toContainText('I saved the checkout evidence. Continue the investigation here.');
     await expect(page.getByText('Later conversation edit.', { exact: true })).toHaveCount(0);
     await expect.poll(() => instructions.evaluate(el => (el.parentElement as HTMLDetailsElement).open)).toBe(true);
     await page.getByRole('link', { name: 'Back to conversation', exact: true }).click();

@@ -46,7 +46,7 @@ module Pkg.AI (
   runAgenticChatWithHistory,
   defaultAgenticConfig,
   executeToolCall,
-  invocationFor,
+  requireRunContext,
   OperationPolicy (..),
   defaultLimits,
 
@@ -232,20 +232,20 @@ completeAgenticResponse config userQuery model apiKey answer = do
     (_, Just convId) -> do
       let message = prepareRunAnswer answer
       case (config.invocationMode, config.access) of
-        (DurableRun context, MemberAccess _ user)
+        (DurableRun context, MemberAccess{})
           | Issues.InteractiveRun{} <- context.source ->
-              Issues.completeRun (Issues.InteractiveTarget config.projectId context.id user context.policy) (Issues.PublishedResult message) >>= \case
+              Issues.completeRun context (Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer message) >>= \case
                 Issues.CompletionRejected -> throwIO AgentStopped
                 Issues.RunCompleted _ -> pass
         (DurableRun context, _) | Issues.InteractiveRun{} <- context.source -> throwIO AgentAccessDenied
-        _ -> Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just message.tools)
+        _ -> Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just $ AE.toJSON answer.toolCalls)
   whenJust config.conversationId \convId ->
     ensureConversationTitle config.sourceConfig config.projectId convId userQuery answer.response (maybe model (.openaiSmallModel) config.sourceConfig) apiKey
   pure $ parseAgenticResponse answer
 
 
 prepareRunAnswer :: AgenticChatResult -> Issues.RunAnswer
-prepareRunAnswer answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, answer = AE.toJSON answer, tools = AE.toJSON answer.toolCalls}
+prepareRunAnswer answer = Issues.RunAnswer{content = msg, widgets = AE.toJSON <$> widgets, report, evidence = Issues.AgentEvidence answer}
   where
     parsed = parseAgenticResponse answer
     widgets = guarded (not . null) . take 10 . responseWidgets =<< rightToMaybe parsed
@@ -596,9 +596,9 @@ data InvocationMode = InteractiveReadOnly | DurableRun Issues.RunContext
   deriving stock (Eq, Generic, Show)
 
 
-invocationFor :: (DB es, IOE :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "conversation" -> Issues.RunClaim -> Eff es InvocationMode
-invocationFor project user conversation claim =
-  DurableRun <$> (Issues.runContextFor project user conversation claim >>= maybe (throwIO AgentStopped) pure)
+requireRunContext :: (DB es, IOE :> es) => Projects.ProjectId -> Issues.RunClaim -> Eff es Issues.RunContext
+requireRunContext project claim =
+  Issues.runContextFor project claim >>= maybe (throwIO AgentStopped) pure
 
 
 invocationContext :: InvocationMode -> Maybe Issues.RunContext
@@ -1211,16 +1211,16 @@ addMessagesToMemory maxTokens history newMsgs = do
   pure $ fromMaybe allMsgs (rightToMaybe result)
 
 
-callRoutineLLM :: (DB es, ELLM.LLM :> es, Time.Time :> es) => Config.EnvConfig -> Text -> Projects.ProjectId -> Issues.EventRun -> Text -> Eff es (Either Text Text)
-callRoutineLLM config model pid execution task = do
-  active <- Issues.routineRunActive pid execution.id
+callRoutineLLM :: (DB es, ELLM.LLM :> es, Time.Time :> es) => Config.EnvConfig -> Text -> Issues.RunContext -> Text -> Eff es (Either Text Text)
+callRoutineLLM config model context task = do
+  active <- isJust <$> Issues.runContextPolicy context
   if not active
     then pure $ Left "Routine paused, stopped, or requester access revoked"
     else do
-      let prompt = execution.instructions <> "\n\n" <> task
+      let prompt = foldMap (<> "\n\n") context.instructions <> task
       response <- ELLM.callLLM model prompt config.openaiApiKey
-      for_ response $ \answer -> Projects.recordAIUsage pid model Projects.UsageRoutine $ pricedUsage (Just config) (estimatedTokens prompt) (estimatedTokens answer)
-      stillActive <- Issues.routineRunActive pid execution.id
+      for_ response $ \answer -> Projects.recordAIUsage context.projectId model Projects.UsageRoutine $ pricedUsage (Just config) (estimatedTokens prompt) (estimatedTokens answer)
+      stillActive <- isJust <$> Issues.runContextPolicy context
       pure $ if stillActive then response else Left "Routine paused, stopped, or requester access revoked"
 
 

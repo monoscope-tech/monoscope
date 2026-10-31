@@ -7,6 +7,7 @@ module Pages.Bots.BotTestHelpers (
   setupSlackAgent,
   scheduledInvocation,
   interactiveInvocation,
+  completeTestRun,
   withHTTPResponses,
   withSlackReplyResponses,
   receiveSlackEvent,
@@ -83,6 +84,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
+import Effectful.Time (Time)
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Slack
 import Models.Apis.Issues qualified as Issues
@@ -102,11 +104,16 @@ import Servant.API.ResponseHeaders (getResponse)
 import System.Config (AuthContext (..))
 import System.Config qualified as Config
 import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.Types (DB)
 import Test.Hspec (expectationFailure, shouldBe)
 import "cryptonite" Crypto.Error qualified as Crypto
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
+
+
+completeTestRun :: (DB es, IOE :> es, Time :> es) => Projects.ProjectId -> Issues.RunClaim -> Issues.RunCompletion -> Eff es ()
+completeTestRun project claim completion = AI.requireRunContext project claim >>= \context -> void $ Issues.completeRun context completion
 
 
 interactiveInvocation :: TestResources -> Projects.ProjectId -> UUIDId "conversation" -> Text -> Issues.ExecutionPolicy -> IO AI.InvocationMode
@@ -115,7 +122,7 @@ interactiveInvocation tr project conversation input policy = runTestBg frozenTim
   let user = (getResponse tr.trSessAndHeader).user.id
   Issues.startInteractiveRun project conversation user request input policy Issues.WebConversation >>= \case
     Issues.ConflictingRequest -> liftIO $ fail "Expected a fresh interactive request"
-    Issues.AcceptedRequest{} -> AI.invocationFor project user conversation $ Issues.InteractiveClaim request
+    Issues.AcceptedRequest{} -> fmap AI.DurableRun $ AI.requireRunContext project $ Issues.InteractiveClaim user conversation request
 
 
 scheduledInvocation :: TestResources -> UUIDId "conversation" -> Issues.ExecutionPolicy -> IO AI.InvocationMode
@@ -128,7 +135,7 @@ scheduledInvocation tr conversation policy = do
     pure scheduled
   schedule <- maybe (fail "Expected a scheduled instant") pure slot
   claimed <- runQueryEffect tr (Issues.claimRoutine schedule.id schedule.scheduledAt) >>= maybe (fail "Expected a claimed run") pure
-  runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim claimed.runId claimed.claimedAt
+  runTestBg frozenTime tr $ fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation claimed.runId claimed.claimedAt
 
 
 -- * Config Helpers

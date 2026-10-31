@@ -415,28 +415,28 @@ runAIRoutineWith
   -> UTCTime
   -> ATBackgroundCtx ()
 runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt = whenJustM (Issues.claimRoutine routineId scheduledAt) \routine -> do
-  mode <- AI.invocationFor routine.projectId routine.requestedBy routine.conversationId $ Issues.BackgroundClaim routine.runId routine.claimedAt
+  context <- AI.requireRunContext routine.projectId $ Issues.BackgroundClaim routine.requestedBy routine.conversationId routine.runId routine.claimedAt
   conversationM <- Issues.getConversation routine.projectId routine.conversationId
   let conversationType = maybe Issues.CTWeb (.conversationType) conversationM
       deliveryContext = case routine.destination of
         Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
         Issues.DestinationConversation -> Nothing
-      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = mode}
+      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.DurableRun context}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
     AI.requireAgentAccess config.access routine.projectId
     pure $ case result of
-      Left err -> Issues.FailedResult $ Issues.RunFailure err ("Routine failed: " <> err)
-      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.QuietResult else Issues.PublishedResult) $ AI.prepareRunAnswer answer
+      Left err -> Issues.FailedResult $ Issues.RunFailure err (Issues.ConversationNotice $ "Routine failed: " <> err)
+      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ AI.prepareRunAnswer answer
   completion <- case outcome of
     Nothing -> do
       Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
-      pure Issues.TimedOutResult
+      pure $ Issues.TimedOutResult $ Issues.RunFailure "Routine execution timed out" $ Issues.ConversationNotice "Routine timed out. It will run again at the next interval."
     Just (Left err) -> do
       Log.logAttention "AI routine run failed" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text err]
-      pure $ Issues.FailedResult $ Issues.RunFailure (show @Text err) "Routine failed unexpectedly. It will run again at the next interval."
+      pure $ Issues.FailedResult $ Issues.RunFailure (show @Text err) $ Issues.ConversationNotice "Routine failed unexpectedly. It will run again at the next interval."
     Just (Right result) -> pure result
-  Issues.completeRun (Issues.ScheduledTarget (Issues.ScheduledRoutine routineId scheduledAt) routine) completion >>= \case
+  Issues.completeRun context completion >>= \case
     Issues.CompletionRejected -> pass
     Issues.RunCompleted next -> for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
 
@@ -3805,8 +3805,9 @@ enhanceIssuesWithLLM pid issueIds = do
           void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object [])
           whenJustM (Issues.startEventRun routine (Issues.IssueEnrichment issueId) Issues.ContinueRun convId routine.requestedBy ("Enrich issue: " <> issue.title)) \execution ->
             when (execution.status == Issues.RunRunning) do
+              context <- AI.requireRunContext pid $ Issues.EventClaim (Issues.IssueEnrichment issueId) execution.id execution.startedAt
               outcome <- tryAny $ Timeout.timeout (120 * 1_000_000) $ runExceptT do
-                let complete = AI.callRoutineLLM ctx.config ctx.config.openaiSmallModel pid execution
+                let complete = AI.callRoutineLLM ctx.config ctx.config.openaiSmallModel context
                 enhancement <- ExceptT $ Enhancement.enhanceIssueWithLLM complete issue
                 classification <- if issue.issueType == Issues.ApiChange then pure Nothing else Just <$> ExceptT (Enhancement.classifyIssueCriticality complete issue)
                 analysis <- if issue.issueType /= Issues.RuntimeException then pure Nothing else Just <$> ExceptT (Enhancement.analyzeErrorPattern complete issue)
@@ -3825,21 +3826,20 @@ enhanceIssuesWithLLM pid issueIds = do
                         <> foldMap (\(cause, category) -> "\n\n## Error analysis\n" <> cause <> "\n\nCategory: " <> category) analysis
                     findings = AE.object ["enhancement" AE..= enhancement, "classification" AE..= classification, "analysis" AE..= analysis]
                 lift do
-                  Issues.saveRunResult pid execution.id "Issue enrichment" body
                   Issues.updateIssueEnhancement issueId enhancement.enhancedTitle enhancement.recommendedAction enhancement.migrationComplexity
                   for_ classification $ \(critical, breaking, _) -> Enhancement.updateIssueClassification issueId critical breaking
                   for_ analysis $ \(cause, category) -> whenJustM (ErrorPatterns.getErrorPatternByHash pid issue.targetHash) $ \ep -> void $ ErrorPatterns.updateErrorPatternAnalysis ep.id cause category
                   now <- Time.currentTime
                   Hasql.interpExecute_ [HI.sql|UPDATE apis.issues SET llm_enhanced_at = #{now} WHERE id = #{issueId} AND project_id = #{pid}|]
-                  Issues.insertRunResultMessage pid execution.id body
-                pure findings
+                pure $ Issues.reportAnswer body $ Just findings
               active <- Issues.routineRunActive pid execution.id
               case outcome of
-                Right (Just (Right findings)) -> Issues.finishRoutineRun execution.id execution.startedAt Issues.CompletedSucceeded (Just findings) Nothing Nothing
+                Right (Just (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer answer
                 _ -> do
-                  let status = if not active then Issues.CompletedCancelled else case outcome of Right Nothing -> Issues.CompletedTimedOut; _ -> Issues.CompletedFailed
-                      message = if active then "Issue enrichment failed. A retry will create a new attempt." else "Routine paused, stopped, or requester access revoked."
-                  Issues.finishRoutineRun execution.id execution.startedAt status Nothing Nothing (Just message)
+                  let message = "Issue enrichment failed. A retry will create a new attempt."
+                      failure = Issues.RunFailure message Issues.RunOnly
+                      completion = if not active then Issues.CancelledResult Nothing else case outcome of Right Nothing -> Issues.TimedOutResult failure; _ -> Issues.FailedResult failure
+                  void $ Issues.completeRun context completion
                   when active $ throwIO $ CE.ErrorCall $ toString message
 
 

@@ -38,7 +38,7 @@ This branch already contains:
 - Run history, instruction snapshots, retained artifacts, and a conversation detail panel.
 - Versioned project wiki storage with member and agent authors.
 
-Slack event runs currently deny project writes. Operations classified as `ConfirmedWrite` remain unavailable.
+Slack event tool calls retain the conservative Observe ceiling. Administrator actions remain unavailable until their authority and disclosure work is complete.
 The new authority policy replaces those limitations after the execution and recovery tests pass.
 Current native Slack behavior still needs controlled workspace acceptance.
 The silent private-channel mention needs a traced reproduction. Metric discovery alone does not explain that failure.
@@ -570,6 +570,33 @@ No schema changes or new Haskell modules were required.
 Native enrichment and review still have specialized mutation and completion paths outside this dispatcher; those remain the next consolidation boundary.
 The trace identifies separate artifact, chat, and finish calls in Slack, enrichment, and impact review. Their replacement must preserve the distinction between a completed computation and confirmed transport delivery.
 The suites pass: 185 bot examples, 75 API v1 examples, and 45 issue examples, plus the native review publication/recovery case. The final prompt distillation also passes all three document regressions. Formatter and diff checks pass. Repeated slice reviews found no remaining material distillation, type-evasion, or client-behavior findings. The previous slice's browser acceptance remains the latest browser run; final release checks and live Slack acceptance remain pending.
+
+### One completion interpreter for durable runs (31 October)
+
+Interactive chat, schedules, Slack commands, Slack investigations, issue enrichment, and impact review now call `completeRun` with the same opaque stored context.
+The separate `CompletionTarget` constructors and public `finishRoutineRun` / `insertRunResultMessage` entry points are removed.
+Member claims bind the actor and conversation; native event claims bind the event reference and worker start time and recover the stored actor.
+Native model calls and progress reports also use the stored context instead of independently supplied project, run, and instruction values.
+
+The result algebra separates success/no-findings from conversation publication/retention.
+This preserves a published no-findings review, a quiet scheduled result, and a Slack answer already stored before delivery without inventing another conversation message.
+Agent evidence contains the typed `AgenticChatResult`; its answer and tool JSON derive from that one value in the completion interpreter.
+Native reports carry an optional native payload, preserving the absence of structured findings without a synthetic model response.
+Failure notices distinguish run-only diagnostics from conversation notices.
+A single typed admission query distinguishes allowed work, unavailable member access, and explicit stops; model boundaries and completion share that query.
+Temporary access loss can retain a recoverable delivery failure, while cancellation, pause, and deletion stay cancelled.
+
+Final report snapshots, conversation publication, terminal status, outstanding-operation uncertainty, and any schedule advance commit together.
+Native delivery acknowledgements and pre-delivery evidence retain their own records.
+A matched scheduled run whose installation disappeared closes as cancelled without publishing or advancing another schedule; an older worker cannot close a replacement lease.
+The enrichment regression first exposed a report already visible after the final status write failed. It now rolls that publication back and retries to one report and one answer.
+Additional failing-first regressions cover deleted installations and explicit stop/pause/delete becoming retryable failures.
+The historical snapshot assertion now targets the run inspector, since the completed retry correctly publishes its newer answer in the current conversation. The browser scenario also checks that separation.
+
+Native business mutations still need operation-ledger and policy admission, and native initialization still needs recovery through installation ownership changes.
+Sensitive history disclosure, event action scopes, selected review, remaining Slack features, and controlled live workspace acceptance remain unfinished.
+No schema migration or new Haskell module was required for this slice.
+Verification: 190 bot, 75 API v1, and 45 issue integration examples pass. The eleven completion regressions pass after the final cleanup. Both Chrome scenarios pass against the current WAI application and isolated test database, including policy controls, action history, retained drafts, and run-inspector boundaries. The native review/SDK suite passed 33 examples during this slice; its publication/recovery regression passed again after the final admission change. Formatting and diff checks pass. Whole-branch review, live Slack acceptance, and release signoff remain pending.
 
 ## External references
 

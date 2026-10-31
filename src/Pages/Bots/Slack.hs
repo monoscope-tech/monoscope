@@ -268,20 +268,20 @@ slackInteractionsHWithTools projectTools interaction = do
               void $ Issues.getOrCreateConversation principal.projectId convId Issues.CTSlackThread (AE.object ["team_id" AE..= interaction.team_id, "channel_id" AE..= interaction.channel_id])
               run <- Issues.startEventRun routine (Issues.SlackCommand convId) Issues.StartRun convId principal.userId interaction.text
               for_ run \execution -> forkBackground authCtx.backgroundScope ("Slack command routine " <> execution.id.toText) do
+                context <- AI.requireRunContext principal.projectId $ Issues.BackgroundClaim principal.userId convId execution.id execution.startedAt
                 let requireRun = do
                       AI.requireAgentAccess access principal.projectId
                       unlessM (Issues.routineRunActive principal.projectId execution.id) $ throwIO AI.AgentStopped
-                    finish status findings = Issues.finishRoutineRun execution.id execution.startedAt status findings Nothing
+                    finish = void . Issues.completeRun context
                     runLink = "<" <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/runs/" <> execution.id.toText <> "|View run and artifacts>"
                 ( do
                     replies <- newIORef []
-                    mode <- AI.invocationFor principal.projectId principal.userId convId $ Issues.BackgroundClaim execution.id execution.startedAt
                     result <- tryAny do
                       requireRun
                       outcome <-
                         runBotQueryWithTools
                           projectTools
-                          mode
+                          (AI.DurableRun context)
                           Slack
                           ( \reply -> do
                               requireRun
@@ -291,8 +291,8 @@ slackInteractionsHWithTools projectTools interaction = do
                                     Nothing -> payload & key "text" . _String %~ (<> "\n\n" <> runLink)
                               modifyIORef' replies (<> [payload])
                               rendered <- readIORef replies
-                              let report = T.intercalate "\n\n" $ concatMap (\replyBody -> replyBody ^.. key "blocks" . values . key "text" . key "text" . _String) rendered
-                              Issues.saveRunResult principal.projectId execution.id "Slack command result" report
+                              let report = slackReplyReport rendered
+                              Issues.saveRunResult context "Slack command result" report
                               sendSlackFollowupResponse interaction.response_url linked
                           )
                           authCtx.env
@@ -308,12 +308,15 @@ slackInteractionsHWithTools projectTools interaction = do
                         let message = case fromException @SlackFollowupRejected err of
                               Just _ -> "Slack did not accept the reply. The result is retained in this run."
                               Nothing -> "Slack command was interrupted before completion"
-                        finish (if active then Issues.CompletedFailed else Issues.CompletedCancelled) Nothing (Just message)
+                        finish $ if active then Issues.FailedResult (Issues.RunFailure message Issues.RunOnly) else Issues.CancelledResult Nothing
                         throwIO err
-                      Right (Left err) -> finish Issues.CompletedFailed Nothing (Just err)
-                      Right (Right ()) -> finish Issues.CompletedSucceeded Nothing Nothing
+                      Right (Left err) -> finish $ Issues.FailedResult $ Issues.RunFailure err Issues.RunOnly
+                      Right (Right ()) -> do
+                        rendered <- readIORef replies
+                        let report = slackReplyReport rendered
+                        finish $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ Issues.reportAnswer report $ Just $ AE.toJSON rendered
                   )
-                  `finally` finish Issues.CompletedFailed Nothing (Just "Slack command worker stopped before recording its result")
+                  `finally` finish (Issues.FailedResult $ Issues.RunFailure "Slack command worker stopped before recording its result" Issues.RunOnly)
               traceResp $ textResp $ getLoadingMessage (detectReportIntent interaction.text)
   where
     traceResp resp = resp <$ Log.logTrace ("Slack interaction response" :: Text) resp
@@ -933,12 +936,13 @@ processSlackEventWithTools projectTools receiptId =
           (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= workspaceId])
       whenJustM (Issues.startEventRun routine (Issues.SlackMessage receiptId) Issues.ContinueRun convId principal.userId event.text) \run ->
         when (run.status == Issues.RunRunning) do
+          context <- AI.requireRunContext slackData.projectId $ Issues.BackgroundClaim principal.userId convId run.id run.startedAt
           let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts
               turn = Investigations.Turn slackData.projectId convId principal.userId event.ts
               requireRunAccess = do
                 AI.requireAgentAccess access slackData.projectId
                 unlessM (Issues.routineRunActive slackData.projectId run.id) $ throwIO AI.AgentStopped
-              finish = Issues.finishRoutineRun run.id run.startedAt
+              finish = void . Issues.completeRun context
               addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
               historyMessage message =
                 (if not (T.null envCfg.slackAppId) && message.app_id == Just envCfg.slackAppId then Issues.ChatAssistant else Issues.ChatUser, message.text)
@@ -957,8 +961,7 @@ processSlackEventWithTools projectTools receiptId =
                     >>= maybe
                       ( do
                           rendered <- newIORef []
-                          mode <- AI.invocationFor slackData.projectId principal.userId convId $ Issues.BackgroundClaim run.id run.startedAt
-                          void $ runBotQueryWithTools projectTools mode Slack (\reply -> modifyIORef' rendered (<> [botReplyPayload reply])) envCfg access slackData.projectId event.text resolveThread
+                          void $ runBotQueryWithTools projectTools (AI.DurableRun context) Slack (\reply -> modifyIORef' rendered (<> [botReplyPayload reply])) envCfg access slackData.projectId event.text resolveThread
                           replies <- readIORef rendered >>= maybe (throwIO $ ErrorCall "Slack query produced no reply") pure . nonEmpty
                           let link = "<" <> envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/ai/" <> convId.toText <> "|View runs and artifacts>"
                               linked reply = case reply ^? key "blocks" . _Array of
@@ -1014,23 +1017,24 @@ processSlackEventWithTools projectTools receiptId =
                 sendSlackChatMessage slackData.botToken (addThread $ AE.object ["text" AE..= ("Investigation stopped. Send another message to continue." :: Text)]) $> False
           case outcome of
             Left err -> do
-              finish Issues.CompletedFailed Nothing Nothing (Just "Slack investigation interrupted; delivery will retry.")
+              finish $ Issues.FailedResult $ Issues.RunFailure "Slack investigation interrupted; delivery will retry." Issues.RunOnly
               throwIO err
-            Right False -> finish Issues.CompletedCancelled Nothing Nothing Nothing
+            Right False -> finish $ Issues.CancelledResult Nothing
             Right True -> do
               answer <- Investigations.loadAnswer turn
               case answer of
                 Just result -> do
-                  let report = either (const result.response) (fromMaybe result.response . (.explanation)) $ AI.parseAgenticResponse result
-                  Issues.saveRunResult slackData.projectId run.id "Slack investigation" report
-                  finish Issues.CompletedSucceeded (Just $ AE.toJSON result) (Just $ AE.toJSON result.toolCalls) Nothing
+                  finish $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer result
                 Nothing -> case detectReportIntent event.text of
-                  GeneralQueryIntent -> finish Issues.CompletedFailed Nothing Nothing (Just "The agent did not produce an answer.")
+                  GeneralQueryIntent -> finish $ Issues.FailedResult $ Issues.RunFailure "The agent did not produce an answer." Issues.RunOnly
                   ReportIntent{} -> do
                     batch <- Investigations.loadReplyBatch turn
-                    let report = T.intercalate "\n\n" [text | saved <- maybeToList batch, reply <- toList saved.replies, text <- reply ^.. key "blocks" . values . key "text" . key "text" . _String]
-                    Issues.saveRunResult slackData.projectId run.id "Slack report" report
-                    finish Issues.CompletedSucceeded Nothing Nothing Nothing
+                    let report = slackReplyReport $ foldMap (toList . (.replies)) batch
+                    finish $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ Issues.reportAnswer report $ AE.toJSON <$> batch
+
+
+slackReplyReport :: Foldable f => f AE.Value -> Text
+slackReplyReport = T.intercalate "\n\n" . concatMap (^.. key "blocks" . values . key "text" . key "text" . _String) . toList
 
 
 withInvestigationLock :: Text -> Text -> Text -> ATBackgroundCtx () -> ATBackgroundCtx ()

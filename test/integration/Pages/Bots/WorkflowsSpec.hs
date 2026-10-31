@@ -185,7 +185,7 @@ spec = around withTestResources do
             pure scheduled
           claimed <- runQueryEffect tr (Issues.claimRoutine routine.id routine.scheduledAt) >>= maybe (fail "Expected a claimed routine run") pure
           let user = (getResponse tr.trSessAndHeader).user.id
-          mode <- runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim claimed.runId claimed.claimedAt
+          mode <- runTestBg frozenTime tr $ fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation claimed.runId claimed.claimedAt
           let config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just $ if scenario == "wrong-conversation" then other else conversation, AI.invocationMode = mode}
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> do
@@ -1065,7 +1065,7 @@ spec = around withTestResources do
                 routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected an installed routine") pure
                 execution <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.StartRun conversation user "Inspect the project") >>= maybe (fail "Expected a routine run") pure
                 when (origin == "event") $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET policy = #{Issues.Autonomous} WHERE id = #{execution.id}|]
-                invocation <- runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim execution.id execution.startedAt
+                invocation <- runTestBg frozenTime tr $ fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation execution.id execution.startedAt
                 when (origin == "event") do
                   let legacy = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = invocation}
                   denied <- runTestBg frozenTime tr $ AI.executeToolCall legacy $ Chat.ToolCall "legacy-event-write" "function" $ Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Must remain Observe" :: Text)])
@@ -1076,7 +1076,7 @@ spec = around withTestResources do
                 scheduled <- Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (liftIO $ fail "Expected a scheduled routine") pure
                 Issues.setRoutinePolicy user testPid conversation Issues.Observe
                 execution <- Issues.claimRoutine scheduled.id scheduled.scheduledAt >>= maybe (liftIO $ fail "Expected a claimed run") pure
-                invocation <- AI.invocationFor testPid user conversation $ Issues.BackgroundClaim execution.runId execution.claimedAt
+                invocation <- fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation execution.runId execution.claimedAt
                 pure (execution.runId, invocation)
           calls <- newIORef ([] :: [Text])
           models <- newIORef ([] :: [Maybe Text])
@@ -1123,7 +1123,7 @@ spec = around withTestResources do
             if recovery
               then do
                 Just previous <- runQueryEffect tr $ Issues.getRoutineRun testPid runId
-                runQueryEffect tr $ Issues.finishRoutineRun previous.id previous.startedAt Issues.CompletedFailed Nothing Nothing (Just "Worker interrupted")
+                runQueryEffect tr $ completeTestRun testPid (Issues.EventClaim (Issues.SlackCommand conversation) previous.id previous.startedAt) $ Issues.FailedResult $ Issues.RunFailure "Worker interrupted" Issues.RunOnly
                 routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected an installed routine") pure
                 replacement <- runTestBg frozenTime tr do
                   actor <- Projects.createUser "Different" "Actor" "" "other-event-actor@example.test"
@@ -1144,7 +1144,7 @@ spec = around withTestResources do
                 (evidence >>= (.requestedBy)) `shouldBe` Just user
                 runQueryEffect tr (Hasql.interpScalar @(UUIDId "ai_routine_run") [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{recovered.id}|]) >>= (`shouldBe` runId)
                 runQueryEffect tr (Issues.routineRunPolicyFor testPid recovered.id user conversation) >>= (`shouldBe` Just Issues.Observe)
-                runTestBg frozenTime tr $ AI.invocationFor testPid user conversation $ Issues.BackgroundClaim recovered.id recovered.startedAt
+                runTestBg frozenTime tr $ fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation recovered.id recovered.startedAt
               else pure mode
           execute resumedMode "Changed retry input" "changed-model" >>= (`shouldSatisfy` isRight)
           readIORef calls >>= (`shouldBe` (if artifact then ["get_schema"] else ["get_project", "get_schema", "get_schema"]))
@@ -2116,7 +2116,7 @@ spec = around withTestResources do
                 then do
                   let request = UUIDId $ UUID.fromWords 0 0 97 3
                   void $ Issues.startInteractiveRun testPid conversation user request "Read project evidence" Issues.Observe Issues.WebMessage
-                  AI.invocationFor testPid user conversation $ Issues.InteractiveClaim request
+                  fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.InteractiveClaim user conversation request
                 else
                   if origin == "event"
                     then do
@@ -2124,11 +2124,11 @@ spec = around withTestResources do
                       void $ Issues.installRoutineTemplate user testPid conversation "UTC" template
                       routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (liftIO $ throwIO $ ErrorCall "Missing installed routine") pure
                       execution <- Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.StartRun conversation user "Read project evidence" >>= maybe (liftIO $ throwIO $ ErrorCall "Missing event run") pure
-                      AI.invocationFor testPid user conversation $ Issues.BackgroundClaim execution.id execution.startedAt
+                      fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation execution.id execution.startedAt
                     else do
                       slot <- Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (liftIO $ throwIO $ ErrorCall "Missing scheduled instant") pure
                       execution <- Issues.claimRoutine slot.id slot.scheduledAt >>= maybe (liftIO $ throwIO $ ErrorCall "Missing claimed run") pure
-                      AI.invocationFor testPid user conversation $ Issues.BackgroundClaim execution.runId execution.claimedAt
+                      fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation execution.runId execution.claimedAt
           let config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode}
               call = Chat.ToolCall "project-read" "function" $ Chat.ToolFunction "get_project" mempty
               mismatch = if changed == "actor" then config{AI.access = AI.MemberAccess AI.ProjectMember otherUser} else config{AI.conversationId = Just otherConversation}
