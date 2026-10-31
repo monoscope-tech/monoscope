@@ -260,6 +260,28 @@ slackInteractionsHWithTools projectTools interaction = do
           AI.requireAgentAccess access principal.projectId
           triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView (SlackDashboardContext principal.projectId interaction.user_id interaction.channel_id Nothing) (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
           traceResp $ textResp "modal opened"
+        "/monoscope" | T.strip interaction.text `elem` ["incidents on", "incidents off"] -> do
+          permission <- ProjectMembers.getUserPermission principal.projectId principal.userId
+          unless (permission >= Just ProjectMembers.PEdit) $ throwError err403
+          AI.requireAgentAccess access principal.projectId
+          channel <- either (\err -> throwError err400{errBody = encodeUtf8 err}) pure $ Issues.incidentChannel interaction.team_id interaction.channel_id
+          let conversation = Issues.incidentRoutineConversationId principal.projectId channel
+              enabled = T.strip interaction.text == "incidents on"
+          if enabled
+            then do
+              void $ Issues.getOrCreateConversation principal.projectId conversation Issues.CTWeb (AE.object ["incident_channel" AE..= channel])
+              void $ AI.requireEvidenceAccess access principal.projectId conversation
+              Issues.setConversationTitle principal.projectId conversation $ "Incidents in #" <> interaction.channel_name
+              Issues.installIncidentRoutine principal.userId principal.projectId channel
+            else Issues.pauseRoutine principal.projectId conversation
+          traceResp
+            $ AE.object
+              [ "response_type" AE..= ("ephemeral" :: Text)
+              , "text"
+                  AE..= if enabled
+                    then "Incident investigations are enabled for this channel. New installations start in Observe. Review the policy and run history: " <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/" <> conversation.toText
+                    else "Incident investigations are paused for this channel."
+              ]
         _ ->
           Issues.getEventRoutine principal.projectId Issues.EventSlackMessage >>= \case
             Nothing -> traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("Ask a project editor to activate or resume Slack investigation in AI routines: " <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/routines")]

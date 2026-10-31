@@ -684,6 +684,58 @@ spec = around withTestResources do
         runQueryEffect tr $ Bot.withDashboardTemplate testPid did \(d :: Dashboards.Dashboard) -> writeIORef ref (Just d.file)
         readIORef ref `shouldReturn` Just (Just "_overview.yaml")
 
+      it "Slack incident opt-in creates one channel routine in Observe without starting an investigation" \tr -> do
+        setupLinkedSlackData tr testPid "T_PROACTIVE"
+        let user = (getResponse tr.trSessAndHeader).user.id
+            command = (slackInteraction "/monoscope" "incidents on" "T_PROACTIVE"){SlackPage.channel_id = "CPROACTIVE"}
+            status interaction = toBaseServantResponse tr $ catchError @ServerError (slackInteractionsH interaction $> 200) (\_ err -> pure err.errHTTPCode)
+            rows :: IO [(Text, Text, Bool)]
+            rows = withResource tr.trPool \conn ->
+              PGS.query conn [sql|SELECT incident_channel_id, policy, active FROM apis.ai_routines WHERE project_id = ? ORDER BY incident_channel_id|] (PGS.Only testPid)
+        response <- toBaseServantResponse tr $ slackInteractionsH command
+        extractResponseType response `shouldBe` Just "ephemeral"
+        rows `shouldReturn` [("CPROACTIVE", "observe", True :: Bool)]
+        void $ toBaseServantResponse tr $ slackInteractionsH command
+        rows `shouldReturn` [("CPROACTIVE", "observe", True)]
+        channel <- either (fail . toString) pure $ Issues.incidentChannel "T_PROACTIVE" "CPROACTIVE"
+        let conversation = Issues.incidentRoutineConversationId testPid channel
+        withResource tr.trPool \conn -> do
+          void $ PGS.execute conn [sql|UPDATE apis.ai_routines SET policy = 'autonomous', instructions = 'Retain my instructions' WHERE project_id = ? AND conversation_id = ?|] (testPid, conversation)
+          void $ PGS.execute conn [sql|UPDATE apis.ai_conversations SET title = 'My incident channel' WHERE project_id = ? AND conversation_id = ?|] (testPid, conversation)
+        void $ toBaseServantResponse tr $ slackInteractionsH command
+        rows `shouldReturn` [("CPROACTIVE", "autonomous", True)]
+        void $ toBaseServantResponse tr $ slackInteractionsH command{SlackPage.channel_id = "CSECOND"}
+        rows `shouldReturn` [("CPROACTIVE", "autonomous", True), ("CSECOND", "observe", True)]
+        void $ toBaseServantResponse tr $ slackInteractionsH command{SlackPage.text = "incidents off"}
+        rows `shouldReturn` [("CPROACTIVE", "autonomous", False), ("CSECOND", "observe", True)]
+        void $ toBaseServantResponse tr $ slackInteractionsH command
+        rows `shouldReturn` [("CPROACTIVE", "autonomous", True), ("CSECOND", "observe", True)]
+        retained <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT r.instructions, c.title FROM apis.ai_routines r JOIN apis.ai_conversations c USING (project_id, conversation_id) WHERE r.project_id = ? AND r.conversation_id = ?|] (testPid, conversation)
+        (retained :: [(Text, Text)]) `shouldBe` [("Retain my instructions", "My incident channel")]
+        for_ ["DPRIVATE", "C_BAD"] \invalid -> status command{SlackPage.channel_id = invalid} >>= (`shouldBe` 400)
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?|] (testPid, user)
+        for_ ["incidents on", "incidents off"] \text -> status command{SlackPage.text = text} >>= (`shouldBe` 403)
+        rows `shouldReturn` [("CPROACTIVE", "autonomous", True), ("CSECOND", "observe", True)]
+        unlinked <- toBaseServantResponse tr $ slackInteractionsH command{SlackPage.user_id = "U_UNLINKED"}
+        extractResponseType unlinked `shouldBe` Just "ephemeral"
+        let replacement = UUIDId (UUID.fromWords 0 0 99 1) :: Projects.UserId
+        withResource tr.trPool \conn -> do
+          void $ PGS.execute conn [sql|INSERT INTO users.users (id, email) VALUES (?, 'incident-replacement@example.test')|] (PGS.Only replacement)
+          void $ PGS.execute conn [sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (?, ?, 'edit')|] (testPid, replacement)
+          void $ PGS.execute conn [sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id) VALUES ('T_PROACTIVE', 'U_REPLACEMENT', ?, ?)|] (replacement, testPid)
+        void $ toBaseServantResponse tr $ slackInteractionsH command{SlackPage.user_id = "U_REPLACEMENT"}
+        rows `shouldReturn` [("CPROACTIVE", "observe", True), ("CSECOND", "observe", True)]
+        owners <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT requested_by FROM apis.ai_routines WHERE project_id = ? AND conversation_id = ?|] (testPid, conversation)
+        (owners :: [PGS.Only Projects.UserId]) `shouldBe` [PGS.Only replacement]
+        counts <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.ai_routine_runs WHERE project_id = ?|] (PGS.Only testPid)
+        (counts :: [PGS.Only Int64]) `shouldBe` [PGS.Only 0]
+        for_ ([(Nothing, Just "C123"), (Just "T1", Nothing), (Just "T1", Just "D123"), (Just "", Just "C123")] :: [(Maybe Text, Maybe Text)]) \(team, channelId) ->
+          withResource tr.trPool (\conn -> PGS.withTransaction conn $ void $ PGS.execute conn [sql|UPDATE apis.ai_routines SET incident_team_id = ?, incident_channel_id = ? WHERE project_id = ? AND conversation_id = ?|] (team, channelId, testPid, conversation))
+            `shouldThrow` (\err -> PGS.sqlState err == "23514")
+        runQueryEffect tr $ Investigations.retainEvidencePermission testPid [conversation] PM.PAdmin
+        toBaseServantResponse tr (slackInteractionsH command{SlackPage.user_id = "U_REPLACEMENT"}) `shouldThrow` (\(_ :: AI.AgentAccessDenied) -> True)
+        rows `shouldReturn` [("CPROACTIVE", "observe", True), ("CSECOND", "observe", True)]
+
       it "Slack commands require a linked active member and scope admin channel changes to one project" \tr -> do
         setupSlackAgent tr testPid "T_COMMAND"
         otherPid <- createTestProject tr "Other workspace project"

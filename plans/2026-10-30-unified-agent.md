@@ -951,6 +951,16 @@ All 76 API examples pass, including exact catalog coverage, MCP HTTP routing, re
 
 A fresh connection probe found no Slack browser tab in Chrome or Arc. The Slack desktop app is running, but macOS rejects UI automation without assistive access. Plugin discovery confirms that the Slack integration is available and not connected in this session. Its existing recent suggestion was not repeated. The controlled workspace/channel target has been requested while independent implementation continues. No live Slack behavior is counted as verified by the signed HTTP fixtures or the local browser artifact checks.
 
+### Channel-scoped incident installations (31 October)
+
+`/monoscope incidents on` and `incidents off` now configure one event routine for the signed workspace and channel. They reuse account linking, current editor access, the routine installer, policy controls, conversation titles, and pause behavior. The initial policy is Observe. Repeating activation preserves the owner's policy and instructions; a replacement owner starts with Observe and advances the authority version. Each channel has its own grant and conversation. Activation does not start a model call or a scheduled job.
+
+The installer accepts a catalog template or a typed incident channel. Both use one installation transaction. The channel constructor rejects direct messages and malformed identifiers. The database requires a complete workspace/channel pair for incident routines, forbids that pair on other routine kinds, and prevents duplicate channel installations. One migration, `0269_channel_incident_routines.sql`, holds this schema change. The retired generic `scope` column from migration `0197` is not restored. Previously applied files remain unchanged.
+
+The regression first failed because activation created no routine. It now covers replay, two separate channels, pause/resume, retained titles and instructions, explicit autonomous policy retention, reader and unlinked-member denial, replacement ownership, invalid database bindings, restricted-evidence denial, and no execution during activation. All 268 bot examples pass, including the existing template, authority, cancellation, schedule recovery, and Slack delivery regressions. Formatting, focused HLint, and diff checks pass. Repeated slice reviews found no remaining material distillation, type-evasion, or client-behavior findings. Doctests, whole-branch review, and final release checks remain pending.
+
+This completes the channel installation portion of slice 8. Incident-event admission, shared execution, closing updates, and reconciled publication are still required. Those must use real incident event/root identities and public-audience evidence, preserve Observe for fixed reports, recheck authority before publication, and leave incident recovery to recorded measurements or explicit resolution. This installation work does not establish live Slack acceptance or release readiness.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
