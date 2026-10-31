@@ -152,7 +152,7 @@ startInstallGetH pid onboarding = do
   envCfg <- asks env
   let params =
         [ ("client_id", envCfg.slackClientId)
-        , ("scope", "assistant:write,chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,im:read,channels:history,groups:history,im:history,mpim:history,chat:write.public")
+        , ("scope", "assistant:write,chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,im:read,mpim:read,channels:history,groups:history,im:history,mpim:history,chat:write.public")
         , ("redirect_uri", envCfg.slackRedirectUri)
         , ("state", stateId.toText)
         ]
@@ -1149,11 +1149,13 @@ processSlackEventWithTools projectTools receiptId =
         when (run.status == Issues.RunRunning) do
           context <- AI.requireRunContext slackData.projectId $ Issues.BackgroundClaim principal.userId convId run.id run.startedAt
           let requestText = fromMaybe event.text context.input
-              access = AI.SlackInvestigationAccess $ AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts
+              investigation = AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts
+              access = AI.SlackInvestigationAccess investigation
               turn = Investigations.Turn slackData.projectId convId principal.userId event.ts
-              requireRunAccess = do
-                void $ AI.requireEvidenceAccess access slackData.projectId convId
+              requireRunAuthority = do
+                AI.requireAgentAccess access slackData.projectId
                 unlessM (Issues.routineRunActive slackData.projectId run.id) $ throwIO AI.AgentStopped
+              requireRunAccess = requireRunAuthority >> void (AI.requireEvidenceAccess access slackData.projectId convId)
               finish = void . Issues.completeRun context
               addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
               historyMessage message =
@@ -1166,7 +1168,7 @@ processSlackEventWithTools projectTools receiptId =
                     convId
                     Issues.CTSlackThread
                     (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
-                    (if event.ts == threadTs then pure $ Just [] else fmap (map historyMessage . filter ((/= event.ts) . (.ts))) <$> getChannelMessages access slackData.projectId slackData.botToken event.channel threadTs event.ts)
+                    (if event.ts == threadTs then pure $ Just [] else fmap (map historyMessage . filter ((/= event.ts) . (.ts))) <$> getChannelMessages investigation slackData.projectId convId slackData.botToken)
               deliverAnswer = do
                 batch <-
                   Investigations.loadReplyBatch turn
@@ -1235,7 +1237,7 @@ processSlackEventWithTools projectTools receiptId =
                       )
                       ( \_ ->
                           race_
-                            (forever $ requireRunAccess >> Concurrent.threadDelay 500_000)
+                            (forever $ requireRunAuthority >> Concurrent.threadDelay 500_000)
                             (withInvestigationProgress slackData access deliverAnswer)
                       )
                     pure True
@@ -1808,13 +1810,23 @@ newtype SlackResponseMetadata = SlackResponseMetadata {next_cursor :: Maybe Text
   deriving anyclass (AE.FromJSON)
 
 
-getChannelMessages :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => AI.AgentAccess -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe [SlackThreadedMessage])
-getChannelMessages access pid token channelId ts latest = page [] Nothing
+getChannelMessages :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => AI.SlackInvestigation -> Projects.ProjectId -> UUIDId "conversation" -> Text -> Eff es (Maybe [SlackThreadedMessage])
+getChannelMessages investigation pid conversation token = do
+  history <- page [] Nothing
+  for_ history $ \messages -> unless (null messages) do
+    audience <- case Integrations.slackChannel investigation.teamId investigation.channelId of
+      Right channel -> pure $ Investigations.SlackChannelAudience channel
+      Left _ | "D" `T.isPrefixOf` investigation.channelId -> pure $ Investigations.PersonalAudience investigation.userId
+      Left _ -> throwIO AI.AgentAccessDenied
+    unlessM (Investigations.retainEvidenceAudience pid conversation audience) $ throwIO AI.AgentAccessDenied
+    void $ AI.requireEvidenceAccess access pid conversation
+  pure history
   where
+    access = AI.SlackInvestigationAccess investigation
     requireAccess = AI.requireAgentAccess access pid
     page seen cursor = do
       requireAccess
-      let params = [("channel", channelId), ("ts", ts), ("latest", latest), ("inclusive", "false"), ("limit", "200")] <> foldMap (pure . ("cursor",)) cursor
+      let params = [("channel", investigation.channelId), ("ts", investigation.threadTs), ("latest", investigation.messageTs), ("inclusive", "false"), ("limit", "200")] <> foldMap (pure . ("cursor",)) cursor
       response <- getWith (defaults & authHeader "Bearer" token & Wreq.params .~ params) "https://slack.com/api/conversations.replies"
       requireAccess
       case AE.eitherDecode @(SlackThreadedMessageResponse SlackThreadedMessage) (response ^. responseBody) of
@@ -1828,4 +1840,4 @@ getChannelMessages access pid token channelId ts latest = page [] Nothing
                 Nothing -> pure $ Just messages
         Right _ -> failed "Slack rejected the history request"
         Left err -> failed $ toText err
-    failed reason = Nothing <$ Log.logAttention "Slack thread backfill failed" (AE.object ["error" AE..= reason, "channel" AE..= channelId, "ts" AE..= ts])
+    failed reason = Nothing <$ Log.logAttention "Slack thread backfill failed" (AE.object ["error" AE..= reason, "channel" AE..= investigation.channelId, "ts" AE..= investigation.threadTs])

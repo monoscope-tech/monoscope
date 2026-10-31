@@ -25,6 +25,7 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -3470,6 +3471,41 @@ spec = around withTestResources do
           Right answer -> T.isInfixOf "Slack message sent" answer.response
           _ -> False
 
+      for_ [False, True] $ \direct ->
+        it ("slackHistory_retainsSourceAudienceBeforeModelWithoutPollingSlackInHeartbeat: direct=" <> show direct) \tr -> do
+          setupSlackAgent tr testPid "T_PRIVATE_HISTORY"
+          membershipProofs <- newIORef (0 :: Int)
+          let channel = if direct then "D123PRIVATE" else "G123PRIVATE"
+              secret = "private-channel-history-canary"
+              conversation = Issues.slackScopedConversationId testPid "T_PRIVATE_HISTORY" channel "1735689600.000001"
+              event = slackThreadedEvent "T_PRIVATE_HISTORY" channel "Investigate this thread" "1735689603.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+              transport = withHTTPResponses \_ url -> do
+                when (url `elem` (["https://slack.com/api/conversations.members", "https://slack.com/api/conversations.info"] :: [String])) $ modifyIORef' membershipProofs (+ 1)
+                pure $ Just $ case url of
+                  "https://slack.com/api/conversations.replies" -> AE.encode $ AE.object ["ok" AE..= True, "messages" AE..= V.singleton (AE.object ["ts" AE..= ("1735689600.000001" :: Text), "text" AE..= secret])]
+                  "https://slack.com/api/conversations.members" -> "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}"
+                  "https://slack.com/api/conversations.info" -> AE.encode $ AE.object ["ok" AE..= True, "channel" AE..= AE.object ["is_im" AE..= True, "id" AE..= channel, "user" AE..= ("U0123ABCDEF" :: Text)]]
+                  _ -> "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> do
+                  liftIO $ toList history `shouldSatisfy` any (T.isInfixOf secret . (.content))
+                  liftIO do
+                    before <- readIORef membershipProofs
+                    threadDelay 1_100_000
+                    readIORef membershipProofs >>= (`shouldBe` before)
+                  pure $ Right $ Chat.Message Chat.Assistant "Private source inspected." Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title model"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+          receipt <- receiveSlackEvent tr event
+          void $ runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ processSlackEvent receipt
+          (_, status) <-
+            runAsBaseRecordingHTTP tr
+              $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"members\":[]}")
+              $ catchError @ServerError (atAuthToBase tr.trSessAndHeader (AIThreads.threadGetH testPid conversation Nothing Nothing) $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
+          status `shouldBe` (if direct then 200 else 403)
+          audience <- runQueryEffect tr $ Investigations.conversationEvidenceAudience testPid conversation
+          audience `shouldBe` (if direct then Investigations.PersonalAudience (getResponse tr.trSessAndHeader).user.id else Investigations.SlackChannelAudience $ fromRightShow $ Slack.slackChannel "T_PRIVATE_HISTORY" channel)
+
       it "Slack follow-ups preserve roles and full answers without elevating history to system instructions" \tr -> do
         setupSlackAgent tr testPid "T_HISTORY"
         observed <- newIORef []
@@ -3494,6 +3530,7 @@ spec = around withTestResources do
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             transport secondPage = withHTTPResponses \opts url -> case url of
+              "https://slack.com/api/conversations.members" -> pure $ Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}"
               "https://slack.com/api/agents.sessions.setStatus" -> pure $ Just "{\"ok\":true}"
               "https://slack.com/api/chat.postMessage" -> pure $ Just "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
               "https://slack.com/api/conversations.replies" -> do
@@ -3504,9 +3541,9 @@ spec = around withTestResources do
                   _ -> fail "Unexpected history cursor"
               _ -> pure Nothing
             statuses requests = mapMaybe (\(_, body) -> AE.decode @AE.Value body >>= (^? key "status" . _String)) requests
-            event text ts = slackThreadedEvent "T_HISTORY" "C_HISTORY" text ts "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ts
+            event text ts = slackThreadedEvent "T_HISTORY" "C123HISTORY" text ts "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ts
         receipt <- receiveSlackEvent resources $ event "First question" "1735689603.000001"
-        let convId = Issues.slackScopedConversationId testPid "T_HISTORY" "C_HISTORY" "1735689600.000001"
+        let convId = Issues.slackScopedConversationId testPid "T_HISTORY" "C123HISTORY" "1735689600.000001"
             revoke = withResource tr.trPool \conn ->
               void
                 $ PGS.execute
@@ -3531,7 +3568,7 @@ spec = around withTestResources do
           statuses requests `shouldBe` ["processing", "active"]
           for_ (filter ((== "https://slack.com/api/agents.sessions.setStatus") . fst) requests) \(_, body) -> do
             let update = AE.decode @AE.Value body
-            (update >>= (^? key "channel_id" . _String)) `shouldBe` Just "C_HISTORY"
+            (update >>= (^? key "channel_id" . _String)) `shouldBe` Just "C123HISTORY"
             (update >>= (^? key "thread_ts" . _String)) `shouldBe` Just "1735689600.000001"
           toBaseServantResponse resources (Issues.selectChatHistory testPid convId) >>= (\messages -> length messages `shouldBe` 0)
           readIORef observed >>= (`shouldBe` [])
@@ -3562,7 +3599,10 @@ spec = around withTestResources do
                   modifyIORef' statusCalls (+ 1)
                   count <- readIORef statusCalls
                   pure $ Just $ AE.encode $ AE.object ["ok" AE..= (count == 1)]
-                else pure $ if url == "https://slack.com/api/chat.postMessage" then Just "{\"ok\":true,\"ts\":\"1735689610.000001\"}" else Nothing
+                else pure $ case url of
+                  "https://slack.com/api/chat.postMessage" -> Just "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
+                  "https://slack.com/api/conversations.members" -> Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}"
+                  _ -> Nothing
         (_, completed) <- runTestBgRecordingHTTP frozenTime resources $ cleanupFailure $ provider $ tryAny $ processSlackEvent cleanupReceipt
         completed `shouldSatisfy` isRight
         readIORef statusCalls >>= (`shouldBe` 2)

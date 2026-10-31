@@ -6,7 +6,7 @@ It combines the Slack consolidation work and the Slack coworker proposal.
 It incorporates the requested default of autonomous background work without repeated permission prompts.
 This document does not claim that unfinished features or live Slack acceptance are complete.
 
-Audience containment now has one typed scope and one read evaluator shared by web navigation, threads, retained runs, artifacts, and agent access. Personal scopes require their owner; channel scopes require current linked Slack membership; personal Slack delivery also verifies the destination DM. Shared mutations and publication reject private scopes, including the completion transaction. Scope inheritance preserves restrictions after conversation recreation. Four focused integration tests, 298 bot tests, 76 API tests, and 38 incident-delivery tests pass. DM proof requires `im:read`, now requested by the installer and manifest; existing installations must reconnect before that evidence path can work. Automatic classification of Slack source history, remote MCP evidence/provenance, and controlled live acceptance still require implementation and verification; this is not completed Slack evidence support.
+Audience containment now has one typed scope and one read evaluator shared by web navigation, threads, retained runs, artifacts, and agent access. Personal scopes require their owner; channel scopes require current linked Slack membership; personal Slack delivery also verifies the destination DM. Shared mutations and publication reject private scopes, including the completion transaction. Scope inheritance preserves restrictions after conversation recreation. The latest 300 bot tests pass, including 67 conversation-context tests; 76 API tests and 38 incident-delivery tests passed on the preceding audience slice. DM and group-DM membership proof require `im:read` and `mpim:read`, now requested by the installer and manifest; existing installations must reconnect before those evidence paths can work. Newly fetched Slack history now receives its channel or personal audience before seeding and model use. The cancellation heartbeat stays local; provider membership proof remains at data-use boundaries. Older unclassified Slack history, remote MCP evidence/provenance, and controlled live acceptance remain unfinished; this is not completed Slack evidence support.
 
 ## Product contract
 
@@ -226,6 +226,7 @@ Broader evidence requires a demonstrated audience rule, including Slack Connect 
 The user's private DM with Monoscope can use their opted-in personal scope.
 Do not reuse private evidence in another audience's conversation or shared artifact.
 Keep Slack write tools excluded from the remote MCP catalog. Publish through Monoscope's audited delivery path.
+Slack's [official search reference](https://github.com/slackapi/slack-skills-plugin/blob/main/skills/slack-search/SKILL.md) confirms `slack_search_public`, `slack_search_public_and_private`, `slack_read_channel`, and `slack_read_thread`. Their full input/output schemas and this app's live eligibility still need verification; these names alone do not establish a working integration.
 
 ## Implementation sequence
 
