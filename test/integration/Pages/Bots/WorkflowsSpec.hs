@@ -1251,8 +1251,8 @@ spec = around withTestResources do
           (_, allowed) <- runAsBaseRecordingHTTP tr $ transport $ AI.canReadEvidence access testPid conversation
           allowed `shouldBe` expected
 
-      for_ [(command, timedOut) | command <- [False, True], timedOut <- [False, True]] \(command, timedOut) ->
-        it ("queuedConversation_retryExhaustionClosesTheRetainedRun: " <> show (command, timedOut)) \tr -> do
+      for_ [(command, timedOut, callbackLost) | command <- [False, True], timedOut <- [False, True], callbackLost <- [False, True]] \(command, timedOut, callbackLost) ->
+        it ("queuedConversation_retryExhaustionClosesTheRetainedRun: " <> show (command, timedOut, callbackLost)) \tr -> do
           let user = (getResponse tr.trSessAndHeader).user.id
               conversation = UUIDId $ UUID.fromWords 0 0 46 1
               request = UUIDId $ UUID.fromWords 0 0 46 2
@@ -1271,11 +1271,14 @@ spec = around withTestResources do
             AI.requireRunContext testPid $ Issues.ConversationClaim identifier
           runQueryEffect tr $ Issues.saveRunResult context "Retained evidence" "The completed investigation survives delivery failure."
           threads <- newIORef mempty
-          let worker =
-                (Jobs.jobsWorkerConfig tr.trLogger tr.trATCtx tr.trTracerProvider Nothing)
+          let configured = Jobs.jobsWorkerConfig tr.trLogger tr.trATCtx tr.trTracerProvider Nothing
+              worker =
+                configured
                   { OddJobs.cfgDefaultJobTimeout = if timedOut then 0 else 30
                   , OddJobs.cfgJobRunner = \_ -> if timedOut then threadDelay 1_000_000 else throwIO $ ErrorCall "Injected worker failure"
                   , OddJobs.cfgLogger = \_ _ -> pure ()
+                  , OddJobs.cfgOnJobFailed = if callbackLost then [] else configured.cfgOnJobFailed
+                  , OddJobs.cfgOnJobTimeout = if callbackLost then const (pure ()) else configured.cfgOnJobTimeout
                   }
               step = do
                 Just attempt <- runReaderT (OddJobs.pollRunJob "conversation-exhaustion-regression" Nothing) $ OddJobs.RunnerEnv worker threads
@@ -1287,7 +1290,22 @@ spec = around withTestResources do
           runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE background_jobs SET run_at = clock_timestamp() - interval '1 second' WHERE payload = #{Aeson $ AE.toJSON $ Jobs.RunConversation testPid context.id}|]
           step
           runQueryEffect tr (Hasql.interpScalar @Text [HI.sql|SELECT status::text FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON $ Jobs.RunConversation testPid context.id}|]) >>= (`shouldBe` "failed")
-          runQueryEffect tr (Hasql.interpScalar @Text [HI.sql|SELECT status FROM apis.ai_routine_runs WHERE id = #{context.id}|]) >>= (`shouldBe` if timedOut then "timed_out" else "failed")
+          when callbackLost do
+            runQueryEffect tr (Hasql.interpScalar @Text [HI.sql|SELECT status FROM apis.ai_routine_runs WHERE id = #{context.id}|]) >>= (`shouldBe` "running")
+            modelCalls <- newIORef (0 :: Int)
+            let noModel = interpose @ELLM.LLM \_ _ -> do
+                  liftIO $ modifyIORef' modelCalls (+ 1)
+                  liftIO $ throwIO $ ErrorCall "Recovery must not run the model"
+                recover = do
+                  (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ noModel $ Jobs.runHourlyJob frozenTime 0
+                  requests `shouldBe` []
+            runQueryEffect tr $ JobQueue.wakeJob $ Jobs.RunConversation testPid context.id
+            recover
+            runQueryEffect tr (Hasql.interpScalar @Text [HI.sql|SELECT status FROM apis.ai_routine_runs WHERE id = #{context.id}|]) >>= (`shouldBe` "running")
+            runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE background_jobs SET status = 'failed' WHERE payload = #{Aeson $ AE.toJSON $ Jobs.RunConversation testPid context.id} AND status = 'queued'|]
+            replicateM_ 2 recover
+            readIORef modelCalls >>= (`shouldBe` 0)
+          runQueryEffect tr (Hasql.interpScalar @Text [HI.sql|SELECT status FROM apis.ai_routine_runs WHERE id = #{context.id}|]) >>= (`shouldBe` if timedOut && not callbackLost then "timed_out" else "failed")
           artifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid context.id
           map (.content) artifacts `shouldSatisfy` any (maybe False $ T.isInfixOf "The completed investigation survives delivery failure.")
           history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation

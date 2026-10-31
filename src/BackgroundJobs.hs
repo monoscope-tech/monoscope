@@ -1464,6 +1464,7 @@ runHourlyJob :: UTCTime -> Int -> ATBackgroundCtx ()
 runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   tryStep "ai-routine-recovery" $ Issues.recoverDueRoutines 100 >>= traverse_ (\routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt)
+  tryStep "ai-conversation-recovery" recoverFailedConversations
   tryStep "metric-catalog-flush" $ Telemetry.flushMetricCatalog ctx.metricCatalogBuffer
   tryStep "metric-catalog-reconcile" Telemetry.reconcileMetricCatalog
   tryStep "endpoint-shape-report" reportUnwrittenIdRules
@@ -1506,6 +1507,18 @@ runHourlyJob scheduledTime hour = do
   checkFreeTierUsageNotifications activeProjects scheduledTime
 
   Log.logTrace "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
+  where
+    recoverFailedConversations = do
+      requests <-
+        Hasql.interp @[(Projects.ProjectId, UUIDId "ai_routine_run")]
+          [HI.sql|SELECT run.project_id, run.id FROM apis.ai_routine_runs run
+          JOIN background_jobs job ON job.payload = jsonb_build_object('tag', 'RunConversation', 'contents', jsonb_build_array(run.project_id, run.id))
+          WHERE run.status = 'running' AND job.status = 'failed'
+            AND NOT EXISTS (SELECT 1 FROM background_jobs newer WHERE newer.payload = job.payload AND newer.id > job.id)
+          ORDER BY job.updated_at, job.id LIMIT 100|]
+      for_ requests \(project, identifier) ->
+        whenJustM (Issues.runContextFor project $ Issues.ConversationClaim identifier) \context ->
+          void $ Issues.completeRun context $ Issues.FailedResult queuedFailure
 
 
 -- | Create dashboards from templates whose @discovery_metrics@ prefixes match
@@ -3268,17 +3281,21 @@ jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enabl
     $ jobsWorkerConfig logger appCtx tp projectTools
 
 
+queuedFailure :: Issues.RunFailure
+queuedFailure =
+  let message = "This request stopped after exhausting its worker retries. Its run retains any saved results and action history."
+   in Issues.RunFailure message $ Issues.ConversationNotice message
+
+
 jobsWorkerConfig :: Logger -> Config.AuthContext -> TracerProvider -> Maybe AI.ProjectTools -> OddJobs.Job.Config
 jobsWorkerConfig logger appCtx tp projectTools =
   mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs appCtx.config.maxConcurrentJobs) (jobsRunner logger appCtx tp projectTools) \cfg ->
     cfg
       { cfgJobOrdering = EarliestRunAtFirst
-      , cfgOnJobFailed = [JobErrHandler $ \(err :: SomeException) job _ -> finishFailedJob (Issues.FailedResult exhaustion) job >> throwIO err]
-      , cfgOnJobTimeout = finishFailedJob $ Issues.TimedOutResult exhaustion
+      , cfgOnJobFailed = [JobErrHandler $ \(err :: SomeException) job _ -> finishFailedJob (Issues.FailedResult queuedFailure) job >> throwIO err]
+      , cfgOnJobTimeout = finishFailedJob $ Issues.TimedOutResult queuedFailure
       }
   where
-    message = "This request stopped after exhausting its worker retries. Its run retains any saved results and action history."
-    exhaustion = Issues.RunFailure message $ Issues.ConversationNotice message
     finishFailedJob completion job = when (job.jobStatus == Failed) $ case AE.fromJSON job.jobPayload of
       AE.Success (RunConversation project identifier) -> runBackground logger appCtx tp
         $ whenJustM (Issues.runContextFor project $ Issues.ConversationClaim identifier)
