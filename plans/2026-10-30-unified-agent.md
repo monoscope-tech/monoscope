@@ -36,7 +36,7 @@ The existing progress card reads the canonical operation outcome. Ended notices 
 
 Failing-first regressions exposed missing immediate wake-up, delayed refresh, cancellation rollback on enqueue failure, and misleading claimed-action messaging. All eleven focused Slack review lifecycle examples now pass, covering decisions, expiry, recovery, signed stop, pause, cancel, stop during notice publication, a claimed action, repeated controls, unknown actors, injected queue failure, unchanged model-call count, and no duplicate mutation. The final source passes all 409 bot, 76 API, and 41 incident-delivery examples. Formatting and diff checks pass; HLint has no hints on changed production lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue. Whole-branch reviews and release gates remain pending.
 
-Waiting revocation, web/slash continuation, native model-session continuation, streaming, and controlled live Slack acceptance remain unfinished. The hosted visual review now includes this slice, with exact source from `44d18c52c`, the subsequent master integration checkpoint.
+Web/slash continuation, native model-session continuation, streaming, and controlled live Slack acceptance remain unfinished. Tested authority-loss retries are described above. The hosted visual review includes signed stops, deletion, and authority-loss retries, with exact source from `d415674f4`.
 
 ## Routine pause and stop while awaiting review
 
@@ -48,7 +48,7 @@ All twelve failing-first cases now pass through real routine handlers. They cove
 
 The final code passes 404 bot, 76 API, and 41 incident-delivery examples. Formatting and diff checks pass; HLint reports no hints in the changed production module. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material issue in this slice.
 
-Signed Slack stop events and the pending Slack notice still need their own wake-up and cleanup checks. Waiting revocation, other source continuations, native model-session continuation, live acceptance, streaming, and final branch gates remain open. This checkpoint establishes routine-control cancellation, not completion of every waiting lifecycle.
+Signed Slack stop and notice cleanup are implemented above. Other source continuations, native model-session continuation, live acceptance, streaming, and final branch gates remain open. This checkpoint establishes routine-control cancellation, not completion of every waiting lifecycle.
 
 ## Initial Slack transcript visibility
 
@@ -70,9 +70,9 @@ Slack discovery is optional: credential rejection, app-access denial, server fai
 
 The discovery regression first failed because Slack reads were absent from the common catalog. The availability regression then failed on both throttling and server errors. The final source passes all 329 bot, 76 API, and 38 incident-delivery examples. Formatting and diff checks pass; HLint has no suggestions on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material issue.
 
-These are deterministic integration checks against a protocol fixture, not live Slack acceptance. Actual app eligibility, provider schemas, Slack Connect behavior, streaming acceptance, selective review controls, and final branch release gates remain open.
+These are deterministic integration checks against a protocol fixture, not live Slack acceptance. Actual app eligibility, provider schemas, Slack Connect behavior, streaming acceptance, remaining review continuations, and final branch release gates remain open.
 
-The [visual review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a919) shows source snapshot `44d18c52c`, including initial transcript privacy, signed Slack stop and notice cleanup, routine pause/stop, typed policy configuration, shared continuation, terminal cleanup, and decision display. Its nine walkthroughs distinguish working paths from unfinished source continuations, waiting revocation, native model-session continuation, and live acceptance. Chrome checks pass for every walkthrough step at widths 390/768/1280, exact source excerpts, keyboard interaction, and code panels. Text contrast ranges from 7.6:1 to 16.3:1. Hosted HTML matches the tested local artifact: 146,252 bytes, SHA-256 `81ef1dcabc6b380fd58a1aaa03126ce664e053897f32cd22c25edd359cd19f7f`, Page sequence 42. Separate authenticated-application checks verify the policy form and review lifecycle. Neither check establishes live Slack acceptance.
+The [visual review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a919) shows source snapshot `d415674f4`, including initial transcript privacy, signed Slack stop and notice cleanup, routine pause/stop/deletion, authority-loss retries, typed policy configuration, shared continuation, terminal cleanup, and decision display. Its nine walkthroughs distinguish working paths from unfinished source continuations, native model-session continuation, and live acceptance. Chrome checks pass for every walkthrough step at widths 390/768/1280, exact source excerpts, keyboard interaction, and code panels. Text contrast ranges from 7.6:1 to 16.3:1. Hosted HTML matches the tested local artifact: 146,711 bytes, SHA-256 `19ebb5fa3859e4c62181cd28c2373636abe9c3c07425b365f96dc3b35bc14a6c`, Page sequence 43. Separate authenticated-application checks verify the policy form and review lifecycle. Neither check establishes live Slack acceptance.
 
 ## Selective review ledger foundation
 
