@@ -76,7 +76,6 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Integrations
-import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -108,6 +107,7 @@ import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.AI qualified as AI
 import Pkg.AdConversions qualified as AdConversions
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
@@ -3824,8 +3824,11 @@ enhanceIssuesWithLLM pid issueIds = do
                         <> foldMap (\(critical, _, _) -> "\n\nSeverity assessment: " <> bool "Not critical" "Critical" critical) classification
                         <> foldMap (\(cause, category) -> "\n\n## Error analysis\n" <> cause <> "\n\nCategory: " <> category) analysis
                     findings = AE.object ["enhancement" AE..= enhancement, "classification" AE..= classification, "analysis" AE..= analysis]
-                required <- lift $ Investigations.conversationEvidencePermission pid convId
-                unless (required <= ProjectMembers.PView) $ throwError "Restricted conversation evidence cannot update shared issue metadata"
+                decision <- lift $ AI.authorizeRunOperation context Catalog.ProjectWrite
+                mutate <- case decision of
+                  Right _ -> pure True
+                  Left (AI.AuthorityDenied Issues.ActionGrantRequired) -> pure False
+                  Left denial -> throwError $ AI.toolDenialMessage denial
                 errorPattern <- lift $ if isJust analysis then ErrorPatterns.getErrorPatternByHash pid issue.targetHash else pure Nothing
                 now <- lift Time.currentTime
                 let mutation = do
@@ -3833,9 +3836,9 @@ enhanceIssuesWithLLM pid issueIds = do
                       for_ classification $ \(critical, breaking, _) -> Enhancement.updateIssueClassification issueId critical breaking
                       for_ ((,) <$> errorPattern <*> analysis) $ \(ep, (cause, category)) -> ErrorPatterns.updateErrorPatternAnalysis ep.id cause category
                       Hasql.executeTx [HI.sql|UPDATE apis.issues SET llm_enhanced_at = #{now} WHERE id = #{issueId} AND project_id = #{pid}|]
-                pure (Issues.reportAnswer body $ Just findings, mutation)
+                pure (Issues.reportAnswer (body <> if mutate then "" else "\n\nObserve policy: issue metadata was not changed.") $ Just findings, mutation <$ guard mutate)
               case outcome of
-                Right (Just (Right (answer, mutation))) -> void $ Issues.completeRunWith mutation context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer answer
+                Right (Just (Right (answer, mutation))) -> void $ maybe Issues.completeRun Issues.completeRunWithProjectMutation mutation context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer answer
                 _ -> do
                   active <- Issues.routineRunActive pid execution.id
                   let message = "Issue enrichment failed. A retry will create a new attempt."

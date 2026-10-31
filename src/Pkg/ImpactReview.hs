@@ -43,6 +43,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types.URI (urlEncode)
 import OpenAI.V1.Chat.Completions qualified as OpenAI
 import Pkg.AI qualified as AI
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.Git qualified as Git
@@ -267,11 +268,15 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     completeReview :: Reviews.ReviewRun -> UUIDId "ai_routine_run" -> UTCTime -> ATBackgroundCtx ()
     completeReview completed runId startedAt = do
       context <- AI.requireRunContext completed.projectId $ Issues.EventClaim (Issues.PullRequestReview completed.id) runId startedAt
+      authority <- Issues.runContextAuthority context
       completion <- case traverse (\value -> case AE.fromJSON value of AE.Success parsed -> Right parsed; AE.Error err -> Left err) completed.result of
         Left _ -> pure $ Issues.FailedResult $ Issues.RunFailure "Stored review result could not be read" Issues.RunOnly
         Right result -> do
           ctx <- ask @AuthContext
-          let body = maybe "Documentation-only change. No production impact review was needed." (renderReview ctx.config.hostUrl completed True) result
+          let body =
+                maybe "Documentation-only change. No production impact review was needed." (renderReview ctx.config.hostUrl completed True) result <> case authority of
+                  Just Issues.RunAuthority{policy = Issues.Observe} -> "\n\nObserve policy: the GitHub comment was not updated."
+                  _ -> ""
               findings = if maybe True ((== NoFinding) . (.verdict)) result then Issues.ResultNoFindings else Issues.ResultSucceeded
           pure $ Issues.CompletedResult findings Issues.PublishAnswer $ Issues.reportAnswer body completed.result
       void $ Issues.completeRun context completion
@@ -305,7 +310,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
               result <- analyse run execution conn (filter ((== credential.id) . (.credentialId)) mappings) pr files
               requireActive run execution
               Issues.saveRunResult context "Production impact review" (renderReview cfg.hostUrl run True result)
-              publish run execution conn ref pr result
+              publish run execution context conn ref pr result
 
     sameRevision :: Git.PullRequest -> Git.PullRequest -> Bool
     sameRevision expected actual = expected.head == actual.head && expected.base == actual.base && actual.state == "open" && not actual.draft
@@ -378,24 +383,27 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           let credentialIds = [c.id | c <- currentCredentials, c.host == Git.GitHub, isNothing c.apiBase, isJust c.installationId]
           pure [service | mapping <- currentMappings, mapping.credentialId `elem` credentialIds, any (\original -> original.id == mapping.id && original.credentialId == mapping.credentialId && original.service == mapping.service && T.toLower mapping.owner == reviewRun.owner && T.toLower mapping.repo == reviewRun.repo) reviewMappings, Just service <- [mapping.service]]
 
-    publish :: Reviews.ReviewRun -> Issues.EventRun -> Git.GitConn -> Git.RepoRef -> Git.PullRequest -> ReviewResult -> ReviewCtx ()
-    publish run execution conn ref pr result = do
-      requireActive run execution
-      cfg <- (.config) <$> ask @AuthContext
-      whenM (Reviews.currentRun run) do
-        current <- require =<< Git.getPullRequest conn ref run.number
-        unless (sameRevision pr current) $ throwError $ ReviewFailure "PR changed before publication"
-        settings <- Reviews.repositorySettings run.projectId
-        let includeEvidence = maybe False (.includeEvidence) $ find (\s -> s.owner == run.owner && s.repo == run.repo) settings
-            marker = "<!-- monoscope-impact:" <> run.projectId.toText <> " -->"
-        comments <- require =<< Git.listPullRequestComments conn ref run.number
-        appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
-        let existing = (.id) <$> find (\c -> fmap (.id) c.performedViaGithubApp == Just appId && marker `T.isInfixOf` c.body) comments
-        whenM (Reviews.currentRun run) do
-          requireActive run execution
-          let runLink = "\n\n[Run and artifacts](" <> T.dropWhileEnd (== '/') cfg.hostUrl <> "/p/" <> run.projectId.toText <> "/ai/runs/" <> execution.id.toText <> ")"
-          cid <- require =<< Git.publishPullRequestComment conn ref run.number existing (marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink)
-          Reviews.finishRun run (Just cid)
+    publish :: Reviews.ReviewRun -> Issues.EventRun -> Issues.RunContext -> Git.GitConn -> Git.RepoRef -> Git.PullRequest -> ReviewResult -> ReviewCtx ()
+    publish run execution context conn ref pr result =
+      AI.authorizeRunOperation context Catalog.ExternalPublication >>= \case
+        Left (AI.AuthorityDenied Issues.ActionGrantRequired) -> Reviews.finishRun run Nothing
+        Left denial -> throwError $ ReviewFailure $ AI.toolDenialMessage denial
+        Right _ -> do
+          cfg <- (.config) <$> ask @AuthContext
+          whenM (Reviews.currentRun run) do
+            current <- require =<< Git.getPullRequest conn ref run.number
+            unless (sameRevision pr current) $ throwError $ ReviewFailure "PR changed before publication"
+            settings <- Reviews.repositorySettings run.projectId
+            let includeEvidence = maybe False (.includeEvidence) $ find (\s -> s.owner == run.owner && s.repo == run.repo) settings
+                marker = "<!-- monoscope-impact:" <> run.projectId.toText <> " -->"
+            comments <- require =<< Git.listPullRequestComments conn ref run.number
+            appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
+            let existing = (.id) <$> find (\c -> fmap (.id) c.performedViaGithubApp == Just appId && marker `T.isInfixOf` c.body) comments
+            whenM (Reviews.currentRun run) do
+              void $ require =<< first AI.toolDenialMessage <$> AI.authorizeRunOperation context Catalog.ExternalPublication
+              let runLink = "\n\n[Run and artifacts](" <> T.dropWhileEnd (== '/') cfg.hostUrl <> "/p/" <> run.projectId.toText <> "/ai/runs/" <> execution.id.toText <> ")"
+              cid <- require =<< Git.publishPullRequestComment conn ref run.number existing (marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink)
+              Reviews.finishRun run (Just cid)
     requireActive :: (DB es, Error ReviewFailure :> es) => Reviews.ReviewRun -> Issues.EventRun -> Eff es ()
     requireActive run execution = do
       unlessM (Issues.routineRunActive run.projectId execution.id) $ throwError $ ReviewFailure "Routine paused, stopped, or requester access revoked"

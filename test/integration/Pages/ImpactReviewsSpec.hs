@@ -46,6 +46,7 @@ import Effectful.Dispatch.Dynamic (interpose, localSeqUnlift, localSeqUnliftIO)
 import Effectful.Error.Static (catchError)
 import Effectful.Reader.Static qualified as Reader
 import Lucid qualified
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (selectLogTable)
 import Models.Projects.AgentUsage qualified as Usage
@@ -3153,6 +3154,29 @@ spec = around withTestResources $ describe "Production impact reviews" do
         $ Impact.reviewPullRequest run.id
     T.intercalate " " (map (decodeUtf8 . snd) metricsRequests) `shouldSatisfy` T.isInfixOf "Review query results"
     T.intercalate " " (map (decodeUtf8 . snd) metricsRequests) `shouldNotSatisfy` T.isInfixOf "No telemetry observed"
+
+    Just routine <- runQueryEffect tr $ Issues.getEventRoutine reviewPid Issues.EventPullRequest
+    runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Observe
+    void $ withResource tr.trPool \conn -> execute conn "DELETE FROM projects.code_mappings WHERE project_id = ? AND service IS NOT NULL" (Only reviewPid)
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
+    (observedRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ interpose @Agent.CodeReview (\_ _ -> liftIO $ fail "Observe coverage-gap review must not call the model") $ Impact.reviewPullRequest run.id
+    observedRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/" . fst)
+    Just observedRun <- runQueryEffect tr $ Issues.getEventRun reviewPid $ Issues.PullRequestReview run.id
+    observedRun.status `shouldBe` Issues.RunSucceeded
+    runQueryEffect tr (Issues.listRunArtifacts reviewPid observedRun.id) >>= (\artifacts -> T.intercalate " " (mapMaybe (.content) artifacts) `shouldSatisfy` T.isInfixOf "Observe policy: the GitHub comment was not updated.")
+
+    for_ (["policy", "evidence"] :: [Text]) $ \restriction -> do
+      runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Autonomous
+      runQueryEffect tr $ Reviews.retryRun reviewPid run.id
+      let restrictBeforePublication = withHTTPResponses \_ endpoint -> do
+            when ("/issues/7/comments?" `T.isInfixOf` toText endpoint) $ runQueryEffect tr $ case restriction of
+              "policy" -> Issues.setRoutinePolicy routine.requestedBy reviewPid routine.conversationId Issues.Observe
+              _ -> Investigations.retainEvidencePermission reviewPid [observedRun.conversationId] ProjectMembers.PAdmin
+            pure Nothing
+      (restrictedRequests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ restrictBeforePublication $ transport True $ tryAny $ Impact.reviewPullRequest run.id
+      outcome `shouldSatisfy` isLeft
+      restrictedRequests `shouldSatisfy` any (T.isInfixOf "/issues/7/comments?" . fst)
+      restrictedRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/comments/99" . fst)
 
   it "persists issue-fix phases only after frozen reproduction and counterfactual verification" \tr -> do
     setup tr

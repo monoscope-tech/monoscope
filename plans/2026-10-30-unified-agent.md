@@ -705,6 +705,22 @@ The regression now compares the complete issue before and after rejected complet
 
 All 215 bot examples and 35 error-pattern examples pass. The latter includes the full enhancement, embedding, and merge pipeline. Formatting and diff checks pass. Repeated slice reviews found no further transaction-composition or type-safety shortcuts; the native capability and ledger work remains an explicit open requirement. No migration or new module was added.
 
+### Shared capability decisions for native metadata and publication (31 October)
+
+Failing regressions reproduced two Observe-policy violations: issue enrichment changed issue metadata, and a production-impact review updated a GitHub comment. Both native paths previously treated an active run as sufficient authority.
+
+`authorizeCapability` now owns the role and execution-policy decision for model tools and native project mutations. Capability classes declare whether they require Autonomous policy in the existing catalog. The existing audience and provenance evaluator is shared through `authorizeRunOperation`; native callers use their stored request context and ordinary project membership, without web-session sudo or service credentials.
+
+Fresh enrichment and PR-review requests capture the installation's policy. Continued attempts retain their original grant. The blanket event Observe clamp now applies only to Slack requests awaiting legacy-checkpoint adoption. Existing native grants remain unchanged. Observe enrichment retains its report and explains that metadata was not changed. Observe reviews retain their report and explain that GitHub was not updated. Autonomous native work uses the same capability decisions without approval prompts.
+
+`completeRunWithProjectMutation` also rechecks the current capability decision and evidence scope inside the fenced completion transaction. A policy reduction, insufficient original role ceiling, or newly restricted evidence prevents both the project update and successful-result publication. The ordinary result-only completion path does not acquire a project-write requirement or an extra scope lookup.
+
+The five focused native-policy cases pass, covering Observe and Autonomous enrichment plus all three commit-boundary restrictions. The native PR workflow regression passes after first reproducing the unauthorized GitHub publication. Its additional timing cases introduce a policy reduction or restricted evidence during GitHub comment lookup; each reaches that boundary and makes no subsequent write. Tool denial messages and operation-policy wire formats remain unchanged.
+
+All 220 bot examples, 33 native review/SDK examples, 35 error-pattern examples, and 75 API v1 examples pass. The extended PR workflow also passes after the timing assertions were added. Formatting and diff checks pass. Repeated slice reviews found no further material policy, transaction-composition, or type-safety findings within these changes. New capability-decision doctests await the final doctest run. Whole-branch review and release signoff remain pending.
+
+Native wiki writes and other retained knowledge, operation-ledger attribution, Slack legacy adoption, and the rest of the plan remain open. These checks do not claim to supply action identity or exactly-once external publication.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

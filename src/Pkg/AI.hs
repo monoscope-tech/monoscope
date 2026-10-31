@@ -51,6 +51,9 @@ module Pkg.AI (
   executeToolCall,
   requireRunContext,
   OperationPolicy (..),
+  ToolDenial (..),
+  toolDenialMessage,
+  authorizeRunOperation,
   defaultLimits,
 
   -- * Message Conversion
@@ -1215,7 +1218,37 @@ data ToolRecovery = ReplayReads | AtomicInRun | RetainInRun
 data ToolExecution es = EffectfulTool (Eff es ToolResult) | AtomicTool (Tx.Transaction ToolResult)
 
 
-data ToolDenial = RoleRequired ProjectMembers.Permissions | ActionGrantRequired | EvidenceRetentionRequired | AudienceRequired ProjectMembers.Permissions | RestrictedPublication
+data ToolDenial = AuthorityDenied Issues.CapabilityDenial | EvidenceRetentionRequired | AudienceRequired ProjectMembers.Permissions | RestrictedPublication
+
+
+toolDenialMessage :: ToolDenial -> Text
+toolDenialMessage = \case
+  AuthorityDenied (Issues.RoleRequired permission) -> "This run's project role does not meet the required " <> toText (encodeEnumSC @"P" permission) <> " permission."
+  AuthorityDenied Issues.ActionGrantRequired -> "Project changes require an Autonomous execution policy."
+  EvidenceRetentionRequired -> "Restricted evidence requires a durable conversation run."
+  AudienceRequired permission -> "This destination cannot receive evidence requiring " <> toText (encodeEnumSC @"P" permission) <> " permission."
+  RestrictedPublication -> "This conversation contains restricted evidence and cannot publish it to a shared destination."
+
+
+authorizeRunOperation :: (DB es, IOE :> es) => Issues.RunContext -> Catalog.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
+authorizeRunOperation context capability = do
+  let config = (defaultAgenticConfig context.projectId){access = MemberAccess ProjectMember context.requestedBy, conversationId = Just context.conversationId, invocationMode = DurableRun context}
+  authority <- requireConfigAccess config
+  authorizeOperation config authority capability
+
+
+authorizeOperation :: DB es => AgenticConfig -> Issues.RunAuthority -> Catalog.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
+authorizeOperation config authority policy = Except.runExceptT do
+  Except.withExceptT AuthorityDenied $ Except.liftEither $ Issues.authorizeCapability authority policy
+  let disclosure = Catalog.disclosurePermission policy
+  when (disclosure > evidenceAudience config.access authority.permission) $ Except.throwError $ AudienceRequired disclosure
+  when (disclosure > ProjectMembers.PView) $ case (invocationContext config.invocationMode, config.conversationId) of
+    (Just _, Just conversation) -> lift $ Investigations.retainEvidencePermission config.projectId [conversation] disclosure
+    _ -> Except.throwError EvidenceRetentionRequired
+  when (Catalog.requiresAutonomy policy) $ for_ config.conversationId $ \conversation -> do
+    required <- lift $ Investigations.conversationEvidencePermission config.projectId conversation
+    when (required > disclosure) $ Except.throwError RestrictedPublication
+  pure $ OperationPolicy policy authority.policy authority.permission
 
 
 executeToolCall :: ProjectToolCtx es => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
@@ -1233,13 +1266,8 @@ executeToolAt cursor config tc = do
     Just tool -> case tool.agentPolicy of
       Nothing -> pure $ Investigations.RecordedResult $ noRaw "This project operation has no Agent policy."
       Just policy ->
-        authorize authority policy >>= \case
-          Left denial -> pure $ Investigations.RecordedResult $ noRaw $ case denial of
-            RoleRequired permission -> "This run's project role does not meet the required " <> toText (encodeEnumSC @"P" permission) <> " permission."
-            ActionGrantRequired -> "Project changes require an Autonomous execution policy."
-            EvidenceRetentionRequired -> "Restricted evidence requires a durable conversation run."
-            AudienceRequired permission -> "This destination cannot receive evidence requiring " <> toText (encodeEnumSC @"P" permission) <> " permission."
-            RestrictedPublication -> "This conversation contains restricted evidence and cannot publish it to a shared destination."
+        authorizeOperation config authority policy >>= \case
+          Left denial -> pure $ Investigations.RecordedResult $ noRaw $ toolDenialMessage denial
           Right snapshot -> recorded snapshot $ case tool.dispatch of
             ProjectOperation backend -> EffectfulTool $ runProjectTool backend funcName args
             LocalOperation operation -> executeLocal operation args
@@ -1248,27 +1276,6 @@ executeToolAt cursor config tc = do
   Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length response.formatted])
   pure result
   where
-    authorize :: DB es => Issues.RunAuthority -> MCP.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
-    authorize authority policy = Except.runExceptT do
-      let execution = authority.policy
-          permission = authority.permission
-          requireActions = unless (execution == Issues.Autonomous) $ Except.throwError ActionGrantRequired
-      unless (permission >= MCP.minimumPermission policy) $ Except.throwError $ RoleRequired (MCP.minimumPermission policy)
-      case policy of
-        (MCP.ReadOnly{}; MCP.ConversationWrite) -> pass
-        (MCP.Administration{}; MCP.ProjectWrite; MCP.ExternalPublication; MCP.ProjectMemoryWrite) -> requireActions
-      let disclosure = Catalog.disclosurePermission policy
-      when (disclosure > evidenceAudience config.access permission) $ Except.throwError $ AudienceRequired disclosure
-      when (disclosure > ProjectMembers.PView) $ case (invocationContext config.invocationMode, config.conversationId) of
-        (Just _, Just conversation) -> lift $ Investigations.retainEvidencePermission config.projectId [conversation] disclosure
-        _ -> Except.throwError EvidenceRetentionRequired
-      case policy of
-        (MCP.ReadOnly{}; MCP.ConversationWrite) -> pass
-        (MCP.ExternalPublication; MCP.ProjectMemoryWrite; MCP.ProjectWrite; MCP.Administration{}) -> for_ config.conversationId $ \conversation -> do
-          required <- lift $ Investigations.conversationEvidencePermission config.projectId conversation
-          when (required > disclosure) $ Except.throwError RestrictedPublication
-      pure $ OperationPolicy policy execution permission
-
     recorded snapshot execution = case (snapshot.capability, cursor, invocationContext config.invocationMode) of
       (MCP.ReadOnly{}, _, _) -> Investigations.RecordedResult <$> perform execution
       (_, Just position, Just context) -> do

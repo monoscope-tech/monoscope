@@ -152,12 +152,14 @@ module Models.Apis.Issues (
   runContextFor,
   runContextPolicy,
   RunAuthority (..),
+  CapabilityDenial (..),
+  authorizeCapability,
   runContextAuthority,
   InteractiveOrigin (..),
   startInteractiveRun,
   InteractiveStart (..),
   completeRun,
-  completeRunWith,
+  completeRunWithProjectMutation,
   RunAnswer (..),
   reportAnswer,
   AnswerEvidence (..),
@@ -301,6 +303,7 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.DeriveUtils (SqlEnum (..), UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Pkg.Parser (ScopedQuery (..))
 import Relude hiding (id)
@@ -1680,6 +1683,27 @@ data RunAuthority = RunAuthority
   deriving stock (Eq, Show)
 
 
+data CapabilityDenial = RoleRequired ProjectMembers.Permissions | ActionGrantRequired
+  deriving stock (Eq, Show)
+
+
+-- | The same capability decision governs model tools and native mutations.
+--
+-- >>> import Pkg.AgentCatalog qualified as Catalog
+-- >>> import Models.Projects.ProjectMembers qualified as Members
+-- >>> authorizeCapability (RunAuthority Observe Members.PAdmin) Catalog.ProjectWrite
+-- Left ActionGrantRequired
+-- >>> authorizeCapability (RunAuthority Autonomous Members.PView) Catalog.ProjectWrite
+-- Left (RoleRequired PEdit)
+-- >>> authorizeCapability (RunAuthority Autonomous Members.PEdit) Catalog.ProjectWrite
+-- Right ()
+authorizeCapability :: RunAuthority -> Catalog.AgentPolicy -> Either CapabilityDenial ()
+authorizeCapability authority capability
+  | authority.permission < Catalog.minimumPermission capability = Left $ RoleRequired $ Catalog.minimumPermission capability
+  | Catalog.requiresAutonomy capability && authority.policy /= Autonomous = Left ActionGrantRequired
+  | otherwise = Right ()
+
+
 readRunAuthority :: DB es => HI.Sql -> Eff es (Maybe RunAuthority)
 readRunAuthority query = (accessAuthority =<<) <$> Hasql.interpOne query
   where
@@ -1698,7 +1722,7 @@ runContextAuthority context = fmap effective <$> readRunAuthority (runContextAcc
   where
     effective :: RunAuthority -> RunAuthority
     effective authority = case context.source of
-      TriggeredRun{} -> authority{policy = Observe}
+      TriggeredRun (SlackMessage{}; SlackCommand{}) -> authority{policy = Observe}
       _ -> authority
 
 
@@ -2146,6 +2170,9 @@ startEventRun routine request continuation convId input = do
       restart = continuation == RestartRun
       resume = continuation /= StartRun
       kind = case event of SlackMessage{} -> EventSlackMessage; SlackCommand{} -> EventSlackMessage; PullRequestReview{} -> EventPullRequest; IssueEnrichment{} -> EventIssueEnrichment
+      initialPolicy = case event of
+        (SlackMessage{}; SlackCommand{}) -> [HI.sql|#{Observe}|]
+        (PullRequestReview{}; IssueEnrichment{}) -> [HI.sql|r.policy|]
   Hasql.transaction TxS.ReadCommitted TxS.Write do
     installation <-
       Hasql.queryTx @[UUIDId "ai_routine"]
@@ -2172,7 +2199,7 @@ startEventRun routine request continuation convId input = do
           CASE WHEN #{restart} OR original.id IS NULL THEN #{input} ELSE original.input END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.instructions ELSE original.instructions END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.template_version ELSE original.template_version END,
-          CASE WHEN #{restart} OR original.id IS NULL THEN #{Observe} ELSE original.policy END,
+          CASE WHEN #{restart} OR original.id IS NULL THEN ^{initialPolicy} ELSE original.policy END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.authority_version ELSE original.authority_version END,
           CASE WHEN #{restart} OR original.id IS NULL THEN apis.least_permission(owner.permission, actor.permission) ELSE original.permission_ceiling END,
           (SELECT permission FROM (
@@ -2288,11 +2315,16 @@ data CompletionResult = CompletionRejected | RunCompleted RunTermination (Maybe 
 -- | Result evidence, conversation publication, terminal state and schedule advance
 -- share one transaction. The stored context fences stale or mismatched workers.
 completeRun :: (DB es, Time :> es) => RunContext -> RunCompletion -> Eff es CompletionResult
-completeRun = completeRunWith pass
+completeRun = completeRunWith Nothing
 
 
--- | Database effects commit only with an accepted successful result.
-completeRunWith :: (DB es, Time :> es) => Tx.Transaction () -> RunContext -> RunCompletion -> Eff es CompletionResult
+-- | Project changes require current Autonomous authority, editor permission,
+-- and shared evidence scope when the result commits.
+completeRunWithProjectMutation :: (DB es, Time :> es) => Tx.Transaction () -> RunContext -> RunCompletion -> Eff es CompletionResult
+completeRunWithProjectMutation = completeRunWith . Just
+
+
+completeRunWith :: (DB es, Time :> es) => Maybe (Tx.Transaction ()) -> RunContext -> RunCompletion -> Eff es CompletionResult
 completeRunWith mutation context proposed = do
   now <- Time.currentTime
   let pid = context.projectId
@@ -2319,12 +2351,19 @@ completeRunWith mutation context proposed = do
         )
     case states of
       [HI.OneColumn RunRunning] -> do
-        (access, _) <- Hasql.oneTx @(RunAccess, ProjectMembers.Permissions) (runContextAccessSql context)
+        (access, permission) <- Hasql.oneTx @(RunAccess, ProjectMembers.Permissions) (runContextAccessSql context)
+        required <- case mutation of
+          Nothing -> pure ProjectMembers.PView
+          Just _ -> HI.getOneColumn <$> Hasql.oneTx @(HI.OneColumn ProjectMembers.Permissions) [HI.sql|SELECT COALESCE(apis.conversation_evidence_permission(#{pid}, #{context.conversationId}), #{ProjectMembers.PAdmin})|]
         let outcome = case (access, proposed) of
               (_, CancelledResult{}) -> proposed
               (Stopped, _) -> CancelledResult Nothing
               (_, FailedResult RunFailure{notice = RunOnly}) -> proposed
               (_, TimedOutResult RunFailure{notice = RunOnly}) -> proposed
+              (Allowed policy, CompletedResult{})
+                | isJust mutation
+                , isLeft (authorizeCapability (RunAuthority policy permission) Catalog.ProjectWrite) || required > Catalog.disclosurePermission Catalog.ProjectWrite ->
+                    CancelledResult $ Just "Project mutation authority was withdrawn before completion."
               (Allowed _, _) -> proposed
               (Unavailable, _) -> CancelledResult Nothing
             (status, response, publication, failure) = case outcome of
@@ -2346,7 +2385,7 @@ completeRunWith mutation context proposed = do
                 PullRequestReview{} -> "Production impact review"
                 IssueEnrichment{} -> "Issue enrichment"
         for_ response $ \answer -> do
-          mutation
+          sequence_ mutation
           for_ title $ \label -> Hasql.executeTx $ saveRunResultSql context label answer.report
           case publication of
             PublishAnswer -> Hasql.executeTx $ runMessageSql pid runId ChatAssistant answer.content answer.widgets actions

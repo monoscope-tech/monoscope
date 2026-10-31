@@ -4,6 +4,7 @@ module Pkg.AgentCatalog (
   Tool (..),
   AgentPolicy (..),
   minimumPermission,
+  requiresAutonomy,
   disclosurePermission,
   actionName,
   apiOperations,
@@ -83,6 +84,12 @@ minimumPermission = \case
   ProjectWrite -> ProjectMembers.PEdit
   ExternalPublication -> ProjectMembers.PEdit
   Administration{} -> ProjectMembers.PAdmin
+
+
+requiresAutonomy :: AgentPolicy -> Bool
+requiresAutonomy = \case
+  (ReadOnly{}; ConversationWrite) -> False
+  (ProjectMemoryWrite; ProjectWrite; ExternalPublication; Administration{}) -> True
 
 
 actionName :: AgentPolicy -> Text

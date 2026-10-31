@@ -1027,7 +1027,7 @@ spec = around withTestResources do
             "cancel" -> Issues.cancelRoutineRun testPid routine.conversationId
             "pause" -> Issues.pauseRoutine testPid routine.conversationId
             _ -> Issues.deleteConversation testPid routine.conversationId
-          void $ runTestBg frozenTime tr $ Issues.completeRunWith (Issues.updateIssueEnhancement frozenTime issueId "Must not change" "" "") context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "Stopped work" Nothing
+          void $ runTestBg frozenTime tr $ Issues.completeRunWithProjectMutation (Issues.updateIssueEnhancement frozenTime issueId "Must not change" "" "") context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "Stopped work" Nothing
           void $ runTestBg frozenTime tr $ Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Delivery interrupted" Issues.RunOnly
           runQueryEffect tr (Issues.getRoutineRun testPid execution.id) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)
           runQueryEffect tr (Issues.listRunArtifacts testPid execution.id) >>= (`shouldSatisfy` null)
@@ -1070,6 +1070,49 @@ spec = around withTestResources do
         runQueryEffect tr (Issues.listRunArtifacts testPid completed.id) >>= (\artifacts -> length artifacts `shouldBe` 1)
         after <- runQueryEffect tr $ Issues.selectChatHistory testPid completed.conversationId
         length (filter ((== Issues.ChatAssistant) . (.role)) after) `shouldBe` 1
+
+      for_ [Issues.Observe, Issues.Autonomous] $ \policy ->
+        it ("nativePolicy_issueEnrichmentRetainsAnalysisAndHonorsMutationPolicy: " <> show policy) \tr -> do
+          issueId <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "native-policy" "Original title" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId
+          void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
+          Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventIssueEnrichment
+          runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId policy
+          let model :: ATBackgroundCtx a -> ATBackgroundCtx a
+              model = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallLLM _ prompt _ ->
+                  pure
+                    $ Right
+                    $ if
+                      | "issue titler" `T.isInfixOf` prompt -> "Enriched title"
+                      | "issue describer" `T.isInfixOf` prompt -> "Observed latency.\nCompare traces.\nlow"
+                      | otherwise -> "critical\n0\n0"
+                ELLM.CallAgenticChat{} -> pure $ Left "Unexpected agentic request"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
+          runTestBg frozenTime tr $ model $ Reader.local (\ctx -> ctx{config = ctx.config{openaiApiKey = "routine-test-key"}}) $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.EnhanceIssuesWithLLM testPid $ V.singleton issueId)
+          runQueryEffect tr (Issues.selectIssueById testPid issueId) >>= (\issue -> fmap (.title) issue `shouldBe` Just (if policy == Issues.Autonomous then "Enriched title" else "Original title"))
+          Just execution <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.IssueEnrichment issueId
+          execution.status `shouldBe` Issues.RunSucceeded
+          runQueryEffect tr (Issues.listRunArtifacts testPid execution.id) >>= (\artifacts -> T.intercalate " " (mapMaybe (.content) artifacts) `shouldSatisfy` T.isInfixOf "Compare traces.")
+
+      for_ (["policy-withdrawn", "original-role-limit", "restricted-evidence"] :: [Text]) $ \restriction ->
+        it ("nativePolicy_completionRechecksMutationAuthority: " <> toString restriction) \tr -> do
+          issueId <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "native-policy-race" "Original title" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId
+          void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
+          Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventIssueEnrichment
+          let conversation = UUIDId issueId.unUUIDId
+              memberRole permission = runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = #{permission} WHERE project_id = #{testPid} AND user_id = #{routine.requestedBy}|]
+          void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTAnomaly (AE.object [])
+          when (restriction == "original-role-limit") $ memberRole ProjectMembers.PView
+          Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.IssueEnrichmentRequest issueId) Issues.StartRun conversation "Retain the native request"
+          memberRole ProjectMembers.PAdmin
+          context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.IssueEnrichment issueId) execution.id execution.startedAt
+          when (restriction == "policy-withdrawn") $ runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId Issues.Observe
+          when (restriction == "restricted-evidence") $ runQueryEffect tr $ Investigations.retainEvidencePermission testPid [conversation] ProjectMembers.PAdmin
+          void $ runTestBg frozenTime tr $ Issues.completeRunWithProjectMutation (Issues.updateIssueEnhancement frozenTime issueId "Must not change" "" "") context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "Must not publish" Nothing
+          runQueryEffect tr (Issues.selectIssueById testPid issueId) >>= (\issue -> fmap (.title) issue `shouldBe` Just "Original title")
+          runQueryEffect tr (Issues.getRoutineRun testPid execution.id) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)
+          runQueryEffect tr (Issues.listRunArtifacts testPid execution.id) >>= (`shouldSatisfy` null)
+          runQueryEffect tr (Issues.selectChatHistory testPid conversation) >>= (\messages -> filter ((== Issues.ChatAssistant) . (.role)) messages `shouldSatisfy` null)
 
       it "issueEnrichment_requiresActivationAndRetainsAnEditableRoutineRun" \tr -> do
         issueId <- runTestBg frozenTime tr do
