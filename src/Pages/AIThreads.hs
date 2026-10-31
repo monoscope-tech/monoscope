@@ -318,6 +318,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 Issues.TriggeredRun (Issues.PullRequestReview _) -> "Pull request"
                 Issues.TriggeredRun (Issues.IssueEnrichment _) -> "New issue"
               span_ $ toHtml $ "Attempt " <> show @Text run.attempt
+              span_ [title_ "Role upgrades apply to new requests. Current access can restrict this run further."] $ toHtml $ "Role limit: " <> toText (encodeEnumSC @"P" evidence.permissionCeiling)
               whenJust requestedBy $ \user -> do
                 let name = T.strip $ user.firstName <> " " <> user.lastName
                 span_ [class_ "min-w-0 break-words"] $ toHtml $ "Requested by " <> if T.null name then CI.original user.email else name

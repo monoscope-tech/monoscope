@@ -2436,6 +2436,78 @@ spec = around withTestResources do
             Right response -> allowed || T.isInfixOf "project role" response.formatted
             _ -> False
           runQueryEffect tr (Investigations.conversationEvidencePermission testPid conversation) >>= (`shouldBe` if allowed then PM.PAdmin else PM.PView)
+          unless allowed do
+            runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'admin' WHERE project_id = #{testPid}|]
+            retained <- runTestBg frozenTime tr $ AI.executeToolCall config $ Chat.ToolCall "upgraded-read" "function" $ Chat.ToolFunction "list_api_keys" mempty
+            readIORef calls >>= (`shouldBe` [])
+            retained.formatted `shouldSatisfy` T.isInfixOf "project role"
+
+      for_ (["interactive", "scheduled", "event"] :: [Text]) \origin ->
+        it ("routineAuthority_membershipUpgradeDoesNotExpandAnExistingRequest: " <> toString origin) \tr -> do
+          setupSlackAgent tr testPid "T_ROLE_CEILING"
+          let user = (getResponse tr.trSessAndHeader).user.id
+              conversation = UUIDId $ UUID.fromWords 0 0 48 1
+              eventContext continuation = runTestBg frozenTime tr do
+                void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+                routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (liftIO $ fail "Expected event routine") pure
+                run <- Issues.startEventRun routine (Issues.SlackCommandRequest conversation user) continuation conversation "Retain the original role" >>= maybe (liftIO $ fail "Expected event run") pure
+                AI.requireRunContext testPid (Issues.EventClaim (Issues.SlackCommand conversation) run.id run.startedAt)
+              claim :: Issues.ScheduledRoutine -> IO Issues.RunContext
+              claim slot = runTestBg frozenTime tr do
+                run <- Issues.claimRoutine slot.id slot.scheduledAt >>= maybe (liftIO $ fail "Expected scheduled claim") pure
+                AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation run.runId run.claimedAt
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = #{testPid} AND user_id = #{user}|]
+          mode <- case origin of
+            "interactive" -> interactiveInvocation tr testPid conversation "Retain the original role" Issues.Autonomous
+            "scheduled" -> scheduledInvocation tr conversation Issues.Autonomous
+            _ -> AI.DurableRun <$> eventContext Issues.StartRun
+          initial <- case mode of AI.DurableRun context -> pure context; AI.InteractiveReadOnly -> fail "Expected a durable invocation"
+          initial.permissionCeiling `shouldBe` PM.PEdit
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'admin' WHERE project_id = #{testPid} AND user_id = #{user}|]
+          withResource tr.trPool (\conn -> PGS.execute conn [sql|UPDATE apis.ai_routine_runs SET permission_ceiling = 'admin' WHERE id = ?|] (PGS.Only initial.id))
+            `shouldThrow` (\err -> PGS.sqlState err == "23514")
+          calls <- newIORef (0 :: Int)
+          let backend = Routes.mcpProjectTools{AI.invoke = \actor project name args -> liftIO (modifyIORef' calls (+ 1)) >> AI.invoke Routes.mcpProjectTools actor project name args}
+              config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.projectTools = Just backend, AI.conversationId = Just conversation}
+              execute context = runTestBg frozenTime tr $ AI.executeToolCall config{AI.invocationMode = AI.DurableRun context} $ Chat.ToolCall "expanded-read" "function" $ Chat.ToolFunction "list_api_keys" mempty
+              denied context = do
+                context.permissionCeiling `shouldBe` PM.PEdit
+                runQueryEffect tr (Issues.runContextAuthority context) >>= (\authority -> fmap (.permission) authority `shouldBe` Just PM.PEdit)
+                execute context >>= (\result -> result.formatted `shouldSatisfy` T.isInfixOf "project role")
+                readIORef calls >>= (`shouldBe` 0)
+          denied initial
+          recovered <- case origin of
+            "interactive" -> runTestBg frozenTime tr do
+              Issues.startInteractiveRun testPid conversation user initial.id "Retain the original role" Issues.Autonomous Issues.WebConversation >>= \case
+                Issues.AcceptedRequest{} -> AI.requireRunContext testPid $ Issues.InteractiveClaim user conversation initial.id
+                _ -> liftIO $ fail "Expected replay admission"
+            "scheduled" -> do
+              slot <-
+                runQueryEffect
+                  tr
+                  ( Hasql.interpOne @Issues.ScheduledRoutine
+                      [HI.sql|UPDATE apis.ai_routines SET running_since = now() - interval '31 minutes'
+                WHERE project_id = #{testPid} AND conversation_id = #{conversation} RETURNING id, next_run_at|]
+                  )
+                  >>= maybe (fail "Expected scheduled lease") pure
+              claim slot
+            _ -> do
+              runQueryEffect tr $ void $ Issues.completeRun initial $ Issues.FailedResult $ Issues.RunFailure "Interrupted before privilege upgrade" Issues.RunOnly
+              eventContext Issues.ContinueRun
+          denied recovered
+          completion <- runQueryEffect tr $ Issues.completeRun recovered $ Issues.CancelledResult Nothing
+          fresh <- case origin of
+            "interactive" ->
+              interactiveInvocation tr testPid conversation "New role grant" Issues.Autonomous >>= \case
+                AI.DurableRun context -> pure context
+                _ -> fail "Expected a new durable request"
+            "scheduled" -> case completion of
+              Issues.RunCompleted _ (Just slot) -> claim slot
+              _ -> fail "Expected the next scheduled instant"
+            _ -> eventContext Issues.RestartRun
+          fresh.permissionCeiling `shouldBe` PM.PAdmin
+          execute fresh >>= (\result -> result.rawData `shouldSatisfy` isJust)
+          readIORef calls >>= (`shouldBe` 1)
 
       it "rechecks in-app membership after access is revoked" \tr -> do
         let userId = (getResponse tr.trSessAndHeader).user.id

@@ -12,6 +12,7 @@ module Models.Projects.ProjectMembers (
   selectAllProjectMembers,
   getUserPermission,
   activeMembership,
+  memberPermissionsSql,
   getSessionPermission,
   sessionPermissionSql,
   sessionAndProjectAtLeast,
@@ -215,14 +216,22 @@ activeMembership =
       SELECT user_id FROM projects.project_members WHERE project_id = project.id ORDER BY created_at, id LIMIT 1)) |]
 
 
+memberPermissionsSql :: HI.Sql -> HI.Sql
+memberPermissionsSql scope =
+  [HI.sql|SELECT member.project_id, member.user_id, member.permission FROM projects.project_members member
+    JOIN users.users account ON account.id = member.user_id
+    JOIN projects.projects project ON project.id = member.project_id WHERE (|]
+    <> scope
+    <> [HI.sql|)|]
+    <> activeMembership
+
+
 getUserPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
 getUserPermission pid uid =
   Hasql.interp
-    $ [HI.sql|SELECT member.permission FROM projects.project_members member
-    JOIN users.users account ON account.id = member.user_id
-    JOIN projects.projects project ON project.id = member.project_id
-    WHERE member.project_id = #{pid} AND member.user_id = #{uid} |]
-    <> activeMembership
+    $ [HI.sql|SELECT permission FROM (|]
+    <> memberPermissionsSql [HI.sql|member.project_id = #{pid} AND member.user_id = #{uid}|]
+    <> [HI.sql|) eligible|]
 
 
 getSessionPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
@@ -231,12 +240,8 @@ getSessionPermission pid user = Hasql.interp $ sessionPermissionSql pid user
 
 sessionPermissionSql :: Projects.ProjectId -> Projects.UserId -> HI.Sql
 sessionPermissionSql pid user =
-  [HI.sql|WITH member_permission AS (
-      SELECT member.permission FROM projects.project_members member
-      JOIN users.users account ON account.id = member.user_id
-      JOIN projects.projects project ON project.id = member.project_id
-      WHERE member.project_id = #{pid} AND member.user_id = #{user}|]
-    <> activeMembership
+  [HI.sql|WITH member_permission AS (|]
+    <> memberPermissionsSql [HI.sql|member.project_id = #{pid} AND member.user_id = #{user}|]
     <> [HI.sql|) SELECT permission FROM member_permission
       UNION ALL SELECT #{PAdmin} FROM users.users account
       WHERE account.id = #{user} AND account.active AND account.deleted_at IS NULL AND account.is_sudo

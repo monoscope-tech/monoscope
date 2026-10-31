@@ -1645,6 +1645,7 @@ data RunContextRow = RunContextRow
   , startedAt :: UTCTime
   , source :: RoutineRunSource
   , policy :: ExecutionPolicy
+  , permissionCeiling :: ProjectMembers.Permissions
   , input :: Maybe Text
   , instructions :: Maybe Text
   }
@@ -1660,7 +1661,7 @@ runContextFor pid claim =
         EventClaim event identifier at -> (identifier, [HI.sql| AND source = #{TriggeredRun event} AND started_at = #{at}|])
    in fmap RunContext
         <$> Hasql.interpOne
-          ( [HI.sql|SELECT id, root_run_id, project_id, conversation_id, requested_by, started_at, source, policy, input, instructions
+          ( [HI.sql|SELECT id, root_run_id, project_id, conversation_id, requested_by, started_at, source, policy, permission_ceiling, input, instructions
       FROM apis.ai_routine_runs WHERE id = #{run} AND project_id = #{pid} AND requested_by IS NOT NULL|]
               <> scope
           )
@@ -1704,7 +1705,8 @@ runContextAuthority context = fmap effective <$> readRunAuthority (runContextAcc
 runContextScopeSql :: RunContext -> HI.Sql
 runContextScopeSql context =
   [HI.sql| AND run.requested_by = #{context.requestedBy} AND run.conversation_id = #{context.conversationId}
-    AND run.started_at = #{context.startedAt} AND run.source = #{context.source} AND run.policy = #{context.policy}|]
+    AND run.started_at = #{context.startedAt} AND run.source = #{context.source} AND run.policy = #{context.policy}
+    AND run.permission_ceiling = #{context.permissionCeiling}|]
 
 
 runContextAccessSql :: RunContext -> HI.Sql
@@ -1712,13 +1714,14 @@ runContextAccessSql context = case context.source of
   InteractiveRun{} ->
     [HI.sql|SELECT CASE WHEN conversation.conversation_id IS NULL THEN #{Stopped}
         WHEN actor.permission IS NULL AND run.project_id = #{Projects.demoProjectId} AND run.evidence_permission = #{ProjectMembers.PView} THEN #{Allowed Observe}
-        WHEN actor.permission IS NULL OR apis.evidence_permission_rank(actor.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
-        WHEN run.policy = #{Autonomous} THEN #{Allowed Autonomous} ELSE #{Allowed Observe} END, COALESCE(actor.permission, #{ProjectMembers.PView})
+        WHEN actor.permission IS NULL OR apis.evidence_permission_rank(authority.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
+        WHEN run.policy = #{Autonomous} THEN #{Allowed Autonomous} ELSE #{Allowed Observe} END, authority.permission
       FROM apis.ai_routine_runs run LEFT JOIN apis.ai_conversations conversation
         ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
       LEFT JOIN LATERAL (|]
       <> ProjectMembers.sessionPermissionSql context.projectId context.requestedBy
       <> [HI.sql|) actor ON TRUE
+      CROSS JOIN LATERAL (SELECT apis.least_permission(actor.permission, run.permission_ceiling) AS permission) authority
       WHERE run.id = #{context.id} AND run.project_id = #{context.projectId} AND run.status IN ('running', 'succeeded')|]
       <> runContextScopeSql context
   (ScheduledRun; TriggeredRun{}) -> routineRunAccessSql context.projectId context.id (runContextScopeSql context)
@@ -1910,6 +1913,7 @@ data RoutineRunEvidence = RoutineRunEvidence
   , actions :: Maybe AE.Value
   , requestedBy :: Maybe Projects.UserId
   , templateVersion :: Maybe Int
+  , permissionCeiling :: ProjectMembers.Permissions
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -2089,15 +2093,19 @@ nextRoutineAt schedule timezone scheduledAt now = case schedule of
 claimRoutine :: DB es => UUIDId "ai_routine" -> UTCTime -> Eff es (Maybe ClaimedRoutine)
 claimRoutine routineId scheduledAt =
   Hasql.interpOne
-    [HI.sql|WITH identity AS (SELECT gen_random_uuid() AS id), claimed AS (
+    ( [HI.sql|WITH identity AS (SELECT gen_random_uuid() AS id), claimed AS (
         UPDATE apis.ai_routines SET running_since = now()
         WHERE id = #{routineId} AND active AND requested_by IS NOT NULL AND next_run_at = #{scheduledAt}
           AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
         RETURNING requested_by, project_id, conversation_id, running_since, policy, authority_version, report_when, destination, timezone, instructions, template_version
-      ), run AS (
-        INSERT INTO apis.ai_routine_runs (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, requested_by, instructions, template_version, input, policy, authority_version)
+      ), eligible_members AS (|]
+        <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id IN (SELECT project_id FROM claimed)|]
+        <> [HI.sql|), run AS (
+        INSERT INTO apis.ai_routine_runs (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, requested_by, instructions, template_version, input, policy, authority_version, permission_ceiling)
         SELECT identity.id, identity.id, #{routineId}, claimed.project_id, claimed.conversation_id, #{scheduledAt}, running_since, 'running', requested_by,
-          COALESCE(instructions, task.content), template_version, task.content, claimed.policy, claimed.authority_version FROM claimed CROSS JOIN identity
+          COALESCE(instructions, task.content), template_version, task.content, claimed.policy, claimed.authority_version,
+          COALESCE((SELECT permission FROM eligible_members WHERE project_id = claimed.project_id AND user_id = claimed.requested_by), #{ProjectMembers.PView})
+          FROM claimed CROSS JOIN identity
         LEFT JOIN LATERAL (SELECT content FROM apis.ai_chat_messages
           WHERE project_id = claimed.project_id AND conversation_id = claimed.conversation_id AND role = 'user'
           ORDER BY created_at, id LIMIT 1) task ON TRUE
@@ -2108,6 +2116,7 @@ claimRoutine routineId scheduledAt =
       )
       SELECT run.id, run.requested_by, claimed.project_id, claimed.conversation_id, claimed.running_since, COALESCE(run.policy, #{Observe}), claimed.report_when, claimed.destination, claimed.timezone, run.instructions
       FROM claimed CROSS JOIN run|]
+    )
 
 
 getEventRoutine :: DB es => Projects.ProjectId -> RoutineEvent -> Eff es (Maybe EventRoutine)
@@ -2145,15 +2154,17 @@ startEventRun routine request continuation convId input = do
       then pure Nothing
       else
         Hasql.queryTx
-          [HI.sql|WITH identity AS (SELECT gen_random_uuid() AS id), previous AS (
+          ( [HI.sql|WITH identity AS (SELECT gen_random_uuid() AS id), previous AS (
         SELECT * FROM apis.ai_routine_runs WHERE project_id = #{routine.projectId} AND source = #{source}
         ORDER BY started_at DESC, id DESC LIMIT 1
       ), original AS (
         SELECT root.* FROM previous JOIN apis.ai_routine_runs root ON root.id = previous.root_run_id
-      ), inserted AS (
+      ), eligible_members AS (|]
+              <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{routine.projectId}|]
+              <> [HI.sql|), inserted AS (
         INSERT INTO apis.ai_routine_runs
           (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, status, source, attempt,
-           requested_by, input, instructions, template_version, policy, authority_version, evidence_permission)
+           requested_by, input, instructions, template_version, policy, authority_version, permission_ceiling, evidence_permission)
         SELECT identity.id, CASE WHEN #{restart} OR original.id IS NULL THEN identity.id ELSE original.id END,
           r.id, r.project_id, #{convId}, #{now}, clock_timestamp(), 'running', #{source},
           COALESCE((SELECT attempt + 1 FROM previous), 1),
@@ -2163,6 +2174,7 @@ startEventRun routine request continuation convId input = do
           CASE WHEN #{restart} OR original.id IS NULL THEN r.template_version ELSE original.template_version END,
           CASE WHEN #{restart} OR original.id IS NULL THEN #{Observe} ELSE original.policy END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.authority_version ELSE original.authority_version END,
+          CASE WHEN #{restart} OR original.id IS NULL THEN apis.least_permission(owner.permission, actor.permission) ELSE original.permission_ceiling END,
           (SELECT permission FROM (
             SELECT COALESCE(installation.evidence_permission, #{ProjectMembers.PAdmin}) AS permission
             UNION ALL SELECT CASE WHEN #{restart} OR original.id IS NULL THEN #{ProjectMembers.PView}
@@ -2170,6 +2182,8 @@ startEventRun routine request continuation convId input = do
           ) scopes ORDER BY apis.evidence_permission_rank(permission) DESC LIMIT 1)
         FROM apis.ai_routines r CROSS JOIN identity LEFT JOIN original ON TRUE
         JOIN apis.ai_conversations installation ON installation.project_id = r.project_id AND installation.conversation_id = r.conversation_id
+        LEFT JOIN eligible_members owner ON owner.user_id = r.requested_by
+        LEFT JOIN eligible_members actor ON actor.user_id = COALESCE(#{member}, r.requested_by)
         WHERE r.id = #{routine.id} AND r.project_id = #{routine.projectId} AND r.schedule_kind = #{kind} AND r.active
           AND EXISTS (SELECT 1 FROM apis.ai_conversations WHERE project_id = r.project_id AND conversation_id = #{convId})
           AND (#{restart} OR original.id IS NULL OR (original.routine_id = r.id AND original.requested_by IS NOT NULL
@@ -2183,6 +2197,7 @@ startEventRun routine request continuation convId input = do
           WHERE #{resume} AND NOT EXISTS (SELECT 1 FROM inserted) AND requested_by IS NOT NULL
             AND (#{member} IS NULL OR requested_by = #{member})
             AND conversation_id = #{convId} AND routine_id = #{routine.id} LIMIT 1|]
+          )
 
 
 data InteractiveStart = ConflictingRequest | AcceptedRequest (Maybe ScheduledRoutine)
@@ -2200,12 +2215,16 @@ startInteractiveRun pid conversation user runId input policy origin = do
   Hasql.transaction TxS.ReadCommitted TxS.Write do
     inserted <-
       Hasql.queryTx @[UUIDId "ai_routine_run"]
-        [HI.sql|INSERT INTO apis.ai_routine_runs
-        (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status)
-        SELECT #{runId}, #{runId}, #{pid}, #{conversation}, #{user}, #{input}, #{policy}, #{InteractiveRun origin}, #{now}, #{now}, 'running'
+        ( [HI.sql|INSERT INTO apis.ai_routine_runs
+        (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status, permission_ceiling)
+        SELECT #{runId}, #{runId}, #{pid}, #{conversation}, #{user}, #{input}, #{policy}, #{InteractiveRun origin}, #{now}, #{now}, 'running', COALESCE(actor.permission, #{ProjectMembers.PView})
+        FROM (SELECT 1) invocation LEFT JOIN LATERAL (|]
+            <> ProjectMembers.sessionPermissionSql pid user
+            <> [HI.sql|) actor ON TRUE
         WHERE #{isJust initialConversation} OR EXISTS
           (SELECT 1 FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{conversation} FOR KEY SHARE)
         ON CONFLICT (id) DO NOTHING RETURNING id|]
+        )
     unless (null inserted) $ for_ initialConversation $ \(conversationType, context) ->
       Hasql.executeTx
         [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
@@ -2366,26 +2385,21 @@ routineRunActive pid runId = isJust <$> readRunAuthority (routineRunAccessSql pi
 
 routineRunAccessSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql -> HI.Sql
 routineRunAccessSql pid runId scope =
-  [HI.sql|WITH eligible_members AS (
-      SELECT member.project_id, member.user_id, member.permission FROM projects.project_members member
-      JOIN users.users account ON account.id = member.user_id
-      JOIN projects.projects project ON project.id = member.project_id
-      WHERE member.project_id = #{pid} |]
-    <> ProjectMembers.activeMembership
+  [HI.sql|WITH eligible_members AS (|]
+    <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{pid}|]
     <> [HI.sql|)|]
     <> [HI.sql|SELECT CASE
       WHEN r.id IS NULL OR NOT r.active OR (r.cancelled_at IS NOT NULL AND r.cancelled_at >= run.started_at)
         OR (run.source = #{ScheduledRun} AND (r.next_run_at IS DISTINCT FROM run.scheduled_at OR r.running_since IS DISTINCT FROM run.started_at)) THEN #{Stopped}
       WHEN owner.user_id IS NULL OR owner.permission NOT IN ('admin', 'edit') OR actor.user_id IS NULL
-        OR apis.evidence_permission_rank(actor.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin}))
-        OR apis.evidence_permission_rank(owner.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
+        OR apis.evidence_permission_rank(authority.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
       WHEN run.policy = #{Autonomous} AND r.policy = #{Autonomous} AND run.authority_version = r.authority_version THEN #{Allowed Autonomous}
       ELSE #{Allowed Observe} END,
-      COALESCE(CASE WHEN apis.evidence_permission_rank(owner.permission) < apis.evidence_permission_rank(actor.permission)
-        THEN owner.permission ELSE actor.permission END, #{ProjectMembers.PView})
+      authority.permission
       FROM apis.ai_routine_runs run LEFT JOIN apis.ai_routines r ON r.id = run.routine_id
       LEFT JOIN eligible_members owner ON owner.project_id = r.project_id AND owner.user_id = r.requested_by
       LEFT JOIN eligible_members actor ON actor.project_id = run.project_id AND actor.user_id = run.requested_by
+      CROSS JOIN LATERAL (SELECT apis.least_permission(owner.permission, actor.permission, run.permission_ceiling) AS permission) authority
       WHERE run.id = #{runId} AND run.project_id = #{pid} AND run.status = 'running'|]
     <> scope
 
@@ -2442,7 +2456,7 @@ getRoutineRun pid runId = Hasql.interpOne $ routineRunsSql pid <> [HI.sql|AND ru
 getRoutineRunEvidence :: DB es => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es (Maybe RoutineRunEvidence)
 getRoutineRunEvidence pid runId =
   Hasql.interpOne
-    [HI.sql|SELECT input, instructions, findings, actions, requested_by, template_version
+    [HI.sql|SELECT input, instructions, findings, actions, requested_by, template_version, permission_ceiling
     FROM apis.ai_routine_runs WHERE project_id = #{pid} AND id = #{runId}|]
 
 

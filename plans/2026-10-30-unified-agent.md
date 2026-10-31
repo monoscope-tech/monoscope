@@ -15,7 +15,7 @@ Every execution has a project, an authorizing member, a conversation, a run, and
 Background routines act automatically within their configured authority.
 Users do not approve every tool call or routine run.
 An enabled routine grants continuing authority until someone pauses it or changes its policy.
-The authorizing member's current role limits that authority.
+The authorizing member's current role limits that authority. Each request also retains its original role ceiling; upgrades apply to new work.
 Slack identity linking establishes identity and project access. It does not replace routine authorization.
 
 The first launch covers reliable requested investigations and autonomous project operations.
@@ -38,7 +38,7 @@ This branch already contains:
 - Run history, instruction snapshots, retained artifacts, and a conversation detail panel.
 - Versioned project wiki storage with member and agent authors.
 
-Slack event tool calls retain an Observe ceiling while immutable role ceilings and legacy-checkpoint adoption are completed.
+Slack event tool calls retain an Observe ceiling while legacy-checkpoint adoption is completed.
 Interactive and scheduled administrator actions now use the common Autonomous policy and durable operation ledger.
 Native business mutations still need that common operation ledger.
 Current native Slack behavior still needs controlled workspace acceptance.
@@ -670,6 +670,21 @@ Legacy administrative snapshots used a constructor without an audience. Their de
 An expanded failing model/tool regression also reproduced restricted content being copied into a project-visible dashboard and team. The executor's existing publication check now covers every project mutation, using the descriptor's resource/result visibility. Conversation documents remain within their conversation scope. The fixed regression observes zero leaked resources for both current and legacy histories; this adds no separate taint store or per-tool privacy list.
 
 All six creation/deletion recovery cases pass: lost checkpoint, uncertain response, and repeated model call for each operation. The shared-audience cases cover a reader's denial, Observe denial, private administrator-read/credential denial, and permitted public administrative dispatch. A real private API-key creation test verifies credential retention, cached replay without another write, and denial after role downgrade. All 212 bot and 75 API v1 examples pass after these changes. Formatting and diff checks pass; repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings. New codec doctests await the final doctest run. Original role ceilings, legacy event-checkpoint adoption, native operation-ledger integration, broader Slack audiences, and final release checks remain open.
+
+
+### Immutable role ceilings across admission and recovery (31 October)
+
+Five failing regressions reproduced a membership upgrade increasing authority inside existing work: interactive, scheduled, and event requests, plus independently upgraded owners and requesters.
+
+One coherent append-only migration, `0266_agent_role_ceiling.sql`, stores `permission_ceiling` on each run. Existing unknown grants default to viewer scope. New admissions capture current eligible permissions; event requests capture the lower current owner/requester role. Recovery retains the original root's ceiling. Database triggers reject changing a ceiling or inserting a recovery attempt with a different ceiling. PostgreSQL's enum order remains isolated behind the existing rank and new least-permission function; a missing role contributes viewer scope, without making an absent member eligible.
+
+`memberPermissionsSql` consolidates account, project, plan, and membership eligibility for capture and current checks. The opaque run context carries its stored ceiling, and its scope predicate includes that value. The shared evaluator now combines current actor, current owner, and the saved ceiling before both execution and evidence access. Interactive web-session sudo and public-demo behavior remain supported; background membership does not borrow sudo authority. The existing run inspector displays its saved role limit.
+
+The expanded source-parameterized regression verifies initial capture, rejected in-place grant changes, interactive replay, scheduled stale-lease recovery, event continuation, and fresh work after an upgrade. Recovered work stays at editor scope and executes no privileged API read; new work captures administrator scope and performs that read. The owner/requester cases verify upgrades on either side. An overly broad test-file replacement was caught during diff review and corrected; every pre-existing test was restored before the full verification run.
+
+All 215 bot examples, 75 API v1 examples, and 33 native review/SDK examples pass. All three Chrome scenarios pass against the current application and an isolated database, including current-role boundaries, retained artifacts, themes/mobile layout, repository settings, and restricted history after a downgrade. The temporary browser launcher is removed. The 14 focused authority examples pass after launcher cleanup. Formatting and diff checks pass; repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior findings. Whole-branch review, doctests, release signoff, and controlled live Slack acceptance remain pending.
+
+The event Observe ceiling remains intentionally temporary. Legacy Slack checkpoints can predate event roots and can contain an unrecorded pending mutation, including the append-capable artifact tool present on `origin/master`. Their adoption must not gain authority or blindly repeat a prior write. Native business mutations still need the shared operation ledger and capability decision; a run being active is not itself permission to mutate resources. The rest of the nine-part plan remains in scope.
 
 
 ## External references

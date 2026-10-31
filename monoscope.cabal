@@ -305,6 +305,7 @@ extra-source-files:
     static/migrations/0263_agent_request_roots.sql
     static/migrations/0264_agent_evidence_scope.sql
     static/migrations/0265_agent_evidence_lookup.sql
+    static/migrations/0266_agent_role_ceiling.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs

@@ -238,6 +238,7 @@ spec = around withTestResources do
             (_, page) <- testServant tr $ AIThreads.routineRunGetH testPid request Nothing
             let html = renderT page
             html `shouldSatisfy` T.isInfixOf "Action history"
+            html `shouldSatisfy` T.isInfixOf "Role limit: admin"
             html `shouldSatisfy` T.isInfixOf (if boundary == "uncertain" then "Outcome uncertain" else "Response saved")
             html `shouldSatisfy` T.isInfixOf "hx-target=\"#routine-run\""
             html `shouldSatisfy` T.isInfixOf "Proposal and outcome"
