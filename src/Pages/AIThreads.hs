@@ -340,6 +340,9 @@ threadPageGetH pid convId docM runM hxTarget = do
               div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
                 code_ [class_ "min-w-0 break-all text-sm text-textStrong"] $ toHtml $ T.replace "_" " " $ Catalog.operationName operation.proposal.call
                 uncurry tonePill_ $ case operation.outcome of
+                  Investigations.OperationRefused Investigations.ReviewDeclined -> (NeutralBadge, "Declined")
+                  Investigations.OperationRefused Investigations.ReviewTimedOut -> (WarningBadge, "Review expired")
+                  Investigations.OperationUnstarted -> (BrandBadge, "Awaiting review")
                   Investigations.OperationRunning -> (BrandBadge, "Awaiting outcome")
                   Investigations.OperationUnknown -> (WarningBadge, "Outcome uncertain")
                   Investigations.OperationReturned{} -> (NeutralBadge, "Response saved")
@@ -351,6 +354,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                   summary_ [class_ "cursor-pointer font-medium text-textStrong"] "Proposal and outcome"
                   pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.proposal
                   pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.outcome
+                  when (operation.review /= Investigations.NoReview) $ pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.review
                 else p_ [class_ "text-xs text-textWeak"] $ toHtml $ "Action details require " <> toText (encodeEnumSC @"P" required) <> " permission."
               time_ [datetime_ $ show operation.createdAt, class_ "text-xs text-textWeak"] $ localTimeFmt_ "MMM d, HH:mm" operation.createdAt
               when (operation.runId /= run.id)

@@ -32,6 +32,7 @@ module Pkg.AI (
   AgentAccessDenied (..),
   SlackInvestigation (..),
   AgentStopped (..),
+  AgentAwaitingReview (..),
   requireAgentAccess,
   requireEvidenceAccess,
   canReadEvidence,
@@ -1233,9 +1234,10 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
         outcome <- executeToolAt turn config{timeRange = step.timeRange} tool
         let result = Investigations.operationResponse config.projectId outcome
             attempted = completed <> [(tool, result)]
-            next = case outcome of
-              Investigations.RecordedResult{} -> Investigations.ToolsPending step message attempted remaining
-              Investigations.UncertainResult{} -> Investigations.AnswerReady $ AgenticChatResult result.formatted (step.toolCalls <> map (uncurry Investigations.mkToolCallInfo) attempted)
+        next <- case outcome of
+          (Investigations.RecordedResult{}; Investigations.RefusedResult{}) -> pure $ Investigations.ToolsPending step message attempted remaining
+          Investigations.UncertainResult{} -> pure $ Investigations.AnswerReady $ AgenticChatResult result.formatted (step.toolCalls <> map (uncurry Investigations.mkToolCallInfo) attempted)
+          Investigations.WaitingResult identifier request -> throwIO $ AgentAwaitingReview identifier request.expiresAt
         updated <-
           Investigations.commitProgress turn journal next
             $ Just
@@ -1354,13 +1356,18 @@ data OperationExecution es result
   deriving stock (Functor)
 
 
+data AgentAwaitingReview = AgentAwaitingReview (UUIDId "agent_operation") UTCTime
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
 data AgentOperationUncertain = AgentOperationUncertain (UUIDId "agent_operation") (UUIDId "ai_routine_run")
   deriving stock (Show)
   deriving anyclass (Exception)
 
 
 executeNativeOperation
-  :: (DB es, IOE :> es, W.HTTP :> es)
+  :: (DB es, IOE :> es, Time.Time :> es, W.HTTP :> es)
   => Issues.RunContext
   -> Operation.NativeOperation
   -> (Operation.NativeOperation -> OperationExecution es (Either Text AE.Value))
@@ -1378,6 +1385,10 @@ executeNativeOperation context proposed perform =
         Right snapshot -> do
           let response result = ToolResult (either Relude.id (const "Response saved.") result) $ Just $ AE.toJSON result
           recordedOperation context cursor (Operation.NativeCall frozen) snapshot (authorizeRunOperation context $ Catalog.nativePolicy frozen) (response <$> perform frozen) >>= \case
+            Investigations.RefusedResult _ reason -> do
+              void $ Investigations.commitProgress (Just cursor) Nothing Investigations.NativeReady Nothing
+              pure $ Left $ Investigations.reviewRefusalMessage reason
+            Investigations.WaitingResult identifier request -> throwIO $ AgentAwaitingReview identifier request.expiresAt
             Investigations.UncertainResult claim _ run -> throwIO $ AgentOperationUncertain (Investigations.operationId claim) run
             Investigations.RecordedResult result -> do
               void $ Investigations.commitProgress (Just cursor) Nothing Investigations.NativeReady Nothing
@@ -1404,13 +1415,13 @@ executeNativeOperation context proposed perform =
       _ -> throwIO Investigations.OperationScopeMismatch
 
 
-recordedOperation :: (DB es, IOE :> es) => Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> Eff es (Either ToolDenial OperationPolicy) -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
+recordedOperation :: (DB es, IOE :> es, Time.Time :> es) => Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> Eff es (Either ToolDenial OperationPolicy) -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
 recordedOperation context cursor call snapshot reauthorize execution = case execution of
-  AtomicOperation action -> Investigations.atomicOperation lease cursor proposal action
+  AtomicOperation action -> Investigations.atomicOperation lease cursor proposal Nothing action
   EffectfulOperation action -> recorded action
   ReconcilableOperation action reconcile ->
     recordedOperation context cursor call snapshot reauthorize action >>= \case
-      retained@Investigations.RecordedResult{} -> pure retained
+      retained@(Investigations.RecordedResult{}; Investigations.WaitingResult{}; Investigations.RefusedResult{}) -> pure retained
       uncertain@(Investigations.UncertainResult claim original _) ->
         reconcile original >>= \case
           Nothing -> pure uncertain
@@ -1424,7 +1435,9 @@ recordedOperation context cursor call snapshot reauthorize execution = case exec
     lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
     proposal = Investigations.OperationProposal call snapshot
     recorded action =
-      Investigations.beginOperation lease cursor proposal >>= \case
+      Investigations.beginOperation lease cursor proposal Nothing >>= \case
+        Investigations.RefuseOperation identifier reason -> pure $ Investigations.RefusedResult identifier reason
+        Investigations.AwaitOperationReview identifier request -> pure $ Investigations.WaitingResult identifier request
         Investigations.RetainedOperation retained -> pure $ Investigations.RecordedResult retained
         Investigations.ExecuteOperation claim -> do
           result <- action

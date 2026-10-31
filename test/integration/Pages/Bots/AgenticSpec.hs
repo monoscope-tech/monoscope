@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Pages.Bots.AgenticSpec (spec) where
 
 import BackgroundJobs qualified
@@ -21,7 +23,7 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful qualified as Eff
-import Effectful.Concurrent.Async (concurrently_)
+import Effectful.Concurrent.Async (concurrently, concurrently_)
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Error.Static (catchError)
 import Effectful.Reader.Static qualified as Reader
@@ -36,6 +38,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
+import OpenAI.V1.Chat.Completions qualified as OpenAI
 import Pages.AIThreads qualified as AIThreads
 import Pages.Bots.BotFixtures (slackThreadedEvent)
 import Pages.Bots.BotTestHelpers (assertJsonGolden, completeTestRun, getOpenAIKey, getOpenAIModel, interactiveInvocation, receiveSlackEvent, resetLegacyEvidenceScope, scheduledInvocation, setupSlackAgent, setupSlackData, withHTTPResponses)
@@ -83,6 +86,10 @@ saveConversationArtifact tr conversation args = do
 
 data AbandonedRun = DeletedRequester | DetachedSchedule | DetachedEvent | HistoricalRequester | ReauthorizedRequester
   deriving stock (Eq, Show)
+
+
+data ReviewScenario = ApproveReview | DeclineReview | ExpireBeforeReview | ExpireAfterReview | RevokeReviewer | AdministratorRequired | PrivateReview | ExpiredProposal | ConcurrentDecisions
+  deriving stock (Bounded, Enum, Eq, Show)
 
 
 spec :: Spec
@@ -298,6 +305,121 @@ spec = around withTestResources do
         denied <- tryAny execute
         denied `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
         IORef.readIORef calls >>= (`shouldBe` 1)
+
+      for_ [ApproveReview, DeclineReview, ExpireAfterReview] $ \scenario ->
+        it ("agentReview_nativeExecutionRetainsItsReviewAndResponseContract: " <> show scenario) \tr -> do
+          issueId <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "review-native" "Original title" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId
+          void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
+          Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventIssueEnrichment
+          runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId Issues.Autonomous
+          let decision = if scenario == DeclineReview then Investigations.ReviewRejected else Investigations.ReviewApproved
+              conversation = UUIDId issueId.unUUIDId
+              native = Operation.EnrichIssue $ Enhancement.IssueEnrichment (Enhancement.IssueEnhancement issueId "Reviewed title" "" "" "") Nothing Nothing frozenTime
+              review = Investigations.ReviewRequest (addUTCTime 60 frozenTime) Investigations.ReviewEditors
+          void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid conversation Issues.CTAnomaly (AE.object [])
+          Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.IssueEnrichmentRequest issueId) Issues.StartRun conversation "Review the issue change"
+          context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.IssueEnrichment issueId) execution.id execution.startedAt
+          let turn = Investigations.RunTurn testPid conversation context.requestedBy context.rootId
+              lease = Investigations.RunLease turn context.startedAt
+              proposal = Investigations.OperationProposal (Operation.NativeCall native) $ AI.OperationPolicy Catalog.ProjectWrite Issues.Autonomous ProjectMembers.PAdmin
+          (cursor, _) <- runQueryEffect tr $ Investigations.prepareNativeOperation turn native
+          pending <- runQueryEffect tr $ Investigations.beginOperation lease cursor proposal $ Just review
+          identifier <- case pending of
+            Investigations.AwaitOperationReview identifier _ -> pure identifier
+            _ -> fail "Expected the native action to wait"
+          runTestBgNoReset tr (Investigations.decideOperationReview testPid context.requestedBy identifier decision) >>= (`shouldSatisfy` \case Investigations.ReviewSaved{} -> True; _ -> False)
+          when (scenario == ExpireAfterReview) $ advanceTestTime tr 60
+          let reason = if decision == Investigations.ReviewRejected then Investigations.ReviewDeclined else Investigations.ReviewTimedOut
+              perform _ = AI.AtomicOperation $ Issues.updateIssueEnhancement frozenTime issueId "Reviewed title" "" "" $> Right AE.Null
+          replicateM_ 2 $ runTestBgNoReset tr (AI.executeNativeOperation context native perform) >>= (`shouldBe` if scenario == ApproveReview then Right AE.Null else Left (Investigations.reviewRefusalMessage reason))
+          runQueryEffect tr (Issues.selectIssueById testPid issueId) >>= (\issue -> fmap (.title) issue `shouldBe` Just (if scenario == ApproveReview then "Reviewed title" else "Original title"))
+          entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
+          case entries of
+            [entry] -> case entry.outcome of
+              Investigations.OperationReturned response -> do
+                scenario `shouldBe` ApproveReview
+                response.rawData `shouldBe` Just (AE.toJSON (Right AE.Null :: Either Text AE.Value))
+              Investigations.OperationRefused refused -> refused `shouldBe` reason
+              _ -> expectationFailure "The reviewed native action must retain its result or refusal"
+            _ -> expectationFailure "A native retry must reuse its original operation"
+
+      for_ [minBound .. maxBound] $ \scenario ->
+        it ("agentReview_retainsTheProposalAndOnlyExecutesAnApprovedUnexpiredAction: " <> show scenario) \tr -> do
+          let conversation = UUIDId $ UUID.fromWords 0 0 0 278
+              user = (getResponse tr.trSessAndHeader).user.id
+              artifactKey = fromRightShow $ Issues.mkArtifactKey "reviewed-finding"
+              call = LLM.ToolCall "reviewed-action" "function" $ LLM.ToolFunction "save_artifact" $ fromList [("key", AE.String "reviewed-finding"), ("content", AE.String "Finding"), ("mode", AE.String "append")]
+              message = LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [call]}
+              parameters = OpenAI._CreateChatCompletion{OpenAI.model = "model", OpenAI.reasoning_effort = Nothing, OpenAI.tools = Nothing, OpenAI.messages = mempty}
+              checkpoint = Investigations.ToolsPending (Investigations.Step (one message) parameters 0 (Nothing, Nothing) []) message [] [call]
+              proposal = Investigations.OperationProposal (Operation.ModelCall call) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Observe ProjectMembers.PView
+              review = Investigations.ReviewRequest (addUTCTime 60 frozenTime) (if scenario == AdministratorRequired then Investigations.ReviewAdministrators else Investigations.ReviewEditors)
+          void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+          mode <- interactiveInvocation tr testPid conversation "Retain this finding after review" Issues.Observe
+          context <- case mode of
+            AI.DurableRun context -> pure context
+            AI.InteractiveReadOnly -> fail "Expected a durable invocation"
+          let turn = Investigations.RunTurn testPid conversation user context.rootId
+              target = Investigations.RunCheckpoint turn
+              lease = Investigations.RunLease turn context.startedAt
+          saved <- runQueryEffect tr $ Investigations.startCheckpointFor target checkpoint
+          let cursor = Investigations.CheckpointCursor target saved.revision
+              execute = runQueryEffect tr $ Investigations.atomicOperation lease cursor proposal (Just review) do
+                result <- Issues.saveArtifactTx testPid conversation artifactKey Nothing "Finding" Issues.ArtifactAppend
+                pure $ Investigations.ToolResult (either show (const "Finding saved.") result) Nothing
+              artifacts = runQueryEffect tr $ Issues.listArtifacts testPid conversation $ Just artifactKey
+          when (scenario == ExpiredProposal) $ advanceTestTime tr 60
+          pending <- execute
+          identifier <- case pending of
+            Investigations.WaitingResult identifier request -> (request `shouldBe` review) $> identifier
+            Investigations.RefusedResult{} | scenario == ExpiredProposal -> do
+              entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
+              case entries of [entry] -> pure entry.id; _ -> fail "Expected one expired proposal"
+            _ -> fail "Expected a retained waiting operation"
+          artifacts >>= (`shouldSatisfy` null)
+          for_ [Nothing, Just review{Investigations.expiresAt = addUTCTime 3600 frozenTime}, Just review{Investigations.approver = Investigations.ReviewEditors}] $ \requested -> do
+            again <- runQueryEffect tr $ Investigations.beginOperation lease cursor proposal requested
+            case again of
+              Investigations.AwaitOperationReview retainedId request -> (retainedId, request) `shouldBe` (identifier, review)
+              Investigations.RefuseOperation{} | scenario == ExpiredProposal -> pass
+              _ -> expectationFailure "A retry cannot bypass review or change its original deadline or approver"
+          runTestBgNoReset tr (Investigations.decideOperationReview (UUIDId $ UUID.fromWords 0 0 0 99999) user identifier Investigations.ReviewApproved) >>= (`shouldBe` Investigations.ReviewUnavailable)
+          let decide = Investigations.decideOperationReview testPid user identifier $ if scenario == DeclineReview then Investigations.ReviewRejected else Investigations.ReviewApproved
+          when (scenario == ExpireBeforeReview) $ advanceTestTime tr 60
+          when (scenario == RevokeReviewer) $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+          when (scenario == AdministratorRequired) $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = #{testPid} AND user_id = #{user}|]
+          when (scenario == PrivateReview) $ runQueryEffect tr (Investigations.retainEvidenceAudience testPid conversation $ Investigations.PersonalAudience $ UUIDId $ UUID.fromWords 0 0 0 99998) >>= (`shouldBe` True)
+          decision <-
+            if scenario /= ConcurrentDecisions
+              then runTestBgNoReset tr decide
+              else do
+                results <- runTestBgNoReset tr $ concurrently decide decide
+                case results of
+                  (Investigations.ReviewSaved leftReceipt, Investigations.ReviewAlreadyDecided rightReceipt) -> (leftReceipt `shouldBe` rightReceipt) $> Investigations.ReviewSaved leftReceipt
+                  (Investigations.ReviewAlreadyDecided leftReceipt, Investigations.ReviewSaved rightReceipt) -> (leftReceipt `shouldBe` rightReceipt) $> Investigations.ReviewSaved rightReceipt
+                  _ -> fail "Concurrent decisions must retain one review receipt"
+          case scenario of
+            ExpireBeforeReview -> decision `shouldBe` Investigations.ReviewExpired
+            (RevokeReviewer; AdministratorRequired; PrivateReview; ExpiredProposal) -> decision `shouldBe` Investigations.ReviewUnavailable
+            _ -> case decision of
+              Investigations.ReviewSaved receipt -> do
+                receipt.decidedBy `shouldBe` user
+                runTestBgNoReset tr (Investigations.decideOperationReview testPid user identifier Investigations.ReviewRejected) >>= (`shouldBe` Investigations.ReviewAlreadyDecided receipt)
+              _ -> expectationFailure "Expected one immutable review decision"
+          when (scenario == ExpireAfterReview) $ advanceTestTime tr 60
+          outcomes <- replicateM 2 execute
+          for_ outcomes $ \case
+            Investigations.RefusedResult retainedId reason -> do
+              retainedId `shouldBe` identifier
+              reason `shouldBe` (if scenario == DeclineReview then Investigations.ReviewDeclined else Investigations.ReviewTimedOut)
+              scenario `shouldSatisfy` (`elem` [DeclineReview, ExpireBeforeReview, ExpireAfterReview, ExpiredProposal])
+            Investigations.WaitingResult retainedId request -> (retainedId, request) `shouldBe` (identifier, review)
+            Investigations.RecordedResult{} -> scenario `shouldSatisfy` (`elem` [ApproveReview, ConcurrentDecisions])
+            Investigations.UncertainResult{} -> expectationFailure "An unstarted action cannot have an uncertain effect"
+          retained <- artifacts
+          map (.content) retained `shouldBe` [Just "Finding" | scenario `elem` [ApproveReview, ConcurrentDecisions]]
+          entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
+          length entries `shouldBe` 1
 
       for_ ["save_artifact", "write_project_memory"] \tool ->
         it ("agentOperation_atomicMutationRollsBackWithItsOutcome: " <> toString tool) \tr -> do

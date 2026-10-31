@@ -51,6 +51,15 @@ module Models.Apis.Investigations (
   OperationOutcome (..),
   OperationConflict (..),
   OperationEntry (..),
+  ReviewApprover (..),
+  ReviewRequest (..),
+  ReviewDecision (..),
+  ReviewReceipt (..),
+  OperationReview (..),
+  ReviewResponse (..),
+  ReviewRefusal (..),
+  reviewRefusalMessage,
+  decideOperationReview,
   beginOperation,
   completeOperation,
   atomicOperation,
@@ -94,6 +103,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Exception (throwIO)
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
@@ -143,22 +153,65 @@ operationId :: OperationClaim -> UUIDId "agent_operation"
 operationId (OperationClaim identifier) = identifier
 
 
-data OperationResult = RecordedResult ToolResult | UncertainResult OperationClaim Operation.OperationCall (UUIDId "ai_routine_run")
+data OperationResult = RecordedResult ToolResult | UncertainResult OperationClaim Operation.OperationCall (UUIDId "ai_routine_run") | WaitingResult (UUIDId "agent_operation") ReviewRequest | RefusedResult (UUIDId "agent_operation") ReviewRefusal
   deriving stock (Show)
 
 
 data OperationDecision
-  = ExecuteOperation OperationClaim
+  = AwaitOperationReview (UUIDId "agent_operation") ReviewRequest
+  | RefuseOperation (UUIDId "agent_operation") ReviewRefusal
+  | ExecuteOperation OperationClaim
   | RetainedOperation ToolResult
   | ReconcileOperation OperationClaim Operation.OperationCall (UUIDId "ai_routine_run")
   deriving stock (Show)
 
 
 -- Returning a tool response does not assert that the domain operation succeeded.
-data OperationOutcome = OperationRunning | OperationUnknown | OperationReturned ToolResult
+data OperationOutcome = OperationUnstarted | OperationRunning | OperationUnknown | OperationReturned ToolResult | OperationRefused ReviewRefusal
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson OperationOutcome
+
+
+data ReviewRefusal = ReviewDeclined | ReviewTimedOut
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+reviewRefusalMessage :: ReviewRefusal -> Text
+reviewRefusalMessage = \case
+  ReviewDeclined -> "A reviewer declined this action. It was not executed."
+  ReviewTimedOut -> "The review expired before this action could execute."
+
+
+data ReviewApprover = ReviewEditors | ReviewAdministrators
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ReviewRequest = ReviewRequest {expiresAt :: UTCTime, approver :: ReviewApprover}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ReviewDecision = ReviewApproved | ReviewRejected
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ReviewReceipt = ReviewReceipt {decidedBy :: Projects.UserId, decidedAt :: UTCTime, decision :: ReviewDecision}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data OperationReview = NoReview | ReviewPending ReviewRequest | ReviewResolved ReviewRequest ReviewReceipt
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson OperationReview
+
+
+data ReviewResponse = ReviewSaved ReviewReceipt | ReviewAlreadyDecided ReviewReceipt | ReviewExpired | ReviewUnavailable
+  deriving stock (Eq, Show)
 
 
 data OperationConflict = OperationScopeMismatch | OperationStepMoved | OperationProposalChanged | OperationOutcomeChanged | OperationResponseInvalid
@@ -172,6 +225,7 @@ data OperationEntry policy = OperationEntry
   , requestedBy :: Projects.UserId
   , proposal :: OperationProposal policy
   , outcome :: OperationOutcome
+  , review :: OperationReview
   , createdAt :: UTCTime
   }
   deriving stock (Generic, Show)
@@ -555,12 +609,14 @@ checkpointSql target =
 
 -- | A checkpoint revision identifies one pending tool position. An interrupted
 -- retained invocation becomes explicitly uncertain; it is never claimed twice.
-beginOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunLease -> CheckpointCursor -> OperationProposal policy -> Eff es OperationDecision
-beginOperation lease cursor proposal = Hasql.transaction TxS.ReadCommitted TxS.Write (beginOperationTx lease cursor proposal) >>= either throwIO pure
+beginOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es, Time.Time :> es) => RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Eff es OperationDecision
+beginOperation lease cursor proposal review = do
+  now <- Time.currentTime
+  Hasql.transaction TxS.ReadCommitted TxS.Write (beginOperationTx now lease cursor proposal review) >>= either throwIO pure
 
 
-beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => RunLease -> CheckpointCursor -> OperationProposal policy -> Tx.Transaction (Either OperationConflict OperationDecision)
-beginOperationTx lease cursor proposal = runExceptT do
+beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => UTCTime -> RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Tx.Transaction (Either OperationConflict OperationDecision)
+beginOperationTx now lease cursor proposal review = runExceptT do
   let turn = lease.turn
       (project, conversation, user, message, checkpointRun) = checkpointIdentity cursor.target
       identifier = operationIdentity cursor
@@ -600,7 +656,7 @@ beginOperationTx lease cursor proposal = runExceptT do
       $ Hasql.queryTx @[OperationEntry policy]
       $ operationsSql project turn.runId
       <> [HI.sql| AND (operation.id = #{identifier}
-        OR operation.outcome->>'tag' IN ('OperationRunning', 'OperationUnknown')
+        OR operation.outcome->>'tag' IN ('OperationUnstarted', 'OperationRunning', 'OperationUnknown')
         OR ^{matchingCall})
         ORDER BY operation.created_at, operation.id FOR UPDATE OF operation|]
   case find ((== identifier) . (.id)) prior of
@@ -610,39 +666,57 @@ beginOperationTx lease cursor proposal = runExceptT do
     Nothing -> case find unresolved prior <|> find (Operation.sameOperation proposal.call . (.call) . (.proposal)) prior of
       Just entry -> reuse entry
       Nothing -> do
+        let outcome = maybe OperationRunning (const OperationUnstarted) review
+            requirement = maybe NoReview ReviewPending review
         inserted <-
           lift
-            $ Hasql.queryTx @[UUIDId "agent_operation"]
-              [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
-            VALUES (#{identifier}, #{project}, #{turn.runId}, #{user}, #{cursor.revision}, #{Aeson proposal}, #{Aeson OperationRunning})
-            ON CONFLICT DO NOTHING RETURNING id|]
+            $ Hasql.queryTx @[OperationEntry policy]
+              [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome, review)
+            VALUES (#{identifier}, #{project}, #{turn.runId}, #{user}, #{cursor.revision}, #{Aeson proposal}, #{Aeson outcome}, #{Aeson requirement})
+            ON CONFLICT DO NOTHING RETURNING id, run_id, requested_by, proposal, outcome, review, created_at|]
         case inserted of
-          [_] -> pure $ ExecuteOperation $ OperationClaim identifier
+          [entry] -> if isJust review then reuse entry else pure $ ExecuteOperation $ OperationClaim entry.id
           _ -> hoistEither $ Left OperationProposalChanged
   where
-    unresolved entry = case entry.outcome of OperationRunning -> True; OperationUnknown -> True; OperationReturned{} -> False
+    unresolved entry = case entry.outcome of OperationUnstarted -> True; OperationRunning -> True; OperationUnknown -> True; OperationReturned{} -> False; OperationRefused{} -> False
     reuse :: OperationEntry policy -> ExceptT OperationConflict Tx.Transaction OperationDecision
     reuse entry = case entry.outcome of
+      OperationUnstarted -> case entry.review of
+        NoReview -> start entry
+        ReviewPending request -> if now < request.expiresAt then pure $ AwaitOperationReview entry.id request else refuse entry ReviewTimedOut
+        ReviewResolved request receipt -> case receipt.decision of
+          ReviewApproved -> if now < request.expiresAt then start entry else refuse entry ReviewTimedOut
+          ReviewRejected -> refuse entry ReviewDeclined
       OperationReturned response -> pure $ RetainedOperation response
+      OperationRefused reason -> pure $ RefuseOperation entry.id reason
       OperationRunning -> do
         lift $ Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET outcome = #{Aeson OperationUnknown}, updated_at = clock_timestamp() WHERE id = #{entry.id}|]
         pure $ ReconcileOperation (OperationClaim entry.id) entry.proposal.call entry.runId
       OperationUnknown -> pure $ ReconcileOperation (OperationClaim entry.id) entry.proposal.call entry.runId
+    refuse entry reason = do
+      lift $ Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET outcome = #{Aeson $ OperationRefused reason}, updated_at = clock_timestamp() WHERE id = #{entry.id}|]
+      pure $ RefuseOperation entry.id reason
+    start entry = do
+      lift $ Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET outcome = #{Aeson OperationRunning}, updated_at = clock_timestamp() WHERE id = #{entry.id}|]
+      pure $ ExecuteOperation $ OperationClaim entry.id
 
 
 -- | The mutation and its retained outcome commit together. A failed transaction
 -- leaves no claimed operation, so a later worker can safely execute it.
-atomicOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunLease -> CheckpointCursor -> OperationProposal policy -> Tx.Transaction ToolResult -> Eff es OperationResult
-atomicOperation lease cursor proposal action = do
+atomicOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es, Time.Time :> es) => RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Tx.Transaction ToolResult -> Eff es OperationResult
+atomicOperation lease cursor proposal review action = do
+  now <- Time.currentTime
   result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
     outcome <-
-      beginOperationTx lease cursor proposal >>= \case
+      beginOperationTx now lease cursor proposal review >>= \case
         Left conflict -> pure $ Left conflict
+        Right (RefuseOperation identifier reason) -> pure $ Right $ RefusedResult identifier reason
+        Right (AwaitOperationReview identifier request) -> pure $ Right $ WaitingResult identifier request
         Right (RetainedOperation retained) -> pure $ Right $ RecordedResult retained
         Right (ReconcileOperation claim original run) -> pure $ Right $ UncertainResult claim original run
         Right (ExecuteOperation claim) -> do
           response <- action
-          fmap (RecordedResult response <$) $ completeOperationTx claim response
+          (RecordedResult response <$) <$> completeOperationTx claim response
     when (isLeft outcome) Tx.condemn
     pure outcome
   either throwIO pure result
@@ -665,19 +739,66 @@ completeOperationTx (OperationClaim identifier) result = do
       pure $ if same == [True] then Right () else Left OperationOutcomeChanged
 
 
+decideOperationReview :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> ReviewDecision -> Eff es ReviewResponse
+decideOperationReview project reviewer identifier decision = do
+  permission <- ProjectMembers.getUserPermission project reviewer
+  conversation <- Hasql.interpOne @(HI.OneColumn (UUIDId "conversation")) [HI.sql|SELECT run.conversation_id FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id AND run.project_id = operation.project_id WHERE operation.id = #{identifier} AND operation.project_id = #{project}|]
+  case (permission, conversation) of
+    (Just role, Just (HI.OneColumn scope)) | role >= ProjectMembers.PEdit -> do
+      visible <- canReadEvidence project role (MemberViewer reviewer) scope
+      if not visible
+        then pure ReviewUnavailable
+        else do
+          now <- Time.currentTime
+          Hasql.transaction TxS.ReadCommitted TxS.Write do
+            entries <-
+              Hasql.queryTx @[(OperationProposal AE.Value, Aeson OperationReview, Bool)]
+                [HI.sql|SELECT operation.proposal, operation.review, run.status = 'running' AND operation.outcome->>'tag' = 'OperationUnstarted'
+            FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id AND run.project_id = operation.project_id
+            WHERE operation.id = #{identifier} AND operation.project_id = #{project} FOR UPDATE OF operation|]
+            current <-
+              Hasql.queryTx @[HI.OneColumn ProjectMembers.Permissions]
+                $ [HI.sql|SELECT permission FROM (|]
+                <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{project} AND member.user_id = #{reviewer}|]
+                <> [HI.sql|) eligible|]
+            let permitted request proposal = case (current, capability proposal.call) of
+                  ([HI.OneColumn fresh], Just policy) -> fresh >= max (Catalog.minimumPermission policy) (case request.approver of ReviewEditors -> ProjectMembers.PEdit; ReviewAdministrators -> ProjectMembers.PAdmin)
+                  _ -> False
+            case entries of
+              [(proposal, Aeson review, live)] -> case review of
+                NoReview -> pure ReviewUnavailable
+                ReviewResolved request receipt -> pure $ if permitted request proposal then ReviewAlreadyDecided receipt else ReviewUnavailable
+                ReviewPending request ->
+                  if not live || not (permitted request proposal)
+                    then pure ReviewUnavailable
+                    else
+                      if now >= request.expiresAt
+                        then pure ReviewExpired
+                        else do
+                          let receipt = ReviewReceipt reviewer now decision
+                          Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET review = #{Aeson $ ReviewResolved request receipt}, updated_at = clock_timestamp() WHERE id = #{identifier}|]
+                          pure $ ReviewSaved receipt
+              _ -> pure ReviewUnavailable
+    _ -> pure ReviewUnavailable
+  where
+    capability = \case
+      Operation.ModelCall call -> join $ Map.lookup (LLM.toolFunctionName $ LLM.toolCallFunction call) Catalog.policiesByName
+      Operation.NativeCall operation -> Just $ Catalog.nativePolicy operation
+
+
 listOperations :: (AE.FromJSON policy, DB es) => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es [OperationEntry policy]
 listOperations project run = Hasql.interp $ operationsSql project run <> [HI.sql| ORDER BY operation.created_at DESC, operation.id DESC LIMIT 200|]
 
 
 operationsSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql
 operationsSql project run =
-  [HI.sql|SELECT operation.id, operation.run_id, operation.requested_by, operation.proposal, operation.outcome, operation.created_at
+  [HI.sql|SELECT operation.id, operation.run_id, operation.requested_by, operation.proposal, operation.outcome, operation.review, operation.created_at
     FROM apis.ai_agent_operations operation
     JOIN apis.ai_routine_runs origin ON origin.id = operation.run_id
     JOIN apis.ai_routine_runs selected ON selected.id = #{run} AND selected.project_id = #{project}
     WHERE operation.project_id = #{project} AND (origin.root_run_id = selected.root_run_id
       OR (selected.source->>'tag' = 'TriggeredRun' AND origin.source = selected.source
-        AND operation.outcome->>'tag' IN ('OperationRunning', 'OperationUnknown')))|]
+        AND operation.outcome->>'tag' IN ('OperationUnstarted', 'OperationRunning', 'OperationUnknown')))|]
 
 
 loadCheckpoint :: DB es => Turn -> Eff es (Maybe SavedCheckpoint)
@@ -762,6 +883,8 @@ adoptSlackCheckpoint lease turn policy = do
                     unless (entry.proposal.call == Operation.ModelCall call) $ hoistEither $ Left CheckpointAccessDenied
                     pure $ case entry.outcome of
                       OperationReturned result -> ToolsPending step message (completed <> [(call, result)]) pending
+                      OperationUnstarted -> original.checkpoint
+                      OperationRefused reason -> ToolsPending step message (completed <> [(call, reviewResponse entry.id reason)]) pending
                       (OperationRunning; OperationUnknown) -> uncertain entry.id entry.runId
                   [] -> do
                     let identifier = operationIdentity cursor
@@ -1166,6 +1289,8 @@ visibleConversationIds project permission viewer = do
 
 operationResponse :: Projects.ProjectId -> OperationResult -> ToolResult
 operationResponse project = \case
+  RefusedResult identifier reason -> reviewResponse identifier reason
+  WaitingResult identifier request -> ToolResult "This action is waiting for review." (Just $ AE.object ["operation_id" AE..= identifier, "expires_at" AE..= request.expiresAt])
   RecordedResult result -> result
   UncertainResult claim _ run ->
     let identifier = operationId claim
@@ -1183,3 +1308,7 @@ mkToolCallInfo tc result =
     , resultPreview = T.take 2000 result.formatted
     , rawData = result.rawData
     }
+
+
+reviewResponse :: UUIDId "agent_operation" -> ReviewRefusal -> ToolResult
+reviewResponse identifier reason = ToolResult (reviewRefusalMessage reason) (Just $ AE.object ["operation_id" AE..= identifier, "review_refusal" AE..= reason])

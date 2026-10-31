@@ -903,7 +903,7 @@ spec = around withTestResources do
             Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackMessageRequest receipt user) Issues.ContinueRun conversation "Keep this finding"
             let lease = Investigations.RunLease (Investigations.RunTurn testPid conversation user execution.id) execution.startedAt
                 proposal = Investigations.OperationProposal (Operation.ModelCall call) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Observe PM.PView
-            void $ runQueryEffect tr $ Investigations.atomicOperation lease (Investigations.CheckpointCursor (Investigations.SlackCheckpoint turn) 0) proposal do
+            void $ runQueryEffect tr $ Investigations.atomicOperation lease (Investigations.CheckpointCursor (Investigations.SlackCheckpoint turn) 0) proposal Nothing do
               result <- Issues.saveArtifactTx testPid conversation artifactKey Nothing "Finding" Issues.ArtifactAppend
               pure $ Investigations.ToolResult (either show (const "Finding saved.") result) (AE.toJSON . (.key) <$> rightToMaybe result)
           (_, outcome) <- runTestBgRecordingHTTP frozenTime tr $ withSlackReplyResponses (pure "{\"ok\":true,\"ts\":\"1735689610.000001\"}") $ provider $ tryAny $ SlackPage.processSlackEventWithTools (Just Routes.mcpProjectTools) receipt

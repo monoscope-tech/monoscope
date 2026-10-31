@@ -10,7 +10,7 @@ Evidence uses one typed audience and one evaluator across web navigation, thread
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-The latest bot suite passes 329 examples, including 27 Slack MCP cases. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, optional review controls, streaming acceptance, and final release checks remain unfinished.
+The latest bot suite passes 341 examples, including 27 Slack MCP cases and 12 review cases. The same source passes 76 API and 38 incident-delivery examples. Remote evidence reads and provenance now have fixture coverage. Controlled live acceptance, optional review controls, streaming acceptance, and final release checks remain unfinished.
 
 ## Slack MCP integration checkpoint
 
@@ -25,6 +25,16 @@ The discovery regression first failed because Slack reads were absent from the c
 These are deterministic integration checks against a protocol fixture, not live Slack acceptance. Actual app eligibility, provider schemas, Slack Connect behavior, streaming acceptance, selective review controls, and final branch release gates remain open.
 
 The [visual review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a919) now shows source snapshot `4bd943a77`, including the remote-read path and availability handling. Chrome checks pass for all eight walkthroughs, code panels, keyboard interaction, and widths 390/768/1280. Every evidence-flow step fits those widths; the mobile read-containment step was visually inspected. The hosted HTML matches the local artifact: 126,529 bytes, SHA-256 `6d0b7b4dae15fc0a14aee5e7a90ad04ad5b2cb32d5d42800503d1d42f7ca842f`, Page sequence 37. This verifies the review artifact, not live Slack behavior.
+
+## Selective review ledger foundation
+
+The existing operation record now separates an unstarted action from an action whose execution outcome is uncertain. A review request and its eventual receipt stay on that record. Waiting returns an operation ID rather than an execution claim. The common atomic and external-operation interpreters retain waiting work before any mutation; the model/native boundary can suspend without advancing the pending tool checkpoint.
+
+One decision function checks the reviewer's current project role, the capability's minimum role, and the proposal's evidence audience. It locks the operation so concurrent and repeated decisions retain one receipt. A retry cannot replace the original request or extend its deadline. Rejected or expired requests retain a typed refusal without running the mutation; an approval that expires before execution also cannot run it. Model tools render that reason as a tool result. Native operations return the refusal through their existing error contract, without treating it as a malformed native response.
+
+The first regression failed because the real artifact writer executed before review. Twelve focused cases now pass: nine ledger cases cover approval, rejection, expiry before review, expiry after approval, reviewer downgrade, administrator-only review, private evidence, an already-expired proposal, and concurrent decisions. They also verify wrong-project decisions and retries that try to remove review, lower the approver requirement, or extend the deadline. Three native issue-update cases verify a real approved mutation, rejection, and expiry, including repeated calls and retained response contracts. The final runtime passes all 341 bot examples. The preceding revision also passed 33 native review/SDK examples; the final native approval/refusal paths pass three focused integration cases. The same final source passes 76 API and 38 incident-delivery examples. Formatting, diff checks, and scoped HLint pass with no hints on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material issue in this foundation.
+
+Migration `0275_agent_operation_review.sql` adds one review field to the existing ledger; it adds no table or worker. The run inspector shows waiting state and retained review metadata. Existing execution paths explicitly use no review, preserving autonomous behavior. Routine configuration, web/Slack decision controls, expiry/resume scheduling, pause and actor-revocation acceptance still need connection. This foundation does not establish a working selective-review mode.
 
 ## Product contract
 
