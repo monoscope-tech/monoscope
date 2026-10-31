@@ -352,7 +352,12 @@ threadPageGetH pid convId docM runM hxTarget = do
                   Investigations.OperationRefused Investigations.ReviewRequestEnded -> (NeutralBadge, "Request ended")
                   Investigations.OperationRefused Investigations.ReviewAuthorityWithdrawn -> (WarningBadge, "Approval withdrawn")
                   Investigations.OperationRefused Investigations.ReviewTimedOut -> (WarningBadge, "Review expired")
-                  Investigations.OperationUnstarted -> (BrandBadge, "Awaiting review")
+                  Investigations.OperationUnstarted -> case operation.review of
+                    Investigations.NoReview -> (NeutralBadge, "Not started")
+                    Investigations.ReviewPending{} -> (BrandBadge, "Awaiting review")
+                    Investigations.ReviewResolved _ receipt -> case receipt.decision of
+                      Investigations.ReviewApproved -> (BrandBadge, "Approved")
+                      Investigations.ReviewRejected -> (NeutralBadge, "Declined")
                   Investigations.OperationRunning -> (BrandBadge, "Awaiting outcome")
                   Investigations.OperationUnknown -> (WarningBadge, "Outcome uncertain")
                   Investigations.OperationReturned{} -> (NeutralBadge, "Response saved")

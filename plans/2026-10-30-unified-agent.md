@@ -119,6 +119,14 @@ The shared run finalizer now closes unstarted actions when their request ends. A
 
 A typed refusal records that the request ended before execution. The run inspector shows its reason instead of leaving the action labelled as awaiting review. No migration, worker, or store is added. Thirty failing-first cases cover three run sources, five outcomes, and both pending and approved-but-unexecuted actions. They also cover a later event attempt closing an earlier retained proposal. All 30 cases and the full 389-example bot suite pass. The same code passes 76 API, 41 incident-delivery, 35 error-pattern, and seven focused native-review examples. Formatting and diff checks pass; scoped HLint has no findings on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue in this slice. Waiting pause/stop semantics and the other unfinished plan items remain open.
 
+## Review state display and browser acceptance
+
+An unstarted action now displays its actual review state: not started, awaiting review, approved, or declined. Fifteen failing-first cases reproduced approved actions still being labelled as awaiting review. The 30 lifecycle cases pass with the corrected display, including all three run sources. The restored permanent fixture passes all 30 cases after browser acceptance. Formatting and diff checks pass; scoped HLint has no findings on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue in this display change.
+
+Chrome exercised the authenticated application through the existing `withLiveServer` helper and an isolated test database. At widths 390 and 1280, both light and dark themes displayed the controls and terminal reason without horizontal overflow or browser errors. Keyboard approval reached the real POST handler, retained the decision, and removed the approval controls after refresh. Cancellation then displayed the typed request-ended reason. Eight screenshots and the successful local acceptance log are retained under `/tmp/review-lifecycle-*`; the temporary browser fixture is removed from the test suite.
+
+This checks the review lifecycle UI, not complete policy configuration or live Slack. The browser run also confirmed that the existing two-choice settings form renders Observe for a stored selected-review policy. That configuration gap remains unfinished, along with the other open plan items.
+
 ## Product contract
 
 Monoscope investigates telemetry, uses project tools, remembers team knowledge, and follows up on its work.

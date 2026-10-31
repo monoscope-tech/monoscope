@@ -568,6 +568,10 @@ spec = around withTestResources do
                 identifier <- case pending of Investigations.AwaitOperationReview identifier _ -> pure identifier; _ -> fail "Expected a waiting proposal"
                 when approved $ void $ runTestBgNoReset tr $ Investigations.decideOperationReview testPid user identifier Investigations.ReviewApproved
                 [before] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
+                when approved do
+                  (_, page) <- testServant tr $ AIThreads.operationGetH testPid identifier
+                  ("Awaiting review" `T.isInfixOf` renderT page) `shouldBe` False
+                  (">Approved<" `T.isInfixOf` renderT page) `shouldBe` True
                 runTestBgNoReset tr (Issues.completeRun context completion) >>= \case
                   Issues.RunCompleted actual _ -> actual `shouldBe` termination
                   Issues.CompletionRejected -> expectationFailure "Run completion was rejected"
@@ -579,8 +583,8 @@ spec = around withTestResources do
                   _ -> False
                 unless retained do
                   (_, page) <- testServant tr $ AIThreads.operationGetH testPid identifier
-                  renderT page `shouldSatisfy` (not . T.isInfixOf "Awaiting review")
-                  renderT page `shouldSatisfy` T.isInfixOf "This request ended before the action executed."
+                  ("Awaiting review" `T.isInfixOf` renderT page) `shouldBe` False
+                  ("This request ended before the action executed." `T.isInfixOf` renderT page) `shouldBe` True
                 when retained $ case context.source of
                   Issues.TriggeredRun (Issues.IssueEnrichment issue) -> do
                     Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventIssueEnrichment
