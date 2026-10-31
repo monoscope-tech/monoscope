@@ -38,7 +38,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (faSprite_, renderMarkdownToc)
-import Web.FormUrlEncoded (FromForm)
+import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.MCP qualified as MCP
 
@@ -97,9 +97,43 @@ newtype RoutineDestinationForm = RoutineDestinationForm {destination :: Issues.R
   deriving anyclass (FromForm)
 
 
-newtype RoutinePolicyForm = RoutinePolicyForm {policy :: Issues.ExecutionPolicy}
-  deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
+data RoutinePolicyForm = RoutinePolicyForm Issues.ExecutionPolicy | MissingReviewClasses
+  deriving stock (Show)
+
+
+-- $setup
+-- >>> import Relude
+-- >>> import Data.Either (isLeft)
+-- >>> import Web.FormUrlEncoded (urlDecodeAsForm)
+-- >>> import Models.Apis.Issues qualified as Issues
+-- >>> import Pkg.AgentCatalog qualified as Catalog
+
+
+-- | Parse selected review into a nonempty policy before it reaches the handler.
+--
+-- >>> let decode = urlDecodeAsForm @RoutinePolicyForm
+-- >>> decode "policy=autonomous"
+-- Right (RoutinePolicyForm Autonomous)
+-- >>> case decode "policy=review&reviewClass=project_changes&reviewApprover=editors" of Right (RoutinePolicyForm value) -> value == Issues.ReviewSelected (Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors); _ -> False
+-- True
+-- >>> decode "policy=review&reviewApprover=editors"
+-- Right MissingReviewClasses
+-- >>> isLeft (decode "policy=review&reviewClass=unknown&reviewApprover=editors")
+-- True
+-- >>> isLeft (decode "policy=review&reviewClass=project_changes&reviewApprover=unknown")
+-- True
+-- >>> isLeft (decode "policy=observe&policy=autonomous")
+-- True
+instance FromForm RoutinePolicyForm where
+  fromForm form =
+    parseUnique @Text "policy" form >>= \case
+      "review" -> do
+        classes <- parseAll "reviewClass" form
+        approver <- parseUnique "reviewApprover" form
+        case classes of
+          [] -> Right MissingReviewClasses
+          actionClass : others -> pure $ RoutinePolicyForm $ Issues.ReviewSelected $ Catalog.ReviewSelection (actionClass :| others) approver
+      value -> RoutinePolicyForm <$> parseUrlPiece value
 
 
 newtype OperationReviewForm = OperationReviewForm {decision :: Investigations.ReviewDecision}
@@ -430,16 +464,33 @@ threadPageGetH pid convId docM runM hxTarget = do
             when (any (isJust . (.routineKind)) conversationM) $ section_ [class_ "mb-6 space-y-4", Aria.label_ "Routine configuration"] do
               when (isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] $ toHtml $ foldMap (\c -> maybe "" Issues.routineKindLabel c.routineKind <> " · " <> bool "Paused" "Active" c.routineActive) conversationM
               for_ (conversationM >>= (.routinePolicy)) \policy -> do
+                let selection = case policy of Issues.ReviewSelected selected -> Just selected; (Issues.Observe; Issues.Autonomous) -> Nothing
                 if canEdit
-                  then form_ [hxPost_ $ threadHref <> "/routine/policy", hxSwap_ "none", class_ "space-y-2 rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
+                  then form_ [hxPost_ $ threadHref <> "/routine/policy", hxSwap_ "none", class_ "group/policy space-y-2 rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
                     label_ [Lucid.for_ "routine-policy", class_ "block text-sm font-medium text-textStrong"] "Execution policy"
                     select_ [id_ "routine-policy", name_ "policy", class_ "select select-sm w-full"] do
                       option_ ([value_ "observe"] <> [selected_ "selected" | policy == Issues.Observe]) "Observe"
                       option_ ([value_ "autonomous"] <> [selected_ "selected" | policy == Issues.Autonomous]) "Autonomous"
+                      option_ ([value_ "review"] <> [selected_ "selected" | isJust selection]) "Review selected actions"
+                    fieldset_ [class_ "hidden space-y-3 group-has-[option[value=review]:checked]/policy:block"] do
+                      legend_ [class_ "text-sm font-medium text-textStrong"] "Actions requiring review"
+                      for_ [minBound @Catalog.ReviewClass .. maxBound] \actionClass -> label_ [class_ "flex items-center gap-2 text-sm text-textStrong"] do
+                        input_ $ [type_ "checkbox", name_ "reviewClass", value_ $ toText $ encodeEnumSC @"" actionClass, class_ "checkbox checkbox-sm"] <> [checked_ | any (elem actionClass . (.classes)) selection]
+                        toHtml $ reviewClassLabel actionClass
+                      label_ [class_ "block space-y-1 text-sm text-textStrong"] do
+                        span_ "Required reviewer"
+                        select_ [name_ "reviewApprover", class_ "select select-sm w-full"]
+                          $ for_ @[] [Catalog.ReviewEditors, Catalog.ReviewAdministrators] \approver ->
+                            option_ ([value_ $ toText $ encodeEnumSC @"Review" approver] <> [selected_ "selected" | approver == maybe Catalog.ReviewEditors (.approver) selection]) $ toHtml $ reviewerLabel approver
+                      p_ [class_ "text-xs text-textWeak"] "Only checked action classes require review. Unchecked actions stay automatic. Choose at least one class."
+
                     p_ [class_ "text-sm text-textWeak"] "Observe reads evidence and saves results. Autonomous also changes project resources, updates project knowledge, and publishes requested results within the authorizing member's current role, without per-action approval."
                     p_ [class_ "text-xs text-textWeak"] "Restrictions apply immediately. Greater authority applies to future runs."
                     button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save policy"
-                  else p_ [class_ "text-sm text-textWeak"] $ toHtml $ "Execution policy: " <> show @Text policy
+                  else p_ [class_ "text-sm text-textWeak"] $ toHtml $ case policy of
+                    Issues.Observe -> "Execution policy: Observe"
+                    Issues.Autonomous -> "Execution policy: Autonomous"
+                    Issues.ReviewSelected selected -> "Review selected actions: " <> T.intercalate ", " (map reviewClassLabel $ toList selected.classes) <> ". Reviewers: " <> reviewerLabel selected.approver <> "."
               details_ [class_ "rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
                 summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Routine instructions"
                 p_ [class_ "my-3 text-sm text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
@@ -515,6 +566,14 @@ threadPageGetH pid convId docM runM hxTarget = do
                   span_ "All routines"
             div_ [class_ "min-h-0 grow overflow-y-auto px-5 py-5"] $ maybe (foldMap documentView_ openDoc) identity runContent
       where
+        reviewClassLabel = \case
+          Catalog.KnowledgeChanges -> "Project knowledge"
+          Catalog.ProjectChanges -> "Project resources"
+          Catalog.ExternalPosts -> "External publication"
+          Catalog.AdministrativeChanges -> "Administrative changes"
+        reviewerLabel = \case
+          Catalog.ReviewEditors -> "Editors or administrators"
+          Catalog.ReviewAdministrators -> "Administrators"
         threadHref = foldMap (threadUrl projectId) activeConversationIdM
         docHref doc = threadHref <> "?doc=" <> toText doc.key
         (openBody, openToc) = maybe (mempty, []) renderMarkdownToc $ openDoc >>= (.content)
@@ -741,8 +800,11 @@ routinePolicyPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutinePoli
 routinePolicyPostH pid conversation form = do
   authorizeConversation pid conversation
   (session, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
-  Issues.setRoutinePolicy session.user.id pid conversation form.policy
-  addSuccessToast "Execution policy saved." Nothing
+  case form of
+    MissingReviewClasses -> addErrorToast "Choose at least one action class for review." Nothing
+    RoutinePolicyForm policy -> do
+      Issues.setRoutinePolicy session.user.id pid conversation policy
+      addSuccessToast "Execution policy saved." Nothing
   addRespHeaders mempty
 
 

@@ -310,6 +310,33 @@ spec = around withTestResources do
         denied `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
         IORef.readIORef calls >>= (`shouldBe` 1)
 
+      it "agentReviewPolicy_formDisplaysAndPreservesSelectedClassesAndReviewer" \tr -> do
+        let conversation = UUIDId $ UUID.fromWords 0 0 0 284
+            user = (getResponse tr.trSessAndHeader).user.id
+            selected = Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
+        void $ runTestBg frozenTime tr do
+          void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+          Issues.insertChatMessage testPid conversation Issues.ChatUser "Investigate checkout" Nothing Nothing
+          Issues.upsertRoutine user testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
+        runQueryEffect tr $ Issues.setRoutinePolicy user testPid conversation selected
+        (_, page) <- testServant tr $ AIThreads.threadGetH testPid conversation Nothing Nothing
+        ("value=\"review\" selected=\"selected\"" `T.isInfixOf` renderT page) `shouldBe` True
+        for_ @[]
+          [ ("policy=review&reviewClass=project_changes&reviewApprover=editors", selected)
+          , ("policy=review&reviewClass=knowledge_changes&reviewClass=external_posts&reviewClass=administrative_changes&reviewApprover=administrators", Issues.ReviewSelected $ Catalog.ReviewSelection (Catalog.KnowledgeChanges :| [Catalog.ExternalPosts, Catalog.AdministrativeChanges]) Catalog.ReviewAdministrators)
+          , ("policy=observe&reviewClass=project_changes&reviewApprover=editors", Issues.Observe)
+          , ("policy=autonomous", Issues.Autonomous)
+          ]
+          $ \(body, expected) -> do
+            form <- either (fail . toString) pure $ urlDecodeAsForm @AIThreads.RoutinePolicyForm body
+            void $ testServant tr $ AIThreads.routinePolicyPostH testPid conversation form
+            Just stored <- runQueryEffect tr $ Issues.getConversation testPid conversation
+            stored.routinePolicy `shouldBe` Just expected
+        missing <- either (fail . toString) pure $ urlDecodeAsForm @AIThreads.RoutinePolicyForm "policy=review&reviewApprover=editors"
+        void $ testServant tr $ AIThreads.routinePolicyPostH testPid conversation missing
+        Just unchanged <- runQueryEffect tr $ Issues.getConversation testPid conversation
+        unchanged.routinePolicy `shouldBe` Just Issues.Autonomous
+
       it "agentReviewPolicy_invalidStorageAndGrantRewritesCannotIncreaseAuthority" \tr -> do
         let conversation = UUIDId $ UUID.fromWords 0 0 0 281
             selected = Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors

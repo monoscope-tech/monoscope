@@ -127,6 +127,14 @@ Chrome exercised the authenticated application through the existing `withLiveSer
 
 This checks the review lifecycle UI, not complete policy configuration or live Slack. The browser run also confirmed that the existing two-choice settings form renders Observe for a stored selected-review policy. That configuration gap remains unfinished, along with the other open plan items.
 
+## Typed policy configuration
+
+The routine form now displays and saves Observe, Autonomous, and selected review through the existing execution-policy type. Selected review exposes the four canonical action classes and the required reviewer role. Native CSS shows those controls only in review mode. Read-only views use the same class and reviewer labels. Existing Observe/Autonomous and JSON-policy form submissions remain supported.
+
+The form decoder constructs a nonempty selection or an explicit missing-selection form state. The handler renders that state through the existing error toast and leaves the stored policy unchanged. Unknown classes, unknown reviewers, and duplicate policy fields remain parse errors. The executor receives the same precise domain policy; no separate configuration model, client script, table, or migration is added.
+
+The first regression reproduced a stored selected policy being displayed as Observe. Handler integration now covers both reviewer levels, every class, both legacy modes, and unchanged policy after an empty selection. Chrome verifies the stored selection, conditional controls, saves and reloads, both themes at widths 390/1280, and visible error feedback for an empty selection. The browser check exposed the generic parser error hiding that feedback; the typed form state resolves it. The permanent 390-example bot suite passes after removing the temporary browser fixture. The same source passes 76 API examples. Form-codec doctests are added; their final suite remains pending. Formatting and diff checks pass; scoped HLint has no findings on changed lines. Repeated scoped distillation, constraint, and client-behavior reviews found no material remaining issue in this slice. Remaining worker continuations, waiting pause/stop behavior, initial-DM privacy acceptance, native model-session continuation, live Slack acceptance, streaming, and final release checks remain open.
+
 ## Product contract
 
 Monoscope investigates telemetry, uses project tools, remembers team knowledge, and follows up on its work.
