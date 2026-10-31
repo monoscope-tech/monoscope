@@ -22,7 +22,7 @@ Migration `0277_member_conversation_runs.sql` groups the new source constraints 
 
 The original regression failed with one model call during HTTP submission. The current implementation passes 420 bot, 76 API, 41 incident-delivery, 87 dashboard/widget, and 16 chart-cache examples. Six focused web cases cover admission, duplicate delivery, authority loss, approval, rejection, expiry, and enqueue rollback. The issue case verifies queued execution and retained context. Real authenticated Chrome checks at widths 390 and 1280 verify automatic answer display, terminal polling removal, and preservation of an unsent draft and its request ID. The temporary browser fixture was restored after acceptance. Formatting and diff checks pass. Repeated scoped distillation, constraint, and client-behavior reviews found no remaining material finding in this slice; HLint reports only the two pre-existing hints in unchanged AI code.
 
-Remaining work includes refreshing the generated title in the asynchronous view, retained slash binding and evidence scope, native model-session and workspace continuation, streaming, live Slack acceptance, the artifact refresh, and final branch reviews and release checks. This checkpoint does not establish completion of the unified plan.
+The asynchronous title and retained slash binding are covered below. Remaining work includes native model-session and workspace continuation, streaming, live Slack acceptance, the final artifact refresh, and final branch reviews and release checks. This checkpoint does not establish completion of the unified plan.
 
 ## Queued slash commands and shared Slack publication
 
@@ -36,7 +36,7 @@ Failing-first regressions reproduced lost replies after deleting web history and
 
 Native events and slash commands share destination-bound Slack evidence reads. Channel requests cannot broaden their destination or use personal workspace search. DM requests use the existing DM-owner check. The same parameterized cases verify credentials, provenance, disconnection, membership loss, schema changes, wrong DM peers, invalid locators, and rejected broader searches for both adapters. Deletion, original-input recovery, and SQL immutability regressions pass. Formatting and diff checks pass; scoped HLint has no new findings. Repeated scoped distillation, constraint, and client-behavior reviews leave no material finding in this checkpoint.
 
-Asynchronous web-title refresh, native workspace continuation, streaming, live Slack acceptance, the visual artifact refresh, and final branch gates remain open.
+The asynchronous web title is covered below. Native production continuation, streaming, live Slack acceptance, the final visual artifact refresh, and final branch gates remain open.
 
 ## Terminal queued failures
 
@@ -45,6 +45,12 @@ Both OddJobs terminal hooks use the existing run finalizer. A retry leaves the r
 The existing hourly recovery step closes requests whose failed job was saved before a database outage or process crash prevented its callback. It correlates the exact queue payload with the retained run and considers only its latest job. A newer queued attempt prevents an older failure from closing active work. Recovery uses the same authority-bound finalizer and failure message without requeueing work. When the typed timeout callback was lost, recovery records the known job failure without guessing the exception type from diagnostic text.
 
 Eight failing-first lifecycle cases cover web and slash requests, actual OddJobs retry and terminal transitions, missed exception and timeout callbacks, repeated hourly recovery, newer queued work, retained artifacts, one execution message, and zero model or HTTP calls during recovery. All 450 bot examples pass on the final source. Formatting, diff checks, and scoped HLint pass. Repeated scoped distillation, constraint, and client-behavior reviews leave no material finding. This adds no table, migration, scheduler, attempt counter, or model executor. The job and run commits remain separate; the retained states support eventual recovery through the existing scheduler.
+
+## Queued conversation titles
+
+Title generation now finishes before the shared conversation finalizer marks the request complete. The results poll selects the existing page-title header from the server response as an out-of-band update. This preserves the composer, draft, and next request identity and lets the final poll update the title before polling stops. The redundant access check was removed because title generation already checks access before and after its work.
+
+The existing queued-conversation regression first reproduced the missing header selection, then a title call observing `RunSucceeded` instead of `RunRunning`. It now verifies the corrected ordering, saved title, terminal polling, one model execution, and one published answer. All 450 bot examples pass. Chrome using HTML captured from the real handlers also verifies the header and document title, stopped polling, preserved draft and request ID, and layouts at 390 and 1280 pixels. This browser check uses captured handler responses, not a live authenticated server. Formatting, diff checks, scoped HLint, and repeated scoped reviews leave no new findings.
 
 ## Native SDK resume contract
 

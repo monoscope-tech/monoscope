@@ -230,7 +230,7 @@ responseWidgets response =
 
 completeAgenticResponse :: (DB es, ELLM.LLM :> es, IOE :> es, Time.Time :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> Text -> AgenticChatResult -> Eff es (Either Text LLMResponse)
 completeAgenticResponse config userQuery model apiKey answer = do
-  void $ requireConfigAccess config
+  void $ ensureConversationTitle config userQuery model apiKey $ Just answer
   case (config.access, config.conversationId) of
     (SlackInvestigationAccess{}, _) -> pass -- Recorded by the replayable Slack turn.
     (_, Nothing) -> pass
@@ -247,7 +247,6 @@ completeAgenticResponse config userQuery model apiKey answer = do
         (DurableRun context, _) | (Issues.InteractiveRun{}; Issues.ConversationRun{}) <- context.source -> throwIO AgentAccessDenied
         (DurableRun context, _) | Issues.TriggeredRun Issues.SlackCommand{} <- context.source -> pass
         _ -> Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just $ AE.toJSON answer.toolCalls)
-  void $ ensureConversationTitle config userQuery model apiKey $ Just answer
   pure $ parseAgenticResponse answer
 
 

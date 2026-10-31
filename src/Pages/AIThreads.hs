@@ -503,7 +503,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                   else p_ [class_ "whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "" instructions
               when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
             div_
-              ([id_ "ai-thread-results"] <> if any ((== Issues.RunRunning) . (.status)) runs then [hxGet_ threadHref, hxTrigger_ "every 2s", hxSelect_ "#ai-thread-results", hxSwap_ "outerHTML"] else [])
+              ([id_ "ai-thread-results"] <> if any ((== Issues.RunRunning) . (.status)) runs then [hxGet_ threadHref, hxTrigger_ "every 2s", hxSelect_ "#ai-thread-results", term "hx-select-oob" "#pageTitleText:outerHTML", hxSwap_ "outerHTML"] else [])
               do
                 unless (null runs) $ section_ [class_ "mb-6 space-y-2", Aria.label_ "Routine runs"] do
                   h2_ [class_ "text-sm font-semibold text-textStrong"] "Runs"

@@ -988,6 +988,7 @@ spec = around withTestResources do
 
       it "webConversation_commitsInputWithQueuedExecutionAndPublishesOnce" \tr -> do
         calls <- IORef.newIORef (0 :: Int)
+        titleStatuses <- IORef.newIORef ([] :: [Maybe Issues.RoutineRunStatus])
         let requestId = UUIDId $ UUID.fromWords 0 0 93 1
             prompt = "Inspect queued conversation evidence"
             form = fromRightShow $ urlDecodeAsForm @AIThreads.AIChatForm "query=Inspect+queued+conversation+evidence&requestId=00000000-0000-0000-0000-005d00000001&mode=chat"
@@ -996,7 +997,10 @@ spec = around withTestResources do
               ELLM.CallAgenticChat{} -> do
                 liftIO $ IORef.modifyIORef' calls (+ 1)
                 pure $ Right $ LLM.Message LLM.Assistant "Queued execution completed." LLM.defaultMessageData
-              ELLM.CallLLM{} -> pure $ Right "Queued conversation"
+              ELLM.CallLLM{} -> do
+                current <- liftIO $ runQueryEffect tr $ Issues.getRoutineRun testPid requestId
+                liftIO $ IORef.modifyIORef' titleStatuses (<> [fmap (.status) current])
+                pure $ Right "Queued conversation"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding request"
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM background_jobs|]
         void $ runAuthHandler tr $ provider $ AIThreads.startThreadPostHWithTools (Just Routes.mcpProjectTools) testPid form
@@ -1007,14 +1011,17 @@ spec = around withTestResources do
         admitted.status `shouldBe` Issues.RunRunning
         (_, pendingPage) <- testServant tr $ AIThreads.threadGetH testPid admitted.conversationId Nothing Nothing
         renderT pendingPage `shouldSatisfy` T.isInfixOf "hx-select=\"#ai-thread-results\""
+        T.isInfixOf "hx-select-oob=\"#pageTitleText:outerHTML\"" (renderT pendingPage) `shouldBe` True
         jobs <- runQueryEffect tr $ Hasql.interp @[HI.OneColumn (Aeson BackgroundJobs.BgJobs)] [HI.sql|SELECT payload FROM background_jobs WHERE status = 'queued'|]
         length jobs `shouldBe` 1
         let execute = for_ jobs \(HI.OneColumn (Aeson job)) -> runTestBgNoReset tr $ provider $ BackgroundJobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx job
         execute
+        IORef.readIORef titleStatuses >>= (`shouldBe` [Just Issues.RunRunning])
         Just completed <- runQueryEffect tr $ Issues.getRoutineRun testPid requestId
         (completed.id, completed.status) `shouldBe` (admitted.id, Issues.RunSucceeded)
         (_, finishedPage) <- testServant tr $ AIThreads.threadGetH testPid admitted.conversationId Nothing Nothing
         renderT finishedPage `shouldSatisfy` (not . T.isInfixOf "hx-trigger=\"every 2s\"")
+        runQueryEffect tr (Issues.getConversationTitle testPid admitted.conversationId) >>= (`shouldBe` Just "Queued conversation")
         execute
         IORef.readIORef calls >>= (`shouldBe` 1)
         messages <- runQueryEffect tr $ Issues.selectChatHistory testPid admitted.conversationId
