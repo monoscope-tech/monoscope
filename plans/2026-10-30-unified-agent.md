@@ -6,6 +6,8 @@ It combines the Slack consolidation work and the Slack coworker proposal.
 It incorporates the requested default of autonomous background work without repeated permission prompts.
 This document does not claim that unfinished features or live Slack acceptance are complete.
 
+Audience containment now has one typed scope and one read evaluator shared by web navigation, threads, retained runs, artifacts, and agent access. Personal scopes require their owner; channel scopes require current linked Slack membership; personal Slack delivery also verifies the destination DM. Shared mutations and publication reject private scopes, including the completion transaction. Scope inheritance preserves restrictions after conversation recreation. Four focused integration tests, 298 bot tests, 76 API tests, and 38 incident-delivery tests pass. DM proof requires `im:read`, now requested by the installer and manifest; existing installations must reconnect before that evidence path can work. Automatic classification of Slack source history, remote MCP evidence/provenance, and controlled live acceptance still require implementation and verification; this is not completed Slack evidence support.
+
 ## Product contract
 
 Monoscope investigates telemetry, uses project tools, remembers team knowledge, and follows up on its work.

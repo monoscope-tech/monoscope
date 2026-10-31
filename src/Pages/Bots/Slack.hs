@@ -152,7 +152,7 @@ startInstallGetH pid onboarding = do
   envCfg <- asks env
   let params =
         [ ("client_id", envCfg.slackClientId)
-        , ("scope", "assistant:write,chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public")
+        , ("scope", "assistant:write,chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,im:read,channels:history,groups:history,im:history,mpim:history,chat:write.public")
         , ("redirect_uri", envCfg.slackRedirectUri)
         , ("state", stateId.toText)
         ]

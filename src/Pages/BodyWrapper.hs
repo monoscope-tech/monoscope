@@ -20,6 +20,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -70,7 +71,7 @@ mkPageCtxWithScope withScope pid = do
       (if withScope then SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now else pure Nothing)
       ( concurrently
           (if V.elem "checklist_dismissed" project.onboardingStepsCompleted then pure Nothing else Just <$> activationProgress pid (V.elem (show Integration) project.onboardingStepsCompleted))
-          (Issues.listVisibleConversations pid viewerPermission)
+          (Issues.listVisibleConversations pid viewerPermission (Investigations.MemberViewer sess.user.id))
       )
   let options field = V.fromList $ sort [v.value | SchemaCatalog.FacetData m <- (.facetJson) <$> maybeToList facetsM, v <- HM.findWithDefault [] field m, not (T.null v.value)]
   pure (sess, project, bw{activationProgressM, conversations, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True})

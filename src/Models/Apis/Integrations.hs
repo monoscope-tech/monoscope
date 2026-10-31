@@ -1,5 +1,8 @@
 module Models.Apis.Integrations (
   activeMembership,
+  SlackChannel (teamId, channelId),
+  SlackChannelError (..),
+  slackChannel,
   SlackData (..),
   slackAgentScopesGranted,
   DiscordData (..),
@@ -44,6 +47,8 @@ module Models.Apis.Integrations (
   slackLinkProjects,
   completeSlackLink,
   resolveSlackPrincipal,
+  slackChannelMember,
+  slackDirectMessageOwner,
   slackThreadProject,
   bindSlackInvestigation,
   SlackSessionTitle,
@@ -55,13 +60,17 @@ module Models.Apis.Integrations (
   slackInvestigationStopped,
 ) where
 
+import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as Aeson
+import Data.Aeson.Types qualified as Aeson
 import Data.Base64.Types (extractBase64)
 import Data.ByteArray qualified as BA
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as HTTP
+import Data.List (lookup)
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
@@ -78,6 +87,7 @@ import Models.Projects.ProjectApiKeys qualified as Secrets
 import Models.Projects.ProjectMembers (activeMembership)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Network.Wreq qualified as Wreq
 import Pkg.DeriveUtils (UUIDId, enumLit, refineText)
 import Pkg.SlackOAuth (SlackTokenLifetime (..), SlackUserGrant (..), slackEvidenceScopes)
 import Pkg.SlackOAuth qualified as OAuth
@@ -86,6 +96,37 @@ import Relude
 import System.Types (DB)
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
+
+
+data SlackChannel = SlackChannel {teamId :: Text, channelId :: Text}
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (Aeson.ToJSON)
+
+
+data SlackChannelError = WorkspaceRequired | ChannelRequired
+  deriving stock (Eq, Show)
+
+
+-- | A channel identity shared by destinations and evidence audiences.
+--
+-- >>> fmap (\channel -> (channel.teamId, channel.channelId)) (slackChannel "T1" "C123") == Right ("T1", "C123")
+-- True
+-- >>> slackChannel "T1" "D123" == Left ChannelRequired
+-- True
+-- >>> slackChannel "" "C123" == Left WorkspaceRequired
+-- True
+slackChannel :: Text -> Text -> Either SlackChannelError SlackChannel
+slackChannel team channel
+  | T.null (T.strip team) = Left WorkspaceRequired
+  | T.length channel < 2 || not (T.isPrefixOf "C" channel || T.isPrefixOf "G" channel) || not (T.all (\c -> isAsciiUpper c || isDigit c) channel) = Left ChannelRequired
+  | otherwise = Right $ SlackChannel team channel
+
+
+instance Aeson.FromJSON SlackChannel where
+  parseJSON = Aeson.withObject "Slack channel" \value -> do
+    team <- value Aeson..: "teamId"
+    channel <- value Aeson..: "channelId"
+    either (fail . show) pure $ slackChannel team channel
 
 
 data SlackLink = SlackLink {id :: UUIDId "slack_link", teamId :: Text, slackUserId :: Text, channelId :: Text}
@@ -199,6 +240,76 @@ resolveSlackPrincipal teamId slackUserId threadProject =
     JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = identity.team_id
     WHERE identity.team_id = #{teamId} AND identity.slack_user_id = #{slackUserId}|]
     <> ProjectMembers.activeMembership
+
+
+-- | Proof comes from Slack's current channel membership, bound to a linked account.
+slackChannelMember :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> Projects.UserId -> SlackChannel -> Eff es Bool
+slackChannelMember project user channel = do
+  identities <- slackAudienceIdentities project user channel.teamId
+  case nonEmpty identities of
+    Nothing -> pure False
+    Just ((_, token) :| _) -> members token (map fst identities) S.empty ""
+  where
+    members token users seen cursor = do
+      response <-
+        HTTP.getWith
+          ( HTTP.defaults & Wreq.header "Authorization"
+              .~ [encodeUtf8 $ "Bearer " <> token]
+                & Wreq.param "channel"
+              .~ [channel.channelId] & Wreq.param "limit"
+              .~ ["200"] & Wreq.param "cursor"
+              .~ [cursor]
+          )
+          "https://slack.com/api/conversations.members"
+      case Aeson.eitherDecode (response ^. HTTP.responseBody) >>= Aeson.parseEither parsePage of
+        Left _ -> pure False
+        Right (current, next)
+          | any (`elem` current) users -> pure True
+          | T.null next || next `S.member` seen -> pure False
+          | otherwise -> members token users (S.insert cursor seen) next
+    parsePage = Aeson.withObject "Slack channel members" \value -> do
+      ok <- value Aeson..: "ok"
+      unless ok $ fail "Channel membership unavailable"
+      users <- value Aeson..: "members"
+      metadata <- value Aeson..:? "response_metadata"
+      cursor <- maybe (pure "") (\object -> object Aeson..:? "next_cursor" Aeson..!= "") metadata
+      pure (users :: [Text], T.strip cursor)
+
+
+slackDirectMessageOwner :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> Projects.UserId -> Text -> Text -> Text -> Eff es Bool
+slackDirectMessageOwner project member team user channel = do
+  identities <- slackAudienceIdentities project member team
+  case lookup user identities of
+    Nothing -> pure False
+    Just token -> do
+      response <-
+        HTTP.getWith
+          (HTTP.defaults & Wreq.header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token] & Wreq.param "channel" .~ [channel])
+          "https://slack.com/api/conversations.info"
+      pure
+        $ fromRight False
+        $ Aeson.eitherDecode (response ^. HTTP.responseBody)
+        >>= Aeson.parseEither
+          ( Aeson.withObject "Slack direct message" \value -> do
+              ok <- value Aeson..: "ok"
+              info <- value Aeson..: "channel"
+              direct <- info Aeson..: "is_im"
+              peer <- info Aeson..: "user"
+              identifier <- info Aeson..: "id"
+              pure $ ok && direct && peer == user && identifier == channel
+          )
+
+
+slackAudienceIdentities :: DB es => Projects.ProjectId -> Projects.UserId -> Text -> Eff es [(Text, Text)]
+slackAudienceIdentities project user team =
+  Hasql.interp @[(Text, Text)]
+    $ [HI.sql|SELECT identity.slack_user_id, installation.bot_token FROM apis.slack_identities identity
+      JOIN projects.project_members member ON member.user_id = identity.user_id AND member.project_id = #{project}
+      JOIN users.users account ON account.id = identity.user_id
+      JOIN projects.projects project ON project.id = member.project_id
+      JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = identity.team_id
+      WHERE identity.team_id = #{team} AND identity.user_id = #{user}|]
+    <> activeMembership
 
 
 slackThreadProject :: DB es => Text -> Text -> Text -> Eff es (Maybe Projects.ProjectId)

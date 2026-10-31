@@ -95,7 +95,6 @@ import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
-import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (sourceFieldLabel)
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -2030,6 +2029,7 @@ aiChatPostHWithTools projectTools pid issueId form = do
   now <- Time.currentTime
   requestId <- maybe (UUIDId <$> UUIDEff.genUUID) pure form.requestId
   let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
+  unlessM (AI.canReadEvidence (AI.MemberAccess AI.WebSession sess.user.id) pid convId) $ throwError err403
   Issues.startInteractiveRun pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
     Issues.ConflictingRequest -> throwError err409{errBody = "Request ID already belongs to another request"}
     Issues.AcceptedRequest _ -> pass
@@ -2050,9 +2050,7 @@ aiChatPostHWithTools projectTools pid issueId form = do
 aiChatHistoryGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Html ()))
 aiChatHistoryGetH pid issueId = do
   (session, _) <- Projects.sessionAndProject pid
-  permission <- fromMaybe ProjectMembers.PView <$> ProjectMembers.getSessionPermission pid session.user.id
-  required <- Investigations.conversationEvidencePermission pid (UUIDId issueId.unUUIDId)
-  unless (permission >= required) $ throwError err403
+  unlessM (AI.canReadEvidence (AI.MemberAccess AI.WebSession session.user.id) pid (UUIDId issueId.unUUIDId)) $ throwError err403
   now <- Time.currentTime
   Issues.selectIssueById pid issueId >>= \case
     Nothing -> addRespHeaders $ aiChatHistoryView_ (pure . href_) pid []

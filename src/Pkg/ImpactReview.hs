@@ -459,7 +459,8 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     requireActive run execution = do
       unlessM (Issues.routineRunActive run.projectId execution.id) $ throwError $ ReviewFailure "Routine paused, stopped, or requester access revoked"
       required <- Investigations.conversationEvidencePermission run.projectId (UUIDId run.threadId.unUUIDId)
-      unless (required <= ProjectMembers.PView) $ throwError $ ReviewFailure "Restricted conversation evidence cannot be published to this review's shared destinations"
+      audience <- Investigations.conversationEvidenceAudience run.projectId (UUIDId run.threadId.unUUIDId)
+      unless (required <= ProjectMembers.PView && audience == Investigations.ProjectAudience) $ throwError $ ReviewFailure "Restricted conversation evidence cannot be published to this review's shared destinations"
 
     require :: Either Text a -> ReviewCtx a
     require = either (throwError . ReviewFailure) pure

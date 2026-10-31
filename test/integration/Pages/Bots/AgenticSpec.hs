@@ -583,6 +583,51 @@ spec = around withTestResources do
         unchanged <- runQueryEffect tr $ Issues.getConversation testPid conversation.conversationId
         (unchanged >>= (.routineKind)) `shouldBe` Just Issues.ScheduleSlackMessage
 
+      it "evidenceAudience_projectAdministratorCannotReadAnotherMembersPrivateConversation" \tr -> do
+        let conversation = UUIDId $ UUID.fromWords 0 0 44 20
+            otherMember = UUIDId $ UUID.fromWords 0 0 44 21
+            secret = "personal-slack-evidence-canary"
+            user = (getResponse tr.trSessAndHeader).user.id
+            privateAudience = Investigations.PersonalAudience otherMember
+        mode <- interactiveInvocation tr testPid conversation "Private Slack investigation" Issues.Autonomous
+        runTestBg frozenTime tr $ Issues.insertChatMessage testPid conversation Issues.ChatAssistant secret Nothing Nothing
+        runQueryEffect tr (Investigations.retainEvidenceAudience testPid conversation privateAudience) >>= (`shouldBe` True)
+        runQueryEffect tr (Investigations.retainEvidenceAudience testPid conversation Investigations.ProjectAudience) >>= (`shouldBe` True)
+        runQueryEffect tr (Investigations.retainEvidenceAudience testPid conversation $ Investigations.PersonalAudience user) >>= (`shouldBe` False)
+        runQueryEffect tr (Investigations.conversationEvidenceAudience testPid conversation) >>= (`shouldBe` privateAudience)
+        for_
+          [ AIThreads.threadGetH testPid conversation Nothing Nothing $> ()
+          , AIThreads.threadTitlePostH testPid conversation (AIThreads.TitleForm "Leaked title") $> ()
+          , AIThreads.threadDeleteH testPid conversation $> ()
+          , AIThreads.routinePausePostH testPid conversation $> ()
+          ]
+          $ \handler -> do
+            status <- runAuthHandler tr $ (handler $> (200 :: Int)) `catchError` \_ (err :: ServerError) -> pure err.errHTTPCode
+            status `shouldBe` 403
+        for_ [AIThreads.threadsGetH testPid, AIThreads.routinesGetH testPid] $ \handler -> do
+          (_, page) <- testServant tr handler
+          renderT page `shouldSatisfy` (not . T.isInfixOf "Private Slack investigation")
+        let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.WebSession user, AI.conversationId = Just conversation, AI.invocationMode = mode}
+        replay <- tryAny $ runTestBg frozenTime tr $ AI.executeToolCall config (LLM.ToolCall "private-document" "function" $ LLM.ToolFunction "read_artifact" mempty)
+        replay `shouldSatisfy` \case Left err -> isJust (fromException @AI.AgentAccessDenied err); Right _ -> False
+        runTestBg frozenTime tr $ Issues.deleteConversation testPid conversation
+        runTestBg frozenTime tr $ void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+        runQueryEffect tr (Investigations.conversationEvidenceAudience testPid conversation) >>= (`shouldBe` privateAudience)
+
+      it "evidenceAudience_ownerCanReadButCannotPublishPrivateEvidenceToProjectResources" \tr -> do
+        let conversation = UUIDId $ UUID.fromWords 0 0 44 22
+            user = (getResponse tr.trSessAndHeader).user.id
+            secret = "own-private-slack-evidence"
+        mode <- interactiveInvocation tr testPid conversation "My private Slack investigation" Issues.Autonomous
+        runTestBg frozenTime tr $ Issues.insertChatMessage testPid conversation Issues.ChatAssistant secret Nothing Nothing
+        runQueryEffect tr (Investigations.retainEvidenceAudience testPid conversation $ Investigations.PersonalAudience user) >>= (`shouldBe` True)
+        (_, page) <- testServant tr $ AIThreads.threadGetH testPid conversation Nothing Nothing
+        renderT page `shouldSatisfy` T.isInfixOf secret
+        let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.WebSession user, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.projectTools = Just Routes.mcpProjectTools}
+        denied <- runTestBg frozenTime tr $ AI.executeToolCall config (LLM.ToolCall "shared-dashboard" "function" $ LLM.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= secret]))
+        denied.formatted `shouldSatisfy` T.isInfixOf "restricted evidence"
+        runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM projects.dashboards WHERE project_id = #{testPid} AND title = #{secret}|]) >>= (`shouldBe` 0)
+
       for_ [False, True] $ \legacy ->
         it ("evidenceDisclosure_adminReadRestrictsItsConversationAfterRoleChange: " <> show legacy) \tr -> do
           let conversation = UUIDId $ UUID.fromWords 0 0 44 1
@@ -1131,7 +1176,7 @@ spec = around withTestResources do
           runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid execution.id) >>= (\entries -> length entries `shouldBe` if policy == Issues.Autonomous then 1 else 0)
           runQueryEffect tr (Issues.listRunArtifacts testPid execution.id) >>= (\artifacts -> T.intercalate " " (mapMaybe (.content) artifacts) `shouldSatisfy` T.isInfixOf "Compare traces.")
 
-      for_ (["policy-withdrawn", "original-role-limit", "restricted-evidence"] :: [Text]) $ \restriction ->
+      for_ (["policy-withdrawn", "original-role-limit", "restricted-evidence", "private-audience"] :: [Text]) $ \restriction ->
         it ("nativePolicy_completionRechecksMutationAuthority: " <> toString restriction) \tr -> do
           issueId <- runTestBg frozenTime tr $ Issues.createQueryAlertIssue testPid "native-policy-race" "Original title" "service == checkout" 100 200 Issues.Above >>= Issues.insertIssueReturningId
           void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
@@ -1145,6 +1190,7 @@ spec = around withTestResources do
           context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.IssueEnrichment issueId) execution.id execution.startedAt
           when (restriction == "policy-withdrawn") $ runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId Issues.Observe
           when (restriction == "restricted-evidence") $ runQueryEffect tr $ Investigations.retainEvidencePermission testPid [conversation] ProjectMembers.PAdmin
+          when (restriction == "private-audience") $ runQueryEffect tr (Investigations.retainEvidenceAudience testPid conversation $ Investigations.PersonalAudience routine.requestedBy) >>= (`shouldBe` True)
           void $ runTestBg frozenTime tr $ Issues.completeRunWithProjectMutation (Issues.updateIssueEnhancement frozenTime issueId "Must not change" "" "") context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "Must not publish" Nothing
           runQueryEffect tr (Issues.selectIssueById testPid issueId) >>= (\issue -> fmap (.title) issue `shouldBe` Just "Original title")
           runQueryEffect tr (Issues.getRoutineRun testPid execution.id) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)

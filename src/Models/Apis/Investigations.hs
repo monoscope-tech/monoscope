@@ -72,19 +72,27 @@ module Models.Apis.Investigations (
   retainEvidencePermission,
   classifyLegacyEvidence,
   visibleConversationIds,
+  EvidenceAudience (..),
+  EvidenceViewer (..),
+  canReadEvidence,
+  meetEvidenceAudience,
+  conversationEvidenceAudience,
+  retainEvidenceAudience,
 ) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM ()
+import Data.Effectful.Wreq qualified as HTTP
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID.V5 qualified as UUID5
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
 import Effectful.Exception (throwIO)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
@@ -981,6 +989,74 @@ captureProgress appId receiptId =
 
 
 -- | A conversation and its retained runs share the strongest evidence requirement.
+data EvidenceAudience = ProjectAudience | PersonalAudience Projects.UserId | SlackChannelAudience Integrations.SlackChannel | NoAudience
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data EvidenceViewer = ProjectViewer | MemberViewer Projects.UserId | ChannelViewer Projects.UserId Integrations.SlackChannel
+
+
+canReadEvidence :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> ProjectMembers.Permissions -> EvidenceViewer -> UUIDId "conversation" -> Eff es Bool
+canReadEvidence project permission viewer conversation = do
+  required <- conversationEvidencePermission project conversation
+  audience <- conversationEvidenceAudience project conversation
+  if permission < required then pure False else audienceVisible project viewer audience
+
+
+audienceVisible :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> EvidenceViewer -> EvidenceAudience -> Eff es Bool
+audienceVisible project viewer = \case
+  ProjectAudience -> pure True
+  NoAudience -> pure False
+  PersonalAudience owner -> pure $ case viewer of
+    MemberViewer member -> owner == member
+    _ -> False
+  SlackChannelAudience channel -> case viewer of
+    MemberViewer member -> Integrations.slackChannelMember project member channel
+    ChannelViewer member destination | channel == destination -> Integrations.slackChannelMember project member channel
+    _ -> pure False
+
+
+-- | Project evidence adds no restriction; distinct private audiences cannot mix.
+--
+-- >>> import Data.UUID qualified as UUID
+-- >>> import Pkg.DeriveUtils (UUIDId(..))
+-- >>> let personal = PersonalAudience (UUIDId UUID.nil)
+-- >>> meetEvidenceAudience ProjectAudience personal == personal
+-- True
+-- >>> meetEvidenceAudience personal personal == personal
+-- True
+-- >>> meetEvidenceAudience personal (PersonalAudience (UUIDId (UUID.fromWords 0 0 0 1))) == NoAudience
+-- True
+-- >>> meetEvidenceAudience NoAudience personal == NoAudience
+-- True
+meetEvidenceAudience :: EvidenceAudience -> EvidenceAudience -> EvidenceAudience
+meetEvidenceAudience ProjectAudience audience = audience
+meetEvidenceAudience audience ProjectAudience = audience
+meetEvidenceAudience left right = if left == right then left else NoAudience
+
+
+conversationEvidenceAudience :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es EvidenceAudience
+conversationEvidenceAudience project conversation = do
+  Aeson audience <- Hasql.interpScalar [HI.sql|SELECT apis.conversation_evidence_audience(#{project}, #{conversation})|]
+  pure audience
+
+
+retainEvidenceAudience :: DB es => Projects.ProjectId -> UUIDId "conversation" -> EvidenceAudience -> Eff es Bool
+retainEvidenceAudience project conversation requested = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  void $ Hasql.queryTx @[UUIDId "ai_routine_run"] [HI.sql|SELECT id FROM apis.ai_routine_runs WHERE project_id = #{project} AND conversation_id = #{conversation} ORDER BY id FOR UPDATE|]
+  anchor <- Hasql.queryTx @[UUIDId "conversation"] [HI.sql|SELECT conversation_id FROM apis.ai_conversations WHERE project_id = #{project} AND conversation_id = #{conversation} FOR UPDATE|]
+  Aeson existing <- HI.getOneColumn <$> Hasql.oneTx @(HI.OneColumn (Aeson EvidenceAudience)) [HI.sql|SELECT apis.conversation_evidence_audience(#{project}, #{conversation})|]
+  let combined = meetEvidenceAudience existing requested
+  if null anchor || combined == NoAudience
+    then pure False
+    else do
+      Hasql.executeTx [HI.sql|UPDATE apis.ai_routine_runs SET evidence_audience = #{Aeson combined} WHERE project_id = #{project} AND conversation_id = #{conversation}|]
+      Hasql.executeTx [HI.sql|UPDATE apis.ai_conversations SET evidence_audience = #{Aeson combined} WHERE project_id = #{project} AND conversation_id = #{conversation}|]
+      pure True
+
+
+-- | A conversation and its retained runs share the strongest evidence requirement.
 conversationEvidencePermission :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ProjectMembers.Permissions
 conversationEvidencePermission project conversation = do
   classifyLegacyEvidence project (Just conversation)
@@ -1074,15 +1150,18 @@ classifyLegacyEvidence project selected = do
       LegacyUncertain _ original -> checkpointNames original
 
 
-visibleConversationIds :: DB es => Projects.ProjectId -> ProjectMembers.Permissions -> Eff es [UUIDId "conversation"]
-visibleConversationIds project permission = do
+visibleConversationIds :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> ProjectMembers.Permissions -> EvidenceViewer -> Eff es [UUIDId "conversation"]
+visibleConversationIds project permission viewer = do
   classifyLegacyEvidence project Nothing
-  Hasql.interp
-    [HI.sql|SELECT conversation_id FROM (
-        SELECT conversation_id, evidence_permission FROM apis.ai_conversations WHERE project_id = #{project}
-        UNION ALL SELECT conversation_id, evidence_permission FROM apis.ai_routine_runs WHERE project_id = #{project}
+  scopes <-
+    Hasql.interp @[(UUIDId "conversation", Aeson EvidenceAudience)]
+      [HI.sql|SELECT conversation_id, apis.meet_evidence_audiences(evidence_audience) FROM (
+        SELECT conversation_id, evidence_permission, evidence_audience FROM apis.ai_conversations WHERE project_id = #{project}
+        UNION ALL SELECT conversation_id, evidence_permission, evidence_audience FROM apis.ai_routine_runs WHERE project_id = #{project}
       ) scopes GROUP BY conversation_id
       HAVING max(apis.evidence_permission_rank(evidence_permission)) <= apis.evidence_permission_rank(#{permission})|]
+  visible <- S.fromList <$> filterM (audienceVisible project viewer) (ordNub [audience | (_, Aeson audience) <- scopes])
+  pure [conversation | (conversation, Aeson audience) <- scopes, audience `S.member` visible]
 
 
 operationResponse :: Projects.ProjectId -> OperationResult -> ToolResult

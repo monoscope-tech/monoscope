@@ -272,10 +272,11 @@ import Control.Lens (view)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
-import Data.Char (isAscii, isAsciiUpper, isDigit, isPrint)
+import Data.Char (isAscii, isPrint)
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
+import Data.Effectful.Wreq qualified as HTTP
 import Data.Generics.Product.Fields qualified as Fields
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
@@ -306,6 +307,7 @@ import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ApiChanges (PayloadChange)
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -1973,15 +1975,15 @@ listConversations :: DB es => Projects.ProjectId -> Eff es [ConversationSummary]
 listConversations pid = Hasql.interp $ conversationSummarySql "AI conversation" [HI.sql|WHERE c.project_id = #{pid} ORDER BY (r.id IS NOT NULL) DESC, c.updated_at DESC|]
 
 
-listVisibleConversations :: DB es => Projects.ProjectId -> ProjectMembers.Permissions -> Eff es [ConversationSummary]
-listVisibleConversations pid role = do
-  visible <- Investigations.visibleConversationIds pid role
+listVisibleConversations :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> ProjectMembers.Permissions -> Investigations.EvidenceViewer -> Eff es [ConversationSummary]
+listVisibleConversations pid role viewer = do
+  visible <- Investigations.visibleConversationIds pid role viewer
   Hasql.interp $ conversationSummarySql "AI conversation" [HI.sql|WHERE c.project_id = #{pid} AND c.conversation_id = ANY(#{visible}) ORDER BY (r.id IS NOT NULL) DESC, c.updated_at DESC|]
 
 
-listVisibleRoutineRuns :: DB es => Projects.ProjectId -> ProjectMembers.Permissions -> Int -> Eff es [RoutineRun]
-listVisibleRoutineRuns pid role limit = do
-  visible <- Investigations.visibleConversationIds pid role
+listVisibleRoutineRuns :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> ProjectMembers.Permissions -> Investigations.EvidenceViewer -> Int -> Eff es [RoutineRun]
+listVisibleRoutineRuns pid role viewer limit = do
+  visible <- Investigations.visibleConversationIds pid role viewer
   Hasql.interp $ routineRunsSql pid <> [HI.sql|AND run.conversation_id = ANY(#{visible}) ORDER BY run.started_at DESC, run.attempt DESC LIMIT #{max 1 $ min 100 limit}|]
 
 
@@ -2081,9 +2083,7 @@ installRoutineTemplate :: (DB es, Time :> es) => Projects.UserId -> Projects.Pro
 installRoutineTemplate requestedBy pid convId timezone = installRoutine requestedBy pid convId timezone . CatalogRoutine
 
 
-data IncidentChannel = IncidentChannel {teamId :: Text, channelId :: Text}
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.ToJSON)
+type IncidentChannel = Integrations.SlackChannel
 
 
 -- | Only channels can opt into proactive incident work; direct messages cannot.
@@ -2095,10 +2095,7 @@ data IncidentChannel = IncidentChannel {teamId :: Text, channelId :: Text}
 -- >>> incidentChannel "" "C123"
 -- Left "A Slack workspace is required."
 incidentChannel :: Text -> Text -> Either Text IncidentChannel
-incidentChannel team channel
-  | T.null (T.strip team) = Left "A Slack workspace is required."
-  | T.length channel < 2 || not (T.isPrefixOf "C" channel || T.isPrefixOf "G" channel) || not (T.all (\c -> isAsciiUpper c || isDigit c) channel) = Left "Choose a Slack channel for incident investigations."
-  | otherwise = Right $ IncidentChannel team channel
+incidentChannel team channel = first (\case Integrations.WorkspaceRequired -> "A Slack workspace is required."; Integrations.ChannelRequired -> "Choose a Slack channel for incident investigations.") $ Integrations.slackChannel team channel
 
 
 incidentRoutineConversationId :: Projects.ProjectId -> IncidentChannel -> UUIDId "conversation"
@@ -2497,9 +2494,12 @@ completeRunTx now mutation context proposed = do
   case states of
     [HI.OneColumn RunRunning] -> do
       (access, permission) <- Hasql.oneTx @(RunAccess, ProjectMembers.Permissions) (runContextAccessSql context)
-      required <- case mutation of
-        Nothing -> pure ProjectMembers.PView
-        Just _ -> HI.getOneColumn <$> Hasql.oneTx @(HI.OneColumn ProjectMembers.Permissions) [HI.sql|SELECT COALESCE(apis.conversation_evidence_permission(#{pid}, #{context.conversationId}), #{ProjectMembers.PAdmin})|]
+      (required, projectAudience) <- case mutation of
+        Nothing -> pure (ProjectMembers.PView, True)
+        Just _ ->
+          Hasql.oneTx @(ProjectMembers.Permissions, Bool)
+            [HI.sql|SELECT COALESCE(apis.conversation_evidence_permission(#{pid}, #{context.conversationId}), #{ProjectMembers.PAdmin}),
+          apis.conversation_evidence_audience(#{pid}, #{context.conversationId}) = #{Aeson Investigations.ProjectAudience}|]
       let outcome = case (access, proposed) of
             (_, CancelledResult{}) -> proposed
             (Stopped, _) -> CancelledResult Nothing
@@ -2507,7 +2507,7 @@ completeRunTx now mutation context proposed = do
             (_, TimedOutResult RunFailure{notice = RunOnly}) -> proposed
             (Allowed policy, CompletedResult{})
               | isJust mutation
-              , isLeft (authorizeCapability (RunAuthority policy permission) Catalog.ProjectWrite) || required > Catalog.disclosurePermission Catalog.ProjectWrite ->
+              , isLeft (authorizeCapability (RunAuthority policy permission) Catalog.ProjectWrite) || required > Catalog.disclosurePermission Catalog.ProjectWrite || not projectAudience ->
                   CancelledResult $ Just "Project mutation authority was withdrawn before completion."
             (Allowed _, _) -> proposed
             (Unavailable, _) -> CancelledResult Nothing
@@ -2589,7 +2589,9 @@ incidentEventBindingSql eventId rootId conversation =
       AND root.message_ts IS NOT NULL AND NOT root.threadless
       AND root.team_id = r.incident_team_id AND root.channel_id = r.incident_channel_id
       AND COALESCE(apis.conversation_evidence_permission(r.project_id, r.conversation_id), #{ProjectMembers.PAdmin}) = #{ProjectMembers.PView}
-      AND COALESCE(apis.conversation_evidence_permission(r.project_id, target.conversation_id), #{ProjectMembers.PAdmin}) = #{ProjectMembers.PView})|]
+      AND COALESCE(apis.conversation_evidence_permission(r.project_id, target.conversation_id), #{ProjectMembers.PAdmin}) = #{ProjectMembers.PView}
+      AND apis.conversation_evidence_audience(r.project_id, r.conversation_id) = #{Aeson Investigations.ProjectAudience}
+      AND apis.conversation_evidence_audience(r.project_id, target.conversation_id) = #{Aeson Investigations.ProjectAudience})|]
 
 
 routineRunAccessSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql -> HI.Sql

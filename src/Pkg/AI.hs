@@ -34,6 +34,7 @@ module Pkg.AI (
   AgentStopped (..),
   requireAgentAccess,
   requireEvidenceAccess,
+  canReadEvidence,
   ToolLimits (..),
   ProjectTools (..),
   viewerProjectTools,
@@ -218,7 +219,7 @@ responseWidgets response =
     pure (def :: Widget.Widget){Widget.wType = wType, Widget.query = Just query}
 
 
-completeAgenticResponse :: (DB es, ELLM.LLM :> es, IOE :> es, Time.Time :> es) => AgenticConfig -> Text -> Text -> Text -> AgenticChatResult -> Eff es (Either Text LLMResponse)
+completeAgenticResponse :: (DB es, ELLM.LLM :> es, IOE :> es, Time.Time :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> Text -> AgenticChatResult -> Eff es (Either Text LLMResponse)
 completeAgenticResponse config userQuery model apiKey answer = do
   void $ requireConfigAccess config
   case (config.access, config.conversationId) of
@@ -240,7 +241,7 @@ completeAgenticResponse config userQuery model apiKey answer = do
   pure $ parseAgenticResponse answer
 
 
-ensureConversationTitle :: (DB es, ELLM.LLM :> es, IOE :> es, Time.Time :> es) => AgenticConfig -> Text -> Text -> Text -> Maybe AgenticChatResult -> Eff es (Maybe Text)
+ensureConversationTitle :: (DB es, ELLM.LLM :> es, IOE :> es, Time.Time :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> Text -> Maybe AgenticChatResult -> Eff es (Maybe Text)
 ensureConversationTitle config userQuery model apiKey answer = do
   void $ requireConfigAccess config
   title <- forM config.conversationId \conversation -> do
@@ -596,12 +597,30 @@ evidenceAudience access role = case access of
   (ServiceAccess; SlackAccess{}; SlackInvestigationAccess{}) -> ProjectMembers.PView
 
 
-requireEvidenceAccess :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> UUIDId "conversation" -> Eff es ProjectMembers.Permissions
-requireEvidenceAccess access project conversation = do
+canReadEvidence :: (DB es, IOE :> es, W.HTTP :> es) => AgentAccess -> Projects.ProjectId -> UUIDId "conversation" -> Eff es Bool
+canReadEvidence access project conversation = do
   permission <- agentPermission access project
-  required <- Investigations.conversationEvidencePermission project conversation
-  unless (permission >= required && evidenceAudience access permission >= required) $ throwIO AgentAccessDenied
-  pure permission
+  viewer <- case access of
+    MemberAccess ProjectMember member -> pure $ Investigations.MemberViewer member
+    MemberAccess WebSession member -> pure $ Investigations.MemberViewer member
+    SlackInvestigationAccess run -> case Integrations.slackChannel run.teamId run.channelId of
+      Right channel -> pure $ Investigations.ChannelViewer run.userId channel
+      Left _
+        | "D" `T.isPrefixOf` run.channelId ->
+            Investigations.conversationEvidenceAudience project conversation >>= \case
+              Investigations.PersonalAudience owner | owner == run.userId -> do
+                own <- Integrations.slackDirectMessageOwner project run.userId run.teamId run.slackUserId run.channelId
+                pure $ if own then Investigations.MemberViewer run.userId else Investigations.ProjectViewer
+              _ -> pure Investigations.ProjectViewer
+      Left _ -> pure Investigations.ProjectViewer
+    _ -> pure Investigations.ProjectViewer
+  Investigations.canReadEvidence project (evidenceAudience access permission) viewer conversation
+
+
+requireEvidenceAccess :: (DB es, IOE :> es, W.HTTP :> es) => AgentAccess -> Projects.ProjectId -> UUIDId "conversation" -> Eff es ProjectMembers.Permissions
+requireEvidenceAccess access project conversation = do
+  unlessM (canReadEvidence access project conversation) $ throwIO AgentAccessDenied
+  agentPermission access project
 
 
 data AgenticConfig = AgenticConfig
@@ -657,7 +676,7 @@ documentConversation config = case config.access of
   SlackInvestigationAccess{} -> config.conversationId
 
 
-requireConfigAccess :: (DB es, IOE :> es) => AgenticConfig -> Eff es Issues.RunAuthority
+requireConfigAccess :: (DB es, IOE :> es, W.HTTP :> es) => AgenticConfig -> Eff es Issues.RunAuthority
 requireConfigAccess config = do
   permission <- case config.conversationId of
     Nothing -> agentPermission config.access config.projectId
@@ -1029,7 +1048,7 @@ runAgenticChatWithHistory initialConfig requestedInput model apiKey = do
 
 -- | Each attempt gets its own journal; a retry never overwrites partial evidence.
 -- Persisted Slack turns resume their checkpoint while each worker attempt retains its own activity log.
-withInvestigationJournal :: (DB es, IOE :> es, UUIDEff :> es) => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
+withInvestigationJournal :: (DB es, IOE :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
 withInvestigationJournal config userQuery model action = do
   void $ requireConfigAccess config
   case config.access of
@@ -1229,7 +1248,7 @@ data AgentOperationUncertain = AgentOperationUncertain (UUIDId "agent_operation"
 
 
 executeNativeOperation
-  :: (DB es, IOE :> es)
+  :: (DB es, IOE :> es, W.HTTP :> es)
   => Issues.RunContext
   -> Operation.NativeOperation
   -> (Operation.NativeOperation -> OperationExecution es (Either Text AE.Value))
@@ -1314,7 +1333,7 @@ toolDenialMessage = \case
   RestrictedPublication -> "This conversation contains restricted evidence and cannot publish it to a shared destination."
 
 
-authorizeRunOperation :: (DB es, IOE :> es) => Issues.RunContext -> Catalog.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
+authorizeRunOperation :: (DB es, IOE :> es, W.HTTP :> es) => Issues.RunContext -> Catalog.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
 authorizeRunOperation context capability = do
   let config = (defaultAgenticConfig context.projectId){access = MemberAccess ProjectMember context.requestedBy, conversationId = Just context.conversationId, invocationMode = DurableRun context}
   authority <- requireConfigAccess config
@@ -1331,7 +1350,8 @@ authorizeOperation config authority policy = Except.runExceptT do
     _ -> Except.throwError EvidenceRetentionRequired
   when (Catalog.requiresAutonomy policy) $ for_ config.conversationId $ \conversation -> do
     required <- lift $ Investigations.conversationEvidencePermission config.projectId conversation
-    when (required > disclosure) $ Except.throwError RestrictedPublication
+    audience <- lift $ Investigations.conversationEvidenceAudience config.projectId conversation
+    when (required > disclosure || audience /= Investigations.ProjectAudience) $ Except.throwError RestrictedPublication
   pure $ OperationPolicy policy authority.policy authority.permission
 
 

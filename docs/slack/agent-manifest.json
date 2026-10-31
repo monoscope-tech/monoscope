@@ -67,6 +67,7 @@
         "app_mentions:read",
         "channels:read",
         "groups:read",
+        "im:read",
         "channels:history",
         "groups:history",
         "im:history",

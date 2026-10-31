@@ -147,9 +147,9 @@ threadsGetH pid = do
 routinesGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 routinesGetH pid = do
   canEdit <- canEditRoutines pid
-  (_, _, bw) <- mkAIPageCtx pid
+  (session, _, bw) <- mkAIPageCtx pid
   role <- currentViewerPermission pid
-  (conversations, runs) <- concurrently (Issues.listVisibleConversations pid role) (Issues.listVisibleRoutineRuns pid role 12)
+  (conversations, runs) <- concurrently (visibleConversations pid) (Issues.listVisibleRoutineRuns pid role (Investigations.MemberViewer session.user.id) 12)
   let installed = filter (isJust . (.routineKind)) conversations
       pageConfig =
         bw
@@ -259,9 +259,7 @@ threadPageGetH pid convId docM runM hxTarget = do
   canEdit <- canEditRoutines pid
   (_, _, bw) <- mkAIPageCtx pid
   viewerPermission <- currentViewerPermission pid
-  for_ (convId : map (.conversationId) (maybeToList runM)) $ \conversation -> do
-    required <- Investigations.conversationEvidencePermission pid conversation
-    unless (viewerPermission >= required) $ throwError Servant.err403
+  for_ (convId : map (.conversationId) (maybeToList runM)) $ authorizeConversation pid
   -- The open document's refresh keeps only #ai-document (htmx 4 sends `tag#id`), so skip what it discards.
   let unlessRefresh :: Applicative f => f [a] -> f [a]
       unlessRefresh q = if any ("#ai-document" `T.isSuffixOf`) hxTarget then pure [] else q
@@ -555,9 +553,7 @@ routineInstallPostH pid form = do
       existing <- find ((== Just template.key) . (.templateKey)) <$> Issues.listConversations pid
       case existing of
         Just conversation -> do
-          role <- currentViewerPermission pid
-          required <- Investigations.conversationEvidencePermission pid conversation.conversationId
-          unless (role >= required) $ throwError Servant.err403
+          authorizeConversation pid conversation.conversationId
           redirectToThread pid conversation.conversationId
         Nothing -> do
           convId <- UUIDId <$> UUID.genUUID
@@ -587,6 +583,7 @@ startThreadPostHWithTools projectTools pid form = do
 
 threadPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> UUIDId "conversation" -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
 threadPostHWithTools projectTools pid convId form = do
+  authorizeConversation pid convId
   authorizeProject pid
   case normalizeQuery form.query of
     Left err -> reject err
@@ -603,6 +600,7 @@ threadPostHWithTools projectTools pid convId form = do
 
 threadTitlePostH :: Projects.ProjectId -> UUIDId "conversation" -> TitleForm -> ATAuthCtx (RespHeaders (Html ()))
 threadTitlePostH pid convId form = do
+  authorizeConversation pid convId
   authorizeProject pid
   let title = T.strip form.conversationTitle
   if T.null title
@@ -611,7 +609,7 @@ threadTitlePostH pid convId form = do
 
 
 threadDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Html ()))
-threadDeleteH pid convId = authorizeProject pid >> Issues.deleteConversation pid convId >> redirect pid ""
+threadDeleteH pid convId = authorizeConversation pid convId >> authorizeProject pid >> Issues.deleteConversation pid convId >> redirect pid ""
 
 
 submitTurn :: Maybe AI.ProjectTools -> Issues.InteractiveOrigin -> UUIDId "ai_routine_run" -> Bool -> Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
@@ -675,6 +673,7 @@ enqueue write = do
 
 routinePostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineForm -> ATAuthCtx (RespHeaders (Html ()))
 routinePostH pid convId form = do
+  authorizeConversation pid convId
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
   whenJustM (Issues.getConversation pid convId) \conversation ->
@@ -683,21 +682,23 @@ routinePostH pid convId form = do
 
 
 routinePausePostH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Html ()))
-routinePausePostH pid convId = void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> redirectToThread pid convId
+routinePausePostH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> redirectToThread pid convId
 
 
 routineCancelPostH, routineResumePostH, routineDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Html ()))
-routineCancelPostH pid convId = void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.cancelRoutineRun pid convId >> redirect pid "/routines"
+routineCancelPostH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.cancelRoutineRun pid convId >> redirect pid "/routines"
 routineResumePostH pid convId = do
+  authorizeConversation pid convId
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
   enqueue (Issues.resumeRoutine sess.user.id pid convId)
   redirect pid "/routines"
-routineDeleteH pid convId = void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.deleteRoutine pid convId >> redirect pid "/routines"
+routineDeleteH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.deleteRoutine pid convId >> redirect pid "/routines"
 
 
 routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (RespHeaders (Html ()))
 routineDestinationPostH pid convId form = do
+  authorizeConversation pid convId
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   Issues.setRoutineDestination pid convId form.destination
   redirect pid "/routines"
@@ -705,6 +706,7 @@ routineDestinationPostH pid convId form = do
 
 routinePolicyPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutinePolicyForm -> ATAuthCtx (RespHeaders (Html ()))
 routinePolicyPostH pid conversation form = do
+  authorizeConversation pid conversation
   (session, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   Issues.setRoutinePolicy session.user.id pid conversation form.policy
   addSuccessToast "Execution policy saved." Nothing
@@ -733,6 +735,7 @@ runUrl pid runId = "/p/" <> pid.toText <> "/ai/runs/" <> runId.toText
 
 routineInstructionsPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineInstructionsForm -> ATAuthCtx (RespHeaders (Html ()))
 routineInstructionsPostH pid convId form = do
+  authorizeConversation pid convId
   void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   case normalizeQuery form.instructions of
     Left err -> reject err
@@ -752,4 +755,13 @@ currentViewerPermission pid = do
 
 
 visibleConversations :: Projects.ProjectId -> ATAuthCtx [Issues.ConversationSummary]
-visibleConversations pid = currentViewerPermission pid >>= Issues.listVisibleConversations pid
+visibleConversations pid = do
+  (session, _) <- Projects.sessionAndProject pid
+  role <- currentViewerPermission pid
+  Issues.listVisibleConversations pid role (Investigations.MemberViewer session.user.id)
+
+
+authorizeConversation :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx ()
+authorizeConversation pid conversation = do
+  (session, _) <- Projects.sessionAndProject pid
+  unlessM (AI.canReadEvidence (AI.MemberAccess AI.WebSession session.user.id) pid conversation) $ throwError Servant.err403

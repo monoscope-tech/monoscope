@@ -964,6 +964,43 @@ spec = around withTestResources do
         -- Process background jobs that send final response
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
+      it "evidenceAudience_channelAccessRequiresFreshLinkedMembershipAndFollowsPagination" \tr -> do
+        setupLinkedSlackData tr testPid "T_AUDIENCE"
+        let conversation = UUIDId $ UUID.fromWords 0 0 44 23
+            user = (getResponse tr.trSessAndHeader).user.id
+            channel = fromRightShow $ Slack.slackChannel "T_AUDIENCE" "C123"
+        runTestBg frozenTime tr $ void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+        runQueryEffect tr (Investigations.retainEvidenceAudience testPid conversation $ Investigations.SlackChannelAudience channel) >>= (`shouldBe` True)
+        for_ [True, False] $ \member -> do
+          let transport = withHTTPResponses \options _ ->
+                pure
+                  $ Just
+                  $ AE.encode
+                  $ if options ^. Wreq.param "cursor" == [""]
+                    then AE.object ["ok" AE..= True, "members" AE..= (["U_OTHER"] :: [Text]), "response_metadata" AE..= AE.object ["next_cursor" AE..= ("page-two" :: Text)]]
+                    else AE.object ["ok" AE..= True, "members" AE..= (["U0123ABCDEF" | member] :: [Text])]
+          (requests, allowed) <- runAsBaseRecordingHTTP tr $ transport $ AI.canReadEvidence (AI.MemberAccess AI.WebSession user) testPid conversation
+          allowed `shouldBe` member
+          length requests `shouldBe` 2
+        (_, service) <- runAsBaseRecordingHTTP tr $ AI.canReadEvidence AI.ServiceAccess testPid conversation
+        service `shouldBe` False
+
+      it "evidenceAudience_personalEvidenceRequiresTheRequestersOwnDirectMessage" \tr -> do
+        setupLinkedSlackData tr testPid "T_DM_AUDIENCE"
+        install <- runAuthHandler tr $ SlackPage.startInstallGetH testPid False
+        location <- maybe (fail "Missing OAuth location") pure $ lookup "Location" $ getHeaders install
+        let scopes = lookup "scope" $ parseSimpleQuery $ encodeUtf8 $ snd $ T.breakOn "?" $ decodeUtf8 location
+        scopes `shouldSatisfy` maybe False (elem "im:read" . T.splitOn "," . decodeUtf8)
+        let conversation = UUIDId $ UUID.fromWords 0 0 44 24
+            user = (getResponse tr.trSessAndHeader).user.id
+            access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_DM_AUDIENCE" "U0123ABCDEF" user "D123" "1735689600.000001" "1735689600.000001"
+        runTestBg frozenTime tr $ void $ Issues.getOrCreateConversation testPid conversation Issues.CTSlackThread (AE.object [])
+        runQueryEffect tr (Investigations.retainEvidenceAudience testPid conversation $ Investigations.PersonalAudience user) >>= (`shouldBe` True)
+        for_ ([(True, "U0123ABCDEF", "D123", True), (True, "U_OTHER", "D123", False), (False, "U0123ABCDEF", "D123", False), (True, "U0123ABCDEF", "D_OTHER", False)] :: [(Bool, Text, Text, Bool)]) $ \(direct, peer, channel, expected) -> do
+          let transport = withHTTPResponses \_ _ -> pure $ Just $ AE.encode $ AE.object ["ok" AE..= True, "channel" AE..= AE.object ["is_im" AE..= direct, "user" AE..= (peer :: Text), "id" AE..= (channel :: Text)]]
+          (_, allowed) <- runAsBaseRecordingHTTP tr $ transport $ AI.canReadEvidence access testPid conversation
+          allowed `shouldBe` expected
+
       it "slackSlashCommand_recordsRoutineRunAndArtifactIncludingRejectedDelivery" \tr -> do
         setupSlackAgent tr testPid "T_SLASH_ROUTINE"
         for_ [False, True] \rejected -> do
