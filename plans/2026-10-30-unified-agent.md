@@ -839,6 +839,18 @@ The regression first reproduced an ignored query returning an unrelated page. It
 
 All 235 bot and 75 API v1 examples pass. Formatting and diff checks pass. HLint reports the same four hints as the baseline across the changed application modules, with none introduced. Repeated slice reviews consolidated native listing and search response handling and found no remaining material distillation, constraint-evasion, or client-behavior findings. A fresh inventory still lists 28 open PRs, with no changed heads or additional selected integration work. Whole-branch reviews, controlled live Slack acceptance, final release checks, and the remaining plan phases stay open.
 
+### Recovery retires unowned routines without replacing their actors (31 October)
+
+The existing hourly routine recovery sweep now retires installations whose authorizing member is absent. In one transaction it clears their schedule and lease, cancels their running attempts, marks unresolved operations unknown, and freezes conversation artifacts into run history. Normal completion and retirement share `finishRunRowsTx` for operation retirement and artifact snapshots. Returned operation results, original operation actors, and conversation history remain intact. A null run actor remains null; maintenance never invents a replacement member.
+
+The entry point is named `recoverDueRoutines` because it now performs recovery before returning due schedules. The existing hourly job calls it; there is no additional timer, queue, or migration. Its run lookup uses the existing routine/run index.
+
+A small `RunFinalization` sum selects a completed member run or retirement of unowned routines. The member case requires an opaque run context and a terminal status. Callers cannot pass an arbitrary SQL prefix; the shared transaction helper owns both statements and their common evidence handling.
+
+The regression reproduces a paused, unowned installation whose attempt still appears to be running. It also reproduced missing artifact snapshots on retirement. It rejects the operation-state update to verify that run cancellation, lease cleanup, and snapshots roll back together, then repeats successful recovery to check idempotence and preserved history. All 236 bot examples and the native review workflow pass. Formatting, HLint on the changed application modules, and diff checks pass. Repeated slice reviews consolidated the shared finalization and replaced its arbitrary SQL input with the typed sum, with no remaining material slice findings.
+
+Interactive orphan attempts, a reassigned installation with an already unowned attempt, and legacy terminal-run leases remain separate lifecycle cases. Whole-branch review and release checks remain pending.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

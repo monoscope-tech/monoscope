@@ -1385,7 +1385,7 @@ retryOnDeadlock label = go 2
 runHourlyJob :: UTCTime -> Int -> ATBackgroundCtx ()
 runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
-  tryStep "ai-routine-recovery" $ Issues.listDueRoutines 100 >>= traverse_ (\routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt)
+  tryStep "ai-routine-recovery" $ Issues.recoverDueRoutines 100 >>= traverse_ (\routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt)
   tryStep "metric-catalog-flush" $ Telemetry.flushMetricCatalog ctx.metricCatalogBuffer
   tryStep "metric-catalog-reconcile" Telemetry.reconcileMetricCatalog
   tryStep "endpoint-shape-report" reportUnwrittenIdRules

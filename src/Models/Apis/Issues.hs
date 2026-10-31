@@ -209,7 +209,7 @@ module Models.Apis.Issues (
   installRoutineTemplate,
   claimRoutine,
   listRoutineRuns,
-  listDueRoutines,
+  recoverDueRoutines,
   pauseRoutine,
   cancelRoutineRun,
   resumeRoutine,
@@ -2428,20 +2428,7 @@ completeRunTx now mutation context proposed = do
       for_ failure $ \err -> case err.notice of
         RunOnly -> pass
         ConversationNotice body -> Hasql.executeTx $ runMessageSql pid runId ChatExecutionEvent body Nothing Nothing
-      Hasql.executeTx
-        [HI.sql|WITH finished AS (
-              UPDATE apis.ai_routine_runs
-              SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{reason}
-              WHERE id = #{runId} AND started_at = #{context.startedAt} AND status = 'running'
-              RETURNING id, project_id, conversation_id, started_at
-            ), uncertain AS (
-              UPDATE apis.ai_agent_operations operation
-              SET outcome = #{Aeson Investigations.OperationUnknown}, updated_at = clock_timestamp()
-              FROM finished run WHERE operation.run_id = run.id AND operation.outcome = #{Aeson Investigations.OperationRunning}
-            ) INSERT INTO apis.ai_routine_run_artifacts (run_id, key, title, content)
-              SELECT run.id, a.key, a.title, a.content FROM finished run
-              JOIN apis.ai_artifacts a ON a.project_id = run.project_id AND a.conversation_id = run.conversation_id
-              WHERE a.key <> 'latest-result' ON CONFLICT (run_id, key) DO NOTHING|]
+      finishRunRowsTx $ FinishRun context status findings actions reason
 
       next <- forM schedule $ \slot -> do
         timing <- decodeRoutineTiming <$> Hasql.oneTx (routineTimingSql [HI.sql|id = #{slot.id}|])
@@ -2614,13 +2601,55 @@ routineRunsSql pid =
 
 -- | Recovery source for a queue insertion lost to a crash. Duplicate enqueues are safe:
 -- 'claimRoutine' admits exactly one worker for each scheduled instant.
-listDueRoutines :: DB es => Int -> Eff es [ScheduledRoutine]
-listDueRoutines limit =
-  Hasql.interp
+recoverDueRoutines :: DB es => Int -> Eff es [ScheduledRoutine]
+recoverDueRoutines limit = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  finishRunRowsTx RetireUnownedRoutines
+  Hasql.queryTx
     [HI.sql|SELECT id, next_run_at
       FROM apis.ai_routines WHERE active AND next_run_at <= now()
         AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
       ORDER BY next_run_at LIMIT #{max 1 limit}|]
+
+
+data RunFinalization
+  = FinishRun RunContext RunTermination (Maybe AE.Value) (Maybe AE.Value) (Maybe Text)
+  | RetireUnownedRoutines
+
+
+finishRunRowsTx :: RunFinalization -> Tx.Transaction ()
+finishRunRowsTx finalization =
+  Hasql.executeTx
+    $ finished
+    <> [HI.sql|, uncertain AS (
+      UPDATE apis.ai_agent_operations operation
+      SET outcome = #{Aeson Investigations.OperationUnknown}, updated_at = clock_timestamp()
+      FROM finished run WHERE operation.run_id = run.id AND operation.outcome = #{Aeson Investigations.OperationRunning}
+    ) INSERT INTO apis.ai_routine_run_artifacts (run_id, key, title, content)
+      SELECT run.id, a.key, a.title, a.content FROM finished run
+      JOIN apis.ai_artifacts a ON a.project_id = run.project_id AND a.conversation_id = run.conversation_id
+      WHERE a.key <> 'latest-result' ON CONFLICT (run_id, key) DO NOTHING|]
+  where
+    finished = case finalization of
+      FinishRun context status findings actions reason ->
+        [HI.sql|WITH finished AS (
+          UPDATE apis.ai_routine_runs
+          SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{reason}
+          WHERE id = #{context.id} AND started_at = #{context.startedAt} AND status = #{RunRunning}
+          RETURNING id, project_id, conversation_id
+        )|]
+      RetireUnownedRoutines ->
+        [HI.sql|WITH retired_routines AS (
+          UPDATE apis.ai_routines routine SET active = FALSE, next_run_at = NULL, running_since = NULL,
+            cancelled_at = clock_timestamp()
+          WHERE requested_by IS NULL AND (next_run_at IS NOT NULL OR running_since IS NOT NULL OR EXISTS (
+            SELECT 1 FROM apis.ai_routine_runs run WHERE run.routine_id = routine.id AND run.status = #{RunRunning}))
+          RETURNING id
+        ), finished AS (
+          UPDATE apis.ai_routine_runs SET status = #{RunCancelled}, finished_at = clock_timestamp(),
+            error = 'Routine authorizing member is no longer available.'
+          WHERE routine_id IN (SELECT id FROM retired_routines) AND status = #{RunRunning}
+          RETURNING id, project_id, conversation_id
+        )|]
 
 
 pauseRoutine :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()

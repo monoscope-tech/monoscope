@@ -18,6 +18,7 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful qualified as Eff
 import Effectful.Concurrent.Async (concurrently_)
 import Effectful.Dispatch.Dynamic (interpose)
@@ -39,6 +40,7 @@ import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
 import Pages.Bots.Utils (processAIQuery)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -1450,6 +1452,45 @@ spec = around withTestResources do
           evidence <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid run.id
           (evidence >>= (.input)) `shouldBe` Just "Send a daily reliability brief to Slack"
           (evidence >>= (.instructions)) `shouldBe` Just "Send a daily reliability brief to Slack"
+
+      it "routineRecovery_retiresUnownedWorkWithoutInventingAnActorOrDeletingEvidence" \tr -> do
+        let conversation = UUIDId UUID.nil
+            user = (getResponse tr.trSessAndHeader).user.id
+        Just slot <- runTestBg frozenTime tr do
+          void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+          Issues.insertChatMessage testPid conversation Issues.ChatUser "Retain this investigation" Nothing Nothing
+          Issues.upsertRoutine user testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
+        Just original <- runQueryEffect tr $ Issues.claimRoutine slot.id slot.scheduledAt
+        let call = LLM.ToolCall "interrupted" "function" $ LLM.ToolFunction "save_artifact" mempty
+            proposal = Investigations.OperationProposal (Operation.ModelCall call) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Autonomous ProjectMembers.PAdmin
+            artifact = fromRightShow $ Issues.mkArtifactKey "orphan-evidence"
+        runQueryEffect tr (Issues.saveArtifact testPid conversation artifact (Just "Investigation evidence") "Retained observation" Issues.ArtifactReplace) >>= (`shouldSatisfy` isRight)
+        runQueryEffect tr do
+          for_ (zip [0, 1 :: Int64] [Investigations.OperationRunning, Investigations.OperationReturned $ Investigations.ToolResult "Saved response" Nothing]) \(revision, outcome) ->
+            Hasql.interpExecute_
+              [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
+              VALUES (gen_random_uuid(), #{testPid}, #{original.runId}, #{user}, #{revision}, #{Aeson proposal}, #{Aeson outcome})|]
+          Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET requested_by = NULL WHERE id = #{original.runId}|]
+          Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET active = FALSE, requested_by = NULL, running_since = now() - interval '31 minutes' WHERE id = #{slot.id}|]
+        let ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+        bracket_
+          (ddl "ALTER TABLE apis.ai_agent_operations ADD CONSTRAINT reject_orphan_retirement CHECK (outcome->>'tag' <> 'OperationUnknown') NOT VALID")
+          (ddl "ALTER TABLE apis.ai_agent_operations DROP CONSTRAINT reject_orphan_retirement")
+          do
+            tryAny (runQueryEffect tr $ Issues.recoverDueRoutines 100) >>= (`shouldSatisfy` isLeft)
+            runQueryEffect tr (Issues.getRoutineRun testPid original.runId) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunRunning)
+            runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT running_since IS NOT NULL FROM apis.ai_routines WHERE id = #{slot.id}|]) >>= (`shouldBe` True)
+            runQueryEffect tr (Issues.listRunArtifacts testPid original.runId) >>= (`shouldSatisfy` null)
+        for_ [1, 2 :: Int] \_ -> runQueryEffect tr (Issues.recoverDueRoutines 100) >>= (\due -> map (.id) due `shouldNotContain` [slot.id])
+        runQueryEffect tr (Issues.getRoutineRun testPid original.runId) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)
+        runQueryEffect tr (Issues.getConversation testPid conversation) >>= (\routine -> ((.routineActive) <$> routine, routine >>= (.routineRunningSince), routine >>= (.routineNextRunAt)) `shouldBe` (Just False, Nothing, Nothing))
+        entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid original.runId
+        map (.requestedBy) entries `shouldBe` [user, user]
+        runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT requested_by IS NULL FROM apis.ai_routine_runs WHERE id = #{original.runId}|]) >>= (`shouldBe` True)
+        sort [AE.toJSON entry.outcome ^? key "tag" . _String | entry <- entries] `shouldBe` [Just "OperationReturned", Just "OperationUnknown"]
+        history <- runQueryEffect tr $ Issues.selectChatHistory testPid conversation
+        map (.content) history `shouldBe` ["Retain this investigation"]
+        runQueryEffect tr (Issues.listRunArtifacts testPid original.runId) >>= (\artifacts -> map (.content) artifacts `shouldBe` [Just "Retained observation"])
 
       for_ (["run-status", "scheduler-lease"] :: [Text]) \boundary ->
         it ("scheduledCompletion_rollsBackPublicationAndLease_thenRetriesTheSavedAnswer: " <> toString boundary) \tr -> do
