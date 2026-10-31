@@ -1000,12 +1000,22 @@ The regressions first exposed rejection of personal consent by the bot callback,
 
 A fresh inventory still lists 28 open PRs, and all twenty selected current heads remain ancestors of this branch. Remote MCP reads, automatic refresh, upstream revocation events, audience containment, app eligibility, and live Slack acceptance remain open. The credentials are not yet exposed to agent tools. Streaming, selective review, and final whole-branch gates also remain unfinished; this slice does not establish completion of the unified plan.
 
+### Signed token revocation uses the existing receipt and worker (31 October)
+
+Slack's `tokens_revoked` callback now parses OAuth user IDs separately from bot token IDs. Signed intake applies revocation immediately. It uses the same credential-selection algebra, member lock, and transactional cleanup as manual disconnect. Scope remains the named workspace and Slack users; another Slack account linked to the same Monoscope user retains its grant, and the project bot installation remains configured.
+
+The stored receipt's immutable subject must match the typed callback subject before cleanup can run. Receipt completion and deletion of grants and pending consent commit together. Duplicate intake and a delayed worker cannot repeat cleanup after a later reconnection. A database failure retains the pending receipt and existing queued job; that same worker recovers without model or Slack API calls. Member locks are acquired in a stable project/user order. Expired-consent cleanup now stays within the same member/project scope.
+
+The regression first failed because a signed revocation left its credential readable. Nine personal-OAuth examples now pass, including subject/workspace isolation, replay after reconnection, an injected database failure with rollback, worker recovery, and a forged subject passed against an immutable receipt. The existing concurrent insertion/disconnect regression now covers both manual disconnect and signed upstream revocation through one table-driven fixture. All 277 bot, 76 API, and 38 incident-delivery examples also pass. Formatting, focused HLint, and diff checks pass. Repeated slice reviews found no remaining material distillation, constraint-evasion, or client-behavior finding.
+
+The manifest template now includes `tokens_revoked`. No live app settings changed. This slice adds no migration, table, scheduler, executor, or separate revocation worker. Remote MCP reads, automatic refresh, audience containment, controlled live acceptance, and the other unfinished unified-plan slices remain open.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
 - [User-token exchange](https://docs.slack.dev/reference/methods/oauth.v2.user.access/) and [authorization metadata](https://mcp.slack.com/.well-known/oauth-authorization-server): endpoints, client-secret POST, and S256 PKCE.
 - [Token rotation](https://docs.slack.dev/authentication/using-token-rotation/): paired refresh/expiry metadata and single-use refresh tokens.
-- [Upstream token revocation](https://docs.slack.dev/reference/events/tokens_revoked/): workspace-bound OAuth user IDs; handling remains pending.
+- [Upstream token revocation](https://docs.slack.dev/reference/events/tokens_revoked/): workspace-bound OAuth user IDs; signed receipt handling and recovery are implemented.
 - [Message shortcuts](https://docs.slack.dev/reference/interaction-payloads/shortcuts-interaction-payload/): signed invocation, selected-message context, and callback identity.
 - [Suggested prompts](https://docs.slack.dev/reference/methods/assistant.threads.setSuggestedPrompts/): Agent apps omit the legacy thread timestamp and provide at most four prompts.
 - [Agent session status](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/): initial titles are ignored once a session exists.

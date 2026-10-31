@@ -888,6 +888,7 @@ data SlackEventKind
   | BotMessage
   | MessageEdit
   | AssistantSession SlackAssistantEvent
+  | TokensRevoked (V.Vector Text)
   | UnknownEvent SlackEventHeader
   deriving stock (Generic, Show)
 
@@ -897,8 +898,8 @@ data SlackEventKind
 classifySlackEvent :: Text -> SlackEvent -> AE.Parser SlackEventKind
 classifySlackEvent workspaceId wire = do
   header <- AE.parseJSON @SlackEventHeader $ AE.toJSON wire
-  -- Every decoded event proves the same two things before it is acted on: its
-  -- timestamps are real Slack timestamps, and it names a user and a channel.
+  -- Conversation events require valid timestamps and user/channel identities.
+  -- App-level revocation has its own payload shape.
   let checked :: AE.FromJSON a => Text -> (a -> [Text]) -> (a -> [Text]) -> (a -> b) -> AE.Parser b
       checked what timestamps identities constructor = do
         value <- AE.parseJSON $ AE.toJSON wire
@@ -929,6 +930,12 @@ classifySlackEvent workspaceId wire = do
       pure $ AgentSessionTitleChanged title
     ("assistant_thread_started", _) -> assistant AssistantSession
     ("assistant_thread_context_changed", _) -> assistant AssistantSession
+    ("tokens_revoked", _) -> do
+      value <- AE.parseJSON @AE.Object $ AE.toJSON wire
+      tokens <- value AE..: "tokens"
+      users <- tokens AE..:? "oauth" AE..!= V.empty
+      when (any T.null users) $ fail "Missing revoked Slack user identity"
+      pure $ TokensRevoked users
     _ -> pure $ UnknownEvent header
 
 
@@ -984,6 +991,7 @@ acceptSlackEvent payload = case payload of
           SELECT now(), 'queued', #{job} FROM receipt|]
     case kind of
       (AgentSessionStopped _; AgentSessionTitleChanged _) -> recordSlackSessionEvent team_id event_id
+      TokensRevoked users -> Integrations.recordSlackTokenRevocation team_id event_id users
       (UserMessage _; AppMention _; MessageShortcut _; AppContextChanged _; AppHomeOpened _; BotMessage; MessageEdit; AssistantSession _; UnknownEvent _) -> pass
     pure $ AE.object []
 
@@ -1035,7 +1043,7 @@ processSlackEventWithTools projectTools receiptId =
             MessageShortcut message -> withThreadLock team_id message process
             AssistantSession session -> withPromptLock team_id session.assistant_thread.channel_id process
             AppHomeOpened home -> withPromptLock team_id home.channel process
-            (AgentSessionStopped _; AgentSessionTitleChanged _; AppContextChanged _; BotMessage; MessageEdit; UnknownEvent _) -> process
+            (AgentSessionStopped _; AgentSessionTitleChanged _; AppContextChanged _; BotMessage; MessageEdit; TokensRevoked _; UnknownEvent _) -> process
     withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
 
     withPromptLock workspaceId channel = withEventLock ("slack-prompts:" <> encodeText ([workspaceId, channel] :: [Text]))
@@ -1043,6 +1051,7 @@ processSlackEventWithTools projectTools receiptId =
     handleEventCallback envCfg kind workspaceId eventId =
       case kind of
         (AgentSessionStopped _; AgentSessionTitleChanged _) -> recordSlackSessionEvent workspaceId eventId
+        TokensRevoked users -> Integrations.recordSlackTokenRevocation workspaceId eventId users
         AppContextChanged change -> saveAppContext workspaceId change
         AppHomeOpened home
           | home.tab == Just "messages" -> do

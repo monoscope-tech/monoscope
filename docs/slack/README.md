@@ -129,9 +129,14 @@ in flight. Access and refresh tokens use the shared authenticated encryption
 helper. Tokens are unavailable after membership loss, workspace replacement, or
 expiry. Rotating grants retain their refresh token and expiry together.
 
-The consent and disconnect flow is implemented. Remote MCP reads, automatic token
-refresh, upstream revocation events, and audience containment remain unfinished;
-agent tools cannot use these credentials yet.
+Signed `tokens_revoked` events remove the named users' grants and pending consent
+in that workspace. The receipt and cleanup commit together, so duplicate delivery
+or a delayed worker cannot remove a later reconnection. The same worker recovers a
+failed intake cleanup. The manifest includes the required event subscription.
+
+The consent, disconnect, and upstream revocation flow is implemented. Remote MCP
+reads, automatic token refresh, and audience containment remain unfinished; agent
+tools cannot use these credentials yet.
 
 ## Link a Slack identity
 

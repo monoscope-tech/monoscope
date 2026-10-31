@@ -85,6 +85,7 @@
         "message.im",
         "message.mpim",
         "app_home_opened",
+        "tokens_revoked",
         "app_context_changed",
         "agent_session_stopped",
         "agent_session_title_changed",

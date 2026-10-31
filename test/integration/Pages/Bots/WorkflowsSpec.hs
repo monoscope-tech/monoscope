@@ -86,6 +86,10 @@ data SessionTitleCase = GenerateTitle | ExistingTitle | RacingTitle
   deriving stock (Eq, Show)
 
 
+data SlackRevocationCase = MemberDisconnect | UpstreamRevocation
+  deriving stock (Bounded, Enum, Show)
+
+
 agentConfig :: Projects.ProjectId -> AI.AgenticConfig
 agentConfig pid = (AI.defaultAgenticConfig pid){AI.projectTools = Just Routes.mcpProjectTools}
 
@@ -405,6 +409,61 @@ spec = around withTestResources do
         toBaseServantResponse tr (Slack.getSlackLink $ linkId 4) >>= (`shouldSatisfy` isNothing)
 
     describe "Slack installation authorization" do
+      it "personalSlackOAuth_signedRevocationClearsOnlyItsSubjectOnceBeforeWorkersRun" \tr -> do
+        setupLinkedSlackData tr testPid "T_REVOKED"
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            stateId number = UUIDId $ UUID.fromWords 0 0 16 number
+            start number slackUser = runQueryEffect tr do
+              verifier <- Slack.newSlackPKCE
+              Slack.createSlackEvidenceConsent (stateId number) userId testPid slackUser verifier
+            authorize number slackUser = do
+              start number slackUser >>= (`shouldBe` True)
+              Just (Slack.EvidenceAuthorization consent) <- runQueryEffect tr $ Slack.consumeSlackAuthorization (stateId number) userId
+              let grant = Slack.SlackUserGrant "T_REVOKED" slackUser ("token-" <> slackUser) Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
+              runQueryEffect tr (Slack.saveSlackEvidenceGrant encKey consent grant) >>= (`shouldBe` Right True)
+            connected slackUser = isJust <$> runQueryEffect tr (Slack.getSlackEvidenceGrant encKey testPid userId "T_REVOKED" slackUser)
+            revoked workspace eventId = slackCallbackEnvelope workspace eventId $ AE.object ["type" AE..= ("tokens_revoked" :: Text), "tokens" AE..= AE.object ["oauth" AE..= (["U0123ABCDEF"] :: [Text])]]
+        withResource tr.trPool \conn -> void $ PGS.execute conn "INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id) VALUES ('T_REVOKED', 'U_KEPT', ?, ?)" (userId, testPid)
+        authorize 1 "U0123ABCDEF"
+        authorize 2 "U_KEPT"
+        start 3 "U0123ABCDEF" >>= (`shouldBe` True)
+        void $ receiveSlackEvent tr $ revoked "T_OTHER" "EvOtherRevocation"
+        connected "U0123ABCDEF" >>= (`shouldBe` True)
+        receipt <- receiveSlackEvent tr $ revoked "T_REVOKED" "EvPersonalRevocation"
+        connected "U0123ABCDEF" >>= (`shouldBe` False)
+        connected "U_KEPT" >>= (`shouldBe` True)
+        isNothing <$> runQueryEffect tr (Slack.consumeSlackAuthorization (stateId 3) userId) >>= (`shouldBe` True)
+        authorize 4 "U0123ABCDEF"
+        void $ receiveSlackEvent tr $ revoked "T_REVOKED" "EvPersonalRevocation"
+        (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ processSlackEvent receipt
+        requests `shouldBe` []
+        connected "U0123ABCDEF" >>= (`shouldBe` True)
+        installed <- runQueryEffect tr $ Slack.getProjectSlackData testPid
+        fmap (.botToken) installed `shouldBe` Just "x-bot-token"
+        start 5 "U0123ABCDEF" >>= (`shouldBe` True)
+        let failedEvent = revoked "T_REVOKED" "EvRetryRevocation"
+            execute statement = withResource tr.trPool \conn -> void $ PGS.execute_ conn statement
+        bracket_
+          ( execute
+              [sql|CREATE FUNCTION reject_slack_revocation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected revocation failure'; END $$;
+            CREATE TRIGGER reject_slack_revocation BEFORE DELETE ON apis.slack_user_credentials FOR EACH ROW EXECUTE FUNCTION reject_slack_revocation();|]
+          )
+          (execute "DROP TRIGGER reject_slack_revocation ON apis.slack_user_credentials; DROP FUNCTION reject_slack_revocation()")
+          do
+            receiveSlackEvent tr failedEvent `shouldThrow` (T.isInfixOf "injected revocation failure" . show @Text @Hasql.HasqlException)
+            connected "U0123ABCDEF" >>= (`shouldBe` True)
+            retained <- withResource tr.trPool \conn -> PGS.query_ conn "SELECT EXISTS (SELECT 1 FROM apis.slack_install_requests WHERE team_id = 'T_REVOKED' AND slack_user_id = 'U0123ABCDEF'), processed_at IS NULL FROM apis.slack_events WHERE team_id = 'T_REVOKED' AND event_id = 'EvRetryRevocation'" :: IO [(Bool, Bool)]
+            retained `shouldBe` [(True, True)]
+        [PGS.Only retryReceipt] <- withResource tr.trPool \conn -> PGS.query_ conn "SELECT id FROM apis.slack_events WHERE team_id = 'T_REVOKED' AND event_id = 'EvRetryRevocation'"
+        runQueryEffect tr $ Slack.recordSlackTokenRevocation "T_REVOKED" "EvRetryRevocation" (fromList ["U_KEPT"])
+        connected "U_KEPT" >>= (`shouldBe` True)
+        (retried, ()) <- runTestBgRecordingHTTP frozenTime tr $ processSlackEvent retryReceipt
+        retried `shouldBe` []
+        connected "U0123ABCDEF" >>= (`shouldBe` False)
+        connected "U_KEPT" >>= (`shouldBe` True)
+        isNothing <$> runQueryEffect tr (Slack.consumeSlackAuthorization (stateId 5) userId) >>= (`shouldBe` True)
+
       it "personalSlackOAuth_connectAndDisconnectArePrivateAccountControls" \tr -> do
         setupLinkedSlackData tr testPid "T_CONTROLS"
         connected <- toBaseServantResponse tr $ slackInteractionsH $ slackInteraction "/monoscope" "search connect" "T_CONTROLS"
@@ -520,41 +579,45 @@ spec = around withTestResources do
           Just (Slack.Rotating refresh expires) -> (refresh, expires) `shouldBe` ("refresh-secret", addUTCTime 3600 frozenTime)
           _ -> expectationFailure "Rotating user grant was not retained"
 
-      it "personalSlackOAuth_disconnectWinsWhenGrantInsertionWasAlreadyInFlight" \tr -> do
-        setupLinkedSlackData tr testPid "T_RACING"
-        let userId = (getResponse tr.trSessAndHeader).user.id
-            stateId = UUIDId $ UUID.fromWords 0 0 14 1
-            encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            grant = Slack.SlackUserGrant "T_RACING" "U0123ABCDEF" "racing-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
-        verifier <- runQueryEffect tr Slack.newSlackPKCE
-        runQueryEffect tr (Slack.createSlackEvidenceConsent stateId userId testPid "U0123ABCDEF" verifier) >>= (`shouldBe` True)
-        Just (Slack.EvidenceAuthorization consent) <- runQueryEffect tr $ Slack.consumeSlackAuthorization stateId userId
-        withResource tr.trPool \conn ->
-          void
-            $ PGS.execute_
-              conn
-              [sql|
-          CREATE FUNCTION test_slack_grant_gate() RETURNS trigger LANGUAGE plpgsql AS $$
-          BEGIN PERFORM pg_advisory_xact_lock(271271); RETURN NEW; END $$;
-          CREATE TRIGGER test_slack_grant_gate BEFORE INSERT ON apis.slack_user_credentials
-            FOR EACH ROW EXECUTE FUNCTION test_slack_grant_gate();|]
-        startSave <- newEmptyMVar
-        startDisconnect <- newEmptyMVar
-        withAsync (takeMVar startSave >> runQueryEffect tr (Slack.saveSlackEvidenceGrant encKey consent grant)) \saving ->
-          withAsync (takeMVar startDisconnect >> runQueryEffect tr (Slack.revokeSlackEvidence testPid userId)) \disconnecting -> do
-            withResource tr.trPool \conn -> PGS.withTransaction conn do
-              void (PGS.query_ conn "SELECT pg_advisory_xact_lock(271271) IS NULL" :: IO [PGS.Only Bool])
-              let awaitBlocked number = timeout 5000000 $ fix \loop -> do
-                    void (PGS.query_ conn "SELECT pg_stat_clear_snapshot() IS NULL" :: IO [PGS.Only Bool])
-                    [PGS.Only count] <- PGS.query_ conn "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'" :: IO [PGS.Only Int]
-                    unless (count >= number) $ threadDelay 10000 >> loop
-              putMVar startSave ()
-              awaitBlocked 1 >>= (`shouldBe` Just ())
-              putMVar startDisconnect ()
-              awaitBlocked 2 >>= (`shouldBe` Just ())
-            wait saving >>= (`shouldBe` Right True)
-            wait disconnecting
-        isNothing <$> runQueryEffect tr (Slack.getSlackEvidenceGrant encKey testPid userId "T_RACING" "U0123ABCDEF") >>= (`shouldBe` True)
+      for_ ([minBound .. maxBound] :: [SlackRevocationCase]) \source ->
+        it ("personalSlackOAuth_disconnectWinsWhenGrantInsertionWasAlreadyInFlight: " <> show source) \tr -> do
+          setupLinkedSlackData tr testPid "T_RACING"
+          let userId = (getResponse tr.trSessAndHeader).user.id
+              stateId = UUIDId $ UUID.fromWords 0 0 14 1
+              encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+              grant = Slack.SlackUserGrant "T_RACING" "U0123ABCDEF" "racing-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
+          verifier <- runQueryEffect tr Slack.newSlackPKCE
+          runQueryEffect tr (Slack.createSlackEvidenceConsent stateId userId testPid "U0123ABCDEF" verifier) >>= (`shouldBe` True)
+          Just (Slack.EvidenceAuthorization consent) <- runQueryEffect tr $ Slack.consumeSlackAuthorization stateId userId
+          withResource tr.trPool \conn ->
+            void
+              $ PGS.execute_
+                conn
+                [sql|
+            CREATE FUNCTION test_slack_grant_gate() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN PERFORM pg_advisory_xact_lock(271271); RETURN NEW; END $$;
+            CREATE TRIGGER test_slack_grant_gate BEFORE INSERT ON apis.slack_user_credentials
+              FOR EACH ROW EXECUTE FUNCTION test_slack_grant_gate();|]
+          startSave <- newEmptyMVar
+          startDisconnect <- newEmptyMVar
+          let revoke = case source of
+                MemberDisconnect -> runQueryEffect tr $ Slack.revokeSlackEvidence testPid userId
+                UpstreamRevocation -> void $ receiveSlackEvent tr $ slackCallbackEnvelope "T_RACING" "EvConcurrentRevocation" $ AE.object ["type" AE..= ("tokens_revoked" :: Text), "tokens" AE..= AE.object ["oauth" AE..= (["U0123ABCDEF"] :: [Text])]]
+          withAsync (takeMVar startSave >> runQueryEffect tr (Slack.saveSlackEvidenceGrant encKey consent grant)) \saving ->
+            withAsync (takeMVar startDisconnect >> revoke) \disconnecting -> do
+              withResource tr.trPool \conn -> PGS.withTransaction conn do
+                void (PGS.query_ conn "SELECT pg_advisory_xact_lock(271271) IS NULL" :: IO [PGS.Only Bool])
+                let awaitBlocked number = timeout 5000000 $ fix \loop -> do
+                      void (PGS.query_ conn "SELECT pg_stat_clear_snapshot() IS NULL" :: IO [PGS.Only Bool])
+                      [PGS.Only count] <- PGS.query_ conn "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'" :: IO [PGS.Only Int]
+                      unless (count >= number) $ threadDelay 10000 >> loop
+                putMVar startSave ()
+                awaitBlocked 1 >>= (`shouldBe` Just ())
+                putMVar startDisconnect ()
+                awaitBlocked 2 >>= (`shouldBe` Just ())
+              wait saving >>= (`shouldBe` Right True)
+              wait disconnecting
+          isNothing <$> runQueryEffect tr (Slack.getSlackEvidenceGrant encKey testPid userId "T_RACING" "U0123ABCDEF") >>= (`shouldBe` True)
 
       it "asks older installations to reconnect before native investigation work" \tr -> do
         setupSlackAgent tr testPid "T_UPGRADE"

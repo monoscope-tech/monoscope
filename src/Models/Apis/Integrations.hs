@@ -30,6 +30,7 @@ module Models.Apis.Integrations (
   saveSlackEvidenceGrant,
   getSlackEvidenceGrant,
   revokeSlackEvidence,
+  recordSlackTokenRevocation,
   SlackLink (..),
   SlackLinkProject (..),
   SlackPrincipal (..),
@@ -60,6 +61,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson qualified as AE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -337,7 +339,7 @@ createSlackAuthorization stateId userId projectId purpose = do
     withSlackCredentialLock projectId userId
       . fmap HI.getRowsAffected
       . Hasql.queryTx
-      $ [HI.sql|WITH expired AS (DELETE FROM apis.slack_install_requests WHERE expires_at <= now())
+      $ [HI.sql|WITH expired AS (DELETE FROM apis.slack_install_requests WHERE project_id = #{projectId} AND user_id = #{userId} AND expires_at <= now())
       INSERT INTO apis.slack_install_requests (id, user_id, project_id, onboarding, team_id, slack_user_id, code_verifier)
       SELECT #{stateId}, #{userId}, #{projectId}, #{onboarding}, identity.team_id, identity.slack_user_id, #{verifier}
       FROM projects.project_members member
@@ -483,16 +485,52 @@ getSlackEvidenceGrant key pid userId teamId slackUserId = do
 
 
 revokeSlackEvidence :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es ()
-revokeSlackEvidence pid userId =
-  withSlackCredentialLock pid userId
-    $ Hasql.executeTx
-      [HI.sql|WITH pending AS (DELETE FROM apis.slack_install_requests WHERE project_id = #{pid} AND user_id = #{userId} AND team_id IS NOT NULL)
-    DELETE FROM apis.slack_user_credentials WHERE project_id = #{pid} AND user_id = #{userId}|]
+revokeSlackEvidence pid userId = Hasql.transaction TxS.ReadCommitted TxS.Write $ revokeSlackEvidenceTx pid userId MemberGrants
+
+
+data SlackGrantSelection = MemberGrants | SlackUserGrants Text (V.Vector Text)
+
+
+revokeSlackEvidenceTx :: Projects.ProjectId -> Projects.UserId -> SlackGrantSelection -> Tx.Transaction ()
+revokeSlackEvidenceTx pid userId selection = withSlackCredentialLockTx pid userId do
+  let selected = case selection of
+        MemberGrants -> [HI.sql|TRUE|]
+        SlackUserGrants team users -> [HI.sql|team_id = #{team} AND slack_user_id = ANY(#{users})|]
+  Hasql.executeTx
+    $ [HI.sql|WITH pending AS (DELETE FROM apis.slack_install_requests WHERE project_id = #{pid} AND user_id = #{userId} AND team_id IS NOT NULL AND (|]
+    <> selected
+    <> [HI.sql|)) DELETE FROM apis.slack_user_credentials WHERE project_id = #{pid} AND user_id = #{userId} AND (|]
+    <> selected
+    <> [HI.sql|)|]
+
+
+-- Finish the receipt with the cleanup so a retry cannot revoke a later consent.
+recordSlackTokenRevocation :: DB es => Text -> Text -> V.Vector Text -> Eff es ()
+recordSlackTokenRevocation team eventId users = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  receipts <-
+    Hasql.queryTx @[UUIDId "slack_event"]
+      [HI.sql|SELECT id FROM apis.slack_events WHERE team_id = #{team} AND event_id = #{eventId}
+      AND processed_at IS NULL AND payload #>> '{event,type}' = 'tokens_revoked'
+      AND COALESCE(payload #> '{event,tokens,oauth}', '[]'::jsonb) = #{Aeson $ Aeson.toJSON users}
+      FOR UPDATE|]
+  for_ receipts \receipt -> do
+    members <-
+      Hasql.queryTx @[(Projects.ProjectId, Projects.UserId)]
+        [HI.sql|SELECT project_id, user_id FROM (
+        SELECT project_id, user_id FROM apis.slack_user_credentials WHERE team_id = #{team} AND slack_user_id = ANY(#{users})
+        UNION SELECT project_id, user_id FROM apis.slack_install_requests WHERE team_id = #{team} AND slack_user_id = ANY(#{users})
+      ) affected ORDER BY project_id, user_id|]
+    for_ members \(pid, userId) -> revokeSlackEvidenceTx pid userId $ SlackUserGrants team users
+    Hasql.executeTx [HI.sql|UPDATE apis.slack_events SET processed_at = now() WHERE id = #{receipt}|]
 
 
 -- Separate statements give disconnect a fresh snapshot after an in-flight grant commits.
 withSlackCredentialLock :: DB es => Projects.ProjectId -> Projects.UserId -> Tx.Transaction a -> Eff es a
-withSlackCredentialLock pid userId action = Hasql.transaction TxS.ReadCommitted TxS.Write do
+withSlackCredentialLock pid userId = Hasql.transaction TxS.ReadCommitted TxS.Write . withSlackCredentialLockTx pid userId
+
+
+withSlackCredentialLockTx :: Projects.ProjectId -> Projects.UserId -> Tx.Transaction a -> Tx.Transaction a
+withSlackCredentialLockTx pid userId action = do
   void $ Hasql.queryTx @[HI.OneColumn Projects.UserId] [HI.sql|SELECT user_id FROM projects.project_members WHERE project_id = #{pid} AND user_id = #{userId} FOR UPDATE|]
   action
 
