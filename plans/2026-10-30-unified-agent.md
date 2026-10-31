@@ -38,8 +38,9 @@ This branch already contains:
 - Run history, instruction snapshots, retained artifacts, and a conversation detail panel.
 - Versioned project wiki storage with member and agent authors.
 
-Slack event tool calls retain the conservative Observe ceiling. Administrator actions remain unavailable until their authority and disclosure work is complete.
-The new authority policy replaces those limitations after the execution and recovery tests pass.
+Slack event tool calls retain an Observe ceiling while immutable role ceilings and legacy-checkpoint adoption are completed.
+Interactive and scheduled administrator actions now use the common Autonomous policy and durable operation ledger.
+Native business mutations still need that common operation ledger.
 Current native Slack behavior still needs controlled workspace acceptance.
 The silent private-channel mention needs a traced reproduction. Metric discovery alone does not explain that failure.
 
