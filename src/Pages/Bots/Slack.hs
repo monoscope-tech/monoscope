@@ -573,8 +573,11 @@ parseSlackOkOrErr body
 
 -- | POST to @https://slack.com/api/\<method\>@, decoding Slack's ok/error envelope.
 slackApi :: HTTP :> es => Text -> Text -> AE.Value -> Eff es (Either Text ())
-slackApi token method content =
-  parseSlackOkOrErr . (^. responseBody) <$> postWith (defaults & contentTypeHeader "application/json" & authHeader "Bearer" token) (toString $ "https://slack.com/api/" <> method) content
+slackApi token method content = parseSlackOkOrErr . (^. responseBody) <$> requestSlackApi token method content
+
+
+requestSlackApi :: HTTP :> es => Text -> Text -> AE.Value -> Eff es (Wreq.Response LByteString)
+requestSlackApi token method = postWith (defaults & contentTypeHeader "application/json" & authHeader "Bearer" token) (toString $ "https://slack.com/api/" <> method)
 
 
 -- | 'slackApi' for callers that treat a rejection as a failure. @context@ names
@@ -1022,7 +1025,9 @@ processSlackEventWithTools projectTools receiptId =
                             Right () -> pure True
                             Left err -> do
                               Log.logAttention "Slack session status unavailable; continuing investigation" $ AE.object ["receipt_id" AE..= receiptId, "error" AE..= show @Text err]
-                              clearQueuedSlackJob resetJob
+                              for_ (fromException @SlackSessionFailure err) \case
+                                SessionRejected _ -> clearQueuedSlackJob resetJob
+                                SessionUnconfirmed -> pass
                               pure False
                       )
                       ( \started -> when started $ whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active Nothing >> clearQueuedSlackJob resetJob) \_ ->
@@ -1433,7 +1438,7 @@ publishReservedMessage eventType token publicationId content release confirm = d
       body =
         mergeSlackContent content
           $ AE.object ["metadata" AE..= AE.object ["event_type" AE..= eventType, "event_payload" AE..= AE.object ["publication_id" AE..= publicationId]]]
-  response <- tryAny $ postWith (defaults & contentTypeHeader "application/json" & authHeader "Bearer" token) "https://slack.com/api/chat.postMessage" body
+  response <- tryAny $ requestSlackApi token "chat.postMessage" body
   case response of
     Left err -> maybe (pending "Transport failed") (\limited -> release >> throwIO limited) (fromException @RateLimit.SlackRateLimited err)
     Right received -> case AE.decode @SlackMessageAck (received ^. responseBody) of
@@ -1484,8 +1489,21 @@ data SlackSessionUpdate = SlackSessionUpdate
 -- | The agent's "working" indicator — @agents.sessions.setStatus@ from the
 -- Agents surface, not the older @assistant.threads.setStatus@.
 setSessionStatus :: (HTTP :> es, IOE :> es) => Text -> Text -> Text -> SlackSessionStatus -> Maybe Integrations.SlackSessionTitle -> Eff es ()
-setSessionStatus token channel thread status title =
-  slackApiOrThrow "Slack session status" token "agents.sessions.setStatus" $ AE.toJSON $ SlackSessionUpdate channel thread status title
+setSessionStatus token channel thread status title = do
+  response <- requestSlackApi token "agents.sessions.setStatus" $ AE.toJSON $ SlackSessionUpdate channel thread status title
+  case AE.decode @SlackMessageAck (response ^. responseBody) of
+    Just ack
+      | statusIsSuccessful (response ^. Wreq.responseStatus), ack.ok -> pass
+      | statusIsSuccessful (response ^. Wreq.responseStatus)
+      , Just reason <- ack.error
+      , definiteSlackRejection reason || reason == "feature_disabled" ->
+          throwIO $ SessionRejected reason
+    _ -> throwIO SessionUnconfirmed
+
+
+data SlackSessionFailure = SessionRejected Text | SessionUnconfirmed
+  deriving stock (Show)
+  deriving anyclass (Exception)
 
 
 saveAppContext :: DB es => Text -> SlackAppContextEvent -> Eff es ()

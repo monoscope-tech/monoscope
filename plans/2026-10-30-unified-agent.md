@@ -879,6 +879,16 @@ The regressions first failed because analysis started before a shared title exis
 
 Dynamic prompts, shortcut intake, session-lifecycle acceptance, streaming, proactive work, Slack evidence audiences, controlled live Slack acceptance, and final release checks remain open.
 
+### Preserve session cleanup after uncertain startup acknowledgements (31 October)
+
+A failing regression reproduced a completed Slack investigation deleting its queued status reset after a transport failure. Slack may already have accepted `processing`, so the completed receipt cannot prove the session is idle. The adapter now keeps the existing reset job for uncertain startup results. Definite rejections, including an unavailable Agent feature, still remove unnecessary cleanup. The private `SlackSessionFailure` sum distinguishes rejection from uncertainty; no exception-message matching is used.
+
+Status parsing reuses the existing acknowledgement envelope and definite-rejection classifier. Transport failures, malformed bodies, missing error details, and Slack internal errors remain uncertain. General API calls, status updates, and reserved publications share one HTTP request helper. Reset retries retain their job until an acknowledged status update; receipt replay does not repeat the investigation. No new worker, migration, or delivery ledger was added.
+
+The existing private-mention integration test now covers all four uncertain responses, failed reset attempts, successful deferred cleanup, and replay, while retaining the known-feature-rejection case. The initial regression failed with zero cleanup jobs instead of one. The focused regression and all 245 bot examples pass, including signed stops, status cleanup, publication reconciliation, and rate limits. Formatting and diff checks pass. HLint reports no hints in the changed application module, matching the baseline. Repeated slice reviews consolidated the request transport and acknowledgement parsing, with no remaining material distillation, constraint-evasion, or client-behavior findings. Whole-branch review, controlled live acceptance, and final release checks remain pending.
+
+Slack's thread session documentation explicitly requires the app to confirm stops and transition status away from `processing`. Its code-channel lifecycle has a different automatic-stop contract. This adapter handles ordinary threads, so its stop confirmation and status cleanup remain unchanged. Code-channel support and controlled live session acceptance remain open.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

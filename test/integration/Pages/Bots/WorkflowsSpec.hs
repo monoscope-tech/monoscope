@@ -2363,14 +2363,31 @@ spec = around withTestResources do
         (replayed, _) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ processSlackEvent receipt
         replayed `shouldBe` []
         runQueryEffect tr (Issues.listRoutineRuns testPid 12) >>= (\after -> map (.id) after `shouldBe` map (.id) runs)
-        networkReceipt <- receiveSlackEvent tr $ slackEventCallback "T_FIRST_MENTION" "G_PRIVATE_NETWORK" "What metrics can you access?" "1735689602.000001" Nothing & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ "EvNetworkStatus"
-        let networkTransport = withHTTPResponses \_ url ->
-              if url == "https://slack.com/api/agents.sessions.setStatus"
-                then throwIO $ ErrorCall "Slack status transport failed"
-                else pure $ Just "{\"ok\":true,\"ts\":\"1735689612.000001\"}"
-        (networkRequests, networkResult) <- runTestBgRecordingHTTP frozenTime tr $ networkTransport $ provider $ tryAny $ processSlackEvent networkReceipt
-        networkResult `shouldSatisfy` isRight
-        map fst networkRequests `shouldSatisfy` elem "https://slack.com/api/chat.postMessage"
+        let rejectedReset = Jobs.ResetSlackSession testPid (getResponse tr.trSessAndHeader).user.id receipt
+        runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON rejectedReset}|]) >>= (`shouldBe` 0)
+        for_ (zip [0 :: Int ..] [Nothing, Just "not json", Just "{\"ok\":false}", Just "{\"ok\":false,\"error\":\"internal_error\"}"]) \(part, statusResponse) -> do
+          networkReceipt <- receiveSlackEvent tr $ slackEventCallback "T_FIRST_MENTION" ("G_PRIVATE_NETWORK_" <> show part) "What metrics can you access?" "1735689602.000001" Nothing & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ("EvNetworkStatus_" <> show part)
+          let networkTransport = withHTTPResponses \_ url ->
+                if url == "https://slack.com/api/agents.sessions.setStatus"
+                  then maybe (throwIO $ ErrorCall "Slack status transport failed") (pure . Just) statusResponse
+                  else pure $ Just "{\"ok\":true,\"ts\":\"1735689612.000001\"}"
+          (networkRequests, networkResult) <- runTestBgRecordingHTTP frozenTime tr $ networkTransport $ provider $ tryAny $ processSlackEvent networkReceipt
+          networkResult `shouldSatisfy` isRight
+          map fst networkRequests `shouldSatisfy` elem "https://slack.com/api/chat.postMessage"
+          let uid = (getResponse tr.trSessAndHeader).user.id
+              resetJob = Jobs.ResetSlackSession testPid uid networkReceipt
+              resetCount = runQueryEffect tr $ Hasql.interpScalar @Int64 [HI.sql|SELECT count(*) FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON resetJob} AND status IN ('queued', 'retry')|]
+          resetCount >>= (`shouldBe` 1)
+          (replayedNetwork, replayResult) <- runTestBgRecordingHTTP frozenTime tr $ networkTransport $ provider $ tryAny $ processSlackEvent networkReceipt
+          replayResult `shouldSatisfy` isRight
+          replayedNetwork `shouldBe` []
+          (_, uncertainReset) <- runTestBgRecordingHTTP frozenTime tr $ networkTransport $ tryAny $ SlackPage.resetSlackSession testPid uid networkReceipt
+          uncertainReset `shouldSatisfy` isRight
+          resetCount >>= (`shouldBe` 1)
+          (resetRequests, resetResult) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true}") $ tryAny $ SlackPage.resetSlackSession testPid uid networkReceipt
+          resetResult `shouldSatisfy` isRight
+          map fst resetRequests `shouldBe` ["https://slack.com/api/agents.sessions.setStatus"]
+          resetCount >>= (`shouldBe` 0)
 
       it "sharedAuthority_serviceAccessCannotReadAdministratorResources" \tr -> do
         invoked <- newIORef False
