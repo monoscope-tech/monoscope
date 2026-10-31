@@ -1492,6 +1492,67 @@ spec = around withTestResources do
         map (.content) history `shouldBe` ["Retain this investigation"]
         runQueryEffect tr (Issues.listRunArtifacts testPid original.runId) >>= (\artifacts -> map (.content) artifacts `shouldBe` [Just "Retained observation"])
 
+      for_ (["resume", "interval", "template"] :: [Text]) \activation -> for_ ([False, True] :: [Bool]) \unownedInstallation ->
+        it ("routineReauthorization_retiresTheUnownedAttemptAndStartsAFreshGrant: " <> toString activation <> show unownedInstallation) \tr -> do
+          let conversation = UUIDId UUID.nil
+              user = (getResponse tr.trSessAndHeader).user.id
+              interval = fromRightShow $ Issues.mkRoutineInterval 15
+              artifact = fromRightShow $ Issues.mkArtifactKey "old-attempt-evidence"
+          previousOwner <- runTestBg frozenTime tr do
+            owner <- Projects.createUser "Previous" "Owner" "" "previous-routine-owner@example.test"
+            Projects.insertUser owner
+            Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{owner.id}, 'admin')|]
+            pure owner
+          Just slot <- runTestBg frozenTime tr do
+            void $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+            Issues.insertChatMessage testPid conversation Issues.ChatUser "Original investigation" Nothing Nothing
+            scheduled <- Issues.upsertRoutine previousOwner.id testPid conversation interval
+            Issues.setRoutinePolicy previousOwner.id testPid conversation Issues.Observe
+            pure scheduled
+          Just original <- runQueryEffect tr $ Issues.claimRoutine slot.id slot.scheduledAt
+          otherProject <- createTestProject tr "Other routine grant"
+          Just otherSlot <- runTestBg frozenTime tr do
+            void $ Issues.getOrCreateConversation otherProject conversation Issues.CTWeb (AE.object [])
+            Issues.upsertRoutine previousOwner.id otherProject conversation interval
+          Just otherRun <- runQueryEffect tr $ Issues.claimRoutine otherSlot.id otherSlot.scheduledAt
+          runQueryEffect tr do
+            void $ Issues.saveArtifact testPid conversation artifact Nothing "Original evidence" Issues.ArtifactReplace
+            Issues.pauseRoutine testPid conversation
+            Issues.pauseRoutine otherProject conversation
+            Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET requested_by = NULL WHERE id IN (#{slot.id}, #{otherSlot.id})|]
+            unless unownedInstallation $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET requested_by = #{user}, authority_version = authority_version + 1 WHERE id = #{slot.id}|]
+            Hasql.interpExecute_ [HI.sql|DELETE FROM users.users WHERE id = #{previousOwner.id}|]
+            Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = #{testPid} AND user_id = #{user}|]
+          template <- maybe (fail "Missing routine template") pure $ find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates
+          let activate = runTestBg slot.scheduledAt tr $ case activation of
+                "resume" -> Issues.resumeRoutine user testPid conversation
+                "interval" -> Issues.upsertRoutine user testPid conversation interval
+                _ -> Issues.installRoutineTemplate user testPid conversation "UTC" template
+              ddl statement = withResource tr.trPool $ \conn -> void $ PGS.execute_ conn statement
+          when (activation == "resume" && unownedInstallation)
+            $ bracket_
+              (ddl "ALTER TABLE apis.ai_routines ADD CONSTRAINT reject_replacement_grant CHECK (NOT active) NOT VALID")
+              (ddl "ALTER TABLE apis.ai_routines DROP CONSTRAINT reject_replacement_grant")
+              do
+                tryAny activate >>= (`shouldSatisfy` isLeft)
+                runQueryEffect tr (Issues.getRoutineRun testPid original.runId) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunRunning)
+                runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT running_since IS NOT NULL FROM apis.ai_routines WHERE id = #{slot.id}|]) >>= (`shouldBe` True)
+                runQueryEffect tr (Issues.listRunArtifacts testPid original.runId) >>= (`shouldSatisfy` null)
+          next <- activate
+          scheduled <- maybe (fail "Unowned attempt stranded the replacement grant") pure next
+          invocations <- IORef.newIORef ([] :: [Issues.RunContext])
+          let execute config = case config.invocationMode of
+                AI.DurableRun context -> Eff.liftIO (IORef.modifyIORef' invocations (<> [context])) $> Right (AI.AgenticChatResult "New investigation" [])
+                AI.InteractiveReadOnly -> Eff.liftIO $ fail "Expected a fresh stored run"
+          runTestBg scheduled.scheduledAt tr $ BackgroundJobs.runAIRoutineWith 1_000_000 execute (\_ _ -> pass) tr.trATCtx scheduled.id scheduled.scheduledAt
+          contexts <- IORef.readIORef invocations
+          [(context.requestedBy, context.rootId == context.id, context.id /= original.runId, context.permissionCeiling, context.policy) | context <- contexts]
+            `shouldBe` [(user, True, True, ProjectMembers.PEdit, Issues.Observe)]
+          runQueryEffect tr (Issues.getRoutineRun testPid original.runId) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunCancelled)
+          runQueryEffect tr (Hasql.interpScalar @Bool [HI.sql|SELECT requested_by IS NULL AND policy = #{Issues.Observe} AND permission_ceiling = #{ProjectMembers.PAdmin} FROM apis.ai_routine_runs WHERE id = #{original.runId}|]) >>= (`shouldBe` True)
+          runQueryEffect tr (Issues.listRunArtifacts testPid original.runId) >>= (\artifacts -> map (.content) artifacts `shouldBe` [Just "Original evidence"])
+          runQueryEffect tr (Issues.getRoutineRun otherProject otherRun.runId) >>= (\run -> fmap (.status) run `shouldBe` Just Issues.RunRunning)
+
       for_ (["run-status", "scheduler-lease"] :: [Text]) \boundary ->
         it ("scheduledCompletion_rollsBackPublicationAndLease_thenRetriesTheSavedAnswer: " <> toString boundary) \tr -> do
           let conversation = UUIDId UUID.nil

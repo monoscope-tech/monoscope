@@ -851,6 +851,20 @@ The regression reproduces a paused, unowned installation whose attempt still app
 
 Interactive orphan attempts, a reassigned installation with an already unowned attempt, and legacy terminal-run leases remain separate lifecycle cases. Whole-branch review and release checks remain pending.
 
+### New routine grants retire unowned current attempts atomically (31 October)
+
+Resume, interval scheduling, template installation, and interactive routine creation now share `prepareRoutineGrantTx`. It locks the project-scoped installation, reads its schedule, and retires unowned current work through the existing finalization interpreter before writing the replacement grant. Retirement and the new grant commit together.
+
+`RoutineRetirement` distinguishes the unowned-installation sweep from reauthorization of one project conversation. Callers cannot supply an arbitrary SQL scope. Reauthorization retires a missing installation owner or an unowned scheduled attempt holding the current slot. Healthy active leases stay intact. The replaced timing-query wrapper is removed.
+
+The replacement worker gets a new request root, its actual member, and the current role ceiling. The old run keeps its missing actor, original policy, role ceiling, and frozen evidence. Existing Observe policies remain Observe during reactivation. Nothing transfers the old request to the new member, and no approval step, queue, table, or migration is added.
+
+Six regressions first failed across resume, interval scheduling, and template installation, both before and after installation ownership had been reassigned. They verify a fresh background invocation, preserved evidence, an unchanged old actor, a failed replacement grant rolling back retirement, and another project's matching conversation remaining untouched. The fixtures then detach the paused installations and delete the original administrator account, exercising the real run-actor foreign key. The replacement editor's run has its own root and editor ceiling; the old run's actor stays null and its administrator ceiling stays unchanged.
+
+All 242 bot examples pass. The strengthened account-deletion cases and native review workflow also pass. Formatting, HLint on the changed application module, and diff checks pass. Repeated slice reviews consolidated preparation across all grant writers and removed the replaced timing wrapper, with no remaining material slice findings. A fresh inventory still lists 28 open PRs, with no changed heads or missing selected work.
+
+Interactive and detached orphan attempts, historical orphan attempts outside the current scheduled slot, and terminal-run lease recovery remain open, along with the remaining plan phases and final release checks.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

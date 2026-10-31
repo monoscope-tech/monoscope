@@ -2040,7 +2040,9 @@ deleteConversation pid convId =
 upsertRoutine :: (DB es, Time :> es) => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> RoutineInterval -> Eff es (Maybe ScheduledRoutine)
 upsertRoutine requestedBy pid convId interval = do
   now <- Time.currentTime
-  Hasql.interpOne $ upsertRoutineSql requestedBy pid convId interval now
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    void $ prepareRoutineGrantTx pid convId
+    Hasql.queryTx $ upsertRoutineSql requestedBy pid convId interval now
 
 
 upsertRoutineSql :: Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> RoutineInterval -> UTCTime -> HI.Sql
@@ -2067,8 +2069,10 @@ installRoutineTemplate requestedBy pid convId timezone template = do
   let (kind, intervalMinutes, hour, minute, weekday) = scheduleColumns template.schedule
       zone = if isJust (TZ.tzByName $ encodeUtf8 timezone) then timezone else "UTC"
       nextRunAt = nextRoutineAt template.schedule zone now now
-  Hasql.interpOne
-    [HI.sql|WITH installed AS (INSERT INTO apis.ai_routines AS routine
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    void $ prepareRoutineGrantTx pid convId
+    Hasql.queryTx
+      [HI.sql|WITH installed AS (INSERT INTO apis.ai_routines AS routine
       (requested_by, project_id, conversation_id, interval_minutes, timezone, next_run_at, template_key, template_version,
        schedule_kind, schedule_hour, schedule_minute, schedule_weekday, report_when, destination, policy, instructions)
       SELECT #{requestedBy}, #{pid}, #{convId}, #{intervalMinutes}, #{zone}, #{nextRunAt}, #{template.key}, #{template.version},
@@ -2299,6 +2303,7 @@ startInteractiveRun pid conversation user runId input policy origin = do
       else
         AcceptedRequest <$> case (inserted, origin) of
           (_ : _, WebRoutine interval) -> do
+            void $ prepareRoutineGrantTx pid conversation
             scheduled <- Hasql.oneTx $ upsertRoutineSql user pid conversation interval now
             Hasql.executeTx [HI.sql|UPDATE apis.ai_routines SET instructions = #{input} WHERE id = #{scheduled.id}|]
             pure $ Just scheduled
@@ -2603,7 +2608,7 @@ routineRunsSql pid =
 -- 'claimRoutine' admits exactly one worker for each scheduled instant.
 recoverDueRoutines :: DB es => Int -> Eff es [ScheduledRoutine]
 recoverDueRoutines limit = Hasql.transaction TxS.ReadCommitted TxS.Write do
-  finishRunRowsTx RetireUnownedRoutines
+  finishRunRowsTx $ RetireUnownedWork UnownedInstallations
   Hasql.queryTx
     [HI.sql|SELECT id, next_run_at
       FROM apis.ai_routines WHERE active AND next_run_at <= now()
@@ -2613,7 +2618,10 @@ recoverDueRoutines limit = Hasql.transaction TxS.ReadCommitted TxS.Write do
 
 data RunFinalization
   = FinishRun RunContext RunTermination (Maybe AE.Value) (Maybe AE.Value) (Maybe Text)
-  | RetireUnownedRoutines
+  | RetireUnownedWork RoutineRetirement
+
+
+data RoutineRetirement = UnownedInstallations | ReauthorizingRoutine Projects.ProjectId (UUIDId "conversation")
 
 
 finishRunRowsTx :: RunFinalization -> Tx.Transaction ()
@@ -2637,19 +2645,37 @@ finishRunRowsTx finalization =
           WHERE id = #{context.id} AND started_at = #{context.startedAt} AND status = #{RunRunning}
           RETURNING id, project_id, conversation_id
         )|]
-      RetireUnownedRoutines ->
+      RetireUnownedWork scope ->
         [HI.sql|WITH retired_routines AS (
           UPDATE apis.ai_routines routine SET active = FALSE, next_run_at = NULL, running_since = NULL,
             cancelled_at = clock_timestamp()
-          WHERE requested_by IS NULL AND (next_run_at IS NOT NULL OR running_since IS NOT NULL OR EXISTS (
+          WHERE |]
+          <> retirementScope scope
+          <> [HI.sql| AND (next_run_at IS NOT NULL OR running_since IS NOT NULL OR EXISTS (
             SELECT 1 FROM apis.ai_routine_runs run WHERE run.routine_id = routine.id AND run.status = #{RunRunning}))
-          RETURNING id
+          RETURNING id, requested_by
         ), finished AS (
-          UPDATE apis.ai_routine_runs SET status = #{RunCancelled}, finished_at = clock_timestamp(),
+          UPDATE apis.ai_routine_runs run SET status = #{RunCancelled}, finished_at = clock_timestamp(),
             error = 'Routine authorizing member is no longer available.'
-          WHERE routine_id IN (SELECT id FROM retired_routines) AND status = #{RunRunning}
-          RETURNING id, project_id, conversation_id
+          FROM retired_routines retired WHERE run.routine_id = retired.id AND run.status = #{RunRunning}
+            AND (retired.requested_by IS NULL OR run.requested_by IS NULL)
+          RETURNING run.id, run.project_id, run.conversation_id
         )|]
+    retirementScope = \case
+      UnownedInstallations -> [HI.sql|routine.requested_by IS NULL|]
+      ReauthorizingRoutine pid conversation ->
+        [HI.sql|routine.project_id = #{pid} AND routine.conversation_id = #{conversation}
+          AND (routine.requested_by IS NULL OR EXISTS (
+            SELECT 1 FROM apis.ai_routine_runs abandoned WHERE abandoned.routine_id = routine.id
+              AND abandoned.source = #{ScheduledRun} AND abandoned.scheduled_at = routine.next_run_at
+              AND abandoned.requested_by IS NULL AND abandoned.status = #{RunRunning}))|]
+
+
+prepareRoutineGrantTx :: Projects.ProjectId -> UUIDId "conversation" -> Tx.Transaction (Maybe (RoutineSchedule, Text))
+prepareRoutineGrantTx pid conversation = do
+  timing <- (decodeRoutineTiming =<<) <$> Hasql.queryTx @(Maybe RoutineTimingRow) (routineTimingSql [HI.sql|project_id = #{pid} AND conversation_id = #{conversation} FOR UPDATE|])
+  finishRunRowsTx $ RetireUnownedWork $ ReauthorizingRoutine pid conversation
+  pure timing
 
 
 pauseRoutine :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
@@ -2672,11 +2698,11 @@ cancelRoutineRun pid convId =
 resumeRoutine :: (DB es, Time :> es) => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ScheduledRoutine)
 resumeRoutine requestedBy pid convId = do
   now <- Time.currentTime
-  routineTiming [HI.sql|project_id = #{pid} AND conversation_id = #{convId}|] >>= \case
+  Hasql.transaction TxS.ReadCommitted TxS.Write $ prepareRoutineGrantTx pid convId >>= \case
     Nothing -> pure Nothing
     Just (schedule, timezone) -> do
       let nextRunAt = nextRoutineAt schedule timezone now now
-      Hasql.interpOne
+      Hasql.queryTx
         [HI.sql|WITH resumed AS (
             UPDATE apis.ai_routines SET
               authority_version = authority_version + CASE WHEN requested_by IS DISTINCT FROM #{requestedBy} THEN 1 ELSE 0 END,
@@ -2727,10 +2753,6 @@ isoWeekday d = [Monday .. Sunday] !!? (d - 1)
 
 
 type RoutineTimingRow = (RoutineScheduleKind, Maybe RoutineInterval, Text, Maybe Int, Maybe Int, Maybe Int)
-
-
-routineTiming :: DB es => HI.Sql -> Eff es (Maybe (RoutineSchedule, Text))
-routineTiming predicate = (decodeRoutineTiming =<<) <$> Hasql.interpOne (routineTimingSql predicate)
 
 
 routineTimingSql :: HI.Sql -> HI.Sql
