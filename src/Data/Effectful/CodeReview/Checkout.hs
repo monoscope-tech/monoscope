@@ -71,7 +71,9 @@ withCheckout store source action = do
         git directory ["checkout", "--quiet", "--detach", toString $ revisionText result.head] HostGit.Local
         deliver started directory result.projectId artifacts.repository result.base result.head Verified $ peerPreparation verifiedArtifacts
       either (const invalid) (pure . Just) verified
-  pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Repository checkout could not be prepared"
+  case outcome of
+    Right (Just result) -> either throwIO (pure . Right) result
+    _ -> pure $ Left "Repository checkout could not be prepared"
   where
     elapsed started = max 1 . (`div` 1000000) . (+ 999999) . subtract started <$> getMonotonicTimeNSec
     deliver started directory project repository baseRevision headRevision status evidence = withSystemTempDirectory "monoscope-agent-metadata" \temporary -> do
@@ -102,7 +104,7 @@ withCheckout store source action = do
         writeFileBS destination =<< content blob
       instructions <- maybe (pure "") instruction $ asum $ map (`lookup` files) instructionNames
       duration <- elapsed started
-      action (Prepared Nothing Nothing Nothing directory metadata instructions project repository baseRevision headRevision status duration (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions)) evidence
+      tryAny $ action (Prepared Nothing Nothing Nothing directory metadata instructions project repository baseRevision headRevision status duration (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions)) evidence
     prepare :: FilePath -> Request run -> IO (FilePath, Revision, Revision, CacheStatus)
     prepare temporary request = do
       baseRevision <- either (const invalid) pure $ mkRevision request.base

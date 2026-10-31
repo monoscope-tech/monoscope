@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, checksPath, withOutbox, replay, acknowledge, retain, deliver, deliverPhase) where
+module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, checksPath, privateDirectory, withOutbox, replay, acknowledge, retain, deliver, deliverPhase) where
 
 import Control.Monad (foldM)
 import Data.Aeson qualified as AE
@@ -46,18 +46,7 @@ withOutbox store scope action = do
         IssueFix run -> ["fixes", toString run.toText]
         Admission run -> ["admissions", toString run.toText]
         PeerReview run -> ["fix-reviews", toString run.toText]
-  directory <-
-    foldM
-      ( \parent part -> do
-          let child = parent </> part
-          createDirectoryIfMissing False child
-          canonicalizePath child >>= ensure . (== child)
-          Posix.setFileMode child 0o700
-          sync parent
-          pure child
-      )
-      root
-      parts
+  directory <- privateDirectory root parts
   let outbox = Outbox directory scope
       checks = checksPath outbox
   createDirectoryIfMissing False checks
@@ -65,6 +54,16 @@ withOutbox store scope action = do
   Posix.setFileMode checks 0o700
   sync directory
   withFileLock (directory </> ".native.lock") Exclusive $ const $ action outbox
+
+
+privateDirectory :: FilePath -> [FilePath] -> IO FilePath
+privateDirectory = foldM \parent part -> do
+  let child = parent </> part
+  createDirectoryIfMissing False child
+  canonicalizePath child >>= ensure . (== child)
+  Posix.setFileMode child 0o700
+  sync parent
+  pure child
 
 
 -- Decode the whole run before any callback; malformed entries stay available for repair.

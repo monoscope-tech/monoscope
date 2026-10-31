@@ -290,6 +290,7 @@ async function main() {
       if (Object.hasOwn(checked, 'Left')) throw new Error('Patch comparison was rejected');
     } else result = await runPi({
       preparedCheckout, request: { ...request, head: preparedCheckout.head }, modelRuntime, attemptId, signal, root, skillsDir: preparedCheckout.guest,
+      sessionManager: process.env.IMPACT_REVIEW_SESSION_FILE ? SessionManager.open(process.env.IMPACT_REVIEW_SESSION_FILE, dirname(process.env.IMPACT_REVIEW_SESSION_FILE), cwd) : undefined,
       tools: hostTools(preparedCheckout, root, (operation) => exchange('Guest', operation)),
       optionsTool: (invocation) => exchange('Tool', invocation),
       workflow: {

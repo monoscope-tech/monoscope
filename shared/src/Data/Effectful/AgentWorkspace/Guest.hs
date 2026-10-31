@@ -185,6 +185,7 @@ withGuest host expected checkout revision start lease attempt allocate retain ac
           unless (saved.revision == revision && saved.image == image.buildId && saved.baseline == (AgentWorkspace.checkpointSummary <$> leased)) $ failure "Suspended guest inputs differ from the current workspace"
           AgentWorkspace.restoreSnapshot rpc image.buildId sandbox saved.disk (temporary </> "resumed.qcow2")
           rpc (GetIdentity ()) >>= writeIORef vmIdentity . Just
+          void $ run "/" $ "/bin/sh" :| ["-c", "tar -C /run -xf /var/lib/monoscope-agent/run.tar"]
         Fresh setup -> do
           case leased of
             Just held -> rpc $ Resume (sandbox, held.resumePath)
@@ -216,7 +217,10 @@ withGuest host expected checkout revision start lease attempt allocate retain ac
     whenRight (Left "Agent sandbox could not be prepared") prepared \imageBuildId -> do
       ready <- getMonotonicTimeNSec
       let cache = CacheReport (maybe (if isJust host.workspace then Miss else Disabled) (Hit . AgentWorkspace.checkpointSummary) leased) ((ready - started) `div` 1000000)
-      Right <$> action (Session (fmap (Suspended revision imageBuildId (AgentWorkspace.checkpointSummary <$> leased)) . AgentWorkspace.captureSnapshot rpc imageBuildId) cache leased skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn (\artifacts -> RegressionOptions artifacts checkout host.image host.bridge) output (void . workspace . toList) upload)
+      let suspend path = do
+            void $ run "/" $ "/bin/sh" :| ["-c", "set -eu; umask 077; mkdir -p /var/lib/monoscope-agent; cd /run; tar --exclude=monoscope-skills -cf /var/lib/monoscope-agent/run.tar -- monoscope-*"]
+            Suspended revision imageBuildId (AgentWorkspace.checkpointSummary <$> leased) <$> AgentWorkspace.captureSnapshot rpc imageBuildId path
+      Right <$> action (Session suspend cache leased skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn (\artifacts -> RegressionOptions artifacts checkout host.image host.bridge) output (void . workspace . toList) upload)
   receipt <- measured
   case outcome of
     Left failed -> void (tryAny $ traverse_ allocate receipt) >> throwIO failed

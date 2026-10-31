@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
+module Data.Effectful.CodeReview.Types (ReviewInput (..), ReviewMemory (..), ReviewContext (..), Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
@@ -12,6 +12,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.ProjectMemory qualified as Memory
 import OpenAI.V1.Models (Model)
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
+import Pkg.Git qualified as Git
 import Relude
 
 
@@ -50,11 +51,26 @@ data Request run = Request
 
 data TelemetryQuery = TelemetryQuery {service :: Text, query :: Text}
   deriving stock (Eq, Generic, Ord, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (AE.FromJSON, AE.FromJSONKey, AE.ToJSON, AE.ToJSONKey)
 
 
 data KnowledgeNote = KnowledgeNote {service :: Text, summary :: Text, evidenceKeys :: NonEmpty Text}
   deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ReviewInput = ReviewInput {base :: Revision, head :: Revision, provider :: Text, model :: Text, files :: [Git.PullRequestFile], evidence :: [Evidence], coverage :: [Text], windowStart :: UTCTime, windowEnd :: UTCTime, prompt :: Text}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ReviewMemory = ReviewMemory {evidence :: Map TelemetryQuery Evidence, notes :: [KnowledgeNote]}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ReviewContext = ReviewContext {input :: ReviewInput, memory :: ReviewMemory}
+  deriving stock (Generic)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
