@@ -239,7 +239,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                     continuation = if run.state == Reviews.Queued then Issues.RestartRun else Issues.ContinueRun
                 void $ Issues.getOrCreateConversation run.projectId convId Issues.CTPullRequest (AE.object ["pull_request" AE..= run.number, "repository" AE..= (run.owner <> "/" <> run.repo)])
                 Issues.renameConversation run.projectId convId (run.owner <> "/" <> run.repo <> " #" <> show run.number)
-                whenJustM (Issues.startEventRun routine (Issues.PullRequestReview run.id) continuation convId routine.requestedBy input) \execution ->
+                whenJustM (Issues.startEventRun routine (Issues.PullRequestReviewRequest run.id) continuation convId input) \execution ->
                   when (execution.status == Issues.RunRunning) do
                     context <- AI.requireRunContext run.projectId $ Issues.EventClaim (Issues.PullRequestReview run.id) execution.id execution.startedAt
                     outcome <- tryAny $ Timeout.timeout (540 * 1000000) $ runErrorNoCallStack $ execute run execution context

@@ -3803,7 +3803,7 @@ enhanceIssuesWithLLM pid issueIds = do
         $ whenJustM (Issues.selectIssueById pid issueId) \issue -> unless (Issues.isNewEndpointOnly issue) do
           let convId = UUIDId issueId.unUUIDId
           void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object [])
-          whenJustM (Issues.startEventRun routine (Issues.IssueEnrichment issueId) Issues.ContinueRun convId routine.requestedBy ("Enrich issue: " <> issue.title)) \execution ->
+          whenJustM (Issues.startEventRun routine (Issues.IssueEnrichmentRequest issueId) Issues.ContinueRun convId ("Enrich issue: " <> issue.title)) \execution ->
             when (execution.status == Issues.RunRunning) do
               context <- AI.requireRunContext pid $ Issues.EventClaim (Issues.IssueEnrichment issueId) execution.id execution.startedAt
               outcome <- tryAny $ Timeout.timeout (120 * 1_000_000) $ runExceptT do

@@ -1063,7 +1063,7 @@ spec = around withTestResources do
             if origin /= "scheduled"
               then do
                 routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected an installed routine") pure
-                execution <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.StartRun conversation user "Inspect the project") >>= maybe (fail "Expected a routine run") pure
+                execution <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommandRequest conversation user) Issues.StartRun conversation "Inspect the project") >>= maybe (fail "Expected a routine run") pure
                 when (origin == "event") $ runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routine_runs SET policy = #{Issues.Autonomous} WHERE id = #{execution.id}|]
                 invocation <- runTestBg frozenTime tr $ fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation execution.id execution.startedAt
                 when (origin == "event") do
@@ -1131,12 +1131,12 @@ spec = around withTestResources do
                   Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{actor.id}, 'edit')|]
                   pure actor
                 for_ [(conversation, replacement.id), (foreignConversation, user)] \(target, actor) ->
-                  runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.ContinueRun target actor "Changed retry input") >>= \result -> fmap (.id) result `shouldBe` Nothing
+                  runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommandRequest conversation actor) Issues.ContinueRun target "Changed retry input") >>= \result -> fmap (.id) result `shouldBe` Nothing
                 runQueryEffect tr do
                   Issues.setRoutineInstructions testPid routine.conversationId "New instructions apply to future requests."
                   Issues.setRoutinePolicy user testPid routine.conversationId Issues.Observe
                   Issues.setRoutinePolicy user testPid routine.conversationId Issues.Autonomous
-                recovered <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.ContinueRun conversation user "Changed retry input") >>= maybe (fail "Expected a recovery attempt") pure
+                recovered <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackCommandRequest conversation user) Issues.ContinueRun conversation "Changed retry input") >>= maybe (fail "Expected a recovery attempt") pure
                 recovered.id `shouldSatisfy` (/= runId)
                 recovered.instructions `shouldBe` routine.instructions
                 evidence <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid recovered.id
@@ -2123,7 +2123,7 @@ spec = around withTestResources do
                       template <- maybe (liftIO $ throwIO $ ErrorCall "Missing Slack template") pure $ find ((== "slack-investigation") . (.key)) Issues.routineTemplates
                       void $ Issues.installRoutineTemplate user testPid conversation "UTC" template
                       routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (liftIO $ throwIO $ ErrorCall "Missing installed routine") pure
-                      execution <- Issues.startEventRun routine (Issues.SlackCommand conversation) Issues.StartRun conversation user "Read project evidence" >>= maybe (liftIO $ throwIO $ ErrorCall "Missing event run") pure
+                      execution <- Issues.startEventRun routine (Issues.SlackCommandRequest conversation user) Issues.StartRun conversation "Read project evidence" >>= maybe (liftIO $ throwIO $ ErrorCall "Missing event run") pure
                       fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation execution.id execution.startedAt
                     else do
                       slot <- Issues.upsertRoutine user testPid conversation (fromRightShow $ Issues.mkRoutineInterval 15) >>= maybe (liftIO $ throwIO $ ErrorCall "Missing scheduled instant") pure

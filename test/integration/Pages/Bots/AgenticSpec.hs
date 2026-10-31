@@ -517,11 +517,50 @@ spec = around withTestResources do
         unchanged <- runQueryEffect tr $ Issues.getConversation testPid conversation.conversationId
         (unchanged >>= (.routineKind)) `shouldBe` Just Issues.ScheduleSlackMessage
 
+      for_ [("issue-enrichment", Issues.EventIssueEnrichment, Issues.IssueEnrichment $ UUIDId UUID.nil, Issues.IssueEnrichmentRequest $ UUIDId UUID.nil), ("production-impact-review", Issues.EventPullRequest, Issues.PullRequestReview $ UUIDId UUID.nil, Issues.PullRequestReviewRequest $ UUIDId UUID.nil)] $ \(template, kind, source, request) ->
+        it ("nativeRequestRecovery_ownerChangeRetainsOriginalActor: " <> template) \tr -> do
+          void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm (toText template))
+          installed <- runQueryEffect tr (Issues.getEventRoutine testPid kind) >>= maybe (fail "Missing installed routine") pure
+          let conversation = installed.conversationId
+              start routine continuation input = runTestBg frozenTime tr (Issues.startEventRun routine request continuation conversation input) >>= maybe (fail "Expected native recovery after owner change") pure
+          initial <- start installed Issues.StartRun "Original event input"
+          replacement <- runTestBg frozenTime tr do
+            actor <- Projects.createUser "Replacement" "Owner" "" "native-replacement@example.test"
+            Projects.insertUser actor
+            Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{actor.id}, 'edit')|]
+            void $ Issues.resumeRoutine actor.id testPid conversation
+            Issues.setRoutineInstructions testPid conversation "Instructions for future events."
+            pure actor.id
+          current <- runQueryEffect tr (Issues.getEventRoutine testPid kind) >>= maybe (fail "Missing current routine") pure
+          current.requestedBy `shouldBe` replacement
+          resumed <- start current Issues.ContinueRun "Changed worker input"
+          resumed.id `shouldBe` initial.id
+          resumed.requestedBy `shouldBe` installed.requestedBy
+          resumed.instructions `shouldBe` installed.instructions
+          runQueryEffect tr $ completeTestRun testPid (Issues.EventClaim source resumed.id resumed.startedAt) $ Issues.FailedResult $ Issues.RunFailure "Interrupted worker" Issues.RunOnly
+          recovered <- start current Issues.ContinueRun "Another worker input"
+          recovered.id `shouldSatisfy` (/= initial.id)
+          recovered.requestedBy `shouldBe` installed.requestedBy
+          retained <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid recovered.id
+          (retained >>= (.input)) `shouldBe` Just "Original event input"
+          (retained >>= (.instructions)) `shouldBe` Just installed.instructions
+          runQueryEffect tr (Hasql.interpScalar @(UUIDId "ai_routine_run") [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{recovered.id}|]) >>= (`shouldBe` initial.id)
+          runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM projects.project_members WHERE project_id = #{testPid} AND user_id = #{installed.requestedBy}|]
+          context <- runQueryEffect tr $ AI.requireRunContext testPid $ Issues.EventClaim source recovered.id recovered.startedAt
+          runQueryEffect tr (Issues.runContextPolicy context) >>= (`shouldBe` Nothing)
+          runQueryEffect tr $ void $ Issues.completeRun context $ Issues.CancelledResult Nothing
+          restarted <- start installed Issues.RestartRun "Explicitly restarted event"
+          restarted.requestedBy `shouldBe` replacement
+          restarted.instructions `shouldBe` current.instructions
+          fresh <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid restarted.id
+          (fresh >>= (.input)) `shouldBe` Just "Explicitly restarted event"
+          runQueryEffect tr (Hasql.interpScalar @(UUIDId "ai_routine_run") [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{restarted.id}|]) >>= (`shouldBe` restarted.id)
+
       it "eventRequestRoot_duplicateWorkersShareOneAttemptAndRecoveryRoot" \tr -> do
         void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
         routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected a Slack routine") pure
         let user = (getResponse tr.trSessAndHeader).user.id
-            start = runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackCommand routine.conversationId) Issues.ContinueRun routine.conversationId user "One concurrent request"
+            start = runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId user) Issues.ContinueRun routine.conversationId "One concurrent request"
         (Just initial, Just duplicate) <- Async.concurrently start start
         duplicate.id `shouldBe` initial.id
         runQueryEffect tr $ completeTestRun testPid (Issues.EventClaim (Issues.SlackCommand routine.conversationId) initial.id initial.startedAt) $ Issues.FailedResult $ Issues.RunFailure "Interrupted worker" Issues.RunOnly
@@ -536,7 +575,7 @@ spec = around withTestResources do
         void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
         (routine, run) <- runTestBg frozenTime tr do
           routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (throwIO $ ErrorCall "Missing routine") pure
-          run <- Issues.startEventRun routine (Issues.SlackMessage $ UUIDId UUID.nil) Issues.ContinueRun routine.conversationId (getResponse tr.trSessAndHeader).user.id "Investigate checkout" >>= maybe (throwIO $ ErrorCall "Missing run") pure
+          run <- Issues.startEventRun routine (Issues.SlackMessageRequest (UUIDId UUID.nil) (getResponse tr.trSessAndHeader).user.id) Issues.ContinueRun routine.conversationId "Investigate checkout" >>= maybe (throwIO $ ErrorCall "Missing run") pure
           context <- AI.requireRunContext testPid $ Issues.EventClaim (Issues.SlackMessage $ UUIDId UUID.nil) run.id run.startedAt
           Issues.saveRunResult context "Investigation" "Original evidence"
           pure (routine, run)
@@ -547,7 +586,7 @@ spec = around withTestResources do
         void $ testServant tr $ AIThreads.routineInstructionsPostH testPid routine.conversationId (AIThreads.RoutineInstructionsForm "Check the new deployment first.")
         void $ testServant tr $ AIThreads.routineResumePostH testPid routine.conversationId
         retry <- runTestBg frozenTime tr do
-          retry <- Issues.startEventRun routine (Issues.SlackMessage $ UUIDId UUID.nil) Issues.RestartRun routine.conversationId (getResponse tr.trSessAndHeader).user.id "Investigate checkout again" >>= maybe (throwIO $ ErrorCall "Missing retry") pure
+          retry <- Issues.startEventRun routine (Issues.SlackMessageRequest (UUIDId UUID.nil) (getResponse tr.trSessAndHeader).user.id) Issues.RestartRun routine.conversationId "Investigate checkout again" >>= maybe (throwIO $ ErrorCall "Missing retry") pure
           completeTestRun testPid (Issues.EventClaim (Issues.SlackMessage $ UUIDId UUID.nil) retry.id retry.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "Revised evidence" Nothing
           pure retry
         (original, revised, oldInstructions, newInstructions, runs, duplicate) <-
@@ -558,7 +597,7 @@ spec = around withTestResources do
             <*> Issues.getRoutineRunEvidence testPid run.id
             <*> Issues.getRoutineRunEvidence testPid retry.id
             <*> Issues.listConversationRuns testPid routine.conversationId 20
-            <*> Issues.startEventRun routine (Issues.SlackMessage $ UUIDId UUID.nil) Issues.ContinueRun routine.conversationId (getResponse tr.trSessAndHeader).user.id "Replay"
+            <*> Issues.startEventRun routine (Issues.SlackMessageRequest (UUIDId UUID.nil) (getResponse tr.trSessAndHeader).user.id) Issues.ContinueRun routine.conversationId "Replay"
         map (.content) original `shouldBe` [Just "Original evidence"]
         map (.content) revised `shouldBe` [Just "Revised evidence"]
         (oldInstructions >>= (.instructions)) `shouldBe` Just routine.instructions
@@ -571,7 +610,7 @@ spec = around withTestResources do
         filter (not . (`T.isInfixOf` html)) ["Original evidence", "Cancelled", "Investigate checkout", "Instructions used for this run"] `shouldBe` []
         (snd $ T.breakOn "id=\"routine-run\"" html) `shouldSatisfy` (not . T.isInfixOf "Revised evidence")
         failed <- runTestBg frozenTime tr do
-          failed <- Issues.startEventRun routine (Issues.SlackMessage $ UUIDId UUID.nil) Issues.RestartRun routine.conversationId (getResponse tr.trSessAndHeader).user.id "Try again" >>= maybe (throwIO $ ErrorCall "Missing failed attempt") pure
+          failed <- Issues.startEventRun routine (Issues.SlackMessageRequest (UUIDId UUID.nil) (getResponse tr.trSessAndHeader).user.id) Issues.RestartRun routine.conversationId "Try again" >>= maybe (throwIO $ ErrorCall "Missing failed attempt") pure
           completeTestRun testPid (Issues.EventClaim (Issues.SlackMessage $ UUIDId UUID.nil) failed.id failed.startedAt) $ Issues.FailedResult $ Issues.RunFailure "Model unavailable" Issues.RunOnly
           Issues.listRunArtifacts testPid failed.id
         map (.content) failed `shouldBe` []
@@ -580,7 +619,7 @@ spec = around withTestResources do
         hidden `shouldBe` 404
         pending <-
           runTestBg frozenTime tr
-            $ Issues.startEventRun routine (Issues.SlackMessage $ UUIDId UUID.nil) Issues.RestartRun routine.conversationId (getResponse tr.trSessAndHeader).user.id "Work finishing during deletion"
+            $ Issues.startEventRun routine (Issues.SlackMessageRequest (UUIDId UUID.nil) (getResponse tr.trSessAndHeader).user.id) Issues.RestartRun routine.conversationId "Work finishing during deletion"
             >>= maybe (throwIO $ ErrorCall "Missing pending attempt") pure
         runQueryEffect tr do
           completeTestRun testPid (Issues.EventClaim (Issues.SlackMessage $ UUIDId UUID.nil) pending.id pending.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Issues.reportAnswer "The published result survives conversation deletion." Nothing
@@ -619,7 +658,7 @@ spec = around withTestResources do
           actor <- Projects.createUser "Routine" "Reader" "" "routine-reader@example.test"
           Projects.insertUser actor
           Hasql.interpExecute_ [HI.sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (#{testPid}, #{actor.id}, 'view')|]
-          run <- Issues.startEventRun routine (Issues.SlackCommand routine.conversationId) Issues.StartRun routine.conversationId actor.id "Inspect checkout" >>= maybe (throwIO $ ErrorCall "Missing run") pure
+          run <- Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId actor.id) Issues.StartRun routine.conversationId "Inspect checkout" >>= maybe (throwIO $ ErrorCall "Missing run") pure
           pure (routine, run, actor)
         runQueryEffect tr (Issues.routineRunActive testPid run.id) >>= (`shouldBe` True)
         for_ [([HI.sql|UPDATE users.users SET active = FALSE WHERE id = #{routine.requestedBy}|], [HI.sql|UPDATE users.users SET active = TRUE WHERE id = #{routine.requestedBy}|]), ([HI.sql|UPDATE projects.projects SET active = FALSE WHERE id = #{testPid}|], [HI.sql|UPDATE projects.projects SET active = TRUE WHERE id = #{testPid}|])] $ \(disable, restore) -> do
@@ -708,7 +747,7 @@ spec = around withTestResources do
         void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
         execution <- runTestBg frozenTime tr do
           routine <- Issues.getEventRoutine testPid Issues.EventSlackMessage >>= maybe (throwIO $ ErrorCall "Missing active template") pure
-          run <- Issues.startEventRun routine (Issues.SlackCommand routine.conversationId) Issues.StartRun routine.conversationId routine.requestedBy "Retain this run result" >>= maybe (throwIO $ ErrorCall "Missing run") pure
+          run <- Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId routine.requestedBy) Issues.StartRun routine.conversationId "Retain this run result" >>= maybe (throwIO $ ErrorCall "Missing run") pure
           void
             $ Hasql.interpExecute
               [HI.sql|INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content)
@@ -725,7 +764,7 @@ spec = around withTestResources do
           void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
           routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected an installed routine") pure
           let source = Issues.SlackCommand routine.conversationId
-          Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine source Issues.StartRun routine.conversationId routine.requestedBy "Retain this result"
+          Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId routine.requestedBy) Issues.StartRun routine.conversationId "Retain this result"
           context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.EventClaim source execution.id execution.startedAt
           runQueryEffect tr $ case stop of
             "cancel" -> Issues.cancelRoutineRun testPid routine.conversationId
@@ -841,7 +880,7 @@ spec = around withTestResources do
           iid <- Issues.insertIssueReturningId issue
           let convId = UUIDId iid.unUUIDId
           void $ Issues.getOrCreateConversation testPid convId Issues.CTAnomaly (AE.object [])
-          void $ Issues.startEventRun installed (Issues.IssueEnrichment iid) Issues.StartRun convId installed.requestedBy "Interrupted worker"
+          void $ Issues.startEventRun installed (Issues.IssueEnrichmentRequest iid) Issues.StartRun convId "Interrupted worker"
           pure iid
         runTestBg frozenTime tr $ model True $ configured $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.EnhanceIssuesWithLLM testPid $ V.singleton interrupted)
         recovered <- runQueryEffect tr $ Issues.getEventRun testPid (Issues.IssueEnrichment interrupted)

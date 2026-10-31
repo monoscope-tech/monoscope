@@ -598,6 +598,22 @@ Sensitive history disclosure, event action scopes, selected review, remaining Sl
 No schema migration or new Haskell module was required for this slice.
 Verification: 190 bot, 75 API v1, and 45 issue integration examples pass. The eleven completion regressions pass after the final cleanup. Both Chrome scenarios pass against the current WAI application and isolated test database, including policy controls, action history, retained drafts, and run-inspector boundaries. The native review/SDK suite passed 33 examples during this slice; its publication/recovery regression passed again after the final admission change. Formatting and diff checks pass. Whole-branch review, live Slack acceptance, and release signoff remain pending.
 
+
+### Native request recovery after owner changes (31 October)
+
+A routine owner change used to strand a running native event: the recovery adapter supplied the new installer, while the saved request required its original member. This affected both issue enrichment and PR reviews.
+
+- `EventRequest` carries a member for Slack messages and commands. Native review and enrichment request constructors take only their source identity; callers cannot substitute a new member during recovery.
+- The existing initialization query derives a new native request's owner from the locked installation. Continued attempts retain the root request's actor, input, instructions, and authority version.
+- Slack requests retain exact-member matching. Native recovery still checks both the current installer and the original actor's current access through the shared authority query.
+- Explicit restarts create a new root with the current owner and instructions, even when the adapter holds an older installation snapshot.
+- No new migration, alternate executor, or recovery table was added.
+
+Both native-source regressions failed before the fix. They cover resuming a running attempt, retrying a failed attempt, retained request evidence, revoked original-member access, and an explicit restart. The focused regressions pass, followed by 192 bot examples, 33 native review/SDK examples, 75 API v1 examples, and 45 issue examples. Formatting and diff checks pass; repeated slice reviews find no material distillation, constraint-evasion, or client-behavior issues. Full-branch review, live Slack acceptance, and release signoff remain pending.
+
+The next disclosure slice must cover the same evidence at every boundary: `AIThreads` currently gates operation previews, while the Findings/Tool results panels, run artifacts, conversation messages, and model history still use less specific access checks. Sensitive reads already have catalog role requirements, so blocking administrator mutations alone does not complete this work. Retained answers and documents derived from a sensitive read must carry that requirement too; hiding a tool preview alone is insufficient. Use one provenance representation and evaluator across model input, tool results, documents, and publication, including role changes during a run. Reuse the capability catalog for legacy evidence; do not introduce a second list of privileged tool names. Keep any required append-only schema changes together in one coherent migration.
+
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

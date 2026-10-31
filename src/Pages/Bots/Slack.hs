@@ -266,7 +266,7 @@ slackInteractionsHWithTools projectTools interaction = do
               AI.requireAgentAccess access principal.projectId
               let convId = Issues.slackCommandConversationId principal.projectId interaction.team_id interaction.channel_id interaction.trigger_id
               void $ Issues.getOrCreateConversation principal.projectId convId Issues.CTSlackThread (AE.object ["team_id" AE..= interaction.team_id, "channel_id" AE..= interaction.channel_id])
-              run <- Issues.startEventRun routine (Issues.SlackCommand convId) Issues.StartRun convId principal.userId interaction.text
+              run <- Issues.startEventRun routine (Issues.SlackCommandRequest convId principal.userId) Issues.StartRun convId interaction.text
               for_ run \execution -> forkBackground authCtx.backgroundScope ("Slack command routine " <> execution.id.toText) do
                 context <- AI.requireRunContext principal.projectId $ Issues.BackgroundClaim principal.userId convId execution.id execution.startedAt
                 let requireRun = do
@@ -934,7 +934,7 @@ processSlackEventWithTools projectTools receiptId =
           convId
           Issues.CTSlackThread
           (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= workspaceId])
-      whenJustM (Issues.startEventRun routine (Issues.SlackMessage receiptId) Issues.ContinueRun convId principal.userId event.text) \run ->
+      whenJustM (Issues.startEventRun routine (Issues.SlackMessageRequest receiptId principal.userId) Issues.ContinueRun convId event.text) \run ->
         when (run.status == Issues.RunRunning) do
           context <- AI.requireRunContext slackData.projectId $ Issues.BackgroundClaim principal.userId convId run.id run.startedAt
           let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts

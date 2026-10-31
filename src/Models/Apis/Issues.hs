@@ -141,6 +141,7 @@ module Models.Apis.Issues (
   RoutineRunSource (..),
   EventRoutine (..),
   EventRun (..),
+  EventRequest (..),
   RunContinuation (..),
   getEventRoutine,
   startEventRun,
@@ -1701,6 +1702,13 @@ runContextAccessSql context = case context.source of
   (ScheduledRun; TriggeredRun{}) -> routineRunAccessSql context.projectId context.id (runContextScopeSql context)
 
 
+data EventRequest
+  = SlackMessageRequest (UUIDId "slack_event") Projects.UserId
+  | SlackCommandRequest (UUIDId "conversation") Projects.UserId
+  | PullRequestReviewRequest (UUIDId "pr_review")
+  | IssueEnrichmentRequest IssueId
+
+
 data RunContinuation = StartRun | ContinueRun | RestartRun
   deriving stock (Eq)
 
@@ -2081,10 +2089,16 @@ getEventRoutine pid event =
 
 -- | Recovery retains one request's actor, instructions, input, and authority.
 -- An explicit restart starts a new request while retaining earlier attempts.
-startEventRun :: (DB es, Time :> es) => EventRoutine -> RoutineEventSource -> RunContinuation -> UUIDId "conversation" -> Projects.UserId -> Text -> Eff es (Maybe EventRun)
-startEventRun routine event continuation convId requestedBy input = do
+-- Native events use the installation owner only for new requests; member events bind their sender.
+startEventRun :: (DB es, Time :> es) => EventRoutine -> EventRequest -> RunContinuation -> UUIDId "conversation" -> Text -> Eff es (Maybe EventRun)
+startEventRun routine request continuation convId input = do
   now <- Time.currentTime
-  let source = TriggeredRun event
+  let (event, member) = case request of
+        SlackMessageRequest receipt user -> (SlackMessage receipt, Just user)
+        SlackCommandRequest conversation user -> (SlackCommand conversation, Just user)
+        PullRequestReviewRequest review -> (PullRequestReview review, Nothing)
+        IssueEnrichmentRequest issue -> (IssueEnrichment issue, Nothing)
+      source = TriggeredRun event
       restart = continuation == RestartRun
       resume = continuation /= StartRun
       kind = case event of SlackMessage{} -> EventSlackMessage; SlackCommand{} -> EventSlackMessage; PullRequestReview{} -> EventPullRequest; IssueEnrichment{} -> EventIssueEnrichment
@@ -2107,7 +2121,8 @@ startEventRun routine event continuation convId requestedBy input = do
            requested_by, input, instructions, template_version, policy, authority_version)
         SELECT identity.id, CASE WHEN #{restart} OR original.id IS NULL THEN identity.id ELSE original.id END,
           r.id, r.project_id, #{convId}, #{now}, clock_timestamp(), 'running', #{source},
-          COALESCE((SELECT attempt + 1 FROM previous), 1), #{requestedBy},
+          COALESCE((SELECT attempt + 1 FROM previous), 1),
+          CASE WHEN #{restart} OR original.id IS NULL THEN COALESCE(#{member}, r.requested_by) ELSE original.requested_by END,
           CASE WHEN #{restart} OR original.id IS NULL THEN #{input} ELSE original.input END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.instructions ELSE original.instructions END,
           CASE WHEN #{restart} OR original.id IS NULL THEN r.template_version ELSE original.template_version END,
@@ -2116,14 +2131,16 @@ startEventRun routine event continuation convId requestedBy input = do
         FROM apis.ai_routines r CROSS JOIN identity LEFT JOIN original ON TRUE
         WHERE r.id = #{routine.id} AND r.project_id = #{routine.projectId} AND r.schedule_kind = #{kind} AND r.active
           AND EXISTS (SELECT 1 FROM apis.ai_conversations WHERE project_id = r.project_id AND conversation_id = #{convId})
-          AND (#{restart} OR original.id IS NULL OR (original.routine_id = r.id AND original.requested_by = #{requestedBy}
+          AND (#{restart} OR original.id IS NULL OR (original.routine_id = r.id AND original.requested_by IS NOT NULL
+            AND (#{member} IS NULL OR original.requested_by = #{member})
             AND original.conversation_id = #{convId} AND original.input IS NOT NULL AND original.instructions IS NOT NULL))
           AND NOT EXISTS (SELECT 1 FROM previous WHERE (status = 'running' AND routine_id = #{routine.id}) OR (NOT #{restart} AND status IN ('succeeded', 'no_findings', 'cancelled')))
         ON CONFLICT DO NOTHING
         RETURNING id, started_at, status, requested_by, instructions
       ) SELECT id, started_at, status, requested_by, instructions FROM inserted
         UNION ALL SELECT id, started_at, status, requested_by, instructions FROM previous
-          WHERE #{resume} AND NOT EXISTS (SELECT 1 FROM inserted) AND requested_by = #{requestedBy}
+          WHERE #{resume} AND NOT EXISTS (SELECT 1 FROM inserted) AND requested_by IS NOT NULL
+            AND (#{member} IS NULL OR requested_by = #{member})
             AND conversation_id = #{convId} AND routine_id = #{routine.id} LIMIT 1|]
 
 
