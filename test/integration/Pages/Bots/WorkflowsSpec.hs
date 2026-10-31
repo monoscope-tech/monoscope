@@ -17,6 +17,7 @@ import Data.Cache qualified as Cache
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Wreq qualified as HTTP
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -40,7 +41,7 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (renderSimpleQuery, status429, status503)
+import Network.HTTP.Types (parseSimpleQuery, renderSimpleQuery, status429, status503)
 import Network.Wreq qualified as Wreq
 import OddJobs.Job qualified as OddJobs
 import OpenAI.V1.Chat.Completions qualified as OpenAI
@@ -57,12 +58,12 @@ import Pages.CodeContext qualified as CodeContextPage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.AgentOperation qualified as Operation
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Git qualified as Git
 import Pkg.SlackRateLimit qualified as RateLimit
 import Pkg.TestUtils
 import Relude
-import Servant.API.ResponseHeaders (getResponse)
+import Servant.API.ResponseHeaders (getHeaders, getResponse)
 import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import System.Timeout (timeout)
@@ -404,6 +405,157 @@ spec = around withTestResources do
         toBaseServantResponse tr (Slack.getSlackLink $ linkId 4) >>= (`shouldSatisfy` isNothing)
 
     describe "Slack installation authorization" do
+      it "personalSlackOAuth_connectAndDisconnectArePrivateAccountControls" \tr -> do
+        setupLinkedSlackData tr testPid "T_CONTROLS"
+        connected <- toBaseServantResponse tr $ slackInteractionsH $ slackInteraction "/monoscope" "search connect" "T_CONTROLS"
+        extractResponseType connected `shouldBe` Just "ephemeral"
+        extractResponseText connected `shouldSatisfy` maybe False (T.isInfixOf $ "/p/" <> testPid.toText <> "/slack/evidence/U0123ABCDEF")
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            stateId = UUIDId $ UUID.fromWords 0 0 15 1
+        verifier <- runQueryEffect tr Slack.newSlackPKCE
+        runQueryEffect tr (Slack.createSlackEvidenceConsent stateId userId testPid "U0123ABCDEF" verifier) >>= (`shouldBe` True)
+        disconnected <- toBaseServantResponse tr $ slackInteractionsH $ slackInteraction "/monoscope" "search disconnect" "T_CONTROLS"
+        extractResponseType disconnected `shouldBe` Just "ephemeral"
+        isNothing <$> runQueryEffect tr (Slack.consumeSlackAuthorization stateId userId) >>= (`shouldBe` True)
+        installed <- runQueryEffect tr $ Slack.getProjectSlackData testPid
+        fmap (.botToken) installed `shouldBe` Just "x-bot-token"
+
+      it "personalSlackOAuth_startBindsTheLinkedAccountAndNeverExposesThePKCEVerifier" \tr -> do
+        setupLinkedSlackData tr testPid "T_PKCE"
+        started <- runAuthHandler tr $ SlackPage.startEvidenceGetH testPid "U0123ABCDEF"
+        location <- maybe (fail "Missing OAuth location") pure $ lookup "Location" $ getHeaders started
+        let (endpoint, query) = T.breakOn "?" $ decodeUtf8 location
+            params = parseSimpleQuery $ encodeUtf8 query
+        endpoint `shouldBe` "https://slack.com/oauth/v2_user/authorize"
+        lookup "scope" params `shouldBe` Just (encodeUtf8 $ T.intercalate "," Slack.slackEvidenceScopes)
+        lookup "code_challenge_method" params `shouldBe` Just "S256"
+        lookup "code_verifier" params `shouldBe` Nothing
+        stateId <- maybe (fail "Missing OAuth state") pure $ lookup "state" params >>= idFromText . decodeUtf8
+        (requests, status) <- runAsBaseRecordingHTTP tr $ catchError @ServerError (atAuthToBase tr.trSessAndHeader (SlackPage.linkProjectGetH Nothing $ Just stateId.toText) $> 200) (\_ err -> pure err.errHTTPCode)
+        status `shouldBe` 400
+        requests `shouldBe` []
+        Just (Slack.EvidenceAuthorization consent) <- runQueryEffect tr $ Slack.consumeSlackAuthorization stateId (getResponse tr.trSessAndHeader).user.id
+        (consent.projectId, consent.teamId, consent.slackUserId) `shouldBe` (testPid, "T_PKCE", "U0123ABCDEF")
+        lookup "code_challenge" params `shouldBe` Just (encodeUtf8 $ Slack.slackPKCEChallenge consent.verifier)
+
+      it "personalSlackOAuth_usesItsOwnEndpointAndKeepsWorkspaceCredentials" \tr -> do
+        setupLinkedSlackData tr testPid "T_PERSONAL"
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            stateId = UUIDId $ UUID.fromWords 0 0 10 1
+            encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            oauth = AE.object ["ok" AE..= True, "token_type" AE..= ("user" :: Text), "access_token" AE..= ("personal-token" :: Text), "authed_user" AE..= AE.object ["id" AE..= ("U0123ABCDEF" :: Text), "scope" AE..= T.intercalate "," Slack.slackEvidenceScopes], "team" AE..= AE.object ["id" AE..= ("T_PERSONAL" :: Text)]]
+        verifier <- runQueryEffect tr Slack.newSlackPKCE
+        runQueryEffect tr (Slack.createSlackEvidenceConsent stateId userId testPid "U0123ABCDEF" verifier) >>= (`shouldBe` True)
+        (requests, result) <- runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode oauth) $ tryAny $ void $ atAuthToBase tr.trSessAndHeader $ SlackPage.linkProjectGetH (Just "personal-code") (Just stateId.toText)
+        result `shouldSatisfy` isRight
+        map fst requests `shouldBe` ["https://slack.com/api/oauth.v2.user.access"]
+        map (lookup "code_verifier" . parseSimpleQuery . toStrict . snd) requests `shouldBe` [Just $ encodeUtf8 $ Slack.slackPKCEVerifier verifier]
+        grant <- runQueryEffect tr $ Slack.getSlackEvidenceGrant encKey testPid userId "T_PERSONAL" "U0123ABCDEF"
+        fmap (.accessToken) grant `shouldBe` Just "personal-token"
+        installed <- runQueryEffect tr $ Slack.getProjectSlackData testPid
+        fmap (.botToken) installed `shouldBe` Just "x-bot-token"
+
+      it "personalSlackOAuth_rechecksTheIdentityAndDisconnectInvalidatesAnInFlightExchange" \tr -> do
+        setupLinkedSlackData tr testPid "T_CONSENT"
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            stateId n = UUIDId $ UUID.fromWords 0 0 11 n
+            encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            start n who = runQueryEffect tr do
+              verifier <- Slack.newSlackPKCE
+              Slack.createSlackEvidenceConsent (stateId n) userId testPid who verifier
+        start 1 "U_SOMEONE_ELSE" >>= (`shouldBe` False)
+        withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?" (testPid, userId)
+        start 2 "U0123ABCDEF" >>= (`shouldBe` True)
+        runQueryEffect tr (Slack.createSlackInstall (stateId 3) userId testPid False) >>= (`shouldBe` False)
+        runQueryEffect tr (Slack.consumeSlackAuthorization (stateId 2) $ UUIDId UUID.nil) >>= ((`shouldBe` True) . isNothing)
+        Just (Slack.EvidenceAuthorization consent) <- runQueryEffect tr $ Slack.consumeSlackAuthorization (stateId 2) userId
+        runQueryEffect tr (Slack.consumeSlackAuthorization (stateId 2) userId) >>= ((`shouldBe` True) . isNothing)
+        runQueryEffect tr $ Slack.revokeSlackEvidence testPid userId
+        let grant = Slack.SlackUserGrant "T_CONSENT" "U0123ABCDEF" "too-late" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
+        runQueryEffect tr (Slack.saveSlackEvidenceGrant encKey consent grant) >>= (`shouldBe` Right False)
+        runQueryEffect tr (Slack.getSlackEvidenceGrant encKey testPid userId "T_CONSENT" "U0123ABCDEF") >>= ((`shouldBe` True) . isNothing)
+        start 4 "U0123ABCDEF" >>= (`shouldBe` True)
+        withResource tr.trPool \conn -> void $ PGS.execute conn "UPDATE apis.slack SET team_id = 'T_REPLACED' WHERE project_id = ?" (PGS.Only testPid)
+        runQueryEffect tr (Slack.consumeSlackAuthorization (stateId 4) userId) >>= ((`shouldBe` True) . isNothing)
+
+      it "personalSlackOAuth_rejectsOtherIdentitiesWriteScopesAndMalformedTokens" \tr -> do
+        setupLinkedSlackData tr testPid "T_REJECT"
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            oauth = AE.object ["ok" AE..= True, "token_type" AE..= ("user" :: Text), "access_token" AE..= ("personal-token" :: Text), "authed_user" AE..= AE.object ["id" AE..= ("U0123ABCDEF" :: Text), "scope" AE..= ("search:read.public" :: Text)], "team" AE..= AE.object ["id" AE..= ("T_REJECT" :: Text)]]
+            cases =
+              [ (403, oauth & key "team" . key "id" . _String .~ "T_OTHER")
+              , (403, oauth & key "authed_user" . key "id" . _String .~ "U_OTHER")
+              , (400, oauth & key "authed_user" . key "scope" . _String .~ "search:read.public,chat:write")
+              , (400, oauth & key "authed_user" . key "scope" . _String .~ "channels:history")
+              , (400, oauth & key "access_token" . _String .~ "")
+              , (400, oauth & key "token_type" . _String .~ "bot")
+              , (400, oauth & key "ok" . _Bool .~ False)
+              , (400, AE.object ["ok" AE..= True])
+              ]
+        for_ (zip [1 ..] cases) \(number, (expected, response)) -> do
+          let stateId = UUIDId $ UUID.fromWords 0 0 12 number
+          verifier <- runQueryEffect tr Slack.newSlackPKCE
+          runQueryEffect tr (Slack.createSlackEvidenceConsent stateId userId testPid "U0123ABCDEF" verifier) >>= (`shouldBe` True)
+          (requests, status) <- runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode response) $ catchError @ServerError (atAuthToBase tr.trSessAndHeader (SlackPage.linkProjectGetH (Just "code") (Just stateId.toText)) $> 200) (\_ err -> pure err.errHTTPCode)
+          status `shouldBe` expected
+          map fst requests `shouldBe` ["https://slack.com/api/oauth.v2.user.access"]
+          isNothing <$> runQueryEffect tr (Slack.getSlackEvidenceGrant encKey testPid userId "T_REJECT" "U0123ABCDEF") >>= (`shouldBe` True)
+          (repeated, denied) <- runAsBaseRecordingHTTP tr $ catchError @ServerError (atAuthToBase tr.trSessAndHeader (SlackPage.linkProjectGetH (Just "code") (Just stateId.toText)) $> 200) (\_ err -> pure err.errHTTPCode)
+          denied `shouldBe` 403
+          repeated `shouldBe` []
+
+      it "personalSlackOAuth_retainsRotatingCredentialsAndUsesTheClockForExpiry" \tr -> do
+        setupLinkedSlackData tr testPid "T_ROTATING"
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            stateId = UUIDId $ UUID.fromWords 0 0 13 1
+            encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            oauth = AE.object ["ok" AE..= True, "token_type" AE..= ("user" :: Text), "access_token" AE..= ("rotating-token" :: Text), "refresh_token" AE..= ("refresh-secret" :: Text), "expires_in" AE..= (3600 :: Int), "authed_user" AE..= AE.object ["id" AE..= ("U0123ABCDEF" :: Text), "scope" AE..= ("search:read.public" :: Text)], "team" AE..= AE.object ["id" AE..= ("T_ROTATING" :: Text)]]
+        verifier <- runQueryEffect tr Slack.newSlackPKCE
+        runQueryEffect tr (Slack.createSlackEvidenceConsent stateId userId testPid "U0123ABCDEF" verifier) >>= (`shouldBe` True)
+        void $ runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode oauth) $ atAuthToBase tr.trSessAndHeader $ SlackPage.linkProjectGetH (Just "code") (Just stateId.toText)
+        grant <- runQueryEffect tr $ Slack.getSlackEvidenceGrant encKey testPid userId "T_ROTATING" "U0123ABCDEF"
+        fmap (.accessToken) grant `shouldBe` Just "rotating-token"
+        case fmap (.lifetime) grant of
+          Just (Slack.Rotating refresh expires) -> (refresh, expires) `shouldBe` ("refresh-secret", addUTCTime 3600 frozenTime)
+          _ -> expectationFailure "Rotating user grant was not retained"
+
+      it "personalSlackOAuth_disconnectWinsWhenGrantInsertionWasAlreadyInFlight" \tr -> do
+        setupLinkedSlackData tr testPid "T_RACING"
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            stateId = UUIDId $ UUID.fromWords 0 0 14 1
+            encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            grant = Slack.SlackUserGrant "T_RACING" "U0123ABCDEF" "racing-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
+        verifier <- runQueryEffect tr Slack.newSlackPKCE
+        runQueryEffect tr (Slack.createSlackEvidenceConsent stateId userId testPid "U0123ABCDEF" verifier) >>= (`shouldBe` True)
+        Just (Slack.EvidenceAuthorization consent) <- runQueryEffect tr $ Slack.consumeSlackAuthorization stateId userId
+        withResource tr.trPool \conn ->
+          void
+            $ PGS.execute_
+              conn
+              [sql|
+          CREATE FUNCTION test_slack_grant_gate() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN PERFORM pg_advisory_xact_lock(271271); RETURN NEW; END $$;
+          CREATE TRIGGER test_slack_grant_gate BEFORE INSERT ON apis.slack_user_credentials
+            FOR EACH ROW EXECUTE FUNCTION test_slack_grant_gate();|]
+        startSave <- newEmptyMVar
+        startDisconnect <- newEmptyMVar
+        withAsync (takeMVar startSave >> runQueryEffect tr (Slack.saveSlackEvidenceGrant encKey consent grant)) \saving ->
+          withAsync (takeMVar startDisconnect >> runQueryEffect tr (Slack.revokeSlackEvidence testPid userId)) \disconnecting -> do
+            withResource tr.trPool \conn -> PGS.withTransaction conn do
+              void (PGS.query_ conn "SELECT pg_advisory_xact_lock(271271) IS NULL" :: IO [PGS.Only Bool])
+              let awaitBlocked number = timeout 5000000 $ fix \loop -> do
+                    void (PGS.query_ conn "SELECT pg_stat_clear_snapshot() IS NULL" :: IO [PGS.Only Bool])
+                    [PGS.Only count] <- PGS.query_ conn "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'" :: IO [PGS.Only Int]
+                    unless (count >= number) $ threadDelay 10000 >> loop
+              putMVar startSave ()
+              awaitBlocked 1 >>= (`shouldBe` Just ())
+              putMVar startDisconnect ()
+              awaitBlocked 2 >>= (`shouldBe` Just ())
+            wait saving >>= (`shouldBe` Right True)
+            wait disconnecting
+        isNothing <$> runQueryEffect tr (Slack.getSlackEvidenceGrant encKey testPid userId "T_RACING" "U0123ABCDEF") >>= (`shouldBe` True)
+
       it "asks older installations to reconnect before native investigation work" \tr -> do
         setupSlackAgent tr testPid "T_UPGRADE"
         withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET scopes = NULL WHERE project_id = ?|] (PGS.Only testPid)
@@ -438,7 +590,7 @@ spec = around withTestResources do
         let userId = (getResponse tr.trSessAndHeader).user.id
             stateId n = UUIDId $ UUID.fromWords 0 0 1 n
             start n = toBaseServantResponse tr $ Slack.createSlackInstall (stateId n) userId testPid True
-            consume n uid = toBaseServantResponse tr $ Slack.consumeSlackInstall (stateId n) uid
+            consume n uid = fmap (\case Just (Slack.WorkspaceAuthorization install) -> Just install; _ -> Nothing) $ toBaseServantResponse tr $ Slack.consumeSlackAuthorization (stateId n) uid
             execute query = withResource tr.trPool \conn -> void $ PGS.execute conn query (PGS.Only userId)
         start 1 >>= (`shouldBe` True)
         consume 1 (UUIDId UUID.nil) >>= (`shouldSatisfy` isNothing)

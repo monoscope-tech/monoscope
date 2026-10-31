@@ -110,6 +110,31 @@ can issue a new link. Already-linked users and visits to other tabs receive no
 onboarding prompt. App Home visits do not start investigations. A rejected prompt
 leaves the receipt pending; delivery is recorded only after Slack acknowledges it.
 
+## Personal Slack search consent
+
+After linking your identity, use `/monoscope search connect` for a private link
+to Slack's user authorization page. The connection uses the registered
+`/slack/oauth/callback`, a single-use state, and S256 PKCE. The returned workspace
+and Slack user must match the linked account and current project membership.
+This flow does not replace the project's bot credentials or alert destination.
+
+The manifest's user scopes contain read access only. Slack currently allows MCP
+for internal or Marketplace apps; enable MCP in the app's **Agents → Slack MCP
+Server** settings before live acceptance. These repository changes do not apply
+live app settings. See [Slack's MCP requirements](https://docs.slack.dev/ai/slack-mcp-server/).
+
+Use `/monoscope search disconnect` to remove your personal grants and pending
+consent for the current project. Disconnect also invalidates an exchange already
+in flight. Access and refresh tokens use the shared authenticated encryption
+helper. Tokens are unavailable after membership loss, workspace replacement, or
+expiry. Rotating grants retain their refresh token and expiry together.
+
+The consent and disconnect flow is implemented. Remote MCP reads, automatic token
+refresh, upstream revocation events, and audience containment remain unfinished;
+agent tools cannot use these credentials yet.
+
+## Link a Slack identity
+
 To link a personal account, mention Monoscope or message it directly in Slack.
 An unlinked user receives an ephemeral link addressed to that Slack user. Sign in
 to Monoscope, choose a project, and submit the form. The project list only includes

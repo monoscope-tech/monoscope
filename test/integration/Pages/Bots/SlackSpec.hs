@@ -1,7 +1,9 @@
 module Pages.Bots.SlackSpec (spec) where
 
+import Control.Lens ((^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Lens (key, _Array)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful.Error.Static (catchError)
@@ -23,6 +25,7 @@ spec = around withTestResources do
       manifest <- either fail pure =<< AE.eitherDecodeFileStrict' @AE.Object "docs/slack/agent-manifest.json"
       KM.member "metadata" manifest `shouldBe` False
       KM.member "events" manifest `shouldBe` False
+      AE.Object manifest ^? key "oauth_config" . key "scopes" . key "user" . _Array `shouldBe` Just (V.fromList $ map AE.toJSON Slack.slackEvidenceScopes)
 
     describe "/here command" do
       it "sets notification channel and saves golden response" \tr -> do

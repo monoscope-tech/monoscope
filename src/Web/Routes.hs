@@ -300,6 +300,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   { -- Dashboard routes
     dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> LocationRedirect NoContent
   , slackInstallGet :: mode :- "p" :> ProjectId :> "slack" :> "install" :> QueryFlag "onboarding" :> LocationRedirect NoContent
+  , slackEvidenceGet :: mode :- "p" :> ProjectId :> "slack" :> "evidence" :> Capture "slackUser" Text :> LocationRedirect NoContent
+  , slackEvidenceDisconnectPost :: mode :- "p" :> ProjectId :> "slack" :> "evidence" :> "disconnect" :> Verb 'POST 303 '[HTML] (Headers '[Header "Location" Text] NoContent)
   , slackIdentityGet :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> Get '[HTML] (RespHeaders (Html ()))
   , slackIdentityPost :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> ReqBody '[FormUrlEncoded] Slack.SlackLinkForm :> Post '[HTML] (RespHeaders (Html ()))
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
@@ -738,6 +740,8 @@ cookieProtectedServer projectTools =
     { -- Dashboard handlers
       dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" ["overview", "http", "logs", "traces", "events"]
     , slackInstallGet = Slack.startInstallGetH
+    , slackEvidenceGet = Slack.startEvidenceGetH
+    , slackEvidenceDisconnectPost = Slack.disconnectEvidencePostH
     , slackIdentityGet = Slack.linkIdentityGetH
     , slackIdentityPost = Slack.linkIdentityPostH
     , slackLinkProjectGet = Slack.linkProjectGetH

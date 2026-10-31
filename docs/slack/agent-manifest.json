@@ -48,6 +48,16 @@
       "https://YOUR_MONOSCOPE_HOST/slack/oauth/callback"
     ],
     "scopes": {
+      "user": [
+        "search:read.public",
+        "search:read.private",
+        "search:read.im",
+        "search:read.mpim",
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "mpim:history"
+      ],
       "bot": [
         "assistant:write",
         "chat:write",

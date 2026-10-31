@@ -16,7 +16,20 @@ module Models.Apis.Integrations (
   deleteSlackData,
   SlackInstall (..),
   createSlackInstall,
-  consumeSlackInstall,
+  SlackAuthorization (..),
+  SlackEvidenceConsent (projectId, userId, teamId, slackUserId, verifier),
+  SlackPKCE,
+  newSlackPKCE,
+  slackPKCEVerifier,
+  slackPKCEChallenge,
+  createSlackEvidenceConsent,
+  consumeSlackAuthorization,
+  SlackUserGrant (..),
+  SlackTokenLifetime (..),
+  slackEvidenceScopes,
+  saveSlackEvidenceGrant,
+  getSlackEvidenceGrant,
+  revokeSlackEvidence,
   SlackLink (..),
   SlackLinkProject (..),
   SlackPrincipal (..),
@@ -39,20 +52,30 @@ module Models.Apis.Integrations (
 ) where
 
 import Data.Aeson qualified as Aeson
+import Data.Base64.Types (extractBase64)
+import Data.ByteArray qualified as BA
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as AE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
+import Models.Projects.ProjectApiKeys qualified as Secrets
 import Models.Projects.ProjectMembers (activeMembership)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId, enumLit, refineText)
 import Relude
 import System.Types (DB)
+import "base64" Data.ByteString.Base64.URL qualified as B64URL
+import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
 
 
 data SlackLink = SlackLink {id :: UUIDId "slack_link", teamId :: Text, slackUserId :: Text, channelId :: Text}
@@ -295,32 +318,183 @@ data SlackInstall = SlackInstall {projectId :: Projects.ProjectId, onboarding ::
 -- | Installation modifies credentials shared by the whole project. Check current
 -- admin membership, rather than the browser session's cached project list.
 createSlackInstall :: DB es => UUIDId "slack_install" -> Projects.UserId -> Projects.ProjectId -> Bool -> Eff es Bool
-createSlackInstall stateId userId projectId onboarding = do
+createSlackInstall stateId userId projectId onboarding = createSlackAuthorization stateId userId projectId $ WorkspaceConsent onboarding
+
+
+createSlackEvidenceConsent :: DB es => UUIDId "slack_install" -> Projects.UserId -> Projects.ProjectId -> Text -> SlackPKCE -> Eff es Bool
+createSlackEvidenceConsent stateId userId projectId slackUserId verifier = createSlackAuthorization stateId userId projectId $ PersonalConsent slackUserId verifier
+
+
+data SlackConsentPurpose = WorkspaceConsent Bool | PersonalConsent Text SlackPKCE
+
+
+createSlackAuthorization :: DB es => UUIDId "slack_install" -> Projects.UserId -> Projects.ProjectId -> SlackConsentPurpose -> Eff es Bool
+createSlackAuthorization stateId userId projectId purpose = do
+  let (onboarding, slackUser, verifier) = case purpose of
+        WorkspaceConsent requestedOnboarding -> (requestedOnboarding, Nothing, Nothing)
+        PersonalConsent requestedUser pkce -> (False, Just requestedUser, Just $ slackPKCEVerifier pkce)
   affected <-
-    Hasql.interpExecute
-      $ [HI.sql|INSERT INTO apis.slack_install_requests (id, user_id, project_id, onboarding)
-      SELECT #{stateId}, #{userId}, #{projectId}, #{onboarding}
+    withSlackCredentialLock projectId userId
+      . fmap HI.getRowsAffected
+      . Hasql.queryTx
+      $ [HI.sql|WITH expired AS (DELETE FROM apis.slack_install_requests WHERE expires_at <= now())
+      INSERT INTO apis.slack_install_requests (id, user_id, project_id, onboarding, team_id, slack_user_id, code_verifier)
+      SELECT #{stateId}, #{userId}, #{projectId}, #{onboarding}, identity.team_id, identity.slack_user_id, #{verifier}
       FROM projects.project_members member
       JOIN projects.projects project ON project.id = member.project_id
       JOIN users.users account ON account.id = member.user_id
+      LEFT JOIN apis.slack installation ON installation.project_id = member.project_id
+      LEFT JOIN apis.slack_identities identity ON identity.team_id = installation.team_id
+        AND identity.slack_user_id = #{slackUser} AND identity.user_id = member.user_id
       WHERE member.project_id = #{projectId} AND member.user_id = #{userId}
-        AND member.permission = ^{enumLit ProjectMembers.PAdmin}|]
+        AND ((#{slackUser}::text IS NULL AND member.permission = ^{enumLit ProjectMembers.PAdmin})
+          OR (#{slackUser}::text IS NOT NULL AND identity.slack_user_id IS NOT NULL))|]
       <> ProjectMembers.activeMembership
   pure $ affected == 1
 
 
--- | Consume before contacting Slack. A failed exchange requires a fresh request.
--- The callback must have the same authenticated Monoscope user as the initiator.
-consumeSlackInstall :: DB es => UUIDId "slack_install" -> Projects.UserId -> Eff es (Maybe SlackInstall)
-consumeSlackInstall stateId userId =
-  Hasql.interpOne
-    $ [HI.sql|DELETE FROM apis.slack_install_requests request
-    USING projects.project_members member, projects.projects project, users.users account
+data SlackAuthorization = WorkspaceAuthorization SlackInstall | EvidenceAuthorization SlackEvidenceConsent
+
+
+data SlackEvidenceConsent = SlackEvidenceConsent
+  { id :: UUIDId "slack_install"
+  , projectId :: Projects.ProjectId
+  , userId :: Projects.UserId
+  , teamId :: Text
+  , slackUserId :: Text
+  , verifier :: SlackPKCE
+  }
+
+
+newtype SlackPKCE = SlackPKCE Text
+  deriving newtype (HI.EncodeValue)
+
+
+instance HI.DecodeValue SlackPKCE where
+  decodeValue = refineText "OAuth PKCE verifier" \text -> SlackPKCE text <$ guard (T.length text >= 43 && T.length text <= 128 && T.all (\c -> isAsciiLower c || isAsciiUpper c || isDigit c || c `elem` ("-._~" :: String)) text)
+
+
+newSlackPKCE :: UUID.UUIDEff :> es => Eff es SlackPKCE
+newSlackPKCE = SlackPKCE . foldMap UUID.toText <$> replicateM 2 UUID.genUUID
+
+
+slackPKCEVerifier :: SlackPKCE -> Text
+slackPKCEVerifier (SlackPKCE text) = text
+
+
+slackPKCEChallenge :: SlackPKCE -> Text
+slackPKCEChallenge verifier = T.dropWhileEnd (== '=') $ extractBase64 $ B64URL.encodeBase64 $ BA.convert (hash (encodeUtf8 (slackPKCEVerifier verifier) :: ByteString) :: Digest SHA256)
+
+
+-- | Claim once before contacting Slack. Keep personal receipts until the grant is
+-- saved so a disconnect during exchange can invalidate the in-flight consent.
+consumeSlackAuthorization :: DB es => UUIDId "slack_install" -> Projects.UserId -> Eff es (Maybe SlackAuthorization)
+consumeSlackAuthorization stateId userId = do
+  request <-
+    Hasql.interpOne @(Projects.ProjectId, Bool, Maybe Text, Maybe Text, Maybe SlackPKCE)
+      $ [HI.sql|UPDATE apis.slack_install_requests request SET consumed_at = now()
+    FROM projects.project_members member, projects.projects project, users.users account
     WHERE request.id = #{stateId} AND request.user_id = #{userId} AND request.expires_at > now()
+      AND request.consumed_at IS NULL
       AND member.project_id = request.project_id AND member.user_id = request.user_id
-      AND project.id = member.project_id AND account.id = member.user_id AND member.permission = ^{enumLit ProjectMembers.PAdmin} |]
-    <> ProjectMembers.activeMembership
-    <> [HI.sql| RETURNING request.project_id, request.onboarding |]
+      AND project.id = member.project_id AND account.id = member.user_id
+      AND ((request.team_id IS NULL AND member.permission = ^{enumLit ProjectMembers.PAdmin})
+        OR EXISTS (SELECT 1 FROM apis.slack_identities identity JOIN apis.slack installation
+          ON installation.team_id = identity.team_id AND installation.project_id = request.project_id
+          WHERE identity.team_id = request.team_id AND identity.slack_user_id = request.slack_user_id AND identity.user_id = request.user_id))|]
+      <> ProjectMembers.activeMembership
+      <> [HI.sql| RETURNING request.project_id, request.onboarding, request.team_id, request.slack_user_id, request.code_verifier |]
+  pure $ request >>= \case
+    (pid, onboarding, Nothing, Nothing, Nothing) -> Just $ WorkspaceAuthorization $ SlackInstall pid onboarding
+    (pid, _, Just team, Just slackUser, Just verifier) -> Just $ EvidenceAuthorization $ SlackEvidenceConsent stateId pid userId team slackUser verifier
+    _ -> Nothing
+
+
+-- No Show instance: tokens must never enter diagnostics or retained evidence.
+data SlackUserGrant = SlackUserGrant
+  { teamId :: Text
+  , slackUserId :: Text
+  , accessToken :: Text
+  , lifetime :: SlackTokenLifetime
+  , scopes :: V.Vector Text
+  }
+
+
+data SlackTokenLifetime = NonExpiring | Rotating Text UTCTime
+
+
+slackEvidenceScopes :: [Text]
+slackEvidenceScopes = ["search:read.public", "search:read.private", "search:read.im", "search:read.mpim", "channels:history", "groups:history", "im:history", "mpim:history"]
+
+
+saveSlackEvidenceGrant :: (DB es, UUID.UUIDEff :> es) => ByteString -> SlackEvidenceConsent -> SlackUserGrant -> Eff es (Either Secrets.SecretError Bool)
+saveSlackEvidenceGrant key consent grant = runExceptT do
+  token <- ExceptT $ Secrets.encryptSecret key $ encodeUtf8 grant.accessToken
+  let (refreshToken, expiresAt) = case grant.lifetime of
+        NonExpiring -> (Nothing, Nothing)
+        Rotating refresh expires -> (Just refresh, Just expires)
+  refresh <- traverse (ExceptT . Secrets.encryptSecret key . encodeUtf8) refreshToken
+  affected <-
+    lift
+      $ withSlackCredentialLock consent.projectId consent.userId
+      . fmap HI.getRowsAffected
+      . Hasql.queryTx
+      $ [HI.sql|WITH consent AS (
+      DELETE FROM apis.slack_install_requests request
+      USING projects.project_members member, projects.projects project, users.users account, apis.slack installation, apis.slack_identities identity
+      WHERE request.id = #{consent.id} AND request.user_id = #{consent.userId} AND request.project_id = #{consent.projectId}
+        AND request.team_id = #{grant.teamId} AND request.slack_user_id = #{grant.slackUserId}
+        AND request.consumed_at IS NOT NULL AND request.expires_at > now()
+        AND installation.project_id = request.project_id AND installation.team_id = request.team_id
+        AND identity.team_id = request.team_id AND identity.slack_user_id = request.slack_user_id AND identity.user_id = request.user_id
+        AND member.project_id = request.project_id AND member.user_id = request.user_id
+        AND project.id = member.project_id AND account.id = member.user_id|]
+      <> ProjectMembers.activeMembership
+      <> [HI.sql|RETURNING request.project_id, request.user_id, request.team_id, request.slack_user_id
+    ) INSERT INTO apis.slack_user_credentials (project_id, user_id, team_id, slack_user_id, access_token, refresh_token, expires_at, scopes)
+      SELECT project_id, user_id, team_id, slack_user_id, #{token}, #{refresh}, #{expiresAt}, #{grant.scopes} FROM consent
+      ON CONFLICT (project_id, user_id, team_id, slack_user_id) DO UPDATE SET
+        access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token, expires_at = EXCLUDED.expires_at, scopes = EXCLUDED.scopes|]
+  pure $ affected == 1
+
+
+getSlackEvidenceGrant :: (DB es, Time.Time :> es) => ByteString -> Projects.ProjectId -> Projects.UserId -> Text -> Text -> Eff es (Maybe SlackUserGrant)
+getSlackEvidenceGrant key pid userId teamId slackUserId = do
+  now <- Time.currentTime
+  stored <-
+    Hasql.interpOne @(Text, Maybe Text, Maybe UTCTime, V.Vector Text)
+      $ [HI.sql|SELECT credential.access_token, credential.refresh_token, credential.expires_at, credential.scopes
+      FROM apis.slack_user_credentials credential
+      JOIN apis.slack installation ON installation.project_id = credential.project_id AND installation.team_id = credential.team_id
+      JOIN apis.slack_identities identity ON identity.team_id = credential.team_id AND identity.slack_user_id = credential.slack_user_id AND identity.user_id = credential.user_id
+      JOIN projects.project_members member ON member.project_id = credential.project_id AND member.user_id = credential.user_id
+      JOIN projects.projects project ON project.id = member.project_id JOIN users.users account ON account.id = member.user_id
+      WHERE credential.project_id = #{pid} AND credential.user_id = #{userId} AND credential.team_id = #{teamId} AND credential.slack_user_id = #{slackUserId}
+        AND (credential.expires_at IS NULL OR credential.expires_at > #{now})|]
+      <> ProjectMembers.activeMembership
+  pure $ stored >>= \(token, refresh, expiresAt, scopes) -> do
+    accessToken <- decodeUtf8 <$> rightToMaybe (Secrets.decryptSecret key token)
+    refreshToken <- traverse (fmap decodeUtf8 . rightToMaybe . Secrets.decryptSecret key) refresh
+    lifetime <- case (refreshToken, expiresAt) of
+      (Nothing, Nothing) -> Just NonExpiring
+      (Just refreshValue, Just expiry) -> Just $ Rotating refreshValue expiry
+      _ -> Nothing
+    pure SlackUserGrant{teamId, slackUserId, accessToken, lifetime, scopes}
+
+
+revokeSlackEvidence :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es ()
+revokeSlackEvidence pid userId =
+  withSlackCredentialLock pid userId
+    $ Hasql.executeTx
+      [HI.sql|WITH pending AS (DELETE FROM apis.slack_install_requests WHERE project_id = #{pid} AND user_id = #{userId} AND team_id IS NOT NULL)
+    DELETE FROM apis.slack_user_credentials WHERE project_id = #{pid} AND user_id = #{userId}|]
+
+
+-- Separate statements give disconnect a fresh snapshot after an in-flight grant commits.
+withSlackCredentialLock :: DB es => Projects.ProjectId -> Projects.UserId -> Tx.Transaction a -> Eff es a
+withSlackCredentialLock pid userId action = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  void $ Hasql.queryTx @[HI.OneColumn Projects.UserId] [HI.sql|SELECT user_id FROM projects.project_members WHERE project_id = #{pid} AND user_id = #{userId} FOR UPDATE|]
+  action
 
 
 -- | OAuth-time Slack credentials + the channel the app was installed to.

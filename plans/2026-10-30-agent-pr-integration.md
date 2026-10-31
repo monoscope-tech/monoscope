@@ -256,6 +256,7 @@ This allows a later fast-forward update of #619 after review and local signoff, 
 No remote PR state has changed.
 
 All twenty selected incoming agent PR heads are now ancestors of this branch: the sixteen-PR stack, #692, #661, #571, and #568.
+A fresh 31 October inventory during user-OAuth implementation still lists 28 open PRs. All twenty current selected heads were rechecked with `git merge-base --is-ancestor` and remain included.
 The server watcher compiles the reconciled native runtime. Startup still fails against the existing configured production database credentials.
 All five VM identity and cleanup regressions pass without a guest image. The complete impact-review suite is still running.
 

@@ -1,7 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, processSlackEventWithTools, refreshSlackProgress, resetSlackSession, reconcileIncidentDeliveries, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, slackInteractionsHWithTools, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure, sendRecoveryNotice) where
+module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, startEvidenceGetH, disconnectEvidencePostH, processSlackEvent, processSlackEventWithTools, refreshSlackProgress, resetSlackSession, reconcileIncidentDeliveries, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, slackInteractionsHWithTools, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure, sendRecoveryNotice) where
 
 import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens ((%~), (.~), (^.), (^..), (^?))
@@ -76,12 +76,12 @@ import Servant.API (Header)
 import Servant.API qualified as Servant
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401, err403, err503)
-import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
+import System.Config (AuthContext (backgroundScope, config, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO (timeout, withRunInIO)
 import UnliftIO.Exception (Handler (..), bracket, catch, catches, finally, throwIO, tryAny)
-import Utils (encodeText)
+import Utils (encodeText, toUriStr)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
 
@@ -159,6 +159,32 @@ startInstallGetH pid onboarding = do
   pure $ addHeader url Servant.NoContent
 
 
+startEvidenceGetH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[Header "Location" Text] Servant.NoContent)
+startEvidenceGetH pid slackUser = do
+  sess <- Projects.getSession
+  stateId <- UUIDId <$> UUID.genUUID
+  verifier <- Integrations.newSlackPKCE
+  allowed <- Integrations.createSlackEvidenceConsent stateId sess.user.id pid slackUser verifier
+  unless allowed $ throwError err403{errBody = "Link this Slack account to your Monoscope account before connecting Slack search."}
+  envCfg <- asks env
+  let params =
+        [ ("client_id", envCfg.slackClientId)
+        , ("scope", T.intercalate "," Integrations.slackEvidenceScopes)
+        , ("redirect_uri", envCfg.slackRedirectUri)
+        , ("state", stateId.toText)
+        , ("code_challenge", Integrations.slackPKCEChallenge verifier)
+        , ("code_challenge_method", "S256")
+        ]
+  pure $ addHeader ("https://slack.com/oauth/v2_user/authorize" <> decodeUtf8 (renderSimpleQuery True $ map (bimap encodeUtf8 encodeUtf8) params)) Servant.NoContent
+
+
+disconnectEvidencePostH :: Projects.ProjectId -> ATAuthCtx (Headers '[Header "Location" Text] Servant.NoContent)
+disconnectEvidencePostH pid = do
+  sess <- Projects.getSession
+  Integrations.revokeSlackEvidence pid sess.user.id
+  pure $ addHeader ("/p/" <> pid.toText <> "/settings/integrations") Servant.NoContent
+
+
 newtype SlackLinkForm = SlackLinkForm {projectId :: Projects.ProjectId}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -199,33 +225,74 @@ linkProjectGetH :: Maybe Text -> Maybe Text -> ATAuthCtx (Headers '[Header "Loca
 linkProjectGetH slack_code stateM = do
   sess <- Projects.getSession
   stateId <- maybe (throwError err400) pure $ stateM >>= idFromText
-  install <- Integrations.consumeSlackInstall stateId sess.user.id >>= maybe (throwError err403) pure
-  let pid = install.projectId
-      bwconf = (def :: BWConfig){pageTitle = "Slack app installed"}
-  envCfg <- asks env
-  pool <- asks pool
-  token <- exchangeCodeForToken envCfg.slackClientId envCfg.slackClientSecret envCfg.slackRedirectUri (fromMaybe "" slack_code)
-  project <- Projects.projectById pid
-  case (token, project) of
-    (Just token', Just project') -> do
-      -- Cross-workspace re-install: if the previous apis.slack row was bound to a
-      -- different Slack workspace (team_id), channels on @everyone belonging to the
-      -- old workspace are orphaned by the new bot token and would produce
-      -- channel_not_found on every alert. Clear them before installing the new one.
-      existing <- getProjectSlackData pid
-      whenJust existing \prev -> when (prev.teamId /= token'.team.id) do
-        Log.logAttention ("Slack re-install switching workspaces; clearing old channels" :: Text) $ AE.object ["project_id" AE..= pid, "old_team_id" AE..= prev.teamId, "new_team_id" AE..= token'.team.id]
-        ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
-      void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel token'.incomingWebhook.url (Just $ V.fromList $ filter (not . T.null) $ map T.strip $ T.splitOn "," token'.scope)
-      void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
-      wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
-      when wasAdded do
-        -- Bot isn't auto-joined to the picked channel (esp. private ones),
-        -- so post the welcome via the channel-bound incoming webhook URL.
-        result <- tryAny $ sendSlackWelcomeViaWebhook token'.incomingWebhook.url project'.title
-        whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
-      pure $ installedResponse "Slack" pid install.onboarding bwconf
-    _ -> pure $ addHeader ("/p/" <> pid.toText <> "/settings/integrations") $ NoTokenFound $ PageCtx bwconf ()
+  code <- maybe (throwError err400) pure $ slack_code >>= \value -> value <$ guard (not $ T.null value)
+  authorization <- Integrations.consumeSlackAuthorization stateId sess.user.id >>= maybe (throwError err403) pure
+  case authorization of
+    Integrations.EvidenceAuthorization consent -> linkEvidence consent code
+    Integrations.WorkspaceAuthorization install -> linkWorkspace install code
+  where
+    linkEvidence :: Integrations.SlackEvidenceConsent -> Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
+    linkEvidence consent code = do
+      envCfg <- asks @AuthContext (.config)
+      let formData :: [FormParam]
+          formData = ["client_id" Wreq.:= envCfg.slackClientId, "client_secret" Wreq.:= envCfg.slackClientSecret, "redirect_uri" Wreq.:= envCfg.slackRedirectUri, "code" Wreq.:= code, "grant_type" Wreq.:= ("authorization_code" :: Text), "code_verifier" Wreq.:= Integrations.slackPKCEVerifier consent.verifier]
+      response <- postWith (defaults & contentTypeHeader "application/x-www-form-urlencoded; charset=utf-8") "https://slack.com/api/oauth.v2.user.access" formData
+      now <- Time.currentTime
+      grant <- either (const $ throwError err400{errBody = "Slack search access could not be connected. Start a new connection and approve read access for your linked Slack account."}) pure $ AE.eitherDecode (response ^. responseBody) >>= AE.parseEither (parseGrant now)
+      saved <- Integrations.saveSlackEvidenceGrant (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) consent grant
+      case saved of
+        Left _ -> throwError err503{errBody = "Slack search access could not be stored. Please try again later."}
+        Right False -> throwError err403{errBody = "This Slack connection no longer matches your account, project, or workspace. Start a new connection."}
+        Right True -> pure $ addHeader ("/p/" <> consent.projectId.toText <> "/settings/integrations") $ NoContent $ PageCtx def ()
+    parseGrant :: UTCTime -> AE.Value -> AE.Parser Integrations.SlackUserGrant
+    parseGrant now = AE.withObject "Slack user authorization" \response -> do
+      ok <- response AE..: "ok"
+      tokenType <- response AE..: "token_type"
+      unless (ok && tokenType == ("user" :: Text)) $ fail "User authorization required"
+      team <- response AE..: "team"
+      teamId <- team AE..: "id"
+      user <- response AE..: "authed_user"
+      slackUserId <- user AE..: "id"
+      scope <- user AE..: "scope"
+      let scopes = V.fromList $ filter (not . T.null) $ map T.strip $ T.splitOn "," scope
+      unless (any (T.isPrefixOf "search:read.") scopes && all (`elem` Integrations.slackEvidenceScopes) scopes) $ fail "Read-only search scopes required"
+      accessToken <- response AE..: "access_token"
+      when (T.null accessToken) $ fail "Missing user token"
+      refresh <- response AE..:? "refresh_token"
+      expires <- response AE..:? "expires_in"
+      lifetime <- case (refresh, expires) of
+        (Nothing, Nothing) -> pure Integrations.NonExpiring
+        (Just token, Just (seconds :: Int)) | not (T.null token) && seconds > 0 -> pure $ Integrations.Rotating token $ addUTCTime (fromIntegral seconds) now
+        _ -> fail "Incomplete token rotation credentials"
+      pure Integrations.SlackUserGrant{teamId, slackUserId, accessToken, lifetime, scopes}
+    linkWorkspace :: Integrations.SlackInstall -> Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
+    linkWorkspace install code = do
+      let pid = install.projectId
+          bwconf = (def :: BWConfig){pageTitle = "Slack app installed"}
+      envCfg <- asks env
+      pool <- asks pool
+      token <- exchangeCodeForToken envCfg.slackClientId envCfg.slackClientSecret envCfg.slackRedirectUri code
+      project <- Projects.projectById pid
+      case (token, project) of
+        (Just token', Just project') -> do
+          -- Cross-workspace re-install: if the previous apis.slack row was bound to a
+          -- different Slack workspace (team_id), channels on @everyone belonging to the
+          -- old workspace are orphaned by the new bot token and would produce
+          -- channel_not_found on every alert. Clear them before installing the new one.
+          existing <- getProjectSlackData pid
+          whenJust existing \prev -> when (prev.teamId /= token'.team.id) do
+            Log.logAttention ("Slack re-install switching workspaces; clearing old channels" :: Text) $ AE.object ["project_id" AE..= pid, "old_team_id" AE..= prev.teamId, "new_team_id" AE..= token'.team.id]
+            ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
+          void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel token'.incomingWebhook.url (Just $ V.fromList $ filter (not . T.null) $ map T.strip $ T.splitOn "," token'.scope)
+          void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
+          wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
+          when wasAdded do
+            -- Bot isn't auto-joined to the picked channel (esp. private ones),
+            -- so post the welcome via the channel-bound incoming webhook URL.
+            result <- tryAny $ sendSlackWelcomeViaWebhook token'.incomingWebhook.url project'.title
+            whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
+          pure $ installedResponse "Slack" pid install.onboarding bwconf
+        _ -> pure $ addHeader ("/p/" <> pid.toText <> "/settings/integrations") $ NoTokenFound $ PageCtx bwconf ()
 
 
 slackInteractionsH :: SlackInteraction -> ATBaseCtx AE.Value
@@ -260,6 +327,12 @@ slackInteractionsHWithTools projectTools interaction = do
           AI.requireAgentAccess access principal.projectId
           triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView (SlackDashboardContext principal.projectId interaction.user_id interaction.channel_id Nothing) (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
           traceResp $ textResp "modal opened"
+        "/monoscope" | T.strip interaction.text == "search connect" -> do
+          let consentUrl = T.dropWhileEnd (== '/') authCtx.env.hostUrl <> "/p/" <> principal.projectId.toText <> "/slack/evidence/" <> toUriStr interaction.user_id
+          traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("<" <> consentUrl <> "|Connect your own Slack search access>. Use `/monoscope search disconnect` to remove it. This connection belongs to your account.")]
+        "/monoscope" | T.strip interaction.text == "search disconnect" -> do
+          Integrations.revokeSlackEvidence principal.projectId principal.userId
+          traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("Your Slack search access is disconnected. The project's Slack app remains connected." :: Text)]
         "/monoscope" | T.strip interaction.text `elem` ["incidents on", "incidents off"] -> do
           permission <- ProjectMembers.getUserPermission principal.projectId principal.userId
           unless (permission >= Just ProjectMembers.PEdit) $ throwError err403

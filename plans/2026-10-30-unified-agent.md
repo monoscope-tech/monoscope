@@ -986,9 +986,26 @@ The integration regression first exposed identical ciphertext for repeated plain
 
 This is the storage prerequisite, not completed Slack evidence support. User OAuth, requester-bound credential lifecycle, remote MCP reads, revocation, and audience containment remain unfinished. Slack's current metadata advertises its user-only authorization endpoint, confidential client-secret POST exchange, and S256 PKCE; app eligibility and live MCP configuration still require acceptance evidence.
 
+### Requester-bound personal Slack consent (31 October)
+
+Personal OAuth and workspace installation now share the expiring receipt store and registered callback. A closed authorization sum selects the user-only or workspace exchange; a personal response cannot overwrite the shared bot token or alert destination. Personal consent binds the initiating Monoscope account, project, signed linked Slack identity, workspace, and S256 verifier. Current membership and installation are rechecked when claiming the receipt, saving the grant, and reading it. Linked readers can authorize their own reads without obtaining installation-admin authority.
+
+`/monoscope search connect` returns a private consent link. `/monoscope search disconnect` removes only the requesting account's grants and pending consent for the current project. The authenticated web disconnect uses the same operation. A member-row transaction lock serializes creation, storage, and disconnect. Its separate lock and mutation statements ensure disconnect sees a grant that committed while it waited. No transaction spans Slack's HTTP exchange.
+
+Access and refresh tokens use the shared authenticated encryption helper. The grant type distinguishes permanent access from a refresh-token/expiry pair, and the clock effect controls expiry checks. Tokens and consent have no Show or JSON instances that could put credentials into diagnostics or agent artifacts. The manifest declares the same read-only user scopes as the consent request; a regression checks that contract. No live manifest or app settings were changed.
+
+One coherent migration, `0271_slack_user_authorization.sql`, extends the receipt store and adds requester-bound credentials with foreign keys, read-scope constraints, and token-lifetime constraints. Earlier migrations remain unchanged. The old installation-only callback consumer has been removed.
+
+The regressions first exposed rejection of personal consent by the bot callback, inconsistent credential configuration, database-clock expiry, a disconnect/write snapshot race, and slash controls falling through to routine activation guidance. All 275 bot examples now pass, including seven personal-OAuth examples. They cover the full start/exchange/storage path, S256 parameters, missing-code handling, reader access, another initiating account, wrong returned user/workspace, write-scope denial, malformed tokens, rotation metadata, repeated callbacks, workspace replacement, and a controlled concurrent insertion/disconnect. All 76 API and 38 incident-delivery examples also pass. Formatting, focused HLint, and diff checks pass; repeated slice reviews found no material remaining distillation, constraint-evasion, or client-behavior issue.
+
+A fresh inventory still lists 28 open PRs, and all twenty selected current heads remain ancestors of this branch. Remote MCP reads, automatic refresh, upstream revocation events, audience containment, app eligibility, and live Slack acceptance remain open. The credentials are not yet exposed to agent tools. Streaming, selective review, and final whole-branch gates also remain unfinished; this slice does not establish completion of the unified plan.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
+- [User-token exchange](https://docs.slack.dev/reference/methods/oauth.v2.user.access/) and [authorization metadata](https://mcp.slack.com/.well-known/oauth-authorization-server): endpoints, client-secret POST, and S256 PKCE.
+- [Token rotation](https://docs.slack.dev/authentication/using-token-rotation/): paired refresh/expiry metadata and single-use refresh tokens.
+- [Upstream token revocation](https://docs.slack.dev/reference/events/tokens_revoked/): workspace-bound OAuth user IDs; handling remains pending.
 - [Message shortcuts](https://docs.slack.dev/reference/interaction-payloads/shortcuts-interaction-payload/): signed invocation, selected-message context, and callback identity.
 - [Suggested prompts](https://docs.slack.dev/reference/methods/assistant.threads.setSuggestedPrompts/): Agent apps omit the legacy thread timestamp and provide at most four prompts.
 - [Agent session status](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/): initial titles are ignored once a session exists.
