@@ -321,6 +321,8 @@ extra-source-files:
     static/migrations/0278_run_reply_publications.sql
     static/migrations/0279_retained_command_origin.sql
     static/migrations/0280_native_fix_runs.sql
+    static/migrations/0281_slack_progress_stream.sql
+    static/migrations/0282_issue_fix_project_eligibility.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs

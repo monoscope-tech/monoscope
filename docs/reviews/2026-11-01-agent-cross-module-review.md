@@ -304,3 +304,15 @@ the receipt-reference check is `scripts/local/unified-agent-review-evidence-audi
 The index is a review record, not an execution attestation.
 Final simplification follows the remaining live acceptance and any resulting fixes.
 Final exact-tree CI, the local production image, and PR publication remain required.
+
+### Generated source manifest correction
+
+The final metadata check fails because monoscope.cabal omits migrations 0281 and 0282
+from its generated extra-source-files list. Running hpack adds those two existing files.
+No migration contents or runtime source changes.
+The existing make fmt-check hpack-check guard then passes.
+Repeated distillation, evasion, and locality review retains generator ownership rather than a handwritten patch.
+All 237 pinned files in the separate live crash probe remain unchanged.
+Red and green receipts are `scripts/local/hpack-migration-manifest-red.json`
+and `scripts/local/hpack-migration-manifest-green.json`.
+This metadata check is not final CI or image signoff.
