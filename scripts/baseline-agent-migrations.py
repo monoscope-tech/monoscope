@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OLD_HEAD = "588beb587947201168615a36d09ac320dd71d136"
+OLD_HEAD = "cf3e3d721b39a7009c2ef16a18bc762ba3592843"
 PREVIOUS = {
     "0212_ai_routine_requester.sql": "z8tN6jCUtPHvfalfNFFCsQ==",
     "0229_pr_review_usage.sql": "MToQldtfKRkkKDk8slLI7Q==",

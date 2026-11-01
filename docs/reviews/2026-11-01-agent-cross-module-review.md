@@ -102,6 +102,7 @@ Chrome verifies a 36-second H264 video, captions, diagram and seven-asset packag
 Authenticated range requests return 206; anonymous retained media access is denied.
 
 The existing [review Page](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a919) is updated in place.
+Current excerpts use reachable source commits and corrected line anchors; all 111 implementation excerpts match the files.
 Hosted source readback matches the repository artifact at its recorded checkpoint.
 Hosted iframe interaction, native Slack new-tab clicks, VoiceOver and physical-device behavior remain unverified.
 Virtual-host loss is not physical Mac power loss. Live GitHub publication is not claimed.
