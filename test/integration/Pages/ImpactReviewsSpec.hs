@@ -80,7 +80,7 @@ import Pkg.GitCommand qualified as HostGit
 import Pkg.ImpactReview qualified as Impact
 import Pkg.Minio qualified as Storage
 import Pkg.Parser.Stats qualified as KQL
-import Pkg.TestUtils
+import Pkg.TestUtils hiding (call)
 import Relude
 import Servant (ServerError (..), getResponse)
 import Servant.Server.Generic (genericServeTWithContext)

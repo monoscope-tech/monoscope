@@ -69,7 +69,7 @@ import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Git qualified as Git
 import Pkg.SlackRateLimit qualified as RateLimit
 import Pkg.TestClock (advanceTime)
-import Pkg.TestUtils
+import Pkg.TestUtils hiding (call)
 import Relude
 import Servant.API.ResponseHeaders (getHeaders, getResponse)
 import Servant.Server (ServerError (errHTTPCode))
