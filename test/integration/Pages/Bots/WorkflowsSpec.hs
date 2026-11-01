@@ -3090,8 +3090,8 @@ spec = around withTestResources do
         (replayed, _) <- work receipt
         replayed `shouldBe` []
 
-      for_ ["ratelimited", "invalid_blocks"] \rejection ->
-        it ("resumes a rendered Slack reply batch after its second part is rejected: " <> T.unpack rejection) \tr -> do
+      for_ (["ratelimited", "invalid_blocks"] :: [Text]) \rejection ->
+        it ("resumes a rendered Slack reply batch after its second part is rejected: " <> toString rejection) \tr -> do
           setupSlackAgent tr testPid "T_PARTS"
           modelCalls <- newIORef (0 :: Int)
           posts <- newIORef (0 :: Int)
