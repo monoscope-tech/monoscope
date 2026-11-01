@@ -119,7 +119,7 @@ spec = around withTestResources do
       it "assistantPages_defaultToAssistant" \tr -> do
         let convId = UUIDId UUID.nil
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
+        threadPage <- call tr $ AIThreads.threadGetH testPid convId Nothing Nothing
         let html = renderT threadPage
         html `shouldSatisfy` T.isInfixOf "id=\"nav-view-ai\" class=\"sr-only\" checked"
 
@@ -127,16 +127,16 @@ spec = around withTestResources do
         let issueId = UUIDId UUID.nil :: Issues.IssueId
             convId = UUIDId issueId.unUUIDId
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTAnomaly})|]
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
+        threadPage <- call tr $ AIThreads.threadGetH testPid convId Nothing Nothing
         let html = renderT threadPage
         html `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/issues/" <> issueId.toText <> "\"")
 
       it "assistantSectionHeadings_linkAndBackdropCoversViewport" \tr -> do
         let convId = UUIDId UUID.nil
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-        (_, conversationPage) <- testServant tr $ AIThreads.threadsGetH testPid
-        (_, routinesPage) <- testServant tr $ AIThreads.routinesGetH testPid
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
+        conversationPage <- call tr $ AIThreads.threadsGetH testPid
+        routinesPage <- call tr $ AIThreads.routinesGetH testPid
+        threadPage <- call tr $ AIThreads.threadGetH testPid convId Nothing Nothing
         let render = renderT
             conversationHtml = render conversationPage
         all (`T.isInfixOf` conversationHtml) ["href=\"/p/" <> testPid.toText <> "/ai/routines\"", "Routines", "href=\"/p/" <> testPid.toText <> "/ai\"", "Conversations"] `shouldBe` True
@@ -149,7 +149,7 @@ spec = around withTestResources do
           void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
           Issues.insertChatMessage testPid convId Issues.ChatUser "Watch checkout latency" Nothing Nothing
           for_ ["First run result", "Second run result"] \r -> Issues.insertChatMessage testPid convId Issues.ChatAssistant r Nothing Nothing
-        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
+        threadPage <- call tr $ AIThreads.threadGetH testPid convId Nothing Nothing
         let html = renderT threadPage
         filter (not . (`T.isInfixOf` html)) ["First run result", "Second run result"] `shouldBe` []
 
@@ -176,9 +176,9 @@ spec = around withTestResources do
         slack.formatted `shouldSatisfy` T.isPrefixOf "Documents are only available"
         -- frozenTime is 2025-01-01T00:00Z, still New Year's Eve in New York.
         routinePrompt `shouldSatisfy` T.isInfixOf "key \"2024-12-31\""
-        (_, chatPage) <- testServant tr $ AIThreads.threadGetH testPid convId Nothing Nothing
+        chatPage <- call tr $ AIThreads.threadGetH testPid convId Nothing Nothing
         renderT chatPage `shouldSatisfy` T.isInfixOf "href=\"?doc=checkout-review\""
-        (_, docPage) <- testServant tr $ AIThreads.threadGetH testPid convId (rightToMaybe $ Issues.mkArtifactKey "checkout-review") Nothing
+        docPage <- call tr $ AIThreads.threadGetH testPid convId (rightToMaybe $ Issues.mkArtifactKey "checkout-review") Nothing
         let html = renderT docPage
         filter (not . (`T.isInfixOf` html)) ["?doc=checkout-review", "<h2 id=\"followup\">", "href=\"#followup\"", "Latency recovered."] `shouldBe` []
 

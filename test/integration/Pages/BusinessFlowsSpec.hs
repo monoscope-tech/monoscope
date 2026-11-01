@@ -149,7 +149,7 @@ onboardingTests =
       bracket (mkHasqlPool 1 cstr) OHasql.release \tfPool -> do
         let ctx = tr.trATCtx
             tfTr = tr{trATCtx = ctx{System.Config.hasqlTimefusionPool = tfPool, System.Config.env = ctx.env{System.Config.enableTimefusionReads = True}}}
-        (_, verified) <- testServant tfTr $ Onboarding.checkIntegrationGet testPid (Just "Javascript")
+        verified <- call tfTr $ Onboarding.checkIntegrationGet testPid (Just "Javascript")
         renderText verified `shouldSatisfy` TL.isInfixOf "verified"
 
     it "moves one new project from profile setup to its first queryable event" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
@@ -163,7 +163,7 @@ onboardingTests =
               }
       (infoHeaders, _) <- testServant tr $ Onboarding.onboardingInfoPostH testPid infoForm
       lookupResponseHeader @"HX-Redirect" infoHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Survey")
-      (_, infoResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Info)
+      infoResult <- call tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Info)
       case infoResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.InfoStep{..} -> do
@@ -179,7 +179,7 @@ onboardingTests =
               }
       (surveyHeaders, _) <- testServant tr $ Onboarding.onboardingConfPostH testPid surveyForm
       lookupResponseHeader @"HX-Redirect" surveyHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=NotifChannel")
-      (_, surveyResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Survey)
+      surveyResult <- call tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Survey)
       case surveyResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.SurveyStep{..} -> do
@@ -190,7 +190,7 @@ onboardingTests =
       -- The survey writes the same `questions` blob the info step filled in, so the
       -- earlier answers have to survive it. Pins the merge itself, which moved from a
       -- Haskell read-modify-write into a jsonb `||` in the statement.
-      (_, afterSurvey) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Info)
+      afterSurvey <- call tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Info)
       case afterSurvey of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.InfoStep{..} -> do
@@ -204,12 +204,12 @@ onboardingTests =
               { phoneNumber = "+1234567890"
               , emails = ["team@example.com", "alerts@example.com"]
               }
-      (_, postResult) <- testServant tr $ Onboarding.phoneEmailPostH testPid notifForm
+      postResult <- call tr $ Onboarding.phoneEmailPostH testPid notifForm
       case postResult of
         Onboarding.OnboardingPhoneEmailsPost pid emails _ -> do
           pid `shouldBe` testPid
           V.length emails `shouldSatisfy` (> 0) -- Should include at least the submitted emails
-      (_, notifResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.NotifChannel)
+      notifResult <- call tr $ Onboarding.onboardingGetH testPid (Just Onboarding.NotifChannel)
       case notifResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.NotifChannelStep{..} -> do
@@ -228,7 +228,7 @@ onboardingTests =
 
       (integratedHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
       lookupResponseHeader @"HX-Redirect" integratedHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Pricing")
-      (_, integrationResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Integration)
+      integrationResult <- call tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Integration)
       case integrationResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.IntegrationStep _stepPid stepApiKey -> do
@@ -237,7 +237,7 @@ onboardingTests =
 
       let from = toText $ iso8601Show $ addUTCTime (-60) eventTime
           to = toText $ iso8601Show $ addUTCTime 60 eventTime
-      (_, events) <- testServant tr $ Log.logExplorerDataH testPid def{Log.query = Just "span_name == \"onboarding-first-span\"", Log.from = Just from, Log.to = Just to}
+      events <- call tr $ Log.logExplorerDataH testPid def{Log.query = Just "span_name == \"onboarding-first-span\"", Log.from = Just from, Log.to = Just to}
       V.length events.logsData `shouldBe` 1
 
       -- This is the customer journey the activation funnel measures. Use the public
@@ -307,7 +307,7 @@ settingsTests = do
   it "billingDowngrade_keepsRecoveryVisibleUntilReactivated" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     let settingsHtml = do
           session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
-          (_, page) <- testServant tr{trSessAndHeader = session} $ CreateProject.projectSettingsGetH testPid
+          page <- call tr{trSessAndHeader = session} $ CreateProject.projectSettingsGetH testPid
           pure $ renderText $ toHtml page
     _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "Free") (Projects.SubId "") (Projects.SubItemId "") (Projects.OrderId "")
     settingsHtml >>= (`shouldNotSatisfy` TL.isInfixOf "id=\"billing-downgrade-banner\"")
@@ -321,7 +321,7 @@ settingsTests = do
       -- A cancelled Stripe sub can't be revived from the portal, only by a new checkout.
       html `shouldSatisfy` TL.isInfixOf (bool "Update payment method" "Reactivate subscription" (provider == Projects.StripeProvider))
       session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
-      (_, billing) <- testServant tr{trSessAndHeader = session} $ Settings.manageBillingGetH testPid
+      billing <- call tr{trSessAndHeader = session} $ Settings.manageBillingGetH testPid
       renderText (toHtml billing) `shouldSatisfy` TL.isInfixOf ("hx-get=\"/p/" <> toLazy testPid.toText <> "/manage_subscription\"")
       _ <- runQueryEffect tr $ Projects.setPlanBySubId (Projects.PlanName "GraduatedPricing") (Projects.SubItemId "si_banner") (Projects.SubId "sub_banner")
       settingsHtml >>= (`shouldNotSatisfy` TL.isInfixOf "id=\"billing-downgrade-banner\"")
@@ -329,7 +329,7 @@ settingsTests = do
   it "superAdmin_customerProject_showsTopmostNoticeOnlyOutsideMemberships" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     let settingsHtml = do
           session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
-          (_, page) <- testServant tr{trSessAndHeader = session} $ CreateProject.projectSettingsGetH testPid
+          page <- call tr{trSessAndHeader = session} $ CreateProject.projectSettingsGetH testPid
           pure $ renderText $ toHtml page
         uid = (getResponse tr.trSessAndHeader).user.id
     settingsHtml >>= (`shouldNotSatisfy` TL.isInfixOf "id=\"super-admin-banner\"")
@@ -341,7 +341,7 @@ settingsTests = do
     fromNotice `shouldSatisfy` TL.isInfixOf "id=\"side-nav-menu\""
 
   it "should display project title, description, timezone, and alert configurations from onboarding" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    (_, result) <- testServant tr $ CreateProject.projectSettingsGetH testPid
+    result <- call tr $ CreateProject.projectSettingsGetH testPid
     case result of
       CreateProject.CreateProject (PageCtx _ (_, _, _, _, _, form, _, project)) -> do
         -- Verify default values from onboarding project creation
@@ -371,7 +371,7 @@ settingsTests = do
             }
     _ <- testServant tr $ CreateProject.createProjectPostH testPid updateForm
 
-    (_, result) <- testServant tr $ CreateProject.projectSettingsGetH testPid
+    result <- call tr $ CreateProject.projectSettingsGetH testPid
     case result of
       CreateProject.CreateProject (PageCtx _ (_, _, _, _, _, form, _, project)) -> do
         -- Verify the POST updated the values correctly
@@ -429,7 +429,7 @@ settingsTests = do
     d.currentInvoice `shouldBe` Nothing
 
   it "should load delete project page" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    (_, _result) <- testServant tr $ CreateProject.deleteProjectGetH testPid
+    _result <- call tr $ CreateProject.deleteProjectGetH testPid
     pass
 
 
@@ -851,7 +851,7 @@ replayTests = do
   it "should retrieve replay session data" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     sessionId <- liftIO UUIDV4.nextRandom
 
-    (_, result) <- testServant tr $ Replay.replaySessionGetH testPid sessionId
+    result <- call tr $ Replay.replaySessionGetH testPid sessionId
 
     -- Decode the serialized envelope (ReplaySessionResp splices events as raw bytes).
     case AE.decode (AE.encode result) of
@@ -869,7 +869,7 @@ s3ConfigTests = do
         uid = (getResponse tr.trSessAndHeader).user.id
     _ <- runQueryEffect tr $ Projects.updateProjectS3Bucket testPid (Just saved)
     _ <- runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid} |]
-    (_, page) <- testServant tr $ S3.bringS3GetH testPid
+    page <- call tr $ S3.bringS3GetH testPid
     let html = renderText $ toHtml page
     html `shouldSatisfy` TL.isInfixOf "fixture-bucket"
     for_ ["fixture-access", "fixture-secret", "Validate &amp; Save", "<span>Remove</span>"] \private -> html `shouldNotSatisfy` TL.isInfixOf private
@@ -883,7 +883,7 @@ s3ConfigTests = do
     let saved = Projects.ProjectS3Bucket "fixture-access" "fixture-secret" "us-east-1" "fixture-bucket" ""
         replacement = saved{Projects.bucket = "INVALID_bucket", Projects.secretKey = "replacement-secret"}
     _ <- runQueryEffect tr $ Projects.updateProjectS3Bucket testPid (Just saved)
-    (_, response) <- testServant tr $ S3.brings3PostH testPid replacement
+    response <- call tr $ S3.brings3PostH testPid replacement
     (response.savedBucket <&> (.bucket)) `shouldBe` Just saved.bucket
     (response.rejected <&> (\(form, _) -> form.secretKey)) `shouldBe` Just "replacement-secret"
     let html = renderText $ toHtml response
@@ -897,7 +897,7 @@ s3ConfigTests = do
   it "storageRemoval_clearsSavedCredentialsAndReturnsTheDisconnectedForm" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     let bucket = Projects.ProjectS3Bucket "fixture-access" "fixture-secret" "us-east-1" "fixture-bucket" ""
     _ <- runQueryEffect tr $ Projects.updateProjectS3Bucket testPid (Just bucket)
-    (_, removed) <- testServant tr $ S3.brings3RemoveH testPid
+    removed <- call tr $ S3.brings3RemoveH testPid
     let html = renderText $ toHtml removed
     html `shouldSatisfy` TL.isInfixOf "id=\"storage-connection-content\""
     html `shouldSatisfy` TL.isInfixOf "name=\"secretKey\""
@@ -912,16 +912,16 @@ s3ConfigTests = do
       -- (MINIO_ENDPOINT is http://minio:9000 in CI, 127.0.0.1:9000 locally); hardcoding
       -- either makes the handler's bucketExists fail and render "Not connected".
       let s3Form = realS3Form tr
-      (_, connected) <- testServant tr $ S3.brings3PostH testPid s3Form
+      connected <- call tr $ S3.brings3PostH testPid s3Form
       renderT connected `shouldSatisfy` T.isInfixOf "Connected"
       renderText (toHtml connected) `shouldSatisfy` TL.isInfixOf "<span>Remove</span>"
 
-      (_, savedPage) <- testServant tr $ S3.bringS3GetH testPid
+      savedPage <- call tr $ S3.bringS3GetH testPid
       let savedHtml = renderT savedPage
       savedHtml `shouldSatisfy` T.isInfixOf s3Form.bucket
       savedHtml `shouldSatisfy` T.isInfixOf "Connected"
 
-      (_, removed) <- testServant tr $ S3.brings3RemoveH testPid
+      removed <- call tr $ S3.brings3RemoveH testPid
       renderT removed `shouldSatisfy` T.isInfixOf "Not connected"
       project <- runTestBg frozenTime tr (Projects.projectById testPid) >>= maybe (fail "the project was not found") pure
       project.s3Bucket `shouldSatisfy` isNothing

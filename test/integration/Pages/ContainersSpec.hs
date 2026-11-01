@@ -169,7 +169,7 @@ spec = sequential $ aroundAll withTfChartResources do
       let html = renderT page
       html `shouldContainAll` ["No containers reporting"]
 
-      (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
+      hostMap <- call tr $ Infrastructure.hostMapGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       (renderT hostMap)
         `shouldContainAll` ["No hosts reporting", "Set up host monitoring"]
 
@@ -269,7 +269,7 @@ spec = sequential $ aroundAll withTfChartResources do
       cpuPctOfLimit noLimit `shouldBe` Nothing
 
     it "facets_narrowTheListAndTheHandlerRendersBothRuntimes" \tr -> do
-      (_, page) <- testServant tr $ containersPage noContainerFilters
+      page <- call tr $ containersPage noContainerFilters
       let Containers.ContainersPage (PageCtx _ body) = page
       table <- deferredBody body
       V.length table.rows `shouldBe` 8
@@ -318,7 +318,7 @@ spec = sequential $ aroundAll withTfChartResources do
       -- Each facet narrows independently, and an unknown value yields an empty list rather
       -- than silently falling back to "all".
       let listWith f = do
-            (_, p) <- testServant tr f
+            p <- call tr f
             let Containers.ContainersPage (PageCtx _ b) = p
             t <- deferredBody b
             pure $ V.toList $ V.map (\vm -> vm.row.containerName) t.rows
@@ -355,23 +355,23 @@ spec = sequential $ aroundAll withTfChartResources do
       Icons.lookupIcon "solid" "download" `shouldSatisfy` isJust
       Icons.lookupIcon "regular" "cube" `shouldSatisfy` isJust
 
-      (_, images) <- testServant tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "1")
+      images <- call tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "1")
       (renderT images)
         `shouldContainAll` ["Images", "ghcr.io/open-telemetry/demo", "docker.redpanda.com/redpandadata/redpanda", "SBOM unavailable", "/infrastructure/images/detail", "role=\"button\""]
 
-      (_, kubernetes) <- testServant tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
+      kubernetes <- call tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       -- A cluster known only by uid renders as a compact label, never 36 hex characters
       -- repeated down the column; the full uid stays in the tooltip for filtering fidelity.
       (renderT kubernetes)
         `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "CPU limit used", "Memory limit used", "whitespace-nowrap", "Showing ", " resources", "/infrastructure/kubernetes/detail", "cluster-9b1deb4d", "data-tippy-content=\"" <> clusterUid <> "\""]
 
-      (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
+      hostMap <- call tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       let hostMapHtml = renderT hostMap
       hostMapHtml
         `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "name=\"fill\"", "data-hx-trigger=\"change\"", "data-component=\"facet-rail\"", "Provider", "Region", "OS"]
       hostMapHtml `shouldNotSatisfy` T.isInfixOf ">Apply</button>"
 
-      (_, hostDetail) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") Nothing Nothing Nothing
+      hostDetail <- call tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") Nothing Nothing Nothing
       (renderT hostDetail)
         `shouldContainAll` [ "Host summary"
                            , "CPU usage"
@@ -386,11 +386,11 @@ spec = sequential $ aroundAll withTfChartResources do
                            , "Metrics coverage: 2 of 4"
                            ]
 
-      (_, imageDetail) <- testServant tr $ Infrastructure.imageDetailGetH testPid (Just "ghcr.io/open-telemetry/demo") Nothing Nothing Nothing
+      imageDetail <- call tr $ Infrastructure.imageDetailGetH testPid (Just "ghcr.io/open-telemetry/demo") Nothing Nothing Nothing
       (renderT imageDetail)
         `shouldContainAll` ["Image summary", "Running containers", "Security coverage", "View containers"]
 
-      (_, kubeDetail) <- testServant tr $ Infrastructure.kubernetesDetailGetH testPid (Just "pods") (Just "checkout-7fb5b4f859-nlcjs") (Just "otel-demo") (Just "default") Nothing Nothing Nothing
+      kubeDetail <- call tr $ Infrastructure.kubernetesDetailGetH testPid (Just "pods") (Just "checkout-7fb5b4f859-nlcjs") (Just "otel-demo") (Just "default") Nothing Nothing Nothing
       (renderT kubeDetail)
         `shouldContainAll` ["Pod summary", "CPU / limit", "View containers", "View logs", "View metrics"]
 

@@ -3,24 +3,17 @@ module Opentelemetry.TraceSessionPropagationSpec (spec) where
 import BackgroundJobs qualified as BGJobs
 import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime, addUTCTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Models.Projects.Projects qualified as Projects
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Pkg.TraceSessionCache qualified as TSC
 import Relude
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
 
 
 querySessionColumns :: TestResources -> Text -> IO (V.Vector (Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text))
@@ -32,7 +25,7 @@ querySessionColumns tr trId =
             FROM otel_logs_and_spans
             WHERE project_id = ? AND context___trace_id = ?
             ORDER BY name |]
-      (pid, trId)
+      (testPid, trId)
 
 
 findSpan :: Text -> V.Vector (Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text) -> Maybe (Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text)
@@ -46,7 +39,7 @@ querySpanSummary tr trId spanName = do
       $ DBT.query
         [sql| SELECT summary FROM otel_logs_and_spans
               WHERE project_id = ? AND context___trace_id = ? AND name = ? |]
-        (pid, trId, spanName)
+        (testPid, trId, spanName)
   pure $ (\(Only summary) -> summary) <$> (V.toList rows & viaNonEmpty head)
 
 
@@ -65,7 +58,7 @@ spec :: Spec
 spec = around withTestResources do
   describe "Trace Session Propagation" do
     it "propagates all session/user attrs across batches via cache" $ \tr -> do
-      key <- createTestAPIKey tr pid "sess-prop-1"
+      key <- createTestAPIKey tr testPid "sess-prop-1"
       let trId = "aabbccdd11223344aabbccdd11223344"
           resource = mkResource key []
           reqWith =
@@ -112,7 +105,7 @@ spec = around withTestResources do
       backendSummary `shouldSatisfy` maybe False (V.elem "user email;right-badge-neutral⇒u@test.com")
 
     it "does not overwrite existing session attributes" $ \tr -> do
-      key <- createTestAPIKey tr pid "sess-prop-2"
+      key <- createTestAPIKey tr testPid "sess-prop-2"
       let trId = "11223344aabbccdd11223344aabbccdd"
           resource = mkResource key []
           reqA =
@@ -144,7 +137,7 @@ spec = around withTestResources do
       fmap (\(_, s, _, _, _, _) -> s) (findSpan "span-B" rows) `shouldBe` Just (Just "sess-B")
 
     it "merges partial session info across spans via Semigroup" $ \tr -> do
-      key <- createTestAPIKey tr pid "sess-prop-3"
+      key <- createTestAPIKey tr testPid "sess-prop-3"
       let trId = "deadbeef11223344deadbeef11223344"
           resource = mkResource key []
           reqSess =
@@ -188,7 +181,7 @@ spec = around withTestResources do
       fmap (\(_, _, u, _, _, _) -> u) (findSpan "has-neither" rows) `shouldBe` Just (Just "usr-merge")
 
     it "backfill propagates session attrs to spans inserted before cache was populated" $ \tr -> do
-      key <- createTestAPIKey tr pid "sess-prop-4"
+      key <- createTestAPIKey tr testPid "sess-prop-4"
       base <- dbNow tr
       -- Age the spans 5 min back (DB clock) so they land in the sweep's lagged
       -- 2–17 min window — the only rows that reach the DB backfill are ones the

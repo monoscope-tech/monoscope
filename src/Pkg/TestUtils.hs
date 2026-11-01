@@ -55,12 +55,15 @@ module Pkg.TestUtils (
   shellHtml,
   renderT,
   call,
+  tablePage,
   dbExec,
   dbQuery,
   dbOne,
   IssueSeed (..),
   issueSeed,
   seedIssue,
+  countIssues,
+  resetSchemaLearning,
   goldenHtml,
   processMessagesAndBackgroundJobs,
   createTestSpans,
@@ -142,7 +145,7 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types (Query (Query))
+import Database.PostgreSQL.Simple.Types (PGArray (..), Query (Query))
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
@@ -180,10 +183,12 @@ import OddJobs.Job (Job (..))
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
@@ -1273,6 +1278,13 @@ call :: TestResources -> ATAuthCtx (RespHeaders a) -> IO a
 call tr = fmap snd . testServant tr
 
 
+-- | The page of a full table response; a rows-only (load-more) fragment fails the test.
+tablePage :: Table.TableResponse a -> IO (PageCtx (Table.Table a))
+tablePage = \case
+  Table.TablePage p -> pure p
+  Table.TableRowsOnly _ -> fail "expected a full table page"
+
+
 -- | Raw SQL for fixtures and for state no handler exposes, on the test clock so
 -- @app_now()@ triggers stamp test time rather than wall time.
 dbExec :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO ()
@@ -1323,6 +1335,24 @@ seedIssue tr s =
       [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, environment, issue_data, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id |]
       (s.pid, s.issueType, s.title, s.hash, s.service, s.environment, s.payload, s.at, s.at)
+
+
+countIssues :: TestResources -> Issues.IssueType -> IO Int
+countIssues tr ty = dbOne tr [sql| SELECT count(*)::int FROM apis.issues WHERE project_id = ? AND issue_type = ? |] (testPid, ty)
+
+
+-- | Empty the schema-learning tables for these projects, creating any project row they lack
+-- (catalog, summary and anomaly inserts reference it).
+resetSchemaLearning :: TestResources -> [Projects.ProjectId] -> IO ()
+resetSchemaLearning tr pids = do
+  dbExec
+    tr
+    [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+                  SELECT id, 'test', 'Free', true, NULL, false, false FROM unnest(?::uuid[]) AS id ON CONFLICT (id) DO NOTHING |]
+    (Only arr)
+  forM_ @[] ["schema_catalog", "schema_summary", "anomalies"] \t -> dbExec tr ("DELETE FROM apis." <> t <> " WHERE project_id = ANY(?::uuid[])") (Only arr)
+  where
+    arr = PGArray pids
 
 
 -- | Snapshot @tests/golden/html/<name>.html@, one tag per line, so the diff is reviewable.

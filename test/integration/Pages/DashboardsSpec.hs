@@ -53,7 +53,7 @@ spec = sequential $ aroundAll withTestResources do
         mkVar k m v = DashboardModel.Variable{key = k, title = Nothing, multi = m, required = Nothing, reloadOnChange = Nothing, helpText = Nothing, _vType = DashboardModel.VTValues, sql = Nothing, facetField = Nothing, query = Nothing, options = Nothing, value = v, dependsOn = Nothing, sqlSig = Nothing}
         renderDash t dash = renderT $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = t} []
         listDashboards tr = do
-          (_, pg) <- testServant tr (Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters)
+          pg <- call tr (Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters)
           PageCtx _ d <- asDashboardsGet pg
           pure d.dashboards
         byTitle :: Text -> V.Vector DashboardModel.DashboardVM -> IO DashboardModel.DashboardVM
@@ -277,7 +277,7 @@ spec = sequential $ aroundAll withTestResources do
       testServant tr (postDashboards ["Dashboard 1", "Dashboard 2"] "Test Dashboard") >>= expectNoContent . snd
 
     it "Should not create a dashboard with an empty title" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsPostH testPid (mkDashboard "")
+      pg <- call tr $ Dashboards.dashboardsPostH testPid (mkDashboard "")
       case pg of
         Dashboards.DashboardPostError message -> message `shouldBe` "Dashboard title is required"
         _ -> fail "Expected DashboardPostError response"
@@ -287,7 +287,7 @@ spec = sequential $ aroundAll withTestResources do
     -- href="newDashboardMdl" -- a dead relative link. The header opens the same modal
     -- with a <label for>, and so must this.
     it "dashboardsZeroState_opensTheNewDashboardModal_notADeadHref" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters{Dashboards.tag = ["no-such-tag-so-the-list-is-empty"]}
+      pg <- call tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters{Dashboards.tag = ["no-such-tag-so-the-list-is-empty"]}
       let html = renderT pg
       html `shouldContainAll` ["No dashboards yet", "for=\"newDashboardMdl\""]
       html `shouldSatisfy` (not . T.isInfixOf "href=\"newDashboardMdl\"")
@@ -297,7 +297,7 @@ spec = sequential $ aroundAll withTestResources do
     it "activeFilters_removeTag_keepsTagsSharingItsPrefix" \tr -> do
       let dashId = UUIDId $ UUID.fromWords 0xda5 0x7a9 0x9 0x1
       _ <- runTestBg frozenTime tr $ DashboardModel.insert (DashboardModel.mkDashboardVM dashId testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.title = "Tagged", DashboardModel.tags = ["prod", "production"]}
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters{Dashboards.tag = ["prod", "production"]}
+      pg <- call tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters{Dashboards.tag = ["prod", "production"]}
       let removeLink tag = T.takeWhile (/= '"') . T.drop 8 . snd . T.breakOn "hx-get=\"" . snd $ T.breakOn ("aria-label=\"Remove filter: " <> tag <> "\"") (renderT pg)
           base = "/p/" <> testPid.toText <> "/dashboards?sort=-updated_at"
       removeLink "prod" `shouldBe` base <> "&amp;tag=production"
@@ -306,11 +306,11 @@ spec = sequential $ aroundAll withTestResources do
       void $ runTestBg frozenTime tr $ DashboardModel.deleteDashboardsByIds testPid [dashId]
 
     it "dashboardTemplatePicker_defersHiddenPreviewsUntilOpened" \tr -> do
-      (_, initial) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
+      initial <- call tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
       let initialHtml = renderT initial
       initialHtml `shouldSatisfy` (not . T.isInfixOf "dashboardTemplatePreviews")
       initialHtml `shouldContainAll` ["hx-get=\"/p/" <> testPid.toText <> "/dashboards/new\"", "hx-trigger=\"change[target.checked] from:#newDashboardMdl\""]
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "true") filters
+      pg <- call tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "true") filters
       let html = renderT pg
       html `shouldContainAll` ["value=\"Blank dashboard\"", "data-title=\"Nginx\"", "data-template=\"nginx.yaml\"", "Requests"]
       html `shouldSatisfy` (not . T.isInfixOf "http-stats.svg")
@@ -321,7 +321,7 @@ spec = sequential $ aroundAll withTestResources do
     it "dashboardTemplates_deployedEnvironmentsDoNotReadYamlPerRequest" \tr ->
       withSystemTempDirectory "dashboard-templates" $ \dir -> withCurrentDirectory dir $ for_ [Prod, Staging] \env -> do
         let deployed = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{environment = env, liveReloadDashboards = True}}}
-        (_, pg) <- testServant deployed $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
+        pg <- call deployed $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
         PageCtx _ d <- asDashboardsGet pg
         d.dashTemplates `shouldSatisfy` (not . null)
 
@@ -331,7 +331,7 @@ spec = sequential $ aroundAll withTestResources do
       runHasqlEffect tr $ SchemaCatalog.upsertSummary $ V.singleton (testPid, doc)
       (_, (_, _, fullShell)) <- testServant tr $ BodyWrapper.mkPageCtx testPid >>= addRespHeaders
       fullShell.envOptions `shouldBe` V.singleton "production"
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
+      pg <- call tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
       PageCtx bw _ <- asDashboardsGet pg
       (bw.envOptions, bw.serviceOptions) `shouldBe` (V.empty, V.empty)
       map (.conversationId) bw.conversations `shouldBe` map (.conversationId) fullShell.conversations

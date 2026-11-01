@@ -104,7 +104,7 @@ spec = around withTestResources $ describe "Metric/trace correlation via exempla
     -- Direction 1: metric -> trace. The Exemplars tab lists representative traces
     -- and deep-links each into the log explorer's trace overlay. The timestamp on
     -- that link is load-bearing: traceH without one widens to a 3-day scan.
-    (_, exemplars) <- testServant tr $ TelemetryPage.metricExemplarsGetH testPid metricName (Just $ isoAt (-3600)) (Just $ isoAt 3600) Nothing
+    exemplars <- call tr $ TelemetryPage.metricExemplarsGetH testPid metricName (Just $ isoAt (-3600)) (Just $ isoAt 3600) Nothing
     let exemplarHtml = renderT exemplars
     exemplarHtml `shouldSatisfy` T.isInfixOf traceIdHex
     exemplarHtml `shouldSatisfy` T.isInfixOf "showTrace="
@@ -120,7 +120,7 @@ spec = around withTestResources $ describe "Metric/trace correlation via exempla
     -- An exemplar whose own timestamp falls outside the window is dropped even
     -- though its row is inside it — cumulative histograms re-export exemplars that
     -- are weeks old, and a link to a trace past retention is worse than no link.
-    (_, stale) <- testServant tr $ TelemetryPage.metricExemplarsGetH testPid metricName (Just $ isoAt 600) (Just $ isoAt 3600) Nothing
+    stale <- call tr $ TelemetryPage.metricExemplarsGetH testPid metricName (Just $ isoAt 600) (Just $ isoAt 3600) Nothing
     renderT stale `shouldNotSatisfy` T.isInfixOf traceIdHex
 
     -- Direction 2: span -> metrics. The detail panel's Metrics tab names the metric
@@ -148,7 +148,7 @@ spec = around withTestResources $ describe "Metric/trace correlation via exempla
               ON CONFLICT DO NOTHING |]
         (testPid, metricName, ts, ts, ts, ts)
 
-    (_, related) <- testServant tr $ TelemetryPage.relatedMetricsGetH testPid rid ts
+    related <- call tr $ TelemetryPage.relatedMetricsGetH testPid rid ts
     let relatedHtml = renderT related
     relatedHtml `shouldSatisfy` T.isInfixOf "Recorded in this trace"
     relatedHtml `shouldSatisfy` T.isInfixOf metricName
@@ -170,12 +170,12 @@ spec = around withTestResources $ describe "Metric/trace correlation via exempla
     -- The panel offers the tab but pays for nothing: opening a span must not run a
     -- metrics lookup. Two levels of deferral, and the test pins both — the panel
     -- ships a placeholder, and the placeholder's own content is another shell.
-    (_, item) <- testServant tr $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
+    item <- call tr $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
     let itemHtml = renderT item
     itemHtml `shouldSatisfy` T.isInfixOf "group-has-[.tab-metrics:checked]/dtab:block"
     itemHtml `shouldSatisfy` T.isInfixOf "tab=tab-metrics&amp;partial=true"
     itemHtml `shouldNotSatisfy` T.isInfixOf metricName
-    (_, metricsTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rid ts Nothing (Just "tab-metrics") Nothing True
+    metricsTab <- call tr $ LogItem.expandAPIlogItemH testPid rid ts Nothing (Just "tab-metrics") Nothing True
     let metricsTabHtml = renderT metricsTab
     metricsTabHtml `shouldSatisfy` T.isInfixOf "/related_metrics"
     metricsTabHtml `shouldNotSatisfy` T.isInfixOf metricName
@@ -183,7 +183,7 @@ spec = around withTestResources $ describe "Metric/trace correlation via exempla
   it "reports no exemplars for a metric that carries none, rather than failing" \tr -> do
     apiKey <- createTestAPIKey tr testPid "exemplar-empty-key"
     ingestMetric tr apiKey [] [] "test.no.exemplars" 1.0 frozenTime
-    (_, exemplars) <- testServant tr $ TelemetryPage.metricExemplarsGetH testPid "test.no.exemplars" (Just $ isoAt (-3600)) (Just $ isoAt 3600) Nothing
+    exemplars <- call tr $ TelemetryPage.metricExemplarsGetH testPid "test.no.exemplars" (Just $ isoAt (-3600)) (Just $ isoAt 3600) Nothing
     case exemplars of
       TelemetryPage.MetricExemplarsGet _ _ [] -> pass
       TelemetryPage.MetricExemplarsGet _ _ xs -> expectationFailure $ "expected no exemplars, got " <> show (length xs)
@@ -198,7 +198,7 @@ spec = around withTestResources $ describe "Metric/trace correlation via exempla
         $ DBT.query [sql| SELECT id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND kind = 'log' |] (Only testPid)
         :: IO (V.Vector (UUID.UUID, UTCTime))
     (rid, ts) <- maybe (error "ingested log missing from otel_logs_and_spans") pure (rows V.!? 0)
-    (_, related) <- testServant tr $ TelemetryPage.relatedMetricsGetH testPid rid ts
+    related <- call tr $ TelemetryPage.relatedMetricsGetH testPid rid ts
     let relatedHtml = renderT related
     relatedHtml `shouldSatisfy` T.isInfixOf "No metric reported a datapoint from this trace"
     relatedHtml `shouldSatisfy` T.isInfixOf "Metrics from test-service"

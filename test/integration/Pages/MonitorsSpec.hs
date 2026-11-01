@@ -69,8 +69,8 @@ spec = sequential $ aroundAll withTestResources do
       length monitors `shouldBe` 0
 
     it "should insert an alert" \tr -> do
-      (_, pg) <-
-        testServant tr $ Alerts.alertUpsertPostH testPid alertForm
+      pg <-
+        call tr $ Alerts.alertUpsertPostH testPid alertForm
       case pg of
         Alerts.AlertNoContent d -> do
           d `shouldBe` ""
@@ -86,8 +86,8 @@ spec = sequential $ aroundAll withTestResources do
           alert.service `shouldBe` Just "checkout"
         _ -> expectationFailure "expected exactly one monitor"
     it "should get single alert" \tr -> do
-      (_, pg) <-
-        testServant tr $ Alerts.alertSingleGetH testPid (QueryMonitorId alertId)
+      pg <-
+        call tr $ Alerts.alertSingleGetH testPid (QueryMonitorId alertId)
       case pg of
         Alerts.AlertSingle pid monitorM -> do
           isJust monitorM `shouldBe` True
@@ -106,7 +106,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "monitorRowActions_haveAccessibleNames" \tr -> do
       _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm
-      (_, page) <- testServant tr $ Alerts.unifiedMonitorsGetH testPid Nothing Nothing
+      page <- call tr $ Alerts.unifiedMonitorsGetH testPid Nothing Nothing
       let html = renderT page
       for_ ["Deactivate", "Mute", "Delete"] \action ->
         html `shouldSatisfy` T.isInfixOf ("aria-label=\"" <> action <> "\"")
@@ -120,7 +120,7 @@ spec = sequential $ aroundAll withTestResources do
     -- makes both the omission and the five never-produced spellings unrepresentable.
     it "healthyMonitor_statusBadgeMatchesItsGreenDot" \tr -> do
       _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm
-      (_, page) <- testServant tr $ Alerts.unifiedMonitorOverviewH testPid (UUID.toText alertId)
+      page <- call tr $ Alerts.unifiedMonitorOverviewH testPid (UUID.toText alertId)
       let html = renderT page
       html `shouldSatisfy` T.isInfixOf "Normal"
       html `shouldContainAll` ["Environment: production", "Service: checkout"]

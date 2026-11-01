@@ -48,10 +48,6 @@ import System.Config (AuthContext (metricCatalogBuffer))
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldContain, shouldNotContain, shouldNotSatisfy, shouldSatisfy, shouldThrow)
 
 
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
-
-
 testTimeRange :: (Text, Text)
 testTimeRange = (toText $ iso8601Show $ addUTCTime (-3600) frozenTime, toText $ iso8601Show $ addUTCTime 3600 frozenTime)
 
@@ -71,7 +67,7 @@ parseNumArray = mapMaybe (readMaybe . toString) . filter (not . T.null) . T.spli
 queryLogs :: TestResources -> Maybe Text -> IO Log.LogResult
 queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
-  snd <$> toServantResponse tr (Log.logExplorerDataH pid def{Log.query = queryM, Log.from = Just timeFrom, Log.to = Just timeTo})
+  snd <$> toServantResponse tr (Log.logExplorerDataH testPid def{Log.query = queryM, Log.from = Just timeFrom, Log.to = Just timeTo})
 
 
 -- | Helper to query the sessions viz endpoint (returns SessionsView).
@@ -97,17 +93,17 @@ spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "gRPC Ingestion via Service Handlers" do
     it "Test 1.1: should create and verify 3 API keys work" $ \tr -> do
-      keys <- traverse (createTestAPIKey tr pid) ["test-key-1", "test-key-2", "test-key-3"]
+      keys <- traverse (createTestAPIKey tr testPid) ["test-key-1", "test-key-2", "test-key-3"]
       forM_ keys $ \key -> ingestLog tr key "Test log" frozenTime
 
     it "Test 2.1: should ingest logs via all 3 API keys using logsServiceExport" $ \tr -> do
-      keys <- traverse (createTestAPIKey tr pid) ["log-key-1", "log-key-2", "log-key-3"]
+      keys <- traverse (createTestAPIKey tr testPid) ["log-key-1", "log-key-2", "log-key-3"]
       forM_ (zip keys ["Log from key 1", "Log from key 2", "Log from key 3"]) $ \(key, msg) -> ingestLog tr key msg frozenTime
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       result <- queryLogs tr (Just "kind == \"log\"")
       dataset <- expectLogsJson result
       V.length dataset `shouldSatisfy` (>= 3)
-      statuses :: V.Vector (Only Int) <- withPool tr.trPool $ DBT.query [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND kind = 'log' AND level IS NOT NULL AND status_code IS DISTINCT FROM level |] (Only $ unUUIDId pid)
+      statuses :: V.Vector (Only Int) <- withPool tr.trPool $ DBT.query [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND kind = 'log' AND level IS NOT NULL AND status_code IS DISTINCT FROM level |] (Only $ unUUIDId testPid)
       statuses `shouldBe` V.singleton (Only 0)
 
     it "Test 2.1b: surfaces backend query failures as LogResult.error, not a silent empty list" $ \tr -> do
@@ -128,7 +124,7 @@ spec = sequential $ aroundAll withTestResources do
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
     it "Test 3.1: should ingest traces via all 3 keys using traceServiceExport" $ \tr -> do
-      keys <- traverse (createTestAPIKey tr pid) ["trace-key-1", "trace-key-2", "trace-key-3"]
+      keys <- traverse (createTestAPIKey tr testPid) ["trace-key-1", "trace-key-2", "trace-key-3"]
       forM_ (zip keys ["GET /api/users", "POST /api/posts", "DELETE /api/comments"]) $ \(key, spanName) -> ingestTrace tr key spanName frozenTime
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       result <- queryLogs tr (Just "kind != \"log\"")
@@ -218,7 +214,7 @@ spec = sequential $ aroundAll withTestResources do
       totals.metrics `shouldSatisfy` (>= 4)
 
     it "poisons queued metric payloads whose uint64 count exceeds BIGINT" $ \tr -> do
-      key <- createTestAPIKey tr pid "metric-overflow-queue-key"
+      key <- createTestAPIKey tr testPid "metric-overflow-queue-key"
       let point :: PM.HistogramDataPoint
           point = defMessage & PMF.timeUnixNano .~ floor (utcTimeToPOSIXSeconds frozenTime * 1000000000) & PMF.count .~ (maxBound :: Word64)
           histogram :: PM.Histogram
@@ -237,23 +233,23 @@ spec = sequential $ aroundAll withTestResources do
         Left failure -> expectationFailure $ "expected poison result, got write failure: " <> toString (Telemetry.writeFailureSummary failure)
 
     it "deduplicates replayed metric exports by deterministic raw-point id" $ \tr -> do
-      key <- createTestAPIKey tr pid "metric-replay-key"
+      key <- createTestAPIKey tr testPid "metric-replay-key"
       let metricName = "replayed.metric"
-      before :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName} |]
+      before :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{testPid.toText} AND metric_name = #{metricName} |]
       ingestMetric tr key [] [] metricName 42 frozenTime
       ingestMetric tr key [] [] metricName 42 frozenTime
-      after :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName} |]
+      after :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{testPid.toText} AND metric_name = #{metricName} |]
       after `shouldBe` (\n -> n + 1) <$> before
 
     it "streams metric label paths into metadata" $ \tr -> do
-      key <- createTestAPIKey tr pid "metric-label-catalog-key"
+      key <- createTestAPIKey tr testPid "metric-label-catalog-key"
       ingestMetric tr key [] [] "catalog.labels" 1 frozenTime
       runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
-      labels :: V.Vector (Only Text) <- withPool tr.trPool $ DBT.query [sql| SELECT array_to_string(metric_labels, ',') FROM otel_metrics_meta WHERE project_id = ? AND metric_name = 'catalog.labels' |] (Only $ unUUIDId pid)
+      labels :: V.Vector (Only Text) <- withPool tr.trPool $ DBT.query [sql| SELECT array_to_string(metric_labels, ',') FROM otel_metrics_meta WHERE project_id = ? AND metric_name = 'catalog.labels' |] (Only $ unUUIDId testPid)
       labels `shouldSatisfy` (any (\(Only value) -> "resource.service.name" `isInfixOf` toString value) . toList)
 
     it "Test 4.1b: preserves OTLP metric start and schema metadata" $ \tr -> do
-      key <- createTestAPIKey tr pid "metric-metadata-key"
+      key <- createTestAPIKey tr testPid "metric-metadata-key"
       let toNanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
           start = addUTCTime (-30) frozenTime
           point = defMessage & PMF.timeUnixNano .~ toNanos frozenTime & PMF.startTimeUnixNano .~ toNanos start & PMF.asDouble .~ 42
@@ -262,21 +258,21 @@ spec = sequential $ aroundAll withTestResources do
           resource = mkResource key [] & PRF.droppedAttributesCount .~ 7
           request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ resource & PMF.schemaUrl .~ "https://example.test/resource/1" & PMF.scopeMetrics .~ [scopeMetrics]]
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
-      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT start_timestamp, resource_schema_url, scope_schema_url, dropped_attributes_count FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'metadata.gauge' |] :: IO (V.Vector (UTCTime, Text, Text, Int))
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT start_timestamp, resource_schema_url, scope_schema_url, dropped_attributes_count FROM otel_metrics WHERE project_id = #{testPid.toText} AND metric_name = 'metadata.gauge' |] :: IO (V.Vector (UTCTime, Text, Text, Int))
       rows `shouldBe` V.singleton (start, "https://example.test/resource/1", "https://example.test/scope/1", 7)
 
     it "Test 4.1c: persists zero-valued histogram buckets" $ \tr -> do
-      key <- createTestAPIKey tr pid "histogram-bucket-key"
+      key <- createTestAPIKey tr testPid "histogram-bucket-key"
       let toNanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
           point = defMessage & PMF.timeUnixNano .~ toNanos frozenTime & PMF.count .~ 3 & PMF.bucketCounts .~ [0, 2, 1] & PMF.explicitBounds .~ [10, 20]
           metric = defMessage & PMF.name .~ "request.duration" & PMF.histogram .~ (defMessage & PMF.dataPoints .~ [point])
           request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
-      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT hist_bucket_counts::text FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration' |] :: IO (V.Vector Text)
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT hist_bucket_counts::text FROM otel_metrics WHERE project_id = #{testPid.toText} AND metric_name = 'request.duration' |] :: IO (V.Vector Text)
       parseNumArray <$> V.toList rows `shouldBe` [[0, 2, 1]]
 
     it "Test 4.1d: persists full histogram distribution, temporality, and exemplars" $ \tr -> do
-      key <- createTestAPIKey tr pid "histogram-full-key"
+      key <- createTestAPIKey tr testPid "histogram-full-key"
       let exemplar :: PM.Exemplar
           exemplar = defMessage & PMF.timeUnixNano .~ nanosOf frozenTime & PMF.asDouble .~ (5.5 :: Double)
           point :: PM.HistogramDataPoint
@@ -308,15 +304,15 @@ spec = sequential $ aroundAll withTestResources do
           request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [scopeMetrics]]
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
       runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
-      (_, details) <- toServantResponse tr $ TelemetryPage.metricDetailsGetH pid "request.duration.full" Nothing Nothing Nothing Nothing Nothing
+      (_, details) <- toServantResponse tr $ TelemetryPage.metricDetailsGetH testPid "request.duration.full" Nothing Nothing Nothing Nothing Nothing
       toString (Lucid.renderText details) `shouldContain` "sum(distribution_sum) / sum(distribution_count)"
-      (_, card) <- toServantResponse tr $ TelemetryPage.metricCardGetH pid "request.duration.full" Nothing Nothing
+      (_, card) <- toServantResponse tr $ TelemetryPage.metricCardGetH testPid "request.duration.full" Nothing Nothing
       toString (Lucid.renderText card) `shouldContain` "request.duration.full · mean"
       let (timeFrom, timeTo) = testTimeRange
-      chart <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | where metric_name == \"request.duration.full\" and distribution_count > 0 and distribution_sum != null | summarize sum(distribution_sum) / sum(distribution_count) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
+      chart <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "metrics | where metric_name == \"request.duration.full\" and distribution_count > 0 and distribution_sum != null | summarize sum(distribution_sum) / sum(distribution_count) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
       chart.error `shouldBe` Nothing
       chart.dataset `shouldSatisfy` (not . V.null)
-      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, distribution_min, distribution_max, hist_explicit_bounds::text, aggregation_temporality FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration.full' |] :: IO (V.Vector (Int64, Double, Double, Double, Text, Text))
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, distribution_min, distribution_max, hist_explicit_bounds::text, aggregation_temporality FROM otel_metrics WHERE project_id = #{testPid.toText} AND metric_name = 'request.duration.full' |] :: IO (V.Vector (Int64, Double, Double, Double, Text, Text))
       case V.toList rows of
         [(c, s, mn, mx, bounds, temporality)] -> do
           (c, s, mn, mx) `shouldBe` (7, 12.5, 0.5, 9.0)
@@ -325,11 +321,11 @@ spec = sequential $ aroundAll withTestResources do
         other -> expectationFailure $ "expected one histogram row, got: " <> show other
       -- exemplars is jsonb; a ::text cast reports as jsonb over real TimeFusion's
       -- pgwire, so decode it as a JSON value (consistent OID) instead of text.
-      exemplarRows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT exemplars FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration.full' |] :: IO (V.Vector AE.Value)
+      exemplarRows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT exemplars FROM otel_metrics WHERE project_id = #{testPid.toText} AND metric_name = 'request.duration.full' |] :: IO (V.Vector AE.Value)
       decodeUtf8 (AE.encode (V.head exemplarRows)) `shouldSatisfy` T.isInfixOf "5.5"
 
     it "Test 4.1e: persists exponential histogram native columns" $ \tr -> do
-      key <- createTestAPIKey tr pid "exp-histogram-key"
+      key <- createTestAPIKey tr testPid "exp-histogram-key"
       let posBuckets :: PM.ExponentialHistogramDataPoint'Buckets
           posBuckets = defMessage & PMF.offset .~ 2 & PMF.bucketCounts .~ [1, 3, 5]
           negBuckets :: PM.ExponentialHistogramDataPoint'Buckets
@@ -368,7 +364,7 @@ spec = sequential $ aroundAll withTestResources do
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
       -- exp_hist_scale/pos_offset/neg_offset are INTEGER (int4); cast to bigint so
       -- hasql's Int64 decoder matches the column OID.
-      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, exp_hist_scale::bigint, exp_hist_zero_count, exp_hist_zero_threshold, exp_hist_pos_offset::bigint, exp_hist_pos_buckets::text, exp_hist_neg_offset::bigint, exp_hist_neg_buckets::text, aggregation_temporality FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.size.exp' |] :: IO (V.Vector (Int64, Double, Int64, Int64, Double, Int64, Text, Int64, Text, Text))
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, exp_hist_scale::bigint, exp_hist_zero_count, exp_hist_zero_threshold, exp_hist_pos_offset::bigint, exp_hist_pos_buckets::text, exp_hist_neg_offset::bigint, exp_hist_neg_buckets::text, aggregation_temporality FROM otel_metrics WHERE project_id = #{testPid.toText} AND metric_name = 'request.size.exp' |] :: IO (V.Vector (Int64, Double, Int64, Int64, Double, Int64, Text, Int64, Text, Text))
       case V.toList rows of
         [(c, s, scale, zc, zt, posOff, posBkts, negOff, negBkts, temporality)] -> do
           (c, s, scale, zc, zt, posOff, negOff, temporality) `shouldBe` (20, 55.0, 4, 3, 0.001, 2, -1, "DELTA")
@@ -377,7 +373,7 @@ spec = sequential $ aroundAll withTestResources do
         other -> expectationFailure $ "expected one exp-histogram row, got: " <> show other
 
     it "Test 4.1f: persists summary count, sum, and quantiles" $ \tr -> do
-      key <- createTestAPIKey tr pid "summary-key"
+      key <- createTestAPIKey tr testPid "summary-key"
       let q1 :: PM.SummaryDataPoint'ValueAtQuantile
           q1 = defMessage & PMF.quantile .~ 0.5 & PMF.value .~ 100
           q2 :: PM.SummaryDataPoint'ValueAtQuantile
@@ -393,7 +389,7 @@ spec = sequential $ aroundAll withTestResources do
           request :: MS.ExportMetricsServiceRequest
           request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [scopeMetrics]]
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
-      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, summary_quantiles::text, summary_values::text FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.latency.summary' |] :: IO (V.Vector (Int64, Double, Text, Text))
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, summary_quantiles::text, summary_values::text FROM otel_metrics WHERE project_id = #{testPid.toText} AND metric_name = 'request.latency.summary' |] :: IO (V.Vector (Int64, Double, Text, Text))
       case V.toList rows of
         [(c, s, quantiles, values)] -> do
           (c, s) `shouldBe` (12, 640.0)
@@ -409,11 +405,11 @@ spec = sequential $ aroundAll withTestResources do
     -- pg-only/tf-only markers land in exactly one store, while a shared-DB harness
     -- collapses both legs onto one — max is 1 in either topology.
     it "Test 4.3: every write target durably persists once and replays idempotently" $ \tr -> do
-      key <- createTestAPIKey tr pid "metric-write-target-key"
+      key <- createTestAPIKey tr testPid "metric-write-target-key"
       let metricsCeType = HM.singleton "ce-type" "org.opentelemetry.otlp.metrics.v1"
           payload name = ("wt-ack", encodeMessage (createGaugeMetricAtTime key [] [] name 7 frozenTime))
-          pgCount name = (\(Only n) -> n) . V.head <$> withPool tr.trPool (DBT.query [sql| SELECT count(*)::int FROM otel_metrics WHERE project_id = ? AND metric_name = ? |] (unUUIDId pid, name)) :: IO Int
-          tfCount name = V.head <$> runTestBg frozenTime tr (Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{name} |]) :: IO Int
+          pgCount name = (\(Only n) -> n) . V.head <$> withPool tr.trPool (DBT.query [sql| SELECT count(*)::int FROM otel_metrics WHERE project_id = ? AND metric_name = ? |] (unUUIDId testPid, name)) :: IO Int
+          tfCount name = V.head <$> runTestBg frozenTime tr (Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{testPid.toText} AND metric_name = #{name} |]) :: IO Int
           maxCount name = max <$> pgCount name <*> tfCount name
           send name attrs = void $ runTestBg frozenTime tr $ OtlpServer.processList [payload name] attrs
       let cases = [("wt.pg.only", HM.insert "monoscope-write-failure" "pg-failed" metricsCeType), ("wt.tf.only", HM.insert "monoscope-write-failure" "tf-failed" metricsCeType), ("wt.both", metricsCeType)] :: [(Text, HM.HashMap Text Text)]
@@ -424,13 +420,13 @@ spec = sequential $ aroundAll withTestResources do
         maxCount name >>= (`shouldBe` 1)
 
     it "Test 4.4: TF metric read path returns series values matching the ingested points" $ \tr -> do
-      key <- createTestAPIKey tr pid "tf-read-match-key"
+      key <- createTestAPIKey tr testPid "tf-read-match-key"
       ingestMetric tr key [] [] "tf.read.match" 10 frozenTime
       ingestMetric tr key [] [] "tf.read.match" 32 (addUTCTime 1 frozenTime)
       let (timeFrom, timeTo) = testTimeRange
       -- data_type omitted so the scalar summarize auto-decodes to a float (the
       -- CLI --assert path); the read goes through queryMetrics' otel_metrics SQL.
-      scalar <- runQueryEffect tr $ Charts.queryMetrics Nothing Nothing (Just pid) (Just "metrics | where metric_name == \"tf.read.match\" | summarize sum(value)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
+      scalar <- runQueryEffect tr $ Charts.queryMetrics Nothing Nothing (Just testPid) (Just "metrics | where metric_name == \"tf.read.match\" | summarize sum(value)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
       scalar.error `shouldBe` Nothing
       scalar.dataFloat `shouldBe` Just 42
 
@@ -439,7 +435,7 @@ spec = sequential $ aroundAll withTestResources do
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
     it "Test 5.1: should query ingested logs via apiLogH handler" $ \tr -> do
-      key <- createTestAPIKey tr pid "query-key-1"
+      key <- createTestAPIKey tr testPid "query-key-1"
       ingestLog tr key "Test log for querying" frozenTime
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       result <- queryLogs tr (Just "kind == \"log\"")
@@ -447,16 +443,16 @@ spec = sequential $ aroundAll withTestResources do
       V.length dataset `shouldSatisfy` (>= 1)
 
     it "Test 6.1: should query time-series data via chart_data endpoint" $ \tr -> do
-      key <- createTestAPIKey tr pid "chart-key-1"
+      key <- createTestAPIKey tr testPid "chart-key-1"
       forM_ ([0 .. 5] :: [Int]) $ \i -> ingestLog tr key "Log entry" (addUTCTime (fromIntegral (i * 60)) frozenTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       let (timeFrom, timeTo) = testTimeRange
-      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") Nothing []
+      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") Nothing []
       V.length result.dataset `shouldSatisfy` (> 0)
       V.toList result.headers `shouldContain` ["timestamp"]
 
     it "Test 7.1: should complete end-to-end integration" $ \tr -> do
-      keys <- traverse (\i -> createTestAPIKey tr pid ("E2E Test Key " <> show i)) ([1, 2, 3] :: [Int])
+      keys <- traverse (\i -> createTestAPIKey tr testPid ("E2E Test Key " <> show i)) ([1, 2, 3] :: [Int])
       forM_ keys $ \key -> do
         ingestLog tr key "E2E test log" frozenTime
         ingestTrace tr key "GET /api/test" frozenTime
@@ -469,13 +465,13 @@ spec = sequential $ aroundAll withTestResources do
       V.length dataset `shouldSatisfy` (>= 6) -- 3 logs + 3 traces
       -- Verify metrics
       let (timeFrom, timeTo) = testTimeRange
-      metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
+      metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
       V.length metricResult.dataset `shouldSatisfy` (> 0)
 
     it "Test 8.1: persists a large bulk OTLP request in one unnest insert" $ \tr -> do
       -- The whole batch goes in a single column-oriented INSERT…SELECT…unnest
       -- (no row-count slicing); a large N exercises that path end to end.
-      key <- createTestAPIKey tr pid "Bulk Test Key"
+      key <- createTestAPIKey tr testPid "Bulk Test Key"
       let bulkN = 2000 :: Int
           tag = "bulk-8.1"
           bodies = [tag <> "/" <> show i | i <- [1 .. bulkN]]
@@ -489,7 +485,7 @@ spec = sequential $ aroundAll withTestResources do
     -- Tests for gRPC Authorization header authentication (NEW!)
     describe "gRPC Authorization Header Authentication" do
       it "Test 9.1: should authenticate logs using gRPC Authorization header" $ \tr -> do
-        key <- createTestAPIKey tr pid "header-log-key"
+        key <- createTestAPIKey tr testPid "header-log-key"
         -- Ingest using Authorization header instead of resource attributes
         ingestLogWithHeader tr key "Log via header auth" frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
@@ -498,7 +494,7 @@ spec = sequential $ aroundAll withTestResources do
         V.length dataset `shouldSatisfy` (>= 1)
 
       it "Test 9.2: should authenticate traces using gRPC Authorization header" $ \tr -> do
-        key <- createTestAPIKey tr pid "header-trace-key"
+        key <- createTestAPIKey tr testPid "header-trace-key"
         ingestTraceWithHeader tr key "GET /api/header-auth" frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         result <- queryLogs tr (Just "kind != \"log\"")
@@ -506,16 +502,16 @@ spec = sequential $ aroundAll withTestResources do
         V.length dataset `shouldSatisfy` (>= 1)
 
       it "Test 9.3: should authenticate metrics using gRPC Authorization header" $ \tr -> do
-        key <- createTestAPIKey tr pid "header-metric-key"
+        key <- createTestAPIKey tr testPid "header-metric-key"
         ingestMetricWithHeader tr key [] [] "header.metric" 123.45 frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         let (timeFrom, timeTo) = testTimeRange
-        result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
+        result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
         V.length result.dataset `shouldSatisfy` (> 0)
 
       it "Test 9.4: should prefer resource attribute auth over header when both present" $ \tr -> do
-        resourceKey <- createTestAPIKey tr pid "resource-key"
-        headerKey <- createTestAPIKey tr pid "header-key"
+        resourceKey <- createTestAPIKey tr testPid "resource-key"
+        headerKey <- createTestAPIKey tr testPid "header-key"
 
         -- Process with both keys - resource should take precedence
         void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just headerKey) (createOtelLogAtTime resourceKey ["Dual auth log"] frozenTime)
@@ -530,7 +526,7 @@ spec = sequential $ aroundAll withTestResources do
           `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
       it "Test 9.6: should handle mixed authentication methods in bulk" $ \tr -> do
-        key <- createTestAPIKey tr pid "mixed-auth-key"
+        key <- createTestAPIKey tr testPid "mixed-auth-key"
         -- Mix of resource attribute and header auth
         ingestLog tr key "Resource auth log" frozenTime
         ingestLogWithHeader tr key "Header auth log" frozenTime
@@ -548,7 +544,7 @@ spec = sequential $ aroundAll withTestResources do
     -- call `mintOtelLogIds` or passes `UUID.nil`, rows either collide or land
     -- with the nil UUID — both caught here.
     it "Test 10.1: ingested rows have distinct non-nil UUID ids (minted upstream)" $ \tr -> do
-      key <- createTestAPIKey tr pid "id-mint-key"
+      key <- createTestAPIKey tr testPid "id-mint-key"
       let names = ["GET /a", "GET /b", "GET /c", "GET /d", "GET /e"] :: [Text]
       forM_ names $ \n -> ingestTrace tr key n frozenTime
       ids <-
@@ -558,7 +554,7 @@ spec = sequential $ aroundAll withTestResources do
               SELECT id::text FROM otel_logs_and_spans
               WHERE project_id = ? AND name = ANY(?)
             |]
-            (pid, V.fromList names)
+            (testPid, V.fromList names)
           :: IO (V.Vector (Only Text))
       let idList = V.toList (fmap (\(Only t) -> t) ids)
       length idList `shouldBe` length names
@@ -630,24 +626,24 @@ spec = sequential $ aroundAll withTestResources do
         case byErrors of
           Log.SessionsView _ rows _ -> V.toList ((.sessionId) <$> rows) `shouldBe` ["abc", "xyz"]
       it "Test 11.2: KQL filter narrows sessions result to a single user" $ \tr -> do
-        key <- createTestAPIKey tr pid "sessions-filter-key"
+        key <- createTestAPIKey tr testPid "sessions-filter-key"
         -- Unique emails are REQUIRED: examples share one DB (sequential $ aroundAll),
         -- so these must not collide with Test 11.1's data.
         ingestSessionEvent tr key "GET /a" [("session.id", "s1-filter"), ("user.email", "alice-filter@example.com")] False frozenTime
         ingestSessionEvent tr key "GET /b" [("session.id", "s2-filter"), ("user.email", "bob-filter@example.com")] False frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        result <- queryLogsViz tr pid (Just "attributes.user.email == \"alice-filter@example.com\"") "sessions"
+        result <- queryLogsViz tr testPid (Just "attributes.user.email == \"alice-filter@example.com\"") "sessions"
         case result of
           Log.SessionsView _ sessionRows _ -> do
             V.length sessionRows `shouldBe` 1
             (V.head sessionRows).sessionId `shouldBe` "s1-filter"
       it "Test 11.3: sessions with missing user identity fields still aggregate" $ \tr -> do
-        key <- createTestAPIKey tr pid "sessions-anon-key"
+        key <- createTestAPIKey tr testPid "sessions-anon-key"
         -- Ingest spans with session.id but NO user.id / user.email / user.name
         forM_ ([1 .. 3] :: [Int]) $ \i ->
           ingestSessionEvent tr key ("GET /anon/" <> show i) [("session.id", "anon-sess")] False frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        result <- queryLogsViz tr pid Nothing "sessions"
+        result <- queryLogsViz tr testPid Nothing "sessions"
         case result of
           Log.SessionsView _ sessionRows _ -> do
             case V.find (\s -> s.sessionId == "anon-sess") sessionRows of
@@ -658,14 +654,14 @@ spec = sequential $ aroundAll withTestResources do
                 s.userName `shouldBe` Nothing
               Nothing -> expectationFailure "session anon-sess not found"
       it "Test 11.4: expand endpoint returns child events for a session" $ \tr -> do
-        key <- createTestAPIKey tr pid "sessions-expand-key"
+        key <- createTestAPIKey tr testPid "sessions-expand-key"
         forM_ ([1 .. 3] :: [Int]) $ \i ->
           ingestSessionEvent tr key ("GET /expand/" <> show i) [("session.id", "expand-sess"), ("user.id", "eu1")] False frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         let (timeFrom, timeTo) = testTimeRange
         (_, expandResult) <-
           toServantResponse tr
-            $ Log.apiLogExpandH pid (Just "session") (Just "expand-sess") Nothing Nothing Nothing (Just timeFrom) (Just timeTo)
+            $ Log.apiLogExpandH testPid (Just "session") (Just "expand-sess") Nothing Nothing Nothing (Just timeFrom) (Just timeTo)
         let field k = case expandResult of AE.Object o -> KM.lookup (fromText k) o; _ -> Nothing
             rows = fromMaybe [] $ AE.decode @[AE.Value] . AE.encode =<< field "rows"
             cols = fromMaybe [] $ AE.decode @[Text] . AE.encode =<< field "cols"
@@ -679,7 +675,7 @@ spec = sequential $ aroundAll withTestResources do
       -- player that could only say "no recorded events". The action is driven by
       -- the `session` summary tag, now emitted only when a replay row exists.
       it "Test 11.4b: Replay action is emitted only for sessions with a recording" $ \tr -> do
-        key <- createTestAPIKey tr pid "sessions-replay-key"
+        key <- createTestAPIKey tr testPid "sessions-replay-key"
         recorded <- UUIDV4.nextRandom
         plain <- UUIDV4.nextRandom
         -- Emitted uppercase: the match is on the parsed UUID, so a case the SDK
@@ -690,9 +686,9 @@ spec = sequential $ aroundAll withTestResources do
         ingestSessionEvent tr key "GET /shouty" [("session.id", T.toUpper (UUID.toText shouty))] False frozenTime
         void
           $ withPool tr.trPool
-          $ DBT.executeMany [sql| INSERT INTO projects.replay_sessions (session_id, project_id) VALUES (?, ?) |] [(recorded, pid), (shouty, pid)]
+          $ DBT.executeMany [sql| INSERT INTO projects.replay_sessions (session_id, project_id) VALUES (?, ?) |] [(recorded, testPid), (shouty, testPid)]
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        view <- queryLogsViz tr pid Nothing "sessions"
+        view <- queryLogsViz tr testPid Nothing "sessions"
         case view of
           Log.SessionsView _ sessionRows _ -> do
             let replayOf sid = (.hasReplay) <$> V.find (\s -> T.toLower s.sessionId == UUID.toText sid) sessionRows
@@ -711,7 +707,7 @@ spec = sequential $ aroundAll withTestResources do
             (h, _) <-
               toServantResponse
                 tr
-                (Log.apiLogExpandH pid (Just "session") Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
+                (Log.apiLogExpandH testPid (Just "session") Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
             evaluate h >> pass
           )
           `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
@@ -722,13 +718,13 @@ spec = sequential $ aroundAll withTestResources do
             (h, _) <-
               toServantResponse
                 tr
-                (Log.apiLogExpandH pid (Just "invalid") (Just "some-key") Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
+                (Log.apiLogExpandH testPid (Just "invalid") (Just "some-key") Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
             evaluate h >> pass
           )
           `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
 
       it "Test 11.7: sort_by=events orders sessions by event count" $ \tr -> do
-        result <- queryLogsVizSorted tr pid Nothing "sessions" (Just "events")
+        result <- queryLogsVizSorted tr testPid Nothing "sessions" (Just "events")
         case result of
           Log.SessionsView _ sessionRows _ -> do
             let counts = V.toList $ V.map (.eventCount) sessionRows
@@ -759,9 +755,9 @@ spec = sequential $ aroundAll withTestResources do
                         ?, ?, 'leak-user', '{}'::TEXT[]) |]
               (otherPid, frozenTime, leakSess, leakEmail)
 
-        -- Same session.id also exists for `pid`, with a different user — this
+        -- Same session.id also exists for `testPid`, with a different user — this
         -- is the realistic case where the filter targets the other project.
-        key <- createTestAPIKey tr pid "sessions-isolation-key"
+        key <- createTestAPIKey tr testPid "sessions-isolation-key"
         ingestSessionEvent
           tr
           key
@@ -771,8 +767,8 @@ spec = sequential $ aroundAll withTestResources do
           frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
-        -- Filter by the external email: must return zero sessions from `pid`.
-        emailFilter <- queryLogsViz tr pid (Just ("attributes.user.email == \"" <> leakEmail <> "\"")) "sessions"
+        -- Filter by the external email: must return zero sessions from `testPid`.
+        emailFilter <- queryLogsViz tr testPid (Just ("attributes.user.email == \"" <> leakEmail <> "\"")) "sessions"
         case emailFilter of
           Log.SessionsView total rows _ -> do
             total `shouldBe` 0
@@ -783,7 +779,7 @@ spec = sequential $ aroundAll withTestResources do
         (_, expandResult) <-
           toServantResponse tr
             $ Log.apiLogExpandH
-              pid
+              testPid
               (Just "session")
               (Just leakSess)
               Nothing
@@ -800,7 +796,7 @@ spec = sequential $ aroundAll withTestResources do
       -- A single column reorder would silently swap landing_url/user_agent/first_error
       -- between rows and ship wrong data to every Sessions page.
       it "Test 11.9: SessionRow surfaces landingUrl, userAgent, and firstError from raw events" $ \tr -> do
-        key <- createTestAPIKey tr pid "sessions-context-key"
+        key <- createTestAPIKey tr testPid "sessions-context-key"
         let attrs =
               [ ("session.id", "ctx-sess")
               , ("user.email", "ctx@example.com")
@@ -810,7 +806,7 @@ spec = sequential $ aroundAll withTestResources do
         ingestSessionEvent tr key "GET /login" attrs False frozenTime
         ingestSessionEvent tr key "POST /login" attrs True (addUTCTime 1 frozenTime)
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        result <- queryLogsViz tr pid (Just "attributes.session.id == \"ctx-sess\"") "sessions"
+        result <- queryLogsViz tr testPid (Just "attributes.session.id == \"ctx-sess\"") "sessions"
         case result of
           Log.SessionsView _ rows _ -> case V.find (\s -> s.sessionId == "ctx-sess") rows of
             Just s -> do
@@ -824,12 +820,12 @@ spec = sequential $ aroundAll withTestResources do
       -- for them. Sessions must fall back to the user key, and the expand path
       -- must resolve that same derived key.
       it "Test 11.11: sessions fall back to user identity when session.id is absent" $ \tr -> do
-        key <- createTestAPIKey tr pid "sessions-derived-key"
+        key <- createTestAPIKey tr testPid "sessions-derived-key"
         let attrs = [("user.id", "derived-u1"), ("user.email", "derived@example.com")]
         forM_ ([1 .. 2] :: [Int]) $ \i -> ingestSessionEvent tr key ("GET /derived/" <> show i) attrs False frozenTime
         ingestSessionEvent tr key "GET /derived/boom" attrs True frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        result <- queryLogsViz tr pid (Just "attributes.user.email == \"derived@example.com\"") "sessions"
+        result <- queryLogsViz tr testPid (Just "attributes.user.email == \"derived@example.com\"") "sessions"
         case result of
           Log.SessionsView total rows _ -> do
             total `shouldBe` 1
@@ -842,7 +838,7 @@ spec = sequential $ aroundAll withTestResources do
         let (timeFrom, timeTo) = testTimeRange
         (_, expandResult) <-
           toServantResponse tr
-            $ Log.apiLogExpandH pid (Just "session") (Just "derived-u1") Nothing Nothing Nothing (Just timeFrom) (Just timeTo)
+            $ Log.apiLogExpandH testPid (Just "session") (Just "derived-u1") Nothing Nothing Nothing (Just timeFrom) (Just timeTo)
         let rows = case expandResult of
               AE.Object o -> fromMaybe [] $ AE.decode @[AE.Value] . AE.encode =<< KM.lookup (fromText "rows") o
               _ -> []
@@ -869,7 +865,7 @@ spec = sequential $ aroundAll withTestResources do
               (sharedSessionId, otherPid, frozenTime)
         (_, result) <-
           toServantResponse tr
-            $ Replay.replaySessionGetH pid sharedSessionId
+            $ Replay.replaySessionGetH testPid sharedSessionId
         let lookupKey k = case AE.decode (AE.encode result) of Just (AE.Object o) -> KM.lookup (fromText k) o; _ -> Nothing
         lookupKey "userEmail" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])
         lookupKey "userId" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])

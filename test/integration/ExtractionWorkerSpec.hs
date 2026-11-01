@@ -5,15 +5,12 @@ import Control.Concurrent.STM.TBQueue (flushTBQueue)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.PatternMerge qualified as PatternMerge
@@ -21,10 +18,6 @@ import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldSatisfy)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
 
 
 spec :: Spec
@@ -65,12 +58,12 @@ spec = around withTestResources do
           $ DBT.execute
             [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, context___span_id, context___trace_id, summary)
               VALUES (?::uuid, ?, ?, ?, 'SERVER', NULLIF(?::text, ''), NULLIF(?::text, ''), ARRAY[?]::text[]) |]
-            (span'.eventId, pid.toText, frozenTime, frozenTime, span'.spanCtxId, span'.traceId, span'.summary)
+            (span'.eventId, testPid.toText, frozenTime, frozenTime, span'.spanCtxId, span'.traceId, span'.summary)
       for_ worker.shards \shard ->
         runTestBg frozenTime pgOnly
           $ BackgroundJobs.flushDrainTask
             shard
-            ExtractionWorker.DrainFlushTask{projectId = pid, serviceName = service, spans, flushedAt = frozenTime}
+            ExtractionWorker.DrainFlushTask{projectId = testPid, serviceName = service, spans, flushedAt = frozenTime}
       rows <-
         withPool tr.trPool
           $ DBT.query
@@ -79,12 +72,12 @@ spec = around withTestResources do
                 ON o.project_id = lp.project_id::text AND o.hashes @> ARRAY['pat:' || lp.pattern_hash]
               WHERE lp.project_id = ? AND lp.service_name = ?
               GROUP BY lp.pattern_hash, lp.occurrence_count, lp.is_error |]
-            (pid, service)
+            (testPid, service)
           :: IO (V.Vector (Int, Bool, Int))
       V.toList rows `shouldBe` [(3, True, 3)]
 
     it "parity: ingest spans → processEagerBatch produces endpoints + hashes" \tr -> do
-      apiKey <- createTestAPIKey tr pid "ew-parity-key"
+      apiKey <- createTestAPIKey tr testPid "ew-parity-key"
       -- Ingest several HTTP spans
       replicateM_ 3 $ ingestTrace tr apiKey "GET /api/parity/check" frozenTime
       replicateM_ 3 $ ingestTrace tr apiKey "POST /api/parity/submit" frozenTime
@@ -99,7 +92,7 @@ spec = around withTestResources do
           $ DBT.query
             [sql| SELECT url_path FROM apis.endpoints
               WHERE project_id = ? AND url_path LIKE '/api/parity/%' |]
-            (Only pid)
+            (Only testPid)
           :: IO (V.Vector (Only Text))
       V.length endpoints `shouldSatisfy` (>= 2)
 
@@ -110,7 +103,7 @@ spec = around withTestResources do
             [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans
               WHERE project_id = ? AND processed_at IS NOT NULL
                 AND timestamp >= ? AND timestamp <= ? |]
-            (pid, addUTCTime (-10) frozenTime, addUTCTime 10 frozenTime)
+            (testPid, addUTCTime (-10) frozenTime, addUTCTime 10 frozenTime)
           :: IO (V.Vector (Only Int))
       case V.toList processed of
         [Only n] -> n `shouldSatisfy` (>= 6)
@@ -122,12 +115,12 @@ spec = around withTestResources do
           $ Hasql.interp
             [HI.sql| SELECT array_to_string(hashes, chr(31))
                   FROM otel_logs_and_spans
-                  WHERE project_id = #{pid.toText}
+                  WHERE project_id = #{testPid.toText}
                     AND name = 'GET /api/parity/check' |]
       tfHashes `shouldSatisfy` any (T.isInfixOf "pat:")
 
     it "safety-net: unprocessed rows get re-driven through the worker" \tr -> do
-      apiKey <- createTestAPIKey tr pid "ew-safetynet-key"
+      apiKey <- createTestAPIKey tr testPid "ew-safetynet-key"
       -- Query DB clock (may be real or frozen) and use a timestamp 1h before it
       -- Must satisfy: now() - 24h < ts < now() - 10m
       [Only dbNow] <- withPool tr.trPool $ DBT.query_ [sql| SELECT now() |]
@@ -145,7 +138,7 @@ spec = around withTestResources do
             [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans
               WHERE project_id = ? AND processed_at IS NULL
                 AND name = 'GET /api/safetynet/test' |]
-            (Only pid)
+            (Only testPid)
           :: IO (V.Vector (Only Int))
       case V.toList unprocessed of
         [Only n] -> n `shouldSatisfy` (>= 1)
@@ -155,7 +148,7 @@ spec = around withTestResources do
       runTestBg frozenTime tr
         $ BackgroundJobs.processBackgroundJob
           tr.trATCtx
-          (BackgroundJobs.SafetyNetReprocess pid)
+          (BackgroundJobs.SafetyNetReprocess testPid)
       drainExtractionWorker tr
 
       -- Verify the span now has processed_at IS NOT NULL
@@ -165,7 +158,7 @@ spec = around withTestResources do
             [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans
               WHERE project_id = ? AND processed_at IS NOT NULL
                 AND name = 'GET /api/safetynet/test' |]
-            (Only pid)
+            (Only testPid)
           :: IO (V.Vector (Only Int))
       case V.toList processed of
         [Only n] -> n `shouldSatisfy` (>= 1)
@@ -178,7 +171,7 @@ spec = around withTestResources do
     -- re-selected and re-drove the same rows on every tick forever — re-sending
     -- hash-append UPDATEs to TimeFusion at a volume that never declined.
     it "safety-net: a fully drained batch is never re-selected on the next tick" \tr -> do
-      apiKey <- createTestAPIKey tr pid "ew-loop-key"
+      apiKey <- createTestAPIKey tr testPid "ew-loop-key"
       [Only dbNow] <- withPool tr.trPool $ DBT.query_ [sql| SELECT now() |]
       let ctx = tr.trATCtx
           -- Hash updates disabled: derivation still runs, so bookkeeping must
@@ -210,14 +203,14 @@ spec = around withTestResources do
       atomically $ writeTVar worker.acceptingBatches True
 
       -- Tick 1: re-drive + derive.
-      runTestBg dbNow trNoHash $ BackgroundJobs.processBackgroundJob trNoHash.trATCtx (BackgroundJobs.SafetyNetReprocess pid)
+      runTestBg dbNow trNoHash $ BackgroundJobs.processBackgroundJob trNoHash.trATCtx (BackgroundJobs.SafetyNetReprocess testPid)
       drainAt dbNow trNoHash
 
       endpoints <-
         withPool tr.trPool
           $ DBT.query
             [sql| SELECT url_path FROM apis.endpoints WHERE project_id = ? AND url_path LIKE '/api/loop/%' |]
-            (Only pid)
+            (Only testPid)
           :: IO (V.Vector (Only Text))
       V.length endpoints `shouldSatisfy` (>= 1)
 
@@ -227,11 +220,11 @@ spec = around withTestResources do
           $ DBT.query
             [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans
               WHERE project_id = ? AND processed_at IS NULL AND name = 'GET /api/loop/test' |]
-            (Only pid)
+            (Only testPid)
           :: IO (V.Vector (Only Int))
       V.toList stillUnprocessed `shouldSatisfy` all (\(Only n) -> n == 0)
 
       -- Tick 2: no row may be handed off to the worker a second time.
-      runTestBg dbNow trNoHash $ BackgroundJobs.processBackgroundJob trNoHash.trATCtx (BackgroundJobs.SafetyNetReprocess pid)
+      runTestBg dbNow trNoHash $ BackgroundJobs.processBackgroundJob trNoHash.trATCtx (BackgroundJobs.SafetyNetReprocess testPid)
       reDriven <- handedOff
       reDriven `shouldSatisfy` (== 0)

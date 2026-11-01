@@ -23,23 +23,16 @@ import Test.Hspec (Spec, around, describe, it, shouldBe)
 -- | Queue a job by tag at an offset from midnight today, mimicking a row the scheduler left
 -- behind on an earlier run.
 queueAt :: TestResources -> Text -> Text -> IO ()
-queueAt tr tag offset = withResource tr.trPool \conn ->
-  void
-    $ PGS.execute
-      conn
-      [sql| INSERT INTO background_jobs (run_at, status, payload)
+queueAt tr tag offset =
+  dbExec
+    tr
+    [sql| INSERT INTO background_jobs (run_at, status, payload)
             VALUES (date_trunc('day', now()) + ?::interval, 'queued', jsonb_build_object('tag', ?)) |]
-      (offset, tag)
+    (offset, tag)
 
 
 countTag :: TestResources -> Text -> IO Int
-countTag tr tag = withResource tr.trPool \conn -> do
-  [PGS.Only n] <-
-    PGS.query
-      conn
-      [sql| SELECT COUNT(*)::INT FROM background_jobs WHERE payload->>'tag' = ? |]
-      (PGS.Only tag)
-  pure n
+countTag tr tag = dbOne tr [sql| SELECT COUNT(*)::INT FROM background_jobs WHERE payload->>'tag' = ? |] (PGS.Only tag)
 
 
 spec :: Spec

@@ -24,16 +24,12 @@ import Test.Hspec (Spec, SpecWith, around, describe, expectationFailure, it, sho
 import Utils (toXXHash)
 
 
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
-
-
 -- | A span with every optional field empty, for tests that care about one or two
 -- attributes and nothing else.
 emptySpan :: UTCTime -> Telemetry.OtelLogsAndSpans
 emptySpan now =
   Telemetry.OtelLogsAndSpans
-    { project_id = pid.toText
+    { project_id = testPid.toText
     , id = ""
     , timestamp = now
     , observed_timestamp = Nothing
@@ -95,14 +91,14 @@ resourceSpec = do
     it "does not crash on an unparseable project_id and stamps the threaded ProjectId" $ \_ -> do
       now <- getCurrentTime
       let badSpan = (emptySpan now){Telemetry.project_id = "not-a-uuid", Telemetry.name = Just "GET /"}
-          (mkEndpoint, _hashes, _, _) = processSpanToEntities emptyPathClassifier pid badSpan
-      fmap (.projectId) (mkEndpoint UUID.nil) `shouldBe` Just pid
+          (mkEndpoint, _hashes, _, _) = processSpanToEntities emptyPathClassifier testPid badSpan
+      fmap (.projectId) (mkEndpoint UUID.nil) `shouldBe` Just testPid
 
     -- isNewEndpoint reads the classifier's knownHashes; a hash in it is not re-minted.
     it "treats a hash already in knownHashes as an existing endpoint" $ \_ -> do
       now <- getCurrentTime
       let sp = (emptySpan now){Telemetry.name = Just "GET /"}
-          run c = processSpanToEntities c pid sp
+          run c = processSpanToEntities c testPid sp
           mints c = isJust $ (\(mk, _, _, _) -> mk UUID.nil) (run c)
           -- take the hash the function itself stamps rather than re-deriving it
           stamped = (\(_, hs, _, _) -> hs V.!? 0) (run emptyPathClassifier)
@@ -126,15 +122,15 @@ resourceSpec = do
                     , ("url", AE.object ["path" AE..= p])
                     ]
             }
-        pathOf classifier sp = (\(_, _, np, _) -> np) $ processSpanToEntities classifier pid sp
-        fwHashOf classifier sp = (\(_, _, _, fw) -> fw) $ processSpanToEntities classifier pid sp
+        pathOf classifier sp = (\(_, _, np, _) -> np) $ processSpanToEntities classifier testPid sp
+        fwHashOf classifier sp = (\(_, _, _, fw) -> fw) $ processSpanToEntities classifier testPid sp
 
     it "httpRoute_batchSharesDeclaredRouteWithUnroutedSpans" \tr -> do
       let path = "/api/stores/6a42926ba6838426a09a58c0/business-hours"
           declared = route "/api/stores/:id/business-hours" path frozenTime
           unrouted = route "" path frozenTime
-          caches = one (pid, Projects.defaultProjectCache)
-          expected = Just $ V.singleton $ toXXHash $ pid.toText <> "GET" <> "/api/stores/{id}/business-hours"
+          caches = one (testPid, Projects.defaultProjectCache)
+          expected = Just $ V.singleton $ toXXHash $ testPid.toText <> "GET" <> "/api/stores/{id}/business-hours"
       for_ [V.fromList [declared, unrouted], V.fromList [unrouted, declared]] \spans ->
         V.map (.hashes) (stampHashesAtIngest caches spans) `shouldBe` V.replicate 2 expected
       let stamped = stampHashesAtIngest caches $ V.fromList [unrouted, declared]
@@ -148,25 +144,25 @@ resourceSpec = do
       drainExtractionWorker tr
       endpoints <-
         withPool tr.trPool
-          $ DBT.query [sql| SELECT url_path, hash FROM apis.endpoints WHERE project_id = ? |] (Only pid)
+          $ DBT.query [sql| SELECT url_path, hash FROM apis.endpoints WHERE project_id = ? |] (Only testPid)
           :: IO (V.Vector (Text, Text))
-      endpoints `shouldBe` V.singleton ("/api/stores/{id}/business-hours", toXXHash $ pid.toText <> "GET" <> "/api/stores/{id}/business-hours")
+      endpoints `shouldBe` V.singleton ("/api/stores/{id}/business-hours", toXXHash $ testPid.toText <> "GET" <> "/api/stores/{id}/business-hours")
 
     it "httpRoute_batchDeclarationsStayWithinTheirProject" \_ -> do
       let path = "/api/stores/6a42926ba6838426a09a58c0/business-hours"
           otherPid = UUIDId $ UUID.fromWords 1 2 3 4
           declared = (route "/api/stores/:id/business-hours" path frozenTime){Telemetry.project_id = otherPid.toText}
           unrouted = route "" path frozenTime
-          caches = HM.fromList [(pid, Projects.defaultProjectCache), (otherPid, Projects.defaultProjectCache)]
+          caches = HM.fromList [(testPid, Projects.defaultProjectCache), (otherPid, Projects.defaultProjectCache)]
           stamped = stampHashesAtIngest caches $ V.fromList [declared, unrouted]
-          expected = Just $ V.singleton $ toXXHash $ pid.toText <> "GET" <> "/api/stores/{uuid}/business-hours"
+          expected = Just $ V.singleton $ toXXHash $ testPid.toText <> "GET" <> "/api/stores/{uuid}/business-hours"
       (.hashes) <$> (stamped V.!? 1) `shouldBe` Just expected
 
     it "stampHashesAtIngest_canonicalizesLegacyHostAndMethodForEndpointFilters" \_ -> do
       let attrs = Map.fromList [("http", AE.object ["request" AE..= AE.object ["method" AE..= ("post" :: Text)]]), ("net", AE.object ["host" AE..= AE.object ["name" AE..= ("integrations.routelift.com" :: Text)]]), ("url", AE.object ["path" AE..= ("/v1/deliveries/estimate/v2" :: Text)])]
           sp :: Telemetry.OtelLogsAndSpans
           sp = (emptySpan frozenTime){Telemetry.kind = Just "client", Telemetry.attributes = Just $ AesonText attrs}
-          stamped = stampHashesAtIngest (one (pid, Projects.defaultProjectCache)) (V.singleton sp)
+          stamped = stampHashesAtIngest (one (testPid, Projects.defaultProjectCache)) (V.singleton sp)
       for_ (stamped V.!? 0) \row -> do
         AesonText result <- maybe (fail "missing stamped attributes") pure row.attributes
         Map.lookup "server" result `shouldBe` Just (AE.object ["address" AE..= ("integrations.routelift.com" :: Text)])
@@ -179,14 +175,17 @@ resourceSpec = do
           sp =
             (emptySpan frozenTime)
               { Telemetry.kind = Just "client"
-              , Telemetry.attributes = Just $ AesonText $ Map.fromList
-                  [ ("http", AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)]])
-                  , ("url", AE.object ["path" AE..= ("/orders/42" :: Text), "template" AE..= ("/orders/{id}" :: Text)])
-                  ]
+              , Telemetry.attributes =
+                  Just
+                    $ AesonText
+                    $ Map.fromList
+                      [ ("http", AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)]])
+                      , ("url", AE.object ["path" AE..= ("/orders/42" :: Text), "template" AE..= ("/orders/{id}" :: Text)])
+                      ]
               }
-          stamped = stampHashesAtIngest (one (pid, Projects.defaultProjectCache)) (V.singleton sp)
+          stamped = stampHashesAtIngest (one (testPid, Projects.defaultProjectCache)) (V.singleton sp)
       for_ (stamped V.!? 0) \row -> do
-        row.hashes `shouldBe` Just (V.singleton $ toXXHash $ pid.toText <> "GET/orders/{id}")
+        row.hashes `shouldBe` Just (V.singleton $ toXXHash $ testPid.toText <> "GET/orders/{id}")
         AesonText result <- maybe (fail "missing stamped attributes") pure row.attributes
         Map.lookup "http" result `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)], "route" AE..= ("/orders/{id}" :: Text)])
         Map.lookup "url" result `shouldBe` Just (AE.object ["path" AE..= ("/orders/42" :: Text), "template" AE..= ("/orders/{id}" :: Text)])
@@ -202,14 +201,14 @@ resourceSpec = do
         `shouldBe` Just "/api/v1/wallets/{pk}/initiate_bank_transfer/"
       -- New, and the framework's own word for it, so it becomes its own
       -- canonical template and discovery may never merge it away.
-      fwHashOf emptyPathClassifier sp `shouldBe` Just (toXXHash $ pid.toText <> "" <> "GET" <> "/api/v1/wallets/{pk}/initiate_bank_transfer/")
+      fwHashOf emptyPathClassifier sp `shouldBe` Just (toXXHash $ testPid.toText <> "" <> "GET" <> "/api/v1/wallets/{pk}/initiate_bank_transfer/")
 
     -- Adopting framework parameter names renames endpoints, and a rename is a
     -- new hash. A project that already has the flattened row keeps it rather
     -- than re-minting its whole table and re-notifying every route.
     it "httpRoute_projectAlreadyHasFlattenedRow_doesNotReMintUnderTheFrameworkName" \_ -> do
       now <- getCurrentTime
-      let existing = toXXHash $ pid.toText <> "" <> "GET" <> "/v1/rates/{param}/history"
+      let existing = toXXHash $ testPid.toText <> "" <> "GET" <> "/v1/rates/{param}/history"
           classifier = emptyPathClassifier{knownHashes = fromList [existing]}
           sp = route "/v1/rates/:id/history" "/v1/rates/8821/history" now
       pathOf classifier sp `shouldBe` Just "/v1/rates/{param}/history"
@@ -245,7 +244,7 @@ resourceSpec = do
           $ DBT.query
             [sql| SELECT attributes #>> '{http,request,headers,authorization}', attributes::text LIKE ?
                   FROM otel_logs_and_spans WHERE project_id = ? |]
-            ("%" <> secret <> "%", pid)
+            ("%" <> secret <> "%", testPid)
           :: IO (V.Vector (Text, Bool))
       stored `shouldBe` V.singleton ("[\"[REDACTED]\"]", False)
 
@@ -285,8 +284,8 @@ resourceSpec = do
       resp <- runTestBg frozenTime tr $ processMessages [("m1", toStrict $ AE.encode reqMsg1)] HM.empty
       whenLeft_ resp \_ -> expectationFailure "processMessages returned Left WriteFailure"
       -- No drainExtractionWorker / runAllBackgroundJobs: the hash must be there already.
-      hashes <- withPool tr.trPool $ DBT.query [sql| SELECT unnest(hashes) FROM otel_logs_and_spans WHERE project_id = ? |] (Only pid) :: IO (V.Vector (Only Text))
-      let expected = toXXHash $ pid.toText <> "172.31.29.11" <> "GET" <> "/"
+      hashes <- withPool tr.trPool $ DBT.query [sql| SELECT unnest(hashes) FROM otel_logs_and_spans WHERE project_id = ? |] (Only testPid) :: IO (V.Vector (Only Text))
+      let expected = toXXHash $ testPid.toText <> "172.31.29.11" <> "GET" <> "/"
       V.map fromOnly hashes `shouldBe` V.singleton expected
 
     it "rawUrl_infersTheCanonicalHttpRoute" $ \tr -> do
@@ -297,7 +296,7 @@ resourceSpec = do
       whenLeft_ resp \_ -> expectationFailure "processMessages returned Left WriteFailure"
       routes <-
         withPool tr.trPool
-          $ DBT.query [sql| SELECT attributes___http___route, attributes->'monoscope'->'endpoint'->>'route' FROM otel_logs_and_spans WHERE project_id = ? |] (Only pid)
+          $ DBT.query [sql| SELECT attributes___http___route, attributes->'monoscope'->'endpoint'->>'route' FROM otel_logs_and_spans WHERE project_id = ? |] (Only testPid)
           :: IO (V.Vector (Maybe Text, Maybe Text))
       routes `shouldBe` V.singleton (Just "/", Just "/")
 
@@ -316,7 +315,7 @@ resourceSpec = do
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
       _ <- runAllBackgroundJobs frozenTime tr.trATCtx
-      endpoints <- fmap fst $ runTestBg frozenTime tr $ Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats False pid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Nothing, search = Nothing, sort = Endpoints.SortEvents, page = 0, perPage = 200, period = Endpoints.Window24h, service = Nothing}
+      endpoints <- fmap fst $ runTestBg frozenTime tr $ Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats False testPid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Nothing, search = Nothing, sort = Endpoints.SortEvents, page = 0, perPage = 200, period = Endpoints.Window24h, service = Nothing}
       V.length endpoints `shouldBe` 2
       forM_ endpoints \enp ->
         ["/", "/api/v1/user/login", "/service/extension/backup/mboximport"] `shouldContain` [enp.urlPath]

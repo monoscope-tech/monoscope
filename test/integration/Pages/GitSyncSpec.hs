@@ -20,7 +20,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..), execute, query)
+import Database.PostgreSQL.Simple (Only (..), execute)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful (Eff, runEff)
 import Effectful.Error.Static (catchError)
@@ -285,7 +285,7 @@ spec = sequential do
         expired <- runTestBg frozenTime tr $ GitSync.createInstallationAttempt session attempt
         runTestBg (addUTCTime 901 frozenTime) tr (GitSync.consumeInstallationAttempt session expired) `shouldReturn` Nothing
         void $ runTestBg (addUTCTime 901 frozenTime) tr $ GitSync.createInstallationAttempt session attempt
-        retained <- withResource tr.trPool \conn -> query conn "SELECT EXISTS (SELECT 1 FROM projects.github_installation_attempts WHERE id = ?)" (Only expired)
+        retained <- dbQuery tr "SELECT EXISTS (SELECT 1 FROM projects.github_installation_attempts WHERE id = ?)" (Only expired)
         retained `shouldBe` [Only False]
 
       it "installationAuthorization_requiresTheGitHubAccountOwner" \tr -> do

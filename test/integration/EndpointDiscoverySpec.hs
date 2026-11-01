@@ -13,8 +13,6 @@ import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -22,10 +20,6 @@ import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSat
 import Text.Printf (printf)
 import UnliftIO.Exception (bracket)
 import Utils (toXXHash)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
 
 
 -- | Insert test endpoints directly into DB, bypassing message ingestion.
@@ -37,7 +31,7 @@ insertTestEndpoints tr endpoints = forM_ endpoints \(method, host, path) ->
       [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
           VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (hash) DO NOTHING |]
-      (pid, path, AE.object [], method, host, Endpoints.hashEndpoint pid.toText host method path, False :: Bool)
+      (testPid, path, AE.object [], method, host, Endpoints.hashEndpoint testPid.toText host method path, False :: Bool)
 
 
 -- | An open api_change issue pinned to one endpoint hash. Four of these across
@@ -50,7 +44,7 @@ insertOpenIssue tr endpointHash =
     $ DBT.execute
       [sql| INSERT INTO apis.issues (project_id, issue_type, endpoint_hash, target_hash, title)
           VALUES (?, 'api_change', ?, ?, 'test issue') |]
-      (pid, endpointHash, endpointHash)
+      (testPid, endpointHash, endpointHash)
 
 
 -- | Pin the api_change issue discovery already raised for this endpoint onto the
@@ -70,7 +64,7 @@ pinIssueAt tr createdAt endpointHash notified = do
       $ DBT.execute
         [sql| UPDATE apis.issues SET created_at = ?, last_notified_at = ?
             WHERE project_id = ? AND endpoint_hash = ? AND issue_type = 'api_change' |]
-        (createdAt, if notified then Just createdAt else Nothing, pid, endpointHash)
+        (createdAt, if notified then Just createdAt else Nothing, testPid, endpointHash)
   when (n == 0) $ fail $ "discovery raised no api_change issue for " <> toString endpointHash
 
 
@@ -86,7 +80,7 @@ endpointHashFor tr path = do
     withPool tr.trPool
       $ DBT.query
         [sql| SELECT hash FROM apis.endpoints WHERE project_id = ? AND url_path = ? |]
-        (pid, path)
+        (testPid, path)
       :: IO (V.Vector (Only Text))
   maybe (fail $ "no endpoint derived for " <> toString path) (\(Only h) -> pure h) (r V.!? 0)
 
@@ -99,7 +93,7 @@ queryIssueAcked tr endpointHash = do
       $ DBT.query
         [sql| SELECT (acknowledged_at IS NOT NULL AND acknowledged_until IS NOT NULL)
           FROM apis.issues WHERE project_id = ? AND endpoint_hash = ? |]
-        (pid, endpointHash)
+        (testPid, endpointHash)
       :: IO (V.Vector (Only Bool))
   pure $ maybe False (\(Only b) -> b) (r V.!? 0)
 
@@ -115,7 +109,7 @@ queryAckReasons tr endpointHash =
           [sql| SELECT a.metadata->>'reason'
           FROM apis.issue_activity_log a JOIN apis.issues i ON i.id = a.issue_id
           WHERE i.project_id = ? AND i.endpoint_hash = ? AND a.event = 'acknowledged' |]
-          (pid, endpointHash)
+          (testPid, endpointHash)
       )
 
 
@@ -128,7 +122,7 @@ queryNotifiedSplit tr = do
         [sql| SELECT count(*) FILTER (WHERE last_notified_at IS NOT NULL)::int,
                  count(*) FILTER (WHERE last_notified_at IS NULL)::int
           FROM apis.issues WHERE project_id = ? AND archived_at IS NULL |]
-        (Only pid)
+        (Only testPid)
       :: IO (V.Vector (Int, Int))
   pure $ fromMaybe (0, 0) (r V.!? 0)
 
@@ -142,7 +136,7 @@ queryOpenIssueTargets tr =
       ( DBT.query
           [sql| SELECT target_hash FROM apis.issues
           WHERE project_id = ? AND acknowledged_at IS NULL AND archived_at IS NULL |]
-          (Only pid)
+          (Only testPid)
       )
 
 
@@ -153,8 +147,8 @@ clearTestEndpoints tr =
     $ withPool tr.trPool
     $ DBT.execute
       [sql| DELETE FROM apis.endpoints WHERE project_id = ? |]
-      (Only pid)
-    >> void (withPool tr.trPool $ DBT.execute [sql| DELETE FROM apis.issues WHERE project_id = ? |] (Only pid))
+      (Only testPid)
+    >> void (withPool tr.trPool $ DBT.execute [sql| DELETE FROM apis.issues WHERE project_id = ? |] (Only testPid))
 
 
 -- | After endpointTemplateDiscovery, merged endpoints are deleted and only the
@@ -166,7 +160,7 @@ queryCanonicalTemplates tr =
       [sql| SELECT url_path, method, host FROM apis.endpoints
         WHERE project_id = ? AND canonical_hash = hash
         ORDER BY method, url_path |]
-      (Only pid)
+      (Only testPid)
 
 
 -- | Query all remaining endpoints for this project.
@@ -176,7 +170,7 @@ queryAllEndpoints tr =
     $ DBT.query
       [sql| SELECT url_path, method FROM apis.endpoints
         WHERE project_id = ? ORDER BY method, url_path |]
-      (Only pid)
+      (Only testPid)
 
 
 spec :: Spec
@@ -198,8 +192,8 @@ spec = around withTestResources do
           , ("GET", "api.example.com", "/api/v1/health")
           , ("GET", "api.example.com", "/api/v1/users")
           ]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
 
         templatePaths <- V.toList . V.map (\(p, _, _) -> p) <$> queryCanonicalTemplates tr
         templatePaths `shouldSatisfy` elem "/api/v1/users/{param}"
@@ -216,12 +210,12 @@ spec = around withTestResources do
           , ("GET", "api.example.com", "/api/v1/items/auth0|item002")
           , ("GET", "api.example.com", "/api/v1/dashboard/overview")
           ]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
         endpoints1 <- queryAllEndpoints tr
 
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
         queryAllEndpoints tr >>= (`shouldBe` endpoints1)
 
     describe "Edge cases" do
@@ -231,7 +225,7 @@ spec = around withTestResources do
           tr
           [ ("GET", "api.example.com", "/api/v1/orders/provider|order001")
           ]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
 
         templates <- queryCanonicalTemplates tr
         V.length templates `shouldBe` 0
@@ -245,7 +239,7 @@ spec = around withTestResources do
           , ("POST", "api.example.com", "/api/v1/items/provider|item001")
           , ("POST", "api.example.com", "/api/v1/items/provider|item002")
           ]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
 
         templates <- queryCanonicalTemplates tr
         V.length templates `shouldBe` 2
@@ -266,8 +260,8 @@ spec = around withTestResources do
           <> [("GET", "api.example.com", "/v1/wallet/complete-fund/WALLET_" <> h) | h <- ["3D16EFF38182", "A1B2C3D4E5F6"]]
           <> [("GET", "api.example.com", "/api/v1/customers/auth0%7C" <> h) | h <- ["6a5ebc849d77a9a4717b0980", "66a12f77bc56dad584b79c8b"]]
           <> [("GET", "api.example.com", "/v1/shipbubble/products/" <> h <> "/stock_status") | h <- ["27ad70cdce4a", "40e1beed4b9e"]]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
 
         paths <- V.toList . V.map fst <$> queryAllEndpoints tr
         sort paths
@@ -281,8 +275,8 @@ spec = around withTestResources do
         clearTestEndpoints tr
         let verbs = ["verify_phone", "verify_email", "deactivate_user", "reset-password", "send_otp", "biometric_login", "update_email", "random_username", "transactions", "notifications"]
         insertTestEndpoints tr [("POST", "api.example.com", "/v1/account/" <> v) | v <- verbs]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
 
         paths <- V.toList . V.map fst <$> queryAllEndpoints tr
         sort paths `shouldBe` sort [("/v1/account/" <>) v | v <- verbs]
@@ -293,8 +287,8 @@ spec = around withTestResources do
           $ ("GET", "api.example.com", "/v1/orders/search")
           : ("GET", "api.example.com", "/v1/orders/summary")
           : [("GET", "api.example.com", "/v1/orders/SB-" <> h) | h <- ["91673E0634FB", "5A3469F964B1", "F76B055211BA"]]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
 
         paths <- V.toList . V.map fst <$> queryAllEndpoints tr
         sort paths `shouldBe` ["/v1/orders/search", "/v1/orders/summary", "/v1/orders/{param}"]
@@ -302,14 +296,14 @@ spec = around withTestResources do
       it "assigns a later straggler to an existing template without re-deriving it" \tr -> do
         clearTestEndpoints tr
         insertTestEndpoints tr [("GET", "api.example.com", "/v1/track/SB-" <> h) | h <- ["91673E0634FB", "5A3469F964B1"]]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
 
         -- One new concrete path, alone: too little evidence to mint a template,
         -- but the template already exists and vouches for it.
         insertTestEndpoints tr [("GET", "api.example.com", "/v1/track/SB-000000000001")]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
 
         paths <- V.toList . V.map fst <$> queryAllEndpoints tr
         paths `shouldBe` ["/v1/track/{param}"]
@@ -366,16 +360,16 @@ spec = around withTestResources do
         insertTestEndpoints tr [("GET", "api.example.com", "/v1/ship/" <> h) | h <- hashes]
         -- One open api_change issue per endpoint: 4 rows that all want the same
         -- (project_id, target_hash, issue_type) once their endpoints merge.
-        forM_ hashes \h -> insertOpenIssue tr $ Endpoints.hashEndpoint pid.toText "api.example.com" "GET" ("/v1/ship/" <> h)
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        forM_ hashes \h -> insertOpenIssue tr $ Endpoints.hashEndpoint testPid.toText "api.example.com" "GET" ("/v1/ship/" <> h)
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
 
         paths <- V.toList . V.map fst <$> queryAllEndpoints tr
         paths `shouldBe` ["/v1/ship/{param}"]
         -- Survives as exactly one issue, pointed at the canonical endpoint.
         issues <- queryOpenIssueTargets tr
         V.length issues `shouldBe` 1
-        issues V.!? 0 `shouldBe` Just (Endpoints.hashEndpoint pid.toText "api.example.com" "GET" "/v1/ship/{param}")
+        issues V.!? 0 `shouldBe` Just (Endpoints.hashEndpoint testPid.toText "api.example.com" "GET" "/v1/ship/{param}")
 
       -- The ordering bug this guards: a concrete path is announced by mail the
       -- moment it is ingested, and merged away hours later. Discovery is what
@@ -385,13 +379,13 @@ spec = around withTestResources do
         let ids = ["SB-" <> h | h <- ["91673E0634FB", "5A3469F964B1", "F76B055211BA"]]
         insertTestEndpoints tr $ ("GET", "api.example.com", "/v1/ship/status") : [("GET", "api.example.com", "/v1/ship/" <> h) | h <- ids]
         -- Every endpoint arrives with an un-notified issue, exactly as ingest leaves them.
-        forM_ ("status" : ids) \h -> insertOpenIssue tr $ Endpoints.hashEndpoint pid.toText "api.example.com" "GET" ("/v1/ship/" <> h)
+        forM_ ("status" : ids) \h -> insertOpenIssue tr $ Endpoints.hashEndpoint testPid.toText "api.example.com" "GET" ("/v1/ship/" <> h)
         (notifiedBefore, deferredBefore) <- queryNotifiedSplit tr
         notifiedBefore `shouldBe` 0
         deferredBefore `shouldBe` 4
 
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
 
         -- The three ids collapsed into one template and their issues were
         -- consolidated; only the literal route is left to announce.
@@ -403,10 +397,10 @@ spec = around withTestResources do
       it "is re-runnable: a second cleanup pass changes nothing" \tr -> do
         clearTestEndpoints tr
         insertTestEndpoints tr [("GET", "api.example.com", "/v1/x/SB-" <> h) | h <- ["91673E0634FB", "5A3469F964B1"]]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery testPid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
         before <- queryAllEndpoints tr
-        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup testPid
         queryAllEndpoints tr >>= (`shouldBe` before)
 
     -- A new-endpoint warning asks "is this a route, or noise?". Sustained
@@ -439,7 +433,7 @@ spec = around withTestResources do
 
       it "acks an endpoint proven by served traffic, and leaves a scanner burst alone" \tr -> do
         clearTestEndpoints tr
-        key <- createTestAPIKey tr pid "auto-ack-key"
+        key <- createTestAPIKey tr testPid "auto-ack-key"
         let realPath = "/v1/orders"
             scanPath = "/v1/burst"
         -- Real route: comfortably over both thresholds, spread across 3 hours.
@@ -464,7 +458,7 @@ spec = around withTestResources do
         scanHash <- endpointHashFor tr scanPath
         forM_ [realHash, scanHash] \h -> pinIssueAtFrozen tr h True
 
-        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints testPid
 
         queryIssueAcked tr realHash `shouldReturn` True
         queryIssueAcked tr scanHash `shouldReturn` False
@@ -473,7 +467,7 @@ spec = around withTestResources do
 
       it "combines proof from both sides of a daily scan boundary" \tr -> do
         clearTestEndpoints tr
-        key <- createTestAPIKey tr pid "auto-ack-cross-day-key"
+        key <- createTestAPIKey tr testPid "auto-ack-cross-day-key"
         let path = "/v1/cross-day"
             boundaryOrigin = addUTCTime (-25 * 3600) frozenTime
         -- Ten requests land just before now-24h and ten just after it. Neither
@@ -484,13 +478,13 @@ spec = around withTestResources do
         h <- endpointHashFor tr path
         pinIssueAt tr (addUTCTime (-26 * 3600) frozenTime) h True
 
-        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints testPid
 
         queryIssueAcked tr h `shouldReturn` True
 
       it "counts one UTC hour only once when it crosses a daily scan boundary" \tr -> do
         clearTestEndpoints tr
-        key <- createTestAPIKey tr pid "auto-ack-same-hour-boundary-key"
+        key <- createTestAPIKey tr testPid "auto-ack-same-hour-boundary-key"
         let path = "/v1/same-hour-boundary"
             scanNow = addUTCTime (30 * 60) frozenTime
             boundary = addUTCTime (-24 * 3600) scanNow
@@ -501,13 +495,13 @@ spec = around withTestResources do
         h <- endpointHashFor tr path
         pinIssueAt tr (addUTCTime (-26 * 3600) scanNow) h True
 
-        runTestBg scanNow tr $ BackgroundJobs.autoAckProvenEndpoints pid
+        runTestBg scanNow tr $ BackgroundJobs.autoAckProvenEndpoints testPid
 
         queryIssueAcked tr h `shouldReturn` False
 
       it "leaves an un-notified issue alone, so the ack cannot swallow its alert" \tr -> do
         clearTestEndpoints tr
-        key <- createTestAPIKey tr pid "auto-ack-unnotified-key"
+        key <- createTestAPIKey tr testPid "auto-ack-unnotified-key"
         let path = "/v1/invoices"
         seedTraffic tr key path "200" 30 3
         -- The extraction worker is what turns ingested spans into apis.endpoints
@@ -518,12 +512,12 @@ spec = around withTestResources do
         h <- endpointHashFor tr path
         pinIssueAtFrozen tr h False
 
-        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints testPid
         queryIssueAcked tr h `shouldReturn` False
 
       it "defers without scanning when another replica owns the evidence lease" \tr -> do
         clearTestEndpoints tr
-        key <- createTestAPIKey tr pid "auto-ack-lease-busy-key"
+        key <- createTestAPIKey tr testPid "auto-ack-lease-busy-key"
         let path = "/v1/lease-busy"
         seedTraffic tr key path "200" 20 2
         drainExtractionWorker tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}, config = tr.trATCtx.config{enableTimefusionWrites = True}}}
@@ -534,8 +528,8 @@ spec = around withTestResources do
         withResource tr.trPool \conn ->
           SimplePG.withTransaction conn do
             void (SimplePG.query conn [sql|SELECT pg_advisory_xact_lock(hashtext(?))|] (Only BackgroundJobs.endpointAutoAckLockName) :: IO [Only ()])
-            runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+            runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints testPid
 
         queryIssueAcked tr h `shouldReturn` False
-        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints testPid
         queryIssueAcked tr h `shouldReturn` True

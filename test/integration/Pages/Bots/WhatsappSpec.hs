@@ -3,7 +3,6 @@ module Pages.Bots.WhatsappSpec (spec) where
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
@@ -86,12 +85,11 @@ spec = around withTestResources do
         setupWhatsappNumber tr testPid testPhone
         -- 6 dashboards: the skip=2 window still overflows, so the next Load-More
         -- token must be dashboard___4; the hardcoded-0 bug would emit dashboard___2.
-        void $ withResource tr.trPool \conn ->
-          PGS.execute
-            conn
-            [sql|INSERT INTO projects.dashboards (project_id, created_by, title)
+        dbExec
+          tr
+          [sql|INSERT INTO projects.dashboards (project_id, created_by, title)
                  SELECT ?, (SELECT id FROM users.users LIMIT 1), 'wa-dash-' || i FROM generate_series(1, 6) i|]
-            (PGS.Only testPid)
+          (PGS.Only testPid)
         (reqs, _) <- runAsBaseRecordingHTTP tr $ whatsappIncomingPostH (twilioWhatsAppPrompt tr testPhone "dashboard___2")
         let twilioBodies = [b | (u, b) <- reqs, "twilio" `T.isInfixOf` u]
         twilioBodies `shouldSatisfy` any (("dashboard___4" `BS.isInfixOf`) . toStrict)
