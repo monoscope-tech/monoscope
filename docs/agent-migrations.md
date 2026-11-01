@@ -24,7 +24,10 @@ Keeping those records preserves their audit trail.
 Production inspection through `../monoscope/.env` found 21 original feature migrations, all with matching checksums.
 The nine native feature tables contain no rows.
 The complete native-record group is applied; only the two older memory changes exist from the shared-run group.
-No production schema, data or history changed during this inspection.
+The guarded production transition then added only `0259_native_agent_records.sql` to the migration ledger.
+All 273 previous records and timestamps remain unchanged; the ledger now has 274 records.
+No schema DDL or feature-data mutation ran. The nine native feature tables remain empty.
+The native-record file is now applied in production and must remain unchanged.
 
 The helper checks every present original checksum and rejects duplicate or conflicting history.
 It adopts complete groups by recording their consolidated file, preserving the old records.
@@ -48,7 +51,8 @@ An installation without any of the original feature migrations uses normal start
 Run adoption between deployments, while no startup migration runner is active.
 Apply it before the merged version starts; the running application does not need a schema reset.
 Local verification covers fresh installation, the original full schema and the observed production shape.
-The production transition remains unapplied pending the normal merge/deployment process.
+Production baseline adoption is complete. The next authorized deployment uses normal startup migrations to apply the remaining four files.
+No production application deployment occurred during preparation.
 Deployment remains subject to the normal PR and local signoff requirements.
 
 Run the isolated baseline safety test against local PostgreSQL with the usual libpq variables:

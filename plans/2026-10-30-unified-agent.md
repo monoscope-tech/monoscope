@@ -1,6 +1,6 @@
 # Unified Monoscope agent
 
-Status: implementation consolidated and locally verified, 1 November 2026. Manual acceptance remains open. This plan controls the complete branch scope; the checklist below does not replace the product contract.
+Status: implementation consolidated and locally verified, 1 November 2026. Ready for user review; physical-device and screen-reader checks remain unverified. This plan controls the complete branch scope; the checklist below does not replace the product contract.
 
 Consolidate Slack, web, scheduled, and event work around one capability catalog, authority evaluator, executor, operation ledger, conversation, and artifact experience. Newly enabled background routines act autonomously within their member's current authority. Optional selected review must not become a mandatory permission loop.
 
@@ -17,7 +17,7 @@ Slack requests, native review/fix work, schedules, enrichment and incident analy
 The consolidated review records current native, browser and real Monoscope Slack acceptance.
 
 Migration and file consolidation, affected verification, repeated reviews and Mac-only image/signoff pass.
-Use canonical PR 619 for review. Existing feature databases require the documented baseline-adoption step before the new version starts.
+Use canonical PR 619 for review. Other existing feature databases require the documented baseline-adoption step before the new version starts. Production baseline adoption is complete; its schema and feature data are unchanged.
 Physical-device, VoiceOver, physical Mac power-loss and hosted iframe interaction remain unverified.
 No merge or production deployment is authorized.
 

@@ -62,6 +62,7 @@ All eleven configured checks pass for runtime snapshot `d5fa93873`, after migrat
 | Browser suite | 172 pass, one skip. | Application browser tests; physical devices and screen readers remain unverified. |
 | UI tests | 1,041 tests across 62 files pass. | Canonical local gate. |
 | CLI | Build, package, signature, runtime version and portable linkage checks pass. | Preserves the CLI/shared package boundary. |
+| Native worker image | The optional `impact-worker` target builds as Linux AMD64 on this Mac. Its non-root CLI, SDK imports, skills, private storage and runtime tools pass smoke checks. | Separate from the standard server image and real KVM acceptance. No worker deployment. |
 | Unit tests | 315 examples, zero failures. | The parser's 22 SQL cases share one pinned golden corpus. |
 | Other canonical checks | HLint, frontend, build and Weeder pass. | All eleven configured checks have matching attestations. |
 | Review artifact | 104 steps pass at 320, 390, 768 and 1280 pixels, without overflow or browser errors. | 111 implementation excerpts match current source; six historical examples remain labeled. |
@@ -143,7 +144,7 @@ An unrelated generated design snapshot and accidental icon-script permission cha
 Forty-eight feature migrations become five dependency-ordered files; all master migration bytes remain unchanged.
 The legacy Slack-evidence backfill stays independent so its existing repeat-upgrade regression remains meaningful.
 Fresh and production-shaped local upgrades retain the original schema, and baseline safety tests preserve existing data/history.
-The final focused watcher passes 62 migration, legacy-evidence, native-linkage and review-policy examples in 17.5477 seconds.
+The final focused watcher passes 69 migration, legacy-evidence, native-linkage, review-policy and issue-page golden examples in 20.3173 seconds.
 The existing runner lifecycle now also proves that historical records survive file consolidation.
 The isolated baseline test passes repeat adoption, the production shape, unrelated history/data retention and seven rejection scenarios.
 A null-checksum case first fails, then passes with null-safe comparison. Formatting and the generated manifest pass.
@@ -151,5 +152,5 @@ Two scoped Haskell review passes retain the existing tests and effect boundaries
 The fresh, original and production-shaped schemas have identical dumps after excluding migration bookkeeping.
 
 Production inspection finds 21 original feature migrations with matching checksums and zero rows in the nine native feature tables.
-No production change is performed. The [transition procedure](../agent-migrations.md) preserves applied history and adopts complete groups before deployment.
-Final local checks and the immutable image pass. The new Haskell template matches all 253 current migration checksums; full schema, ownership and privileges match the pre-consolidation template. An explicit rollback test also preserves the retained native-recovery fixture across eight tables while adopting the current checksums. Production remains unchanged.
+The [production transition](../agent-migrations.md) adds one native baseline record and preserves all 273 earlier rows and timestamps. No schema DDL, feature-data mutation or application deployment occurs.
+Final local checks and the immutable image pass. The new Haskell template matches all 253 current migration checksums; full schema, ownership and privileges match the pre-consolidation template. An explicit rollback test also preserves the retained native-recovery fixture across eight tables while adopting the current checksums. Production schema and feature data remain unchanged; native baseline bookkeeping is prepared.
