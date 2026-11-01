@@ -68,3 +68,12 @@ The file is ignored session evidence, not a release attestation.
 7. Verify interruption and ambiguous acknowledgements before streaming acceptance.
 
 Changing this shared app affects its installations. This audit does not authorize a global manifest update or a branch deployment.
+
+## Authorized QA installation
+
+The user authorized creating and installing the separate QA app on 1 November 2026.
+Slack installed **Monoscope Local QA** (`A0CDFCWNBNK`) in **Monoscope** (`T0AP82L853K`).
+The installed-app portal offers “Reinstall to Monoscope”; real `auth.test` verifies bot user `U0CE0F6UDC4`, bot `B0CDWJNP6MQ`, and all eleven requested bot scopes.
+The bot-only installation adds no personal OAuth grant. Credentials remain in an ignored local file with mode `0600`.
+The receipt is `scripts/local/monoscope-local-qa-installation.json`; it contains no credentials.
+The QA callback and live branch behavior still need verification. The existing shared app and production deployment are unchanged.
