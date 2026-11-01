@@ -77,6 +77,20 @@ export function bashTool(exec, publish) {
   };
 }
 
+function pendingTools(messages) {
+  const index = messages.findLastIndex((message) => message.role === 'assistant');
+  const assistant = messages[index];
+  const completed = new Set(messages.slice(index + 1).filter((message) => message.role === 'toolResult').map((message) => message.toolCallId));
+  return { assistant, pending: assistant?.content.filter((block) => block.type === 'toolCall' && !completed.has(block.id)) ?? [] };
+}
+
+function branchBeforeFailure(manager) {
+  const last = manager.getBranch().findLast((entry) => entry.type === 'message');
+  if (last?.message.role !== 'assistant' || !['error', 'aborted'].includes(last.message.stopReason)) return false;
+  if (last.parentId) manager.branch(last.parentId); else manager.resetLeaf();
+  return true;
+}
+
 /**
  * Runs one Pi session over `tools` and returns the accepted submission. `workflow` names the submit tool and
  * prepares each candidate; tool contracts come from the host policy.
@@ -88,7 +102,8 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
       if (property === 'streamSimple') return (...args) => {
         const call = { id: randomUUID(), attemptId, provider: args[0].provider, model: args[0].id };
         // The host acknowledges the durable start before the provider stream exists.
-        const stream = Promise.resolve().then(() => onEvent({ type: 'model_started', receipt: call })).then(() => target.streamSimple(...args));
+        const checkAbort = () => { signal?.throwIfAborted(); args[2]?.signal?.throwIfAborted(); };
+        const stream = Promise.resolve().then(() => { checkAbort(); return onEvent({ type: 'model_started', receipt: call }); }).then(() => { checkAbort(); return target.streamSimple(...args); });
         const completion = stream.then((value) => value.result()).then((message) => { onEvent({ type: 'model_response', message, callId: call.id }); return message; });
         modelCalls.add(completion);
         void completion.then(() => modelCalls.delete(completion), () => modelCalls.delete(completion));
@@ -145,6 +160,7 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
     await loader.reload();
     const model = modelRuntime.getModel(request.provider, request.model);
     if (!model) throw new Error('Review model is not configured');
+    branchBeforeFailure(sessionManager);
     ({ session } = await createAgentSession({
       cwd, agentDir: join(root, 'agent'), modelRuntime: meteredRuntime, model,
       thinkingLevel: request.thinkingLevel, settingsManager, resourceLoader: loader,
@@ -158,10 +174,8 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
     signal?.throwIfAborted();
     if (session.messages.length === 0) await session.prompt(request.prompt);
     else {
-      const assistant = session.messages.findLastIndex((message) => message.role === 'assistant');
-      const issued = session.messages[assistant];
-      const completed = new Set(session.messages.slice(assistant + 1).filter((message) => message.role === 'toolResult').map((message) => message.toolCallId));
-      for (const call of issued?.content.filter((block) => block.type === 'toolCall' && !completed.has(block.id)) ?? []) {
+      const { assistant: issued, pending } = pendingTools(session.messages);
+      for (const call of pending) {
         signal?.throwIfAborted();
         emit({ type: 'tool_execution_start', toolCallId: call.id, toolName: call.name, args: call.arguments });
         const outcome = await runToolCall(call, { tools: session.agent.state.tools, assistantMessage: issued, context: { messages: session.messages, tools: session.agent.state.tools }, beforeToolCall: session.agent.beforeToolCall, afterToolCall: session.agent.afterToolCall, signal });
@@ -243,7 +257,7 @@ async function main() {
   const controller = new AbortController();
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => controller.abort());
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(420000)]);
-  let root;
+  let root, sessionManager, exchange;
   let pending = Promise.resolve();
   try {
     const messages = jsonLines(addAbortSignal(signal, process.stdin), 16 * 1024 * 1024);
@@ -252,7 +266,7 @@ async function main() {
     if (envelope.tag !== undefined && !['PatchTask', 'FixTask', 'AdmitTask', 'ReviewFixTask'].includes(envelope.tag)) throw new Error('Unknown repository task');
     const request = envelope.tag === undefined ? envelope : isPatch ? envelope.contents : envelope.tag === 'FixTask' ? envelope.contents.request : envelope.contents.fix.request;
     const outbox = fs.realpathSync(process.env.IMPACT_REVIEW_OUTBOX_DIR);
-    const exchange = (tag, contents) => {
+    exchange = (tag, contents) => {
       const reply = pending.then(async () => {
         process.stdout.write(JSON.stringify({ tag, contents }) + '\n');
         const response = JSON.parse((await messages.next()).value);
@@ -277,6 +291,7 @@ async function main() {
     const attemptId = z.uuid().parse(request.attemptId);
     root = await mkdtemp(join(tmpdir(), 'monoscope-review-agent-'));
     const modelRuntime = await ModelRuntime.create({ authPath: join(root, 'auth.json'), modelsPath: process.env.IMPACT_REVIEW_MODELS ?? null, refreshOnCreate: false });
+    if (process.env.IMPACT_REVIEW_SESSION_FILE) sessionManager = SessionManager.open(process.env.IMPACT_REVIEW_SESSION_FILE, dirname(process.env.IMPACT_REVIEW_SESSION_FILE), cwd);
     let result;
     if (isPatch) {
       const call = { id: randomUUID(), attemptId, provider: request.provider, model: request.model };
@@ -290,7 +305,7 @@ async function main() {
       if (Object.hasOwn(checked, 'Left')) throw new Error('Patch comparison was rejected');
     } else result = await runPi({
       preparedCheckout, request: { ...request, head: preparedCheckout.head }, modelRuntime, attemptId, signal, root, skillsDir: preparedCheckout.guest,
-      sessionManager: process.env.IMPACT_REVIEW_SESSION_FILE ? SessionManager.open(process.env.IMPACT_REVIEW_SESSION_FILE, dirname(process.env.IMPACT_REVIEW_SESSION_FILE), cwd) : undefined,
+      sessionManager,
       tools: hostTools(preparedCheckout, root, (operation) => exchange('Guest', operation)),
       optionsTool: (invocation) => exchange('Tool', invocation),
       workflow: {
@@ -317,6 +332,9 @@ async function main() {
     process.stdout.write(JSON.stringify({ tag: 'Result', contents: result }) + '\n');
   } catch {
     await pending;
+    if (!signal.aborted && process.env.IMPACT_REVIEW_SESSION_FILE && sessionManager && branchBeforeFailure(sessionManager) && pendingTools(sessionManager.buildSessionContext().messages).pending.length === 0) {
+      await exchange('Suspend', []).catch(() => {});
+    }
     process.stderr.write(signal.aborted ? 'Impact review cancelled or timed out\n' : 'Impact review did not produce a validated result\n');
     process.exitCode = 1;
   } finally {

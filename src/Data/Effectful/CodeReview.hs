@@ -44,7 +44,7 @@ import UnliftIO.Timeout qualified as Timeout
 data GuestIdentity = Agent | Supervisor
 
 
-data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Guest Guest.Operation | Validate AE.Value | ValidateText Text | Result AE.Value
+data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Guest Guest.Operation | Validate AE.Value | ValidateText Text | Result AE.Value | Suspend ()
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -391,18 +391,18 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                     writeMessage value = LBS.hPut (getStdin process) (AE.encode value <> "\n") >> hFlush (getStdin process)
                     parseMessage :: AE.Value -> AET.Parser (Either Outbox.Receipt Message)
                     parseMessage value = (Left <$> AE.parseJSON value) <|> (Right <$> AE.parseJSON value)
+                    suspend remaining submissions accepted = for_ sessionDirectory \directory -> case accepted of
+                      Just draft -> persist $ Finished draft
+                      Nothing -> do
+                        transcript <- Native.readPrivateArtifact directory "active.jsonl" (64 * 1048576)
+                        identifier <- UUIDId <$> UUID4.nextRandom
+                        generation <- Outbox.privateDirectory directory [toString identifier.toText]
+                        Native.writePrivateArtifact generation "session.jsonl" $ fromStrict transcript
+                        session <- readIORef guest >>= maybe (fail "Native continuation requires a live guest") pure
+                        disk <- session.suspend $ generation </> "guest.qcow2"
+                        persist $ Waiting $ SavedGuest identifier disk (Native.sha256 transcript) remaining submissions
                     pause :: Int -> Int -> IO value -> IO value
-                    pause remaining submissions action =
-                      action `catch` \(waiting :: AgentAwaitingReview) -> do
-                        for_ sessionDirectory \directory -> do
-                          transcript <- Native.readPrivateArtifact directory "active.jsonl" (64 * 1048576)
-                          identifier <- UUIDId <$> UUID4.nextRandom
-                          generation <- Outbox.privateDirectory directory [toString identifier.toText]
-                          Native.writePrivateArtifact generation "session.jsonl" $ fromStrict transcript
-                          session <- readIORef guest >>= maybe (fail "Native continuation requires a live guest") pure
-                          disk <- session.suspend $ generation </> "guest.qcow2"
-                          persist $ Waiting $ SavedGuest identifier disk (Native.sha256 transcript) remaining submissions
-                        throwIO waiting
+                    pause remaining submissions action = action `catch` \(waiting :: AgentAwaitingReview) -> suspend remaining submissions Nothing >> throwIO waiting
                     active :: (Guest.Session -> IO (Either Text value)) -> IO (Either Text value)
                     active action = readIORef guest >>= maybe (pure $ Left "Guest operations require a host-owned sandbox") action
                     execute privilege argv = active $ \session -> do
@@ -705,6 +705,12 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             writeMessage $ void checked
                             receive supplied guestSession remaining (submissions - 1) $ either (const Nothing) (Just . (AE.String raw,)) checked
                           _ -> pure $ Left "Text submission requires a prepared patch comparison and remaining budget"
+                        Right (Right (Suspend ())) -> case sessionDirectory of
+                          Nothing -> writeMessage (Left "Session retention is not configured" :: Either Text ()) $> Left "Session retention is not configured"
+                          Just _ -> do
+                            suspend remaining submissions (fst <$> accepted)
+                            writeMessage (Right () :: Either Text ())
+                            pure $ maybe (Left "Review session interrupted; retry its retained request") (Right . snd) accepted
                         Right (Right (Result draft)) -> case accepted of
                           Just (acceptedDraft, result) | acceptedDraft == draft -> do
                             status <- waitExitCode process

@@ -157,6 +157,14 @@ sandboxSessions = do
   either fail pure $ AE.eitherDecode output
 
 
+data NativeRecovery = ReviewWake Investigations.ReviewDecision | ExpiryWake | ProviderWake | FinalProviderWake
+  deriving stock (Eq, Show)
+
+
+data NativeInterruption = ReviewSuspension | ProviderFailure | FinalProviderFailure
+  deriving stock (Eq, Show)
+
+
 data SdkReply = SdkText Text | SdkTool Text AE.Value
 
 
@@ -2767,8 +2775,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Review run.id) legacy) `shouldReturn` True
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Review run.id) legacy{Agent.id = uid 997}) `shouldReturn` False
 
-  for_ [Just Investigations.ReviewApproved, Just Investigations.ReviewRejected, Nothing] $ \decision ->
-    it ("nativeReview_resumesOriginalEvidenceAndNotesAfterARealDecision: " <> show decision) \tr -> withSystemTempDirectory "native-review-context" \temporary -> do
+  for_ [ReviewWake Investigations.ReviewApproved, ReviewWake Investigations.ReviewRejected, ExpiryWake, ProviderWake, FinalProviderWake] $ \recovery ->
+    it ("nativeReview_resumesOriginalEvidenceAndNotesAfterInterruption: " <> show recovery) \tr -> withSystemTempDirectory "native-review-context" \temporary -> do
       directory <- canonicalizePath temporary
       image <- nativeTestImage
       let repository = directory </> "repository"
@@ -2799,11 +2807,15 @@ spec = around withTestResources $ describe "Production impact reviews" do
       void $ deliver tr $ payload "opened" headRevision "2025-01-01T00:00:00Z"
       [review] <- runQueryEffect tr $ Reviews.latestRuns testPid
       Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
-      runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.KnowledgeChanges) Catalog.ReviewEditors
+      let policy = case recovery of
+            (ProviderWake; FinalProviderWake) -> Issues.Autonomous
+            (ReviewWake{}; ExpiryWake) -> Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.KnowledgeChanges) Catalog.ReviewEditors
+      runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId policy
       apiKey <- createTestAPIKey tr testPid "Native context evidence"
       ingestLog tr apiKey "native-context-observation" $ addUTCTime (-60) frozenTime
       pem <- readFileBS "test/fixtures/github-app-test.pem"
       publications <- newIORef (0 :: Int)
+      failProvider <- newIORef (recovery `elem` [ProviderWake, FinalProviderWake])
       let cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem, impactReviewUsageDir = Just store.usageDir, impactReviewCacheDir = Just store.cacheDir, impactReviewProvider = "context-fixture", openaiModel = "fixture"}
           pr = AE.object ["head" AE..= AE.object ["sha" AE..= headRevision], "base" AE..= AE.object ["sha" AE..= base], "state" AE..= ("open" :: Text), "draft" AE..= False, "changed_files" AE..= (1 :: Int), "updated_at" AE..= ("2025-01-01T00:00:00Z" :: Text)]
           transport :: ATBackgroundCtx a -> ATBackgroundCtx a
@@ -2818,7 +2830,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 | otherwise -> pure pr
             pure $ Just $ AE.encode response
           next results = pure $ fromMaybe (SdkText "Unexpected repeated inference") $ viaNonEmpty head $ drop (length results) plan
-      withSdkModel directory "context-fixture" next \models observed -> do
+      let provider _ replies = do
+            failNow <- readIORef failProvider
+            if failNow && length replies == (if recovery == FinalProviderWake then 4 else 2)
+              then writeIORef failProvider False $> SdkUnavailable "Provider interrupted after original evidence and notes"
+              else (`SdkResponse` SdkTokens 7 0) <$> next replies
+      withSdkProvider directory "context-fixture" provider \models observed -> do
         let backend :: ATBackgroundCtx a -> ATBackgroundCtx a
             backend = interpose @Agent.CodeReview \env -> \case
               Agent.ReadReviewContext reviewId root -> liftIO $ runEff $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"] $ Agent.readReviewContext reviewId root
@@ -2838,126 +2855,156 @@ spec = around withTestResources $ describe "Production impact reviews" do
                     (liftIO . unlift . validate)
               _ -> liftIO $ fail "Unexpected native workflow outside the review fixture"
             worker at = runTestBgRecordingHTTP at tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport $ backend $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.ReviewPullRequest review.id
-        void $ worker frozenTime
+        initial <- tryAny $ worker frozenTime
+        isLeft initial `shouldBe` (recovery == ProviderWake)
         Just waiting <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.PullRequestReview review.id
-        waiting.status `shouldBe` Issues.RunRunning
-        [operation] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
-        length <$> observed `shouldReturn` 3
-        readIORef publications `shouldReturn` 0
-        for_ decision $ \vote -> void $ testServant tr $ AIThreads.operationReviewPostH testPid operation.id $ AIThreads.OperationReviewForm vote
-        let resumedAt = maybe (addUTCTime (24 * 60 * 60 + 1) frozenTime) (const $ addUTCTime 60 frozenTime) decision
+        waiting.status `shouldBe` (case recovery of ProviderWake -> Issues.RunFailed; FinalProviderWake -> Issues.RunSucceeded; (ReviewWake{}; ExpiryWake) -> Issues.RunRunning)
+        operations <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
+        length operations `shouldBe` (case recovery of ProviderWake -> 0; FinalProviderWake -> 2; (ReviewWake{}; ExpiryWake) -> 1)
+        length <$> observed `shouldReturn` (if recovery == FinalProviderWake then 5 else 3)
+        readIORef publications `shouldReturn` (if recovery == FinalProviderWake then 1 else 0)
+        for_ operations $ \operation -> case recovery of
+          ReviewWake vote -> void $ testServant tr $ AIThreads.operationReviewPostH testPid operation.id $ AIThreads.OperationReviewForm vote
+          (ExpiryWake; ProviderWake; FinalProviderWake) -> pass
+        let resumedAt = addUTCTime (if recovery == ExpiryWake then 24 * 60 * 60 + 1 else 60) frozenTime
         continued <- tryAny $ worker resumedAt
         whenLeft_ continued \err -> do
           diagnostic <- readFileBS $ directory </> "worker.log"
           expectationFailure $ "Original evidence did not resume: " <> displayException err <> "\n" <> decodeUtf8 diagnostic
         void $ worker $ addUTCTime 60 resumedAt
         Just completed <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.PullRequestReview review.id
-        (completed.id, completed.status) `shouldBe` (waiting.id, Issues.RunSucceeded)
+        completed.status `shouldBe` Issues.RunSucceeded
+        Just initialContext <- runQueryEffect tr $ Issues.runContextFor testPid $ Issues.EventClaim (Issues.PullRequestReview review.id) waiting.id waiting.startedAt
+        Just finalContext <- runQueryEffect tr $ Issues.runContextFor testPid $ Issues.EventClaim (Issues.PullRequestReview review.id) completed.id completed.startedAt
+        finalContext.rootId `shouldBe` initialContext.rootId
+        case recovery of
+          ProviderWake -> completed.id `shouldNotBe` waiting.id
+          (ReviewWake{}; ExpiryWake; FinalProviderWake) -> completed.id `shouldBe` waiting.id
         Just retained <- runQueryEffect tr $ Reviews.getRun review.id
         result <- maybe (fail "Review result missing") (either fail pure . AET.parseEither AE.parseJSON) retained.result :: IO Impact.ReviewResult
         result.windowEnd `shouldBe` frozenTime
         map (.key) (filter (("query-" `T.isPrefixOf`) . (.key)) result.evidence) `shouldBe` ["query-1"]
         fmap (map (.summary)) result.knowledge `shouldBe` Just ["Recheck the recorded retry observation."]
-        length <$> observed `shouldReturn` 5
+        length <$> observed `shouldReturn` (if recovery == ProviderWake then 6 else 5)
+        totals <- runQueryEffect tr $ Usage.usageTotals Usage.Reviews testPid
+        fmap (\entry -> (entry.usage.calls, entry.usage.unreportedCalls, entry.usage.failedCalls)) (find ((== Just review.id) . (.runId)) totals) `shouldBe` Just (if recovery == ProviderWake then 6 else 5, 0, if recovery `elem` [ProviderWake, FinalProviderWake] then 1 else 0)
         readIORef publications `shouldReturn` 1
         pages <- runQueryEffect tr $ Memory.pageHistory testPid pageId
-        map (AE.toJSON . (.author)) pages `shouldBe` [AE.toJSON $ Memory.Run waiting.id | decision == Just Investigations.ReviewApproved]
+        let writes = case recovery of ReviewWake Investigations.ReviewApproved -> True; (ProviderWake; FinalProviderWake) -> True; (ReviewWake Investigations.ReviewRejected; ExpiryWake) -> False
+        map (AE.toJSON . (.author)) pages `shouldBe` [AE.toJSON $ Memory.Run completed.id | writes]
 
-  it "nativeReview_resumeKeepsTheSdkTranscriptAndCompletedGuestEdit" \_ -> withSystemTempDirectory "native-review-resume" \temporary -> do
-    directory <- canonicalizePath temporary
-    image <- nativeTestImage
-    let repository = directory </> "repository"
-        store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
-        uid n = UUIDId $ UUID.fromWords 61 0x4000 0x80000000 n
-        sessionDirectory = store.usageDir </> toString (uid 1 :: UUIDId "pr_review").toText </> "sessions" </> toString (uid 4 :: UUIDId "ai_routine_run").toText
-        suspendedDisks = filterM doesDirectoryExist . map (sessionDirectory </>) =<< listDirectory sessionDirectory
-        git args = T.strip . decodeUtf8 @Text <$> readProcessStdout_ (setWorkingDir repository $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] <> args)
-        draft = AE.object ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [Text])]
-        plan =
-          [ SdkTool "bash" $ AE.object ["command" AE..= ("printf 'edit\\n' >> completed.txt; head -c 70000 /dev/zero | tr '\\0' x" :: Text)]
-          , SdkTool "write_project_memory" $ AE.object ["pageId" AE..= ("00000000-0000-4000-8000-000000000099" :: Text), "version" AE..= (0 :: Int), "document" AE..= AE.object ["title" AE..= ("Resume context" :: Text), "body" AE..= ("Keep the original pending action." :: Text)]]
-          , SdkTool "bash" $ AE.object ["command" AE..= ("test \"$(cat completed.txt)\" = \"$(printf 'original\\nedit')\" && echo completed-edit-preserved" :: Text)]
-          , SdkTool "submit_review" draft
-          , SdkText "Review submitted."
-          ]
-    traverse_ (createDirectoryIfMissing True) [repository, store.usageDir, store.cacheDir]
-    void $ git ["init", "--quiet"]
-    void $ git ["config", "user.name", "Resume fixture"]
-    void $ git ["config", "user.email", "fixture@example.invalid"]
-    writeFileBS (repository </> "completed.txt") "original\n"
-    void $ git ["add", "."]
-    void $ git ["commit", "--quiet", "-m", "base"]
-    commit <- git ["rev-parse", "HEAD"]
-    commitRevision <- either (fail . show) pure $ Agent.mkRevision commit
-    callbacks <- newIORef (0 :: Int)
-    let next replies
-          | length replies == 2 = do
-              firstReply <- maybe (fail "Completed tool result missing") pure $ viaNonEmpty head replies
-              text <- either fail pure $ AET.parseEither (AE.withObject "Completed tool output" (AE..: "content")) firstReply
-              let path = T.takeWhile (\c -> c /= ']' && c /= '\n') $ T.drop (T.length "Full output: ") $ snd $ T.breakOn "Full output: " text
-              unless ("/run/monoscope-review-output/" `T.isPrefixOf` path && not ("'" `T.isInfixOf` path)) $ fail "Completed output did not retain its guest path"
-              pure $ SdkTool "bash" $ AE.object ["command" AE..= ("test \"$(cat completed.txt)\" = \"$(printf 'original\\nedit')\" && test -s '" <> path <> "' && echo completed-edit-preserved-with-log")]
-          | otherwise = pure $ fromMaybe (SdkText "Unexpected repeated model call") $ viaNonEmpty head $ drop (length replies) plan
-    withSdkModel directory "resume-fixture" next \models observed -> do
-      let request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = toText repository, base = commit, head = commit, gitToken = "fixture-git-secret-must-not-be-retained", prompt = "Resume the original review.", provider = "resume-fixture", model = "fixture", thinkingLevel = Agent.Off}
-          invoke root configured =
-            runEff
-              $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"]
-              $ Agent.reviewRepository
-                (Agent.Retained root $ pure $ Agent.ReviewContext Agent.ReviewInput{base = commitRevision, head = commitRevision, provider = configured.provider, model = "fixture", files = [], evidence = [], coverage = [], windowStart = frozenTime, windowEnd = frozenTime, prompt = configured.prompt} (Agent.ReviewMemory mempty []))
-                configured
-                (const $ pure $ Left "Unexpected telemetry")
-                ( \_ -> liftIO do
-                    modifyIORef' callbacks (+ 1)
-                    count <- readIORef callbacks
-                    if count == 1 then throwIO $ AI.AgentAwaitingReview (uid 3) frozenTime else pure $ Right $ AE.String "Original pending action completed"
-                )
-                (const pass)
-                (const pass)
-                (const pass)
-                (const pass)
-                (const $ pure $ Right ())
-          run = invoke (uid 4) request
-      suspended <- tryAny run
-      case suspended of
-        Left err -> case fromException err of
-          Just (AI.AgentAwaitingReview identifier _) -> identifier `shouldBe` uid 3
-          Nothing -> expectationFailure $ displayException err
-        Right result -> do
+  for_ ([(ReviewSuspension, 0, 1), (ProviderFailure, 1, 0), (FinalProviderFailure, 0, 1)] :: [(NativeInterruption, Int, Int)]) $ \(interruption, extraCalls, initialCallbacks) ->
+    it ("nativeReview_resumeKeepsTheSdkTranscriptAndCompletedGuestEdit: " <> show interruption) \_ -> withSystemTempDirectory "native-review-resume" \temporary -> do
+      directory <- canonicalizePath temporary
+      image <- nativeTestImage
+      let repository = directory </> "repository"
+          store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
+          uid n = UUIDId $ UUID.fromWords 61 0x4000 0x80000000 n
+          sessionDirectory = store.usageDir </> toString (uid 1 :: UUIDId "pr_review").toText </> "sessions" </> toString (uid 4 :: UUIDId "ai_routine_run").toText
+          suspendedDisks = filterM doesDirectoryExist . map (sessionDirectory </>) =<< listDirectory sessionDirectory
+          git args = T.strip . decodeUtf8 @Text <$> readProcessStdout_ (setWorkingDir repository $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] <> args)
+          draft = AE.object ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [Text])]
+          plan =
+            [ SdkTool "bash" $ AE.object ["command" AE..= ("printf 'edit\\n' >> completed.txt; head -c 70000 /dev/zero | tr '\\0' x" :: Text)]
+            , SdkTool "write_project_memory" $ AE.object ["pageId" AE..= ("00000000-0000-4000-8000-000000000099" :: Text), "version" AE..= (0 :: Int), "document" AE..= AE.object ["title" AE..= ("Resume context" :: Text), "body" AE..= ("Keep the original pending action." :: Text)]]
+            , SdkTool "bash" $ AE.object ["command" AE..= ("test \"$(cat completed.txt)\" = \"$(printf 'original\\nedit')\" && echo completed-edit-preserved" :: Text)]
+            , SdkTool "submit_review" draft
+            , SdkText "Review submitted."
+            ]
+      traverse_ (createDirectoryIfMissing True) [repository, store.usageDir, store.cacheDir]
+      void $ git ["init", "--quiet"]
+      void $ git ["config", "user.name", "Resume fixture"]
+      void $ git ["config", "user.email", "fixture@example.invalid"]
+      writeFileBS (repository </> "completed.txt") "original\n"
+      void $ git ["add", "."]
+      void $ git ["commit", "--quiet", "-m", "base"]
+      commit <- git ["rev-parse", "HEAD"]
+      commitRevision <- either (fail . show) pure $ Agent.mkRevision commit
+      callbacks <- newIORef (0 :: Int)
+      failProvider <- newIORef (interruption /= ReviewSuspension)
+      let next replies
+            | length replies == 2 = do
+                firstReply <- maybe (fail "Completed tool result missing") pure $ viaNonEmpty head replies
+                text <- either fail pure $ AET.parseEither (AE.withObject "Completed tool output" (AE..: "content")) firstReply
+                let path = T.takeWhile (\c -> c /= ']' && c /= '\n') $ T.drop (T.length "Full output: ") $ snd $ T.breakOn "Full output: " text
+                unless ("/run/monoscope-review-output/" `T.isPrefixOf` path && not ("'" `T.isInfixOf` path)) $ fail "Completed output did not retain its guest path"
+                pure $ SdkTool "bash" $ AE.object ["command" AE..= ("test \"$(cat completed.txt)\" = \"$(printf 'original\\nedit')\" && test -s '" <> path <> "' && echo completed-edit-preserved-with-log")]
+            | otherwise = pure $ fromMaybe (SdkText "Unexpected repeated model call") $ viaNonEmpty head $ drop (length replies) plan
+      let provider _ replies = do
+            failNow <- readIORef failProvider
+            if failNow && length replies == (if interruption == FinalProviderFailure then 4 else 1)
+              then writeIORef failProvider False $> SdkUnavailable "Interrupted after the completed guest edit"
+              else (`SdkResponse` SdkTokens 7 0) <$> next replies
+      withSdkProvider directory "resume-fixture" provider \models observed -> do
+        let request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = toText repository, base = commit, head = commit, gitToken = "fixture-git-secret-must-not-be-retained", prompt = "Resume the original review.", provider = "resume-fixture", model = "fixture", thinkingLevel = Agent.Off}
+            invoke root configured =
+              runEff
+                $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"]
+                $ Agent.reviewRepository
+                  (Agent.Retained root $ pure $ Agent.ReviewContext Agent.ReviewInput{base = commitRevision, head = commitRevision, provider = configured.provider, model = "fixture", files = [], evidence = [], coverage = [], windowStart = frozenTime, windowEnd = frozenTime, prompt = configured.prompt} (Agent.ReviewMemory mempty []))
+                  configured
+                  (const $ pure $ Left "Unexpected telemetry")
+                  ( \_ -> liftIO do
+                      modifyIORef' callbacks (+ 1)
+                      count <- readIORef callbacks
+                      if interruption == ReviewSuspension && count == 1 then throwIO $ AI.AgentAwaitingReview (uid 3) frozenTime else pure $ Right $ AE.String "Original pending action completed"
+                  )
+                  (const pass)
+                  (const pass)
+                  (const pass)
+                  (const pass)
+                  (const $ pure $ Right ())
+            run = invoke (uid 4) request
+        suspended <- tryAny run
+        case (interruption, suspended) of
+          (ReviewSuspension, Left err) -> case fromException err of
+            Just (AI.AgentAwaitingReview identifier _) -> identifier `shouldBe` uid 3
+            Nothing -> expectationFailure $ displayException err
+          (ProviderFailure, Right (Left _)) -> pass
+          (FinalProviderFailure, Right (Right value)) -> AE.eitherDecodeStrict @AE.Value (encodeUtf8 value) `shouldBe` Right draft
+          _ -> do
+            diagnostic <- readFileBS $ directory </> "worker.log"
+            expectationFailure $ "Unexpected native recovery outcome: " <> show suspended <> "\n" <> decodeUtf8 diagnostic
+        let initialCalls = if interruption == FinalProviderFailure then length plan else 2
+            resumedCallbacks = initialCallbacks + if interruption == FinalProviderFailure then 0 else 1
+        length <$> observed `shouldReturn` initialCalls
+        doesFileExist (sessionDirectory </> "checkpoint.json") `shouldReturn` True
+        if interruption == FinalProviderFailure
+          then suspendedDisks `shouldReturn` []
+          else do
+            generations <- suspendedDisks
+            length generations `shouldBe` 1
+            generation <- maybe (fail "Native interruption did not retain its SDK/guest pair") pure $ viaNonEmpty head generations
+            let transcript = generation </> "session.jsonl"
+            frozen <- readFileBS transcript
+            writeFileBS transcript $ frozen <> "\n"
+            run >>= (`shouldSatisfy` isLeft)
+            length <$> observed `shouldReturn` initialCalls
+            readIORef callbacks `shouldReturn` initialCallbacks
+            writeFileBS transcript frozen
+        resumed <- run
+        when (isLeft resumed) do
           diagnostic <- readFileBS $ directory </> "worker.log"
-          expectationFailure $ "Native action did not suspend: " <> show result <> "\n" <> decodeUtf8 diagnostic
-      length <$> observed `shouldReturn` 2
-      [generation] <- suspendedDisks
-      let transcript = generation </> "session.jsonl"
-      frozen <- readFileBS transcript
-      writeFileBS transcript $ frozen <> "\n"
-      run >>= (`shouldSatisfy` isLeft)
-      length <$> observed `shouldReturn` 2
-      readIORef callbacks `shouldReturn` 1
-      writeFileBS transcript frozen
-      resumed <- run
-      when (isLeft resumed) do
-        diagnostic <- readFileBS $ directory </> "worker.log"
-        expectationFailure $ show resumed <> "\n" <> decodeUtf8 diagnostic
-      fmap (AE.eitherDecodeStrict @AE.Value . encodeUtf8) resumed `shouldBe` Right (Right draft)
-      length <$> observed `shouldReturn` 5
-      suspendedDisks `shouldReturn` []
-      repeated <- invoke (uid 4) (request{Agent.attemptId = uid 6} :: Agent.Request "pr_review")
-      repeated `shouldBe` resumed
-      changed <- invoke (uid 4) (request{Agent.prompt = "A different request must not reuse this session"} :: Agent.Request "pr_review")
-      changed `shouldSatisfy` isLeft
-      length <$> observed `shouldReturn` 5
-      checkpoint <- readFileBS $ store.usageDir </> toString request.runId.toText </> "sessions" </> toString (uid 4 :: UUIDId "ai_routine_run").toText </> "checkpoint.json"
-      decodeUtf8 @Text checkpoint `shouldNotSatisfy` T.isInfixOf request.gitToken
-      readIORef callbacks `shouldReturn` 2
-      messages <- observed >>= traverse (either fail pure . AET.parseEither (AE.withObject "Resumed model" (AE..: "messages")))
-      let results = concat messages :: [AE.Value]
-          contents = mapMaybe (AET.parseMaybe $ AE.withObject "Completed guest tool" (AE..: "content")) results :: [Text]
-      contents `shouldSatisfy` any (T.isInfixOf "completed-edit-preserved-with-log")
-      fresh <- invoke (uid 5) request
-      fresh `shouldBe` resumed
-      length <$> observed `shouldReturn` 10
-      readIORef callbacks `shouldReturn` 3
+          expectationFailure $ show resumed <> "\n" <> decodeUtf8 diagnostic
+        fmap (AE.eitherDecodeStrict @AE.Value . encodeUtf8) resumed `shouldBe` Right (Right draft)
+        length <$> observed `shouldReturn` (length plan + extraCalls)
+        suspendedDisks `shouldReturn` []
+        repeated <- invoke (uid 4) (request{Agent.attemptId = uid 6} :: Agent.Request "pr_review")
+        repeated `shouldBe` resumed
+        changed <- invoke (uid 4) (request{Agent.prompt = "A different request must not reuse this session"} :: Agent.Request "pr_review")
+        changed `shouldSatisfy` isLeft
+        length <$> observed `shouldReturn` (length plan + extraCalls)
+        checkpoint <- readFileBS $ store.usageDir </> toString request.runId.toText </> "sessions" </> toString (uid 4 :: UUIDId "ai_routine_run").toText </> "checkpoint.json"
+        decodeUtf8 @Text checkpoint `shouldNotSatisfy` T.isInfixOf request.gitToken
+        readIORef callbacks `shouldReturn` resumedCallbacks
+        messages <- observed >>= traverse (either fail pure . AET.parseEither (AE.withObject "Resumed model" (AE..: "messages")))
+        let results = concat messages :: [AE.Value]
+            contents = mapMaybe (AET.parseMaybe $ AE.withObject "Completed guest tool" (AE..: "content")) results :: [Text]
+        contents `shouldSatisfy` any (T.isInfixOf "completed-edit-preserved-with-log")
+        fresh <- invoke (uid 5) request
+        fresh `shouldBe` resumed
+        length <$> observed `shouldReturn` (2 * length plan + extraCalls)
+        readIORef callbacks `shouldReturn` (resumedCallbacks + 1)
 
   it "nativeReview_interpreterPreservesRetainedOperationSuspension" \_ -> withSystemTempDirectory "review-suspension" \directory -> do
     let uid n = UUIDId $ UUID.fromWords 59 0 0 n
