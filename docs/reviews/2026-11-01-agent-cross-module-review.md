@@ -327,3 +327,18 @@ The merge retains the durable issue-chat request identity as a required typed fi
 Two scoped hs-distill, hs-evasion-review and hs-lob-review passes retain the merged shapes. Typed views replace presentation-only handler output without a second page, executor, policy, or request-ID store. The test DSL reuses the existing clock and pool scope. Threshold comparison remains total over its two direction constructors. Production effects and authorization rows are not weakened; the clock interpreter change is in the existing test boundary. Renderers keep their existing HTML/htmx/hyperscript behavior. There is no warning suppression or applied-migration rewrite.
 
 The first combined run passes 656 of 659 cases. Its three failures pin expected presentation differences: durable form identity and replacement semantics, plus the default API-change title before explicitly activated enrichment. Only those exact expectations are updated in three incoming fixtures; the remaining five fixtures stay byte-identical to master. The focused issue rerun passes all seven lifecycles in 6.1787 seconds. Pinned formatting and scoped runtime HLint pass with zero hints. The final combined rerun passes 659 examples with zero failures in 234.4043 seconds. The supported complete doctest target passes all 2,105 examples with zero errors or failures. All 557 recorded Haskell, package, migration and fixture inputs remain unchanged. Merge b418cea23 includes the fresh master head. The private source/result receipts are master-760-integrated-final-source.json, master-760-integrated-final-result.json, master-760-doctests.log, and master-760-final-checkpoint.json under scripts/local/. This scoped integration review does not establish final whole-branch or release signoff.
+
+### Rebase onto the new master
+
+The branch is rebased onto master 2c15b4bc5 with git rebase --rebase-merges.
+All twenty selected incoming heads remain ancestors. Adapted #661 behavior remains in the preserved tree.
+The isolated candidate resolves the typed issue view, request identity, artifact tests, and generated manifest together.
+A tree audit removes unrelated formatting drift before adoption.
+
+The final rebased commit 59f1d374c has exactly the verified integration tree from b418cea23.
+All 557 recorded inputs remain unchanged, so the 659-case pass and 2,105 doctests retain their tested source.
+Adoption updates the branch reference atomically without rewriting working files or the index.
+Concurrent review-document edits remain intact.
+The original integration history is retained at local branch codex/slack-agent-before-master-760-b418cea23.
+The private receipt is `scripts/local/master-rebase-760.json`.
+The later uncertain-append finding still needs its regression and fix before final release checks.
