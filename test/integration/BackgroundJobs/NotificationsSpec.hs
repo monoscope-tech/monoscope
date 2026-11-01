@@ -4,7 +4,6 @@ import BackgroundJobs qualified
 import Data.Pool (withResource)
 import Data.Time (UTCTime, addUTCTime)
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Time qualified as Time
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
@@ -13,9 +12,7 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Projects qualified as ProjectPages
 import Pkg.EmailTemplates qualified as ET
 import Pkg.TestUtils
-import Relude
 import Servant qualified
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 
 
 -- Seed slack creds + enable error alerts so notify paths don't short-circuit.

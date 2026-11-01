@@ -7,7 +7,6 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap qualified as KM
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.List (isInfixOf)
@@ -22,8 +21,6 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Apis.LogQueries qualified as LogQueries
@@ -36,16 +33,13 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Replay qualified as Replay
 import Pages.Telemetry qualified as TelemetryPage
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
-import Relude
 import System.Config (AuthContext (metricCatalogBuffer))
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldContain, shouldNotContain, shouldNotSatisfy, shouldSatisfy, shouldThrow)
 
 
 testTimeRange :: (Text, Text)

@@ -7,13 +7,9 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Charts qualified as Charts
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import Relude
-import Test.Hspec (Spec, SpecWith, around, describe, it, shouldBe, shouldReturn)
 import Text.Read (read)
 
 

@@ -8,16 +8,12 @@ import Data.Time (addUTCTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Pkg.Drain qualified as Drain
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.PatternMerge qualified as PatternMerge
 import Pkg.TestUtils
-import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldSatisfy)
 
 
 spec :: Spec

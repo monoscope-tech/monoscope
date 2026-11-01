@@ -2,15 +2,12 @@ module Pages.Projects.ManageMembersSpec (spec) where
 
 import BackgroundJobs qualified as BJ
 import Data.CaseInsensitive qualified as CI
-import Data.Default (def)
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PGT
 import Effectful.Error.Static (catchError)
 import Models.Apis.Integrations qualified as Integrations
@@ -19,7 +16,6 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Projects qualified as ManageMembers
 import Pkg.TestUtils
-import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (ServerError (..), getResponse)
 import System.Config qualified as Config

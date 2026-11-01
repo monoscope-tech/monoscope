@@ -7,7 +7,6 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Base64.URL qualified as B64URL
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
-import Data.Default (def)
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
 import Data.HashMap.Strict qualified as HashMap
@@ -20,7 +19,6 @@ import Data.UUID.Quasi (uuid)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
@@ -35,11 +33,9 @@ import Pages.Monitors (AlertUpsertForm (..), alertUpsertPostH, convertToQueryMon
 import Pages.Projects qualified as ProjectPages
 import Pages.Settings qualified as Settings
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Mail qualified as Mail
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
-import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Environment qualified as Env
 import Test.Hspec

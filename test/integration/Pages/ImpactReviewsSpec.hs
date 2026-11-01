@@ -10,7 +10,6 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Cache qualified as Cache
 import Data.Effectful.LLM qualified as LLM
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Error.Static (catchError)
@@ -24,7 +23,6 @@ import Pages.GitSync qualified as GitSyncPage
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as Impact
 import Pkg.TestUtils
-import Relude
 import Servant (ServerError (..))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)

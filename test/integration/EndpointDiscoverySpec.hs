@@ -9,14 +9,10 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as SimplePG
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Endpoints qualified as Endpoints
 import Pkg.TestUtils
-import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import Text.Printf (printf)
 import UnliftIO.Exception (bracket)
 import Utils (toXXHash)

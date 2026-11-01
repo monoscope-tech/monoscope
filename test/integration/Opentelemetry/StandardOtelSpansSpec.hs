@@ -4,16 +4,13 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..), fromOnly)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple (fromOnly)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
-import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
 
 -- | Ingest a standard OTel HTTP span (as produced by auto-instrumentation, NOT our SDK).

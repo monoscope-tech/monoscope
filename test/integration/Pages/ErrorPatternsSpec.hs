@@ -1,7 +1,6 @@
 module Pages.ErrorPatternsSpec (spec) where
 
 import BackgroundJobs qualified
-import Data.Default (def)
 import Data.Effectful.Notify (Notification (..), SlackData (..))
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -11,7 +10,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Models.Apis.ErrorPatterns (ErrorState (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
@@ -20,13 +18,10 @@ import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.Projects qualified as Projects
 import Pages.Issues qualified
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
-import Relude
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldReturn, shouldSatisfy)
 
 
 patternOf :: TestResources -> Text -> IO ErrorPatterns.ErrorPattern

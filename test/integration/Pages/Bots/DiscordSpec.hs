@@ -5,9 +5,7 @@ import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Discord (discordInteractionsH)
 import Pkg.TestUtils
-import Relude
 import System.Config qualified as Config
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
 
 spec :: Spec

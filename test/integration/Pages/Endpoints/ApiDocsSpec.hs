@@ -18,15 +18,12 @@ import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.OpenApi qualified as OpenApi
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils (call, TestResources (..), frozenTime, renderT, runHasqlEffect, testPid, testServant, withTestResources)
-import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldMatchList, shouldSatisfy)
+import Pkg.TestUtils
 import Utils (toXXHash)
 
 

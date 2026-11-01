@@ -19,7 +19,6 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.Icons qualified as Icons
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
-import Relude
 import Servant.API (parseUrlPiece)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders)

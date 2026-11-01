@@ -6,13 +6,10 @@ import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Whatsapp (BodyType (..), TwilioWhatsAppMessage (..), getWhatsappList, parseWhatsappBody, whatsappIncomingPostH)
 import Pkg.TestUtils
-import Relude
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 spec :: Spec

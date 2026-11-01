@@ -3,10 +3,7 @@ module BackgroundJobs.DashboardAutoProvisionSpec (spec) where
 import BackgroundJobs qualified
 import Data.Pool (withResource)
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pkg.TestUtils
-import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe)
 
 
 seedMetric :: TestResources -> Text -> IO ()

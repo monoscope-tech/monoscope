@@ -20,8 +20,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..), execute)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple (execute)
 import Effectful (Eff, runEff)
 import Effectful.Error.Static (catchError)
 import Models.Projects.Dashboards qualified as Dashboards
@@ -33,7 +32,7 @@ import OddJobs.Job (createJob)
 import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.GitSync (GitSyncForm (..))
 import Pages.GitSync qualified as GitSyncPage
-import Pkg.DeriveUtils (DB, UUIDId (..))
+import Pkg.DeriveUtils (DB)
 import Pkg.Git qualified as Git
 import Pkg.TestUtils
 import Relude hiding (head)

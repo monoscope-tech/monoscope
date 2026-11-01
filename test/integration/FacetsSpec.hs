@@ -33,10 +33,8 @@ import Pkg.Parser.Expr qualified as PE
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils (TestResources (..), frozenTime, renderT, resetSchemaLearning, runHasqlEffect, testPid, toBaseServantResponse, withTestResources)
+import Pkg.TestUtils
 import ProcessMessage qualified
-import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
 import Web.ApiHandlers qualified as ApiH
 
 

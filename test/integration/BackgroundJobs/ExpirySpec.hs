@@ -5,10 +5,7 @@ import Data.Pool (withResource)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pkg.TestUtils
-import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe)
 
 
 countShareRow :: TestResources -> UUID.UUID -> IO Int

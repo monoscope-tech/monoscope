@@ -31,11 +31,9 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.LogExplorer.LiveTail qualified as LiveTailPage
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.LiveTail qualified as LT
-import Pkg.TestUtils (call, TestResources (..), assertNonMemberDenied, createTestAPIKey, createTestProject, frozenTime, ingestLog, runHasqlEffect, testPid, withTestResources)
-import Relude
+import Pkg.TestUtils
 import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (hasqlPool, liveTail))
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
 
 
 -- | A second project and two users, for the cross-tenant checks.

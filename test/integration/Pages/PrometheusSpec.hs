@@ -9,8 +9,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Error.Static (catchError)
 import Lucid (renderText, toHtml)
 import Models.Apis.Issues qualified as Issues
@@ -22,7 +20,6 @@ import Pages.Monitors qualified as Monitors
 import Pages.Settings (PrometheusForm (..), prometheusPostH)
 import Pages.Settings qualified as Settings
 import Pkg.TestUtils
-import Relude
 import Servant (ServerError (..), getResponse)
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Types (RespHeaders)

@@ -2,21 +2,16 @@ module Lifecycle.LogPatternIncidentSpec (spec) where
 
 import BackgroundJobs qualified
 import Control.Exception (try)
-import Data.Default (def)
 import Data.Effectful.Notify (Notification (..))
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Pages.Projects qualified as ProjectPages
 import Pkg.TestUtils
-import Relude
 import Servant qualified
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
 
 spec :: Spec

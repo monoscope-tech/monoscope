@@ -8,7 +8,6 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Numeric (showHex)
@@ -17,7 +16,6 @@ import Pages.Telemetry (metricDetailUrl, metricExpandUrl)
 import Pages.Telemetry qualified as Trace
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
-import Relude
 import System.Config (AuthContext (metricCatalogBuffer))
 import Test.Hspec
 

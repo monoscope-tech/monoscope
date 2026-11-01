@@ -1,7 +1,6 @@
 module Pages.ApiSpec (spec) where
 
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Error.Static (catchError)
 import Models.Projects.ProjectApiKeys (ProjectApiKey (..))
 import Models.Projects.ProjectApiKeys qualified as Keys
@@ -11,7 +10,6 @@ import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
 import Pkg.TestUtils
-import Relude
 import Servant (ServerError (..), getResponse)
 import Test.Hspec
 import UnliftIO.Exception (bracket_)

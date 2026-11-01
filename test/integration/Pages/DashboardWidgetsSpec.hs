@@ -14,7 +14,6 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -51,11 +50,10 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.TestClock (getTestTime, setTestTime)
-import Pkg.TestUtils
+import Pkg.TestUtils hiding (sql)
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
-import Relude
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config qualified as Config

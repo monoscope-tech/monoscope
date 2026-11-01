@@ -7,12 +7,10 @@ import Data.Pool (withResource)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects (pattern UserId)
 import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils
-import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
 
