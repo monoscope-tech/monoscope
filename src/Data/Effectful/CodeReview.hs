@@ -343,11 +343,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
           , checks = Nothing
           , phase = const $ pure $ Left "Admission cannot advance a fix phase"
           , validate = StructuredDraft $ \value -> pure $ case AE.fromJSON @AdmissionResult value of
-              AE.Success result
-                | result.artifact == request.artifact
-                , let rationale = case result.decision of Admitted text -> text; Rejected text -> text
-                , not (T.null $ T.strip rationale) && T.length rationale <= 1200 ->
-                    Right result.decision
+              AE.Success result | result.artifact == request.artifact -> Right result.decision
               _ -> Left "Admission result must bind the exact test artifact and a nonempty rationale"
           }
   ReviewVerifiedFix sessionScope request verified knowledge recordCall recordUsage recordAllocation -> localSeqUnliftIO env \unlift ->
@@ -862,15 +858,10 @@ readNativeCheckpoint directory = do
 runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a
 runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondExplanation respondReview = interpret \env -> \case
   ReadSessionContext _ _ -> pure $ Right Nothing
-  ReviewRepository _ request _ _ _ _ _ _ _ -> pure $ respond request
-  ReviewSource mode request _ _ _ _ check -> case respond request of
-    Left message -> pure $ Left message
-    Right raw -> case (case mode of BoundedPatch -> Right $ ProviderText raw; CheckoutHarness -> Structured <$> first (const "Source review returned invalid JSON") (AE.eitherDecodeStrict $ encodeUtf8 raw)) of
-      Left failure -> pure $ Left failure
-      Right candidate -> localSeqUnliftIO env $ \unlift -> (raw <$) <$> unlift (check candidate)
-  ReviewPatch request _ _ check -> case respond request of
-    Left message -> pure $ Left message
-    Right raw -> localSeqUnliftIO env $ \unlift -> (raw <$) <$> unlift (check raw)
+  ReviewRepository _ request _ _ _ _ _ _ check -> localSeqUnliftIO env $ \unlift -> checked (respond request) (first (const "Review agent returned invalid review JSON") . AE.eitherDecodeStrict . encodeUtf8) (unlift . check)
+  ReviewSource mode request _ _ _ _ check -> localSeqUnliftIO env $ \unlift ->
+    checked (respond request) (case mode of BoundedPatch -> Right . ProviderText; CheckoutHarness -> fmap Structured . first (const "Source review returned invalid JSON") . AE.eitherDecodeStrict . encodeUtf8) (unlift . check)
+  ReviewPatch request _ _ check -> localSeqUnliftIO env $ \unlift -> checked (respond request) Right (unlift . check)
   FixRepository _ request _ _ _ _ _ _ _ _ check -> case respondFix request of
     Left message -> pure $ Left message
     Right result -> localSeqUnliftIO env $ \unlift -> (>>= matchingReview result) <$> unlift (check result)
@@ -882,6 +873,13 @@ runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondEx
     explanation <- respondExplanation request
     unless (validExplanation result explanation) $ Left "Invalid explanation fixture"
     pure $ ExplainedFix result explanation
+  where
+    checked :: Either Text Text -> (Text -> Either Text value) -> (value -> IO (Either Text ())) -> IO (Either Text Text)
+    checked response parse check = runExceptT do
+      raw <- hoistEither response
+      value <- hoistEither $ parse raw
+      ExceptT $ check value
+      pure raw
 
 
 matchingReview :: FixResult -> ReviewedFix -> Either Text ReviewedFix

@@ -813,7 +813,7 @@ fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob)
                 admissionAttempt <- sessionAttempt $ Agent.AdmissionSubject fid artifact
                 decision <- Agent.admitRegression (Agent.Retained context.rootId $ pure admissionAttempt) (Agent.AdmissionRequest (Agent.FixRequest request{Agent.attemptId = admissionAttempt, Agent.prompt = "Review only the proposed regression’s relevance to this untrusted issue context, under the admission policy.\n" <> issueContext} run.issueId setup.imageBuildId) artifact) (requestMemory context admissionAttempt (Fixes.currentJob lease)) recordCall recordUsage recordAllocation
                 allowed <- Fixes.currentJob lease
-                pure $ if not allowed then Left "Fix authorization is no longer available" else decision >>= \case Agent.Admitted rationale -> Right rationale; Agent.Rejected rationale -> Left rationale
+                pure $ if not allowed then Left "Fix authorization is no longer available" else decision >>= \case Agent.Admitted rationale -> Right $ Memory.memoryText rationale; Agent.Rejected rationale -> Left $ Memory.memoryText rationale
           phase delivery = do
             permitted <- Fixes.currentJob lease
             own <- Usage.ownsAttempt pid target delivery.attemptId

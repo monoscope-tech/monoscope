@@ -662,7 +662,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 then writeIORef interruptAdmission False $> SdkUnavailable "Provider interrupted after admission inspection"
                 else pure $ case length results of
                   0 -> SdkResponse (bash "cat /run/monoscope-admission.json; test ! -w runtime.sh") $ SdkTokens 7 0
-                  1 -> SdkResponse (SdkTool "submit_admission" $ AE.toJSON $ Agent.Admitted "Relevant fixture regression admitted") $ SdkTokens 7 0
+                  1 -> SdkResponse (SdkTool "submit_admission" $ AE.object ["tag" AE..= ("Admitted" :: Text), "contents" AE..= ("Relevant fixture regression admitted" :: Text)]) $ SdkTokens 7 0
                   _ -> SdkUnavailable "Provider failed after checked admission submission"
             else do
               let peer = "submit_fix_review" `elem` tools
@@ -739,7 +739,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
               then pure $ Left "The test patch must only contain the actual regression"
               else do
                 decision <- Agent.admitRegression (Agent.Retained (uid 200) $ pure $ uid 8) (Agent.AdmissionRequest fixRequest{Agent.request = request{Agent.attemptId = uid 8}} artifact) knowledge (capture calls) (capture usage) (capture allocations)
-                pure $ decision >>= \case Agent.Admitted rationale -> Right rationale; Agent.Rejected rationale -> Left rationale
+                pure $ decision >>= \case Agent.Admitted rationale -> Right $ Memory.memoryText rationale; Agent.Rejected rationale -> Left $ Memory.memoryText rationale
       for_ ([("admission", interruptAdmission, "Native child session interrupted; retry its retained request"), ("candidate", interruptCandidate, "Review session interrupted; retry its retained request"), ("peer", interruptPeer, "Native child session interrupted; retry its retained request")] :: [(Text, IORef Bool, Text)]) \(label, boundary, reason) -> do
         interrupted <- run $ Agent.fixRepository continuation fixRequest (const $ pure $ Left "Unexpected query") knowledge admit (capture calls) (capture usage) (capture allocations) (capture checks) (\receipt -> capture phases receipt $> Right ()) (validate 23)
         isLeft interrupted `shouldBe` True
@@ -1442,16 +1442,27 @@ spec = around withTestResources $ describe "Production impact reviews" do
         parse (field "outcome") (AE.toJSON allocation) `shouldReturn` ("released" :: Text)
         parse (field "durationMs") (AE.toJSON allocation) >>= (\duration -> (duration :: Word64) `shouldSatisfy` (> 0))
 
-  it "patchComparison_testInterpreter_preservesValidationAndTransportFailures" \_tr -> do
-    checked <- newIORef ([] :: [Text])
-    let unused :: a -> Either Text b
-        unused _ = Left "Unexpected fixture operation"
-        request = Agent.Request testPid (UUIDId UUID.nil) (UUIDId UUID.nil) "." (T.replicate 40 "a") (T.replicate 40 "b") "" "Fixture patch review" "fixture" "fixture" Agent.Off
-        run response validation = runEff $ Agent.runCodeReviewTest (const response) unused unused unused unused unused $ Agent.reviewPatch request (const pass) (const pass) (\raw -> liftIO (modifyIORef' checked (<> [raw])) $> validation)
-    run (Right "not-json") (Left "Invalid JSON") `shouldReturn` Left "Invalid JSON"
-    run (Right "accepted") (Right ()) `shouldReturn` Right "accepted"
-    run (Left "Provider unavailable") (Right ()) `shouldReturn` Left "Provider unavailable"
-    readIORef checked `shouldReturn` ["not-json", "accepted"]
+  it "reviewTestInterpreter_preservesValidationAndTransportFailures" \_tr ->
+    for_ [(False, Nothing), (True, Nothing), (False, Just Agent.BoundedPatch), (True, Just Agent.CheckoutHarness)] \(structured, source) -> do
+      checked <- newIORef ([] :: [Text])
+      let unused :: a -> Either Text b
+          unused _ = Left "Unexpected fixture operation"
+          request = Agent.Request testPid (UUIDId UUID.nil) (UUIDId UUID.nil) "." (T.replicate 40 "a") (T.replicate 40 "b") "" "Fixture review" "fixture" "fixture" Agent.Off
+          rejected = if structured then "{}" else "not-json"
+          accepted = if structured then "{\"findings\":[]}" else "accepted"
+          run response validation = runEff $ Agent.runCodeReviewTest (const response) unused unused unused unused unused do
+            let check raw = liftIO (modifyIORef' checked (<> [raw])) $> validation
+            case source of
+              Just mode -> Agent.reviewSource mode request (const pass) (const pass) (const pass) (const pass) (\case Agent.ProviderText raw -> check raw; Agent.Structured value -> check $ decodeUtf8 $ AE.encode value)
+              Nothing ->
+                if structured
+                  then Agent.reviewRepository Agent.Isolated request (pure . unused) (pure . unused) (const pass) (const pass) (const pass) (const pass) (check . decodeUtf8 . AE.encode)
+                  else Agent.reviewPatch request (const pass) (const pass) check
+      run (Right rejected) (Left "Review rejected") `shouldReturn` Left "Review rejected"
+      run (Right accepted) (Right ()) `shouldReturn` Right accepted
+      run (Left "Provider unavailable") (Right ()) `shouldReturn` Left "Provider unavailable"
+      when structured $ run (Right "not-json") (Right ()) >>= (`shouldSatisfy` isLeft)
+      readIORef checked `shouldReturn` [rejected, accepted]
 
   it "patchComparison_acknowledgesCallsBeforeInference_withoutGuestAssets" \_tr -> withSystemTempDirectory "native-patch-comparison" \temporary -> do
     directory <- canonicalizePath temporary
@@ -4240,7 +4251,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 $ if admission
                   then case length results of
                     0 -> bash "cat runtime.sh /run/monoscope-admission.json"
-                    1 -> SdkTool "submit_admission" $ AE.toJSON $ Agent.Admitted "The regression exercises the caller's retry token."
+                    1 -> SdkTool "submit_admission" $ AE.object ["tag" AE..= ("Admitted" :: Text), "contents" AE..= ("The regression exercises the caller's retry token." :: Text)]
                     _ -> SdkText "Admission complete."
                   else
                     if peer

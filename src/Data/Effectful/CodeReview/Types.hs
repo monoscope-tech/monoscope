@@ -315,7 +315,17 @@ data AdmissionRequest = AdmissionRequest {fix :: FixRequest, artifact :: TestArt
   deriving anyclass (AE.ToJSON)
 
 
-data AdmissionDecision = Admitted Text | Rejected Text
+-- | Admission decisions preserve their wire format and carry a bounded rationale.
+--
+-- >>> let wire = "{\"tag\":\"Admitted\",\"contents\":\"Relevant regression\"}"
+-- >>> fmap AE.toJSON (AE.eitherDecode @AdmissionDecision wire) == AE.eitherDecode @AE.Value wire
+-- True
+-- >>> let decode :: Text -> Either String AdmissionDecision; decode value = AE.eitherDecode (AE.encode $ AE.object ["tag" AE..= ("Rejected" :: Text), "contents" AE..= value])
+-- >>> map (isLeft . decode) ["", " ", T.replicate 1201 "x", "bad\NULrationale"]
+-- [True,True,True,True]
+-- >>> isRight $ decode $ T.replicate 1200 "x"
+-- True
+data AdmissionDecision = Admitted (Memory.MemoryText 1200) | Rejected (Memory.MemoryText 1200)
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
