@@ -159,3 +159,39 @@ Scoped `hs-distill` and `hs-evasion-review` passes retain the shared query and e
 There is no duplicate authority SQL, widened effect row, warning suppression, or new executor.
 `hs-lob-review` finds no client behavior in this change.
 Whole-branch review, live streaming acceptance, and final release checks remain open.
+
+## Retained fix project eligibility
+
+The native publication lifecycle now covers inactive projects and free-plan
+members who are not the project's first member. Before the fix, both states
+returned retained media, exposed the completed-fix listing, authorized native
+publication, and returned HTTP 200 from the authenticated fix-page handler.
+The expected result is no media or listing, `AccessRevoked` for publication,
+and HTTP 404 from the page handler. The failing result records both states:
+`[(False,False,Nothing,200),(False,False,Nothing,200)]`.
+
+Migration `0282_issue_fix_project_eligibility.sql` updates the existing shared
+access view. It adds the active-project and first-member free-plan predicates
+used by routine membership eligibility. All existing administrator, account,
+issue, repository, credential, and installation checks remain in the view.
+Applied migrations `0237` and `0238` are unchanged. The checked remote master
+ends at migration `0257`; this branch previously ended at `0281`.
+
+The extended native lifecycle passes after applying the migration through the
+normal test-template setup. It also verifies that the first member still reads
+media on a free project and that restoring the original project plan restores
+publication eligibility. Existing native upload, interruption, corrupt-media,
+and revoked-account checks remain in the same lifecycle.
+
+The failing log is `scripts/local/native-project-plan-eligibility-red.log`.
+The first passing native case is retained in
+`scripts/local/native-project-plan-eligibility-green-combined.log`; that combined
+run contains two separate failing Slack citation regressions and is not a green
+suite. Input hashes and the exact scope are recorded in
+`scripts/local/native-project-plan-eligibility-source.json`.
+
+Repeated scoped distillation, evasion, and locality checks retain one access view
+and one existing lifecycle regression. No alternate permission store, raw IO
+runtime seam, warning suppression, client behavior, or weaker capability was
+introduced. Pinned Fourmolu and `git diff --check` pass. The full native suite,
+whole-branch reviews, and release gates remain open.

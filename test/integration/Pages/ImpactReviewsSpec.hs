@@ -2494,7 +2494,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     readIORef events `shouldReturn` []
     tryAny (readFileBS $ marker <> ".process") >>= (`shouldSatisfy` isLeft)
 
-  it "verifies native artifacts, renders media and publishes with native tools without a worker" \tr -> withSystemTempDirectory "native-artifacts" \temporary -> do
+  it "nativePublication_rechecksProjectEligibilityWhileVerifyingArtifactsAndPublishingWithoutAWorker" \tr -> withSystemTempDirectory "native-artifacts" \temporary -> do
     directory <- canonicalizePath temporary
     let repository = directory </> "repository"
         store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
@@ -2703,6 +2703,22 @@ spec = around withTestResources $ describe "Production impact reviews" do
     setMode ""
     denied <- runPublisher (const $ pure $ Left Publication.AccessRevoked) validate
     leftToMaybe denied `shouldBe` Just Publication.AccessRevoked
+    [Only originalPlan] <- withResource tr.trPool (\conn -> query conn "SELECT payment_plan FROM projects.projects WHERE id = ?" (Only testPid)) :: IO [Only Text]
+    let earlierOwner = uid 77 :: Projects.UserId
+    withResource tr.trPool \conn -> do
+      void $ execute conn "INSERT INTO users.users (id, email) VALUES (?, 'native-eligibility-owner@example.test')" (Only earlierOwner)
+      void $ execute conn "INSERT INTO projects.project_members (project_id, user_id, permission, created_at) VALUES (?, ?, 'admin', '2000-01-01')" (testPid, earlierOwner)
+    deniedProjects <- forM [(False, originalPlan), (True, "Free")] \(active, plan) -> do
+      void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET active = ?, payment_plan = ? WHERE id = ?" (active, plan, testPid)
+      mediaDenied <- isNothing <$> runQueryEffect tr (Fixes.mediaForUser testPid result.runId user)
+      listingDenied <- null <$> runQueryEffect tr (Fixes.latestMediaForUser testPid user)
+      publicationDenied <- leftToMaybe <$> runPublisher authorize validate
+      pageStatus <- runAuthHandler tr $ catchError @ServerError (CodeContextPage.issueFixGetH testPid result.runId $> 200) (\_ err -> pure err.errHTTPCode)
+      pure (mediaDenied, listingDenied, publicationDenied, pageStatus)
+    isJust <$> runQueryEffect tr (Fixes.mediaForUser testPid result.runId earlierOwner) `shouldReturn` True
+    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET active = true, payment_plan = ? WHERE id = ?" (originalPlan, testPid)
+    deniedProjects `shouldBe` replicate 2 (True, True, Just Publication.AccessRevoked, 404)
+    isJust <$> runQueryEffect tr (Fixes.publicationForUser testPid result.runId user) `shouldReturn` True
     void $ withResource tr.trPool \conn -> execute conn "UPDATE users.users SET active = false WHERE id = ?" (Only user)
     revoked <- runPublisher authorize validate
     leftToMaybe revoked `shouldBe` Just Publication.AccessRevoked
