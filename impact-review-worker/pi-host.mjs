@@ -326,7 +326,7 @@ async function main() {
         }
         if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
           const type = signal.aborted && event.type === 'tool_execution_end' ? 'tool_execution_cancelled' : event.type;
-          process.stderr.write(JSON.stringify({ event: type, attemptId, tool: event.toolName, failed: event.isError ?? false }) + '\n');
+          process.stderr.write(JSON.stringify({ event: type, pid: process.pid, attemptId, tool: event.toolName, failed: event.isError ?? false }) + '\n');
         }
       },
     });
