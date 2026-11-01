@@ -2,6 +2,62 @@ import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { sql } from './helpers';
 
+test('conversation detail controls remain reachable when text size is doubled', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID(), run = randomUUID();
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Text resize review');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
+       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES ('${pid}', '${conversation}', 'web');
+       INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content)
+       VALUES ('${pid}', '${conversation}', 'checkout', 'Checkout evidence', '## Findings\n\nRetained checkout evidence.');
+       INSERT INTO apis.ai_routine_runs (id, root_run_id, project_id, conversation_id, scheduled_at, started_at, finished_at, status, source, requested_by, input, instructions)
+       VALUES ('${run}', '${run}', '${pid}', '${conversation}', now(), now(), now(), 'succeeded',
+         '{"tag":"ConversationRun","contents":{"tag":"WebConversation"}}', '${uid}', 'Review checkout', 'Read the retained checkout evidence.');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    for (const width of [1280, 320]) for (const theme of ['light', 'dark']) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`/p/${pid}/ai/${conversation}`);
+      await page.evaluate(value => document.body.dataset.theme = value, theme);
+      const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
+      await composer.fill('Keep this draft while I inspect the enlarged text.');
+      const targets = [
+        ['artifact', page.getByRole('navigation', { name: 'Artifacts', exact: true }).getByRole('link', { name: 'Checkout evidence', exact: true })],
+        ['run', page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first()],
+      ] as const;
+      for (const [kind, trigger] of targets) {
+        await page.evaluate(() => document.documentElement.style.fontSize = '100%');
+        await trigger.press('Enter');
+        const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
+        await expect(inspector).toBeVisible();
+        await expect(inspector).toBeFocused();
+        const close = inspector.getByRole('link', { name: 'Back to conversation', exact: true });
+        const originalSize = await close.evaluate(element => parseFloat(getComputedStyle(element).fontSize));
+        await page.evaluate(() => document.documentElement.style.fontSize = '200%');
+        const enlargedSize = await close.evaluate(element => parseFloat(getComputedStyle(element).fontSize));
+        expect(enlargedSize).toBeCloseTo(originalSize * 2, 1);
+        await page.keyboard.press('Tab');
+        await expect(close).toBeFocused();
+        await page.screenshot({ path: testInfo.outputPath(`details-${kind}-text-200-${theme}-${width}.png`) });
+        const bounds = await close.boundingBox();
+        expect.soft(bounds).not.toBeNull();
+        if (bounds) {
+          expect.soft(bounds.x, `Close starts inside the ${width}px viewport`).toBeGreaterThanOrEqual(0);
+          expect.soft(bounds.x + bounds.width, `Close ends inside the ${width}px viewport`).toBeLessThanOrEqual(width);
+        }
+        expect.soft(await inspector.evaluate(element => element.scrollWidth <= element.clientWidth), `Details fit with doubled text in ${theme} at ${width}px`).toBe(true);
+        await page.keyboard.press('Escape');
+        await expect(inspector).toBeHidden();
+        await expect(composer).toBeFocused();
+        await expect(composer).toHaveValue('Keep this draft while I inspect the enlarged text.');
+      }
+    }
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
 test('inspector failures explain recovery and release loading feedback without losing drafts', async ({ page, baseURL }, testInfo) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID();
   sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');

@@ -355,3 +355,72 @@ surrounding prose blocks remain unchanged. The uploaded HTML matches the local f
 185,066 bytes, SHA-256 `d25874281e71bfe3081308ed82e3230876271bedbfe454dd62aa01bb9f776c34`.
 Local Chromium checked the same HTML. The hosted viewer and screen-reader interaction
 remain unverified. This update does not change product code or establish release signoff.
+
+
+## Text resize and final conversation browser pass (1 November)
+
+### Scope and coverage
+
+Full mode covers the routine catalog, conversation, run inspector, action review,
+artifacts, and request recovery in Chromium. The application uses Lucid, HTMX,
+hyperscript, Tailwind, and the existing theme tokens. The review uses isolated
+HTTP handlers and a temporary database. Physical devices, VoiceOver, RTL,
+the hosted review viewer, and the specialized native-fix view remain outside
+this verification checkpoint.
+
+| Domain | Evidence inspected | Result |
+| --- | --- | --- |
+| Accessibility | Automatic inspector focus, Tab to Close, Escape, restored composer focus, accessible control names, retained drafts | Checked paths pass; VoiceOver remains unverified |
+| Layout | Run and artifact details at 320px and 1280px, both themes, with text enlarged to 200%; existing loading, empty and failure states | Close stays within the viewport; inspector content has no horizontal overflow |
+| Writing | Recovery alerts, terminal-state explanations, empty-state guidance, action outcomes and selected-review controls | Clear within the reviewed flows |
+| Typography | Sixteen close-control font measurements across eight run/artifact scenarios; 28 existing mobile input measurements and seven desktop assertions | Text doubles as requested; existing input-size checks pass |
+| Colors | Existing light/dark tokens and captures; eight composited placeholder/background pairs | The measured pairs pass the 4.5:1 review target; no palette adjustment is needed |
+| UI | In-conversation navigation, polling completion, draft retention, stale-role rejection and failed-request recovery | All nine permanent browser cases pass |
+
+### Findings
+
+No actionable interface findings in this scoped browser pass.
+The new regression closes a verification gap rather than changing the product layout.
+
+| Before | After | Why |
+| --- | --- | --- |
+| Text enlargement had no explicit browser regression | Run and artifact controls are exercised at twice their rendered font size | A root CSS setting alone would not prove that the text actually enlarged |
+| Inspector resize coverage relied on ordinary viewport checks | Keyboard focus, close-control bounds, overflow and draft restoration are checked together | Reading details must preserve the path back to the conversation |
+
+### Considered but rejected
+
+| Location | Candidate | Rejected because |
+| --- | --- | --- |
+| `src/Pages/AIThreads.hs:565` | Add an entrance animation to the inspector | This is frequent keyboard navigation; the immediate transition preserves context and focus |
+| `src/Pages/AIThreads.hs:573` | Add elevation shadows to the panel header | The existing raised surface and structural border match the application shell |
+| `src/Pages/AIThreads.hs:625` | Enlarge artifact metadata above every Markdown heading | The metadata identifies the artifact; the document retains its authored heading hierarchy and format |
+
+### Verification
+
+The existing `live-test-dev` watcher ran a temporary `routineBrowserReview`
+adapter using `withLiveServer`. It invoked
+`playwright test --config=e2e/playwright.config.ts routines.spec.ts --project=chromium`.
+All nine browser cases pass in 24.0 seconds. The same watcher run also passes
+fourteen Slack audience examples, for fifteen Hspec examples with zero failures.
+The temporary adapter and its imports are removed.
+
+The new case measures the Close link before and after text enlargement in each
+run/artifact, width, and theme combination. It checks keyboard entry and exit,
+visible control bounds, horizontal fit, and the retained conversation draft.
+The fixture uses the typed `WebConversation` origin JSON object.
+
+The successful log is `scripts/local/interface-text-review-green.log`.
+Captures are under `scripts/local/interface-text-review/`; tested source hashes
+are in `scripts/local/interface-text-review-source.json`.
+The pinned formatter accepts the temporary Haskell adapter cleanup, and
+`git diff --check` passes. Scoped distillation, evasion, and locality review find
+no material follow-up: this is one parameterized HTTP/browser regression using
+the existing fixtures and database helper.
+
+Physical-device and screen-reader interaction are **Not verified**.
+The administrator-only native-fix screen and hosted Page viewer still require
+separate acceptance. This verdict covers the browser paths described above.
+
+### Verdict
+
+Approve
