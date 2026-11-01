@@ -47,6 +47,7 @@ Streaming, Slack evidence, and proactive work remain part of this full plan even
 - Inspector request recovery: all seven permanent browser cases pass in 23.1 seconds after adding a full-opacity toast assertion. Server failures, dropped connections, delayed retries, and cancelled confirmations preserve drafts and release loading feedback. The failing-first regression is saved in `scripts/local/inspector-requests-red.log`; the final pass is `scripts/local/inspector-requests-final-green.log`. Final captures and source hashes are under `scripts/local/inspector-request-review/`. The temporary live-server adapter has been removed. The scoped [interface review](2026-10-29-routine-interface-review.md) records the changes, review decisions, and remaining limitations.
 - Selected review browser acceptance: all eight permanent cases pass in 22.9 seconds. The new case covers approval in the desktop light inspector and decline in the mobile dark inspector, rejects an administrator-only decision after a role downgrade with HTTP 403, retains the pending decision, and preserves composer focus, draft, and conversation URL. It uses the actual HTTP review handler; it does not execute the resumed model. Captures/source hashes are in `scripts/local/selected-review-browser/`, with log `scripts/local/selected-review-browser-green.log`. No product code changed; the temporary adapter is removed.
 - Review decision failure feedback: a failing-first browser regression reproduces a silent rejection from a stale review form. The form now uses the existing error toast for HTTP failures and dropped connections, with copy that does not assume an uncertain decision failed to save. All eight browser cases pass in 22.6 seconds, including enabled controls after failure and successful retry. Logs are `scripts/local/review-decision-feedback-{red,green}.log`; captures and source hashes are under `scripts/local/review-decision-feedback/`. No authorization or receipt guard changed; the temporary adapter is removed.
+- Slack evidence review: all 39 focused examples pass in 12.8914 seconds on the current branch. The source review covers requester grants, destination confinement, response identity, schema changes, rejected catalogs, session release, and provider cooldowns. It finds no further material issue in those paths. The log is `scripts/local/slack-evidence-review-39-green.log`. These test interpreters do not establish live MCP eligibility or current provider schemas. The streaming section now records the provider's total text limit, fixed timeout, and destination constraints.
 - Earlier checkpoints: 450 bot examples and 39 Slack-evidence examples passed in their recorded slices. These passes are not a final whole-branch signoff.
 - Live Slack configuration: the [1 November audit](../docs/reviews/2026-11-01-slack-live-configuration.md) compares the authenticated app manifest with the branch template. It identifies missing Messages-tab configuration, two bot scopes, eleven event subscriptions, and the message shortcut. No live configuration changed. MCP eligibility remains unproven; the submission overview offers preparation instructions without a publication status.
 - Isolated Slack acceptance: the user authorized creation and installation on 1 November. “Monoscope Local QA” (`A0CDFCWNBNK`) is installed in Monoscope workspace `T0AP82L853K`. The installed-app portal and real `auth.test` verify the workspace, bot identity, and all eleven requested bot scopes. Credentials are Git-ignored and owner-only; the non-secret receipt is `scripts/local/monoscope-local-qa-installation.json`. Callback configuration and live branch acceptance remain pending. This authorization concerns the QA app; no personal search grant, shared-app callback change, or production deployment occurred.
@@ -252,6 +253,18 @@ Add streaming only after interruption and ambiguous-start recovery work in a rea
 Slack documents metadata on `chat.stopStream`, but not in the `chat.startStream` argument list.
 Do not assume that saving the returned timestamp closes the lost-acknowledgement window.
 Keep progress and stream presentation separate from stored execution state.
+
+The [append documentation](https://docs.slack.dev/reference/methods/chat.appendStream/) sets a 12,000-character limit for the complete stream.
+An append does not extend the ten-minute timeout.
+The [start documentation](https://docs.slack.dev/reference/methods/chat.startStream/) limits top-level streams to channels that represent one session.
+Ordinary threadless slash replies retain their existing destination contract.
+Channel streams require the recipient user and team identifiers.
+
+During implementation, add acceptance cases for total text length, timeout, and unsupported threadless destinations.
+For a lost append acknowledgement, retain the uncertain append before any retry.
+Do not infer that an append failed because its acknowledgement is missing.
+The [stop documentation](https://docs.slack.dev/reference/methods/chat.stopStream/) exposes metadata only at completion.
+Completion metadata alone cannot identify an uncertain start or append.
 Optional approvals can use Slack cards or the existing web conversation panel.
 
 ### Proactive work and Slack evidence
