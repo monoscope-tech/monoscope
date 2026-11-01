@@ -45,7 +45,7 @@ import Database.PostgreSQL.Simple (Only (..), execute, query)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (Eff, IOE, runEff, (:>))
-import Effectful.Dispatch.Dynamic (interpose, localSeqUnlift, localSeqUnliftIO)
+import Effectful.Dispatch.Dynamic (impose, interpose, localSeqUnlift, localSeqUnliftIO, passthrough)
 import Effectful.Error.Static (catchError)
 import Effectful.Reader.Static qualified as Reader
 import Lucid qualified
@@ -243,7 +243,7 @@ withAllocationBridge mode action = withSystemTempDirectory "allocation-regressio
   action (Guest.Host "fixture" bridge [] Nothing) directory
 
 
-sdkAgent :: Agent.ArtifactStore -> [FilePath] -> Eff (Agent.CodeReview ': '[IOE]) a -> Eff '[IOE] a
+sdkAgent :: IOE :> es => Agent.ArtifactStore -> [FilePath] -> Eff (Agent.CodeReview ': es) a -> Eff es a
 sdkAgent store arguments action = do
   let option name = case dropWhile (/= name) arguments of _ : value : _ -> Just value; _ -> Nothing
       models = fromMaybe "" $ viaNonEmpty head arguments
@@ -2917,23 +2917,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
               else (`SdkResponse` SdkTokens 7 0) <$> next replies
       withSdkProvider directory "context-fixture" provider \models observed -> do
         let backend :: ATBackgroundCtx a -> ATBackgroundCtx a
-            backend = interpose @Agent.CodeReview \env -> \case
-              Agent.ReadSessionContext reviewId root -> liftIO $ runEff $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"] $ Agent.readSessionContext reviewId root
-              Agent.ReviewRepository sessionScope request respond knowledge calls usage allocations checks validate -> localSeqUnliftIO env \unlift ->
-                liftIO
-                  $ runEff
-                  $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"]
-                  $ Agent.reviewRepository
-                    (case sessionScope of Agent.Isolated -> Agent.Isolated; Agent.Retained root capture -> Agent.Retained root $ liftIO $ unlift capture)
-                    request{Agent.repository = toText repository}
-                    (liftIO . unlift . respond)
-                    (liftIO . unlift . knowledge)
-                    (liftIO . unlift . calls)
-                    (liftIO . unlift . usage)
-                    (liftIO . unlift . allocations)
-                    (liftIO . unlift . checks)
-                    (liftIO . unlift . validate)
-              _ -> liftIO $ fail "Unexpected native workflow outside the review fixture"
+            backend = impose (sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"]) \env -> \case
+              Agent.ReviewRepository selected request respond knowledge calls usage allocations checks validate ->
+                passthrough env $ Agent.ReviewRepository selected request{Agent.repository = toText repository} respond knowledge calls usage allocations checks validate
+              operation -> passthrough env operation
             worker at = runTestBgRecordingHTTP at tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport $ backend $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.ReviewPullRequest review.id
         initial <- tryAny $ worker frozenTime
         isLeft initial `shouldBe` (recovery == ProviderWake)
@@ -4194,18 +4181,15 @@ spec = around withTestResources $ describe "Production impact reviews" do
         cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem, impactReviewUsageDir = Just store.usageDir, impactReviewCacheDir = Just store.cacheDir, impactReviewProvider = "fix-job-fixture", openaiModel = "fixture", impactReviewArtifactBucket = Just "fixture-bucket"}
         transport = withHTTPResponses \_ endpoint -> pure $ if "/access_tokens" `T.isSuffixOf` toText endpoint then Just (AE.encode $ AE.object ["token" AE..= ("fixture-token" :: Text), "expires_at" AE..= ("2030-01-01T00:00:00Z" :: Text)]) else Nothing
     withSdkProvider directory "fix-job-fixture" provider \models observed -> do
-      let native :: Eff '[Agent.CodeReview, IOE] (Either Text a) -> IO (Either Text a)
-          native action = do
-            answer <- runEff $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"] action
-            for_ (leftToMaybe answer) (\message -> modifyIORef' nativeFailures (<> [message]))
+      let recordNative :: IOE :> es => Eff es (Either Text a) -> Eff es (Either Text a)
+          recordNative action = do
+            answer <- action
+            for_ (leftToMaybe answer) (\message -> liftIO $ modifyIORef' nativeFailures (<> [message]))
             pure answer
-          localRequest :: Agent.Request run -> Agent.Request run
-          localRequest request = request{Agent.repository = toText repository}
           localFix :: Agent.FixRequest -> Agent.FixRequest
-          localFix request = request{Agent.request = localRequest request.request}
+          localFix request = request{Agent.request = request.request{Agent.repository = toText repository}}
           localArtifacts :: Agent.ArtifactRequest -> Agent.ArtifactRequest
           localArtifacts artifacts = artifacts{Agent.repository = toText repository}
-          scope unlift = \case Agent.Isolated -> Agent.Isolated; Agent.Retained root capture -> Agent.Retained root $ liftIO $ unlift capture
           backend :: ATBackgroundCtx a -> ATBackgroundCtx a
           backend =
             interpose @Artifacts.AgentArtifacts
@@ -4214,24 +4198,19 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   _ -> liftIO $ fail "Unexpected artifact publication"
               )
               . interpose @LLM.LLM (\_ _ -> liftIO $ fail "Legacy LLM used by native continuation")
-              . interpose @Agent.CodeReview
+              . impose
+                (sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"])
                 ( \env -> \case
-                    Agent.ReadSessionContext (Agent.PeerSubject fixId artifacts) root -> liftIO $ native $ Agent.readSessionContext (Agent.PeerSubject fixId $ localArtifacts artifacts) root
-                    Agent.ReadSessionContext subject root -> liftIO $ native $ Agent.readSessionContext subject root
-                    Agent.FixRepository selected request queryTelemetry knowledge admit calls usage allocations checks phase validate -> localSeqUnliftIO env \unlift ->
-                      liftIO
-                        $ native
-                        $ Agent.fixRepository (scope unlift selected) (localFix request) (liftIO . unlift . queryTelemetry) (liftIO . unlift . knowledge) (liftIO . unlift . admit) (liftIO . unlift . calls) (liftIO . unlift . usage) (liftIO . unlift . allocations) (liftIO . unlift . checks) (liftIO . unlift . phase) (liftIO . unlift . validate)
-                    Agent.AdmitRegression selected request knowledge calls usage allocations -> localSeqUnliftIO env \unlift ->
-                      liftIO
-                        $ native
-                        $ Agent.admitRegression (scope unlift selected) request{Agent.fix = localFix request.fix} (liftIO . unlift . knowledge) (liftIO . unlift . calls) (liftIO . unlift . usage) (liftIO . unlift . allocations)
-                    Agent.VerifyFixArtifacts artifacts request -> liftIO $ native $ Agent.verifyFixArtifacts artifacts $ localArtifacts request
-                    Agent.ReviewVerifiedFix selected request verified knowledge calls usage allocations -> localSeqUnliftIO env \unlift ->
-                      liftIO
-                        $ native
-                        $ Agent.reviewVerifiedFix (scope unlift selected) request{Agent.fix = localFix request.fix, Agent.artifacts = localArtifacts request.artifacts} verified (liftIO . unlift . knowledge) (liftIO . unlift . calls) (liftIO . unlift . usage) (liftIO . unlift . allocations)
-                    Agent.ExplainVerifiedFix artifacts request verified -> liftIO $ native $ Agent.explainVerifiedFix artifacts (localArtifacts request) verified
+                    Agent.ReadSessionContext (Agent.PeerSubject fixId artifacts) root -> recordNative $ passthrough env $ Agent.ReadSessionContext (Agent.PeerSubject fixId $ localArtifacts artifacts) root
+                    Agent.ReadSessionContext subject root -> recordNative $ passthrough env $ Agent.ReadSessionContext subject root
+                    Agent.FixRepository selected request queryTelemetry knowledge admit calls usage allocations checks phase validate ->
+                      recordNative $ passthrough env $ Agent.FixRepository selected (localFix request) queryTelemetry knowledge admit calls usage allocations checks phase validate
+                    Agent.AdmitRegression selected request knowledge calls usage allocations ->
+                      recordNative $ passthrough env $ Agent.AdmitRegression selected request{Agent.fix = localFix request.fix} knowledge calls usage allocations
+                    Agent.VerifyFixArtifacts artifacts request -> recordNative $ passthrough env $ Agent.VerifyFixArtifacts artifacts $ localArtifacts request
+                    Agent.ReviewVerifiedFix selected request verified knowledge calls usage allocations ->
+                      recordNative $ passthrough env $ Agent.ReviewVerifiedFix selected request{Agent.fix = localFix request.fix, Agent.artifacts = localArtifacts request.artifacts} verified knowledge calls usage allocations
+                    Agent.ExplainVerifiedFix artifacts request verified -> recordNative $ passthrough env $ Agent.ExplainVerifiedFix artifacts (localArtifacts request) verified
                     _ -> liftIO $ fail "Unexpected native workflow"
                 )
           worker at = runTestBgRecordingHTTP at tr $ Reader.local (\ctx -> ctx{config = if at == frozenTime then cfg else cfg{impactReviewProvider = "changed-after-interruption", openaiModel = "changed-after-interruption"}}) $ transport $ backend $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.FixIssue testPid fid
