@@ -14,9 +14,9 @@ Evidence uses one typed audience and one evaluator across web navigation, thread
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-Current review boundary: web, issue, slash-command, scheduled, Slack-event, enrichment, incident, and retained PR-publication decisions resume their existing jobs. Native PR analysis now pairs its SDK transcript, live guest disk, original inputs, queried evidence, notes, and remaining budgets. The real-SDK/VM cases pass for approval, rejection, expiry, and cooperative provider failure after completed tools. A provider failure after an accepted draft returns that checked result immediately. The native-fix checkpoint `0a19031b5` passed all 43 native integration and 450 bot cases. Subsequent focused verification on `c28fd5aeb` passes 39 Slack evidence, 41 incident-delivery, and 76 API/catalog cases. The current native provider-recovery source passes all 47 native integration and 19 SDK worker cases. The shared-panel change is committed as `ec35f5fd9`; its twelve focused cases and browser checks pass.
+Current review boundary: web, issue, slash-command, scheduled, Slack-event, enrichment, incident, and retained PR-publication decisions resume their existing jobs. Native PR analysis now pairs its SDK transcript, live guest disk, original inputs, queried evidence, notes, and remaining budgets. The real-SDK/VM cases pass for approval, rejection, expiry, and cooperative provider failure after completed tools. A provider failure after an accepted draft returns that checked result immediately. The native-fix checkpoint `0a19031b5` passed all 43 native integration and 450 bot cases. Subsequent focused verification on `c28fd5aeb` passes 39 Slack evidence, 41 incident-delivery, and 76 API/catalog cases. The preceding native checkpoint `4eb4ae142` passed 47 native integration and 19 SDK worker cases. Shared fix/admission/peer continuation at `53f48b667`, with the subsequent opaque-patch constraint fix, now passes a fresh run of all 47 native integration cases. The 19 worker tests also pass in this session on Node 25.2.1. The shared-panel change is committed as `ec35f5fd9`; its twelve focused cases and browser checks pass.
 
-Native fix, admission, and peer wiki writes now use the shared ledger, as described below. Remaining work is explicit: broader native fix session recovery needs acceptance; streaming needs implementation and acceptance; Slack app eligibility, Slack Connect, and the silent private mention need live verification. The existing visual review now includes source `4eb4ae142`, paired native recovery, provider-failure continuation, the shared decision panel, and the native-fix consolidation. Whole-branch review, doctests, Linux/KVM coverage, local release signoff, and the canonical PR update remain open. Autonomous remains the default; these changes add no mandatory permission prompts.
+Native fix, admission, and peer wiki writes now use the shared ledger, as described below. Remaining work is explicit: broader native fix session recovery needs acceptance; streaming needs implementation and acceptance; Slack app eligibility, Slack Connect, and the silent private mention need live verification. The local visual review now includes source `53f48b667`, shared fix/admission/peer continuation, candidate proof restoration, the shared decision panel, and the native-fix consolidation. Its source panels retain their exact commit and line references. Whole-branch review, doctests, Linux/KVM coverage, local release signoff, and the canonical PR update remain open. Autonomous remains the default; these changes add no mandatory permission prompts.
 
 The current tool session has browser automation but no installed Slack connector. Plugin discovery confirms the Slack integration is available and was already suggested. This limits live workspace acceptance; it does not prevent local implementation, fixture integration tests, or browser checks. No live app settings were changed.
 
@@ -135,9 +135,31 @@ A private candidate manifest supplies one wire representation for two opaque wra
 
 A nested admission or peer interruption suspends both the child and its pending parent tool. A typed pause signal preserves that distinction from rejection. An unresolved admission does not consume another query charge on every wake. End-of-input cancels the SDK before another model start; cancelled tool events retain their attempt and cancellation status instead of appearing as completed failures.
 
-The existing real-SDK/VM fixture now interrupts admission, candidate capture, and independent inspection, then completes the same fix. It has passed with forty provider requests, including eight recorded failures, eight original phase receipts, and ten released agent allocations. Its finished-result replay starts no inference; a changed native attempt is refused. Snapshot codec round-trip and corrupted metadata, patch, and bundle cases pass. The final sealed-proof source passes the same focused case, including finished replay and corruption rejection. Broader native verification is in progress. The current SDK worker suite passes all nineteen cases. No migration, worker, scheduler, VM manager, dependency, or product page was added.
+The existing real-SDK/VM fixture now interrupts admission, candidate capture, and independent inspection, then completes the same fix. It has passed with forty provider requests, including eight recorded failures, eight original phase receipts, and ten released agent allocations. Its finished-result replay starts no inference; a changed native attempt is refused. Snapshot codec round-trip and corrupted metadata, patch, and bundle cases pass. The final sealed-proof source passes the same focused case, including finished replay and corruption rejection. A fresh broad run now passes all 47 native integration cases. The current SDK worker suite passes all nineteen cases. A subsequent constraint review also removed `Generic` from the opaque `CandidatePatch`: its explicit JSON boundary uses the existing smart constructor, so generic decoding cannot bypass the patch budget. No migration, worker, scheduler, VM manager, dependency, or product page was added.
 
 This covers cooperative provider interruption and the existing typed wait frontiers. Arbitrary host-loss coverage, production-job acceptance of the complete SDK continuation, Linux/KVM acceptance, streaming, controlled live Slack acceptance, and final release gates remain open.
+
+### Visual review recheck
+
+Full interface scope: the existing standalone review artifact, including all twelve scenarios and expanded source panels. It uses native HTML controls and its existing CSS tokens. This review does not establish product-screen or live Slack acceptance.
+
+| Domain | Evidence | Result |
+| --- | --- | --- |
+| Accessibility | Enter selection, retained focus, Tab order, named native controls, live step region | Fixed lost focus; no screen-reader session |
+| Layout | All 101 steps at 320/390/768/1280 with expanded sources | No horizontal overflow |
+| Writing | Fix continuation, proof restoration, verification status | Current behavior and pending broad verification distinguished |
+| Typography | Phone and desktop screenshots, expanded code | Legible hierarchy and wrapped source; no extra font |
+| Colors | Existing text/surface token pairs in Chrome | Minimum measured contrast 7.09:1 |
+| UI | Previous/next boundaries, scenario changes, source disclosures | No browser errors; native controls retained |
+
+| Location | Before | After | Why |
+| --- | --- | --- | --- |
+| Artifact step buttons | Enter rebuilt the focused button and left focus on the body | Restore focus to the selected step | Tab continues through the walkthrough |
+| Native source panels | Older continuation code and acceptance claims | Exact commit/line excerpts and current verification boundaries | The review matches the implementation |
+
+Considered and rejected: another review page would split the existing destination; step-transition animation would delay frequent navigation. The twelve-flow browser check covers every expanded step at all four widths; all 113 source excerpts match their cited revisions. The existing Page visualization was replaced and read back, preserving its title and surrounding text. Local Chrome inspected the uploaded HTML; the hosted viewer itself was not browser-tested.
+
+Verdict: Approve within this artifact scope. Implementation and release work remain open.
 
 ## Shared review controls: interface review
 

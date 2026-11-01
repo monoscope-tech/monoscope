@@ -268,7 +268,6 @@ verifyCandidate store repository result directory = do
 -- >>> accepted "diff" "valid\nexplanation"
 -- True
 data CandidatePatch = CandidatePatch {patch :: Text, rootCause :: CandidateCause}
-  deriving stock (Generic)
 
 
 newtype CandidateCause = CandidateCause {text :: Text}
@@ -279,9 +278,10 @@ instance AE.FromJSON CandidateCause where
 
 
 instance AE.FromJSON CandidatePatch where
-  parseJSON value = do
-    input <- AE.genericParseJSON @CandidatePatch AE.defaultOptions value
-    either (fail . toString) pure $ mkCandidatePatch input.patch input.rootCause
+  parseJSON = AE.withObject "CandidatePatch" \fields -> do
+    patch <- fields AE..: "patch"
+    cause <- fields AE..: "rootCause"
+    either (fail . toString) pure $ mkCandidatePatch patch cause
 
 
 mkCandidatePatch :: Text -> CandidateCause -> Either Text CandidatePatch
