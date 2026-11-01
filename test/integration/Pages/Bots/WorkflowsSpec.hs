@@ -3109,7 +3109,7 @@ spec = around withTestResources do
                     $ Right
                     $ Chat.Message
                       Chat.Assistant
-                      "{\"query\":\"logs | summarize count() by bin(timestamp, 1m)\",\"visualization\":\"line\",\"explanation\":\"Inspect the checkout latency change.\",\"time_range\":\"last 1 hour\"}"
+                      "{\"query\":\"summarize count() by bin_auto(timestamp)\",\"visualization\":\"line\",\"explanation\":\"Inspect the checkout latency change.\",\"time_range\":\"last 1 hour\"}"
                       Chat.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
                 ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
@@ -3937,7 +3937,7 @@ spec = around withTestResources do
 
       it "projectAdapter_preservesLLMInterpreter_forNestedTranslation" \tr -> do
         let provider = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallAgenticChat{} -> pure $ Right $ Chat.Message Chat.Assistant "{\"query\":\"level == ERROR\",\"explanation\":\"test translation\"}" Chat.defaultMessageData
+              ELLM.CallAgenticChat{} -> pure $ Right $ Chat.Message Chat.Assistant "{\"query\":\"severity.severity_text == \\\"error\\\"\",\"explanation\":\"test translation\"}" Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
         (requests, result) <-
@@ -3946,7 +3946,7 @@ spec = around withTestResources do
             $ AI.invoke Routes.mcpProjectTools (MemberPrincipal (getResponse tr.trSessAndHeader).user.id) testPid "search_events_nl"
             $ one ("input", AE.String "errors")
         requests `shouldBe` []
-        (result ^? key "structuredContent" . key "query" . _String) `shouldBe` Just "level == ERROR"
+        (result ^? key "structuredContent" . key "query" . _String) `shouldBe` Just "severity.severity_text == \"error\""
 
       it "projectAdapter_preservesFrozenClock_forMetricCatalog" \tr -> do
         setupSlackAgent tr testPid "T_METRIC_CATALOG"
