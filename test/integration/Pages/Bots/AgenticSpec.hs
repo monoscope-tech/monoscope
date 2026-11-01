@@ -827,14 +827,24 @@ spec = around withTestResources do
           entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
           length entries `shouldBe` 1
 
-      for_ (["role", "policy", "review", "audience", "permission"] :: [Text]) $ \restriction ->
+      for_ (["role", "policy", "review", "audience", "permission", "slack-unlink"] :: [Text]) $ \restriction ->
         it ("agentOperation_authorityChangedBeforeAtomicWikiClaimDoesNotWrite: " <> toString restriction) \tr -> do
           let conversation = UUIDId $ UUID.fromWords 0 0 0 198
               page = UUIDId UUID.nil :: Memory.PageId
               user = (getResponse tr.trSessAndHeader).user.id
               arguments = fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (0 :: Int)), ("document", AE.object ["title" AE..= ("Retained authority" :: Text), "body" AE..= ("Must not write after role loss" :: Text)])]
-          mode <- scheduledInvocation tr conversation Issues.Autonomous
-          let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode}
+          mode <-
+            if restriction == "slack-unlink"
+              then do
+                setupSlackAgent tr testPid "T_ATOMIC_AUTHORITY"
+                void $ runTestBg frozenTime tr $ Issues.getOrCreateConversation testPid conversation Issues.CTSlackThread (AE.object [])
+                receipt <- receiveSlackEvent tr $ slackThreadedEvent "T_ATOMIC_AUTHORITY" "CATOMIC" "Remember the finding" "1735689602.000001" "1735689600.000001"
+                routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= maybe (fail "Expected the Slack routine") pure
+                execution <- runTestBg frozenTime tr (Issues.startEventRun routine (Issues.SlackMessageRequest receipt user) Issues.StartRun conversation "Remember the finding") >>= maybe (fail "Expected a Slack run") pure
+                runTestBg frozenTime tr $ AI.DurableRun <$> AI.requireRunContext testPid (Issues.BackgroundClaim user conversation execution.id execution.startedAt)
+              else scheduledInvocation tr conversation Issues.Autonomous
+          let access = if restriction == "slack-unlink" then AI.SlackAccess "T_ATOMIC_AUTHORITY" "U0123ABCDEF" user else AI.MemberAccess AI.ProjectMember user
+              config = (AI.defaultAgenticConfig testPid){AI.access = access, AI.conversationId = Just conversation, AI.invocationMode = mode}
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
                   [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "write" "function" $ LLM.ToolFunction "write_project_memory" arguments]}
@@ -849,12 +859,13 @@ spec = around withTestResources do
                     "policy" -> Issues.setRoutinePolicy user testPid conversation Issues.Observe
                     "review" -> Issues.setRoutinePolicy user testPid conversation $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.KnowledgeChanges) Catalog.ReviewEditors
                     "audience" -> void $ Investigations.retainEvidenceAudience testPid conversation $ Investigations.PersonalAudience user
+                    "slack-unlink" -> Hasql.interpExecute_ [HI.sql|DELETE FROM apis.slack_identities WHERE team_id = 'T_ATOMIC_AUTHORITY' AND slack_user_id = 'U0123ABCDEF'|]
                     _ -> Investigations.retainEvidencePermission testPid [conversation] ProjectMembers.PAdmin
                   pure frozenTime
                 request -> send @Time.Time $ coerce request
-          runTestBg frozenTime tr (revokeBeforeClaim $ provider $ AI.runAgenticChatWithHistory config "Remember the finding" "model" "key")
-            `shouldThrow` (isJust . fromException @AI.AgentStopped)
+          outcome <- tryAny $ runTestBg frozenTime tr (revokeBeforeClaim $ provider $ AI.runAgenticChatWithHistory config "Remember the finding" "model" "key")
           runQueryEffect tr (Memory.pageHistory testPid page) >>= (`shouldSatisfy` null)
+          outcome `shouldSatisfy` either (isJust . fromException @AI.AgentStopped) (const False)
           case mode of
             AI.DurableRun context -> runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid context.id) >>= (`shouldSatisfy` null)
             AI.InteractiveReadOnly -> expectationFailure "Expected a durable scheduled request"

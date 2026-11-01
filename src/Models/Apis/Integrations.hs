@@ -48,6 +48,7 @@ module Models.Apis.Integrations (
   slackLinkProjects,
   completeSlackLink,
   resolveSlackPrincipal,
+  resolveSlackPrincipalTx,
   slackChannelMember,
   slackDirectMessageOwner,
   slackThreadProject,
@@ -232,9 +233,16 @@ completeSlackLink linkId userId projectId = do
 
 -- | Revalidate membership and the installation on every incoming investigation.
 resolveSlackPrincipal :: DB es => Text -> Text -> Maybe Projects.ProjectId -> Eff es (Maybe SlackPrincipal)
-resolveSlackPrincipal teamId slackUserId threadProject =
-  Hasql.interpOne
-    $ [HI.sql|SELECT identity.user_id, member.project_id, member.permission FROM apis.slack_identities identity
+resolveSlackPrincipal teamId slackUserId threadProject = Hasql.interpOne $ slackPrincipalSql teamId slackUserId threadProject
+
+
+resolveSlackPrincipalTx :: Text -> Text -> Maybe Projects.ProjectId -> Tx.Transaction (Maybe SlackPrincipal)
+resolveSlackPrincipalTx teamId slackUserId threadProject = Hasql.queryTx $ slackPrincipalSql teamId slackUserId threadProject
+
+
+slackPrincipalSql :: Text -> Text -> Maybe Projects.ProjectId -> HI.Sql
+slackPrincipalSql teamId slackUserId threadProject =
+  [HI.sql|SELECT identity.user_id, member.project_id, member.permission FROM apis.slack_identities identity
     JOIN projects.project_members member ON member.project_id = COALESCE(#{threadProject}, identity.project_id) AND member.user_id = identity.user_id
     JOIN users.users account ON account.id = identity.user_id
     JOIN projects.projects project ON project.id = member.project_id

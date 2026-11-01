@@ -1385,7 +1385,7 @@ executeNativeOperation context proposed perform =
         Left denial -> pure $ Left $ toolDenialMessage denial
         Right snapshot -> do
           let response result = ToolResult (either Relude.id (const "Response saved.") result) $ Just $ AE.toJSON result
-          recordedOperation context cursor (Operation.NativeCall frozen) snapshot (authorizeRunOperation context $ Catalog.nativePolicy frozen) (response <$> perform frozen) >>= \case
+          recordedOperation (MemberAccess ProjectMember context.requestedBy) context cursor (Operation.NativeCall frozen) snapshot (authorizeRunOperation context $ Catalog.nativePolicy frozen) (response <$> perform frozen) >>= \case
             Investigations.RefusedResult _ reason -> do
               void $ Investigations.commitProgress (Just cursor) Nothing Investigations.NativeReady Nothing
               pure $ Left $ Investigations.reviewRefusalMessage reason
@@ -1421,8 +1421,8 @@ executeNativeOperation context proposed perform =
       _ -> throwIO Investigations.OperationScopeMismatch
 
 
-recordedOperation :: (DB es, IOE :> es, Time.Time :> es) => Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> Eff es (Either ToolDenial OperationPolicy) -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
-recordedOperation context cursor call snapshot reauthorize execution = do
+recordedOperation :: (DB es, IOE :> es, Time.Time :> es) => AgentAccess -> Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> Eff es (Either ToolDenial OperationPolicy) -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
+recordedOperation access context cursor call snapshot reauthorize execution = do
   requirement <- for (Issues.reviewApprover snapshot.execution snapshot.capability) $ \approver -> do
     now <- Time.currentTime
     pure $ Investigations.ReviewRequest (addUTCTime (24 * 60 * 60) now) approver
@@ -1436,7 +1436,7 @@ recordedOperation context cursor call snapshot reauthorize execution = do
             conflict -> throwIO conflict
       EffectfulOperation action -> recorded requirement action
       ReconcilableOperation action reconcile ->
-        recordedOperation context cursor call snapshot reauthorize action >>= \case
+        recordedOperation access context cursor call snapshot reauthorize action >>= \case
           retained@(Investigations.RecordedResult{}; Investigations.WaitingResult{}; Investigations.RefusedResult{}) -> pure retained
           uncertain@(Investigations.UncertainResult claim original _) ->
             reconcile original >>= \case
@@ -1446,10 +1446,15 @@ recordedOperation context cursor call snapshot reauthorize execution = do
                 Investigations.completeOperation claim result
                 if Operation.sameOperation original call
                   then pure $ Investigations.RecordedResult result
-                  else recordedOperation context cursor call current reauthorize execution
+                  else recordedOperation access context cursor call current reauthorize execution
     -- Recheck after locking the run: authority can change after the earlier snapshot.
     atomic action = do
       current <- Issues.runContextAuthorityTx context
+      connected <- case access of
+        SlackAccess team user member -> linked team user member
+        SlackCommandAccess origin member -> linked origin.teamId origin.slackUserId member
+        SlackInvestigationAccess run -> linked run.teamId run.slackUserId run.userId
+        (ServiceAccess; MemberAccess{}) -> pure True
       shared <-
         if Catalog.requiresAutonomy snapshot.capability
           then
@@ -1462,10 +1467,14 @@ recordedOperation context cursor call snapshot reauthorize execution = do
       case current of
         Just authority
           | isRight (Issues.authorizeCapability authority snapshot.capability)
+          , connected
           , not (Catalog.requiresAutonomy snapshot.capability) || authority.policy == snapshot.execution
           , shared ->
               Right <$> action
         _ -> pure $ Left Investigations.OperationAuthorityWithdrawn
+    linked team user member = do
+      principal <- Integrations.resolveSlackPrincipalTx team user (Just context.projectId)
+      pure $ any (\linkedMember -> linkedMember.userId == member && linkedMember.projectId == context.projectId && linkedMember.permission >= Catalog.minimumPermission snapshot.capability) principal
     lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
     proposal = Investigations.OperationProposal call snapshot
     recorded requirement action =
@@ -1547,7 +1556,7 @@ executeToolAt cursor config tc = do
   where
     recorded snapshot execution = case (snapshot.capability, cursor, invocationContext config.invocationMode) of
       (MCP.ReadOnly{}, _, _) -> Investigations.RecordedResult <$> perform execution
-      (_, Just position, Just context) -> recordedOperation context position (Operation.ModelCall tc) snapshot (requireConfigAccess config >>= \fresh -> authorizeOperation config fresh snapshot.capability) execution
+      (_, Just position, Just context) -> recordedOperation config.access context position (Operation.ModelCall tc) snapshot (requireConfigAccess config >>= \fresh -> authorizeOperation config fresh snapshot.capability) execution
       _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable checkpoint."
     perform = \case
       EffectfulOperation action -> action
