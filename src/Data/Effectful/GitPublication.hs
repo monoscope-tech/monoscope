@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Data.Effectful.GitPublication (GitPublication (..), Request, requestFor, UploadCredential, uploadCredential, Visibility (..), Stage (..), Failure (..), Authorization (..), MediaUrls (..), PullState (..), Receipt (..), PublishedFix, publicationReceipt, publishFix, runGitPublicationReal, runGitPublicationTest) where
 
 import Data.Aeson qualified as AE
@@ -52,7 +54,7 @@ newtype UploadCredential = UploadCredential Text
 uploadCredential :: GitSync.GitCreds -> Either Failure UploadCredential
 uploadCredential = \case
   GitSync.PersonalToken token | not (T.null $ T.strip token) -> Right $ UploadCredential token
-  _ -> Left NativeUnavailable
+  (GitSync.PersonalToken{}; GitSync.AppInstallation{}) -> Left NativeUnavailable
 
 
 newtype PublishedFix = PublishedFix Receipt

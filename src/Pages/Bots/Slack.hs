@@ -1401,7 +1401,7 @@ resetSlackSession projectId userId receiptId = do
           UserMessage human -> pure human
           AppMention human -> pure human
           MessageShortcut human -> pure human
-          _ -> throwIO $ ErrorCall "Slack session reset requires a human message"
+          (AgentSessionStopped{}; AgentSessionTitleChanged{}; AppContextChanged{}; AppHomeOpened{}; BotMessage; MessageEdit; AssistantSession{}; TokensRevoked{}; UnknownEvent{}) -> throwIO $ ErrorCall "Slack session reset requires a human message"
         let thread = fromMaybe message.ts message.thread_ts
         withInvestigationLock team_id message.channel thread $ RateLimit.withRateLimits team_id do
           AI.requireAgentAccess (AI.SlackAccess team_id message.user userId) projectId
@@ -1640,7 +1640,7 @@ loadProgressSnapshot target = do
         retained <- Hasql.interpOne @(Issues.RoutineRunStatus, Maybe UTCTime, Aeson Investigations.OperationOutcome) $ [HI.sql|SELECT run.status, run.finished_at, operation.outcome |] <> Investigations.operationRunSql target.projectId identifier
         pure $ case retained of
           Just (Issues.RunCancelled, finishedAt, Aeson outcome) -> Progress.endReview notice finishedAt outcome progress
-          _ -> progress
+          (Nothing; Just (Issues.RunRunning, _, _); Just (Issues.RunSucceeded, _, _); Just (Issues.RunNoFindings, _, _); Just (Issues.RunFailed, _, _); Just (Issues.RunTimedOut, _, _)) -> progress
       (Nothing; Just Progress.EndedNotice{}) -> pure progress
 
 
@@ -1661,7 +1661,7 @@ withInvestigationProgress envCfg slackData access action = case access of
             existing <- Investigations.loadProgress target
             let activeStream = case (.delivery) <$> existing of
                   Just (Investigations.StreamDelivery (Investigations.StreamReady{}; Investigations.StreamPending{})) -> True
-                  _ -> False
+                  (Nothing; Just Investigations.SnapshotDelivery{}; Just (Investigations.StreamDelivery Investigations.StreamClosed{})) -> False
             when (old /= Just progress || not allowCreate || activeStream) do
               let canCreate =
                     allowCreate || case progress.review of
@@ -1695,7 +1695,7 @@ withInvestigationProgress envCfg slackData access action = case access of
               for_ publication $ \pending -> slackRetryTime 1 >>= scheduleProgressRefresh pending.publicationId
         updates = forever $ Concurrent.threadDelay 2_000_000 >> publishSafely True
     race_ updates action `finally` publishSafely False
-  _ -> action
+  (AI.ServiceAccess; AI.MemberAccess{}; AI.SlackAccess{}; AI.SlackCommandAccess{}) -> action
 
 
 -- | Each uncertain request is retained before HTTP. Only acknowledged or
@@ -1717,7 +1717,7 @@ updateProgressStream envCfg target publicationId checkpoint close progress = do
         confirmed <- transition connection $ Investigations.StreamPending request
         case confirmed of
           Investigations.StreamClosed timestamp -> refreshObservedProgress envCfg.hostUrl target $ Incidents.slackTimestampText timestamp
-          _ -> pass
+          (Investigations.StreamReady{}; Investigations.StreamPending{}) -> pass
     Investigations.StreamClosed timestamp -> refreshObservedProgress envCfg.hostUrl target $ Incidents.slackTimestampText timestamp
     Investigations.StreamPending{} -> do
       recovered <- reconcileProgressStream connection frame
@@ -1762,7 +1762,7 @@ updateProgressStream envCfg target publicationId checkpoint close progress = do
                     guard $ close || progress.limited || now >= addUTCTime (9 * 60) session.startedAt
                     Just $ Investigations.StreamPending $ Investigations.StopStream session previous $ if progress.limited then previous else finalFrame
               (Investigations.StreamInProgress, Investigations.StreamPending request@Investigations.StopStream{}) -> Just $ Investigations.StreamPending request
-              _ -> Nothing
+              ((Investigations.StreamInProgress, Investigations.StreamReady{}); (Investigations.StreamInProgress, Investigations.StreamClosed{})) -> Nothing
             pure (timestamp, next)
           params = [("channel", target.channelId), ("ts", target.threadTs), ("oldest", target.messageTs), ("include_all_metadata", "true"), ("limit", "15")] <> foldMap (pure . ("cursor",)) search.cursor
       outcome <- readPublicationHistory slackData "conversations.replies" publicationId params search.cursor matching

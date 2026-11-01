@@ -464,14 +464,14 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                         Agent ->
                           session.output (Workspace.agentCommand $ toList argv) 1048576 >>= \case
                             (Workspace.Exited 0, bytes, False) -> pure $ decodeUtf8 bytes
-                            _ -> fail "Guest workspace command failed or exceeded its output limit"
+                            ((Workspace.Exited{}, _, _); (Workspace.LogLimit, _, _)) -> fail "Guest workspace command failed or exceeded its output limit"
                       pure $ first (const "Guest workspace command failed") outcome
                     copy hostPath destination = active $ \session -> first (const "Guest copy failed") <$> tryAny (session.copyIn hostPath destination)
                     readGuest path = active $ \session ->
                       session.output (Workspace.agentCommand ["/usr/bin/head", "-c", "262145", "--", path]) 262145 <&> \case
                         (Workspace.Exited 0, bytes, False) -> Right $ decodeUtf8 bytes
                         (Workspace.Exited 0, _, True) -> Left "Regression patch file exceeds its 256 KiB limit"
-                        _ -> Left "Regression patch file could not be read"
+                        ((Workspace.Exited{}, _, _); (Workspace.LogLimit, _, _)) -> Left "Regression patch file could not be read"
                     protectWorkspace = for_ (["/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path] | path <- ["/workspace", "/workspace/.git"]] <> ["/bin/chown" :| ["-hR", "0:0", "/workspace"], "/bin/chmod" :| ["-R", "u+rwX,go+rX,go-w", "/workspace"], "/usr/bin/git" :| ["update-index", "--refresh"]] :: [NonEmpty Text]) $ void . ExceptT . execute Supervisor
                     regression :: Request run -> Workspace.Baseline -> UUID.UUID -> AE.Value -> [(Text, Text)] -> Outbox.Outbox -> IO (Either Text RegressionWire)
                     regression pinned baseline sessionId artifact revisions outbox = active $ \session -> do

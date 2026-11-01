@@ -595,7 +595,7 @@ requestEvidence pid currentServices windowStart windowEnd request = do
     | otherwise -> case mkReviewQuery request.query of
         Left err -> pure $ Left err
         Right (ReviewQuery sections) -> do
-          let aggregated = any (\case KQL.SummarizeCommand{} -> True; _ -> False) sections
+          let aggregated = any (\case KQL.SummarizeCommand{} -> True; (KQL.Search{}; KQL.WhereClause{}; KQL.ExtendCommand{}; KQL.ProjectCommand{}; KQL.SortCommand{}; KQL.TakeCommand{}; KQL.Source{}; KQL.HavingClause{}) -> False) sections
               rowLimit = if aggregated then 200 else 20
               queryAST = map groupFilter $ KQL.transformAST (KQL.Search (And (Cmp Eq (Subject "resource.service.name" "resource" [FieldKey "service", FieldKey "name"]) (Str request.service)) (evidenceWindow windowStart windowEnd)) : sections <> [KQL.TakeCommand $ foldr min rowLimit [n | KQL.TakeCommand n <- sections]])
               query = toQText queryAST

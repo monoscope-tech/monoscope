@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Pkg.SlackRateLimit (SlackRateLimited (..), SlackHttpFailure, slackHttpStatus, withRateLimits) where
 
 import Control.Exception (ErrorCall (..))
@@ -36,7 +38,7 @@ withRateLimits :: (DB es, HTTP.HTTP :> es) => Text -> Eff es a -> Eff es a
 withRateLimits workspace = interpose @HTTP.HTTP $ \_ request -> case request of
   HTTP.PostWith options url body -> limited workspace options url $ \opts -> send $ HTTP.PostWith opts url body
   HTTP.GetWith options url -> limited workspace options url $ \opts -> send $ HTTP.GetWith opts url
-  _ -> send @HTTP.HTTP $ coerce request
+  (HTTP.Get{}; HTTP.Post{}; HTTP.Put{}; HTTP.Patch{}; HTTP.Delete{}; HTTP.PutWith{}; HTTP.PatchWith{}; HTTP.DeleteWith{}) -> send @HTTP.HTTP $ coerce request
 
 
 limited :: DB es => Text -> HTTP.Options -> String -> (HTTP.Options -> Eff es (HTTP.Response LByteString)) -> Eff es (HTTP.Response LByteString)

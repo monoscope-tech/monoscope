@@ -236,7 +236,7 @@ routinesGetH pid = do
             div_ [class_ "grid gap-1 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center sm:gap-4"] do
               div_ [class_ "min-w-0"] do
                 a_ [href_ $ runUrl pid run.id, class_ "break-words text-sm font-medium text-textBrand hover:underline"] $ toHtml $ fromMaybe "Deleted routine" run.title
-                whenJust run.error $ p_ [class_ $ "mt-0.5 truncate text-xs " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; _ -> "text-textWeak")] . toHtml
+                whenJust run.error $ p_ [class_ $ "mt-0.5 truncate text-xs " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; (Issues.RunRunning; Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunCancelled) -> "text-textWeak")] . toHtml
               uncurry tonePill_ $ runStatus run.status
               time_ [datetime_ $ show run.startedAt, class_ "text-xs tabular-nums text-textWeak sm:text-right"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
         section_ [Aria.label_ "Routine catalog"] do
@@ -320,7 +320,7 @@ threadPageGetH pid convId docM runM hxTarget = do
     operations <- Investigations.listOperations @AI.OperationPolicy pid run.id
     fixEvidence <- case run.source of
       Issues.FixRun identifier | run.status == Issues.RunSucceeded && viewerPermission >= ProjectMembers.PAdmin -> Just <$> CodeContext.issueFixEvidenceH pid identifier
-      _ -> pure Nothing
+      (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}; Issues.FixRun{}) -> pure Nothing
     pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts viewerPermission operations fixEvidence
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
@@ -370,13 +370,13 @@ threadPageGetH pid convId docM runM hxTarget = do
                 span_ [class_ "min-w-0 break-words"] $ toHtml $ "Requested by " <> if T.null name then CI.original user.email else name
               time_ [datetime_ $ show run.startedAt] $ toHtml $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" run.startedAt
           sequence_ fixEvidence
-          whenJust run.error $ p_ [class_ $ "rounded-lg border border-strokeWeak p-4 text-sm break-words " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; _ -> "text-textWeak"), role_ "status"] . toHtml
+          whenJust run.error $ p_ [class_ $ "rounded-lg border border-strokeWeak p-4 text-sm break-words " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; (Issues.RunRunning; Issues.RunSucceeded; Issues.RunNoFindings; Issues.RunCancelled) -> "text-textWeak"), role_ "status"] . toHtml
           whenJust evidence.input $ \input -> section_ [Aria.label_ "Run request"] do
             h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Request"
             p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml input
           details_ [class_ "rounded-lg border border-strokeWeak p-4", term "hx-morph-skip" ""] do
-            summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ case run.source of Issues.FixRun{} -> "Fix workflow"; _ -> "Instructions used for this run"
-            p_ [class_ "mt-3 whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe (case run.source of Issues.FixRun{} -> "The fix must reproduce the issue, pass the retained regression, and pass independent review."; _ -> "This run predates instruction snapshots.") evidence.instructions
+            summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ case run.source of Issues.FixRun{} -> "Fix workflow"; (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> "Instructions used for this run"
+            p_ [class_ "mt-3 whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe (case run.source of Issues.FixRun{} -> "The fix must reproduce the issue, pass the retained regression, and pass independent review."; (Issues.ScheduledRun; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> "This run predates instruction snapshots.") evidence.instructions
             whenJust evidence.templateVersion $ \version -> p_ [class_ "mt-2 text-xs text-textWeak"] $ toHtml $ "Template version " <> show @Text version
           unless (null operations) $ section_ [Aria.label_ "Action history", class_ "space-y-3"] do
             div_ [class_ "flex items-center justify-between gap-3"] do
@@ -403,8 +403,8 @@ threadPageGetH pid convId docM runM hxTarget = do
                   Investigations.OperationReturned{} -> (NeutralBadge, "Response saved")
               case operation.outcome of
                 Investigations.OperationRefused reason -> p_ [class_ "text-sm text-textWeak"] $ toHtml $ Investigations.reviewRefusalMessage reason
-                _ -> pass
-              when (case operation.outcome of Investigations.OperationUnknown -> True; _ -> False)
+                (Investigations.OperationUnstarted; Investigations.OperationRunning; Investigations.OperationUnknown; Investigations.OperationReturned{}) -> pass
+              when (case operation.outcome of Investigations.OperationUnknown -> True; (Investigations.OperationUnstarted; Investigations.OperationRunning; Investigations.OperationReturned{}; Investigations.OperationRefused{}) -> False)
                 $ p_ [class_ "text-sm text-textWeak"] "No result was retained. This action was not repeated. It may still complete."
               let required = MCP.minimumPermission operation.proposal.policy.capability
               if viewerPermission >= required
@@ -414,26 +414,28 @@ threadPageGetH pid convId docM runM hxTarget = do
                   pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.outcome
                   when (operation.review /= Investigations.NoReview) $ pre_ [class_ "mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"] $ toHtml $ preview operation.review
                 else p_ [class_ "text-xs text-textWeak"] $ toHtml $ "Action details require " <> toText (encodeEnumSC @"P" required) <> " permission."
-              case (run.status, operation.outcome, operation.review) of
-                (Issues.RunRunning, Investigations.OperationUnstarted, Investigations.ReviewPending request) -> do
-                  p_ [class_ "text-xs text-textWeak"] do
-                    "Review deadline: "
-                    localTimeFmt_ "MMM d, HH:mm" request.expiresAt
-                  when (viewerPermission >= max required (Catalog.approverPermission request.approver))
-                    $ form_
-                      [ hxPost_ $ "/p/" <> pid.toText <> "/ai/operations/" <> operation.id.toText <> "/review"
-                      , hxTarget_ "closest #routine-run"
-                      , hxSelect_ "#routine-run"
-                      , hxSwap_ "outerMorph"
-                      , term "hx-disable" $ "#operation-" <> operation.id.toText <> " button"
-                      , [__|on htmx:response:error or htmx:error
-                        send errorToast(value: ['Could not confirm the decision. Refresh actions to check its status.']) to <body/>|]
-                      , class_ "flex flex-wrap gap-2"
-                      ]
-                      do
-                        button_ [type_ "submit", name_ "decision", value_ "approved", class_ "btn btn-sm btn-primary"] "Approve action"
-                        button_ [type_ "submit", name_ "decision", value_ "rejected", class_ "btn btn-sm btn-ghost"] "Decline action"
-                _ -> pass
+              when (run.status == Issues.RunRunning) $ case operation.outcome of
+                Investigations.OperationUnstarted -> case operation.review of
+                  Investigations.ReviewPending request -> do
+                    p_ [class_ "text-xs text-textWeak"] do
+                      "Review deadline: "
+                      localTimeFmt_ "MMM d, HH:mm" request.expiresAt
+                    when (viewerPermission >= max required (Catalog.approverPermission request.approver))
+                      $ form_
+                        [ hxPost_ $ "/p/" <> pid.toText <> "/ai/operations/" <> operation.id.toText <> "/review"
+                        , hxTarget_ "closest #routine-run"
+                        , hxSelect_ "#routine-run"
+                        , hxSwap_ "outerMorph"
+                        , term "hx-disable" $ "#operation-" <> operation.id.toText <> " button"
+                        , [__|on htmx:response:error or htmx:error
+                          send errorToast(value: ['Could not confirm the decision. Refresh actions to check its status.']) to <body/>|]
+                        , class_ "flex flex-wrap gap-2"
+                        ]
+                        do
+                          button_ [type_ "submit", name_ "decision", value_ "approved", class_ "btn btn-sm btn-primary"] "Approve action"
+                          button_ [type_ "submit", name_ "decision", value_ "rejected", class_ "btn btn-sm btn-ghost"] "Decline action"
+                  (Investigations.NoReview; Investigations.ReviewResolved{}) -> pass
+                (Investigations.OperationRunning; Investigations.OperationUnknown; Investigations.OperationReturned{}; Investigations.OperationRefused{}) -> pass
               time_ [datetime_ $ show operation.createdAt, class_ "text-xs text-textWeak"] $ localTimeFmt_ "MMM d, HH:mm" operation.createdAt
               when (operation.runId /= run.id)
                 $ a_ [href_ $ runUrl pid operation.runId, class_ "ms-3 text-xs text-textBrand hover:underline"] "View original attempt"
@@ -744,7 +746,7 @@ submitTurn projectTools origin requestId allowActions pid convId prompt = do
   member <- ProjectMembers.getUserPermission pid sess.user.id
   let browserOnly = case (.source) <$> retained of
         Just Issues.InteractiveRun{} -> True
-        _ -> isNothing member
+        (Nothing; Just Issues.ScheduledRun; Just Issues.TriggeredRun{}; Just Issues.ConversationRun{}; Just Issues.FixRun{}) -> isNothing member
       admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation
   admit pid convId sess.user.id requestId prompt policy origin >>= \case
     Issues.ConflictingRequest -> throwError Servant.err409{Servant.errBody = "Request ID already belongs to another request"}

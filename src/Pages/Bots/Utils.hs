@@ -223,11 +223,11 @@ processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid
   for_ conversationId $ AI.requireEvidenceAccess access pid
   now <- Time.currentTime
   conversation <- join <$> traverse (Issues.getConversation pid) conversationId
-  issuePrompt <- case conversation of
-    Just saved | saved.conversationType == Issues.CTAnomaly -> do
-      issue <- Issues.selectIssueById pid (UUIDId saved.conversationId.unUUIDId) >>= maybe (throwIO AI.AgentStopped) pure
+  issuePrompt <- case conversation >>= Issues.conversationIssueId of
+    Just issueId -> do
+      issue <- Issues.selectIssueById pid issueId >>= maybe (throwIO AI.AgentStopped) pure
       Just <$> buildIssuePrompt pid issue now
-    _ -> pure Nothing
+    Nothing -> pure Nothing
   facetSummaryM <- if isNothing issuePrompt then SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now else pure Nothing
   let defaults = AI.defaultAgenticConfig pid
       config =
@@ -263,7 +263,7 @@ buildIssuePrompt pid issue now = do
         MaybeT $ Monitors.queryMonitorById (Monitors.QueryMonitorId monitorId)
       metricsData <- Charts.queryProjectMetrics Nothing (Just Charts.DTMetric) pid (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing Nothing []
       pure $ Just (alertData, monitorM, metricsData)
-    _ -> pure Nothing
+    (Nothing; Just Issues.ApiChangeP{}; Just Issues.RuntimeExceptionP{}; Just Issues.LogPatternP{}; Just Issues.LogPatternRateChangeP{}; Just Issues.PerformanceP{}; Just Issues.FrontendP{}; Just Issues.FeedbackP{}; Just Issues.UptimeP{}; Just Issues.CronP{}) -> pure Nothing
   facetSummaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
   pure
     $ unlines

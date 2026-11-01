@@ -267,17 +267,22 @@ completeAgenticResponse config userQuery model apiKey answer = do
     (_, Nothing) -> pass
     (_, Just convId) -> do
       let message = prepareRunAnswer answer
-      case (config.invocationMode, config.access) of
-        (DurableRun context, MemberAccess{})
-          | (Issues.InteractiveRun{}; Issues.ConversationRun{}) <- context.source ->
+          persist = Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just $ AE.toJSON answer.toolCalls)
+      case config.invocationMode of
+        InteractiveReadOnly -> persist
+        DurableRun context -> case context.source of
+          (Issues.InteractiveRun{}; Issues.ConversationRun{}) -> case config.access of
+            MemberAccess{} ->
               Issues.completeRun context (Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer message) >>= \case
                 Issues.CompletionRejected -> throwIO AgentStopped
                 Issues.RunCompleted termination _ -> case termination of
                   (Issues.CompletedSucceeded; Issues.CompletedNoFindings) -> pass
                   (Issues.CompletedCancelled; Issues.CompletedFailed; Issues.CompletedTimedOut) -> throwIO AgentStopped
-        (DurableRun context, _) | (Issues.InteractiveRun{}; Issues.ConversationRun{}) <- context.source -> throwIO AgentAccessDenied
-        (DurableRun context, _) | Issues.TriggeredRun Issues.SlackCommand{} <- context.source -> pass
-        _ -> Issues.insertChatMessage config.projectId convId Issues.ChatAssistant message.content message.widgets (Just $ AE.toJSON answer.toolCalls)
+            (ServiceAccess; SlackAccess{}; SlackCommandAccess{}; SlackInvestigationAccess{}) -> throwIO AgentAccessDenied
+          Issues.TriggeredRun event -> case event of
+            Issues.SlackCommand{} -> pass
+            (Issues.SlackMessage{}; Issues.PullRequestReview{}; Issues.IssueEnrichment{}; Issues.IncidentEvent{}) -> persist
+          (Issues.ScheduledRun; Issues.FixRun{}) -> persist
   pure $ parseAgenticResponse answer
 
 
@@ -648,7 +653,7 @@ canReadEvidence access project conversation = do
     SlackAccess _ _ member -> pure $ Investigations.MemberViewer member
     SlackInvestigationAccess run -> pure $ slackViewer run.userId run.teamId run.slackUserId run.channelId
     SlackCommandAccess origin member -> pure $ slackViewer member origin.teamId origin.slackUserId origin.channelId
-    _ -> pure Investigations.ProjectViewer
+    (ServiceAccess; MemberAccess SharedMember _) -> pure Investigations.ProjectViewer
   Investigations.canReadEvidence project (evidenceAudience access permission) viewer conversation
   where
     slackViewer member team user channelId = case Integrations.slackChannel team channelId of
@@ -901,8 +906,10 @@ slackGrant config = runExceptT do
     SlackInvestigationAccess run -> pure $ Integrations.SlackEvidenceSubject config.projectId run.userId run.teamId run.slackUserId
     SlackAccess team user member -> pure $ Integrations.SlackEvidenceSubject config.projectId member team user
     SlackCommandAccess origin member -> pure $ Integrations.SlackEvidenceSubject config.projectId member origin.teamId origin.slackUserId
-    MemberAccess context member | context /= SharedMember -> ExceptT $ first SlackCredentialFailure <$> Integrations.memberSlackEvidenceSubject config.projectId member
-    _ -> Except.throwError SlackRequesterRequired
+    MemberAccess context member -> case context of
+      (ProjectMember; WebSession) -> ExceptT $ first SlackCredentialFailure <$> Integrations.memberSlackEvidenceSubject config.projectId member
+      SharedMember -> Except.throwError SlackRequesterRequired
+    ServiceAccess -> Except.throwError SlackRequesterRequired
   grant <- ExceptT $ first SlackCredentialFailure <$> Integrations.resolveSlackEvidenceGrant (encodeUtf8 settings.apiKeyEncryptionSecretKey) settings.slackClientId settings.slackClientSecret subject
   pure (settings, subject, grant)
 
@@ -921,7 +928,7 @@ runSlackEvidence config tool operation proposed = do
     let destination = case config.access of
           SlackInvestigationAccess run -> Just run.channelId
           SlackCommandAccess origin _ -> Just origin.channelId
-          _ -> Nothing
+          (ServiceAccess; MemberAccess{}; SlackAccess{}) -> Nothing
     (audience, arguments) <- case (config.access, destination) of
       (MemberAccess context member, _) | context /= SharedMember -> pure (Investigations.PersonalAudience member, proposed)
       (_, Just channelId) | "D" `T.isPrefixOf` channelId -> do
@@ -956,7 +963,8 @@ runSlackEvidence config tool operation proposed = do
         link <- threadPermalink grant arguments
         unlessM (lift $ currentSlackGrant settings subject grant) $ Except.throwError $ SlackCredentialFailure Integrations.SlackNotConnected
         pure link
-      _ -> pure Nothing
+      (SlackMCP.ReadThread, SlackMCP.ReadRejected) -> pure Nothing
+      ((SlackMCP.SearchPublic, _); (SlackMCP.SearchPersonal, _); (SlackMCP.ReadChannel, _)) -> pure Nothing
     pure SlackEvidence{subject, operation, arguments, result, source}
   pure $ case outcome of
     Left failure -> ToolResult (slackEvidenceMessage failure) Nothing
@@ -964,7 +972,7 @@ runSlackEvidence config tool operation proposed = do
       let citation = case (evidence.operation, evidence.source) of
             (SlackMCP.ReadThread, Just (SlackPermalink url)) -> "\n\nVerified source thread: " <> url <> "\nCite this link verbatim; do not construct Slack URLs."
             (SlackMCP.ReadThread, Nothing) -> "\n\nNo verified source link is available. Do not invent a Slack URL."
-            _ -> ""
+            ((SlackMCP.SearchPublic, _); (SlackMCP.SearchPersonal, _); (SlackMCP.ReadChannel, _)) -> ""
        in ToolResult ((case evidence.result.outcome of SlackMCP.ReadSucceeded -> ""; SlackMCP.ReadRejected -> "Slack evidence read failed:\n") <> T.intercalate "\n\n" evidence.result.content <> citation) (Just $ AE.toJSON evidence)
   where
     threadPermalink grant arguments = maybe (pure Nothing) (uncurry fetch) do
@@ -1095,7 +1103,8 @@ buildSystemPrompt config now =
                   [ "This is a scheduled run. Keep ONE document per day: key \"" <> localNow "%Y-%m-%d" <> "\", a title naming the routine's subject and the date, mode append."
                   , "Append one \"## " <> localNow "%H:%M" <> "\" section with what this run observed. When nothing changed, append a single line saying so rather than repeating earlier sections."
                   ]
-            _ -> []
+            InteractiveReadOnly -> []
+            DurableRun{} -> []
       actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ Issues.permitsActions (invocationPolicy config.invocationMode)
    in basePrompt <> timezoneSection <> facetSection <> customSection <> slackSection <> projectSection <> investigationSection <> documentsSection <> actionsSection
 
@@ -1184,7 +1193,7 @@ runAgenticChatWithHistory suppliedConfig requestedInput model apiKey = do
     SlackInvestigationAccess investigation -> for_ config.conversationId \convId -> do
       expected <- Incidents.threadConversationId config.projectId investigation.teamId investigation.channelId investigation.threadTs
       unless (convId == expected) $ throwIO AgentAccessDenied
-    _ -> pass
+    (ServiceAccess; MemberAccess{}; SlackAccess{}; SlackCommandAccess{}) -> pass
   let initial history = Investigations.ModelPending $ Investigations.Step (systemMsg :| (mapMaybe dbMessageToLLMMessage history <> [userMsg])) params 0 config.timeRange []
       run turn checkpoint = withInvestigationJournal config userQuery model $ \journal -> runAgenticLoopRaw turn journal config apiKey checkpoint
       initialize target turn adoption = do
@@ -1286,11 +1295,14 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
               Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err])
               pure $ Left "LLM service temporarily unavailable"
             Right message -> do
-              let source = case (config.invocationMode, config.access) of
-                    (DurableRun context, _) | context.source == Issues.ScheduledRun -> Projects.UsageRoutine
-                    (DurableRun context, _) | Issues.TriggeredRun{} <- context.source -> Projects.UsageRoutine
-                    (_, SlackInvestigationAccess{}) -> Projects.UsageSlackInvestigation
-                    _ -> Projects.UsageInteractive
+              let interactive = case config.access of
+                    SlackInvestigationAccess{} -> Projects.UsageSlackInvestigation
+                    (ServiceAccess; MemberAccess{}; SlackAccess{}; SlackCommandAccess{}) -> Projects.UsageInteractive
+                  source = case config.invocationMode of
+                    InteractiveReadOnly -> interactive
+                    DurableRun context -> case context.source of
+                      (Issues.ScheduledRun; Issues.TriggeredRun{}) -> Projects.UsageRoutine
+                      (Issues.InteractiveRun{}; Issues.ConversationRun{}; Issues.FixRun{}) -> interactive
               Projects.recordAIUsage config.projectId (show request.model) source $ pricedUsage config.sourceConfig (estimatedTokens (step.history, request)) (estimatedTokens message)
               let next = case LLM.toolCalls $ LLM.messageData message of
                     Just tools | not finalRound -> Investigations.ToolsPending step message [] tools
@@ -1300,7 +1312,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
                 Investigations.AnswerReady{} -> do
                   steeredAnswer <- acceptFollowupsWith updated step
                   maybe (continue updated next) (uncurry continue) steeredAnswer
-                _ -> continue updated next
+                (Investigations.ModelPending{}; Investigations.ToolsPending{}; Investigations.LegacyUncertain{}; Investigations.NativePending{}; Investigations.NativeReady) -> continue updated next
     Investigations.ToolsPending step message completed pending -> case pending of
       [] -> do
         let (calls, results) = unzip completed
@@ -1492,7 +1504,7 @@ executeNativeOperation context proposed perform =
       (Issues.TriggeredRun (Issues.IssueEnrichment issue), Operation.EnrichIssue enrichment) -> do
         permitted <- Hasql.interpOne @(HI.OneColumn Bool) [HI.sql|SELECT TRUE FROM apis.issues WHERE project_id = #{context.projectId} AND id = #{issue} AND id = #{enrichment.enhancement.issueId}|]
         unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
-      _ -> throwIO Investigations.OperationScopeMismatch
+      ((Issues.ScheduledRun, _); (Issues.InteractiveRun{}, _); (Issues.ConversationRun{}, _); (Issues.FixRun{}, Operation.PublishPullRequestComment{}); (Issues.FixRun{}, Operation.EnrichIssue{}); (Issues.TriggeredRun Issues.PullRequestReview{}, Operation.EnrichIssue{}); (Issues.TriggeredRun Issues.IssueEnrichment{}, Operation.WriteWiki{}); (Issues.TriggeredRun Issues.IssueEnrichment{}, Operation.PublishPullRequestComment{}); (Issues.TriggeredRun Issues.SlackMessage{}, _); (Issues.TriggeredRun Issues.SlackCommand{}, _); (Issues.TriggeredRun Issues.IncidentEvent{}, _)) -> throwIO Investigations.OperationScopeMismatch
 
 
 recordedOperation :: (DB es, IOE :> es, Time.Time :> es) => AgentAccess -> Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> Eff es (Either ToolDenial OperationPolicy) -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
@@ -1612,7 +1624,7 @@ executeToolAt cursor config tc = do
       | Map.member funcName Catalog.slackReads
       , Left failure <- config.slackEvidence -> case failure of
           SlackProviderCoolingDown deadline -> throwIO $ SlackRateLimit.SlackRateLimited deadline
-          _ -> pure $ Investigations.RecordedResult $ noRaw $ slackEvidenceMessage failure
+          (SlackRequesterRequired; SlackCredentialFailure{}; SlackProviderFailure{}; SlackAudienceUnavailable; SlackSearchRequiresPersonalScope; SlackSchemaUnsupported; SlackReadArgumentsInvalid) -> pure $ Investigations.RecordedResult $ noRaw $ slackEvidenceMessage failure
     Nothing -> pure $ Investigations.RecordedResult $ noRaw $ "Unknown tool: " <> funcName
     Just tool -> case tool.agentPolicy of
       Nothing -> pure $ Investigations.RecordedResult $ noRaw "This project operation has no Agent policy."
@@ -1628,10 +1640,11 @@ executeToolAt cursor config tc = do
   Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length response.formatted])
   pure result
   where
-    recorded snapshot execution = case (snapshot.capability, cursor, invocationContext config.invocationMode) of
-      (MCP.ReadOnly{}, _, _) -> Investigations.RecordedResult <$> perform execution
-      (_, Just position, Just context) -> recordedOperation config.access context position (Operation.ModelCall tc) snapshot (requireConfigAccess config >>= \fresh -> authorizeOperation config fresh snapshot.capability) execution
-      _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable checkpoint."
+    recorded snapshot execution = case snapshot.capability of
+      MCP.ReadOnly{} -> Investigations.RecordedResult <$> perform execution
+      (MCP.ConversationWrite; MCP.ProjectMemoryWrite; MCP.ProjectWrite; MCP.ExternalPublication; MCP.Administration{}) -> case (cursor, invocationContext config.invocationMode) of
+        (Just position, Just context) -> recordedOperation config.access context position (Operation.ModelCall tc) snapshot (requireConfigAccess config >>= \fresh -> authorizeOperation config fresh snapshot.capability) execution
+        _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable checkpoint."
     perform = \case
       EffectfulOperation action -> action
       AtomicOperation action -> Hasql.transaction TxS.ReadCommitted TxS.Write action
@@ -1728,7 +1741,7 @@ executeToolAt cursor config tc = do
         _ -> pure $ noRaw "Slack message must contain between 1 and 4000 characters."
     recovery tool = case tool.agentPolicy of
       Just MCP.ReadOnly{} -> ReplayReads
-      _ -> case tool.dispatch of
+      (Nothing; Just MCP.ConversationWrite; Just MCP.ProjectMemoryWrite; Just MCP.ProjectWrite; Just MCP.ExternalPublication; Just MCP.Administration{}) -> case tool.dispatch of
         (ProjectOperation{}; SlackEvidenceOperation{}) -> RetainInRun
         LocalOperation operation -> case executeLocal operation mempty of
           AtomicOperation{} -> AtomicInRun
