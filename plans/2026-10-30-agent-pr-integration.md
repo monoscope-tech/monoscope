@@ -9,7 +9,7 @@ The [current review](../docs/reviews/2026-11-01-agent-cross-module-review.md) re
 ## Selected work
 
 The recorded inventory covers 28 open PRs and selects twenty incoming heads.
-All twenty selected heads and published #619 remain ancestors of the local branch after the actual rebase onto master `0bd2296ec`.
+All twenty selected heads and published #619 remain ancestors of the local branch after the actual rebase onto master `d842c8dc3`.
 The sixteen-PR impact stack forms one parent-to-child chain through #709.
 It supplies shared execution infrastructure without granting Slack code-publication or deployment authority.
 
@@ -58,8 +58,8 @@ The unrelated icon-script rewrite from #692 is excluded; the existing Python hel
 
 ## Evidence and remaining gates
 
-An actual 408-command rebase preserves the selected ancestry and reconciles to the independently prepared integration tree.
-The previous branch remains available locally as `codex/slack-agent-before-master-762-1e293d070`.
+The final actual rebase onto master PR #763 preserves selected ancestry and exactly matches an independent merge of the verified branch and the new master.
+The previous branch remains available locally as `codex/slack-agent-before-master-763-cfb98f6df`.
 Current canonical checks, native/KVM recovery and live Slack acceptance are summarized in the consolidated review.
 Detailed merge previews, iteration logs and source hashes remain in Git history and ignored local receipts.
 

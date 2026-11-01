@@ -10,7 +10,7 @@ The [visual review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a
 
 ## Current implementation and remaining work
 
-All twenty selected incoming PR heads, published PR 619 and master `0bd2296ec` remain ancestors of this branch.
+All twenty selected incoming PR heads, published PR 619 and master `d842c8dc3` remain ancestors of this branch.
 The [integration record](2026-10-30-agent-pr-integration.md) defines that selection.
 The shared executor, capability catalog, authority evaluator, operation ledger, wiki and conversation inspector are implemented.
 Slack requests, native review/fix work, schedules, enrichment and incident analysis reuse those boundaries.
@@ -25,7 +25,7 @@ No merge or production deployment is authorized.
 
 The [consolidated review](../docs/reviews/2026-11-01-agent-cross-module-review.md) records current evidence and its limits.
 Earlier iteration logs remain in Git history and ignored local receipts.
-Migration and documentation consolidation is in progress at the user's request.
+Migration/documentation consolidation and production-shaped upgrade verification are complete.
 Final image/signoff and PR publication must follow that work.
 
 ## Product contract

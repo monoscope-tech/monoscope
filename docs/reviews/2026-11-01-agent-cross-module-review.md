@@ -108,7 +108,8 @@ Virtual-host loss is not physical Mac power loss. Live GitHub publication is not
 
 ## Rebase and evidence records
 
-The actual rebase onto master `0bd2296ec` preserves all twenty selected PR heads and the published branch head.
+The final actual rebase onto master `d842c8dc3` preserves all twenty selected PR heads and the published branch head.
+Its tree exactly matches an independent merge: only the incoming golden-test helper, parser table, golden fixture and repository guidance change from the verified branch.
 Canonical TestUtils/prelude imports retain the original regression bodies and stronger assertions.
 Master migration names and contents remain unchanged.
 The user's later request explicitly permits consolidation of this branch's unreleased migration files.
