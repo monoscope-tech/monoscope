@@ -69,6 +69,16 @@ The runtime source hashes remain unchanged through both runs.
 A concurrent edit extended a separate reply-retry test during the doctest run.
 That edit remains outside this commit; the 489-case result covers the recorded source hashes.
 
+## Row results and the primary query boundary
+
+`c5e27c6c2` routes legacy queries and widget arrays through `responseWidgets` and the existing widget data shape. Table, log, and top-list results use actual query columns through the shared CLI formatter; charts retain the existing PNG path. This removes thirteen runtime lines. The extended queued-command matrix exercises empty rows, real aggregate columns, retention, and replay.
+
+Prompt instructions alone failed the live schema-only request: the model supplied explanatory prose as its optional query. `f9370f71d` therefore makes that field an opaque `ModelQuery`, parsed by the existing KQL grammar. Its constructor is hidden and it has no `Generic`, `Read`, or `IsString` bypass. Partial decoding preserves the explanation while dropping an invalid optional query. This guarantees syntactic KQL, not model intent or field validity.
+
+The regression first fails with two replies instead of one, then all nineteen queued-command cases pass. Two older fixtures contained invalid KQL; `9bb232244` corrects their inputs without weakening the parser or assertions. The canonical bot group passes **504 examples, zero failures**, in 183.7113 seconds, and all **2,089 doctests** pass. Logs and source receipts use `scripts/local/slack-model-query-*`. Repeated scoped distillation, evasion, and locality reviews found no further material issue; no dependency, migration, or client behavior was added.
+
+The original unchanged request also passes through native Slack on runtime snapshot `87c8bce79`: one `get_schema` call, one explanatory publication, no retained widget or external operation, and authenticated conversation HTTP 200. The raw model again supplies a prose query, so this proves the decoder boundary matters in the actual provider path. Replaying the completed production job adds no model usage, journal entry, operation, or publication. The private receipt is `scripts/local/slack-schema-typed-live-acceptance.json`; hashes are `scripts/local/slack-schema-typed-current-source.json`. This does not establish host-loss recovery or all Slack text limits.
+
 ## Provider references
 
 Slack documents the [header limit](https://docs.slack.dev/reference/block-kit/blocks/header-block/) and [image block limits](https://docs.slack.dev/reference/block-kit/blocks/image-block/).
