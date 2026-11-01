@@ -666,12 +666,19 @@ checkpointSql target =
         AND message_ts IS NOT DISTINCT FROM #{message} AND run_id IS NOT DISTINCT FROM #{run}|]
 
 
--- | A checkpoint revision identifies one pending tool position. An interrupted
--- retained invocation becomes explicitly uncertain; it is never claimed twice.
-beginOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es, Time.Time :> es) => RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Eff es OperationDecision
-beginOperation lease cursor proposal review = do
+-- | The transaction guard runs under the claim locks; rejection rolls back the
+-- claim. Interrupted retained invocations become explicitly uncertain.
+beginOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es, Time.Time :> es) => Tx.Transaction (Either OperationConflict ()) -> RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Eff es OperationDecision
+beginOperation authorize lease cursor proposal review = do
   now <- Time.currentTime
-  Hasql.transaction TxS.ReadCommitted TxS.Write (beginOperationTx now lease cursor proposal review) >>= either throwIO pure
+  result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    outcome <-
+      beginOperationTx now lease cursor proposal review >>= \case
+        Right decision@ExecuteOperation{} -> (decision <$) <$> authorize
+        other -> pure other
+    when (isLeft outcome) Tx.condemn
+    pure outcome
+  either throwIO pure result
 
 
 beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => UTCTime -> RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Tx.Transaction (Either OperationConflict OperationDecision)

@@ -1487,13 +1487,12 @@ recordedOperation access context cursor call snapshot reauthorize execution = do
     now <- Time.currentTime
     pure $ Investigations.ReviewRequest (addUTCTime (24 * 60 * 60) now) approver
   perform requirement execution
+    `Exception.catch` \case
+      Investigations.OperationAuthorityWithdrawn -> throwIO AgentStopped
+      conflict -> throwIO conflict
   where
     perform requirement = \case
-      AtomicOperation action ->
-        Investigations.atomicOperation lease cursor proposal requirement (atomic action)
-          `Exception.catch` \case
-            Investigations.OperationAuthorityWithdrawn -> throwIO AgentStopped
-            conflict -> throwIO conflict
+      AtomicOperation action -> Investigations.atomicOperation lease cursor proposal requirement (atomic action)
       EffectfulOperation action -> recorded requirement action
       ReconcilableOperation action reconcile ->
         recordedOperation access context cursor call snapshot reauthorize action >>= \case
@@ -1508,6 +1507,7 @@ recordedOperation access context cursor call snapshot reauthorize execution = do
                   then pure $ Investigations.RecordedResult result
                   else recordedOperation access context cursor call current reauthorize execution
     -- Recheck after locking the run: authority can change after the earlier snapshot.
+    atomic :: Tx.Transaction a -> Tx.Transaction (Either Investigations.OperationConflict a)
     atomic action = do
       current <- Issues.runContextAuthorityTx context
       connected <- case access of
@@ -1538,7 +1538,7 @@ recordedOperation access context cursor call snapshot reauthorize execution = do
     lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
     proposal = Investigations.OperationProposal call snapshot
     recorded requirement action =
-      Investigations.beginOperation lease cursor proposal requirement >>= \case
+      Investigations.beginOperation (atomic pass) lease cursor proposal requirement >>= \case
         Investigations.RefuseOperation identifier reason -> pure $ Investigations.RefusedResult identifier reason
         Investigations.AwaitOperationReview identifier request -> pure $ Investigations.WaitingResult identifier request
         Investigations.RetainedOperation retained -> pure $ Investigations.RecordedResult retained

@@ -31,7 +31,7 @@ Streaming, Slack evidence, and proactive work remain part of this full plan even
 
 ## Latest verified checkpoint
 
-- Slack source citations: `b8d22c46d` supplies the validated provider permalink; `7e4229eb0` discards evidence on credential rejection while preserving successful reads when optional metadata is unavailable. Both failure paths were reproduced first. Current canonical runtime sources and migrations now match the QA snapshot. Fresh run `c2753e4c-2f85-4cbb-ba26-4bdf3fcdabba` completes the real requester-bound MCP read and publishes the verified source once. Signed replay leaves all counts unchanged; authenticated conversation access returns 200 and anonymous access redirects. All 479 bot examples, 41 incident-delivery examples, and 2,068 doctests pass with unchanged recorded Haskell inputs. These are scoped checkpoints, not release attestations. See the [Slack audit](../docs/reviews/2026-11-01-slack-live-configuration.md).
+- Slack source citations: `b8d22c46d` supplies the validated provider permalink; `7e4229eb0` discards evidence on credential rejection while preserving successful reads when optional metadata is unavailable. Both failure paths were reproduced first. At that live checkpoint, canonical runtime sources and migrations matched the QA snapshot. Fresh run `c2753e4c-2f85-4cbb-ba26-4bdf3fcdabba` completes the real requester-bound MCP read and publishes the verified source once. Signed replay leaves all counts unchanged; authenticated conversation access returns 200 and anonymous access redirects. All 479 bot examples, 41 incident-delivery examples, and 2,068 doctests pass with unchanged recorded Haskell inputs. These are scoped checkpoints, not release attestations. See the [Slack audit](../docs/reviews/2026-11-01-slack-live-configuration.md).
 - Proactive Slack: an explicitly synthetic alert produces one Observe analysis; a measurement gap leaves the episode active without another analysis; explicit synthetic recovery produces one closing analysis in the same real Slack thread. Repeated sweeps add no work. After opt-out, a second alert/recovery still delivers normal notifications but starts no new investigation. Both run links return HTTP 200 with their reports. This exercises existing incident recording, the production worker/model/project-tool adapter, and real Slack delivery. It does not establish telemetry ingestion or native slash-command delivery. The private receipt is `scripts/local/slack-proactive-live-acceptance.json`; source hashes are `scripts/local/slack-proactive-live-source.json`.
 
 - Native eligibility and interface: migration `0282_issue_fix_project_eligibility.sql` closes retained media, listing, publication, and page access for inactive projects and free-plan non-owner members. The extended native lifecycle first reproduced both page HTTP 200 responses, then passed with no retained reads, publication `AccessRevoked`, and page HTTP 404. Eligible owner access and restored plan access still pass. Eight native-page browser states also pass with actual handlers and generated fixture media; the combined watcher run passes 33 examples in 34.6194 seconds. The temporary browser adapter is removed. See the [native audit](../docs/reviews/2026-11-01-native-continuation-audit.md) and [interface review](2026-10-29-routine-interface-review.md). Full native regression and release checks remain required.
@@ -449,6 +449,28 @@ An incident installation binds a real workspace/channel pair and excludes DMs an
 Applied migration filenames and contents remain immutable, including the locally applied native-fix migration. Consolidate related future, unapplied schema work into one coherent migration; do not squash previously applied files to reduce the file count.
 
 ## Branch review checkpoint, 1 November
+
+The shared operation review reproduced an admission race in external actions.
+A role downgrade, Observe policy, newly selected review, audience restriction,
+raised evidence permission, or Slack identity unlink could occur after the tool
+check but before its claim, and `send_to_slack` still posted. All six external
+cases first fail on an actual captured publication (`expected 0, got 1`), while
+the existing atomic wiki cases pass. The same table now covers both operations.
+
+Operation admission now requires a transaction guard. The executor reuses its
+existing role, policy, audience, and linked-identity evaluator under the claim
+locks for external actions as well as atomic writes. Rejection rolls back the
+claim and uses the common stopped-run outcome. No migration, store, interpreter,
+or permission prompt is added. All twelve cases pass in the final 485-example
+bot run (172.9788 seconds), with unchanged recorded runtime and bot inputs.
+All 2,068 doctests also pass. The native review/fix regression group is running.
+Logs are `/tmp/agent-effect-admission-six-red.log`,
+`scripts/local/agent-effect-admission-bots-485-green.log`, and
+`/tmp/agent-effect-admission-doctests.log`. Runtime HLint has zero hints; no hints
+occur on changed test lines (122 pre-existing test hints remain). Pinned
+formatting and whitespace checks pass. The repeated scoped three-skill
+review has no further material finding. This does not close whole-branch review;
+the live QA checkpoint above predates this admission fix.
 
 The current review continues against `origin/master`; the whole-branch review
 remains open. The completed source-reading slice covers `Pkg.AgentCatalog`,

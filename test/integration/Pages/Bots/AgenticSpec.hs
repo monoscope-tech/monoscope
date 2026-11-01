@@ -601,7 +601,7 @@ spec = around withTestResources do
                     review = Investigations.ReviewRequest (addUTCTime 60 frozenTime) Investigations.ReviewEditors
                     retained = kind == EventReview && termination `elem` [Issues.CompletedFailed, Issues.CompletedTimedOut]
                 saved <- runQueryEffect tr $ Investigations.startCheckpointFor target checkpoint
-                pending <- runQueryEffect tr $ Investigations.beginOperation lease (Investigations.CheckpointCursor target saved.revision) proposal $ Just review
+                pending <- runQueryEffect tr $ Investigations.beginOperation (pure $ Right ()) lease (Investigations.CheckpointCursor target saved.revision) proposal $ Just review
                 identifier <- case pending of Investigations.AwaitOperationReview identifier _ -> pure identifier; _ -> fail "Expected a waiting proposal"
                 when approved $ void $ runTestBgNoReset tr $ Investigations.decideOperationReview testPid user identifier Investigations.ReviewApproved
                 [before] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
@@ -667,10 +667,10 @@ spec = around withTestResources do
                   review = Investigations.ReviewRequest (addUTCTime 60 frozenTime) Investigations.ReviewEditors
               saved <- runQueryEffect tr $ Investigations.startCheckpointFor target checkpoint
               let cursor = Investigations.CheckpointCursor target saved.revision
-              pending <- runQueryEffect tr $ Investigations.beginOperation lease cursor proposal $ Just review
+              pending <- runQueryEffect tr $ Investigations.beginOperation (pure $ Right ()) lease cursor proposal $ Just review
               identifier <- case pending of Investigations.AwaitOperationReview identifier _ -> pure identifier; _ -> fail "Expected a waiting action"
               when (progress /= WaitingDecision) $ void $ testServant tr $ AIThreads.operationReviewPostH testPid identifier $ AIThreads.OperationReviewForm Investigations.ReviewApproved
-              when (progress == ActionStarted) $ runQueryEffect tr (Investigations.beginOperation lease cursor proposal $ Just review) >>= (`shouldSatisfy` \case Investigations.ExecuteOperation{} -> True; _ -> False)
+              when (progress == ActionStarted) $ runQueryEffect tr (Investigations.beginOperation (pure $ Right ()) lease cursor proposal $ Just review) >>= (`shouldSatisfy` \case Investigations.ExecuteOperation{} -> True; _ -> False)
               [before] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
               when (kind == ScheduledReview && pause && progress == WaitingDecision) do
                 let ddl statement = withResource tr.trPool $ \connection -> void $ PGS.execute_ connection statement
@@ -724,7 +724,7 @@ spec = around withTestResources do
               lease = Investigations.RunLease turn context.startedAt
               proposal = Investigations.OperationProposal (Operation.NativeCall native) $ AI.OperationPolicy Catalog.ProjectWrite Issues.Autonomous ProjectMembers.PAdmin
           (cursor, _) <- runQueryEffect tr $ Investigations.prepareNativeOperation turn native
-          pending <- runQueryEffect tr $ Investigations.beginOperation lease cursor proposal $ Just review
+          pending <- runQueryEffect tr $ Investigations.beginOperation (pure $ Right ()) lease cursor proposal $ Just review
           identifier <- case pending of
             Investigations.AwaitOperationReview identifier _ -> pure identifier
             _ -> fail "Expected the native action to wait"
@@ -780,7 +780,7 @@ spec = around withTestResources do
             _ -> fail "Expected a retained waiting operation"
           artifacts >>= (`shouldSatisfy` null)
           for_ [Nothing, Just review{Investigations.expiresAt = addUTCTime 3600 frozenTime}, Just review{Investigations.approver = Investigations.ReviewEditors}] $ \requested -> do
-            again <- runQueryEffect tr $ Investigations.beginOperation lease cursor proposal requested
+            again <- runQueryEffect tr $ Investigations.beginOperation (pure $ Right ()) lease cursor proposal requested
             case again of
               Investigations.AwaitOperationReview retainedId request -> (retainedId, request) `shouldBe` (identifier, review)
               Investigations.RefuseOperation{} | scenario == ExpiredProposal -> pass
@@ -827,12 +827,14 @@ spec = around withTestResources do
           entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
           length entries `shouldBe` 1
 
-      for_ (["role", "policy", "review", "audience", "permission", "slack-unlink"] :: [Text]) $ \restriction ->
-        it ("agentOperation_authorityChangedBeforeAtomicWikiClaimDoesNotWrite: " <> toString restriction) \tr -> do
+      for_ [(tool, restriction) | tool <- ["write_project_memory", "send_to_slack"], restriction <- (["role", "policy", "review", "audience", "permission", "slack-unlink"] :: [Text])] $ \(tool, restriction) ->
+        it ("agentOperation_authorityChangedBeforeClaimDoesNotMutate: " <> show (tool, restriction)) \tr -> do
           let conversation = UUIDId $ UUID.fromWords 0 0 0 198
               page = UUIDId UUID.nil :: Memory.PageId
               user = (getResponse tr.trSessAndHeader).user.id
-              arguments = fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (0 :: Int)), ("document", AE.object ["title" AE..= ("Retained authority" :: Text), "body" AE..= ("Must not write after role loss" :: Text)])]
+              arguments = if tool == "send_to_slack" then one ("message", AE.String "Must not publish after authority loss") else fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (0 :: Int)), ("document", AE.object ["title" AE..= ("Retained authority" :: Text), "body" AE..= ("Must not write after role loss" :: Text)])]
+          posts <- newIORef (0 :: Int)
+          when (tool == "send_to_slack" && restriction /= "slack-unlink") $ setupSlackData tr testPid "T_ATOMIC_AUTHORITY"
           mode <-
             if restriction == "slack-unlink"
               then do
@@ -847,23 +849,30 @@ spec = around withTestResources do
               config = (AI.defaultAgenticConfig testPid){AI.access = access, AI.conversationId = Just conversation, AI.invocationMode = mode}
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
-                  [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "write" "function" $ LLM.ToolFunction "write_project_memory" arguments]}
+                  [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "write" "function" $ LLM.ToolFunction tool arguments]}
                   _ -> LLM.Message LLM.Assistant "Finished." LLM.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Left "No title request"
                 ELLM.EmbedDocuments{} -> pure $ Left "No embedding request"
+              transport = withHTTPResponses \_ url -> case url of
+                "https://slack.com/api/chat.postMessage" -> do
+                  modifyIORef' posts (+ 1)
+                  pure $ Just "{\"ok\":true,\"ts\":\"1735689600.000001\"}"
+                "https://slack.com/api/conversations.members" -> pure $ Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}"
+                _ -> pure Nothing
               revokeBeforeClaim = interpose @Time.Time \_ -> \case
                 Time.CurrentTime -> do
                   pending <- Hasql.interpScalar @Bool [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.slack_turn_checkpoints WHERE project_id = #{testPid} AND conversation_id = #{conversation} AND checkpoint->>'tag' = 'ToolsPending')|]
                   when pending $ case restriction of
                     "role" -> Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
                     "policy" -> Issues.setRoutinePolicy user testPid conversation Issues.Observe
-                    "review" -> Issues.setRoutinePolicy user testPid conversation $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.KnowledgeChanges) Catalog.ReviewEditors
+                    "review" -> Issues.setRoutinePolicy user testPid conversation $ Issues.ReviewSelected $ Catalog.ReviewSelection (one $ if tool == "send_to_slack" then Catalog.ExternalPosts else Catalog.KnowledgeChanges) Catalog.ReviewEditors
                     "audience" -> void $ Investigations.retainEvidenceAudience testPid conversation $ Investigations.PersonalAudience user
                     "slack-unlink" -> Hasql.interpExecute_ [HI.sql|DELETE FROM apis.slack_identities WHERE team_id = 'T_ATOMIC_AUTHORITY' AND slack_user_id = 'U0123ABCDEF'|]
                     _ -> Investigations.retainEvidencePermission testPid [conversation] ProjectMembers.PAdmin
                   pure frozenTime
                 request -> send @Time.Time $ coerce request
-          outcome <- tryAny $ runTestBg frozenTime tr (revokeBeforeClaim $ provider $ AI.runAgenticChatWithHistory config "Remember the finding" "model" "key")
+          outcome <- tryAny $ runTestBg frozenTime tr (transport $ revokeBeforeClaim $ provider $ AI.runAgenticChatWithHistory config "Remember the finding" "model" "key")
+          readIORef posts >>= (`shouldBe` 0)
           runQueryEffect tr (Memory.pageHistory testPid page) >>= (`shouldSatisfy` null)
           outcome `shouldSatisfy` either (isJust . fromException @AI.AgentStopped) (const False)
           case mode of

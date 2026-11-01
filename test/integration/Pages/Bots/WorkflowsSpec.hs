@@ -2175,7 +2175,7 @@ spec = around withTestResources do
                 let turn = Investigations.RunTurn testPid current.conversationId routine.requestedBy current.id
                     target = Investigations.RunCheckpoint turn
                 Just saved <- runQueryEffect tr $ Investigations.loadCheckpointFor target
-                runQueryEffect tr (Investigations.beginOperation (Investigations.RunLease turn current.startedAt) (Investigations.CheckpointCursor target saved.revision) operation.proposal Nothing) >>= (`shouldSatisfy` \case Investigations.ExecuteOperation{} -> True; _ -> False)
+                runQueryEffect tr (Investigations.beginOperation (pure $ Right ()) (Investigations.RunLease turn current.startedAt) (Investigations.CheckpointCursor target saved.revision) operation.proposal Nothing) >>= (`shouldSatisfy` \case Investigations.ExecuteOperation{} -> True; _ -> False)
               [beforeStop] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid current.id
               case reviewCase of
                 StopClaimedAction -> void $ stop "U0123ABCDEF" "ReviewStopClaimed"
