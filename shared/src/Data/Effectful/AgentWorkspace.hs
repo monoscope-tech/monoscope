@@ -1201,7 +1201,7 @@ verifyArtifactRegression options request = do
               when (side == Head && firstFrozen /= Just frozen) do
                 change $ \measured -> measured{reason = Just "Candidate changed the frozen regression files"}
                 invalid
-            result <- rpc @LogExit $ ExecuteLogged $ LoggedCommand (GuestCommand ("/usr/bin/setpriv" :| ["--reuid=1000", "--regid=1000", "--clear-groups", "--no-new-privs", "--reset-env", "--", "/usr/bin/env", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "/bin/bash", "--noprofile", "--norc", "/run/monoscope-regression.sh"]) (Just "/workspace") False) logPath 1048576 CloseSandbox
+            result <- rpc @LogExit $ ExecuteLogged $ LoggedCommand (GuestCommand (agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-regression.sh"]) (Just "/workspace") False) logPath 1048576 CloseSandbox
             case result of
               LogLimit -> change $ \measured -> measured{status = OutputLimit, reason = Just "Check output limit"}
               Exited exit -> do
@@ -1373,7 +1373,7 @@ lookupWorkspace options operation request = do
                 ensure $ actual == expected.sha256
               writeFileBS (source </> "prepare.sh") scriptBytes
               copy (source </> "prepare.sh") "/run/monoscope-prepare.sh"
-              void $ execute (Just "/workspace") True $ "/usr/bin/setpriv" :| ["--reuid=1000", "--regid=1000", "--clear-groups", "--no-new-privs", "--reset-env", "--", "/usr/bin/env", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
+              void $ execute (Just "/workspace") True $ agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
               revision <- guestGit ["rev-parse", "HEAD"]
               after <- sourceHash
               ensure $ revision == baseText && before == after

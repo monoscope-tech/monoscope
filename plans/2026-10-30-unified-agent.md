@@ -626,6 +626,18 @@ The review Page preserves its prior content and adds the actual Slack capture at
 See [populated Slack charts](../docs/reviews/2026-11-01-slack-populated-charts.md).
 Whole-branch reviews, remaining live scenarios, Linux/KVM, host loss, final signoff, and publication remain open.
 
+The full shared-workspace review reuses the existing guest command wrapper for preparation and verification.
+The fresh Mac CLI passes build, packaging, signing, linkage, version and help checks.
+The complete native review/fix group passes 50 examples in 348.4111 seconds; all 2,098 doctest examples pass.
+A separate local Lima VM now provides ARM64 Linux/KVM without project or home mounts.
+The pinned SDK boots and restores a retained edit under UID 1000; all twenty worker tests pass in Linux.
+The current Linux CLI also builds locally through OrbStack using the shared caches.
+Its actual KVM preparation and frozen comparison pass, while a weakened candidate test is blocked.
+Five observed CLI guest processes use KVM with two CPUs and 1024 MiB.
+The fresh remote inventory still includes all twenty selected heads and adapted #661; current master is already an ancestor.
+See the [workspace interpreter review](../docs/reviews/2026-11-01-workspace-interpreter.md) for scope and receipts.
+Full Linux application jobs, remaining host-loss and live acceptance, whole-branch review, final gates, and publication remain open.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

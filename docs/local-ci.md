@@ -158,6 +158,28 @@ shows no health status is therefore normal, not broken.
 Dependency images rebuild when their declared inputs change or through a manual workflow run.
 There is no weekly rebuild. Use the manual run for base image or system package updates.
 
+### Native Linux and KVM checks
+
+The normal CI container has no KVM device and deliberately hides host guest images.
+A passing container check does not establish native VM acceptance.
+On this Mac, the OrbStack host also has no `/dev/kvm` device.
+Use a separate local Linux VM for those checks; keep image builds on OrbStack.
+
+The tested setup uses Lima 2.2.1 with `vmType: vz`, `arch: aarch64`,
+and `nestedVirtualization: true`, as described by the
+[Lima configuration](https://github.com/lima-vm/lima/blob/v2.2.1/templates/default.yaml).
+The outer VM has four CPUs, eight GiB of RAM, and a 64 GiB sparse disk.
+Project and home folders are not mounted. Rosetta shares only its runtime.
+The SDK's inner guest uses two CPUs and 1024 MiB.
+Check the KVM API, actual QEMU accelerator, and open device descriptor;
+an existing device path alone does not prove that a guest uses KVM.
+The [workspace review](reviews/2026-11-01-workspace-interpreter.md) records the current acceptance scope.
+Keep test binaries, assets, and receipts in the guest user's home; a VM reboot clears `/tmp`.
+
+If a required watcher restart leaves an orphaned GHC process, inspect its parent,
+working directory, listeners, and children before cleanup. Stop only a confirmed
+detached process from that checkout. Preserve active watchers and other worktrees.
+
 ## Production images and deployment
 
 Same-repository PRs run `Production image ready` and publish a production image.
