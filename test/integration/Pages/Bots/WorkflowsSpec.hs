@@ -582,7 +582,8 @@ spec = around withTestResources do
       it "personalSlackOAuth_refreshesAnExpiredGrantOnceAndKeepsItsSubject" \tr -> do
         (encKey, subject) <- slackRefreshFixture tr "T_REFRESH"
         let resolve = Slack.resolveSlackEvidenceGrant encKey "test-client" "test-secret" subject
-        (requests, resolved) <- runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode slackRefreshedToken) resolve
+            response = slackRefreshedToken & key "token_type" . _String .~ "Bearer" & _Object . Lens.at "user_id" ?~ AE.String "U0123ABCDEF"
+        (requests, resolved) <- runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode response) resolve
         fmap (.accessToken) resolved `shouldBe` Right "renewed-token"
         map fst requests `shouldBe` ["https://slack.com/api/oauth.v2.user.access"]
         map (lookup "refresh_token" . parseSimpleQuery . toStrict . snd) requests `shouldBe` [Just "refresh-once"]
@@ -690,7 +691,7 @@ spec = around withTestResources do
         let userId = (getResponse tr.trSessAndHeader).user.id
             stateId = UUIDId $ UUID.fromWords 0 0 10 1
             encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            oauth = AE.object ["ok" AE..= True, "token_type" AE..= ("user" :: Text), "access_token" AE..= ("personal-token" :: Text), "authed_user" AE..= AE.object ["id" AE..= ("U0123ABCDEF" :: Text), "scope" AE..= T.intercalate "," Slack.slackEvidenceScopes], "team" AE..= AE.object ["id" AE..= ("T_PERSONAL" :: Text)]]
+            oauth = AE.object ["ok" AE..= True, "token_type" AE..= ("Bearer" :: Text), "access_token" AE..= ("personal-token" :: Text), "user_id" AE..= ("U0123ABCDEF" :: Text), "app_id" AE..= ("A_PERSONAL" :: Text), "scope" AE..= T.intercalate "," Slack.slackEvidenceScopes, "team" AE..= AE.object ["id" AE..= ("T_PERSONAL" :: Text)]]
         verifier <- runQueryEffect tr Slack.newSlackPKCE
         runQueryEffect tr (Slack.createSlackEvidenceConsent stateId userId testPid "U0123ABCDEF" verifier) >>= (`shouldBe` True)
         (requests, result) <- runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode oauth) $ tryAny $ void $ atAuthToBase tr.trSessAndHeader $ SlackPage.linkProjectGetH (Just "personal-code") (Just stateId.toText)
@@ -730,6 +731,7 @@ spec = around withTestResources do
         let userId = (getResponse tr.trSessAndHeader).user.id
             encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
             oauth = AE.object ["ok" AE..= True, "token_type" AE..= ("user" :: Text), "access_token" AE..= ("personal-token" :: Text), "authed_user" AE..= AE.object ["id" AE..= ("U0123ABCDEF" :: Text), "scope" AE..= ("search:read.public" :: Text)], "team" AE..= AE.object ["id" AE..= ("T_REJECT" :: Text)]]
+            bearer = oauth & key "token_type" . _String .~ "Bearer" & _Object . Lens.at "user_id" ?~ AE.String "U0123ABCDEF"
             cases =
               [ (403, oauth & key "team" . key "id" . _String .~ "T_OTHER")
               , (403, oauth & key "authed_user" . key "id" . _String .~ "U_OTHER")
@@ -737,6 +739,11 @@ spec = around withTestResources do
               , (400, oauth & key "authed_user" . key "scope" . _String .~ "channels:history")
               , (400, oauth & key "access_token" . _String .~ "")
               , (400, oauth & key "token_type" . _String .~ "bot")
+              , (400, oauth & key "token_type" . _String .~ "Bearer")
+              , (400, bearer & key "user_id" . _String .~ "U_OTHER")
+              , (403, bearer & key "user_id" . _String .~ "U_OTHER" & key "authed_user" . key "id" . _String .~ "U_OTHER")
+              , (403, bearer & key "team" . key "id" . _String .~ "T_OTHER")
+              , (400, bearer & key "authed_user" . key "scope" . _String .~ "search:read.public,chat:write")
               , (400, oauth & key "ok" . _Bool .~ False)
               , (400, AE.object ["ok" AE..= True])
               ]

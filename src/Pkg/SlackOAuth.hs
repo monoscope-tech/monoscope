@@ -64,7 +64,8 @@ exchangeUserToken clientId clientSecret request = do
     parseGrant now = AE.withObject "Slack user authorization" \response -> do
       ok <- response AE..: "ok"
       tokenType <- response AE..: "token_type"
-      unless (ok && tokenType == ("user" :: Text)) $ fail "User authorization required"
+      rootUser <- response AE..:? "user_id"
+      unless (ok && (tokenType == ("user" :: Text) || tokenType == "Bearer" && isJust rootUser)) $ fail "User authorization required"
       team <- response AE..:? "team"
       user <- response AE..:? "authed_user"
       let required value fallback = maybe (maybe (fail "Missing OAuth subject") pure fallback) (AE..: "id") value
@@ -72,8 +73,8 @@ exchangeUserToken clientId clientSecret request = do
             ExchangeUserCode{} -> (Nothing, Nothing, Nothing)
             RefreshUserToken (SlackTokenRefresh teamId slackUserId scopes _) -> (Just teamId, Just slackUserId, Just scopes)
       teamId <- required team expectedTeam
-      slackUserId <- required user expectedUser
-      unless (all (== teamId) expectedTeam && all (== slackUserId) expectedUser) $ fail "Slack refresh identity changed"
+      slackUserId <- required user (rootUser <|> expectedUser)
+      unless (not (T.null teamId) && not (T.null slackUserId) && all (== teamId) expectedTeam && all (== slackUserId) expectedUser && all (== slackUserId) rootUser) $ fail "Slack OAuth identity changed"
       nestedScope <- traverse (AE..:? "scope") user
       rootScope <- response AE..:? "scope"
       let decodeScope = V.fromList . filter (not . T.null) . map T.strip . T.splitOn ","
