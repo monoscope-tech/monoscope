@@ -417,7 +417,7 @@ outputFormatInstructions =
   ## Response Schema
   Return a single JSON object with these optional fields:
   - `explanation` (string, markdown): your data-driven analysis.
-  - `query` (string): KQL query.
+  - `query` (string): executable KQL only. Omit it when no telemetry query is needed; never put prose, a field description, or a placeholder here.
   - `visualization` (string): one of `timeseries`, `timeseries_line`, `distribution`, `pie_chart`, `top_list`, `table`, `stat`, `heatmap`, `logs`.
   - `widgets` (array): widget configs of the form `{ "type": "...", "query": "...", "title": "..." }`.
   - `time_range` (object, snake_case keys):
@@ -430,7 +430,7 @@ outputFormatInstructions =
      a. Call `run_query` first to fetch real data.
      b. Inspect the results for patterns, trends, spikes, anomalies.
      c. Return `query` + `visualization` + a data-driven `explanation`.
-  2. Analysis-only requests: call tools as needed to retrieve data, then explain.
+  2. Analysis-only requests: call tools as needed to retrieve data, then explain. For schema or tool descriptions, return only `explanation`; omit `query`, `visualization`, and `widgets`. Put illustrative queries in the explanation.
   3. Pure KQL translation (no chart): return just the `query`.
 
   ## Explanation Guidelines

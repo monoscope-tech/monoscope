@@ -43,6 +43,7 @@ import Pages.BodyWrapper (BWConfig, OnboardingStep (NotifChannel), PageCtx (..),
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateCfg (..), emptyState_, navBar)
 import Pkg.AI qualified as AI
+import Pkg.CLIFormat qualified as CLIFormat
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
@@ -58,7 +59,7 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
-import Utils (faSprite_, formatUTC, getDurationNSMS, hostPath, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
+import Utils (faSprite_, formatUTC, hostPath, toUriStr)
 import Web.HttpApiData (parseUrlPiece)
 
 
@@ -577,98 +578,84 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
         total k = maybe (0 :: Int) round (report.reportJson ^? key k . key "total" . _Number)
         (totalEvents, totalErrors) = (total "events", total "errors")
 
-    -- Renders a chart when the model picked a visualization, a result table when
-    -- it produced a bare query, then any accompanying explanation.
+    -- Use each widget's declared row/chart shape on every bot surface.
     dispatchAIResponse conversation resp = do
       AI.requireAgentAccess access pid
       now <- Time.currentTime
       let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
           iso = fmap (toText . iso8601Show)
-          renderWidget widget = do
-            let query = fromMaybe "" widget.query
-                chartType = Widget.mapWidgetTypeToChartType widget.wType
-                queryUrl = maybe (explorerUrl <> "viz_type=" <> chartType <> "&query=" <> toUriStr query) (\identifier -> hostPath envCfg.hostUrl $ "p/" <> pid.toText <> "/ai/" <> identifier.toText) conversation
-                viewLabel = bool "View in Log Explorer" "View in Monoscope" (isJust conversation)
-                title = fromMaybe userQuery widget.title
-            imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid widget Nothing (iso fromTimeM) (iso toTimeM)
-            send $ ReplyChart $ case target of
-              Slack ->
-                AE.object
-                  [ "blocks"
-                      AE..= arr
-                        ( [slackHeader (T.take 150 $ botEmoji EmojiChart <> " " <> title)]
-                            <> maybeToList (slackImage (T.take 2000 $ "Chart: " <> title) Nothing <$> mfilter ((<= 3000) . T.length) imageUrl)
-                            <> [ slackContext ["*Query:* `" <> query <> "`"]
-                               , slackActions [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " " <> viewLabel) queryUrl]
-                               ]
-                        )
-                  , "response_type" AE..= ("in_channel" :: Text)
-                  , "replace_original" AE..= True
-                  ]
-              Discord ->
-                dcContainer 26879
-                  $ [dcText $ botEmoji EmojiChart <> " **" <> title <> "**"]
-                  <> dcGallery [(imageUrl, "Chart visualization: " <> title)]
-                  <> [ dcText $ "**Query:** `" <> query <> "`"
-                     , dcLinkButton (botEmoji EmojiSearch <> " " <> viewLabel) queryUrl
-                     ]
-              -- Twilio content-template variables: WhatsApp renders the chart itself, so
-              -- "3" is the query string the template appends to the chart endpoint, "4"
-              -- the (host-relative) explorer link.
-              WhatsApp ->
-                AE.object
-                  [ "1" AE..= ("*" <> title <> "*")
-                  , "2" AE..= ("`" <> query <> "`")
-                  , "3" AE..= ("time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr pid.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr (fold $ iso fromTimeM) <> "&to=" <> toUriStr (fold $ iso toTimeM))
-                  , "4" AE..= (pid.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query)
-                  ]
-      if null resp.widgets
-        then do
-          case resp.query of
-            Nothing -> send $ ReplyText $ textReply $ fromMaybe "No response available" resp.explanation
-            Just query -> do
-              case resp.visualization of
-                Just _ -> traverse_ renderWidget $ AI.responseWidgets resp
-                Nothing -> case parseQueryToAST query of
+          renderWidget widget
+            | (queryM, Charts.DTText) <- Widget.chartQuery widget = do
+                let query = fromMaybe "" queryM
+                case parseQueryToAST query of
                   Left _ -> send $ ReplyText $ formatBotError target (QueryParseError query)
                   Right query' ->
                     LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing Nothing
                       >>= send
                       . ReplyText
                       . tableReply query
-              whenJust resp.explanation (send . ReplyText . textReply)
-        else do
-          traverse_ renderWidget $ take 10 $ AI.responseWidgets resp
+            | otherwise = do
+                let query = fromMaybe "" widget.query
+                    chartType = Widget.mapWidgetTypeToChartType widget.wType
+                    queryUrl = maybe (explorerUrl <> "viz_type=" <> chartType <> "&query=" <> toUriStr query) (\identifier -> hostPath envCfg.hostUrl $ "p/" <> pid.toText <> "/ai/" <> identifier.toText) conversation
+                    viewLabel = bool "View in Log Explorer" "View in Monoscope" (isJust conversation)
+                    title = fromMaybe userQuery widget.title
+                imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid widget Nothing (iso fromTimeM) (iso toTimeM)
+                send $ ReplyChart $ case target of
+                  Slack ->
+                    AE.object
+                      [ "blocks"
+                          AE..= arr
+                            ( [slackHeader (T.take 150 $ botEmoji EmojiChart <> " " <> title)]
+                                <> maybeToList (slackImage (T.take 2000 $ "Chart: " <> title) Nothing <$> mfilter ((<= 3000) . T.length) imageUrl)
+                                <> [ slackContext ["*Query:* `" <> query <> "`"]
+                                   , slackActions [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " " <> viewLabel) queryUrl]
+                                   ]
+                            )
+                      , "response_type" AE..= ("in_channel" :: Text)
+                      , "replace_original" AE..= True
+                      ]
+                  Discord ->
+                    dcContainer 26879
+                      $ [dcText $ botEmoji EmojiChart <> " **" <> title <> "**"]
+                      <> dcGallery [(imageUrl, "Chart visualization: " <> title)]
+                      <> [ dcText $ "**Query:** `" <> query <> "`"
+                         , dcLinkButton (botEmoji EmojiSearch <> " " <> viewLabel) queryUrl
+                         ]
+                  -- Twilio content-template variables: WhatsApp renders the chart itself, so
+                  -- "3" is the query string the template appends to the chart endpoint, "4"
+                  -- the (host-relative) explorer link.
+                  WhatsApp ->
+                    AE.object
+                      [ "1" AE..= ("*" <> title <> "*")
+                      , "2" AE..= ("`" <> query <> "`")
+                      , "3" AE..= ("time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr pid.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr (fold $ iso fromTimeM) <> "&to=" <> toUriStr (fold $ iso toTimeM))
+                      , "4" AE..= (pid.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query)
+                      ]
+      case AI.responseWidgets resp of
+        [] -> send $ ReplyText $ textReply $ fromMaybe "No response available" resp.explanation
+        widgets -> do
+          traverse_ renderWidget $ take 10 widgets
           whenJust resp.explanation (send . ReplyText . textReply)
 
     tableReply query = \case
       Left _ -> formatBotError target (QueryParseError query)
       Right (_, _, 0) -> formatBotError target NoDataError
       Right (requestVecs, colNames, resultCount) ->
-        let colIdxMap = listToIndexHashMap colNames
-            rows = V.toList (V.take 15 requestVecs)
+        let rows = V.toList (V.take 15 requestVecs)
             shownCount = length rows
-            pad n = T.take n . T.justifyLeft n ' '
-            txt n v k = pad n $ fromMaybe "" $ lookupVecTextByKey v colIdxMap k
-            row v =
-              unwords
-                [ txt 18 v "timestamp"
-                , txt 15 v "service"
-                , txt 20 v "span_name"
-                , pad 8 (toText $ getDurationNSMS $ fromIntegral $ lookupVecIntByKey v colIdxMap "duration")
-                , botEmoji (if lookupVecBoolByKey v colIdxMap "errors" then EmojiError else EmojiSuccess)
-                ]
-            tableData = "```\n" <> unlines (unwords [pad 20 "TIME", pad 15 "SERVICE", pad 20 "SPAN NAME", pad 8 "DURATION", "STATUS"] : map row rows) <> "```"
+            cells = map (map $ T.take 60 . unwords . words) $ colNames : map (map CLIFormat.valToText . V.toList) rows
+            tableData = "```\n" <> T.take 1200 (unlines $ map (CLIFormat.formatRow $ CLIFormat.colWidths cells) cells) <> "\n```"
             url' = explorerUrl <> "query=" <> toUriStr query
             moreText = if resultCount > shownCount then "\n_" <> show (resultCount - shownCount) <> " more results in Log Explorer_" else ""
-            content = botEmoji EmojiTable <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " events)\n`" <> query <> "`\n" <> tableData <> moreText <> "\n"
+            content = botEmoji EmojiTable <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " rows)\n`" <> query <> "`\n" <> tableData <> moreText <> "\n"
          in case target of
               Discord -> AE.object ["content" AE..= (content <> "\n[View in Log Explorer →](" <> url' <> ")")]
               WhatsApp -> AE.object ["body" AE..= (content <> "\n" <> url')]
               Slack ->
                 slackResponse
                   [ slackHeader $ botEmoji EmojiTable <> " Query Results"
-                  , slackContext ["Showing *" <> show shownCount <> "* of *" <> show resultCount <> "* events"]
+                  , slackContext ["Showing *" <> show shownCount <> "* of *" <> show resultCount <> "* rows"]
                   , slackSection $ "`" <> query <> "`"
                   , AE.object ["type" AE..= ("divider" :: Text)]
                   , slackSection tableData

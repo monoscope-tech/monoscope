@@ -1006,38 +1006,44 @@ spec = around withTestResources do
           widgetAnswer :: Maybe Text -> Maybe Text -> Text
           widgetAnswer query commentary = decodeUtf8 $ AE.encode $ AE.object ["explanation" AE..= commentary, "query" AE..= query, "widgets" AE..= widgets]
           explanation = "Error volume and request count."
-      for_ ([("show errors", 1, "No errors were found.", "No errors were found.", 0), ("show weekly report", 0, "report found", "No errors were found.", 0), ("Call send_to_slack exactly once, then report completion.", 1, "No errors were found.", "No errors were found.", 0), ("Show charts of error volume and request count", 1, explanation, widgetAnswer Nothing (Just explanation), 2), ("Show charts with a legacy primary query", 1, explanation, widgetAnswer (Just "summarize count()") (Just explanation), 2), ("Show charts without commentary", 1, "", widgetAnswer Nothing Nothing, 2)] :: [(Text, Int, Text, Text, Int)]) \(prompt, expectedCalls, expectedReply, answer, expectedCharts) ->
-        it ("Slack: handles queued query end-to-end: " <> toString prompt) \tr -> do
-          setupSlackAgent tr testPid "T_WF_SLACK"
-          calls <- newIORef (0 :: Int)
-          let interaction = slackInteraction "/monoscope" prompt "T_WF_SLACK"
-              provider = interpose @ELLM.LLM \_ -> \case
-                ELLM.CallAgenticChat{} -> do
-                  modifyIORef' calls (+ 1)
-                  pure $ Right $ Chat.Message Chat.Assistant answer Chat.defaultMessageData
-                ELLM.CallLLM{} -> pure $ Left "No title model"
-                ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
-              transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"channel\":\"C0123ABCDEF\",\"ts\":\"1735689601.000001\",\"members\":[\"U0123ABCDEF\"]}"
-          receipt <- toBaseServantResponse tr $ slackInteractionsH interaction
-          fromMaybe "" (extractResponseText receipt) `shouldSatisfy` T.isInfixOf "/ai/runs/"
-          queued <- runQueryEffect tr $ Hasql.interp @[HI.OneColumn (Aeson Jobs.BgJobs)] [HI.sql|SELECT payload FROM background_jobs WHERE payload->>'tag' = 'RunConversation' AND status = 'queued'|]
-          length queued `shouldBe` 1
-          (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ for_ queued \(HI.OneColumn (Aeson job)) -> Jobs.processBackgroundJob tr.trATCtx job
-          let replies = [body | (url, body) <- requests, url == "https://slack.com/api/chat.postMessage"]
-          length replies `shouldBe` expectedCharts + if T.null expectedReply then 0 else 1
-          T.concat (map (decodeUtf8 @Text) replies) `shouldSatisfy` T.isInfixOf expectedReply
-          payloads <- traverse (either fail pure . AE.eitherDecode @AE.Value) replies
-          let images = concatMap (toListOf $ key "blocks" . _Array . traverse . key "image_url" . _String) payloads
-          length images `shouldBe` expectedCharts
-          for_ images $ \url -> url `shouldSatisfy` T.isInfixOf ("p/" <> testPid.toText <> "/widget.png?widgetZ=")
-          readIORef calls >>= (`shouldBe` expectedCalls)
-          Just completed <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackCommand $ Issues.slackCommandConversationId testPid interaction.team_id interaction.channel_id interaction.trigger_id
-          completed.status `shouldBe` Issues.RunSucceeded
-          when (expectedCharts > 0) do
-            history <- runQueryEffect tr $ Issues.selectChatHistory testPid completed.conversationId
-            [V.length values | message <- history, Just (Aeson (AE.Array values)) <- [message.widgets]] `shouldBe` [expectedCharts]
-            let buttons = concatMap (toListOf $ key "blocks" . _Array . traverse . key "elements" . _Array . traverse . key "url" . _String) payloads
-            buttons `shouldSatisfy` any (T.isInfixOf $ "/ai/" <> completed.conversationId.toText)
+      for_
+        ( [("show errors", 1, "No errors were found.", "No errors were found.", 0), ("show weekly report", 0, "report found", "No errors were found.", 0), ("Call send_to_slack exactly once, then report completion.", 1, "No errors were found.", "No errors were found.", 0), ("Show charts of error volume and request count", 1, explanation, widgetAnswer Nothing (Just explanation), 2), ("Show charts with a legacy primary query", 1, explanation, widgetAnswer (Just "summarize count()") (Just explanation), 2), ("Show charts without commentary", 1, "", widgetAnswer Nothing Nothing, 2)]
+            <> [("Show " <> shape <> bool " from a primary query: " " from a widget: " modern <> query, 1, expected, decodeUtf8 $ AE.encode $ if modern then AE.object ["widgets" AE..= ([AE.object ["type" AE..= shape, "query" AE..= query]] :: [AE.Value])] else AE.object ["query" AE..= query, "visualization" AE..= shape], 0) | shape <- ["logs", "table", "top_list"], modern <- [False, True], (query, expected) <- [("name == \"qa-missing-event\"", "No data found"), ("summarize matches=count()", "matches\n0")]]
+            :: [(Text, Int, Text, Text, Int)]
+        )
+        \(prompt, expectedCalls, expectedReply, answer, expectedCharts) ->
+          it ("Slack: handles queued query end-to-end: " <> toString prompt) \tr -> do
+            setupSlackAgent tr testPid "T_WF_SLACK"
+            calls <- newIORef (0 :: Int)
+            let interaction = slackInteraction "/monoscope" prompt "T_WF_SLACK"
+                provider = interpose @ELLM.LLM \_ -> \case
+                  ELLM.CallAgenticChat{} -> do
+                    modifyIORef' calls (+ 1)
+                    pure $ Right $ Chat.Message Chat.Assistant answer Chat.defaultMessageData
+                  ELLM.CallLLM{} -> pure $ Left "No title model"
+                  ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
+                transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"channel\":\"C0123ABCDEF\",\"ts\":\"1735689601.000001\",\"members\":[\"U0123ABCDEF\"]}"
+            receipt <- toBaseServantResponse tr $ slackInteractionsH interaction
+            fromMaybe "" (extractResponseText receipt) `shouldSatisfy` T.isInfixOf "/ai/runs/"
+            queued <- runQueryEffect tr $ Hasql.interp @[HI.OneColumn (Aeson Jobs.BgJobs)] [HI.sql|SELECT payload FROM background_jobs WHERE payload->>'tag' = 'RunConversation' AND status = 'queued'|]
+            length queued `shouldBe` 1
+            (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ for_ queued \(HI.OneColumn (Aeson job)) -> Jobs.processBackgroundJob tr.trATCtx job
+            let replies = [body | (url, body) <- requests, url == "https://slack.com/api/chat.postMessage"]
+            length replies `shouldBe` expectedCharts + if T.null expectedReply then 0 else 1
+            payloads <- traverse (either fail pure . AE.eitherDecode @AE.Value) replies
+            let rendered = T.concat $ mapMaybe extractResponseText payloads <> concatMap (toListOf $ key "blocks" . _Array . traverse . key "text" . key "text" . _String) payloads
+            rendered `shouldSatisfy` T.isInfixOf expectedReply
+            let images = concatMap (toListOf $ key "blocks" . _Array . traverse . key "image_url" . _String) payloads
+            length images `shouldBe` expectedCharts
+            for_ images $ \url -> url `shouldSatisfy` T.isInfixOf ("p/" <> testPid.toText <> "/widget.png?widgetZ=")
+            readIORef calls >>= (`shouldBe` expectedCalls)
+            Just completed <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackCommand $ Issues.slackCommandConversationId testPid interaction.team_id interaction.channel_id interaction.trigger_id
+            completed.status `shouldBe` Issues.RunSucceeded
+            when (expectedCharts > 0) do
+              history <- runQueryEffect tr $ Issues.selectChatHistory testPid completed.conversationId
+              [V.length values | message <- history, Just (Aeson (AE.Array values)) <- [message.widgets]] `shouldBe` [expectedCharts]
+              let buttons = concatMap (toListOf $ key "blocks" . _Array . traverse . key "elements" . _Array . traverse . key "url" . _String) payloads
+              buttons `shouldSatisfy` any (T.isInfixOf $ "/ai/" <> completed.conversationId.toText)
             (retried, ()) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ for_ queued \(HI.OneColumn (Aeson job)) -> Jobs.processBackgroundJob tr.trATCtx job
             [url | (url, _) <- retried, url == "https://slack.com/api/chat.postMessage"] `shouldBe` []
             readIORef calls >>= (`shouldBe` expectedCalls)
