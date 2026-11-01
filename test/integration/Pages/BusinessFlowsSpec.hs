@@ -18,7 +18,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Connection, Only (..))
+import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PGS
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Error.Static (catchError)
@@ -40,7 +40,7 @@ import Pages.Replay qualified as Replay
 import Pages.Settings qualified as LemonSqueezy
 import Pages.Settings qualified as S3
 import Pages.Settings qualified as Settings
-import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
+import Pkg.DeriveUtils (mkHasqlPool)
 import Pkg.TestUtils hiding (testPid)
 import Servant.API (ResponseHeader (..), getResponse, lookupResponseHeader)
 import Servant.Server qualified as ServantS

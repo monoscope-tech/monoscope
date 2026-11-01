@@ -20,10 +20,8 @@ import Data.UUID.V4 qualified as UUID4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Log.Backend.LogList qualified as LogList
 import Log.Data (showLogMessage)
@@ -31,7 +29,6 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Pages.Share qualified as Share
 import Pkg.TestUtils
-import Relude
 import Servant qualified
 import System.Environment (setEnv, unsetEnv)
 import System.Exit (ExitCode (..))

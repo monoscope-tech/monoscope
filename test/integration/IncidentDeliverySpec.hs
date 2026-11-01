@@ -7,7 +7,6 @@ import Control.Lens ((.~), (^.), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Lens (key, _String)
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified as Notify
@@ -16,7 +15,6 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -38,9 +36,7 @@ import Pages.Bots.Slack qualified as SlackPage
 import Pages.Issues qualified as IssuesPage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import Relude
 import Servant qualified
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)

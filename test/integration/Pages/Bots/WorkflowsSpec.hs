@@ -31,7 +31,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Error.Static (catchError)
@@ -65,19 +64,17 @@ import Pages.CodeContext qualified as CodeContextPage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.AgentOperation qualified as Operation
-import Pkg.DeriveUtils (UUIDId (..), idFromText)
+import Pkg.DeriveUtils (idFromText)
 import Pkg.Git qualified as Git
 import Pkg.SlackRateLimit qualified as RateLimit
 import Pkg.TestClock (advanceTime)
 import Pkg.TestUtils hiding (call)
 import Pkg.TestUtils qualified as Test
-import Relude
 import Servant.API.ResponseHeaders (getHeaders, getResponse)
 import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx)
-import Test.Hspec (Spec, anyException, around, describe, expectationFailure, it, shouldBe, shouldNotBe, shouldNotContain, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
 import Web.ApiTypes (ApiActor (..))

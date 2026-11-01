@@ -548,7 +548,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       addRespHeaders
         $ PageCtx bwconf
         $ IssueFound
-        $ let view = IssueView{pid, requestId, issue, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom, rollupSqlSig = Nothing}
+        $ let view = IssueView{pid, issue, requestId, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom, rollupSqlSig = Nothing}
            in view{rollupSqlSig = issueRollupSql view <&> \(sql, _) -> Widget.sqlSignature secret pid Nothing (Just sql)}
   where
     -- A lookup that only decides whether an optional panel renders: a throw or a 10s stall
@@ -936,8 +936,8 @@ instance ToHtml IssueDetail where
 -- error pattern rather than the issue row.
 data IssueView = IssueView
   { pid :: Projects.ProjectId
-  , requestId :: UUIDId "ai_routine_run"
   , issue :: Issues.Issue
+  , requestId :: UUIDId "ai_routine_run"
   , apiEvidence :: Maybe ([ApiChanges.AnomalyVM], Maybe Catalog.CatalogEntry)
   , traceRef :: Maybe (Text, UTCTime)
   , selectedAt :: UTCTime

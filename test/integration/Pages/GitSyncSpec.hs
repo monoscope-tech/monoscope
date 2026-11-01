@@ -9,7 +9,7 @@ import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
-import Data.Default (Default (..), def)
+import Data.Default (Default (..))
 import Data.Effectful.Wreq qualified as W
 import Data.Map.Strict qualified as M
 import Data.Maybe (fromJust)

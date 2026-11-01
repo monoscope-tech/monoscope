@@ -29,7 +29,7 @@ import Ki qualified
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.LogExplorer.LiveTail qualified as LiveTailPage
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
+import Pkg.DeriveUtils (AesonText (..))
 import Pkg.LiveTail qualified as LT
 import Pkg.TestUtils
 import Servant.Types.SourceT (SourceT (..), StepT (..))

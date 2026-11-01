@@ -9,7 +9,6 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
 import Data.Map.Strict qualified as M
@@ -52,10 +51,8 @@ import Pages.CodeContext qualified as PageCodeContext
 import Pages.Components (stackTrace_)
 import Pages.Dashboards qualified as DashboardPage
 import Pages.GitSync qualified as GitSyncPage
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.TestUtils
-import Relude
 import Servant (getHeaders, getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))

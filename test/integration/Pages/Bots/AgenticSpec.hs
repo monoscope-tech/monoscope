@@ -10,7 +10,6 @@ import Control.Lens ((^..), (^?))
 import Control.Lens qualified as Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, values, _Array, _String)
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID qualified as UUIDEff
@@ -53,17 +52,14 @@ import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils hiding (call)
 import Pkg.TestUtils qualified as Test
-import Relude
 import Servant (ServerError (..))
 import Servant.API.ResponseHeaders (getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Timeout qualified as Timeout
 import System.Types (ATBackgroundCtx)
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotBe, shouldNotContain, shouldSatisfy, shouldThrow)
 import UnliftIO.Async qualified as Async
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (urlDecodeAsForm)

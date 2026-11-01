@@ -17,7 +17,6 @@ import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.OpenApi qualified as OpenApi
 import Pkg.SchemaLearning.Catalog qualified as Catalog

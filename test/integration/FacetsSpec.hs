@@ -28,7 +28,7 @@ import Models.Apis.SchemaCatalog qualified as SC
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.LogExplorer.Log qualified as LogPage
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
+import Pkg.DeriveUtils (AesonText (..))
 import Pkg.Parser.Expr qualified as PE
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot

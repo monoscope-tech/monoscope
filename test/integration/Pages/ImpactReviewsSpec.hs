@@ -20,7 +20,6 @@ import Data.ByteString.Char8 qualified as BSC
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
 import Data.Conduit.Combinators qualified as CC
-import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.AgentWorkspace.Guest qualified as Guest
@@ -41,7 +40,7 @@ import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..), execute, query)
+import Database.PostgreSQL.Simple (execute, query)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (Eff, IOE, runEff, (:>))
@@ -74,7 +73,6 @@ import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.GitCommand qualified as HostGit
 import Pkg.ImpactReview qualified as Impact
@@ -82,7 +80,6 @@ import Pkg.Minio qualified as Storage
 import Pkg.Parser.Stats qualified as KQL
 import Pkg.TestUtils hiding (call)
 import Pkg.TestUtils qualified as Test
-import Relude
 import Servant (ServerError (..), getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
