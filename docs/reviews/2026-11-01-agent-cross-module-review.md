@@ -231,6 +231,30 @@ All 279 recorded Haskell and manifest inputs remain unchanged through the focuse
 The source receipt is `scripts/local/agent-discovery-locality-source.json`.
 Final exact-tree release checks remain separate.
 
+### Routine admission, completion, and retained artifacts follow-up
+
+The complete routine/control block in Issues is read from its refined inputs through history seeding.
+The review follows event admission, scheduled claims, authority refresh, atomic completion,
+lease recovery, pause/cancel/resume, policy changes, and retained artifacts.
+The adjacent enrichment transaction changes are covered by the enrichment review above.
+
+Event recovery retains the original actor, input, instructions, policy, and permission ceiling.
+Explicit restarts create a new request root; duplicate event identities reuse the admitted request.
+Native incident admission binds the installed channel, event, episode, and current installation.
+Scheduled claims retain one run for the scheduled slot and fence completion by the active lease.
+Completion rechecks current authority before a project mutation, then commits the mutation,
+result, message, artifacts, and terminal state in one transaction.
+Uncertain external operations remain explicit; cancellation closes unstarted operations.
+
+Two scoped distillation, evasion, and locality passes find no additional material issue.
+The shared SQL fragments have multiple callers; their extraction removes real duplication.
+Opaque RunContext and CommandOrigin constructors remain private, without a public Generic bypass.
+No browser interaction is introduced by this model block.
+No runtime source changes are made during this follow-up.
+The existing routine selection passes 67 examples with zero failures in 19.2874 seconds.
+All five recorded runtime/test inputs remain unchanged through that run.
+The source receipt is `scripts/local/routine-control-boundary-review.json`.
+
 The source record is `scripts/local/agent-cross-module-review-source.json`.
 No runtime source changed during this review, so no additional test run is claimed.
 The preceding chart checkpoint passes 489 bot cases and 2,083 doctest examples.
