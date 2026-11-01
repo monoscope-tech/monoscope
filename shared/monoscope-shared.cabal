@@ -90,7 +90,6 @@ library
   build-depends:
     , aeson
     , base                  >=4.7 && <5
-    , base64
     , cryptonite
     , conduit
     , http-client-tls

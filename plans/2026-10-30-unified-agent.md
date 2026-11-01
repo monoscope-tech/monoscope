@@ -443,6 +443,34 @@ An incident installation binds a real workspace/channel pair and excludes DMs an
 
 Applied migration filenames and contents remain immutable, including the locally applied native-fix migration. Consolidate related future, unapplied schema work into one coherent migration; do not squash previously applied files to reduce the file count.
 
+## Branch review checkpoint, 1 November
+
+The current review continues against `origin/master`; the whole-branch review
+remains open. The completed source-reading slice covers `Pkg.AgentCatalog`,
+`Pkg.AgentOperation`, `Pkg.SlackOAuth`, `Pkg.SlackMCP`,
+`Data.Effectful.AgentArtifacts`, `Data.Effectful.GitPublication`, and its `Types`
+module. The distillation and evasion checks retain the existing catalog,
+requester grant, precise HTTP/UUID/time effects, opaque publication capabilities,
+and production/test interpreter pairs. No further material finding was identified
+in those modules during this slice. Their application callers and native
+interpreters still belong to the remaining whole-branch review. The shared
+request-indicator JavaScript retains its request-identity set because overlapping
+requests and cancelled confirmations need independent lifecycle tracking; a
+visibility toggle cannot replace that behavior.
+
+The manifest review removed a second `base64` entry from
+`shared/monoscope-shared.cabal`. A dependency-set comparison proves that this
+removes no dependency. `cabal check` reads the package successfully but reports
+the existing parent-directory license path, `-Werror`, and package metadata/bounds
+issues; it is not a passing package check. The license path and warning policy
+were confirmed in the preceding committed manifest and remain unchanged.
+
+The review artifact is committed at `5ca2fb59b`. Its hosted HTML readback matches
+the local 232,534-byte file. All 102 steps across twelve walkthroughs pass at four
+widths. The actual hosted Page opens in Chrome and its desktop image decodes;
+interaction within its embedded visualization remains unverified. See the
+[interface evidence](2026-10-29-routine-interface-review.md) for the exact scope.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
