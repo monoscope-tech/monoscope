@@ -1888,7 +1888,7 @@ data SlackPublicationPending = SlackPublicationPending
 
 
 definiteSlackRejection :: Text -> Bool
-definiteSlackRejection = (`elem` ["ratelimited", "channel_not_found", "not_in_channel", "is_archived", "missing_scope", "invalid_auth", "token_revoked", "account_inactive"])
+definiteSlackRejection = (`elem` ["ratelimited", "invalid_blocks", "channel_not_found", "not_in_channel", "is_archived", "missing_scope", "invalid_auth", "token_revoked", "account_inactive"])
 
 
 data SlackWorkerBusy = SlackWorkerBusy
