@@ -205,3 +205,13 @@ migration inputs match their pre-run hashes. The saved log is
 `scripts/local/native-project-eligibility-full-source.json`. This closes the
 native regression run at that source checkpoint. Whole-branch review, Linux/KVM,
 and final release signoff remain separate requirements.
+
+## Whole-application loss before a candidate checkpoint
+
+The separate persistent database `monoscope_qa_native_hostloss_20261101` now exercises the real application worker, SDK, VM, and database with controlled model responses, GitHub token exchange, and object retention. At the interruption boundary, run `3cbfbead-9981-4e21-ae4c-19615fe01a2a` has committed one wiki revision under its actual shared run, retained one regression check and its admission, and successfully edited `/workspace/runtime.sh`. The next model request is held open. The candidate transcript exists but its checkpoint manifest does not.
+
+After saving the database, artifact hashes, process ownership, and receipts, the test sends SIGKILL to the entire GHC application and its SDK/VM descendants. The original application PID is confirmed absent. The watcher restarts the application, and the original ten-minute lease expires without changing its deadline. The worker then refuses the missing native context before inference. The same four attempts, regression check, operation receipt, wiki revision, and fourteen retained files remain unchanged. Two of those attempts belong to earlier fixture-setup failures and are retained rather than erased. The job releases its lease and retains no fabricated result.
+
+The automatic-completion oracle fails; the independent observer verifies the intended fail-closed contract. This is evidence for uncheckpointed whole-application loss, **not successful recovery**. Recovery from a paired checkpoint after a whole-application kill remains open, as do physical-host loss and Linux/KVM. The earlier child-process and cooperative-provider checks retain their narrower scope.
+
+Private evidence is `scripts/local/native-hostloss-before-kill.json`, `native-hostloss-uncheckpointed-acceptance.json`, `native-hostloss-uncheckpointed-worker.log`, `native-hostloss-source.json`, and the full `native-hostloss-before-kill.dump`. The isolated fixture and its evidence remain available; the Slack fixture database is unchanged.
