@@ -3,7 +3,7 @@
 module Opentelemetry.GrpcIngestionSpec (spec) where
 
 import Control.Exception (ErrorCall (..), evaluate)
-import Control.Lens ((.~))
+import Control.Lens ((%~), (.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap qualified as KM
@@ -34,11 +34,15 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.Replay qualified as Replay
 import Pages.Telemetry qualified as TelemetryPage
 import Pkg.TestUtils
+import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
+import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualified as TSF
+import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields qualified as PLF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
+import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import System.Config (AuthContext (metricCatalogBuffer))
 
 
@@ -478,22 +482,43 @@ spec = sequential $ aroundAll withTestResources do
 
     -- Tests for gRPC Authorization header authentication (NEW!)
     describe "gRPC Authorization Header Authentication" do
-      it "Test 9.1: should authenticate logs using gRPC Authorization header" $ \tr -> do
-        key <- createTestAPIKey tr testPid "header-log-key"
-        -- Ingest using Authorization header instead of resource attributes
-        ingestLogWithHeader tr key "Log via header auth" frozenTime
-        void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        result <- queryLogs tr (Just "kind == \"log\"")
-        dataset <- expectLogsJson result
-        V.length dataset `shouldSatisfy` (>= 1)
+      it "headerOnlyHttpExports_persistLogsAndTracesWithoutResourceCredentials" $ \tr -> do
+        key <- createTestAPIKey tr testPid "header-only-http-key"
+        let service = "header-only-http-exports"
+            resource = defMessage & PRF.attributes .~ [mkAttr "service.name" service]
+            logs = createOtelLogAtTime "" ["Log via header auth"] frozenTime & LSF.resourceLogs . traverse . PLF.resource .~ resource
+            traces = createOtelSpanAtTime "" "abc123" "def456" Nothing "GET /header-auth" frozenTime & TSF.resourceSpans . traverse . PTF.resource .~ resource
+        forM_ [OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just key) (encodeMessage logs), OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just key) (encodeMessage traces)] $ \export -> do
+          response <- export
+          response `shouldBe` (Right "" :: Either Text ByteString)
+        result <- queryLogs tr (Just $ "resource.service.name == \"" <> service <> "\"")
+        V.length result.logsData `shouldBe` 2
 
-      it "Test 9.2: should authenticate traces using gRPC Authorization header" $ \tr -> do
-        key <- createTestAPIKey tr testPid "header-trace-key"
-        ingestTraceWithHeader tr key "GET /api/header-auth" frozenTime
-        void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        result <- queryLogs tr (Just "kind != \"log\"")
-        dataset <- expectLogsJson result
-        V.length dataset `shouldSatisfy` (>= 1)
+      it "resourceOnlyExports_doNotAssignUncredentialedSiblingsToTheirProject" $ \tr -> do
+        key <- createTestAPIKey tr testPid "resource-only-sibling-key"
+        let service = "resource-only-sibling-exports"
+            resource = defMessage & PRF.attributes .~ [mkAttr "service.name" service, mkAttr "qa.sibling" "uncredentialed"]
+            logs =
+              createOtelLogAtTime key ["Resource-only log"] frozenTime
+                & LSF.resourceLogs
+                . traverse
+                . PLF.resource
+                .~ mkResource key [mkAttr "service.name" service]
+                  & LSF.resourceLogs
+                %~ (\resources -> resources <> map (PLF.resource .~ resource) resources)
+            traces =
+              createOtelSpanAtTime key "abc124" "def457" Nothing "GET /resource-only" frozenTime
+                & TSF.resourceSpans
+                . traverse
+                . PTF.resource
+                .~ mkResource key [mkAttr "service.name" service]
+                  & TSF.resourceSpans
+                %~ (\resources -> resources <> map ((PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.spanId .~ "sibling") . (PTF.resource .~ resource)) resources)
+        forM_ [OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider Nothing (encodeMessage logs), OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider Nothing (encodeMessage traces)] $ \export -> do
+          response <- export
+          response `shouldBe` (Right "" :: Either Text ByteString)
+        result <- queryLogs tr (Just $ "resource.service.name == \"" <> service <> "\"")
+        V.length result.logsData `shouldBe` 2
 
       it "Test 9.3: should authenticate metrics using gRPC Authorization header" $ \tr -> do
         key <- createTestAPIKey tr testPid "header-metric-key"
@@ -503,17 +528,21 @@ spec = sequential $ aroundAll withTestResources do
         result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
         V.length result.dataset `shouldSatisfy` (> 0)
 
-      it "Test 9.4: should prefer resource attribute auth over header when both present" $ \tr -> do
+      it "resourceCredentials_keepPrecedenceOverADifferentHeaderProject" $ \tr -> do
+        otherPid <- createTestProject tr "header-resource-precedence"
         resourceKey <- createTestAPIKey tr testPid "resource-key"
-        headerKey <- createTestAPIKey tr testPid "header-key"
-
-        -- Process with both keys - resource should take precedence
-        void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just headerKey) (createOtelLogAtTime resourceKey ["Dual auth log"] frozenTime)
-        void $ runAllBackgroundJobs frozenTime tr.trATCtx
-
-        result <- queryLogs tr (Just "kind == \"log\"")
-        dataset <- expectLogsJson result
-        V.length dataset `shouldSatisfy` (>= 1)
+        headerKey <- createTestAPIKey tr otherPid "header-key"
+        let resource = mkResource resourceKey [mkAttr "service.name" "dual-auth-log"]
+            request = createOtelLogAtTime resourceKey ["Dual auth log"] frozenTime & LSF.resourceLogs . traverse . PLF.resource .~ resource
+            query = Just "resource.service.name == \"dual-auth-log\""
+            (timeFrom, timeTo) = testTimeRange
+        response <- OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just headerKey) (encodeMessage request)
+        response `shouldBe` (Right "" :: Either Text ByteString)
+        result <- queryLogs tr query
+        V.length result.logsData `shouldBe` 1
+        (_, other) <- toServantResponse tr (Log.logExplorerDataH otherPid def{Log.query, Log.from = Just timeFrom, Log.to = Just timeTo})
+        other.error `shouldBe` Nothing
+        other.logsData `shouldBe` V.empty
 
       it "Test 9.5: should reject logs with invalid Authorization header" $ \tr -> do
         runTestBg frozenTime tr (OtlpServer.processLogsRequest (Just "invalid-header-key") (createOtelLogAtTime "" ["Should not be stored"] frozenTime))
