@@ -36,7 +36,6 @@ import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "cryptonite" Crypto.Hash (Digest, SHA256, hashlazy)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
-import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..))
 import Control.Monad.Extra (whileM)
 import Data.Char (isDigit)
@@ -1690,11 +1689,11 @@ withInvestigationProgress envCfg slackData access action = case access of
         publishSafely allowCreate = whenLeftM_ (tryAny $ publish allowCreate) $ \_ -> do
           Log.logAttention "Slack investigation progress update failed" $ AE.object ["channel_id" AE..= run.channelId, "thread_ts" AE..= run.threadTs]
           if allowCreate
-            then liftIO $ threadDelay 28_000_000
+            then Concurrent.threadDelay 28_000_000
             else do
               publication <- Investigations.loadProgress target
               for_ publication $ \pending -> slackRetryTime 1 >>= scheduleProgressRefresh pending.publicationId
-        updates = forever $ liftIO (threadDelay 2_000_000) >> publishSafely True
+        updates = forever $ Concurrent.threadDelay 2_000_000 >> publishSafely True
     race_ updates action `finally` publishSafely False
   _ -> action
 

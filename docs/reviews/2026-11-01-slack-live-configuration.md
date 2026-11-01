@@ -396,3 +396,30 @@ The production app remains unchanged. The loopback-only control invokes the real
 Private receipts are `scripts/local/slack-telemetry-proactive-source.json`, `slack-telemetry-proactive-acceptance.json`, `slack-telemetry-acceptance-probe.json`, and `slack-telemetry-optout-probe.json`. The [OTLP routing review](2026-11-01-otlp-routing.md) records the failed-first fix required to enable this test.
 
 The persistent QA database is backed up after the completed lifecycle, with the channel paused. `scripts/local/slack-live-qa-after-telemetry.dump` and its ready-state copy are owner-only; restoring this new dump has not been tested. The existing review Page is updated in place at sequence 73, including the real thread link and revised visual readiness notes. Saved readback preserves all earlier blocks; hosted interaction remains unverified.
+
+
+## Slack channel construction and progress effects
+
+`SlackChannel` carries a validated workspace/channel pair. Its constructor was hidden, but its public `Generic` instance and record labels still allowed invalid values.
+
+### Failed-first construction checks
+
+The generic-decoding doctest constructs an empty workspace and a DM channel without calling `slackChannel`. It first fails with `Right (SlackChannel {teamId = "", channelId = "D123"})` instead of rejecting generic construction.
+
+A separate watcher probe updates a valid channel to `D123`. It first fails with `Right (SlackChannel {teamId = "T1", channelId = "D123"})`. An annotation on the update's left-hand expression is necessary to disambiguate the exported record labels; an earlier unannotated probe only exposed ambiguity and is not construction-bypass evidence.
+
+The type now has a private positional constructor, no Generic instance, and two getter-only HasField instances. Existing `.teamId` and `.channelId` reads remain valid. The same record update now fails compilation because SlackChannel has no writable record fields. Its explicit JSON encoder preserves the existing `teamId` and `channelId` wire keys; decoding still calls the original smart constructor. Current membership remains checked by the existing authority paths.
+
+The permanent doctests pin getters, exact JSON shape, round-trip decoding, invalid DM rejection, generic-construction rejection, and record-update rejection. The temporary watcher probe is removed after establishing the failure and compiler rejection.
+
+### Progress effects
+
+The progress loop now uses the module's existing Concurrent.threadDelay at both sleep sites. It keeps the same durations and existing Concurrent constraint, removes the raw IO lifts and unused import, and adds no effect, interpreter, configuration, or dependency.
+
+### Review and verification
+
+Two scoped hs-distill, hs-evasion-review, and hs-lob-review passes retain these small declarations. Explicit getter instances and encoding close construction paths without a new wrapper framework or downstream validation branches. There is no client-side change, suppression, partial function, or effect-row weakening. Pinned Fourmolu, whitespace checks, and HLint pass; both runtime modules have zero HLint hints.
+
+Before this change, the complete bot group plus ingestion, catalog and checkout selection passes 587 examples in 216.8456 seconds with all 212 recorded Haskell inputs unchanged. Afterward, the stream, audience, incident and API selection passes 155 examples in 63.5426 seconds. The supported complete doctest target passes all 2,104 examples, with zero errors and failures.
+
+Private receipts: `scripts/local/slack-channel-constructor-red.log`, `slack-channel-record-constructor-red.log`, `slack-channel-constructor-green.log`, `slack-channel-proof-hlint.json`, and `slack-stream-branch-regression-source.json`. These checks do not replace final whole-branch review and release signoff.

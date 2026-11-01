@@ -1,6 +1,6 @@
 module Models.Apis.Integrations (
   activeMembership,
-  SlackChannel (teamId, channelId),
+  SlackChannel,
   SlackChannelError (..),
   slackChannel,
   SlackData (..),
@@ -82,6 +82,7 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Exception qualified as Exception
 import Effectful.Time qualified as Time
+import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
@@ -100,9 +101,20 @@ import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
 
 
-data SlackChannel = SlackChannel {teamId :: Text, channelId :: Text}
-  deriving stock (Eq, Generic, Ord, Show)
-  deriving anyclass (Aeson.ToJSON)
+data SlackChannel = SlackChannel Text Text
+  deriving stock (Eq, Ord, Show)
+
+
+instance HasField "teamId" SlackChannel Text where
+  getField (SlackChannel team _) = team
+
+
+instance HasField "channelId" SlackChannel Text where
+  getField (SlackChannel _ channel) = channel
+
+
+instance Aeson.ToJSON SlackChannel where
+  toJSON channel = Aeson.object ["teamId" Aeson..= channel.teamId, "channelId" Aeson..= channel.channelId]
 
 
 data SlackChannelError = WorkspaceRequired | ChannelRequired
@@ -117,6 +129,22 @@ data SlackChannelError = WorkspaceRequired | ChannelRequired
 -- True
 -- >>> slackChannel "" "C123" == Left WorkspaceRequired
 -- True
+-- >>> fmap Aeson.toJSON (slackChannel "T1" "C123") == Right (Aeson.object ["teamId" Aeson..= ("T1" :: Text), "channelId" Aeson..= ("C123" :: Text)])
+-- True
+-- >>> fmap (Aeson.decode @SlackChannel . Aeson.encode) (slackChannel "T1" "C123") == (Just <$> slackChannel "T1" "C123")
+-- True
+-- >>> isLeft (Aeson.eitherDecode @SlackChannel "{\"teamId\":\"T1\",\"channelId\":\"D123\"}")
+-- True
+-- >>> fmap (\channel -> (channel :: SlackChannel){channelId = "D123"}) (slackChannel "T1" "C123")
+-- ...
+-- ...No data constructor of type constructor...SlackChannel...
+-- ...has all of the fields:...
+-- ...channelId...
+-- ...
+-- >>> Aeson.parseEither (Aeson.genericParseJSON Aeson.defaultOptions :: Aeson.Value -> Aeson.Parser SlackChannel) (Aeson.object ["teamId" Aeson..= ("" :: Text), "channelId" Aeson..= ("D123" :: Text)])
+-- ...
+-- ...No instance for...Generic SlackChannel...
+-- ...
 slackChannel :: Text -> Text -> Either SlackChannelError SlackChannel
 slackChannel team channel
   | T.null (T.strip team) = Left WorkspaceRequired
@@ -358,6 +386,7 @@ newtype SlackSessionTitle = SlackSessionTitle Text
 
 -- $setup
 -- >>> import Data.Aeson qualified as Aeson
+-- >>> import Data.Aeson.Types qualified as Aeson
 -- >>> import Data.Text qualified as T
 -- >>> import Relude
 
