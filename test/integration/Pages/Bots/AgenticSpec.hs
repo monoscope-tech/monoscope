@@ -1747,6 +1747,29 @@ spec = around withTestResources do
         runs <- runQueryEffect tr $ Issues.listConversationRuns testPid routine.conversationId 10
         map (.attempt) runs `shouldBe` [2, 1]
 
+      it "retainedRun_widgetsRenderInTheAuthorizedConversationInspectorWithoutPublishingChat" \tr -> do
+        project <- createTestProject tr "Retained widget inspector"
+        void $ testServant tr $ AIThreads.routineInstallPostH project (AIThreads.RoutineTemplateForm "slack-investigation")
+        routine <- runQueryEffect tr (Issues.getEventRoutine project Issues.EventSlackMessage) >>= maybe (fail "Expected a Slack routine") pure
+        let user = (getResponse tr.trSessAndHeader).user.id
+            answer = AI.AgenticChatResult "{\"explanation\":\"Retained chart evidence.\",\"widgets\":[{\"type\":\"timeseries_line\",\"id\":\"reused-model-id\",\"title\":\"Retained error volume\",\"query\":\"summarize count() by bin_auto(timestamp)\"},{\"type\":\"stat\",\"id\":\"reused-model-id\",\"title\":\"Retained request count\",\"query\":\"summarize count()\"},{\"type\":\"table\",\"title\":\"Unsafe model link\",\"columns\":[{\"field\":\"name\",\"title\":\"Name\",\"link\":\"javascript:alert(1)\"}]}]}" []
+        Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackCommandRequest routine.conversationId user) Issues.StartRun routine.conversationId "Show retained charts"
+        runTestBg frozenTime tr $ completeTestRun project (Issues.EventClaim (Issues.SlackCommand routine.conversationId) execution.id execution.startedAt) $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer $ AI.prepareRunAnswer answer
+        history <- runQueryEffect tr $ Issues.selectChatHistory project routine.conversationId
+        [message | message <- history, message.role == Issues.ChatAssistant] `shouldSatisfy` null
+        (_, page) <- testServant tr $ AIThreads.routineRunGetH project execution.id $ Just routine.conversationId
+        let html = renderT page
+        for_ ["Visualizations", "Retained error volume", "Retained request count", "data-chart-widget", "ai-run-" <> execution.id.toText] $ \label -> (label, label `T.isInfixOf` html) `shouldBe` (label, True)
+        for_ ([0, 1] :: [Int]) $ \index -> (index, ("id=\"ai-run-" <> execution.id.toText <> "-" <> show index <> "_widgetEl\"") `T.isInfixOf` html) `shouldBe` (index, True)
+        html `shouldSatisfy` T.isInfixOf "id=\"ai-conversation\""
+        ("unsafe widget rendered", ("id=\"ai-run-" <> execution.id.toText <> "-2_widgetEl\"") `T.isInfixOf` html) `shouldBe` ("unsafe widget rendered", False)
+        let storedWidgets = AE.decodeStrict' @AE.Value (encodeUtf8 answer.response) >>= (^? key "widgets")
+        runQueryEffect tr $ Issues.insertChatMessage project routine.conversationId Issues.ChatAssistant "Legacy retained charts" storedWidgets Nothing
+        (_, chat) <- testServant tr $ AIThreads.threadGetH project routine.conversationId Nothing Nothing
+        for_ ["Retained error volume", "Retained request count"] $ \label -> (label, label `T.isInfixOf` renderT chat) `shouldBe` (label, True)
+        ("stored widget executable link", "javascript:" `T.isInfixOf` renderT chat) `shouldBe` ("stored widget executable link", False)
+        assertNonMemberDenied tr project $ AIThreads.routineRunGetH project execution.id $ Just routine.conversationId
+
       it "eventRoutineCancellation_stopsActiveRunAndRetainsSnapshotsAcrossRetry" \tr -> do
         void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "slack-investigation")
         (routine, run) <- runTestBg frozenTime tr do

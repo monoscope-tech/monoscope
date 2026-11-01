@@ -353,6 +353,8 @@ instance ToHtml Widget where
 -- [True,True,True,True,True]
 -- >>> isRight $ AE.eitherDecode @ModelWidget "{\"type\":\"timeseries\",\"queries\":[{\"query\":\"summarize count()\"}]}"
 -- True
+-- >>> isLeft $ AE.eitherDecode @ModelWidget "{\"type\":\"table\",\"columns\":[{\"field\":\"name\",\"title\":\"Name\",\"link\":\"javascript:alert(1)\"}]}"
+-- True
 newtype ModelWidget = ModelWidget Widget
   deriving stock (Show)
   deriving newtype (AE.ToJSON)
@@ -367,6 +369,7 @@ instance AE.FromJSON ModelWidget where
       safe widget =
         not (or [isJust widget.sql, isJust widget.rollupSql, isJust widget.sqlSig, isJust widget.html, isJust widget.expandBtnFn, isJust widget.expandPushUrl, isJust widget.groupByUrl, isJust widget.groupByTarget, isJust widget.onRowClick, isJust widget.cta, isJust widget._projectId, isJust widget._dashboardId, isJust widget._tabSlug, isJust widget.dbSource, isJust widget.pngUrl])
           && all (isNothing . (.sql)) (fold widget.queries)
+          && all (isNothing . (.link)) (fold widget.columns)
           && all safe (fold widget.children)
 
 

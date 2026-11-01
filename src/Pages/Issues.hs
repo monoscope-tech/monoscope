@@ -48,6 +48,7 @@ module Pages.Issues (
   -- Shared rendering helpers
   issueCardCompact_,
   aiChatHistoryView_,
+  aiChatWidgets_,
 )
 where
 
@@ -2088,12 +2089,7 @@ aiChatResponse_ artifactLinkAttrs pid userQuery explanation widgetsM toolCallsM 
           a_ (class_ "inline-flex items-center gap-1.5 rounded-md border border-strokeWeak px-2 py-1 text-xs font-medium text-textStrong hover:bg-fillHover" : artifactLinkAttrs ("?doc=" <> k)) do
             faSprite_ "file-lines" "regular" "h-3 w-3 text-iconBrand"
             toHtml k
-        whenJust widgetsM \widgets -> do
-          let processedWidgets = maybe widgets (`processWidgetsWithToolData` widgets) toolCallsM
-          -- Model widgets carry no id, and the widget's element ids and hx-target/select derive from it.
-          let fallbackId i = "chat-" <> show (abs $ hash (userQuery, explanation)) <> "-" <> show @Text @Int i
-          div_ [class_ "grid grid-cols-1 gap-3 mt-3"] $ forM_ (zip [0 ..] processedWidgets) \(i, widget) ->
-            div_ [class_ "w-full aspect-[3/1]"] $ Widget.widget_ widget{Widget._projectId = Just pid, Widget.id = widget.id <|> Just (fallbackId i)}
+        whenJust widgetsM $ \widgets -> aiChatWidgets_ pid ("chat-" <> show (abs $ hash (userQuery, explanation)) <> "-") widgets toolCallsM
     -- Collapsed debug info (tool calls + system prompt)
     let toolCalls = fromMaybe [] toolCallsM
     unless (null toolCalls && isNothing systemPromptM)
@@ -2113,6 +2109,14 @@ aiChatResponse_ artifactLinkAttrs pid userQuery explanation widgetsM toolCallsM 
           whenJust (Map.lookup "query" tc.args) $ span_ [class_ "text-xs text-textWeak break-all"] . toHtml . show
         unless (T.null tc.resultPreview) $ div_ [class_ "text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all"] $ toHtml $ "→ " <> tc.resultPreview
     chatAvatar_ bg icon color = div_ [class_ $ "shrink-0 w-6 h-6 rounded-full flex items-center justify-center " <> bg] $ faSprite_ icon "regular" ("w-3 h-3 " <> color)
+
+
+aiChatWidgets_ :: Projects.ProjectId -> Text -> [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Html ()
+aiChatWidgets_ pid prefix widgets toolCallsM =
+  let processedWidgets = maybe widgets (`processWidgetsWithToolData` widgets) toolCallsM
+   in div_ [class_ "grid grid-cols-1 gap-3 mt-3"] $ forM_ (zip [0 ..] processedWidgets) $ \(i, widget) ->
+        div_ [class_ $ "w-full aspect-[3/1] " <> if widget.wType == Widget.WTStat then "min-h-24" else "min-h-48"] $ Widget.widget_ widget{Widget._projectId = Just pid, Widget.id = Just (prefix <> show @Text @Int i)}
+  where
     -- A widget whose query matches a cached run_query tool call renders from that data
     -- rather than re-querying.
     processWidgetsWithToolData :: [AI.ToolCallInfo] -> [Widget.Widget] -> [Widget.Widget]
@@ -2187,9 +2191,11 @@ aiChatHistoryView_ artifactLinkAttrs pid = render
         let widgets = AI.responseWidgets aiResp
             structured = isJust aiResp.query || isJust aiResp.visualization || not (null widgets)
          in ( fromMaybe (bool content "Here are the requested visualizations:" structured) aiResp.explanation
-            , guarded (not . null) widgets <|> parseStoredJSON @[Widget.Widget] storedWidgets
+            , guarded (not . null) widgets <|> parseStoredWidgets storedWidgets
             )
-      Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
+      Left _ -> (content, parseStoredWidgets storedWidgets)
+
+    parseStoredWidgets = fmap (mapMaybe $ fmap Widget.modelWidget . parseMaybe AE.parseJSON) . parseStoredJSON @[AE.Value]
 
 
 -- | Decode a stored JSONB value (anomaly metadata, widget lists) into a typed payload.

@@ -83,6 +83,56 @@ test('verified fix evidence stays in the conversation run inspector', async ({ p
   }
 });
 
+test('retained run widgets open inside the conversation inspector', async ({ page, baseURL }, testInfo) => {
+  const [uid, sid, pid, conversation, run] = Array.from({ length: 5 }, () => randomUUID());
+  const answer = { response: JSON.stringify({ explanation: 'Synthetic chart evidence for interface review.', widgets: [
+    { type: 'timeseries_line', id: 'reused-model-id', title: 'Synthetic request volume', query: 'summarize count() by bin_auto(timestamp)' },
+    { type: 'stat', id: 'reused-model-id', title: 'Synthetic request count', query: 'summarize count()', dataset: { source: [], value: 44 } },
+  ] }), toolCalls: [] };
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Retained widget review');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
+       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, title) VALUES ('${pid}', '${conversation}', 'web', 'Review retained charts');
+       INSERT INTO apis.ai_routine_runs (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, finished_at, status, permission_ceiling, findings)
+       VALUES ('${run}', '${run}', '${pid}', '${conversation}', '${uid}', 'Show synthetic charts', '"observe"', '{"tag":"TriggeredRun","contents":{"tag":"SlackCommand","contents":"${conversation}"}}', now(), now(), now(), 'succeeded', 'admin', '${JSON.stringify(answer)}');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    const to = Date.now();
+    await page.route('**/chart_data/stream?**', route => route.fulfill({ contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'complete', data: { from: to - 60000, to, headers: ['timestamp', 'count'], dataset: [[to - 45000, 12], [to - 30000, 18], [to - 15000, 14]], rows_per_min: 44, stats: { count: 44, sum: 44, max: 18, max_group_sum: 18 } } }) + '\n' }));
+    const path = `/p/${pid}/ai/${conversation}`;
+    for (const width of [320, 1280]) for (const theme of ['light', 'dark']) for (const zoom of [100, 200]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(path);
+      await page.evaluate(({ theme, zoom }) => { document.body.dataset.theme = theme; document.documentElement.style.fontSize = `${zoom}%`; }, { theme, zoom });
+      const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
+      await composer.fill('Keep this draft while I review the charts.');
+      await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().press('Enter');
+      const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
+      const charts = inspector.getByRole('region', { name: 'Run visualizations', exact: true });
+      await expect(charts.getByRole('heading', { name: 'Visualizations', exact: true })).toBeVisible();
+      await charts.scrollIntoViewIfNeeded();
+      await expect(charts.getByText('Synthetic request volume', { exact: true })).toBeVisible();
+      await expect(charts.getByText('Synthetic request count', { exact: true })).toBeVisible();
+      await expect(charts.locator('strong[id$="Value"]')).toHaveText('44');
+      await expect(charts.locator('strong[id$="Value"]')).toBeVisible();
+      await expect(charts.locator('[data-chart-widget]')).toHaveAttribute('aria-busy', 'false');
+      await expect(charts.locator('[data-chart-widget] canvas').first()).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath(`retained-widgets-${theme}-${width}-${zoom}.png`) });
+      expect(await inspector.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(new URL(page.url()).pathname).toBe(path);
+      await inspector.focus();
+      await page.keyboard.press('Escape');
+      await expect(inspector).toBeHidden();
+      await expect(composer).toBeFocused();
+      await expect(composer).toHaveValue('Keep this draft while I review the charts.');
+    }
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
 test('conversation detail controls remain reachable when text size is doubled', async ({ page, baseURL }, testInfo) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID(), run = randomUUID();
   sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');

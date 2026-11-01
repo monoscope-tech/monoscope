@@ -590,6 +590,14 @@ All twelve flows and 102 steps pass at four widths; source entries total 115.
 Both application captures decode in Chrome. Hosted embedded interaction remains unverified.
 See the [interface record](2026-10-29-routine-interface-review.md) for the preservation and verification scope.
 
+Retained run evidence now renders interactive widgets inside the existing inspector.
+Chat and run views share the widget renderer, text-relative minimum sizes, and indexed top-level IDs.
+New and stored model widgets reject executable column links while preserving valid siblings.
+The failing-first handler lifecycle and all eleven conversation browser cases pass at the recorded UI checkpoint.
+The temporary browser adapter is removed. Broader bot and doctest checks are running.
+The review Page includes the synthetic chart capture at sequence 65.
+See [retained widgets](../docs/reviews/2026-11-01-retained-widgets.md) for the scoped review and exact evidence.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.
