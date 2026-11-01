@@ -67,6 +67,34 @@ Removing the wrapper would expand this change across unrelated chart callers.
 
 ## Evidence and remaining work
 
+### Native execution follow-up
+
+A further review reads CodeReview and AgentOperation completely, then follows role policies
+and project-memory callbacks into the common operation ledger.
+Two hs-distill, hs-evasion-review, and hs-lob-review passes find no additional material issue in this scope.
+The source receipt is scripts/local/native-execution-review-source.json.
+
+All task roles use the existing launch and retained-session interpreter.
+Callback unlifting preserves their original effect rows; process IO stays inside that interpreter.
+VerifiedFix, ReviewedFix, and ExplainedFix remain opaque and do not derive bypass constructors.
+Independent approval binds the exact verified candidate and a distinct attempt.
+Admission binds its exact artifact; resumed reproduction and comparisons are verified again.
+Tools and phase/check receipts invalidate an accepted draft before another result can be returned.
+Completed replay revalidates its retained result before starting another model process.
+
+The paired checkpoint retains transcript, VM state, budgets, workflow, and application context.
+A missing manifest beside retained files fails closed rather than starting a replacement session.
+Snapshot pruning follows durable persistence and cannot revoke a saved result.
+Admission and peer roles intentionally permit project wiki operations through current application authority.
+Their legacy knowledge callbacks reject unsupported service-memory operations.
+Operation identity excludes transport call IDs and wiki worker attempt IDs, while preserving the actual edit.
+The ledger remains scoped to its project and shared run; author attribution is checked separately.
+No browser behavior or additional client interpreter enters this path.
+
+No source changes or additional test run are claimed for this follow-up.
+The separate [workspace review](2026-11-01-workspace-interpreter.md) records the passing Linux application cases
+and distinguishes their controlled provider/publication interpreters from live acceptance.
+
 The source record is `scripts/local/agent-cross-module-review-source.json`.
 No runtime source changed during this review, so no additional test run is claimed.
 The preceding chart checkpoint passes 489 bot cases and 2,083 doctest examples.
