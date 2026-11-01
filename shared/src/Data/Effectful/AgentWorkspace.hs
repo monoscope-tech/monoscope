@@ -110,8 +110,8 @@ mkTestArtifact script patch failure
 
 
 instance AE.FromJSON TestArtifact where
-  parseJSON value =
-    AE.withObject "Regression artifact" (\fields -> mkTestArtifact <$> fields AE..: "script" <*> fields AE..: "testPatch" <*> fields AE..: "failureMessage" >>= either (fail . toString) pure) value
+  parseJSON =
+    AE.withObject "Regression artifact" (\fields -> mkTestArtifact <$> fields AE..: "script" <*> fields AE..: "testPatch" <*> fields AE..: "failureMessage" >>= either (fail . toString) pure)
 
 
 validArtifact :: Text -> Maybe Text -> Text -> Bool

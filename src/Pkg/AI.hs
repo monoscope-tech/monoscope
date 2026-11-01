@@ -1073,7 +1073,7 @@ agenticSetup config userQuery model =
           OpenAIV1._CreateChatCompletion
             { OpenAIV1.model = modelName
             , OpenAIV1.reasoning_effort = effort $> OpenAIV1.ReasoningEffort_None
-            , OpenAIV1.tools = Just $ V.fromList $ initialToolDefs
+            , OpenAIV1.tools = Just $ V.fromList initialToolDefs
             , OpenAIV1.messages = V.empty
             }
     )
@@ -1477,7 +1477,7 @@ authorizeRunOperation context capability = do
 
 
 authorizeOperation :: DB es => AgenticConfig -> Issues.RunAuthority -> Catalog.AgentPolicy -> Eff es (Either ToolDenial OperationPolicy)
-authorizeOperation config authority policy = Except.runExceptT do
+authorizeOperation config authority policy = runExceptT do
   Except.withExceptT AuthorityDenied $ Except.liftEither $ Issues.authorizeCapability authority policy
   let disclosure = Catalog.disclosurePermission policy
   when (disclosure > evidenceAudience config.access authority.permission) $ Except.throwError $ AudienceRequired disclosure

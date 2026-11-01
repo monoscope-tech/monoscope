@@ -278,7 +278,7 @@ apiOperations =
   where
     view name = (name, Just $ ReadOnly ProjectMembers.PView)
     adminRead name = (name, Just $ ReadOnly ProjectMembers.PAdmin)
-    edit name = (name, Just $ ProjectWrite)
+    edit name = (name, Just ProjectWrite)
     admin name = (name, Just $ Administration ProjectMembers.PView)
     privateAdmin name = (name, Just $ Administration ProjectMembers.PAdmin)
 
@@ -389,7 +389,7 @@ data CompositeOperation = FindErrorPatterns | SearchEventsNL | AnalyzeIssue
 compositeTools :: [Tool CompositeOperation]
 compositeTools = [findErrorPatterns, searchEventsNL, analyzeIssue]
   where
-    composite name description schema dispatch = Tool name description schema (Just $ ReadOnly ProjectMembers.PView) dispatch
+    composite name description schema = Tool name description schema (Just $ ReadOnly ProjectMembers.PView)
     findErrorPatterns =
       composite
         "find_error_patterns"
