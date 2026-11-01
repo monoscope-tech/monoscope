@@ -1076,7 +1076,7 @@ processSlackEventWithTools projectTools receiptId =
         $ AE.object
           [ "channel" AE..= request.channelId
           , "user" AE..= request.slackUserId
-          , "text" AE..= ("Link your Monoscope account and choose a project before investigating: <" <> envCfg.hostUrl <> "slack/link/" <> request.id.toText <> "|Link account>. This private link expires in 15 minutes.")
+          , "text" AE..= ("Link your Monoscope account and choose a project before investigating: <" <> T.dropWhileEnd (== '/') envCfg.hostUrl <> "/slack/link/" <> request.id.toText <> "|Link account>. This private link expires in 15 minutes.")
           ]
       Integrations.markSlackLinkDelivered request.id
 

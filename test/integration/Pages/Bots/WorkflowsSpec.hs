@@ -393,7 +393,8 @@ spec = around withTestResources do
             userId = (getResponse tr.trSessAndHeader).user.id
             resolve = toBaseServantResponse tr $ Slack.resolveSlackPrincipal "T_IDENTITY" "U0123ABCDEF" Nothing
         receiptId <- receiveSlackEvent tr payload
-        (requests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ tryAny $ processSlackEvent receiptId
+        let withoutTrailingSlash = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.hostUrl = "https://qa.monoscope.test"}}}
+        (requests, outcome) <- runTestBgRecordingHTTP frozenTime withoutTrailingSlash $ tryAny $ processSlackEvent receiptId
         outcome `shouldSatisfy` isLeft -- The recorder returns {}, not Slack's required ok=true acknowledgement.
         map fst requests `shouldBe` ["https://slack.com/api/chat.postEphemeral"]
         [PGS.Only linkId] <- withResource tr.trPool \conn ->
@@ -401,7 +402,7 @@ spec = around withTestResources do
         let sent = snd <$> listToMaybe requests >>= AE.decode @AE.Value
         (sent >>= (^? key "user" . _String)) `shouldBe` Just "U0123ABCDEF"
         (sent >>= (^? key "channel" . _String)) `shouldBe` Just "CIDENTITY"
-        (sent >>= (^? key "text" . _String)) `shouldSatisfy` maybe False (T.isInfixOf linkId.toText)
+        (sent >>= (^? key "text" . _String)) `shouldSatisfy` maybe False (T.isInfixOf $ "<https://qa.monoscope.test/slack/link/" <> linkId.toText <> "|Link account>")
         resolve >>= (`shouldSatisfy` isNothing)
         void $ toServantResponse tr $ SlackPage.linkIdentityGetH linkId
         void $ toServantResponse tr $ SlackPage.linkIdentityPostH linkId $ SlackPage.SlackLinkForm testPid
