@@ -1155,12 +1155,11 @@ spec = around withTestResources do
                   decodeUtf8 (AE.encode result.toolCalls) `shouldSatisfy` (not . T.isInfixOf "private-mcp-token")
                 Left _ -> expectationFailure "Expected retained Slack evidence"
 
-      for_ [(command, scenario) | command <- [False, True], scenario <- [minBound .. maxBound]] $ \(command, scenario) ->
-        it ("slackEvidenceChannel_confinesReadsToTheVerifiedDestination: " <> show (command, scenario)) \tr -> do
+      for_ [(command, channel, scenario) | command <- [False, True], channel <- ["C123MCP", "G123MCP"], scenario <- [minBound .. maxBound]] $ \(command, channel, scenario) ->
+        it ("slackEvidenceChannel_confinesReadsToTheVerifiedDestination: " <> show (command, channel, scenario)) \tr -> do
           setupSlackAgent tr testPid "T_MCP_CHANNEL"
           unless (scenario == PersonalGrantMissing) $ authorizeSlackTestGrant tr $ Slack.SlackUserGrant "T_MCP_CHANNEL" "U0123ABCDEF" "channel-user-token" Slack.NonExpiring (fromList Slack.slackEvidenceScopes)
-          let channel = "G123MCP"
-              user = (getResponse tr.trSessAndHeader).user.id
+          let user = (getResponse tr.trSessAndHeader).user.id
               conversation = Issues.slackScopedConversationId testPid "T_MCP_CHANNEL" channel "1735689600.000001"
               access = if command then AI.SlackCommandAccess (fromRightShow $ Issues.commandOrigin "T_MCP_CHANNEL" channel "U0123ABCDEF") user else AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_CHANNEL" "U0123ABCDEF" user channel "1735689600.000001" "1735689600.000001"
               threadRead = scenario `elem` [CurrentThread, ThreadLocatorRejected, ThreadCitationRejected, ThreadCitationWrongTarget, ThreadCitationWrongQuery, ThreadCitationUntrustedHost, ThreadCitationRateLimited, ThreadCitationRevoked, ThreadCitationCredentialRejected, ThreadCitationHTTPUnauthorized, ThreadCitationServerFailure]
@@ -1169,7 +1168,7 @@ spec = around withTestResources do
                 | threadRead = "slack_read_thread"
                 | otherwise = "slack_read_channel"
               secret = "current-channel-mcp-evidence"
-              source = "https://monoscope-test.slack.com/archives/G123MCP/p1735689600000001?thread_ts=1735689600.000001&cid=G123MCP"
+              source = "https://monoscope-test.slack.com/archives/" <> channel <> "/p1735689600000001?thread_ts=1735689600.000001&cid=" <> channel
               schema = AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object ["channel_id" AE..= AE.object ["type" AE..= ("string" :: Text)], "team_id" AE..= AE.object ["type" AE..= ("string" :: Text)], "message_ts" AE..= AE.object ["type" AE..= ("string" :: Text)], "response_format" AE..= AE.object ["type" AE..= ("string" :: Text)]]]
           mode <- interactiveInvocation tr testPid conversation "Read Slack context" Issues.Observe
           let config = (agentConfig testPid){AI.access = access, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.sourceConfig = Just tr.trATCtx.config{Config.slackAppId = "A123MONOSCOPE"}}

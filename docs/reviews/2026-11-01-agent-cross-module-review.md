@@ -342,3 +342,12 @@ Concurrent review-document edits remain intact.
 The original integration history is retained at local branch codex/slack-agent-before-master-760-b418cea23.
 The private receipt is `scripts/local/master-rebase-760.json`.
 The later uncertain-append finding still needs its regression and fix before final release checks.
+
+
+### Public and private Slack destination confinement
+
+The existing sixteen-scenario evidence-read lifecycle now covers both public C and private G destinations, through command and threaded origins. The same assertions verify that hostile channel/workspace arguments cannot redirect a read, unsupported locators and broader searches fail before disclosure, and membership, consent, and citation failures retain their existing boundaries. Citation fixtures derive from the selected destination. No production behavior or authorization type changes.
+
+All 64 controlled integration cases pass in 22.0914 seconds under seed 13421578. All four recorded source inputs remain unchanged. Two scoped hs-distill, hs-evasion-review and hs-lob-review passes find no further material issue: one lifecycle matrix owns the cases, typed audience retention remains before provider reads, and no client behavior or effect escape is added. Pinned formatting passes. The private receipt and log are `scripts/local/slack-destination-confinement-review.json` and `scripts/local/slack-destination-confinement-64-green.log`.
+
+These tests interpret the provider boundary; they do not establish live public-channel acceptance. The earlier broad stream-test failure and final release gates remain open.
