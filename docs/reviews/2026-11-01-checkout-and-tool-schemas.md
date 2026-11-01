@@ -34,6 +34,10 @@ It also requires every reference in every advertised input schema to resolve loc
 
 The first focused run reproduced both bugs: 76 examples, two failures, 32.2089 seconds.
 The final focused run passes 76 examples with zero failures in 38.0861 seconds.
+The subsequent broader run passes 585 examples with zero failures in 192.1411 seconds.
+It covers bot workflows, OTLP ingestion, and both new regressions.
+All 279 recorded Haskell and manifest inputs remain unchanged during that run.
+Its source receipt is `scripts/local/checkpoint-fix-broad-watch-source.json`.
 The local Linux supported doctest target passes all 2,098 examples with zero errors or failures.
 Pinned formatting, HLint, and whitespace checks pass.
 
