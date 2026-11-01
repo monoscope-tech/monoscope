@@ -19,10 +19,8 @@ import Pkg.DeriveUtils (AesonText (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils (TestResources (..), frozenTime, resetSchemaLearning, runHasqlEffect, testPid, withTestResources)
+import Pkg.TestUtils
 import ProcessMessage qualified
-import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldSatisfy)
 
 
 -- | A synthetic HTTP-server span with stable shape (one of N "endpoints")

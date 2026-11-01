@@ -6,7 +6,6 @@ import Control.Exception (ErrorCall (..))
 import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, values, _Array, _String)
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.IORef qualified as IORef
 import Data.Map qualified as Map
@@ -25,12 +24,9 @@ import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
 import Pages.Bots.Utils (processAIQuery)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
 import UnliftIO.Exception (throwIO)
 
 

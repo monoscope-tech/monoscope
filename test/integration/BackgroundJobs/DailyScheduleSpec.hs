@@ -11,13 +11,10 @@ import Control.Exception (bracket_)
 import Data.Pool (withResource)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Notification qualified as PGN
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import OddJobs.Types (pgEventName)
 import Pkg.TestUtils
-import Relude
 import System.Config qualified as Config
 import System.Timeout qualified as Timeout
-import Test.Hspec (Spec, around, describe, it, shouldBe)
 
 
 -- | Queue a job by tag at an offset from midnight today, mimicking a row the scheduler left

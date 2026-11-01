@@ -1,6 +1,13 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
 module Pkg.TestUtils (
+  -- * Test prelude: what nearly every spec imports
+  module Relude,
+  module Test.Hspec,
+  sql,
+  Only (..),
+  def,
+  UUIDId (..),
   shouldContainAll,
   streamFrames,
   completeFrame,
@@ -233,7 +240,7 @@ import System.Server qualified as Server
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest, effToServantHandlerTestHTTP)
-import Test.Hspec (Expectation, expectationFailure, shouldBe, shouldSatisfy)
+import Test.Hspec (Expectation, Spec, SpecWith, anyException, around, aroundAll, beforeWith, describe, expectationFailure, it, pendingWith, runIO, sequential, shouldBe, shouldContain, shouldMatchList, shouldNotBe, shouldNotContain, shouldNotSatisfy, shouldReturn, shouldSatisfy, shouldThrow)
 import Text.RE.TDFA.Text (ed, (*=~/))
 import Unsafe.Coerce (unsafeCoerce)
 import Utils (toXXHash)

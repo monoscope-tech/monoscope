@@ -2,13 +2,11 @@ module Pages.Projects.ProjectsSpec (spec) where
 
 import Control.Exception (ErrorCall (..), evaluate, try)
 import Control.Lens ((.~))
-import Data.Default (def)
 import Data.Generics.Labels ()
 import Data.Generics.Product.Fields (field)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Error.Static (catchError)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -17,12 +15,9 @@ import Pages.CommandPalette qualified as CommandPalette
 import Pages.Projects
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ListProjects
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (ServerError (..), getResponse)
-import Test.Hspec
 import UnliftIO.Exception (bracket_)
 
 

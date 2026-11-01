@@ -9,18 +9,14 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry hiding (BulkCol (..))
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
+import Pkg.DeriveUtils (AesonText (..))
 import Pkg.TestUtils
 import ProcessMessage (PathClassifier (..), emptyPathClassifier, processMessages, processSpanToEntities, stampHashesAtIngest)
-import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..))
-import Test.Hspec (Spec, SpecWith, around, describe, expectationFailure, it, shouldBe, shouldContain)
 import Utils (toXXHash)
 
 

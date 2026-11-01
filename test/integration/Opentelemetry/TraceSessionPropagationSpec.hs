@@ -7,13 +7,10 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (Only))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.TestUtils
 import Pkg.TraceSessionCache qualified as TSC
-import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
 
 querySessionColumns :: TestResources -> Text -> IO (V.Vector (Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text))

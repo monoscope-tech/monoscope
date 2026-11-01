@@ -10,9 +10,7 @@ import Data.Time (NominalDiffTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as DataUUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Lucid (toHtml)
 import Models.Apis.ApiChanges qualified as ApiChanges
@@ -31,12 +29,10 @@ import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker (TimePicker (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
-import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldNotSatisfy, shouldReturn, shouldSatisfy)
 
 
 spec :: Spec

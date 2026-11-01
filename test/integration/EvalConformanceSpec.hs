@@ -26,14 +26,11 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..))
 import Pkg.Parser.Eval (evalExpr, filterExpr, resolveIn)
 import Pkg.Parser.Stats (parseQueryToAST)
-import Pkg.TestUtils (TestResources (..), frozenTime, testPid, withTestResources)
-import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe)
+import Pkg.TestUtils
 
 
 rowId :: Text

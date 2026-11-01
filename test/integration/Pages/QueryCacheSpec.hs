@@ -3,7 +3,6 @@ module Pages.QueryCacheSpec (spec) where
 import Control.Exception qualified as E
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Pool (defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
 import Data.Time (UTCTime, addUTCTime)
@@ -12,17 +11,14 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (execute_)
 import Database.PostgreSQL.Simple qualified as PG
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import GHC.Clock (getMonotonicTimeNSec)
 import Pages.Charts.Charts qualified as Charts
 import Pkg.Parser (currentTime, dateRange, defSqlQueryCfg, environment, parseQueryToAST, service)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache qualified as QC
 import Pkg.TestUtils
-import Relude
 import Servant qualified
 import System.Config (AuthContext (..))
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy)
 import Text.Read (read)
 import Utils (toXXHash)
 

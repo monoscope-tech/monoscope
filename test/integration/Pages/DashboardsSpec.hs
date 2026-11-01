@@ -2,7 +2,6 @@ module Pages.DashboardsSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as LBS
-import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as List
 import Data.Text qualified as T
@@ -23,17 +22,15 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Projects (TeamForm (..))
 import Pages.Projects qualified as ManageMembers
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
+import Pkg.DeriveUtils (mkHasqlPool)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
-import Relude
 import Servant qualified
 import System.Config (AuthContext (..), DeploymentEnv (Prod, Staging), EnvConfig (..))
 import System.Directory (withCurrentDirectory)
 import System.Environment qualified as Env
 import System.IO.Temp (withSystemTempDirectory)
 import System.Types (addRespHeaders)
-import Test.Hspec
 import Web.Routes qualified as Routes
 import "cryptonite" Crypto.Hash qualified as Crypto
 

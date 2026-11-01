@@ -2,7 +2,6 @@ module Pages.LogExplorer.LogSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
@@ -15,8 +14,6 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries qualified as LogQueries
@@ -33,14 +30,12 @@ import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.LogExplorer.QueryLibrary qualified as QueryLibrary
 import Pages.Telemetry qualified as TelemetryPage
 import Pkg.Components.LogQueryBox qualified as LogQueryBox
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser qualified as Parser
 import Pkg.Parser.Stats (Sources (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import ProcessMessage qualified
-import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.QueryParam.Record (RecordParam)

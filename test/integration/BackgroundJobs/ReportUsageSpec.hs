@@ -19,7 +19,6 @@ import Data.ProtoLens (decodeMessage, defMessage, encodeMessage)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.Sampling qualified as Sampling
@@ -30,9 +29,7 @@ import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qual
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualified as TSF
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
-import Relude
 import System.Config qualified as Config
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldNotSatisfy, shouldReturn, shouldSatisfy, shouldThrow)
 
 
 -- | Put the project on a known plan/provider footing. `billing_day` anchors the cycle, and

@@ -11,7 +11,6 @@ import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful.Time qualified as Time
 import GHC.Stats (gc, gcdetails_live_bytes, getRTSStats)
@@ -20,13 +19,10 @@ import Models.Apis.LogPatterns (BaselineState (..), LogPatternState (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.PatternMerge qualified as PM
 import Pkg.TestUtils
-import Relude
 import Servant qualified
 import System.Mem (performGC)
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy, shouldThrow)
 
 
 -- | Insert pre-aggregated hourly stats for a pattern to build baselines quickly

@@ -22,7 +22,6 @@ import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Error.Static (catchError)
 import Langchain.LLM.Core qualified as Chat
@@ -45,17 +44,14 @@ import Pages.Bots.Slack qualified as SlackPage
 import Pages.Bots.Utils qualified as Bot
 import Pages.Bots.Whatsapp (whatsappIncomingPostH)
 import Pkg.AI qualified as AI
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.SlackRateLimit qualified as RateLimit
 import Pkg.TestUtils
-import Relude
 import Servant.API.ResponseHeaders (getResponse)
 import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx)
-import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldNotContain, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
 import "cryptonite" Crypto.Hash (SHA256)

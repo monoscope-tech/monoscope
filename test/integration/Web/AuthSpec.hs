@@ -18,7 +18,6 @@ import Network.Wai.Test qualified as WT
 import Pages.BodyWrapper qualified as BodyWrapper
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.TestUtils
-import Relude
 import Servant.API (Header, Headers, ResponseHeader (..), getHeaders, getResponse, lookupResponseHeader)
 import Servant.Server (ServerError (..))
 import Servant.Server qualified as Servant

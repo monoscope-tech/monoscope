@@ -75,7 +75,6 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Models.Apis.Incidents qualified as Incidents
@@ -89,12 +88,10 @@ import Pages.Bots.BotFixtures (slackCallbackEnvelope)
 import Pages.Bots.Slack qualified as SlackEvents
 import Pkg.DeriveUtils (UUIDId)
 import Pkg.TestUtils
-import Relude
 import Servant.API.ResponseHeaders (getResponse)
 import System.Config (AuthContext (..))
 import System.Config qualified as Config
 import System.Directory (createDirectoryIfMissing, doesFileExist)
-import Test.Hspec (expectationFailure, shouldBe)
 import "cryptonite" Crypto.Error qualified as Crypto
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC

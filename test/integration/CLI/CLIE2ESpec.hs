@@ -18,8 +18,7 @@
 -- point of this file.
 module CLI.CLIE2ESpec (spec) where
 
-import Pkg.TestUtils (createTestAPIKey, testPid, withLiveServer, withTestResources)
-import Relude
+import Pkg.TestUtils
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM

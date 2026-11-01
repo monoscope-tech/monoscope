@@ -5,7 +5,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPRecord)
 import Data.List (lookup)
@@ -30,10 +29,8 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Charts.Types (MetricsData (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TestUtils
-import Relude
 import Servant (NoContent (..))
 import System.Types (ATBaseCtx, ApiPrincipal (..), effToServantHandlerTestHTTP)
 import System.Config (AuthContext (..), EnvConfig (..))

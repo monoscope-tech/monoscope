@@ -6,10 +6,7 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pkg.TestUtils
-import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe)
 
 
 spec :: Spec

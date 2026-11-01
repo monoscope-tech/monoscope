@@ -8,7 +8,6 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64.URL qualified as B64URL
-import Data.Default (def)
 import Data.Effectful.Notify (EmailData (..), Notification (..))
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -16,7 +15,6 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Issues (ReportListItem (..))
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
@@ -28,11 +26,9 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Reports qualified as Reports
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as Email
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, parseQueryToAST, parseQueryToComponents)
 import Pkg.TestUtils
-import Relude
 import Test.Hspec
 import UnliftIO.Async (concurrently)
 import Utils (formatWithCommas)

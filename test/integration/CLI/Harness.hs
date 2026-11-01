@@ -14,8 +14,7 @@ import Effectful (Eff, IOE, runEff)
 import Effectful.Environment (runEnvironment)
 import Effectful.FileSystem (runFileSystem)
 import Options.Applicative qualified as OA
-import Pkg.TestUtils (TestResources, runHTTPtoServant)
-import Relude
+import Pkg.TestUtils
 import System.Environment (setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.IO.Silently qualified as Silently

@@ -13,8 +13,7 @@ import Hasql.Session qualified as Session
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Pkg.DeriveUtils (mkHasqlPool)
-import Pkg.TestUtils (TestResources (..), withTestResources)
-import Relude
+import Pkg.TestUtils
 import Test.Hspec
 
 

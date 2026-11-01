@@ -6,7 +6,6 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as BL
-import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (HTTP, Options)
 import Data.List (lookup)
@@ -21,7 +20,6 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Connection, Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Error.Static (catchError)
 import Hasql.Interpolate qualified as HI
@@ -44,7 +42,6 @@ import Pages.Settings qualified as S3
 import Pages.Settings qualified as Settings
 import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
 import Pkg.TestUtils hiding (testPid)
-import Relude
 import Servant.API (ResponseHeader (..), getResponse, lookupResponseHeader)
 import Servant.Server qualified as ServantS
 import System.Config qualified

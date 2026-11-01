@@ -12,19 +12,14 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import GHC.Conc (getAllocationCounter, setAllocationCounter)
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
 import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload)
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.TestUtils
-import Relude
 import System.Config (AuthContext (..))
 import System.Mem (performGC)
-import Test.Hspec (Spec, around, describe, expectationFailure, it, pendingWith, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
 
 
 -- | The `merged` flag decides whether the cron will ever look at a session

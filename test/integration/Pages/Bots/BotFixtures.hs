@@ -25,8 +25,7 @@ import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Whatsapp qualified as Whatsapp
-import Pkg.TestUtils (TestResources (..))
-import Relude
+import Pkg.TestUtils
 import System.Config (AuthContext (..), EnvConfig (..))
 
 

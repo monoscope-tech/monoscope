@@ -12,16 +12,12 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant.Server qualified as ServantS
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec
 import Web.Auth (ClientMetadata (..), clientMetadataH)
 
 

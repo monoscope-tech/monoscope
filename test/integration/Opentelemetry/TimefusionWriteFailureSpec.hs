@@ -28,14 +28,12 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Opentelemetry.OtlpServer qualified as OtlpServer
-import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool, rawSql)
-import Pkg.TestUtils
+import Pkg.DeriveUtils (mkHasqlPool, rawSql)
+import Pkg.TestUtils hiding (sql)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields qualified as PLF
 import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
-import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (SpecWith, around, beforeWith, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 import UnliftIO.Exception (bracket, finally, throwIO, try)
 
 

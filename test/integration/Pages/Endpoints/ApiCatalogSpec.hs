@@ -3,7 +3,6 @@ module Pages.Endpoints.ApiCatalogSpec (spec) where
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
-import Data.Default (def)
 import Data.Effectful.Notify (EmailData (..), Notification (..))
 import Data.Text qualified as T
 import Data.Time (addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
@@ -13,16 +12,13 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
 import Pkg.TestUtils hiding (testPid)
-import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldSatisfy)
 import Utils (toUriStr, toXXHash)
 
 

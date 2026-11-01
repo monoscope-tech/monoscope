@@ -18,8 +18,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -30,8 +28,6 @@ import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified a
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
-import Relude
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldNotSatisfy, shouldSatisfy)
 
 
 -- | The trace the exemplar points at. Ingestion hex-decodes span/trace ids on the

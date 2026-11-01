@@ -8,14 +8,10 @@ import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 
 import Pages.Monitors qualified as Alerts
 import Pages.Projects qualified as Projects
-import Relude
 import Relude.Unsafe qualified as Unsafe
 
 

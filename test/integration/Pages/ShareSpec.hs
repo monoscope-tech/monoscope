@@ -6,14 +6,12 @@ import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.ShareEvents qualified as ShareEvents
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
 import Pages.Share qualified as Share
 import Pkg.TestUtils
-import Relude
 import System.Server qualified as Server
 import Test.Hspec
 import Web.ApiHandlers qualified as ApiH
