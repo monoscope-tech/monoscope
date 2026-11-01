@@ -455,3 +455,69 @@ checks above ran against the identical local HTML in Chromium.
 
 This refresh changes the review artifact and evidence only. It does not establish
 product release signoff, screen-reader acceptance, or physical-device acceptance.
+
+## Completed native-fix page review (1 November)
+
+### Scope and coverage
+
+Full mode covers the authenticated completed-fix page, its retained media,
+captions link, package control, and recorded usage at 320px and 1280px in both
+themes with normal and doubled text. The native lifecycle also checks the page
+handler's unavailable response after project eligibility changes. The page uses
+the existing Lucid shell, Tailwind/DaisyUI controls, and theme tokens.
+
+| Domain | Inspected evidence |
+| --- | --- |
+| Accessibility | Named video player, caption track and link, diagram alt text, focused package control, and measured text enlargement |
+| Layout | Eight viewport/theme/text combinations; video, diagram, title, and download control remain within the viewport |
+| Writing | Verified candidate and inferred cause remain distinct; the package is explicitly prepared rather than published; unavailable costs are labelled |
+| Typography | Candidate revision, body text, headings, and wrapped control label remain legible at 200% text |
+| Colors | Both application themes use the existing text, border, and link tokens; inspected dark focus ring remains visible |
+| UI | Native player controls, consistent package control, restrained surfaces, and the existing application navigation |
+
+### Findings
+
+No actionable interface findings.
+
+| Before | After | Why |
+| --- | --- | --- |
+| The completed native-fix screen had no rendered review checkpoint | Eight browser states verify the existing layout, media metadata, text size, and package-control focus | Retained evidence must remain readable without adding a parallel interface |
+
+### Considered but rejected
+
+| Location | Candidate | Rejected because |
+| --- | --- | --- |
+| `src/Pages/CodeContext.hs:107` | Autoplay the explanation video | Controlled playback avoids unsolicited motion and preserves the user's reading position |
+| `src/Pages/CodeContext.hs:98` | Add a raised card and shadow around the whole report | The report already uses the application shell and structural media borders; another surface adds visual weight without improving grouping |
+| `src/Pages/CodeContext.hs:117` | Force the package label onto one line at enlarged text | The existing two-line label fits on mobile and retains the complete action name |
+
+### Verification
+
+A temporary adapter in the existing native publication lifecycle used
+`withLiveServer tr` and invoked
+`node scripts/local/check-native-fix-interface.cjs` with the isolated server,
+fixture IDs, session, generated media directory, and retained summary. The actual
+authenticated HTML handler returns HTTP 200. Playwright supplies the same native
+fixture's generated media through its route handler; this is fixture transport,
+not S3 or media-authorization acceptance.
+
+All eight states pass. Video metadata loads, the caption track is present, the
+diagram decodes, the download has the expected package URL and filename, and
+its focused state and complete label remain visible. Actual computed font
+sizes double. There is no page overflow, clipped package text, or browser error.
+The same watcher run passes 32 Slack citation cases, for 33 examples with zero
+failures in 34.6194 seconds. The temporary adapter is removed.
+
+The checks, sixteen captures, log, and source hashes are under
+`scripts/local/native-fix-interface/`. The compiled CSS matches the prior
+conversation browser checkpoint and predates these captures. The enlarged mobile
+and normal desktop captures were visually inspected in both themes.
+
+Physical devices, screen readers, keyboard traversal, playback controls, storage failures,
+S3 delivery, and package download remain **Not verified by this browser pass**.
+The existing native/backend acceptance evidence remains separate. No product
+layout or behavior changed during this visual review.
+
+### Verdict
+
+Approve
