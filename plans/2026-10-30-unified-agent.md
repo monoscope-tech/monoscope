@@ -453,7 +453,12 @@ module. The distillation and evasion checks retain the existing catalog,
 requester grant, precise HTTP/UUID/time effects, opaque publication capabilities,
 and production/test interpreter pairs. No further material finding was identified
 in those modules during this slice. Their application callers and native
-interpreters still belong to the remaining whole-branch review. The shared
+interpreters still belong to the remaining whole-branch review. Additional source
+reads cover the native publisher, checkout wrapper, and shared host Git command.
+Their raw IO remains inside the existing interpreter boundary; temporary resources
+use scoped wrappers, and host Git filters the environment and disables external
+hooks, credential helpers, global configuration, and redirects. These reads do not
+prove abrupt host-loss behavior or Linux/KVM acceptance. The shared
 request-indicator JavaScript retains its request-identity set because overlapping
 requests and cancelled confirmations need independent lifecycle tracking; a
 visibility toggle cannot replace that behavior.
@@ -464,6 +469,14 @@ removes no dependency. `cabal check` reads the package successfully but reports
 the existing parent-directory license path, `-Werror`, and package metadata/bounds
 issues; it is not a passing package check. The license path and warning policy
 were confirmed in the preceding committed manifest and remain unchanged.
+
+The cached development CLI fails the portability check because it links Homebrew
+zlib. Running the existing release packager on a temporary copy succeeds: it
+uses system zlib, passes strict code-signature and linkage verification, and
+prints `monoscope 0.6.31`. The temporary copy is removed automatically. Evidence
+is `scripts/local/cli-release-review-20261101.{json,log}`; the JSON records the
+source binary, packager, and linkage-check hashes. This verifies packaging of
+that cached executable, not a fresh build of the final branch.
 
 The review artifact is committed at `5ca2fb59b`. Its hosted HTML readback matches
 the local 232,534-byte file. All 102 steps across twelve walkthroughs pass at four
