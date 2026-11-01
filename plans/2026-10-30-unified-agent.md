@@ -463,7 +463,7 @@ locks for external actions as well as atomic writes. Rejection rolls back the
 claim and uses the common stopped-run outcome. No migration, store, interpreter,
 or permission prompt is added. All twelve cases pass in the final 485-example
 bot run (172.9788 seconds), with unchanged recorded runtime and bot inputs.
-All 2,068 doctests also pass. The native review/fix regression group is running.
+All 2,068 doctests also pass at that checkpoint. The subsequent full native group passes with all three queued Slack workflow cases: 53 examples, zero failures in 347.5340 seconds (`scripts/local/agent-effect-admission-native-53-green.log`).
 Logs are `/tmp/agent-effect-admission-six-red.log`,
 `scripts/local/agent-effect-admission-bots-485-green.log`, and
 `/tmp/agent-effect-admission-doctests.log`. Runtime HLint has zero hints; no hints
@@ -471,6 +471,24 @@ occur on changed test lines (122 pre-existing test hints remain). Pinned
 formatting and whitespace checks pass. The repeated scoped three-skill
 review has no further material finding. This does not close whole-branch review;
 the live QA checkpoint above predates this admission fix.
+
+The controlled publication retry exposed a separate routing defect: substring
+matching treated a freeform `send_to_slack ... report completion` instruction
+as a saved daily-report request. Run `5ce569e9-41d0-446c-90e5-516f96e0571a`
+returned “No daily report found” without invoking the agent or an operation.
+That is a failed acceptance attempt despite its terminal run status. The private
+receipt is `scripts/local/slack-admission-before-report-routing-fix.json`.
+
+The existing queued-command table reproduces the same wrong reply before the
+fix (`/tmp/slack-report-routing-red.log`). The shared classifier now recognizes
+complete saved-report commands and parses their period through the existing
+`ReportType` parser. Other instructions use the agent. Three doctests cover
+substring rejection, compound instructions, and a polite weekly-report request.
+All three queued-command cases pass in the native checkpoint above. Runtime
+HLint and formatting pass; scoped distillation, evasion, and locality review find
+no further material issue. No new parser module, dependency, configuration, or
+execution path is added. The final broad bot/doctest run and unchanged live
+request retry remain underway.
 
 The current review continues against `origin/master`; the whole-branch review
 remains open. The completed source-reading slice covers `Pkg.AgentCatalog`,

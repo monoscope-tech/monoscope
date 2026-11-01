@@ -8,6 +8,7 @@ import Data.Aeson.Lens (key, _Number)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isAlphaNum)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (Options, header)
@@ -58,6 +59,7 @@ import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
 import Utils (faSprite_, formatUTC, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
+import Web.HttpApiData (parseUrlPiece)
 
 
 data BotType = Discord | Slack | WhatsApp
@@ -458,7 +460,7 @@ verifyWidgetSignature secret pid widgetJson = maybe (Left "Missing signature") \
 data QueryIntent = ReportIntent Projects.ReportType | GeneralQueryIntent deriving (Eq, Show)
 
 
--- | Detect if user query is requesting a report. Requires action verb + "report/summary".
+-- | Recognize complete saved-report requests; other instructions use the agent.
 --
 -- >>> detectReportIntent "send daily report"
 -- ReportIntent RTDaily
@@ -474,14 +476,22 @@ data QueryIntent = ReportIntent Projects.ReportType | GeneralQueryIntent derivin
 -- GeneralQueryIntent
 -- >>> detectReportIntent "daily"
 -- GeneralQueryIntent
+-- >>> detectReportIntent "forget the report"
+-- GeneralQueryIntent
+-- >>> detectReportIntent "show me how to send an incident summary"
+-- GeneralQueryIntent
+-- >>> detectReportIntent "Please show me the weekly report!"
+-- ReportIntent RTWeekly
 detectReportIntent :: Text -> QueryIntent
-detectReportIntent query =
-  let q = T.toLower $ T.strip query
-      has :: [Text] -> Bool
-      has = any (`T.isInfixOf` q)
-   in if has ["send", "get", "show", "give", "fetch", "retrieve"] && has ["report", "summary"]
-        then ReportIntent $ bool Projects.RTDaily Projects.RTWeekly ("week" `T.isInfixOf` q)
-        else GeneralQueryIntent
+detectReportIntent query = fromMaybe GeneralQueryIntent do
+  action :| request <- nonEmpty $ filter (`notElem` ["please", "me", "my", "the", "a", "an"]) $ words $ T.map (\c -> if isAlphaNum c then c else ' ') $ T.toCaseFold query
+  guard $ action `elem` ["send", "get", "show", "give", "fetch", "retrieve"]
+  (kind, reportType) <- case request of
+    [kind] -> Just (kind, Projects.RTDaily)
+    [period, kind] -> (kind,) <$> rightToMaybe (parseUrlPiece period)
+    _ -> Nothing
+  guard $ kind `elem` ["report", "summary"]
+  pure $ ReportIntent reportType
 
 
 -- | A rendered bot reply. The payload is already platform-shaped; the constructor

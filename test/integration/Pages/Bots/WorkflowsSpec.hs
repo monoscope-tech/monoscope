@@ -1002,7 +1002,7 @@ spec = around withTestResources do
             runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(DISTINCT root_run_id) FROM apis.ai_routine_runs WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]) >>= (`shouldBe` 1)
             when (expectedWrites == 1) $ runQueryEffect tr (Hasql.interpScalar @Projects.UserId [HI.sql|SELECT created_by FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Slack autonomous dashboard'|]) >>= (`shouldBe` requester.id)
 
-      for_ ([("show errors", 1, "No errors were found."), ("show weekly report", 0, "report found")] :: [(Text, Int, Text)]) \(prompt, expectedCalls, expectedReply) ->
+      for_ ([("show errors", 1, "No errors were found."), ("show weekly report", 0, "report found"), ("Call send_to_slack exactly once, then report completion.", 1, "No errors were found.")] :: [(Text, Int, Text)]) \(prompt, expectedCalls, expectedReply) ->
         it ("Slack: handles queued query end-to-end: " <> toString prompt) \tr -> do
           setupSlackAgent tr testPid "T_WF_SLACK"
           calls <- newIORef (0 :: Int)
