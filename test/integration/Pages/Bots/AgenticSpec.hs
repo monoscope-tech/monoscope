@@ -1888,7 +1888,9 @@ spec = around withTestResources do
         renderT chatPage `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/ai/" <> convId.toText <> "?doc=checkout-review\"")
         (_, docPage) <- testServant tr $ AIThreads.threadGetH testPid convId (rightToMaybe $ Issues.mkArtifactKey "checkout-review") Nothing
         let html = renderT docPage
-        filter (not . (`T.isInfixOf` html)) ["?doc=checkout-review", "<h2 id=\"followup\">", "href=\"#followup\"", "Latency recovered."] `shouldBe` []
+            fragment = "ai-document-" <> convId.toText <> "-followup"
+        filter (not . (`T.isInfixOf` html)) ["?doc=checkout-review", "<h2 id=\"" <> fragment <> "\" tabindex=\"-1\">", "href=\"#" <> fragment <> "\"", "Latency recovered."] `shouldBe` []
+        html `shouldSatisfy` (not . T.isInfixOf "<h2 id=\"followup\">")
 
       it "agentDocuments_boundedPerDocumentPerConversationAndPerRead" \tr -> do
         let convId = UUIDId UUID.nil
