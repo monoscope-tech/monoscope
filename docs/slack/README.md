@@ -9,7 +9,7 @@ Do not construct an OAuth URL with a project ID as `state`; the callback rejects
 
 ## Activate the Slack routine
 
-1. Open **AI → Routines** in the connected project.
+1. Open **Agents → Routines** in the connected project.
 2. Add **Slack investigation**. You need project edit or admin permission.
 3. Open the routine to review or change its instructions.
 4. Mention Monoscope, send a direct message, or use `/monoscope` in Slack.
@@ -29,9 +29,16 @@ the conversation with its run details beside it. Within a conversation, runs and
 artifacts open in the same detail panel without clearing your draft. On narrow
 screens, close the panel or press Escape to return to the conversation.
 
-Pause the routine to stop future investigations. Use **Stop active runs** to
-stop current work. If the routine is absent or paused, Slack returns private
-activation instructions. Notification delivery remains connected.
+For optional review, choose **Review selected actions** under **Execution policy**
+in the routine's conversation. Select the action classes and required reviewer,
+then save. Other actions stay automatic. Waiting actions appear in the same run
+panel and Slack notice. Approval resumes the original request; rejection, expiry,
+or withdrawn access prevents the action. Autonomous does not require these votes.
+
+Pause the routine to stop current and future investigations. Use **Stop active
+runs** to stop current work while keeping the routine enabled for future
+requests. If the routine is absent or paused, Slack returns private activation
+instructions. Notification delivery remains connected.
 
 ## Enable incident investigations in a channel
 
@@ -54,7 +61,7 @@ acknowledgement is reconciled before another reply can be sent.
 
 ## Activate pull request reviews
 
-1. Open **AI → Routines** in the project.
+1. Open **Agents → Routines** in the project.
 2. Add **Production impact review**.
 3. Open the repository settings and enable its automatic pull request reviews.
 4. Choose **Links only** or **Aggregates and links** for evidence sent to GitHub.
@@ -66,7 +73,7 @@ earlier attempts and artifacts.
 
 ## Activate issue enrichment
 
-1. Open **AI → Routines** in the project.
+1. Open **Agents → Routines** in the project.
 2. Add **Issue enrichment** to permit automatic issue metadata updates.
 3. Open the routine to change its instructions or pause future work.
 
@@ -126,8 +133,9 @@ live app settings. See [Slack's MCP requirements](https://docs.slack.dev/ai/slac
 Use `/monoscope search disconnect` to remove your personal grants and pending
 consent for the current project. Disconnect also invalidates an exchange already
 in flight. Access and refresh tokens use the shared authenticated encryption
-helper. Tokens are unavailable after membership loss, workspace replacement, or
-expiry. Rotating grants retain their refresh token and expiry together.
+helper. Tokens are unavailable after membership loss or workspace replacement. Expired
+access tokens require a successful refresh before use. Rotating grants retain
+their refresh token and expiry together.
 
 Signed `tokens_revoked` events remove the named users' grants and pending consent
 in that workspace. The receipt and cleanup commit together, so duplicate delivery
@@ -142,9 +150,19 @@ not replayed. If its access token expires, the user must reconnect. Disconnect,
 membership loss, and workspace replacement prevent an in-flight response from
 restoring access; a later reconnection wins over an older refresh response.
 
-The consent, disconnect, revocation, and refresh lifecycle is implemented. Remote
-MCP reads and audience containment remain unfinished; agent tools cannot use these
-credentials yet.
+The agent discovers Slack search, channel history, and thread reads through the
+shared tool catalog. Each read uses the linked requester's personal grant and
+checks the provider's current tool schema. Provider write tools are excluded.
+Channel requests can read their own authorized destination; personal workspace
+search requires a personal conversation. Current Slack membership is checked
+before and after restricted reads.
+
+Retained evidence carries its audience into later model turns, saved documents,
+and run history. A private read cannot authorize publication into a shared Slack
+channel or project wiki. Consent, refresh, disconnect, revocation, MCP reads, and
+audience containment have integration coverage. Actual app eligibility, live
+provider schemas, Slack Connect, and controlled workspace acceptance remain
+rollout gates.
 
 ## Link a Slack identity
 

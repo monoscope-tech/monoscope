@@ -18,6 +18,8 @@ Current review boundary: web, issue, slash-command, scheduled, Slack-event, enri
 
 Native fix, admission, and peer wiki writes now use the shared ledger, as described below. Remaining work is explicit: broader native fix session recovery needs acceptance; streaming needs implementation and acceptance; Slack app eligibility, Slack Connect, and the silent private mention need live verification. The existing visual review now includes source `0a19031b5`, paired native recovery, the shared decision panel, and the native-fix consolidation. Whole-branch review, doctests, Linux/KVM coverage, local release signoff, and the canonical PR update remain open. Autonomous remains the default; these changes add no mandatory permission prompts.
 
+The current tool session has browser automation but no installed Slack connector. Plugin discovery confirms the Slack integration is available and was already suggested. This limits live workspace acceptance; it does not prevent local implementation, fixture integration tests, or browser checks. No live app settings were changed.
+
 ## Native fixes use the shared run and wiki ledger
 
 A queued native fix now owns one shared run and dedicated conversation. Duplicate admission retains that run. The existing fix lease constructs an opaque `RunContext`; the ordinary conversation worker cannot borrow it. A replaced lease loses authority even if it still holds an old context. Fix, admission, and independent-review attempts keep their actual attempt IDs, while their wiki revisions link to the shared writing run. All four writes use the same native-operation ledger and transactional wiki recipe as other agent work. Repeated identical calls return their retained response instead of creating another revision.
