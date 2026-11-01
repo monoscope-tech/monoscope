@@ -172,6 +172,8 @@ detect_caps() {
   command -v cabal >/dev/null 2>&1 && caps="$caps ghc"
   command -v node >/dev/null 2>&1 && caps="$caps node"
   command -v bun >/dev/null 2>&1 && caps="$caps bun"
+  command -v python3 >/dev/null 2>&1 && caps="$caps python3"
+  command -v psql >/dev/null 2>&1 && command -v createdb >/dev/null 2>&1 && command -v dropdb >/dev/null 2>&1 && caps="$caps pg-cli"
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1 && caps="$caps docker"
   command -v hlint >/dev/null 2>&1 && caps="$caps hlint"
   probe_tcp "${DB_HOST:-localhost}" "${DB_PORT:-5432}" && caps="$caps pg"
@@ -401,7 +403,11 @@ run_body() { # <check>
       scripts/e2e.sh
       ;;
     # Provisioned SDK guests run through the Haskell suite; its inputs include the worker.
-    integration-tests) test -x scripts/package-cli.sh && run_integration ;;
+    integration-tests)
+      test -x scripts/package-cli.sh
+      PGHOST=${DB_HOST:-localhost} PGPORT=${DB_PORT:-5432} PGUSER=postgres PGPASSWORD=postgres PGDATABASE=postgres PYTHONDONTWRITEBYTECODE=1 python3 scripts/baseline-agent-migrations-test.py
+      run_integration
+      ;;
     *) die "no body for check '$1'" ;;
   esac
 }
@@ -1113,6 +1119,11 @@ cmd_selftest() {
   before=$(fingerprint ui-tests)
   : > "static/public/assets/js/thirdparty/$probe"; WORKTREE_TREE=''; after=$(fingerprint ui-tests); rm -f "static/public/assets/js/thirdparty/$probe"
   assert "vendored parser change moves UI fp" changed "$([ "$before" != "$after" ] && echo changed)"
+
+  WORKTREE_TREE=''
+  before=$(fingerprint integration-tests)
+  : > "scripts/baseline-agent-migrations-$probe.py"; WORKTREE_TREE=''; after=$(fingerprint integration-tests); rm -f "scripts/baseline-agent-migrations-$probe.py"
+  assert "baseline adoption change moves integration fp" changed "$([ "$before" != "$after" ] && echo changed)"
 
   : > "web-components/$probe.bun-build"; WORKTREE_TREE=''
   after=$(git ls-tree "$(worktree_tree)" -- "web-components/$probe.bun-build")
