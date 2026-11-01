@@ -176,6 +176,7 @@ from
                                   AND c.key_hash = split_part(an.target_hash, ':', 1)
 where
   an.project_id=#{pid} AND an.target_hash=ANY(#{hash})
+ORDER BY an.created_at, an.target_hash
       |]
 
 

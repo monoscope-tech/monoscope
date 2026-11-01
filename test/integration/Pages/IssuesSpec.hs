@@ -1,14 +1,12 @@
 module Pages.IssuesSpec (spec) where
 
 import BackgroundJobs qualified
-import Control.Exception (bracket_)
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Hasql qualified as EHasql
-import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Text.Display (display)
-import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as DataUUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -16,20 +14,20 @@ import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
-import Lucid (ToHtml)
+import Lucid (toHtml)
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pages.BodyWrapper (PageCtx (..))
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Issues qualified as IssuesPage
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Components.TimePicker (TimePicker (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
 import Relude
@@ -37,1469 +35,366 @@ import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldNotSatisfy, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldNotSatisfy, shouldReturn, shouldSatisfy)
 
 
 spec :: Spec
--- Examples seed state for later ones ("previous test" assertions below), so this
--- keeps aroundAll and runs sequentially — opting out of the suite's per-test
--- isolation + parallelism (same as GitSyncSpec).
-spec = sequential $ aroundAll withTestResources do
-  describe "Issues list and lifecycle" do
-    it "should return an empty list" \tr -> do
-      rows <- listAnomalies tr Nothing
-      length rows `shouldBe` 0
-
-    -- The body preloads every hx-get on mouseover, so a GET lifecycle action fires on
-    -- hover. They are POSTs, which preload never fetches; no control may regress to GET.
-    it "does not preload issue acknowledge or archive actions" \_ -> do
-      issueId <- UUIDId <$> UUID.nextRandom
-      let html = renderT do
-            IssuesPage.issueAcknowledgeButton testPid issueId frozenTime Nothing
-            IssuesPage.issueArchiveButton testPid issueId False
-      T.count "hx-post=" html `shouldSatisfy` (> 2) -- ack, its duration options, archive
-      T.count "hx-get=" html `shouldBe` 0
-
-    it "should create endpoint anomalies (not visible in anomaly list)" \tr -> do
-      nowTxt <- nowText
-      let reqMsg1 = encMsg $ testRequestMsgs.reqMsg1 nowTxt
-      -- same message four times
-      processMessagesAndBackgroundJobs tr [(k, reqMsg1) | k <- ["m1", "m2", "m3", "m4"]]
-
-      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.endpoints WHERE project_id=? |] (Only testPid)
-        >>= (`shouldBe` 1)
-
-      -- NewAnomaly jobs are what create issues from anomalies
-      runAnomalyJobs tr \case
-        BackgroundJobs.NewAnomaly{} -> True
-        _ -> False
-      createTestSpans tr testPid 10
-
-      apiChangeIssueIds tr >>= \issues -> length issues `shouldBe` 1
-      -- API change issues are visible in the anomaly list
-      anomalies <- listAnomalies tr Nothing
-      length anomalies `shouldBe` 1
-
-    it "should acknowledge endpoint anomaly" \tr -> do
-      issues <- apiChangeIssueIds tr
-      length issues `shouldBe` 1
-      issueId <- maybe (fail "Expected at least one API change issue") pure $ listToMaybe issues
-
-      runAnomalyJobs tr shapeOrField
-
-      -- Acknowledge the endpoint anomaly directly using Issues module
-      let sess = Servant.getResponse tr.trSessAndHeader
-      runTestBg frozenTime tr $ ackIssue testPid sess.user.id issueId
-
-      acknowledgedIssue <- runTestBg frozenTime tr $ Issues.selectIssueById testPid issueId
-      maybe (error "Issue not found after acknowledgment") (isJust . (.acknowledgedAt)) acknowledgedIssue `shouldBe` True
-
-      -- Regression (selectIssueById_otherProject_returnsNothing): the lookup used to be
-      -- unscoped, so any tenant knowing an issue id could read the row.
-      otherPid <- UUIDId @"project" <$> UUID.nextRandom
-      -- isNothing rather than `shouldReturn Nothing`: Issue has no Eq instance.
-      runTestBg frozenTime tr (Issues.selectIssueById otherPid issueId) >>= (`shouldSatisfy` isNothing)
-
-      -- After acknowledging, the issue should appear in the Acknowledged filter
-      acked <- listAnomalies tr (Just "Acknowledged")
-      length (V.filter isApiChange acked) `shouldSatisfy` (> 0)
-
-    it "should detect new shape anomaly after processing new messages" \tr -> do
-      nowTxt <- nowText
-      let reqMsg2 = encMsg $ testRequestMsgs.reqMsg2 nowTxt
-      processMessagesAndBackgroundJobs
-        tr
-        [ ("m1", encMsg $ testRequestMsgs.reqMsg1 nowTxt)
-        , ("m2", reqMsg2)
-        , ("m3", encMsg $ msgWithBody "/" shapeBody nowTxt) -- same endpoint, different shape
-        , ("m4", reqMsg2)
-        ]
-      createTestSpans tr testPid 10
-
-      runAnomalyJobs tr shapeOrField
-
-      -- Issues exist in the database (they may be acknowledged from previous test)
-      apiChangeIssueIds tr >>= \issues -> length issues `shouldSatisfy` (>= 1)
-
-    it "should detect new format anomaly" \tr -> do
-      nowTxt <- nowText
-      runAnomalyJobs tr shapeOrField
-
-      apiChangeIssueIds tr >>= \issues -> length issues `shouldSatisfy` (>= 1)
-      issueId <- pickApiChangeIssue tr
-      let sess = Servant.getResponse tr.trSessAndHeader
-      runTestBg frozenTime tr $ ackIssue testPid sess.user.id issueId
-
-      -- Now send a message with a different format
-      processMessagesAndBackgroundJobs tr [("m4", encMsg $ msgWithBody "/" formatBody nowTxt)]
-      runAnomalyJobs tr \case
-        BackgroundJobs.NewAnomaly{anomalyType = "format"} -> True
-        _ -> False
-
-      -- In the new Issues system, format anomalies are part of API changes
-      anomalies <- listAnomalies tr Nothing
-      length (V.filter isApiChange anomalies) `shouldSatisfy` (>= 1)
-      length anomalies `shouldSatisfy` (> 0)
-
-    it "should get acknowledged anomalies" \tr -> do
-      rows <- listAnomalies tr (Just "Acknowledged")
-      -- We acknowledged at least one API change issue in the previous test
-      length (V.filter isApiChange rows) `shouldSatisfy` (>= 1)
-      length rows `shouldSatisfy` (> 0)
-
-    -- Regression: since #376 dropped apis.shapes/fields/formats, getAnomaliesVM selected
-    -- NULL drift detail, so new/changed fields never reached the issue, never updated an
-    -- open one. Observed field drift does not establish consumer breakage.
-    it "apiChangeIssue_fieldDrift_neverReachedIssuePayload" \tr -> do
-      nowTxt <- nowText
-      let ingest body = do
-            processMessagesAndBackgroundJobs tr [("drift", encMsg $ msgWithBody "/v1/drift" body nowTxt)]
-            runAnomalyJobs tr \case
-              BackgroundJobs.NewAnomaly{} -> True
-              _ -> False
-          driftIssue = do
-            h <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT hash FROM apis.endpoints WHERE project_id=? AND url_path='/v1/drift' |] (Only testPid)
-            iM <- maybe (pure Nothing) (\(Only eh) -> runTestBg frozenTime tr $ Issues.selectIssueByHash testPid eh (Issues.OpenOfType Issues.ApiChange)) (listToMaybe h)
-            i <- maybe (fail "no open api_change issue for /v1/drift") pure iM
-            case Issues.issuePayload i of
-              Just (Issues.ApiChangeP d) -> pure (i, d)
-              _ -> fail "api_change issue without an ApiChangeP payload"
-          hasField f = V.any (f `T.isSuffixOf`)
-      ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyJ9" -- {"username":"a@b.co"}
-      (i0, _) <- driftIssue
-      Issues.isNewEndpointOnly i0 `shouldBe` True
-      ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyIsInBhc3N3b3JkIjoieCIsIm5pY2tuYW1lIjoiYSJ9" -- + password, nickname
-      (i1, d1) <- driftIssue
-      (hasField "password" d1.newFields, V.null d1.modifiedFields, i1.critical) `shouldBe` (True, True, False)
-      ingest "eyJ1c2VybmFtZSI6MiwicGFzc3dvcmQiOiJ4Iiwibmlja25hbWUiOjJ9" -- username, nickname: string -> number
-      (i2, d2) <- driftIssue
-      (hasField "password" d2.newFields, hasField "username" d2.modifiedFields, hasField "password" d2.modifiedFields) `shouldBe` (True, True, False)
-      (i2.id == i0.id, i2.critical, i2.severity) `shouldBe` (True, False, Issues.Warning)
-      (_, detail) <- testServant tr $ IssuesPage.issueDetailGetH testPid i2.id Nothing Nothing Nothing Nothing Nothing
-      let html = renderPage detail
-      for_ ["Before", "After", "Detected", "a@b.co", "string", "number"] \text ->
-        html `shouldSatisfy` T.isInfixOf text
-      withResource tr.trPool \conn -> void $ PGS.execute conn [sql| UPDATE apis.anomalies SET field_evidence='[]', created_at=CASE WHEN cardinality(modified_fields)=0 THEN '2026-01-01'::timestamptz ELSE '2026-01-02'::timestamptz END WHERE project_id=? AND target_hash IN ? |] (testPid, PGS.In $ V.toList d2.anomalyHashes)
-      (_, legacyDetail) <- testServant tr $ IssuesPage.issueDetailGetH testPid i2.id Nothing Nothing Nothing Nothing Nothing
-      for_ ["Historical types and values were not captured", "Current observations", "a@b.co"] \text ->
-        renderPage legacyDetail `shouldSatisfy` T.isInfixOf text
-      for_ ([("Added", "2026-01-01T00:00:00Z"), ("Modified", "2026-01-02T00:00:00Z")] :: [(Text, Text)]) \(kind, detected) ->
-        T.splitOn "</tbody>" (renderPage legacyDetail) `shouldSatisfy` any (\batch -> all (`T.isInfixOf` batch) ["nickname", ">" <> kind <> "</td>", detected])
-
-    it "apiChangeEvidence_unavailable_doesNotHideIssue" \tr -> do
-      issueId <- pickApiChangeIssue tr
-      withResource tr.trPool \conn -> do
-        saved <- PGS.query conn "SELECT target_hash, field_evidence::text FROM apis.anomalies WHERE project_id=?" (Only testPid) :: IO [(Text, Text)]
-        bracket_
-          (void $ PGS.execute conn "UPDATE apis.anomalies SET field_evidence='null'::jsonb WHERE project_id=?" (Only testPid))
-          (for_ saved \(target, evidence) -> void $ PGS.execute conn "UPDATE apis.anomalies SET field_evidence=?::jsonb WHERE project_id=? AND target_hash=?" (evidence, testPid, target))
-          do
-            (_, detail) <- testServant tr $ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing Nothing Nothing Nothing
-            for_ ["Field changes", "Field evidence unavailable"] \text -> renderPage detail `shouldSatisfy` T.isInfixOf text
-
-    it "apiChanges_sameHost_collapseWithoutLosingEndpointIssues" \tr -> do
-      nowTxt <- nowText
-      for_ ["eyJ1c2VybmFtZSI6ImFAYi5jbyJ9", "eyJ1c2VybmFtZSI6Mn0="] \body -> do
-        processMessagesAndBackgroundJobs tr [("group", encMsg $ msgWithBody "/v1/grouped-drift" body nowTxt)]
-        runAnomalyJobs tr \case
-          BackgroundJobs.NewAnomaly{} -> True
-          _ -> False
-      withResource tr.trPool \conn -> do
-        saved <- PGS.query conn "SELECT id::text, service FROM apis.issues WHERE project_id=? AND issue_type='api_change'" (Only testPid) :: IO [(Text, Maybe Text)]
-        bracket_
-          (void $ PGS.execute conn "UPDATE apis.issues SET service=NULL WHERE project_id=? AND issue_type='api_change'" (Only testPid))
-          (for_ saved \(issueId, service) -> void $ PGS.execute conn "UPDATE apis.issues SET service=? WHERE project_id=? AND id=?::uuid" (service, testPid, issueId))
-          do
-            (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing Nothing [] ["api_change"]
-            let html = renderPage page
-            for_ ["<details", "API changes", "items on this page", "/v1/drift", "/v1/grouped-drift"] \text ->
-              html `shouldSatisfy` T.isInfixOf text
-            T.splitOn "</tbody>" html `shouldSatisfy` any (\batch -> all (`T.isInfixOf` batch) ["<summary", "API changes", "/v1/drift", "/v1/grouped-drift"])
-            html `shouldNotSatisfy` T.isInfixOf "172.31.29.11 · 172.31.29.11"
-            (_, singletonPage) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just "1") Nothing Nothing [] ["api_change"]
-            renderPage singletonPage `shouldNotSatisfy` T.isInfixOf "items on this page"
-
-    it "filters, paginates, and renders an empty anomaly list through the page handler" \tr -> do
-      -- Put the issues created above back in one customer-visible list. The bulk handler
-      -- is the same action the Acknowledged tab offers, and avoids fixture-only state.
-      acknowledged <- listAnomalies tr (Just "Acknowledged")
-      let acknowledgedIds = [issue.base.id.toText | IssuesPage.IssueVM _ issue <- V.toList acknowledged]
-      unless (null acknowledgedIds) do
-        void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAUnacknowledge Nothing Nothing IssuesPage.IssueBulk{itemId = acknowledgedIds}
-
-      let load page perPage services types = do
-            (_, response) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing (Just $ show page) (Just $ show perPage) Nothing (Just "24h") services types
-            case response of
-              Table.TablePage (PageCtx _ table) -> pure (response, table)
-              _ -> fail "expected a full anomaly-list page"
-
-      (_, allIssues) <- load 0 100 [] []
-      V.length allIssues.rows `shouldSatisfy` (>= 2)
-      sample <- maybe (fail "expected an issue with a service") pure $ V.find (isJust . (.base.service) . issueOf) allIssues.rows
-      service <- maybe (fail "expected an issue service") pure $ (issueOf sample).base.service
-      let issueType = display (issueOf sample).base.issueType
-
-      (_, filtered) <- load 0 100 [service] [issueType]
-      filtered.rows `shouldSatisfy` (not . V.null)
-      for_ filtered.rows \row -> do
-        (issueOf row).base.service `shouldBe` Just service
-        display (issueOf row).base.issueType `shouldBe` issueType
-
-      (_, firstPage) <- load 0 1 [] []
-      (_, secondPage) <- load 1 1 [] []
-      V.length firstPage.rows `shouldBe` 1
-      V.length secondPage.rows `shouldBe` 1
-      firstIssue <- onlyIssue firstPage.rows
-      secondIssue <- onlyIssue secondPage.rows
-      issueIdOf firstIssue `shouldSatisfy` (/= issueIdOf secondIssue)
-
-      (emptyResponse, emptyTable) <- load 0 25 ["service-that-does-not-exist"] []
-      emptyTable.rows `shouldSatisfy` V.null
-      renderPage emptyResponse `shouldSatisfy` T.isInfixOf "Nothing to triage"
-
-      -- Timed acknowledgement expiry uses the same uniqueness invariant as manual
-      -- unacknowledge. Recreate two acknowledged recurrences and prove the sweep
-      -- leaves one actionable issue instead of failing the whole background job.
-      let uid = (Servant.getResponse tr.trSessAndHeader).user.id
-          selectedIds = mapMaybe (fmap UUIDId . DataUUID.fromText) acknowledgedIds
-      void $ runTestBg frozenTime tr $ Issues.setAckState testPid selectedIds $ Just Issues.AckSet{at = frozenTime, by = Just uid, window = Issues.AckFor 1}
-      void $ runTestBg frozenTime tr $ Issues.setArchiveState testPid selectedIds Nothing
-      expired <- runTestBg frozenTime tr $ Issues.expireAcks (addUTCTime 120 frozenTime)
-      length (filter (`elem` selectedIds) expired) `shouldBe` 1
-      inboxAfterExpiry <- listAnomalies tr Nothing
-      archivedAfterExpiry <- listAnomalies tr (Just "Archived")
-      length (filter (`elem` selectedIds) $ map issueIdOf $ V.toList inboxAfterExpiry) `shouldBe` 1
-      length (filter (`elem` selectedIds) $ map issueIdOf $ V.toList archivedAfterExpiry) `shouldBe` length selectedIds - 1
-
-    -- Regression: posting via the bulk handler used the wrong form field name
-    -- (`anomalyId` instead of `itemId`) so selected ids were silently dropped and
-    -- the handler reported "No items selected". Subsequent attempt to read
-    -- `anomaly_hashes` as a column returned 500. This test goes through the real
-    -- handler so both bugs are caught together.
-    it "bulk acknowledge acknowledges the selected issue" \tr -> do
-      issueId <- pickApiChangeIssue tr
-
-      -- Reset state — earlier tests in this describe block may have acknowledged it.
-      withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql| UPDATE apis.issues    SET acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
-
-      _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAAcknowledge Nothing Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
-
-      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only issueId)
-        >>= (`shouldBe` 1)
-
-    -- Regression: the archive path posted to apis.anomalies by *issue* id, which
-    -- is never an anomaly id, so it silently no-op'd. The mirror is gone now and
-    -- the issue row is the only state; this asserts it leaves the inbox.
-    it "bulk archive removes the issue from the inbox" \tr -> do
-      issueId <- pickApiChangeIssue tr
-      let containsIssue = V.any \(IssuesPage.IssueVM _ issue) -> issue.base.id == issueId
-
-      withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql| UPDATE apis.issues    SET archived_at=NULL, acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
-
-      inboxBefore <- listAnomalies tr Nothing
-      containsIssue inboxBefore `shouldBe` True
-
-      _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAArchive Nothing Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
-
-      inboxAfter <- listAnomalies tr Nothing
-      containsIssue inboxAfter `shouldBe` False
-      archived <- listAnomalies tr (Just "Archived")
-      containsIssue archived `shouldBe` True
-      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only issueId)
-        >>= (`shouldBe` 1)
-      _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAUnarchive Nothing Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
-      containsIssue <$> listAnomalies tr Nothing `shouldReturn` True
-
-    -- Regression: the issues UPDATE in the cascade used target_hash=ANY() with
-    -- %-suffixed prefixes, so the legacy-hash sweep never matched any issue row.
-    -- Acking the endpoint's issue has to silence the field/shape issues under it.
-    it "ackCascade prefix-sweeps sibling issues under the same endpoint" \tr -> do
-      runTestBg frozenTime tr pass
-      let sess = Servant.getResponse tr.trSessAndHeader
-          prefix = "casc-legacy-001" :: Text
-      iid <- UUIDId <$> UUID.nextRandom
-      parentIid <- UUIDId <$> UUID.nextRandom
-      withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.issues
-                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
-                   severity, critical, affected_requests, affected_clients,
-                   issue_data, created_at, updated_at)
-                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
-                        false, 1, 1, '{}'::jsonb, ?, ?) |]
-            (iid, testPid, prefix <> ":child", prefix <> ":child", frozenTime, frozenTime)
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.issues
-                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
-                   severity, critical, affected_requests, affected_clients,
-                   issue_data, created_at, updated_at)
-                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
-                        false, 1, 1, '{}'::jsonb, ?, ?) |]
-            (parentIid, testPid, prefix, prefix, frozenTime, frozenTime)
-
-      -- A second project holding the SAME hash. The sweep is by content-derived hash, which is
-      -- not unique across projects, so an unscoped sweep silences another tenant's issue —
-      -- and unscoped it also could not use any index on these tables (every one leads with
-      -- project_id), which is what made acknowledging an issue a pair of sequential scans.
-      otherPid <- UUIDId <$> UUID.nextRandom
-      otherIid <- UUIDId <$> UUID.nextRandom
-      withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql| INSERT INTO projects.projects (id, title, description, active) VALUES (?, 'other', '', true) ON CONFLICT DO NOTHING |] (Only otherPid)
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.issues
-                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
-                   severity, critical, affected_requests, affected_clients,
-                   issue_data, created_at, updated_at)
-                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
-                        false, 1, 1, '{}'::jsonb, ?, ?) |]
-            (otherIid, otherPid, prefix <> ":child", prefix <> ":child", frozenTime, frozenTime)
-
-      void $ runTestBg frozenTime tr $ Issues.ackCascade testPid sess.user.id Issues.AckIndefinite [parentIid]
-
-      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NULL |] (Only otherIid)
-        >>= (`shouldBe` 1)
-
-      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only iid)
-        >>= (`shouldBe` 1)
-
-    -- A swept sibling is acknowledged without ever being named, so its own
-    -- timeline is the only place that can explain why it went quiet.
-    it "ackCascade reports the siblings it swept so their timelines can say so" \tr -> do
-      runTestBg frozenTime tr pass
-      let sess = Servant.getResponse tr.trSessAndHeader
-          prefix = "casc-logged-01" :: Text
-          insertAt conn i h =
-            PGS.execute
-              conn
-              [sql| INSERT INTO apis.issues
-                      (id, project_id, issue_type, target_hash, endpoint_hash, title,
-                       severity, critical, affected_requests, affected_clients,
-                       issue_data, created_at, updated_at)
-                    VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
-                            false, 1, 1, '{}'::jsonb, ?, ?) |]
-              (i, testPid, h, h, frozenTime, frozenTime)
-      parentIid <- UUIDId <$> UUID.nextRandom
-      childIid <- UUIDId <$> UUID.nextRandom
-      withResource tr.trPool \conn -> do
-        void $ insertAt conn parentIid prefix
-        void $ insertAt conn childIid (prefix <> ":child")
-
-      swept <- runTestBg frozenTime tr $ Issues.ackCascade testPid sess.user.id Issues.AckIndefinite [parentIid]
-      sort swept `shouldBe` sort [parentIid, childIid]
-
-    -- Regression: the archive path took no project at all. The issue ids come off a
-    -- bulk-action form, so any tenant could archive any issue by id.
-    it "setArchiveState_crossTenant_archivesOnlyTheCallersProject" \tr -> do
-      runTestBg frozenTime tr pass
-      let sharedHash = "arch-shared-hash-01" :: Text
-          insertIssue conn iid pid =
-            void
-              $ PGS.execute
-                conn
-                [sql| INSERT INTO apis.issues
-                        (id, project_id, issue_type, target_hash, endpoint_hash, title,
-                         severity, critical, affected_requests, affected_clients,
-                         issue_data, created_at, updated_at)
-                      VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
-                              false, 1, 1, jsonb_build_object('anomaly_hashes', jsonb_build_array(?::text)), ?, ?) |]
-                (iid, pid, sharedHash, sharedHash, sharedHash, frozenTime, frozenTime)
-      ownIid <- UUIDId <$> UUID.nextRandom
-      otherPid <- UUIDId <$> UUID.nextRandom
-      otherIid <- UUIDId <$> UUID.nextRandom
-      withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql| INSERT INTO projects.projects (id, title, description, active) VALUES (?, 'other-arch', '', true) ON CONFLICT DO NOTHING |] (Only otherPid)
-        insertIssue conn ownIid testPid
-        insertIssue conn otherIid otherPid
-
-      -- Both ids submitted together, exactly as a tampered bulk form would.
-      void $ runTestBg frozenTime tr $ Issues.setArchiveState testPid [ownIid, otherIid] (Just (frozenTime, Issues.ArchiveIndefinite))
-
-      let archivedIssue iid = countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only iid)
-      archivedIssue ownIid >>= (`shouldBe` 1)
-      archivedIssue otherIid >>= (`shouldBe` 0)
-
-    -- The issue AI chat never checked membership: any signed-in user could spend this
-    -- project's AI budget on its telemetry and read the answers, by project and issue id.
-    it "aiChatPostH_nonMember_cannotChat" \tr -> do
-      victim <- createTestProject tr "victim"
-      iid <- UUIDId <$> UUID.nextRandom
-      assertNonMemberDenied tr victim $ IssuesPage.aiChatPostH victim iid (IssuesPage.AIChatForm "summarise this")
-      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.ai_chat_messages WHERE project_id=? |] (Only victim) >>= (`shouldBe` 0)
-
-    -- The sweep narrows on LEFT(target_hash, 8) to reach migration 0130's index, which is only
-    -- a valid superset while the target is at least that wide. A shorter one must fall back to
-    -- the plain LIKE rather than silently matching nothing — this is the case where the fast
-    -- path would be wrong, so it is the one worth a test of its own.
-    it "still sweeps a target shorter than the indexed hash prefix" \tr -> do
-      runTestBg frozenTime tr pass
-      let sess = Servant.getResponse tr.trSessAndHeader
-          shortPrefix = "ab1" :: Text
-      shortIid <- UUIDId <$> UUID.nextRandom
-      shortParentIid <- UUIDId <$> UUID.nextRandom
-      withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.issues
-                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
-                   severity, critical, affected_requests, affected_clients,
-                   issue_data, created_at, updated_at)
-                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
-                        false, 1, 1, '{}'::jsonb, ?, ?) |]
-            (shortIid, testPid, shortPrefix <> "cdef9999", shortPrefix <> "cdef9999", frozenTime, frozenTime)
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.issues
-                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
-                   severity, critical, affected_requests, affected_clients,
-                   issue_data, created_at, updated_at)
-                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
-                        false, 1, 1, '{}'::jsonb, ?, ?) |]
-            (shortParentIid, testPid, shortPrefix, shortPrefix, frozenTime, frozenTime)
-
-      void $ runTestBg frozenTime tr $ Issues.ackCascade testPid sess.user.id Issues.AckIndefinite [shortParentIid]
-
-      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only shortIid)
-        >>= (`shouldBe` 1)
-
-    -- Regression: createAPIChangeIssue hard-coded a string that differed from
-    -- defaultRecommendedAction, so the detail page's "not yet LLM-enhanced" check
-    -- never matched api_change issues and always rendered the boilerplate.
-    it "api_change issues carry defaultRecommendedAction" \tr -> do
-      -- Seed through the real pipeline when running in isolation; the file's
-      -- earlier tests normally created the api_change issue already.
-      existing <- apiChangeIssueIds tr
-      when (null existing) do
-        nowTxt <- nowText
-        processMessagesAndBackgroundJobs tr [("m1", encMsg $ testRequestMsgs.reqMsg1 nowTxt)]
-        runAnomalyJobs tr \case
-          BackgroundJobs.NewAnomaly{} -> True
-          _ -> False
-      ras <- withResource tr.trPool \conn ->
-        PGS.query
-          conn
-          [sql| SELECT DISTINCT recommended_action FROM apis.issues WHERE project_id=? AND issue_type='api_change' |]
-          (Only testPid)
-          :: IO [Only Text]
-      map fromOnly ras `shouldBe` [Issues.defaultRecommendedAction]
-
-    -- Regression: the ApiChange detail page used to render an empty Investigation
-    -- panel because hashPrefix returned Nothing for ApiChange and there was no
-    -- query to find the originating trace. Now hashPrefix is "" and
-    -- getEndpointTraceId locates spans by (method, url_path); seed one and
-    -- assert the rendered page surfaces its trace id.
-    it "new-endpoint issue detail surfaces originating trace via getEndpointTraceId" \tr -> do
-      issueId <- pickApiChangeIssue tr
-      -- Un-archive so the detail handler renders normally
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn [sql| UPDATE apis.issues SET archived_at=NULL WHERE id=? |] (Only issueId)
-      traceIdText <- DataUUID.toText <$> UUID.nextRandom
-      spanIdText <- DataUUID.toText <$> UUID.nextRandom
-      withResource tr.trPool \conn ->
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO otel_logs_and_spans
-                (id, project_id, timestamp, start_time,
-                 attributes___http___request___method, attributes___url___path,
-                 context___trace_id, context___span_id,
-                 context, kind, status_code, summary)
-              VALUES (gen_random_uuid(), ?, ?, ?, 'GET', '/', ?, ?,
-                      jsonb_build_object('trace_id', ?::text, 'span_id', ?::text),
-                      'SERVER', '200', '{}') |]
-            (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
-
-      (_, pageById) <- testServant tr $ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing Nothing Nothing Nothing
-      -- The trace id should be embedded somewhere in the rendered investigation panel.
-      renderPage pageById `shouldSatisfy` (traceIdText `T.isInfixOf`)
-
-      issue <- runTestBg frozenTime tr $ Issues.selectIssueById testPid issueId
-      let targetHash = maybe (error "Expected API change issue") (.targetHash) issue
-      (_, pageByHash) <- testServant tr $ IssuesPage.issueDetailHashGetH testPid targetHash Nothing (Just "14D") Nothing Nothing Nothing
-      -- The reader's chosen range still drives the page: it seeds the URL the charts
-      -- read and it is the time picker's selected value. It is deliberately no longer
-      -- in the Logs tab's own URL — a trace-scoped query is about the trace's instant,
-      -- not the page's range, and pinning it to +/-2h cost 35.9s for the same 14 rows.
-      let hashHtml = renderPage pageByHash
-      hashHtml `shouldSatisfy` T.isInfixOf "\"since\":\"14D\""
-      hashHtml `shouldSatisfy` T.isInfixOf "data-start=\"14D\""
-
-      -- Shared absolute ranges must reach server-rendered controls on both routes,
-      -- even when the issue's latest activity falls outside that window.
-      let from = "2026-09-02T06:04:43Z"
-          to = "2026-09-02T10:04:43Z"
-      forM_
-        [ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing (Just from) (Just to) Nothing
-        , IssuesPage.issueDetailHashGetH testPid targetHash Nothing Nothing (Just from) (Just to) Nothing
-        ]
-        \handler -> do
-          (_, absolutePage) <- testServant tr handler
-          let html = renderPage absolutePage
-          html `shouldSatisfy` T.isInfixOf "data-start=\"2026-09-02T06:04:43Z\""
-          html `shouldSatisfy` T.isInfixOf "data-end=\"2026-09-02T10:04:43Z\""
-          html `shouldSatisfy` T.isInfixOf ("\"from\":\"" <> from <> "\"")
-          html `shouldSatisfy` T.isInfixOf ("\"to\":\"" <> to <> "\"")
-          html `shouldNotSatisfy` T.isInfixOf "first_occurrence=true"
-          html `shouldSatisfy` T.isInfixOf "Selected event is outside this range."
-          html `shouldSatisfy` T.isInfixOf "Jump to latest occurrence"
-
-    it "spanSchemaIssue_doesNotLookUpTraceUsingLegacyHttpPlaceholders" \tr -> do
-      let subject = ApiChanges.SpanSchema Catalog.emptyScope{Catalog.service = Just "checkout", Catalog.spanName = Just "process-order"}
-          payload =
-            [aesonQQ|{ "subject": #{subject}, "endpoint_method": "UNKNOWN", "endpoint_path": "/", "endpoint_host": "Unknown",
-                              "anomaly_hashes": [], "shape_changes": [], "format_changes": [], "new_fields": [], "deleted_fields": [], "modified_fields": [] }|]
-      traceIdText <- DataUUID.toText <$> UUID.nextRandom
-      issueId <- withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO otel_logs_and_spans
-          (id, project_id, timestamp, start_time, attributes___http___request___method, attributes___url___path, context___trace_id, summary)
-          VALUES (gen_random_uuid(), ?, ?, ?, 'UNKNOWN', '/', ?, '{}') |]
-            (testPid, frozenTime, frozenTime, traceIdText)
-        maybe (fail "expected schema issue") (pure . fromOnly)
-          . listToMaybe
-          =<< PGS.query
-            conn
-            [sql| INSERT INTO apis.issues
-          (project_id, issue_type, title, target_hash, issue_data, created_at, updated_at)
-          VALUES (?, 'api_change', 'Span schema changed', ?, ?::jsonb, ?, ?) RETURNING id |]
-            (testPid, "span-schema-" <> traceIdText, AE.encode payload, frozenTime, frozenTime)
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing Nothing Nothing Nothing
-      let html = renderPage page
-      html `shouldSatisfy` T.isInfixOf "process-order"
-      html `shouldNotSatisfy` T.isInfixOf traceIdText
-      html `shouldSatisfy` T.isInfixOf "Span schema observed"
-      html `shouldNotSatisfy` T.isInfixOf "New endpoint discovered"
-
-    it "log-pattern evidence loads separately and honors the shared absolute range" \tr -> do
-      patternHash <- DataUUID.toText <$> UUID.nextRandom
-      traceIdText <- T.filter (/= '-') . DataUUID.toText <$> UUID.nextRandom
-      let selectedAt = addUTCTime (-86400) frozenTime
-          iso = toText . formatTime defaultTimeLocale "%FT%TZ"
-          from = iso $ addUTCTime (-60) selectedAt
-          to = iso $ addUTCTime 60 selectedAt
-          payload = Issues.LogPatternData patternHash "payment failed <*>" (Just "saved occurrence") Nothing (Just "checkout") "body" selectedAt 2
-      issueId <- withResource tr.trPool \conn -> do
-        forM_ [(selectedAt, "selected occurrence" :: Text), (frozenTime, "outside occurrence")] \(at, message) ->
-          void
-            $ PGS.execute
-              conn
-              [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary, context___trace_id)
-                  VALUES (gen_random_uuid(), ?, ?, ?, 'log', ARRAY[?], ARRAY[?], ?) |]
-              (testPid, at, at, "pat:" <> patternHash, message, traceIdText)
-        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
-          . listToMaybe
-          =<< PGS.query
-            conn
-            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
-                  VALUES (?, 'log_pattern', 'payment pattern', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
-            (testPid, patternHash, AE.encode payload, selectedAt, frozenTime)
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing (Just from) (Just to) Nothing
-      let html = renderPage page
-      html `shouldSatisfy` not . T.isInfixOf "selected occurrence"
-      html `shouldSatisfy` T.isInfixOf "id=\"issue-sample\""
-      html `shouldSatisfy` T.isInfixOf "saved occurrence"
-      (_, sample) <- testServant tr $ IssuesPage.issueSampleGetH testPid (UUIDId issueId) Nothing (Just from) (Just to)
-      let sampleHtml = renderT sample
-      sampleHtml `shouldSatisfy` T.isInfixOf "selected occurrence"
-      sampleHtml `shouldSatisfy` not . T.isInfixOf "outside occurrence"
-      sampleHtml `shouldSatisfy` not . T.isInfixOf "saved occurrence"
-      sampleHtml `shouldSatisfy` T.isInfixOf "Latest event in range"
-      sampleHtml `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText <> "?timestamp=")
-      (_, emptySample) <- testServant tr $ IssuesPage.issueSampleGetH testPid (UUIDId issueId) Nothing (Just $ iso $ addUTCTime 3600 frozenTime) (Just $ iso $ addUTCTime 3660 frozenTime)
-      let emptyHtml = renderT emptySample
-      emptyHtml `shouldSatisfy` T.isInfixOf "No occurrences in this range."
-      emptyHtml `shouldSatisfy` T.isInfixOf "Stored sample"
-      emptyHtml `shouldSatisfy` T.isInfixOf "saved occurrence"
-      emptyHtml `shouldSatisfy` T.isInfixOf "independently of the date filter and raw-event retention"
-      let otherPid = UUIDId $ DataUUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-      (_, otherProjectSample) <- testServant tr $ IssuesPage.issueSampleGetH otherPid (UUIDId issueId) Nothing (Just from) (Just to)
-      renderT otherProjectSample `shouldSatisfy` not . T.isInfixOf "occurrence"
-      html `shouldSatisfy` not . T.isInfixOf "first_occurrence=true"
-      -- A log pattern has no trace, so its event card offers the pattern, sample and
-      -- logs sections and no Trace section.
-      html `shouldSatisfy` not . T.isInfixOf "id=\"issue-trace\""
-      forM_ ["issue-pattern", "issue-sample-section", "issue-logs"] \anchor ->
-        html `shouldSatisfy` T.isInfixOf ("href=\"#" <> anchor <> "\"")
-
-    -- Regression: a log-pattern issue row is written once, so "Last seen" and the "all time"
-    -- count froze at detection while the pattern kept firing; and the pattern text was split
-    -- on spaces, orphaning the second half of a value such as `<*> min` outside its chip.
-    it "log-pattern issue shows the pattern's live counts and keeps multi-word values in one chip" \tr -> do
-      patternHash <- DataUUID.toText <$> UUID.nextRandom
-      let detectedAt = addUTCTime (-86400) frozenTime
-          pat = "kind;text-weak\8658rpc duration;badge-neutral\8658<*> min"
-          payload = Issues.LogPatternData patternHash pat Nothing Nothing (Just "checkout") "summary" detectedAt 2
-      issueId <- withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, first_seen_at, last_seen_at, occurrence_count) VALUES (?, ?, ?, 'summary', ?, ?, 92) |] (testPid, pat, patternHash, detectedAt, addUTCTime (-120) frozenTime)
-        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
-          . listToMaybe
-          =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at) VALUES (?, 'log_pattern', 'rpc pattern', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |] (testPid, patternHash, AE.encode payload, detectedAt, detectedAt)
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
-      let html = renderPage page
-      html `shouldSatisfy` T.isInfixOf "92 all time"
-      html `shouldSatisfy` T.isInfixOf ">2 mins ago<"
-      html `shouldSatisfy` T.isInfixOf ">&lt;*&gt; min</span>"
-
-    -- Regression: an issue that never captured a trace id used to render the logs tab as
-    -- `context___trace_id==""`, a predicate that filters nothing — so the tab fetched the
-    -- project's entire retention window (~6s / 550KB of unrelated logs, on ~24% of issues).
-    -- With no trace to pin to it must scope to the issue's service over a bounded window.
-    it "issue detail with no trace id scopes the logs tab to service and a bounded window" \tr -> do
-      noTraceHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
-      issueId <- withResource tr.trPool \conn ->
-        -- INSERT ... RETURNING always yields the row, but `head` is partial and
-        -- -Werror=x-partial rejects it; an empty result should say so, not crash later.
-        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
-          . listToMaybe
-          =<< PGS.query
-            conn
-            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, environment, created_at, updated_at)
-                  VALUES (?, 'runtime_exception', 'no-trace issue', ?, 'checkout', 'production', ?, ?) RETURNING id |]
-            (testPid, noTraceHash, frozenTime, frozenTime)
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
-      let html = renderPage page
-      T.count "id=\"log_details_container\"" html `shouldBe` 1
-      -- The closed global-data drawer remains mounted on an issue page. Its transformed panel
-      -- must be clipped by the drawer, or it creates a page-level horizontal scroll range.
-      html `shouldSatisfy` T.isInfixOf "drawer-side top-0 left-0 w-full h-full flex justify-end z-10000 overflow-y-scroll overflow-x-hidden"
-      html `shouldSatisfy` not . T.isInfixOf "context___trace_id%3D%3D%22%22"
-      html `shouldSatisfy` T.isInfixOf "service%3D%3D%22checkout%22"
-      html `shouldSatisfy` T.isInfixOf "resource.deployment.environment.name%3D%3D%22production%22"
-      -- Lucid escapes the attribute, so the separators render as &amp; — assert on both
-      -- ends of the window: an unbounded fallback would carry neither.
-      html `shouldSatisfy` T.isInfixOf "&amp;from="
-      html `shouldSatisfy` T.isInfixOf "&amp;to="
-
-    -- A recovery is an episode fact, while acknowledgement is a user action.
-    -- They must meet in the issue timeline so an on-call reader can distinguish
-    -- “we stopped notifications” from “the system became healthy again.”
-    it "issue timeline shows both acknowledgement and monitor recovery" \tr -> do
-      issueId <- withResource tr.trPool \conn ->
-        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
-          . listToMaybe
-          =<< PGS.query
-            conn
-            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at)
-                  VALUES (?, 'query_alert', 'checkout recovery', ?, ?, ?) RETURNING id |]
-            (testPid, "checkout-recovery" :: Text, frozenTime, frozenTime)
-      _ <- testServant tr $ IssuesPage.acknowledgeIssueGetH testPid True (UUIDId issueId) Nothing
-      Just payload <- pure $ Incidents.slackPayload $ AE.object ["text" AE..= ("checkout alert" :: Text)]
-      let update at change =
-            Incidents.IncidentUpdate
-              { projectId = testPid
-              , source = Incidents.IssueIncident (UUIDId issueId)
-              , observedAt = at
-              , change
-              , delivery = Incidents.PublishIncident
-              , issueId = Just $ UUIDId issueId
-              , rootPayload = payload
-              , replyPayload = payload
-              , destinations = []
-              }
-      void $ runTestBg frozenTime tr $ Incidents.recordIncidentEvent $ update frozenTime Incidents.IncidentAlert
-      void $ runTestBg frozenTime tr $ Incidents.recordIncidentEvent $ update (addUTCTime 60 frozenTime) Incidents.IncidentRecovered
-      (_, timeline) <- testServant tr $ IssuesPage.issueActivityGetH testPid (UUIDId issueId) Nothing Nothing
-      let html = renderT timeline
-      html `shouldSatisfy` T.isInfixOf "Acknowledged"
-      html `shouldSatisfy` T.isInfixOf "Recovered"
-
-    -- Regression: the /impeccable critique found the heading outline inverted — h1 was
-    -- the breadcrumb number, the issue title an h3, and on three of four types the only
-    -- h2 was an empty-state string, so a screen reader heard "No stack trace in this
-    -- event" outrank the incident. Also guards the shared fact row and the promoted
-    -- EVENTS figure, neither of which had coverage.
-    it "issue detail has one h1 and puts the incident above its evidence sections" \tr -> do
-      errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
-      issueId <- withResource tr.trPool \conn ->
-        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
-          . listToMaybe
-          =<< PGS.query
-            conn
-            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, environment, issue_data, created_at, updated_at)
-                  VALUES (?, 'runtime_exception', 'heading order issue', ?, 'checkout', 'staging', ?::jsonb, ?, ?) RETURNING id |]
-            ( testPid
-            , errHash
-            , AE.encode
-                [aesonQQ|{ "error_type": "TypeError", "error_message": "boom", "stack_trace": ""
-                         , "occurrence_count": 1, "first_seen": #{frozenTime}, "last_seen": #{frozenTime} }|]
-            , frozenTime
-            , frozenTime
-            )
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
-      let html = renderPage page
-          headings = [T.toLower t | t <- ["H1", "H2", "H3"], ("<" <> t) `T.isInfixOf` T.toUpper html]
-      -- Exactly one h1, and it is not the issue title (the page shell owns it).
-      T.count "<h1" html `shouldBe` 1
-      headings `shouldBe` ["h1", "h2", "h3"]
-      -- The issue title is the h2; evidence sections are h3 and now have a heading role
-      -- at all, which they lacked entirely when detailCard_ titles were spans.
-      html `shouldSatisfy` T.isInfixOf "heading order issue"
-      -- An empty state announces a condition; it must not open a section.
-      html `shouldSatisfy` not . T.isInfixOf "<h2 class=\"text-2xl"
-      -- The rail's fact block carries service and environment for every type.
-      html `shouldSatisfy` T.isInfixOf "<dt class=\"text-textWeak\">Service</dt>"
-      html `shouldSatisfy` T.isInfixOf "staging"
-      -- The workflow bar sits under the title.
-      fst (T.breakOn "Acknowledge issue" html) `shouldSatisfy` T.isInfixOf "heading order issue"
-      -- The pinned navigator links every section the card renders and nothing else:
-      -- no trace was captured, so there is no Trace section to jump to.
-      html `shouldSatisfy` T.isInfixOf "id=\"issue-event-nav\" class=\"sticky top-0"
-      let nav = fst $ T.breakOn "</nav>" $ snd $ T.breakOn "id=\"issue-event-nav\"" html
-      T.takeWhile (/= '"') <$> drop 1 (T.splitOn "href=\"#" nav) `shouldBe` ["issue-highlights", "issue-contexts", "issue-stack", "issue-logs", "issue-events"]
-      -- The range total is labelled and rendered at headline weight, not as a grey pill.
-      html `shouldSatisfy` T.isInfixOf "Events"
-      html `shouldSatisfy` T.isInfixOf "text-2xl font-semibold text-textStrong tabular-nums"
-
-    it "triage: priority, assignee, timed and until-escalating archives, and resolve work on any issue type" \tr -> do
-      let reload iid = runTestBg frozenTime tr (Issues.selectIssueById testPid iid) >>= maybe (fail "issue vanished") pure
-      logIid <- seedIssue tr Issues.LogPattern "triage probe" "triage-log"
-      (member : _) <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid)
-      (_, triage) <- testServant tr $ IssuesPage.triagePostH testPid logIid (IssuesPage.TriageForm (Just Issues.Warning) (Just member.userId.toText))
-      renderPage triage `shouldSatisfy` T.isInfixOf "value=\"warning\" selected>"
-      i1 <- reload logIid
-      (i1.severity, i1.assigneeId) `shouldBe` (Issues.Warning, Just member.userId)
-      withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT event::text FROM apis.issue_activity_log WHERE issue_id = ? |] (Only logIid)) `shouldReturn` [Only ("assigned" :: Text)]
-
-      _ <- testServant tr $ IssuesPage.archiveIssueGetH testPid logIid (Just (Issues.ArchiveFor 60))
-      (isJust . (.archivedAt) <$> reload logIid) `shouldReturn` True
-      runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 1800 frozenTime)) `shouldReturn` []
-      runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 7200 frozenTime)) `shouldReturn` [logIid]
-      (isNothing . (.archivedAt) <$> reload logIid) `shouldReturn` True
-
-      errIid <- seedIssue tr Issues.RuntimeException "triage probe" "triage-err"
-      _ <- testServant tr $ IssuesPage.archiveIssueGetH testPid errIid (Just Issues.ArchiveUntilEscalating)
-      runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 86400 frozenTime)) `shouldReturn` []
-      runTestBg frozenTime tr (Issues.wakeOnEscalation testPid "triage-err") `shouldReturn` [errIid]
-
-      _ <- testServant tr $ IssuesPage.resolveIssueGetH testPid logIid
-      (isJust . (.archivedAt) <$> reload logIid) `shouldReturn` True
-      runTestBg frozenTime tr (Issues.selectLatestStateEvent logIid) `shouldReturn` Just Issues.IEResolved
-
-    it "bulk priority, assign and resolve apply to every selected issue; the list shows severity, assignee and users" \tr -> do
-      iids <- forM ["bulk-a", "bulk-b"] \h -> seedIssue tr Issues.LogPattern ("bulk " <> h) h
-      (member : _) <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid)
-      let sel = IssuesPage.IssueBulk{itemId = (.toText) <$> iids}
-          bulk a v = void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid a Nothing v sel
-          issues = catMaybes <$> forM iids (runTestBg frozenTime tr . Issues.selectIssueById testPid)
-      bulk IssuesPage.BAPriority (Just "warning")
-      bulk IssuesPage.BAAssign (Just member.userId.toText)
-      map ((.severity) &&& (.assigneeId)) <$> issues `shouldReturn` replicate 2 (Issues.Warning, Just member.userId)
-      (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") (Just "-users_count") Nothing Nothing (Just "100") Nothing (Just "24h") [] []
-      renderPage page `shouldContainAll` [">WARNING</span>", "First seen", "Most users", IssuesPage.memberLabel member, "bulk_actions/priority?value=critical", "bulk_actions/spam"]
-      -- Regression: list rows' archive/acknowledge were hx-get, so hovering one fired it.
-      let rowActions = ["/p/" <> testPid.toText <> "/issues/" <> i.toText <> v | i <- iids, v <- ["/archive", "/acknowledge"]]
-      renderPage page `shouldContainAll` map (\u -> "hx-post=\"" <> u <> "\"") rowActions
-      renderPage page `shouldNotSatisfy` \h -> any (\u -> ("hx-get=\"" <> u) `T.isInfixOf` h) rowActions
-      bulk IssuesPage.BAResolve Nothing
-      all (isJust . (.archivedAt)) <$> issues `shouldReturn` True
-      forM iids (runTestBg frozenTime tr . Issues.selectLatestStateEvent) `shouldReturn` replicate 2 (Just Issues.IEResolved)
-
-    it "issueList_mobileEventCount_labelsPeriodNotTimeFilter" \tr -> do
-      void $ seedIssue tr Issues.LogPattern "mobile count probe" "mobile-count"
-      (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing (Just "7d") Nothing (Just "100") Nothing (Just "24h") [] []
-      renderPage page `shouldSatisfy` T.isInfixOf "0 events · 24h"
-      renderPage page `shouldNotSatisfy` T.isInfixOf "(7d)"
-
-    it "the user journey offers search, newest-first ordering and copy, and skips contentless events" \tr -> do
-      traceIdText <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
-      -- Ingested, not INSERTed: CI reads the trace from TimeFusion, where a raw INSERT
-      -- never lands. gRPC instrumentation emits a bare `message` event per RPC message;
-      -- 35 of them once filled the journey with rows reading only "message".
-      apiKey <- createTestAPIKey tr testPid "journey-key"
-      let at dt = addUTCTime dt frozenTime
-          checkoutEvents = [mkSpanEvent "message" [("rpc.message.type", "SENT")] (at 0), mkSpanEvent "log" [("message", "checkout declined")] (at 0)]
-      forM_ @[] [(-5, "a0", "page loaded", []), (-4, "b0", "cart opened", []), (-3, "c0", "shipping selected", []), (-2, "a1", "GET /cart", []), (-1, "a2", "cart item missing price", []), (0, "a3", "POST /checkout", checkoutEvents)] \(dt, sid, name, evs) ->
-        ingestSpanReq tr $ mkSpanRequest traceIdText sid Nothing name evs Nothing [] (mkResource apiKey []) (at dt)
-      issueId <- seedIssue tr Issues.RuntimeException "journey probe" "journey-probe"
-      html <- eventually (renderPage . snd <$> testServant tr (IssuesPage.issueActivityGetH testPid issueId (Just traceIdText) (Just frozenTime))) (T.isInfixOf "checkout declined")
-      html `shouldContainAll` ["id=\"issue-journey\"", "Search the user journey", "crumb-rev", "issue-journey-text", "cart item missing price", "checkout declined", "id=\"issue-journey-events\"", "View all", "Show fewer", "Last 5 events"]
-      html `shouldNotSatisfy` T.isInfixOf ">message</span>"
-
-    it "comments, external links and viewers show in the issue's activity" \tr -> do
-      iid <- seedIssue tr Issues.LogPattern "collab probe" "collab-probe"
-      -- The page GET records nothing (hover preloads it); the page posts the view once shown.
-      issuePage tr iid >>= (`shouldContainAll` ["/issues/" <> iid.toText <> "/viewed"])
-      replicateM_ 2 $ testServant tr $ IssuesPage.issueViewedPostH testPid iid
-      _ <- testServant tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "Rolled back the cart service")
-      _ <- testServant tr $ IssuesPage.linkPostH testPid iid (IssuesPage.LinkForm "https://github.com/acme/shop/issues/42" (Just "Cart crash"))
-      _ <- testServant tr $ IssuesPage.linkPostH testPid iid (IssuesPage.LinkForm "javascript:alert(1)" Nothing)
-      (_, activity) <- testServant tr $ IssuesPage.issueActivityGetH testPid iid Nothing Nothing
-      let html = renderPage activity
-      html `shouldContainAll` ["Rolled back the cart service", "External links", "GitHub", "Cart crash", "Participating:", "/api/avatar/", "People", "name=\"body\""]
-      html `shouldSatisfy` not . T.isInfixOf "javascript:alert"
-      -- Two views in a day record one, and views stay off the timeline.
-      withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'viewed' |] (Only iid)) `shouldReturn` [Only (1 :: Int)]
-
-    it "events step to their neighbours and the page opens on a chosen event" \tr -> do
-      apiKey <- createTestAPIKey tr testPid "step-key"
-      let at dt = addUTCTime dt frozenTime
-          (ta, tb, tc) = ("57e9000000000000000000000000000a", "57e9000000000000000000000000000b", "57e9000000000000000000000000000c") :: (Text, Text, Text)
-          -- Ingested (so TimeFusion, which the step handler reads on CI, has them); the oldest
-          -- carries a replay session and a user, so it is the Recommended one.
-          emit tid extra dt = ingestSpanReq tr . withTraceId tid =<< createOtelTraceWithExceptionAtTime apiKey (extra, [], []) "GET /step" "StepProbeError" "step probe" "StepProbeError: step probe\n    at step (/app/src/step.js:1:1)" (at dt)
-      emit ta [("session.id", "sess-1"), ("user.id", "u-1")] (-600)
-      emit tb [] (-300)
-      emit tc [] 0
-      drainExtractionWorker tr
-      void $ runAllBackgroundJobs frozenTime tr.trATCtx
-      pat <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns testPid Nothing 500 0) >>= maybe (fail "no StepProbeError") pure . find ((== "StepProbeError") . (.errorType))
-      iid <- (.id) <$> (runTestBg frozenTime tr (Issues.selectIssueByHash testPid pat.hash Issues.AnyIssue) >>= maybe (fail "no issue") pure)
-      let step dir from = runTestBg frozenTime tr (Telemetry.adjacentHashEvent testPid ("err:" <> pat.hash) dir from)
-      step Telemetry.Older (at 0) `shouldReturn` Just (tb, at (-300))
-      step Telemetry.Newer (at (-600)) `shouldReturn` Just (tb, at (-300))
-      step Telemetry.Older (at (-600)) `shouldReturn` Nothing
-      step Telemetry.Recommended (at 1) `shouldReturn` Just (ta, at (-600))
-      -- Past the oldest event the reader stays where they were, not on the default event.
-      let stepTo dir ev =
-            runAuthHandler tr (IssuesPage.issueStepGetH testPid iid (Just dir) (Just ev)) >>= \h -> case lookupResponseHeader @"Location" h of
-              Header loc -> pure loc
-              _ -> fail "no Location"
-      eventually (stepTo Telemetry.Older (IssuesPage.EventRef tc (at 0))) (T.isInfixOf tb) >>= (`shouldSatisfy` T.isInfixOf tb)
-      stepTo Telemetry.Older (IssuesPage.EventRef ta (at (-600))) >>= (`shouldSatisfy` T.isInfixOf ta)
-      -- A triage edit must not move a historical event's default investigation window.
-      withResource tr.trPool \conn -> void $ PGS.execute conn [sql| UPDATE apis.issues SET updated_at=? WHERE id=? |] (at 86400, iid)
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef tb (at (-300)))
-      renderPage page `shouldContainAll` [tb, "id=\"issue-events\"", "/step?dir=older", "/step?dir=recommended", "class=\"dropdown dropdown-end menu", "id=\"issue-copy-pop\""]
-      renderPage page `shouldContainAll` ["data-start=\"2024-12-31T21:55:00Z\"", "data-end=\"2025-01-01T01:55:00Z\"", "Around selected event", "±2 hours", "2024-12-31 23:55:00 UTC"]
-      renderPage page `shouldNotSatisfy` T.isInfixOf "Selected event is outside this range."
-
-    it "category views, filter chips and saved views on the issue list" \tr -> do
-      let list types = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] types)
-      html <- list ["runtime_exception"]
-      html `shouldContainAll` ["&amp;type=log_pattern&amp;type=log_pattern_rate_change", "Remove filter Type: runtime_exception", "Save view", "aria-label=\"Saved views\"", "id=\"issue-views-menu\""]
-      _ <- testServant tr $ IssuesPage.saveViewPostH testPid (IssuesPage.SaveViewForm "My errors" "filter=Inbox&sort=-created_at&period=24h&type=runtime_exception")
-      views <- runTestBg frozenTime tr (Issues.selectIssueViews testPid)
-      map (.name) views `shouldBe` ["My errors"]
-      (`shouldContainAll` ["My errors", "issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception"]) =<< list []
-      -- The list it was saved from now names it on the bookmark button.
-      (`shouldContainAll` ["aria-label=\"Saved views: My errors\""]) =<< list ["runtime_exception"]
-      forM_ views \v -> testServant tr $ IssuesPage.deleteViewPostH testPid v.id
-      (null <$> runTestBg frozenTime tr (Issues.selectIssueViews testPid)) `shouldReturn` True
-
-    -- Seeded through ingestion (which also writes TimeFusion) and polled: on CI the detectors read
-    -- an asynchronous, shared TimeFusion, which a raw Postgres INSERT never reaches.
-    it "performance detection opens N+1 and slow-query issues with span evidence" \tr -> do
-      apiKey <- createTestAPIKey tr testPid "perf-key"
-      let span' (sid, parent, name, q, durNs, dt) =
-            ingestSpanReq tr
-              . withSpanDuration durNs
-              $ mkSpanRequest "0e7f0000000000000000000000000001" sid parent name [] Nothing (mkAttr "db.system.name" "postgresql" : [mkAttr "db.query.text" q' | Just q' <- [q]]) (mkResource apiKey [mkAttr "service.name" "catalog"]) (addUTCTime dt frozenTime)
-      span' ("1", Nothing, "GET /products", Nothing, 900_000_000, -60)
-      span' ("2", Just "1", "ProductController.index", Nothing, 800_000_000, -59)
-      forM_ [1 .. 6 :: Integer] \i -> span' ("3" <> show i, Just "2", "SELECT reviews", Just ("SELECT * FROM reviews WHERE product_id = " <> show i), 20_000_000, fromIntegral (i - 58))
-      span' ("4", Just "1", "SELECT promotions", Just "SELECT * FROM promotions WHERE active", 1_500_000_000, -40)
-      let detect = runTestBg frozenTime tr (BackgroundJobs.detectPerformanceIssues testPid) >> issuesOfType tr Issues.Performance
-      void $ eventually detect ((== 2) . length)
-      -- Repeat detections fold into the same issues.
-      [(n1, n1Title), (_, slowTitle)] <- detect
-      n1Title `shouldSatisfy` T.isPrefixOf "N+1 Query: SELECT * FROM reviews WHERE product_id ="
-      slowTitle `shouldSatisfy` T.isPrefixOf "Slow DB Query: SELECT * FROM promotions"
-      issuePage tr n1 >>= (`shouldContainAll` ["Span evidence", "repeating query (\x00d7" <> "6)", "ProductController.index", "GET /products", "120 ms", "id=\"issue-trace\"", "Performance"])
-
-    it "frontend detection turns a burst of clicks on one element into a rage-click issue" \tr -> do
-      apiKey <- createTestAPIKey tr testPid "rage-key"
-      let click (name, sid, label, dt) = do
-            spanId <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
-            ingestSpanLinked tr apiKey spanId spanId Nothing name [("session.id", sid), ("page.url", "https://shop.example.com/checkout"), ("monoscope.display.label", label), ("target.tag_name", "button"), ("target.id", "place-order")] (addUTCTime dt frozenTime)
-      forM_ [0, 0.4, 0.9, 1.4] \dt -> click ("click", "sess-rage", "Place order", -120 + dt)
-      click ("click", "sess-rage", "Continue shopping", -100)
-      forM_ ([("sess-a", -90), ("sess-b", -80)] :: [(Text, NominalDiffTime)]) \(sid, dt) -> click ("dead_click", sid, "Apply coupon", dt)
-      [(_, deadTitle), (rage, rageTitle)] <- eventually (runTestBg frozenTime tr (BackgroundJobs.detectFrontendIssues testPid) >> issuesOfType tr Issues.Frontend) ((== 2) . length)
-      (deadTitle, rageTitle) `shouldBe` ("Dead Click: Apply coupon", "Rage Click: Place order")
-      issuePage tr rage >>= (`shouldContainAll` ["Rage click", "button#place-order", "https://shop.example.com/checkout", "4 within 2s", "sess-rage"])
-
-    it "user.feedback records become feedback issues linked to their trace's error, and spam leaves the Inbox" \tr -> do
-      apiKey <- createTestAPIKey tr testPid "feedback-key"
-      let tid = "fb000000000000000000000000000001"
-          feedback trId msg = ingestSpanLinked tr apiKey trId trId Nothing "user.feedback" [("feedback.message", msg), ("feedback.contact_email", "ada@example.com"), ("user.name", "Ada"), ("url.full", "https://shop.example.com/cart")] (addUTCTime (-60) frozenTime)
-      ingestSpanReq tr . withTraceId tid =<< createOtelTraceWithExceptionAtTime apiKey ([], [], []) "POST /cart" "CartError" "boom" "CartError: boom\n    at add (/app/src/cart.js:1:1)" (addUTCTime (-70) frozenTime)
-      feedback tid "The cart button does nothing"
-      feedback "fb000000000000000000000000000002" "   "
-      let detect = runTestBg frozenTime tr (BackgroundJobs.detectFeedback testPid) >> issuesOfType tr Issues.Feedback
-      void $ eventually detect (not . null)
-      -- A second pass over the same window must not duplicate the submission.
-      rows <- detect
-      map snd rows `shouldBe` ["Feedback: The cart button does nothing"]
-      [(iid, _)] <- pure rows
-      issuePage tr iid >>= (`shouldContainAll` ["The cart button does nothing", "Ada", "ada@example.com", "https://shop.example.com/cart", "/issues/by_hash/", "Feedback"])
-      let list tab = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just tab) Nothing Nothing Nothing Nothing Nothing (Just "24h") [] ["feedback"])
-      list "Inbox" >>= (`shouldContainAll` ["The cart button does nothing", "bulk_actions/spam"])
-      void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BASpam Nothing Nothing IssuesPage.IssueBulk{itemId = [iid.toText]}
-      list "Inbox" >>= (`shouldSatisfy` not . T.isInfixOf "The cart button does nothing")
-      list "Spam" >>= (`shouldContainAll` ["The cart button does nothing", "bulk_actions/unspam"])
-      void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAUnspam Nothing Nothing IssuesPage.IssueBulk{itemId = [iid.toText]}
-      list "Inbox" >>= (`shouldContainAll` ["The cart button does nothing"])
-
-    -- Sentry's stack trace earns its slot by separating the code you wrote from the
-    -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue
-    -- fingerprint is already computed from) but rendered a raw <pre> blob. No demo
-    -- error carries a stack trace, so this is the only place the structured render is
-    -- exercised at all.
-    it "a stack trace renders as frames, with runtime frames folded away" \tr -> do
-      errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
-      let stack = "at com.example.MyClass.doWork(MyClass.java:25)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)"
-      issueId <- withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.error_patterns
-                  (project_id, error_type, message, stacktrace, hash, runtime, error_data, created_at, updated_at)
-                VALUES (?, 'NullPointerException', 'boom', ?, ?, 'java', ?::jsonb, ?, ?) |]
-            ( testPid
-            , stack
-            , errHash
-            , AE.encode
-                [aesonQQ|{ "when": #{frozenTime}, "error_type": "NullPointerException", "root_error_type": "NullPointerException"
-                         , "message": "boom", "root_error_message": "boom", "stack_trace": #{stack}
-                         , "hash": #{errHash}, "is_framework": false, "runtime": "java" }|]
-            , frozenTime
-            , frozenTime
-            )
-        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
-          . listToMaybe
-          =<< PGS.query
-            conn
-            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
-                  VALUES (?, 'runtime_exception', 'java stack issue', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
-            ( testPid
-            , errHash
-            , AE.encode
-                [aesonQQ|{ "error_type": "NullPointerException", "error_message": "boom", "stack_trace": #{stack}
-                         , "occurrence_count": 1, "first_seen": #{frozenTime}, "last_seen": #{frozenTime} }|]
-            , frozenTime
-            , frozenTime
-            )
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
-      let html = renderPage page
-      -- Your frame is shown by function and file:line.
-      html `shouldSatisfy` T.isInfixOf "doWork"
-      html `shouldSatisfy` T.isInfixOf "MyClass.java:25"
-      -- Spring is the runtime's, not yours, so it is folded away behind a count —
-      -- singular, because there is exactly one.
-      html `shouldSatisfy` T.isInfixOf "Show 1 runtime frame"
-      html `shouldSatisfy` not . T.isInfixOf "Show 1 runtime frames"
-      -- ...and the original text stays one disclosure away.
-      html `shouldSatisfy` T.isInfixOf "Raw"
-      -- Source context: /code_context resolves file+line to real source through the
-      -- project's Git integration and had never been called from anywhere. Each frame
-      -- with a file and line now asks for it, lazily — `intersect once` inside a closed
-      -- <details>, so a page with 40 frames issues no GitHub reads until one is opened.
-      html `shouldSatisfy` T.isInfixOf "/code_context?file="
-      html `shouldSatisfy` T.isInfixOf "MyClass.java"
-      html `shouldSatisfy` T.isInfixOf "line=25"
-      html `shouldSatisfy` T.isInfixOf "intersect once"
-
-    -- Regression: a query alert used to render its KQL string and nothing else — not
-    -- the threshold, not the value that crossed it, no chart, no monitor link. Below
-    -- that, the Investigation panel reserved lg:h-[70vh] to say "No trace data
-    -- available", which a query alert can never have (mTraceRef is Nothing by
-    -- construction for this type).
-    it "query alert issue distinguishes recorded evaluations and preserves the query handoff" \tr -> do
-      monitorId <- DataUUID.toText <$> UUID.nextRandom
-      alertHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
-      issueId <- withResource tr.trPool \conn ->
-        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
-          . listToMaybe
-          =<< PGS.query
-            conn
-            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
-                  VALUES (?, 'query_alert', 'checkout throughput dropped', ?, 'Monitoring', ?::jsonb, ?, ?) RETURNING id |]
-            ( testPid
-            , alertHash
-            , AE.encode
-                -- query_id is stored as a `show` of the newtype, which is what every
-                -- row already in the table looks like; the page must still find the id.
-                -- Hoisted out of the quasi-quote: aesonQQ parses the braces inside
-                -- this Haskell string literal as its own interpolation syntax.
-                let storedQueryId = "QueryMonitorId {unQueryMonitorId = " <> monitorId <> "}"
-                 in [aesonQQ|{ "query_id": #{storedQueryId}
-                         , "query_name": "checkout throughput", "query_expression": "resource.service.name == \"checkout\" | summarize count(*) by bin_auto(timestamp)"
-                         , "threshold_value": 5, "actual_value": 0, "threshold_type": "below"
-                         , "triggered_at": #{frozenTime} }|]
-            , frozenTime
-            , frozenTime
-            )
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
-      let html = renderPage page
-      -- The two numbers that were compared, and the direction, are all on the page.
-      html `shouldSatisfy` T.isInfixOf ">checkout throughput</h2>"
-      html `shouldSatisfy` T.isInfixOf "Recorded evaluation"
-      html `shouldSatisfy` T.isInfixOf "Recorded value"
-      html `shouldSatisfy` T.isInfixOf "At or below"
-      -- The alert's own query is charted, carrying its threshold as a mark line.
-      html `shouldSatisfy` T.isInfixOf "&quot;alertThreshold&quot;:5"
-      -- The monitor id survives the `show` blob it is stored inside.
-      html `shouldSatisfy` T.isInfixOf ("/monitors/" <> monitorId <> "/overview")
-      -- ...and the void is gone: no trace panel, and no boilerplate subtitle.
-      html `shouldSatisfy` not . T.isInfixOf "No trace data available"
-      html `shouldSatisfy` not . T.isInfixOf Issues.queryAlertRecommendedAction
-      html `shouldSatisfy` T.isInfixOf "Open query in Explorer"
-      html `shouldSatisfy` T.isInfixOf "data-preserve-page-context"
-      html `shouldSatisfy` T.isInfixOf "query=resource.service.name"
-      for_ ([(Issues.Below, 5, False), (Issues.Below, 10, True), (Issues.Above, 5, False), (Issues.Above, 3, True)] :: [(Issues.ThresholdDirection, Double, Bool)]) \(direction, value :: Double, mismatch) -> do
-        void $ withResource tr.trPool \conn ->
-          PGS.execute conn [sql|UPDATE apis.issues SET issue_data = issue_data || jsonb_build_object('actual_value', ?::float8, 'threshold_type', ?::text) WHERE id = ?|] (value, display direction, issueId)
-        (_, evaluated) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
-        T.isInfixOf "does not meet the recorded threshold" (renderPage evaluated) `shouldBe` mismatch
-
-    -- Regression: a 1300-span trace read cold from TimeFusion took 56s, so the whole
-    -- issue page 504'd behind the gateway. The trace is supporting evidence — past
-    -- 'traceViewTimeoutSecs' the page must still render everything else.
-    it "issue detail defers the trace to its own fragment and survives a starved trace fetch" \tr -> do
-      errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
-      traceIdText <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
-      spanIdText <- T.take 16 . T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
-      -- Ingested, not INSERTed: the fragment reads whichever store the env points
-      -- at (TimeFusion in CI), and a raw INSERT only ever lands in Postgres.
-      apiKey <- createTestAPIKey tr testPid "slow-trace-key"
-      ingestSpanLinked tr apiKey traceIdText spanIdText Nothing "GET /checkout" [] frozenTime
-      issueId <- withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.error_patterns
-                  (project_id, error_type, message, stacktrace, hash, first_trace_id, recent_trace_id, error_data, created_at, updated_at)
-                VALUES (?, 'SyntaxError', 'JSON parse failed', 'at parse (a.js:1)', ?, ?, ?, ?::jsonb, ?, ?) |]
-            ( testPid
-            , errHash
-            , traceIdText
-            , traceIdText
-            , AE.encode
-                [aesonQQ|{ "when": #{frozenTime}, "error_type": "SyntaxError", "root_error_type": "SyntaxError"
-                       , "message": "JSON parse failed", "root_error_message": "JSON parse failed"
-                       , "stack_trace": "at parse (a.js:1)", "hash": #{errHash}, "is_framework": false }|]
-            , frozenTime
-            , frozenTime
-            )
-        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
-          . listToMaybe
-          =<< PGS.query
-            conn
-            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
-                  VALUES (?, 'runtime_exception', 'slow-trace issue', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
-            ( testPid
-            , errHash
-            , AE.encode
-                [aesonQQ|{ "error_type": "SyntaxError", "error_message": "JSON parse failed"
-                         , "stack_trace": "at parse (a.js:1)", "occurrence_count": 1
-                         , "first_seen": #{frozenTime}, "last_seen": #{frozenTime} }|]
-            , frozenTime
-            , frozenTime
-            )
-
-      -- The page ships a shell that fetches the waterfall itself — no span read
-      -- inline, so a slow trace can no longer delay (or 504) the issue.
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) (Just "true") Nothing Nothing Nothing Nothing
-      let html = renderPage page
-      html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
-      -- Losing the timestamp turns the fragment's +/-5min window into a 3-day scan.
-      html `shouldSatisfy` T.isInfixOf "timestamp="
-      html `shouldSatisfy` T.isInfixOf "slow-trace issue"
-      html `shouldSatisfy` not . T.isInfixOf "Waterfall"
-      -- The user journey rides along in the activity fragment; drop these params
-      -- and it disappears with every other assertion still passing.
-      html `shouldSatisfy` T.isInfixOf "/activity?trace_id="
-      html `shouldSatisfy` T.isInfixOf "trace_ts="
-      html `shouldSatisfy` not . T.isInfixOf "No trace data available"
-
-      -- And the fragment itself is budgeted: starved, it answers with a retryable
-      -- state rather than hanging past the gateway timeout.
-      (_, frag) <- testServant tr $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true") Nothing
-      case frag of
-        Trace.TraceDetails{} -> pass
-        _ -> expectationFailure "expected the trace fragment to render with the default budget"
-      let starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
-      (_, starvedFrag) <- testServant starved $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true") Nothing
-      case starvedFrag of
-        Trace.TraceDetailsUnavailable retryUrl _ _ Trace.TraceTimedOut -> retryUrl `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
-        _ -> expectationFailure "expected a starved trace fetch to yield a timeout state"
-      renderPage starvedFrag `shouldSatisfy` T.isInfixOf "Trace loading timed out"
-      (_, emptyFrag) <- testServant tr $ Trace.traceH testPid "missing-trace" (Just frozenTime) Nothing Nothing (Just "true") Nothing
-      case emptyFrag of
-        Trace.TraceDetailsUnavailable _ _ _ Trace.TraceEmpty -> pass
-        _ -> expectationFailure "expected an empty trace read to yield an empty state"
-      let emptyHtml = renderPage emptyFrag
-      emptyHtml `shouldSatisfy` T.isInfixOf "No spans found for this trace"
-      emptyHtml `shouldSatisfy` T.isInfixOf "Open Log Explorer"
-      emptyHtml `shouldSatisfy` not . T.isInfixOf "timed out"
-
-    -- Regression: every runtime exception without frames (151 of 151 in the demo
-    -- project — OTel's exception event carries message and type, and the Go SDKs
-    -- never opt into exception.stacktrace) rendered "common for browser console
-    -- errors", which is wrong for anyone whose backend is not a browser. Name the
-    -- runtime that stayed silent instead.
-    it "a stackless runtime exception names its runtime instead of blaming browsers" \tr -> do
-      errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
-      issueId <- withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.error_patterns
-                  (project_id, error_type, message, stacktrace, hash, runtime, error_data, created_at, updated_at)
-                VALUES (?, '*errors.errorString', 'shipping quote failure', '', ?, 'go', ?::jsonb, ?, ?) |]
-            ( testPid
-            , errHash
-            , AE.encode
-                [aesonQQ|{ "when": #{frozenTime}, "error_type": "*errors.errorString", "root_error_type": "*errors.errorString"
-                         , "message": "shipping quote failure", "root_error_message": "shipping quote failure"
-                         , "stack_trace": "", "hash": #{errHash}, "is_framework": false, "runtime": "go" }|]
-            , frozenTime
-            , frozenTime
-            )
-        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
-          . listToMaybe
-          =<< PGS.query
-            conn
-            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
-                  VALUES (?, 'runtime_exception', 'stackless go error', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
-            ( testPid
-            , errHash
-            , AE.encode
-                [aesonQQ|{ "error_type": "*errors.errorString", "error_message": "shipping quote failure"
-                         , "stack_trace": "", "occurrence_count": 1
-                         , "first_seen": #{frozenTime}, "last_seen": #{frozenTime} }|]
-            , frozenTime
-            , frozenTime
-            )
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
-      let html = renderPage page
-      html `shouldSatisfy` T.isInfixOf "No stack trace in this event"
-      html `shouldSatisfy` T.isInfixOf "The go SDK reported this exception without frames."
-      html `shouldSatisfy` not . T.isInfixOf "browser console errors"
-
-    -- Migration 0095 swapped now() → app_now() in apis.log_auto_resolve_activity
-    -- so the auto-resolve activity row's created_at honours the test clock.
-    it "auto_resolved activity record uses app_now() (migration 0095)" \tr -> do
-      runTestBg frozenTime tr pass
-      let errHash = "test-095-auto-resolve-hash" :: Text
-          issueId = UUIDId $ Unsafe.fromJust $ DataUUID.fromText "00000000-0000-0000-0000-000000000095"
-      withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.error_patterns
-                  (project_id, error_type, message, stacktrace, hash, state, created_at, updated_at)
-                VALUES (?, 'TestError', 'm', 's', ?, 'new', ?, ?)
-                ON CONFLICT (project_id, hash) DO UPDATE SET state='new' |]
-            (testPid, errHash, frozenTime, frozenTime)
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.issues
-                  (id, project_id, issue_type, target_hash, title, created_at, updated_at)
-                VALUES (?, ?, 'runtime_exception', ?, 'test issue 095', ?, ?)
-                ON CONFLICT (id) DO NOTHING |]
-            (issueId, testPid, errHash, frozenTime, frozenTime)
-        void
-          $ PGS.execute
-            conn
-            [sql| DELETE FROM apis.issue_activity_log
-                WHERE issue_id = ? AND event = 'auto_resolved' |]
-            (Only issueId)
-
-      advanceDays tr 5
-      expectedTime <- getTestTime tr.trTestClock
-
-      -- runHasqlEffect now syncs app.current_time on every Session via
-      -- runHasqlPoolSynced, so the trigger reads app_now() = expectedTime.
-      runHasqlEffect tr
-        $ EHasql.interpExecute_
-          [HI.sql| UPDATE apis.error_patterns SET state = 'resolved'
-                  WHERE project_id = #{testPid} AND hash = #{errHash} |]
-
-      rows <- withResource tr.trPool \conn ->
-        PGS.query
-          conn
-          [sql| SELECT created_at FROM apis.issue_activity_log
-                WHERE issue_id = ? AND event = 'auto_resolved' |]
-          (Only issueId)
-          :: IO [Only UTCTime]
-      rows `shouldBe` [Only expectedTime]
-
-    -- selectIssues' 24h period uses Time.currentTime for the bucket window —
-    -- after the test clock advances past created_at, the issue must drop out.
-    it "selectIssues 24h period respects test clock" \tr -> do
-      runTestBg frozenTime tr pass
-      iid <- UUIDId <$> UUID.nextRandom
-      let tgt = "selectIssues-24h-target" :: Text
-      withResource tr.trPool \conn ->
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.issues
-                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
-                   severity, critical, affected_requests, affected_clients,
-                   issue_data, created_at, updated_at)
-                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
-                        false, 1, 1, '{}'::jsonb, ?, ?) |]
-            (iid, testPid, tgt, tgt, frozenTime, frozenTime)
-
-      -- 23h in: still within the 24h window
-      advanceHours tr 23
-      (within, _) <-
-        runHasqlEffect tr
-          $ Issues.selectIssues testPid Issues.PIssueL Issues.defIssueFilters{Issues.period = "24h", Issues.limit = 100}
-      map (.base.id) within `shouldSatisfy` elem iid
-
-      -- 25h in: outside window — query still returns row, but activityBuckets all zero
-      advanceHours tr 2
-      (after, _) <-
-        runHasqlEffect tr
-          $ Issues.selectIssues testPid Issues.PIssueL Issues.defIssueFilters{Issues.period = "24h", Issues.limit = 100}
-      whenJust (find (\r -> r.base.id == iid) after) \row ->
-        V.sum row.activityBuckets `shouldBe` 0 -- absent entirely is also acceptable
-    it "issue list intersects global environment/service scope with local service filters" \tr -> do
-      prodId <- UUIDId <$> UUID.nextRandom
-      prodCatalogId <- UUIDId <$> UUID.nextRandom
-      stagingId <- UUIDId <$> UUID.nextRandom
-      let insertIssue iid service environment target =
-            withResource tr.trPool \conn ->
-              void
-                $ PGS.execute
-                  conn
-                  [sql| INSERT INTO apis.issues
-                        (id, project_id, issue_type, target_hash, endpoint_hash, title, service, environment,
-                         severity, critical, affected_requests, affected_clients, issue_data, created_at, updated_at)
-                      VALUES (?, ?, 'runtime_exception', ?, ?, ?, ?, ?,
-                              'warning', false, 1, 1, '{}'::jsonb, ?, ?) |]
-                  (iid, testPid, target, target, target, service, environment, frozenTime, frozenTime)
-      insertIssue prodId "scope-checkout" "production" "issue-scope-production"
-      insertIssue prodCatalogId "scope-catalog" "production" "issue-scope-production-catalog"
-      insertIssue stagingId "scope-checkout" "staging" "issue-scope-staging"
-      (prod, _) <-
-        runHasqlEffect tr
-          $ Issues.selectIssues testPid Issues.PIssue Issues.defIssueFilters{Issues.service = Just "scope-checkout", Issues.environment = Just "production", Issues.limit = 100}
-      map (.id) prod `shouldBe` [prodId]
-      map (.environment) prod `shouldBe` [Just "production"]
-
-      let scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "scope-checkout", Projects.environment = Just "production"}) tr.trSessAndHeader}
-      (_, response) <- testServant scoped $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just "100") Nothing (Just "24h") ["scope-catalog"] []
-      case response of
-        Table.TablePage (PageCtx _ table) -> table.rows `shouldSatisfy` V.null
-        _ -> expectationFailure "expected a full scoped issue-list page"
-
-    -- Read-side sibling of errorUnmerge_doesNotTouchAnotherProjectsPattern, in the
-    -- adjacent handler. `errorGroupMembersGetH` checks the caller may access `pid`, then
-    -- listed group members by pattern id alone — disclosing another project's error types
-    -- and messages, and rendering unmerge links for them under the caller's own project
-    -- path.
-    it "errorGroupMembers_doesNotDiscloseAnotherProjectsPatterns" \tr -> do
-      let otherPid = UUIDId $ Unsafe.fromJust $ DataUUID.fromString "0000ffff-0000-0000-0000-00000000cd01" :: Projects.ProjectId
-      canonicalId <- UUID.nextRandom
-      memberId <- UUID.nextRandom
-      -- `error_data` decodes as ATError on read, and '{}' lacks its required `when` key.
-      -- With the guard working these rows are never returned, so the default is harmless
-      -- — but if the guard ever regresses, the row *is* returned, and an undecodable
-      -- payload makes the test die with a HasqlException instead of the disclosure
-      -- assertion. Supplying a decodable payload is what keeps this a real regression
-      -- guard rather than one that reports a decode crash.
-      let atErrorJson = "{\"when\":\"2026-01-01T00:00:00Z\",\"error_type\":\"SecretTypeError\",\"root_error_type\":\"SecretTypeError\",\"message\":\"victim-only-message\",\"root_error_message\":\"victim-only-message\",\"stack_trace\":\"\",\"hash\":\"group-read-authz-hash\",\"is_framework\":false}" :: Text
-      withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-                VALUES (?, 'group-read-authz-victim', 'Free', true, NULL, false, false)
-                ON CONFLICT (id) DO NOTHING |]
-            (PGS.Only otherPid.unwrap)
-        -- canonical_id is a self-referencing FK, so the parent has to exist before a
-        -- member can point at it. Its own columns are deliberately bland: the assertions
-        -- below look for the *member's* strings leaking, not the group's.
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, error_data)
-                VALUES (?, ?, 'group-read-authz-canonical', 'CanonicalType', 'canonical', '', ?::jsonb)
-                ON CONFLICT (id) DO NOTHING |]
-            (canonicalId, otherPid.unwrap, atErrorJson)
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, error_data, canonical_id, merge_override)
-                VALUES (?, ?, 'group-read-authz-hash', 'SecretTypeError', 'victim-only-message', '', ?::jsonb, ?, FALSE)
-                ON CONFLICT (id) DO NOTHING |]
-            (memberId, otherPid.unwrap, atErrorJson, canonicalId)
-
-      -- Acting as testPid, ask for the other project's group members.
-      (_, html) <- testServant tr $ IssuesPage.errorGroupMembersGetH testPid canonicalId
-      let rendered = renderT html
-      rendered `shouldSatisfy` not . T.isInfixOf "victim-only-message"
-      rendered `shouldSatisfy` not . T.isInfixOf "SecretTypeError"
-
-    -- Sibling of the monitor-toggle authz test. `errorUnmergePostH` checks the caller may
-    -- access `pid`, then unmerged by pattern id alone — unlike the three sibling handlers
-    -- in the same module, which each guard with `err.projectId /= pid`. So a user on one
-    -- project could detach another project's error pattern from its group and corrupt its
-    -- error grouping. The fix scopes the UPDATE itself, covering every caller.
-    it "errorUnmerge_doesNotTouchAnotherProjectsPattern" \tr -> do
-      let otherPid = UUIDId $ Unsafe.fromJust $ DataUUID.fromString "0000ffff-0000-0000-0000-00000000ab01" :: Projects.ProjectId
-      otherErrId <- UUID.nextRandom
-      canonicalId <- UUID.nextRandom
-      withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-                VALUES (?, 'unmerge-authz-victim', 'Free', true, NULL, false, false)
-                ON CONFLICT (id) DO NOTHING |]
-            (PGS.Only otherPid.unwrap)
-        -- A pattern in the victim project, merged under a canonical parent. The parent
-        -- is inserted first: canonical_id is a self-referencing FK.
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace)
-                VALUES (?, ?, 'unmerge-authz-canonical', 'TypeError', 'canonical', '')
-                ON CONFLICT (id) DO NOTHING |]
-            (canonicalId, otherPid.unwrap)
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, canonical_id, merge_override)
-                VALUES (?, ?, 'unmerge-authz-hash', 'TypeError', 'victim', '', ?, FALSE)
-                ON CONFLICT (id) DO NOTHING |]
-            (otherErrId, otherPid.unwrap, canonicalId)
-
-      -- Acting as testPid, aim the unmerge at the other project's pattern.
-      _ <- testServant tr $ IssuesPage.errorUnmergePostH testPid otherErrId
-
-      rows <-
-        withResource tr.trPool \conn ->
-          PGS.query conn [sql| SELECT merge_override FROM apis.error_patterns WHERE id = ? |] (PGS.Only otherErrId)
-            :: IO [PGS.Only Bool]
-      -- Still merged: the unmerge must not have crossed the tenant boundary.
-      map PGS.fromOnly rows `shouldBe` [False]
-
-
-isApiChange :: IssuesPage.IssueVM -> Bool
-isApiChange (IssuesPage.IssueVM _ c) = c.base.issueType == Issues.ApiChange
-
-
-issueOf :: IssuesPage.IssueVM -> Issues.IssueL
-issueOf (IssuesPage.IssueVM _ issue) = issue
-
-
-issueIdOf :: IssuesPage.IssueVM -> Issues.IssueId
-issueIdOf = (.base.id) . issueOf
-
-
-onlyIssue :: V.Vector IssuesPage.IssueVM -> IO IssuesPage.IssueVM
-onlyIssue rows = case V.toList rows of
-  [row] -> pure row
-  _ -> fail $ "expected exactly one paginated issue, got " <> show (V.length rows)
-
-
-nowText :: IO Text
-nowText = toText . formatTime defaultTimeLocale "%FT%T%QZ" <$> getCurrentTime
-
-
-encMsg :: AE.Value -> ByteString
-encMsg = toStrict . AE.encode . Unsafe.fromJust . convert
-
-
-listAnomalies :: TestResources -> Maybe Text -> IO (V.Vector IssuesPage.IssueVM)
-listAnomalies tr filterT = do
-  (_, pg) <- testServant tr $ IssuesPage.issueListGetH testPid filterT Nothing Nothing Nothing Nothing Nothing Nothing [] []
-  case pg of
-    Table.TablePage (PageCtx _ tbl) -> pure tbl.rows
-    _ -> error "Unexpected response from anomaly list"
-
-
-renderPage :: ToHtml a => a -> Text
-renderPage = renderT
-
-
-seedIssue :: TestResources -> Issues.IssueType -> Text -> Text -> IO Issues.IssueId
-seedIssue tr ty title h =
-  withResource tr.trPool \conn ->
-    maybe (fail "INSERT ... RETURNING id returned no row") (pure . UUIDId . fromOnly)
-      . listToMaybe
-      =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id |] (testPid, ty, title, h, frozenTime, frozenTime)
-
-
-issuePage :: TestResources -> Issues.IssueId -> IO Text
-issuePage tr iid = renderPage . snd <$> testServant tr (IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing Nothing)
-
-
-issuesOfType :: TestResources -> Issues.IssueType -> IO [(Issues.IssueId, Text)]
-issuesOfType tr ty = withResource tr.trPool \conn -> PGS.query conn [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = ? ORDER BY title |] (testPid, ty)
-
-
-countQ :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO Int
-countQ tr q args = withResource tr.trPool \conn ->
-  maybe (fail "count query returned no row") (pure . fromOnly) . listToMaybe =<< PGS.query conn q args
-
-
-apiChangeIssueIds :: TestResources -> IO [Issues.IssueId]
-apiChangeIssueIds tr =
-  map fromOnly <$> withResource tr.trPool \conn ->
-    PGS.query
-      conn
-      [sql| SELECT id FROM apis.issues WHERE project_id=? AND issue_type='api_change' ORDER BY created_at |]
-      (Only testPid)
-
-
--- | Pull the first ApiChange issue id created by earlier tests. Fails the test
--- with a useful message if the seed step (test 2) didn't run or left no issues.
-pickApiChangeIssue :: TestResources -> IO Issues.IssueId
-pickApiChangeIssue tr =
-  maybe (error "pickApiChangeIssue: no ApiChange issue seeded — earlier tests in this spec must run first") pure
-    . listToMaybe
-    =<< apiChangeIssueIds tr
-
-
--- | Dump the pending queue (diagnostics on failure), then run the matching jobs.
-runAnomalyJobs :: TestResources -> (BackgroundJobs.BgJobs -> Bool) -> IO ()
-runAnomalyJobs tr p = do
-  getPendingBackgroundJobs tr.trATCtx >>= logBackgroundJobsInfo tr.trLogger
-  void $ runBackgroundJobsWhere frozenTime tr.trATCtx p
-
-
-shapeOrField :: BackgroundJobs.BgJobs -> Bool
-shapeOrField = \case
-  BackgroundJobs.NewAnomaly{anomalyType = t} -> t `elem` ["shape", "field"]
-  _ -> False
-
-
--- Base64 request bodies for the msg1 endpoint: a different body shape (shape anomaly)
--- and a username typed as a number instead of a string (format anomaly).
-shapeBody, formatBody :: Text
-shapeBody = "eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOiJhZG1pbkBncm92ZXBheS5jby51ayJ9"
-formatBody = "eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOjJ9"
-
-
--- msg1 (at path @/@), with a caller-supplied path and request body.
-msgWithBody :: Text -> Text -> Text -> AE.Value
-msgWithBody path body timestamp =
-  [aesonQQ|{"duration":476434,
-            "host":"172.31.29.11",
-            "method":"GET",
-            "path_params":{},
-            "project_id":"00000000-0000-0000-0000-000000000000",
-            "proto_minor":1,
-            "proto_major":1,"query_params":{},
-            "raw_url": #{path},"referer":"","request_body": #{body},
-            "request_headers":{
-              "connection":["upgrade"],"host":["172.31.29.11"],
-              "x-real-ip":["172.31.81.1"],"x-forwarded-for":["172.31.81.1"],
-              "user-agent":["ELB-HealthChecker/2.0"],"accept-encoding":["gzip, compressed"]},
-              "response_body":"V2VsY29tZSB0byBSZXRhaWxsb29w","response_headers":{"x-powered-by":["Express"],
-              "vary":["Origin"],"access-control-allow-credentials":["true"],"content-type":["text/html; charset=utf-8"],
-              "content-length":["21"],"etag":["W/\"15-2rFUmgZR2gmQik/+S8kDb7KSIZk\""]
-            },
-            "sdk_type":"JsExpress",
-            "status_code":200,
-            "timestamp": #{timestamp},
-            "url_path": #{path},"errors":[],"tags":[]}
-      |]
+spec = around withTestResources $ describe "Issues" do
+  it "api change: discovered, acked, drifts, evidence degrades, groups by host, deep-links by hash and range" \tr -> do
+    processMessagesAndBackgroundJobs tr [(k, encMsg $ testRequestMsgs.reqMsg1 isoNow) | k <- ["m1", "m2", "m3", "m4"]]
+    runAnomalyJobs tr
+    dbOne tr [sql| SELECT count(*)::int FROM apis.endpoints WHERE project_id=? |] (Only testPid) `shouldReturn` (1 :: Int)
+    [iid] <- apiChangeIds tr
+    map issueIdOf <$> listRows tr "Inbox" [] `shouldReturn` [iid]
+    dbOne tr [sql| SELECT recommended_action FROM apis.issues WHERE id=? |] (Only iid) `shouldReturn` Issues.defaultRecommendedAction
+
+    void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True iid Nothing
+    fmap (isJust . (.acknowledgedAt)) <$> runTestBg frozenTime tr (Issues.selectIssueById testPid iid) `shouldReturn` Just True
+    otherPid <- createTestProject tr "other"
+    runTestBg frozenTime tr (Issues.selectIssueById otherPid iid) >>= (`shouldSatisfy` isNothing)
+    map issueIdOf <$> listRows tr "Acknowledged" [] `shouldReturn` [iid]
+
+    -- Field drift reaches the open issue: new fields, then type changes, never critical.
+    let drift path body = processMessagesAndBackgroundJobs tr [("drift", encMsg $ apiMsg path body)] >> runAnomalyJobs tr
+        driftIssue = do
+          h <- dbOne tr [sql| SELECT hash FROM apis.endpoints WHERE project_id=? AND url_path='/v1/drift' |] (Only testPid)
+          i <- runTestBg frozenTime tr (Issues.selectIssueByHash testPid h (Issues.OpenOfType Issues.ApiChange)) >>= maybe (fail "no open drift issue") pure
+          case Issues.issuePayload i of
+            Just (Issues.ApiChangeP d) -> pure (i, d)
+            _ -> fail "api_change issue without an ApiChangeP payload"
+        hasField f = V.any (f `T.isSuffixOf`)
+    drift "/v1/drift" "eyJ1c2VybmFtZSI6ImFAYi5jbyJ9" -- {"username":"a@b.co"}
+    (i0, _) <- driftIssue
+    Issues.isNewEndpointOnly i0 `shouldBe` True
+    drift "/v1/drift" "eyJ1c2VybmFtZSI6ImFAYi5jbyIsInBhc3N3b3JkIjoieCIsIm5pY2tuYW1lIjoiYSJ9" -- + password, nickname
+    (i1, d1) <- driftIssue
+    (hasField "password" d1.newFields, V.null d1.modifiedFields, i1.critical) `shouldBe` (True, True, False)
+    drift "/v1/drift" "eyJ1c2VybmFtZSI6MiwicGFzc3dvcmQiOiJ4Iiwibmlja25hbWUiOjJ9" -- username, nickname: string -> number
+    (i2, d2) <- driftIssue
+    (hasField "password" d2.newFields, hasField "username" d2.modifiedFields, hasField "password" d2.modifiedFields, i2.id == i0.id, i2.critical, i2.severity) `shouldBe` (True, True, False, True, False, Issues.Warning)
+    current <- detail tr i2.id
+    -- Legacy rows captured no field evidence; NULL evidence (checked last) must not hide the issue either.
+    dbExec tr [sql| UPDATE apis.anomalies SET field_evidence='[]', created_at=CASE WHEN cardinality(modified_fields)=0 THEN '2026-01-01'::timestamptz ELSE '2026-01-02'::timestamptz END WHERE project_id=? AND target_hash IN ? |] (testPid, PGS.In $ V.toList d2.anomalyHashes)
+    legacy <- detail tr i2.id
+
+    -- Same-host api changes collapse into one group without losing their endpoints.
+    drift "/v1/grouped-drift" "eyJ1c2VybmFtZSI6ImFAYi5jbyJ9"
+    drift "/v1/grouped-drift" "eyJ1c2VybmFtZSI6Mn0="
+    dbExec tr [sql| UPDATE apis.issues SET service=NULL WHERE project_id=? AND issue_type='api_change' |] (Only testPid)
+    let typed perPage = call tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just perPage) Nothing Nothing [] ["api_change"]
+    grouped <- listHtml =<< typed "100"
+    singleton <- listHtml =<< typed "1"
+    goldenHtml "issue-list-api-change-groups" do grouped; singleton
+
+    -- Detail resolves the originating trace and honours relative and absolute ranges on both routes.
+    (.traceRef) <$> found (detail tr iid) >>= (`shouldSatisfy` isJust)
+    hashed <- found $ inner $ call tr $ IssuesPage.issueDetailHashGetH testPid i0.targetHash Nothing (Just "14D") Nothing Nothing Nothing
+    hashed.tp.since `shouldBe` Just "14D"
+    let (from, to) = ("2026-09-02T06:04:43Z", "2026-09-02T10:04:43Z")
+    absolute <-
+      forM [IssuesPage.issueDetailGetH testPid i0.id, IssuesPage.issueDetailHashGetH testPid i0.targetHash] \h ->
+        found (inner $ call tr $ h Nothing Nothing (Just from) (Just to) Nothing)
+    map (\v -> (v.tp.from, v.tp.to, v.isFirst)) absolute `shouldBe` replicate 2 (Just from, Just to, False)
+    dbExec tr [sql| UPDATE apis.anomalies SET field_evidence='null'::jsonb WHERE project_id=? |] (Only testPid)
+    unavailable <- detail tr i2.id
+    goldenHtml "issue-api-change-evidence" do toHtml current; toHtml legacy; toHtml unavailable
+
+  it "detail renders each issue type from its typed view" \tr -> do
+    let errorIssue :: Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Issues.IssueId
+        errorIssue ty msg stack runtime tidM svc env = do
+          let h = "err-" <> ty
+          let errData = [aesonQQ|{ "when": #{frozenTime}, "error_type": #{ty}, "root_error_type": #{ty}, "message": #{msg}, "root_error_message": #{msg}, "stack_trace": #{stack}, "hash": #{h}, "is_framework": false, "runtime": #{runtime} }|]
+          dbExec
+            tr
+            [sql| INSERT INTO apis.error_patterns (project_id, error_type, message, stacktrace, hash, runtime, first_trace_id, recent_trace_id, error_data, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) |]
+            ((testPid, ty, msg, stack, h, runtime, tidM, tidM, errData) PGS.:. (frozenTime, frozenTime))
+          seedIssue tr (issueSeed Issues.RuntimeException h){title = ty <> " issue", service = svc, environment = env, payload = [aesonQQ|{ "error_type": #{ty}, "error_message": #{msg}, "stack_trace": #{stack}, "occurrence_count": 1, "first_seen": #{frozenTime}, "last_seen": #{frozenTime} }|]}
+    java <- errorIssue "NullPointerException" "boom" "at com.example.MyClass.doWork(MyClass.java:25)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)" (Just "java") Nothing (Just "checkout") Nothing
+    go <- errorIssue "*errors.errorString" "shipping quote failure" "" (Just "go") Nothing (Just "checkout") Nothing
+    noTrace <- errorIssue "TypeError" "boom" "" Nothing Nothing (Just "checkout") (Just "production")
+
+    -- The trace is deferred to its own fragment, which is time-budgeted.
+    apiKey <- createTestAPIKey tr testPid "trace-key"
+    let spanTrace = "5d0e0000000000000000000000000001"
+    ingestSpanLinked tr apiKey spanTrace "5d0e000000000001" Nothing "GET /checkout" [] frozenTime
+    traced <- errorIssue "SyntaxError" "JSON parse failed" "at parse (a.js:1)" Nothing (Just spanTrace) (Just "checkout") Nothing
+    fmap fst . (.traceRef) <$> found (inner $ call tr $ IssuesPage.issueDetailGetH testPid traced (Just "true") Nothing Nothing Nothing Nothing) `shouldReturn` Just spanTrace
+    let fetchTrace tr' t = call tr' $ Trace.traceH testPid t (Just frozenTime) Nothing Nothing (Just "true") Nothing
+        starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
+    fetchTrace tr spanTrace >>= \case Trace.TraceDetails{} -> pass; _ -> expectationFailure "default budget renders the trace"
+    timedOut <- fetchTrace starved spanTrace
+    missing <- fetchTrace tr "missing-trace"
+    case (timedOut, missing) of
+      (Trace.TraceDetailsUnavailable retry _ _ Trace.TraceTimedOut, Trace.TraceDetailsUnavailable _ _ _ Trace.TraceEmpty) -> retry `shouldSatisfy` T.isInfixOf ("/traces/" <> spanTrace)
+      _ -> expectationFailure "expected timed-out and empty trace states"
+
+    -- A query alert carries its own query and monitor; its id is stored as a `show` blob.
+    let monitorId = "7a3e1b52-0000-4000-8000-000000000001" :: Text
+        storedQueryId = "QueryMonitorId {unQueryMonitorId = " <> monitorId <> "}"
+    alert <-
+      seedIssue tr (issueSeed Issues.QueryAlert "alert-hash"){title = "checkout throughput dropped", service = Just "Monitoring", payload = [aesonQQ|{ "query_id": #{storedQueryId}, "query_name": "checkout throughput", "query_expression": "resource.service.name == \"checkout\" | summarize count(*) by bin_auto(timestamp)", "threshold_value": 5, "actual_value": 0, "threshold_type": "below", "triggered_at": #{frozenTime} }|]}
+
+    -- A log pattern shows its pattern's live counts, not the counts frozen at detection.
+    let detectedAt = addUTCTime (-86400) frozenTime
+        pat = "kind;text-weak\8658rpc duration;badge-neutral\8658<*> min" :: Text
+    dbExec tr [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, first_seen_at, last_seen_at, occurrence_count) VALUES (?, ?, 'live-pattern', 'summary', ?, ?, 92) |] (testPid, pat, detectedAt, addUTCTime (-120) frozenTime)
+    logPattern <- seedIssue tr (issueSeed Issues.LogPattern "live-pattern"){service = Just "checkout", payload = AE.toJSON $ Issues.LogPatternData "live-pattern" pat Nothing Nothing (Just "checkout") "summary" detectedAt 2, at = detectedAt}
+    ((.occurrenceCount) <$>) . (.patternM) <$> found (detail tr logPattern) `shouldReturn` Just (92 :: Int64)
+
+    -- A span schema has no HTTP endpoint, so no trace may be looked up by placeholder method/path.
+    let subject = ApiChanges.SpanSchema Catalog.emptyScope{Catalog.service = Just "checkout", Catalog.spanName = Just "process-order"}
+    dbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, attributes___http___request___method, attributes___url___path, context___trace_id, summary) VALUES (gen_random_uuid(), ?, ?, ?, 'UNKNOWN', '/', 'placeholder-trace', '{}') |] (testPid, frozenTime, frozenTime)
+    spanSchema <- seedIssue tr (issueSeed Issues.ApiChange "span-schema"){title = "Span schema changed", payload = [aesonQQ|{ "subject": #{subject}, "endpoint_method": "UNKNOWN", "endpoint_path": "/", "endpoint_host": "Unknown", "anomaly_hashes": [], "shape_changes": [], "format_changes": [], "new_fields": [], "deleted_fields": [], "modified_fields": [] }|]}
+    (.traceRef) <$> found (detail tr spanSchema) `shouldReturn` Nothing
+
+    pages <- forM [java, go, noTrace, traced, alert, logPattern, spanSchema] (detail tr)
+    goldenHtml "issue-detail-types" $ traverse_ toHtml pages
+
+  it "triage: ack, archive, priority, assign, resolve, spam, expiry, collaboration and saved views" \tr -> do
+    [a, b] <- forM ([(0, "triage-a"), (60, "triage-b")] :: [(NominalDiffTime, Text)]) \(dt, h) -> seedIssue tr (issueSeed Issues.LogPattern h){title = "triage " <> h, at = addUTCTime dt frozenTime}
+    member : _ <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid)
+    let bulk action v ids = void $ call tr $ IssuesPage.issueBulkActionsPostH testPid action Nothing v IssuesPage.IssueBulk{itemId = (.toText) <$> ids}
+        reload iid = runTestBg frozenTime tr (Issues.selectIssueById testPid iid) >>= maybe (fail "issue vanished") pure
+        inTab tab iid = elem iid . map issueIdOf <$> listRows tr tab []
+
+    bulk IssuesPage.BAAcknowledge Nothing [a]
+    (,) <$> inTab "Inbox" a <*> inTab "Acknowledged" a `shouldReturn` (False, True)
+    bulk IssuesPage.BAUnacknowledge Nothing [a]
+    bulk IssuesPage.BAArchive Nothing [a]
+    (,) <$> inTab "Inbox" a <*> inTab "Archived" a `shouldReturn` (False, True)
+    bulk IssuesPage.BAUnarchive Nothing [a]
+    inTab "Inbox" a `shouldReturn` True
+
+    void $ call tr $ IssuesPage.triagePostH testPid a (IssuesPage.TriageForm (Just Issues.Warning) (Just member.userId.toText))
+    ((.severity) &&& (.assigneeId)) <$> reload a `shouldReturn` (Issues.Warning, Just member.userId)
+    bulk IssuesPage.BAPriority (Just "warning") [b]
+    bulk IssuesPage.BAAssign (Just member.userId.toText) [b]
+    ((.severity) &&& (.assigneeId)) <$> reload b `shouldReturn` (Issues.Warning, Just member.userId)
+    listed <- listHtml =<< call tr (IssuesPage.issueListGetH testPid (Just "Inbox") (Just "-users_count") (Just "7d") Nothing (Just "100") Nothing (Just "24h") [] [])
+    goldenHtml "issue-list-triaged" listed
+
+    -- Timed archive expires; until-escalating wakes only on escalation.
+    void $ call tr $ IssuesPage.archiveIssueGetH testPid a (Just (Issues.ArchiveFor 60))
+    runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 1800 frozenTime)) `shouldReturn` []
+    runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 7200 frozenTime)) `shouldReturn` [a]
+    err <- seedIssue tr (issueSeed Issues.RuntimeException "triage-err")
+    void $ call tr $ IssuesPage.archiveIssueGetH testPid err (Just Issues.ArchiveUntilEscalating)
+    runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 86400 frozenTime)) `shouldReturn` []
+    runTestBg frozenTime tr (Issues.wakeOnEscalation testPid "triage-err") `shouldReturn` [err]
+
+    -- Two acked recurrences of one signal expire into one open issue, not a failed sweep.
+    void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True err (Just 1)
+    again <- seedIssue tr (issueSeed Issues.RuntimeException "triage-err")
+    void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True again (Just 1)
+    expired <- runTestBg frozenTime tr (Issues.expireAcks (addUTCTime 120 frozenTime))
+    length (filter (`elem` [err, again]) expired) `shouldBe` 1
+    length . filter id <$> forM [err, again] (inTab "Inbox") `shouldReturn` 1
+
+    bulk IssuesPage.BASpam Nothing [b]
+    (,) <$> inTab "Inbox" b <*> inTab "Spam" b `shouldReturn` (False, True)
+    bulk IssuesPage.BAUnspam Nothing [b]
+    inTab "Spam" b `shouldReturn` False
+    bulk IssuesPage.BAResolve Nothing [a, b]
+    forM [a, b] (runTestBg frozenTime tr . Issues.selectLatestStateEvent) `shouldReturn` replicate 2 (Just Issues.IEResolved)
+
+    -- Views are posted by the page once shown (GET would fire on hover), one per day; comments,
+    -- links, acks and monitor recoveries share the timeline.
+    replicateM_ 2 $ call tr $ IssuesPage.issueViewedPostH testPid a
+    void $ call tr $ IssuesPage.commentPostH testPid a (IssuesPage.CommentForm "Rolled back the cart service")
+    forM_ [IssuesPage.LinkForm "https://github.com/acme/shop/issues/42" (Just "Cart crash"), IssuesPage.LinkForm "javascript:alert(1)" Nothing] (call tr . IssuesPage.linkPostH testPid a)
+    void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True a Nothing
+    Just slack <- pure $ Incidents.slackPayload $ AE.object ["text" AE..= ("checkout alert" :: Text)]
+    forM_ [(frozenTime, Incidents.IncidentAlert), (addUTCTime 60 frozenTime, Incidents.IncidentRecovered)] \(observedAt, change) ->
+      runTestBg frozenTime tr $ Incidents.recordIncidentEvent Incidents.IncidentUpdate{projectId = testPid, source = Incidents.IssueIncident a, observedAt, change, delivery = Incidents.PublishIncident, issueId = Just a, rootPayload = slack, replyPayload = slack, destinations = []}
+    dbOne tr [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'viewed' |] (Only a) `shouldReturn` (1 :: Int)
+    activity <- call tr $ IssuesPage.issueActivityGetH testPid a Nothing Nothing
+    renderT activity `shouldNotSatisfy` T.isInfixOf "javascript:alert"
+    goldenHtml "issue-activity" activity
+
+    let saved = map (.name) <$> runTestBg frozenTime tr (Issues.selectIssueViews testPid)
+    void $ call tr $ IssuesPage.saveViewPostH testPid (IssuesPage.SaveViewForm "My errors" "filter=Inbox&sort=-created_at&period=24h&type=runtime_exception")
+    saved `shouldReturn` ["My errors"]
+    views <- forM [[], ["runtime_exception"]] \types -> listHtml =<< call tr (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] types)
+    goldenHtml "issue-list-saved-views" $ sequence_ views
+    runTestBg frozenTime tr (Issues.selectIssueViews testPid) >>= traverse_ (call tr . IssuesPage.deleteViewPostH testPid . (.id))
+    saved `shouldReturn` []
+
+  -- Seeded through ingestion: CI's detectors read TimeFusion, which a Postgres INSERT never reaches.
+  it "detectors open performance, frontend and feedback issues with their evidence" \tr -> do
+    apiKey <- createTestAPIKey tr testPid "detector-key"
+    let at = (`addUTCTime` frozenTime)
+        span' (sid, parent, name, q, durNs, dt) = ingestSpanReq tr . withSpanDuration durNs $ mkSpanRequest "0e7f0000000000000000000000000001" sid parent name [] Nothing (mkAttr "db.system.name" "postgresql" : [mkAttr "db.query.text" q' | Just q' <- [q]]) (mkResource apiKey [mkAttr "service.name" "catalog"]) (at dt)
+        click (name, sid, label, dt) = do
+          spanId <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
+          ingestSpanLinked tr apiKey spanId spanId Nothing name [("session.id", sid), ("page.url", "https://shop.example.com/checkout"), ("monoscope.display.label", label), ("target.tag_name", "button"), ("target.id", "place-order")] (at dt)
+        feedback tid msg = ingestSpanLinked tr apiKey tid tid Nothing "user.feedback" [("feedback.message", msg), ("feedback.contact_email", "ada@example.com"), ("user.name", "Ada"), ("url.full", "https://shop.example.com/cart")] (at (-60))
+        detect job ty = runTestBg frozenTime tr (job testPid) >> issuesOfType tr ty :: IO [(Issues.IssueId, Text)]
+    span' ("1", Nothing, "GET /products", Nothing, 900_000_000, -60)
+    span' ("2", Just "1", "ProductController.index", Nothing, 800_000_000, -59)
+    forM_ [1 .. 6 :: Integer] \i -> span' ("3" <> show i, Just "2", "SELECT reviews", Just ("SELECT * FROM reviews WHERE product_id = " <> show i), 20_000_000, fromIntegral (i - 58))
+    span' ("4", Just "1", "SELECT promotions", Just "SELECT * FROM promotions WHERE active", 1_500_000_000, -40)
+    forM_ [0, 0.4, 0.9, 1.4] \dt -> click ("click", "sess-rage", "Place order", -120 + dt)
+    click ("click", "sess-rage", "Continue shopping", -100)
+    forM_ ([("sess-a", -90), ("sess-b", -80)] :: [(Text, NominalDiffTime)]) \(sid, dt) -> click ("dead_click", sid, "Apply coupon", dt)
+    let tid = "fb000000000000000000000000000001"
+    ingestSpanReq tr . withTraceId tid =<< createOtelTraceWithExceptionAtTime apiKey ([], [], []) "POST /cart" "CartError" "boom" "CartError: boom\n    at add (/app/src/cart.js:1:1)" (at (-70))
+    feedback tid "The cart button does nothing"
+    feedback "fb000000000000000000000000000002" "   "
+
+    void $ eventually (detect BackgroundJobs.detectPerformanceIssues Issues.Performance) ((== 2) . length)
+    void $ eventually (detect BackgroundJobs.detectFrontendIssues Issues.Frontend) ((== 2) . length)
+    void $ eventually (detect BackgroundJobs.detectFeedback Issues.Feedback) (not . null)
+    -- A second pass over the same window folds into the same issues.
+    perf <- detect BackgroundJobs.detectPerformanceIssues Issues.Performance
+    frontend <- detect BackgroundJobs.detectFrontendIssues Issues.Frontend
+    fb <- detect BackgroundJobs.detectFeedback Issues.Feedback
+    map (T.takeWhile (/= ':') . snd) perf `shouldBe` ["N+1 Query", "Slow DB Query"]
+    map snd frontend `shouldBe` ["Dead Click: Apply coupon", "Rage Click: Place order"]
+    map snd fb `shouldBe` ["Feedback: The cart button does nothing"]
+    pages <- forM (map fst $ take 1 perf <> drop 1 frontend <> fb) (detail tr)
+    goldenHtml "issue-detail-detected" $ traverse_ toHtml pages
+
+  it "events: stepping, chosen event window, user journey and range-scoped log samples" \tr -> do
+    apiKey <- createTestAPIKey tr testPid "step-key"
+    let at = (`addUTCTime` frozenTime)
+        (ta, tb, tc) = ("57e9000000000000000000000000000a", "57e9000000000000000000000000000b", "57e9000000000000000000000000000c") :: (Text, Text, Text)
+        emit tid extra dt = ingestSpanReq tr . withTraceId tid =<< createOtelTraceWithExceptionAtTime apiKey (extra, [], []) "GET /step" "StepProbeError" "step probe" "StepProbeError: step probe\n    at step (/app/src/step.js:1:1)" (at dt)
+    -- The oldest carries a replay session and a user, so it is the Recommended one.
+    emit ta [("session.id", "sess-1"), ("user.id", "u-1")] (-600)
+    emit tb [] (-300)
+    emit tc [] 0
+    drainExtractionWorker tr
+    void $ runAllBackgroundJobs frozenTime tr.trATCtx
+    pat <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns testPid Nothing 500 0) >>= maybe (fail "no StepProbeError") pure . find ((== "StepProbeError") . (.errorType))
+    iid <- (.id) <$> (runTestBg frozenTime tr (Issues.selectIssueByHash testPid pat.hash Issues.AnyIssue) >>= maybe (fail "no issue") pure)
+    let step dir from = runTestBg frozenTime tr (Telemetry.adjacentHashEvent testPid ("err:" <> pat.hash) dir from)
+    mapM (uncurry step) [(Telemetry.Older, at 0), (Telemetry.Newer, at (-600)), (Telemetry.Older, at (-600)), (Telemetry.Recommended, at 1)]
+      `shouldReturn` [Just (tb, at (-300)), Just (tb, at (-300)), Nothing, Just (ta, at (-600))]
+    -- Past the oldest event the reader stays where they were.
+    let stepTo dir ev =
+          runAuthHandler tr (IssuesPage.issueStepGetH testPid iid (Just dir) (Just ev)) >>= \h -> case lookupResponseHeader @"Location" h of
+            Header loc -> pure loc
+            _ -> fail "no Location"
+    void $ eventually (stepTo Telemetry.Older (IssuesPage.EventRef tc (at 0))) (T.isInfixOf tb)
+    stepTo Telemetry.Older (IssuesPage.EventRef ta (at (-600))) >>= (`shouldSatisfy` T.isInfixOf ta)
+    -- A triage edit must not move a chosen event's window off the event.
+    dbExec tr [sql| UPDATE apis.issues SET updated_at=? WHERE id=? |] (at 86400, iid)
+    chosen <- found $ inner $ call tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef tb (at (-300)))
+    (chosen.traceRef, chosen.tp.from, chosen.tp.to) `shouldBe` (Just (tb, at (-300)), Just "2024-12-31T21:55:00Z", Just "2025-01-01T01:55:00Z")
+
+    -- gRPC instrumentation emits a bare `message` event per RPC message; the journey skips them.
+    let journeyTrace = "70a0000000000000000000000000000a"
+        checkoutEvents = [mkSpanEvent "message" [("rpc.message.type", "SENT")] (at 0), mkSpanEvent "log" [("message", "checkout declined")] (at 0)]
+    forM_ @[] [(-5, "a0", "page loaded", []), (-4, "b0", "cart opened", []), (-3, "c0", "shipping selected", []), (-2, "a1", "GET /cart", []), (-1, "a2", "cart item missing price", []), (0, "a3", "POST /checkout", checkoutEvents)] \(dt, sid, name, evs) ->
+      ingestSpanReq tr $ mkSpanRequest journeyTrace sid Nothing name evs Nothing [] (mkResource apiKey []) (at dt)
+    journey <- eventually (call tr (IssuesPage.issueActivityGetH testPid iid (Just journeyTrace) (Just frozenTime))) (T.isInfixOf "checkout declined" . renderT)
+    goldenHtml "issue-journey" journey
+
+    -- A log pattern's sample is the latest event inside the reader's range, or the stored snapshot.
+    let selectedAt = at (-86400)
+        iso = toText . formatTime defaultTimeLocale "%FT%TZ"
+        window dt = (Just $ iso $ addUTCTime (-60) dt, Just $ iso $ addUTCTime 60 dt)
+        sampleTrace = "5a0000000000000000000000000000aa"
+    forM_ [(selectedAt, "selected occurrence" :: Text), (frozenTime, "outside occurrence")] \(t, message) ->
+      dbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary, context___trace_id) VALUES (gen_random_uuid(), ?, ?, ?, 'log', ARRAY['pat:sample-pattern'], ARRAY[?], ?) |] (testPid, t, t, message, sampleTrace)
+    sampled <- seedIssue tr (issueSeed Issues.LogPattern "sample-pattern"){service = Just "checkout", payload = AE.toJSON $ Issues.LogPatternData "sample-pattern" "payment failed <*>" (Just "saved occurrence") Nothing (Just "checkout") "body" selectedAt 2, at = selectedAt}
+    let sample pid (from, to) = call tr $ IssuesPage.issueSampleGetH pid sampled Nothing from to
+    sample testPid (window selectedAt) >>= \case
+      IssuesPage.IssueSample _ (Just "saved occurrence") (IssuesPage.SampleFound t summary (Just tr')) -> (t, summary, tr') `shouldBe` (selectedAt, V.singleton "selected occurrence", sampleTrace)
+      _ -> expectationFailure "expected the in-range event"
+    sample testPid (window $ at 3600) >>= \case
+      IssuesPage.IssueSample _ (Just "saved occurrence") IssuesPage.SampleEmpty -> pass
+      _ -> expectationFailure "expected an empty range with the stored snapshot"
+    otherPid <- createTestProject tr "other"
+    sample otherPid (window selectedAt) >>= \case
+      IssuesPage.NoIssueSample -> pass
+      _ -> expectationFailure "another project must not read this issue's sample"
+
+  it "tenant isolation: ack cascade, archive, error groups, unmerge and AI chat stay in their project" \tr -> do
+    let uid = (Servant.getResponse tr.trSessAndHeader).user.id
+    otherPid <- createTestProject tr "other"
+    let seed pid h = seedIssue tr (issueSeed Issues.RuntimeException h){pid}
+        acked iid = isJust <$> dbOne @_ @(Maybe UTCTime) tr [sql| SELECT acknowledged_at FROM apis.issues WHERE id=? |] (Only iid)
+    -- The cascade sweeps by hash prefix, including targets shorter than the indexed prefix, and
+    -- reports every swept sibling so its timeline can say why it went quiet.
+    parent <- seed testPid "casc-legacy-001"
+    child <- seed testPid "casc-legacy-001:child"
+    foreignChild <- seed otherPid "casc-legacy-001:child"
+    sort <$> runTestBg frozenTime tr (Issues.ackCascade testPid uid Issues.AckIndefinite [parent]) `shouldReturn` sort [parent, child]
+    short <- seed testPid "ab1"
+    shortChild <- seed testPid "ab1cdef9999"
+    void $ runTestBg frozenTime tr $ Issues.ackCascade testPid uid Issues.AckIndefinite [short]
+    mapM acked [child, foreignChild, shortChild] `shouldReturn` [True, False, True]
+
+    -- A tampered bulk form naming another project's issue archives only the caller's.
+    own <- seed testPid "arch-shared"
+    theirs <- seed otherPid "arch-shared"
+    void $ runTestBg frozenTime tr $ Issues.setArchiveState testPid [own, theirs] (Just (frozenTime, Issues.ArchiveIndefinite))
+    mapM (\i -> isJust <$> dbOne @_ @(Maybe UTCTime) tr [sql| SELECT archived_at FROM apis.issues WHERE id=? |] (Only i)) [own, theirs] `shouldReturn` [True, False]
+
+    -- Error-group reads and unmerges are scoped to the caller's project.
+    [canonical, member] <- replicateM 2 UUID.nextRandom
+    let errData = [aesonQQ|{"when":"2026-01-01T00:00:00Z","error_type":"SecretTypeError","root_error_type":"SecretTypeError","message":"victim-only-message","root_error_message":"victim-only-message","stack_trace":"","hash":"group-authz","is_framework":false}|]
+    dbExec tr [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, error_data) VALUES (?, ?, 'group-canonical', 'CanonicalType', 'canonical', '', ?) |] (canonical, otherPid, errData)
+    dbExec tr [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, error_data, canonical_id, merge_override) VALUES (?, ?, 'group-authz', 'SecretTypeError', 'victim-only-message', '', ?, ?, FALSE) |] (member, otherPid, errData, canonical)
+    members <- renderT <$> call tr (IssuesPage.errorGroupMembersGetH testPid canonical)
+    members `shouldNotSatisfy` T.isInfixOf "victim-only-message"
+    void $ call tr $ IssuesPage.errorUnmergePostH testPid member
+    dbOne tr [sql| SELECT merge_override FROM apis.error_patterns WHERE id=? |] (Only member) `shouldReturn` False
+
+    assertNonMemberDenied tr otherPid $ IssuesPage.aiChatPostH otherPid parent (IssuesPage.AIChatForm "summarise this")
+    dbOne tr [sql| SELECT count(*)::int FROM apis.ai_chat_messages WHERE project_id=? |] (Only otherPid) `shouldReturn` (0 :: Int)
+
+    -- Hover preloads every hx-get, so no issue mutation may be reachable by GET.
+    let actions = renderT do IssuesPage.issueAcknowledgeButton testPid parent frozenTime Nothing; IssuesPage.issueArchiveButton testPid parent False
+    (T.count "hx-post=" actions > 2, T.count "hx-get=" actions) `shouldBe` (True, 0)
+
+  it "the test clock drives auto-resolve stamps, the 24h window and scoped lists" \tr -> do
+    let errHash = "auto-resolve-hash" :: Text
+    dbExec tr [sql| INSERT INTO apis.error_patterns (project_id, error_type, message, stacktrace, hash, state, created_at, updated_at) VALUES (?, 'TestError', 'm', 's', ?, 'new', ?, ?) |] (testPid, errHash, frozenTime, frozenTime)
+    resolved <- seedIssue tr (issueSeed Issues.RuntimeException errHash)
+    advanceDays tr 5
+    expected <- getTestTime tr.trTestClock
+    runHasqlEffect tr $ EHasql.interpExecute_ [HI.sql| UPDATE apis.error_patterns SET state = 'resolved' WHERE project_id = #{testPid} AND hash = #{errHash} |]
+    dbQuery tr [sql| SELECT created_at FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'auto_resolved' |] (Only resolved) `shouldReturn` [Only expected]
+
+    recent <- seedIssue tr (issueSeed Issues.RuntimeException "window-target"){at = expected}
+    let window = map (\r -> (r.base.id, V.sum r.activityBuckets)) . fst <$> runHasqlEffect tr (Issues.selectIssues testPid Issues.PIssueL Issues.defIssueFilters{Issues.period = "24h", Issues.limit = 100})
+    advanceHours tr 23
+    find ((== recent) . fst) <$> window >>= (`shouldSatisfy` isJust)
+    advanceHours tr 2
+    find ((== recent) . fst) <$> window >>= (`shouldSatisfy` maybe True ((== 0) . snd))
+
+    [prod, _, _] <- forM ([("scope-checkout", "production"), ("scope-catalog", "production"), ("scope-checkout", "staging")] :: [(Text, Text)]) \(svc, env) ->
+      seedIssue tr (issueSeed Issues.RuntimeException (svc <> "-" <> env)){service = Just svc, environment = Just env}
+    map (.id) . fst <$> runHasqlEffect tr (Issues.selectIssues testPid Issues.PIssue Issues.defIssueFilters{Issues.service = Just "scope-checkout", Issues.environment = Just "production", Issues.limit = 100})
+      `shouldReturn` [prod]
+    let scoped = tr{trSessAndHeader = (\s -> s{Projects.service = Just "scope-checkout", Projects.environment = Just "production"}) <$> tr.trSessAndHeader}
+    call scoped (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just "100") Nothing (Just "24h") ["scope-catalog"] []) >>= rowsOf >>= (`shouldSatisfy` V.null)
+  where
+    isoNow = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+    encMsg = toStrict . AE.encode . Unsafe.fromJust . convert
+    -- msg1 at another path with another request body.
+    apiMsg path body = case testRequestMsgs.reqMsg1 isoNow of
+      AE.Object o -> AE.Object $ KM.fromList [("raw_url", AE.String path), ("url_path", AE.String path), ("request_body", AE.String body)] <> o
+      v -> v
+    runAnomalyJobs tr = void $ runBackgroundJobsWhere frozenTime tr.trATCtx \case
+      BackgroundJobs.NewAnomaly{} -> True
+      _ -> False
+    apiChangeIds tr = map fromOnly <$> dbQuery tr [sql| SELECT id FROM apis.issues WHERE project_id=? AND issue_type='api_change' ORDER BY created_at |] (Only testPid)
+    issuesOfType tr ty = dbQuery @_ @(Issues.IssueId, Text) tr [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = ? ORDER BY title |] (testPid, ty)
+    inner = fmap \(PageCtx _ x) -> x
+    detail tr iid = inner $ call tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing Nothing
+    found act =
+      act >>= \case
+        IssuesPage.IssueFound v -> pure v
+        IssuesPage.IssueNotFound _ -> fail "issue not found"
+    listPage = \case
+      Table.TablePage (PageCtx bw t) -> pure (bw, t)
+      _ -> fail "expected a full issue-list page"
+    rowsOf = fmap ((.rows) . snd) . listPage
+    -- The category and saved-view menus live in the shell's nav tabs, beside the table.
+    listHtml = fmap (\(bw, t) -> sequence_ bw.navTabs >> toHtml t) . listPage
+    listRows tr tab types = V.toList <$> (rowsOf =<< call tr (IssuesPage.issueListGetH testPid (Just tab) Nothing Nothing Nothing (Just "100") Nothing Nothing [] types))
+    issueIdOf (IssuesPage.IssueVM _ i) = i.base.id

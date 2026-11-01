@@ -1,3 +1,5 @@
+{-# LANGUAGE NoFieldSelectors #-}
+
 module Pkg.TestUtils (
   shouldContainAll,
   streamFrames,
@@ -52,6 +54,14 @@ module Pkg.TestUtils (
   deferredBody,
   shellHtml,
   renderT,
+  call,
+  dbExec,
+  dbQuery,
+  dbOne,
+  IssueSeed (..),
+  issueSeed,
+  seedIssue,
+  goldenHtml,
   processMessagesAndBackgroundJobs,
   createTestSpans,
   -- OTLP/Telemetry helpers
@@ -128,6 +138,7 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (ConnectInfo (..), Connection, Only (..), close, connect, connectPostgreSQL, defaultConnectInfo, execute)
 import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -209,7 +220,7 @@ import Servant.Types.SourceT qualified as Source
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..), mkTwilioContentSid)
 import System.Config qualified as Config
-import System.Directory (getFileSize, listDirectory)
+import System.Directory (doesFileExist, getFileSize, listDirectory)
 import System.Envy (DefConfig (..), decodeWithDefaults, fromVar)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Logging
@@ -217,7 +228,8 @@ import System.Server qualified as Server
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest, effToServantHandlerTestHTTP)
-import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
+import Test.Hspec (Expectation, expectationFailure, shouldBe, shouldSatisfy)
+import Text.RE.TDFA.Text (ed, (*=~/))
 import Unsafe.Coerce (unsafeCoerce)
 import Utils (toXXHash)
 import Web.ApiHandlers qualified as ApiH
@@ -1256,6 +1268,75 @@ renderT :: Lucid.ToHtml a => a -> Text
 renderT = toStrict . Lucid.renderText . Lucid.toHtml
 
 
+-- | A handler's typed payload, for specs that assert on data rather than headers.
+call :: TestResources -> ATAuthCtx (RespHeaders a) -> IO a
+call tr = fmap snd . testServant tr
+
+
+-- | Raw SQL for fixtures and for state no handler exposes, on the test clock so
+-- @app_now()@ triggers stamp test time rather than wall time.
+dbExec :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO ()
+dbExec tr q args = withClockedConn tr \conn -> void $ PGS.execute conn q args
+
+
+dbQuery :: forall q r. (PGS.FromRow r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO [r]
+dbQuery tr q args = withClockedConn tr \conn -> PGS.query conn q args
+
+
+withClockedConn :: TestResources -> (Connection -> IO a) -> IO a
+withClockedConn tr f = withResource tr.trPool \conn -> do
+  now <- getTestTime tr.trTestClock
+  void $ PGS.query @_ @(Only Text) conn "SELECT set_config('app.current_time', ?::timestamptz::text, false)" (Only now)
+  f conn
+
+
+-- | The single column of the single row a query returns: a count, or an @INSERT … RETURNING@.
+dbOne :: forall q r. (FromField r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO r
+dbOne tr q args =
+  dbQuery tr q args >>= \case
+    [Only r] -> pure r
+    rows -> fail $ "dbOne: expected one row, got " <> show (length rows)
+
+
+-- | An @apis.issues@ row; 'issueSeed' fills the columns most fixtures leave alone.
+data IssueSeed = IssueSeed
+  { pid :: Projects.ProjectId
+  , issueType :: Issues.IssueType
+  , title :: Text
+  , hash :: Text
+  , service :: Maybe Text
+  , environment :: Maybe Text
+  , payload :: AE.Value
+  , at :: UTCTime
+  }
+
+
+issueSeed :: Issues.IssueType -> Text -> IssueSeed
+issueSeed ty h = IssueSeed testPid ty h h Nothing Nothing (AE.object []) frozenTime
+
+
+seedIssue :: TestResources -> IssueSeed -> IO Issues.IssueId
+seedIssue tr s =
+  UUIDId
+    <$> dbOne
+      tr
+      [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, environment, issue_data, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id |]
+      (s.pid, s.issueType, s.title, s.hash, s.service, s.environment, s.payload, s.at, s.at)
+
+
+-- | Snapshot @tests/golden/html/<name>.html@, one tag per line, so the diff is reviewable.
+-- UUIDs, trace ids and issue numbers (a counter every upsert attempt consumes) are
+-- scrubbed to keep it stable. @UPDATE_GOLDEN=true@, or a missing file, (re)writes it.
+goldenHtml :: Lucid.ToHtml a => FilePath -> a -> Expectation
+goldenHtml name html = do
+  let path = "./tests/golden/html/" <> name <> ".html"
+      actual = T.replace "><" ">\n<" (renderT html) *=~/ [ed|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}///<uuid>|] *=~/ [ed|[0-9a-f]{32,}///<hex>|] *=~/ [ed|>#[0-9]+///>#<n>|]
+  update <- (== Just "true") <$> lookupEnv "UPDATE_GOLDEN"
+  exists <- doesFileExist path
+  if update || not exists then writeFileText path actual else readFileBS path >>= (actual `shouldBe`) . decodeUtf8
+
+
 -- | Every frame a streaming handler emitted, or the stream's own error.
 streamFrames :: Servant.Headers hs (Servant.SourceIO a) -> IO (Either String [a])
 streamFrames = runExceptT . Source.runSourceT . Servant.getResponse
@@ -1812,18 +1893,22 @@ mkSpanRequest trId spanId parentSpanIdM spanName events statusM attrs resource t
       otelSpan =
         defMessage
           & PTF.traceId
-          .~ hexPad 32 trId & PTF.spanId
+          .~ hexPad 32 trId
+            & PTF.spanId
           .~ hexPad 16 spanId
             & PTF.parentSpanId
           .~ maybe "" (hexPad 16) parentSpanIdM
             & PTF.name
-          .~ spanName & PTF.kind
+          .~ spanName
+            & PTF.kind
           .~ PT.Span'SPAN_KIND_SERVER
             & PTF.startTimeUnixNano
-          .~ startTime & PTF.endTimeUnixNano
+          .~ startTime
+            & PTF.endTimeUnixNano
           .~ endTime
             & PTF.attributes
-          .~ attrs & PTF.events
+          .~ attrs
+            & PTF.events
           .~ events
             & maybe id (PTF.status .~) statusM
       scopeSpan = defMessage & PTF.spans .~ [otelSpan]
