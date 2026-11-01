@@ -191,8 +191,8 @@ outside GitHub's concurrency group. The ref check and tag/deployment updates are
 separate operations; a merge between them can make an update stale.
 
 ```bash
-make deploy-image          # build or reuse an image for this clean checkout
-make ship                  # check, build/reuse, and deploy already-merged master
+DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make deploy-image
+DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make ship
 make deploy-app SHA=<sha>  # deploy current master only
 make rollback-app SHA=<sha> # explicitly deploy an older image already on master
 make deploy-status
@@ -201,7 +201,7 @@ make deploy-status
 `make ship` never pushes to master. Merge the pull request first, then use a
 clean checkout of that merged revision. Every deploy-path check must be proven
 for this tree. GitHub still verifies the gate and skips checks with matching
-attestations; the registry cache makes its image build a lookup and promotion.
+attestations; its image step resolves and aliases the locally built registry artifact.
 
 `make ci-signoff CHECKS="release-tests"` runs the release regression suite on the
 host using Node’s built-in test runner, with no npm dependencies, and records its
@@ -211,6 +211,12 @@ prebuilt packages instead of hiding them beneath an empty cache.
 `make ci-selftest` also runs it. The suite checks
 squash reuse, source and toolchain invalidation, pinned build inputs, rejection
 of dirty or mismatched checkouts, and stale local/remote deployment prevention.
+
+On this Mac, the real cold-cache fixture validates and selects the local builder.
+Each run uses a new cache ID and asserts that only the prebuilt dependency exists
+before adding a file. Later build steps must retain both files. It avoids global
+`--no-cache`, which can discard cache mounts, as discussed in
+[BuildKit's cache-mount issue](https://github.com/moby/buildkit/issues/5305).
 
 ### Local AMD64 images on this Mac
 
@@ -244,9 +250,14 @@ DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make ci-signoff
 DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make deploy-image
 ```
 
-The legacy default can select an existing `monoscope-amd64` SSH builder.
-A local command invocation does not prove that compilation stays local.
-Do not use `BUILD_HOST=… make builder-setup` for work from this Mac.
+`release.sh` checks the Mac host, explicit context, Unix socket, builder name,
+and sole `orbstack` node before image generation. Missing builders fail instead
+of falling back. CI can reuse and alias a completed registry image; a cache miss
+fails with instructions to build locally. CI does not compile a production image.
+
+`make builder-setup` now creates only the local OrbStack builder. It rejects
+`BUILD_HOST` before any SSH or Docker operation. The default builder name is
+`monoscope-local-amd64`; select the context and builder explicitly as above.
 Registry pulls and pushes transfer artifacts. They do not move compilation to another host.
 
 `ci-signoff` runs checks and an image build. Report their progress separately.
@@ -297,7 +308,7 @@ match. Image labels preserve who built it and from which revision.
 | `CI_ATTEST_DISABLED=true` | ignore all attestations — set as a repo variable to force full CI runs |
 | `MONOSCOPE_CI_TF_IMAGE` / `MONOSCOPE_CI_TF_PLATFORM` | point at a locally built TimeFusion image (auto-detected after `make tf-image`) |
 | `TF_TARGET_CPU` | CPU baseline used by `make tf-image`; defaults to `neoverse-n1` on arm64 and `x86-64-v3` on amd64. Override only for a known compatible target. |
-| `BUILD_HOST` / `BUILD_CPUS` / `BUILD_MEMORY` | legacy SSH-builder parameters. Do not use them for image builds from this Mac. |
+| `BUILD_HOST` | rejected by `builder-setup`; SSH image builders are prohibited |
 | `DOCKER_CONTEXT` / `MONOSCOPE_BUILDER` | for this Mac, set `orbstack` and `monoscope-local-amd64` explicitly. Inspect their local endpoint before a build. |
 | `SHIP_ANY_BRANCH=1` | let `make ship` deploy something other than master |
 

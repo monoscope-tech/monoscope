@@ -798,18 +798,9 @@ cmd_clean() { compose down -v --remove-orphans && docker volume rm "${SHARED_VOL
 # be recorded at build time or it is unanswerable.
 IMAGE=${MONOSCOPE_IMAGE:-ghcr.io/monoscope-tech/monoscope}
 
-# The image must be linux/amd64 because prod is. On an Apple Silicon laptop that
-# means emulation, and an emulated GHC build is the slowest thing in this repo —
-# slow enough that it pushes people back to "push it and let CI do it", which is
-# the habit this whole file exists to kill. A BUILDER naming a native amd64
-# buildx endpoint removes the emulation instead of tolerating it.
-#
-# Deploy images build on the native builder `make builder-setup` creates over SSH when it
-# exists (that host is production; the builder container is capped by builder-setup), else
-# on this machine. Emulated builds took long enough — and crashed Docker Desktop/OrbStack
-# often enough — that sign-off rarely produced an image and CI rebuilt it from scratch
-# (~1h). MONOSCOPE_BUILDER= (empty) forces a local build.
-BUILDER=${MONOSCOPE_BUILDER-monoscope-amd64}
+# Production image generation stays on this Mac's OrbStack builder. release.sh
+# checks its endpoint and rejects missing builders rather than falling back.
+BUILDER=${MONOSCOPE_BUILDER-monoscope-local-amd64}
 
 # A TimeFusion image built for this machine's own architecture. `make tf-image`
 # produces it; cmd_local picks it up on its own.
@@ -825,37 +816,19 @@ cmd_image() { # [sha] — build and push the production image for a commit
   publish_attestation image "$sha" docker linux-amd64
 }
 
-# A native amd64 builder, so the image build is a build and not an emulation.
-# BUILD_HOST is any amd64 machine you can `ssh` to that runs Docker; the deploy
-# host itself is the obvious one, and it is also the machine that will pull the
-# image, so the push is a local-network hop.
-#
-# The buildkit container is capped, because that host is usually production:
-# BUILD_CPUS cores and BUILD_MEMORY are all it may take. Uncapped, a -j48 GHC
-# build competes with the thing it is being built to replace.
+# Local AMD64 emulation through OrbStack/Rosetta; never allocate an SSH builder.
 cmd_builder() { # setup | rm | status
-  local host=${BUILD_HOST:-} cpus=${BUILD_CPUS:-12} mem=${BUILD_MEMORY:-48g} container
-  container="buildx_buildkit_${BUILDER}0"
   case "${1:-status}" in
     setup)
-      [ -n "$host" ] || die "BUILD_HOST is unset, e.g. BUILD_HOST=ubuntu@build.example.com make builder-setup"
-      ssh -o BatchMode=yes "$host" 'docker info >/dev/null' \
-        || die "cannot reach docker on $host over ssh"
-      case "$(ssh -o BatchMode=yes "$host" 'uname -m')" in
-        x86_64|amd64) ;;
-        *) die "$host is not amd64 — a builder there would emulate too" ;;
-      esac
-      docker buildx inspect "$BUILDER" >/dev/null 2>&1 && { note "builder '$BUILDER' already exists"; return 0; }
-      docker buildx create --name "$BUILDER" --driver docker-container \
-        --platform linux/amd64 --driver-opt env.BUILDKIT_STEP_LOG_MAX_SIZE=-1 "ssh://$host" >/dev/null
+      [ -z "${BUILD_HOST:-}" ] || die "BUILD_HOST is prohibited; image builders must stay on this Mac"
+      MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh local-context
+      if ! docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
+        docker buildx create --name "$BUILDER" --driver docker-container \
+          --platform linux/amd64 --driver-opt env.BUILDKIT_STEP_LOG_MAX_SIZE=-1 orbstack >/dev/null
+      fi
+      MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh local-builder
       docker buildx inspect --bootstrap "$BUILDER" >/dev/null
-      # Resource limits are applied to the container rather than passed as
-      # driver-opts: buildx only learned those opts after the version Docker
-      # Desktop ships, and a builder that refuses to be created is worse than
-      # one that is capped a second later.
-      ssh -o BatchMode=yes "$host" "docker update --cpus $cpus --memory $mem --memory-swap $mem $container" >/dev/null \
-        || note "could not cap the builder container — it will use the whole host"
-      note "builder '$BUILDER' ready on $host (capped at ${cpus} cpus / ${mem})"
+      note "builder '$BUILDER' ready on this Mac's OrbStack context"
       ;;
     rm)     docker buildx rm "$BUILDER" >/dev/null 2>&1 && note "removed '$BUILDER'" || note "no builder '$BUILDER'" ;;
     status) docker buildx inspect "$BUILDER" 2>/dev/null | grep -E '^(Name|Status|Platforms|Endpoint):' || note "no builder '$BUILDER' — \`make builder-setup\`" ;;

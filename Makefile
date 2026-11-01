@@ -499,11 +499,11 @@ ci-clean:
 ci-selftest:
 	./scripts/ci/ci.sh selftest
 
-# Build and push the production image for HEAD yourself, so CI's build-image
-# job finds it already in the registry and skips ~4 minutes. Requires a clean
+# Build and push the production image for HEAD locally, so CI's build-image
+# job can resolve the completed registry artifact. Requires a clean
 # tree (the image must match the SHA it is tagged with) and `docker login ghcr.io`.
-# Prod is amd64: with a native builder (`make builder-setup`) this is a real
-# build; without one it is emulated on Apple Silicon and much slower.
+# Generate linux/amd64 locally through OrbStack/Rosetta; missing or remote
+# builders are rejected. Set DOCKER_CONTEXT and MONOSCOPE_BUILDER explicitly.
 deploy-image:
 	./scripts/ci/ci.sh image $(SHA)
 
@@ -530,9 +530,8 @@ deploy-status:
 kafka-topics:
 	./scripts/kafka-topics.sh
 
-# One-time, per machine: a native amd64 buildx builder over SSH, so the image
-# build is not emulated. BUILD_HOST is any amd64 docker host you can ssh to.
-#   BUILD_HOST=ubuntu@build.example.com make builder-setup
+# One-time local OrbStack builder setup; BUILD_HOST/SSH builders are rejected.
+#   DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make builder-setup
 builder-setup:
 	./scripts/ci/ci.sh builder setup
 

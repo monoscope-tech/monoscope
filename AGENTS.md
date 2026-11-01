@@ -218,9 +218,11 @@ Docker context and builder endpoint before an image build. The endpoint must
 use the local `orbstack` context, whose Docker socket is local to this Mac.
 
 Set `DOCKER_CONTEXT=orbstack` and `MONOSCOPE_BUILDER=monoscope-local-amd64`
-explicitly for `ci-signoff`, `deploy-image`, and `ship`. An omitted builder can
-select the legacy SSH builder. Do not run `BUILD_HOST=… make builder-setup`.
-Create the local builder with the procedure in `docs/local-ci.md`.
+explicitly for `ci-signoff`, `deploy-image`, and `ship`. Image generation checks
+the Mac host, local Unix socket, builder name, and sole OrbStack node; missing or
+remote builders cannot fall back. GitHub can reuse a completed image, but a cache
+miss fails instead of compiling there. `builder-setup` creates only a local node
+and rejects `BUILD_HOST`. See the procedure in `docs/local-ci.md`.
 
 ### Sign off locally before updating the pull request — never push and wait on CI
 

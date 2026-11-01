@@ -16,6 +16,23 @@ current_master() {
   [ "${current%%[[:space:]]*}" = "$1" ] || die "$1 is stale; master is ${current%%[[:space:]]*}"
 }
 
+require_local_context() {
+  local endpoint
+  [ -z "${GITHUB_ACTIONS:-}" ] || die "production image is missing; generate it locally on the Mac before updating the pull request"
+  [ "$(uname -s)" = Darwin ] || die "production image generation requires the Mac's local OrbStack builder"
+  [ "${DOCKER_CONTEXT:-}" = orbstack ] || die "set DOCKER_CONTEXT=orbstack for local image generation"
+  [ "${MONOSCOPE_BUILDER:-}" = monoscope-local-amd64 ] || die "set MONOSCOPE_BUILDER=monoscope-local-amd64; remote builders and fallback builds are prohibited"
+  endpoint=$(docker context inspect orbstack --format '{{.Endpoints.docker.Host}}') || die "cannot inspect the local OrbStack context"
+  case "$endpoint" in unix:///*) ;; *) die "the OrbStack context must use a local Unix socket" ;; esac
+}
+
+require_local_builder() {
+  local endpoints
+  require_local_context
+  endpoints=$(docker buildx inspect "$MONOSCOPE_BUILDER" | awk '$1 == "Endpoint:" {print $2}') || die "local builder is unavailable; follow docs/local-ci.md"
+  [ "$endpoints" = orbstack ] || die "the local builder must have exactly one node using the orbstack endpoint"
+}
+
 build() {
   local sha tree deps runtime fingerprint digest metadata
   sha=$(git rev-parse "${1:-HEAD}^{commit}")
@@ -30,15 +47,10 @@ build() {
     # Alias the merge SHA without modifying the image's build revision/provenance.
     docker buildx imagetools create --prefer-index=false -t "$IMAGE:$sha" "$IMAGE@$digest"
   else
+    require_local_builder
     metadata=$(mktemp -t monoscope-image.XXXXXX)
     trap 'rm -f "$metadata"' EXIT
-    set --
-    if [ -n "${MONOSCOPE_BUILDER:-}" ] && docker buildx inspect "$MONOSCOPE_BUILDER" >/dev/null 2>&1; then
-      set -- --builder "$MONOSCOPE_BUILDER"
-    fi
-    # Exporting the registry cache costs minutes. It only helps a builder without its own
-    # cache (a fresh GitHub runner); a developer's builder keeps one locally.
-    [ -z "${GITHUB_ACTIONS:-}" ] || set -- "$@" --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max"
+    set -- --builder "$MONOSCOPE_BUILDER"
     git archive "$sha" | docker buildx build "$@" --platform linux/amd64 -f Dockerfile \
       --build-arg "DEPS_IMAGE=$deps" --build-arg "RUNTIME_IMAGE=$runtime" \
       --build-arg "GIT_HASH=$sha" --build-arg "GIT_COMMIT_DATE=$(git show -s --format=%cI HEAD)" \
@@ -60,10 +72,12 @@ build() {
 
 case "${1:-}" in
   build) shift; build "$@" ;;
+  local-context) require_local_context ;;
+  local-builder) require_local_builder ;;
   current-master) current_master "$2" ;;
   latest)
     current_master "$2"
     docker buildx imagetools create --prefer-index=false -t "$IMAGE:latest" "$IMAGE@$3"
     ;;
-  *) die "usage: release.sh build [sha] | current-master sha | latest sha digest" ;;
+  *) die "usage: release.sh build [sha] | local-context | local-builder | current-master sha | latest sha digest" ;;
 esac
