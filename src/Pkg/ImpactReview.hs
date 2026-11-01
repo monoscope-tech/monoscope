@@ -443,7 +443,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
             whenM (Reviews.currentRun run) do
               current <- require =<< Git.getPullRequest conn ref run.number
               unless (sameRevision pr current) $ throwError $ ReviewFailure "PR changed before publication"
-              void $ require =<< first AI.toolDenialMessage <$> AI.authorizeRunOperation context Catalog.ExternalPublication
+              void $ require . first AI.toolDenialMessage =<< AI.authorizeRunOperation context Catalog.ExternalPublication
               let runLink = "\n\n[Run and artifacts](" <> T.dropWhileEnd (== '/') cfg.hostUrl <> "/p/" <> run.projectId.toText <> "/ai/runs/" <> context.rootId.toText <> ")"
                   body = marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink
                   comment = Operation.ReviewComment run.id body
@@ -454,7 +454,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                       ( AI.EffectfulOperation do
                           unless (frozen == comment) $ throwIO Investigations.OperationProposalChanged
                           requireActive run execution
-                          void $ require =<< first AI.toolDenialMessage <$> AI.authorizeRunOperation context Catalog.ExternalPublication
+                          void $ require . first AI.toolDenialMessage =<< AI.authorizeRunOperation context Catalog.ExternalPublication
                           published <- require =<< Git.publishPullRequestComment conn ref run.number existing frozen.body
                           pure $ Right $ AE.toJSON published
                       )
