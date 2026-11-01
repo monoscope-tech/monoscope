@@ -913,7 +913,7 @@ runSlackEvidence config tool operation proposed = do
         field <- case filter (`KM.member` fields) ["channel_id", "channel"] of
           [name] -> pure name
           _ -> Except.throwError SlackSchemaUnsupported
-        unless (all (`elem` (["channel_id", "channel", "team_id", "ts", "thread_ts", "message_ts", "oldest", "latest", "limit", "cursor"] :: [Text])) $ Map.keys proposed) $ Except.throwError SlackSchemaUnsupported
+        unless (all (`elem` (["channel_id", "channel", "team_id", "ts", "thread_ts", "message_ts", "oldest", "latest", "limit", "cursor", "response_format"] :: [Text])) $ Map.keys proposed) $ Except.throwError SlackSchemaUnsupported
         unless ((KM.lookup field fields >>= (^? key "type" . _String)) == Just "string") $ Except.throwError SlackSchemaUnsupported
         for_ (["ts", "thread_ts", "message_ts"] :: [Text]) $ \name -> for_ (Map.lookup name proposed) $ \value ->
           unless (isJust $ value ^? _String >>= Incidents.slackTimestamp) $ Except.throwError SlackReadArgumentsInvalid
@@ -1013,6 +1013,15 @@ buildSystemPrompt config now =
       timezoneSection = "\nUSER TIMEZONE: " <> fromMaybe "UTC" config.timezone <> "\nCURRENT TIME (UTC): " <> show now <> "\n"
       facetSection = formatFacetContext config.facetContext
       customSection = fromMaybe "" config.customContext
+      slackSection = case config.access of
+        SlackInvestigationAccess request -> slackRequest request.teamId request.channelId (Just request.threadTs)
+        SlackCommandAccess request _ -> slackRequest request.teamId request.channelId Nothing
+        (MemberAccess{}; ServiceAccess; SlackAccess{}) -> ""
+      slackRequest :: Text -> Text -> Maybe Text -> Text
+      slackRequest team channel thread =
+        "\nSLACK REQUEST CONTEXT\n"
+          <> encodeText (AE.object ["team_id" AE..= team, "channel_id" AE..= channel, "thread_ts" AE..= thread])
+          <> "\nUse this channel_id for current-channel Slack reads. In a channel conversation, read only this channel; workspace-wide search requires the requester's own DM or a personal web conversation.\n"
       projectSection = maybe "" (const "\nPROJECT OPERATIONS\nUse list_metrics to discover metric names before querying an unknown metric. The default active page covers the last seven days; active=false lists older metrics. Report the selected scope and whether more pages exist. For other project operations, search_project_tools by task, then get_project_tool_schema for the selected operation before calling it. Their project scope is fixed by authorization; never infer that data absent from a tool result does not exist in another project.\n") config.projectTools
       localNow fmt = toText $ formatTime defaultTimeLocale fmt $ utcToLocalTimeTZ (fromMaybe utcTZ $ TZ.tzByName . encodeUtf8 =<< config.timezone) now
       documentsSection = bool "" documentsGuide $ isJust $ documentConversation config
@@ -1034,7 +1043,7 @@ buildSystemPrompt config now =
                   ]
             _ -> []
       actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ Issues.permitsActions (invocationPolicy config.invocationMode)
-   in basePrompt <> timezoneSection <> facetSection <> customSection <> projectSection <> investigationSection <> documentsSection <> actionsSection
+   in basePrompt <> timezoneSection <> facetSection <> customSection <> slackSection <> projectSection <> investigationSection <> documentsSection <> actionsSection
 
 
 -- | Strip markdown code blocks from LLM responses

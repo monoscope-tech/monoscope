@@ -1117,15 +1117,20 @@ spec = around withTestResources do
                 | scenario `elem` [CurrentThread, ThreadLocatorRejected] = "slack_read_thread"
                 | otherwise = "slack_read_channel"
               secret = "current-channel-mcp-evidence"
-              schema = AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object ["channel_id" AE..= AE.object ["type" AE..= ("string" :: Text)], "team_id" AE..= AE.object ["type" AE..= ("string" :: Text)], "message_ts" AE..= AE.object ["type" AE..= ("string" :: Text)]]]
+              schema = AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object ["channel_id" AE..= AE.object ["type" AE..= ("string" :: Text)], "team_id" AE..= AE.object ["type" AE..= ("string" :: Text)], "message_ts" AE..= AE.object ["type" AE..= ("string" :: Text)], "response_format" AE..= AE.object ["type" AE..= ("string" :: Text)]]]
           mode <- interactiveInvocation tr testPid conversation "Read Slack context" Issues.Observe
           let config = (agentConfig testPid){AI.access = access, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.sourceConfig = Just tr.trATCtx.config{Config.slackAppId = "A123MONOSCOPE"}}
-              arguments = Map.fromList $ [("channel_id", AE.String "G_OTHER"), ("channel", AE.String "G_ALTERNATE"), ("team_id", AE.String "T_OTHER"), ("message_ts", AE.String $ if scenario == ThreadLocatorRejected then "https://example.invalid/another-channel" else "1735689600.000001")] <> [("url", AE.String "https://example.invalid/another-channel") | scenario == ExtraTargetArgument]
+              arguments = Map.fromList $ [("channel_id", AE.String "G_OTHER"), ("channel", AE.String "G_ALTERNATE"), ("team_id", AE.String "T_OTHER"), ("message_ts", AE.String $ if scenario == ThreadLocatorRejected then "https://example.invalid/another-channel" else "1735689600.000001")] <> [("url", AE.String "https://example.invalid/another-channel") | scenario == ExtraTargetArgument] <> [("response_format", AE.String "detailed") | scenario `elem` [CurrentChannel, CurrentThread]]
               provider = interpose @ELLM.LLM \_ -> \case
-                ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == Chat.Tool] of
-                  [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" $ Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String operation)]}
-                  [_] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "bounded-read" "function" $ Chat.ToolFunction operation arguments]}
-                  results -> Chat.Message Chat.Assistant (if any (T.isInfixOf secret) results then "Channel evidence read." else "Slack read unavailable.") Chat.defaultMessageData
+                ELLM.CallAgenticChat history _ _ -> do
+                  let system = case history of message :| _ -> message.content
+                  liftIO $ system `shouldSatisfy` T.isInfixOf ("\"channel_id\":\"" <> channel <> "\"")
+                  liftIO $ system `shouldSatisfy` T.isInfixOf "\"team_id\":\"T_MCP_CHANNEL\""
+                  liftIO $ system `shouldSatisfy` T.isInfixOf (if command then "\"thread_ts\":null" else "\"thread_ts\":\"1735689600.000001\"")
+                  pure $ Right $ case [message.content | message <- toList history, message.role == Chat.Tool] of
+                    [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" $ Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String operation)]}
+                    [_] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "bounded-read" "function" $ Chat.ToolFunction operation arguments]}
+                    results -> Chat.Message Chat.Assistant (if any (T.isInfixOf secret) results then "Channel evidence read." else "Slack read unavailable.") Chat.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Left "No title model"
                 ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
               transport = withSlackMCPResponses \options request -> do
@@ -1134,6 +1139,7 @@ spec = around withTestResources do
                   request ^? key "params" . key "arguments" . key "channel_id" . _String `shouldBe` Just channel
                   request ^? key "params" . key "arguments" . key "team_id" . _String `shouldBe` Just "T_MCP_CHANNEL"
                   request ^? key "params" . key "arguments" . key "channel" `shouldBe` Nothing
+                  request ^? key "params" . key "arguments" . key "response_format" . _String `shouldBe` Just "detailed"
                   runQueryEffect tr (Investigations.conversationEvidenceAudience testPid conversation) >>= (`shouldBe` Investigations.SlackChannelAudience (fromRightShow $ Slack.slackChannel "T_MCP_CHANNEL" channel))
                 pure $ slackMCPReply request (slackMCPTools schema) $ AE.object ["content" AE..= V.singleton (AE.object ["type" AE..= ("text" :: Text), "text" AE..= secret])]
               membership = withHTTPResponses \_ url ->
