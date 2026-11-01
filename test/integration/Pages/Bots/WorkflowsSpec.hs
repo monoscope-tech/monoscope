@@ -219,7 +219,7 @@ spec = around withTestResources do
             document = AE.object ["title" AE..= ("Payments" :: Text), "body" AE..= ("Retries need an idempotency key." :: Text)]
             write version content = Chat.ToolCall (show version) "function" $ Chat.ToolFunction "write_project_memory" $ fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (version :: Int)), ("document", content)]
             calls = [write 0 document, Chat.ToolCall "read" "function" $ Chat.ToolFunction "read_project_memory" $ fromList [("pageId", AE.toJSON page)], Chat.ToolCall "list" "function" $ Chat.ToolFunction "list_project_memory" mempty, Chat.ToolCall "foreign" "function" $ Chat.ToolFunction "read_project_memory" $ fromList [("pageId", AE.toJSON privatePage)], write 0 (document & key "body" . _String .~ "A stale edit must not replace the observation.")]
-            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.maxIterations = 6}
+            config = (agentConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.sourceConfig = Just tr.trATCtx.config{Config.hostUrl = "https://qa.monoscope.test"}, AI.maxIterations = 6}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> do
                 let evidence = [message.content | message <- toList history, message.role == Chat.Tool]
@@ -228,6 +228,10 @@ spec = around withTestResources do
                   [] -> do
                     liftIO $ length evidence `shouldBe` 5
                     liftIO $ all (T.isInfixOf "Retries need an idempotency key.") (take 2 evidence) `shouldBe` True
+                    for_ (take 2 evidence) \response -> liftIO do
+                      let value = AE.decodeStrict @AE.Value $ encodeUtf8 response
+                      (value >>= (^? key "url" . _String)) `shouldBe` Just ("https://qa.monoscope.test/p/" <> testPid.toText <> "/wiki/" <> page.toText)
+                      (value >>= (^? key "document" . key "title" . _String)) `shouldBe` Just "Payments"
                     liftIO $ maybe False (T.isInfixOf "Payments") (viaNonEmpty head $ drop 2 evidence) `shouldBe` True
                     liftIO $ maybe False (T.isInfixOf "not found") (viaNonEmpty head $ drop 3 evidence) `shouldBe` True
                     liftIO $ not (any (T.isInfixOf "Private project body") evidence) `shouldBe` True

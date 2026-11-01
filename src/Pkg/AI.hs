@@ -71,7 +71,7 @@ module Pkg.AI (
   stripCodeBlock,
 ) where
 
-import Control.Lens ((.~), (^.), (^..), (^?))
+import Control.Lens ((%~), (.~), (^.), (^..), (^?))
 import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
@@ -141,7 +141,7 @@ import System.Config qualified as Config
 import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (throwIO, withException)
-import Utils (encodeText, nonEmptyT, unwrapJsonPrimValue)
+import Utils (encodeText, hostPath, nonEmptyT, unwrapJsonPrimValue)
 import Web.ApiTypes (ApiActor (..))
 import Web.MCP qualified as MCP
 
@@ -1669,10 +1669,14 @@ executeToolAt cursor config tc = do
     inConversation f = maybe (pure $ ToolResult "Documents are only available in Monoscope conversations." Nothing) f $ documentConversation config
     readMemory arguments = case getTextArg "pageId" arguments >>= idFromText of
       Nothing -> pure $ toolError "read_project_memory" "invalid or missing 'pageId'" arguments
-      Just pageId -> maybe "Wiki page not found in the authorized project." encodeText . viaNonEmpty head <$> Memory.pageHistory config.projectId pageId
+      Just pageId -> maybe "Wiki page not found in the authorized project." memoryResult . viaNonEmpty head <$> Memory.pageHistory config.projectId pageId
     writeMemory arguments = case (invocationContext config.invocationMode, parseMaybe (AE.parseJSON @Memory.Edit) $ AE.toJSON arguments) of
-      (Just context, Just edit) -> either memoryError encodeText <$> Memory.writeRunPageTx config.projectId context.id edit
+      (Just context, Just edit) -> either memoryError memoryResult <$> Memory.writeRunPageTx config.projectId context.id edit
       _ -> pure "Wiki writes require a durable run, pageId, version and bounded document."
+    memoryResult page = encodeText $ AE.toJSON page & _Object %~ KM.insert "url" (AE.String url)
+      where
+        path = "/p/" <> config.projectId.toText <> "/wiki/" <> Memory.pagePathText page.path
+        url = maybe path (\cfg -> hostPath cfg.hostUrl path) config.sourceConfig
     memoryError = \case
       Memory.StaleRevision -> "Wiki page changed; read the current revision before retrying."
       Memory.PathTaken -> "Wiki page path is already in use."
