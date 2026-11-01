@@ -348,3 +348,15 @@ A native command submitted during the expired callback tunnel failed with Slack'
 Resubmitting the original unchanged schema request creates run `33242503-50b6-4ee8-8e99-3d80bc7a5d13` on runtime snapshot `87c8bce79`. It calls `get_schema` once, succeeds, and publishes exactly one explanation with matching Slack metadata and timestamp. There is no query-error reply, chart, retained widget, or external operation. Authenticated conversation access returns HTTP 200. The raw provider still returns prose in its optional query field; the shared opaque KQL decoder rejects that field and retains the explanation. This closes the previously recorded schema-only response-quality failure.
 
 A duplicate production `RunConversation` job for that completed run is consumed without changing run, journal, publication, operation, or model-usage counts. This verifies worker replay, not a duplicate native slash callback. The owner-only `slack-schema-typed-live-acceptance.json` contains the actual checkpoint, published reply, and counts; `slack-schema-typed-current-source.json` pins the runtime sources. The [widget review](2026-11-01-slack-widgets.md) records failing-first application coverage and the canonical 504-case bot run. Whole-branch signoff and the remaining plan acceptance are still open.
+
+
+## Populated chart and stat acceptance
+
+The native Monoscope QA DM now passes useful two-widget delivery and a follow-up in the same conversation.
+Synthetic PostgreSQL batches of 12, 18, and 14 produce a populated line chart and a stat of 44.
+The live check exposed a blank stat PNG; the signed-endpoint regression fails before the fix and passes afterward.
+Both corrected images visibly display in the actual Slack thread.
+The authenticated run inspector retains both widgets; anonymous access redirects.
+Duplicate-event replay adds no run, journal entry, publication, or action.
+The callback queue drains, there are no mutating operations, and the original routine policy is restored.
+See [populated Slack charts](2026-11-01-slack-populated-charts.md) for the exact test and live evidence.

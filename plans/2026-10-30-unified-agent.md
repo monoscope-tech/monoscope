@@ -611,6 +611,17 @@ The shared-package change required one reload per root watcher; ordinary test re
 See [guest timeout bounds](../docs/reviews/2026-11-01-guest-command-timeouts.md) for failing-first proof and limits.
 Whole-branch review, remaining live acceptance, Linux/KVM, arbitrary host loss, final local signoff, and publication remain open.
 
+Populated chart delivery now passes in the actual Monoscope Slack QA thread.
+A native request and follow-up each produce two retained widgets and three acknowledged reply parts.
+The line chart shows synthetic batches of 12, 18, and 14; the stat visibly displays 44.
+The live check exposed a blank stat PNG, now covered by a failing-first signed-endpoint regression.
+Both PNG export cases pass in light and dark appearance, including zero and missing data.
+The web inspector retains both widgets, anonymous access redirects, and duplicate replay changes no counts.
+The original routine policy is restored, and the temporary test-server adapter is removed.
+The review Page preserves its prior content and adds the actual Slack capture at sequence 68.
+See [populated Slack charts](../docs/reviews/2026-11-01-slack-populated-charts.md).
+Whole-branch reviews, remaining live scenarios, Linux/KVM, host loss, final signoff, and publication remain open.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

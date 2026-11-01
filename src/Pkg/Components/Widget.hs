@@ -1440,6 +1440,23 @@ unitValueExprJS unitWord unitM
 
 -- Function to convert Widget to ECharts options
 widgetToECharts :: Widget -> AE.Value
+widgetToECharts widget
+  | widget.wType == WTStat =
+      AE.object
+        [ "graphic"
+            AE..= AE.object
+              [ "type" AE..= ("text" :: Text)
+              , "left" AE..= ("center" :: Text)
+              , "top" AE..= ("middle" :: Text)
+              , "style"
+                  AE..= AE.object
+                    [ "text" AE..= maybe "N/A" (\value -> formatStatValue value $ fromMaybe "" widget.unit) (widget.dataset >>= (.value))
+                    , "fontSize" AE..= (48 :: Int)
+                    , "fontWeight" AE..= (600 :: Int)
+                    , "fill" AE..= (if widget.theme == Just "dark" then "#cbd5e1" else "#334155" :: Text)
+                    ]
+              ]
+        ]
 widgetToECharts widget =
   let isStat = widget.wType == WTTimeseriesStat
       axisVisibility = not isStat

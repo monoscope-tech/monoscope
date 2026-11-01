@@ -288,6 +288,23 @@ spec = sequential $ aroundAll withTestResources do
         (rows :: [(Projects.ProjectId, Text, Aeson AE.Value)]) `shouldMatchList` [(testPid, "Safari", Aeson $ AE.object ["browser" AE..= ("Safari" :: Text), "errors" AE..= ("true" :: Text)]), (pid, "Safari", Aeson $ AE.object ["browser" AE..= ("Safari" :: Text), "errors" AE..= ("false" :: Text)])]
 
   describe "Widget PNG export" do
+    it "statPng_rendersTheScalarInsteadOfAnEmptyChart" \tr ->
+      for_ [(profile, appearance) | profile <- [Nothing, Just Widget.PngSlack], appearance <- ["light", "dark"]] \(profile, appearance) -> do
+        pngs <- forM [Nothing, Just 0, Just 44] \value -> do
+          let widget =
+                (def :: Widget.Widget)
+                  { Widget.wType = Widget.WTStat
+                  , Widget.pngProfile = profile
+                  , Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.value = value}
+                  }
+              encoded = decodeUtf8 @Text $ AE.encode widget
+              signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded
+          response <- toBaseServantResponse tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just signature) [("appearance", Just appearance)]
+          let bytes = Servant.getResponse response
+          LBS.take 8 bytes `shouldBe` "\137PNG\r\n\26\n"
+          pure bytes
+        length (ordNub pngs) `shouldBe` 3
+
     it "tablePng_aggregateChangesAlterRenderedImage" \tr ->
       for_ [Nothing, Just Widget.PngSlack] \profile -> do
         pngs <- forM [2, 3 :: Int] \count -> do
