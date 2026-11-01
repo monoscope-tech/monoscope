@@ -157,14 +157,14 @@ spec = around withTestResources do
         let convId = UUIDId UUID.nil
             web = (AI.defaultAgenticConfig testPid){AI.conversationId = Just convId, AI.conversationType = Just Issues.CTWeb}
             routine = web{AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) False, AI.timezone = Just "America/New_York"}
-            call cfg name args = AI.executeToolCall cfg (LLM.ToolCall "call" "function" $ LLM.ToolFunction name $ Map.fromList args)
+            tool cfg name args = AI.executeToolCall cfg (LLM.ToolCall "call" "function" $ LLM.ToolFunction name $ Map.fromList args)
         (saved, appended, listed, readBack, slack, routinePrompt) <- runTestBg frozenTime tr do
           void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-          saved <- call web "save_artifact" [("key", "Checkout Review"), ("title", "Checkout review"), ("content", "## Summary\nAll good.")]
-          appended <- call web "save_artifact" [("key", "checkout-review"), ("mode", "append"), ("content", "## Follow-up\nLatency recovered.")]
-          listed <- call web "read_artifact" []
-          readBack <- call web "read_artifact" [("key", "checkout-review")]
-          slack <- call web{AI.conversationType = Just Issues.CTSlackThread} "save_artifact" [("key", "x"), ("content", "y")]
+          saved <- tool web "save_artifact" [("key", "Checkout Review"), ("title", "Checkout review"), ("content", "## Summary\nAll good.")]
+          appended <- tool web "save_artifact" [("key", "checkout-review"), ("mode", "append"), ("content", "## Follow-up\nLatency recovered.")]
+          listed <- tool web "read_artifact" []
+          readBack <- tool web "read_artifact" [("key", "checkout-review")]
+          slack <- tool web{AI.conversationType = Just Issues.CTSlackThread} "save_artifact" [("key", "x"), ("content", "y")]
           Issues.insertChatMessage testPid convId Issues.ChatAssistant "Saved." Nothing $ Just $ AE.toJSON ([ToolCallInfo "save_artifact" mempty "" saved.rawData] :: [ToolCallInfo])
           (system, _, _) <- AI.agenticSetup routine "run" "model"
           pure (saved, appended, listed, readBack, slack, system.content)
@@ -185,18 +185,18 @@ spec = around withTestResources do
       it "agentDocuments_boundedPerDocumentPerConversationAndPerRead" \tr -> do
         let convId = UUIDId UUID.nil
             web = (AI.defaultAgenticConfig testPid){AI.conversationId = Just convId, AI.conversationType = Just Issues.CTWeb}
-            call name args = (.formatted) <$> AI.executeToolCall web (LLM.ToolCall "call" "function" $ LLM.ToolFunction name $ Map.fromList args)
+            tool name args = (.formatted) <$> AI.executeToolCall web (LLM.ToolCall "call" "function" $ LLM.ToolFunction name $ Map.fromList args)
             big = AE.String $ T.replicate 90_000 "x"
         (badMode, longRead, overflow, overCap, existing) <- runTestBg frozenTime tr do
           void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-          badMode <- call "save_artifact" [("key", "a"), ("content", "y"), ("mode", "merge")]
-          void $ call "save_artifact" [("key", "log"), ("content", big)]
-          void $ call "save_artifact" [("key", "log"), ("mode", "append"), ("content", big)]
-          longRead <- call "read_artifact" [("key", "log")]
-          overflow <- call "save_artifact" [("key", "log"), ("mode", "append"), ("content", big)]
+          badMode <- tool "save_artifact" [("key", "a"), ("content", "y"), ("mode", "merge")]
+          void $ tool "save_artifact" [("key", "log"), ("content", big)]
+          void $ tool "save_artifact" [("key", "log"), ("mode", "append"), ("content", big)]
+          longRead <- tool "read_artifact" [("key", "log")]
+          overflow <- tool "save_artifact" [("key", "log"), ("mode", "append"), ("content", big)]
           void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content) SELECT #{testPid}, #{convId}, 'doc-' || n, 'Doc', '' FROM generate_series(1, #{Issues.maxArtifactsPerConversation - 1}) n|]
-          overCap <- call "save_artifact" [("key", "one-too-many"), ("content", "y")]
-          existing <- call "save_artifact" [("key", "log"), ("content", "rewritten")]
+          overCap <- tool "save_artifact" [("key", "one-too-many"), ("content", "y")]
+          existing <- tool "save_artifact" [("key", "log"), ("content", "rewritten")]
           pure (badMode, longRead, overflow, overCap, existing)
         badMode `shouldBe` "mode must be replace or append."
         T.length longRead `shouldSatisfy` (< 41_000)

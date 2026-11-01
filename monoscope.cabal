@@ -274,6 +274,7 @@ extra-source-files:
     static/migrations/0255_dashboard_saved_views.sql
     static/migrations/0256_ai_artifacts.sql
     static/migrations/0257_ad_attribution.sql
+    static/migrations/0258_app_now_inlinable_created_at_defaults.sql
     test/fixtures/github-app-test.pem
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json

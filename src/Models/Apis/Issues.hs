@@ -39,6 +39,7 @@ module Models.Apis.Issues (
   RuntimeExceptionData (..),
   QueryAlertData (..),
   ThresholdDirection (..),
+  meetsThreshold,
   ChatMessageKind (..),
   IssueSeverity (..),
   LogPatternRateChangeData (..),
@@ -546,6 +547,15 @@ data ThresholdDirection = Above | Below
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" ThresholdDirection
+
+
+-- | Whether a recorded value crossed its threshold in the alert's direction.
+--
+-- >>> (meetsThreshold Below 5 5, meetsThreshold Below 5 10, meetsThreshold Above 5 5, meetsThreshold Above 5 3)
+-- (True,False,True,False)
+meetsThreshold :: ThresholdDirection -> Double -> Double -> Bool
+meetsThreshold Below threshold v = v <= threshold
+meetsThreshold Above threshold v = v >= threshold
 
 
 -- | Query Alert issue data

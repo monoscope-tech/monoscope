@@ -18,6 +18,10 @@ module Pages.Issues (
   linkPostH,
   triagePostH,
   issueDetailGetH,
+  IssueDetail (..),
+  IssueView (..),
+  IssueSample (..),
+  IssueSampleResult (..),
   IssueBulkForm (..),
   issueAcknowledgeButton,
   issueArchiveButton,
@@ -364,11 +368,11 @@ issueBulkActionsPostH pid action durationM valueM items = do
       addRespHeaders Bulk
 
 
-issueDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe EventRef -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe EventRef -> ATAuthCtx (RespHeaders (PageCtx IssueDetail))
 issueDetailGetH pid issueId firstM sinceM fromM toM eventM = issueDetailCore pid firstM eventM (TimePicker.TimePicker sinceM fromM toM) $ Issues.selectIssueById pid issueId
 
 
-issueDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe EventRef -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe EventRef -> ATAuthCtx (RespHeaders (PageCtx IssueDetail))
 issueDetailHashGetH pid issueId firstM sinceM fromM toM eventM = issueDetailCore pid firstM eventM (TimePicker.TimePicker sinceM fromM toM) $ Issues.selectIssueByHash pid issueId Issues.AnyIssue
 
 
@@ -389,7 +393,7 @@ instance FromHttpApiData EventRef where
     _ -> Left "event: <trace_id>@<iso-8601 timestamp>"
 
 
-issueDetailCore :: Projects.ProjectId -> Maybe Text -> Maybe EventRef -> TimePicker.TimePicker -> ATAuthCtx (Maybe Issues.Issue) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailCore :: Projects.ProjectId -> Maybe Text -> Maybe EventRef -> TimePicker.TimePicker -> ATAuthCtx (Maybe Issues.Issue) -> ATAuthCtx (RespHeaders (PageCtx IssueDetail))
 issueDetailCore pid firstM eventM requestedRange fetchIssue = do
   (sess, project, bw) <- mkPageCtx pid
   issueM <- fetchIssue
@@ -398,12 +402,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
   let baseBwconf = bw{pageTitle = "Issues", menuItem = Just "Issues"}
   case issueM of
     Nothing ->
-      addRespHeaders
-        $ PageCtx baseBwconf{pageTitle = "Issue Not Found"}
-        $ emptyState_
-          def{icon = Just "circle-xmark", action = ESLink ("/p/" <> pid.toText <> "/issues") "Back to Issues"}
-          "Issue not found"
-          "This issue may have been resolved, merged, or the link may be outdated."
+      addRespHeaders $ PageCtx baseBwconf{pageTitle = "Issue Not Found"} $ IssueNotFound pid
     Just issue -> do
       -- The default window is anchored on the issue's own last activity rather than
       -- on @now@, and is kept narrow. Both halves are load-bearing, and the width is
@@ -545,7 +544,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       secret <- (.env.apiKeyEncryptionSecretKey) <$> ask @AuthContext
       addRespHeaders
         $ PageCtx bwconf
-        $ issueDetailPage
+        $ IssueFound
         $ let view = IssueView{pid, issue, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom, rollupSqlSig = Nothing}
            in view{rollupSqlSig = issueRollupSql view <&> \(sql, _) -> Widget.sqlSignature secret pid Nothing (Just sql)}
   where
@@ -590,9 +589,10 @@ data IssueSampleResult
   | SampleUnavailable
   | SampleEmpty
   | SampleFound UTCTime (V.Vector Text) (Maybe Text)
+  deriving stock (Eq, Show)
 
 
-issueSampleGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+issueSampleGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders IssueSample)
 issueSampleGetH pid issueId sinceM fromM toM = do
   _ <- Projects.sessionAndProject pid
   issueM <- Issues.selectIssueById pid issueId
@@ -627,8 +627,17 @@ issueSampleGetH pid issueId sinceM fromM toM = do
                   )
               _ -> Exception.throwIO $ userError "Unable to read telemetry statement timeout"
       let sample = maybe SampleUnavailable (maybe SampleEmpty \(at, PGArray summary, sampleTraceId) -> SampleFound at (V.fromList summary) sampleTraceId) result
-      addRespHeaders $ issueSampleCard_ pid snapshot sample
-    _ -> addRespHeaders $ p_ [class_ "px-4 text-sm text-textWeak"] "This issue has no event sample."
+      addRespHeaders $ IssueSample pid snapshot sample
+    _ -> addRespHeaders NoIssueSample
+
+
+data IssueSample = IssueSample Projects.ProjectId (Maybe Text) IssueSampleResult | NoIssueSample
+
+
+instance ToHtml IssueSample where
+  toHtml (IssueSample pid snapshot sample) = toHtml $ issueSampleCard_ pid snapshot sample
+  toHtml NoIssueSample = p_ [class_ "px-4 text-sm text-textWeak"] "This issue has no event sample."
+  toHtmlRaw = toHtml
 
 
 issueSampleCard_ :: Projects.ProjectId -> Maybe Text -> IssueSampleResult -> Html ()
@@ -900,6 +909,20 @@ issueFactRow_ now issue errM patternM =
         ]
 
 
+data IssueDetail = IssueNotFound Projects.ProjectId | IssueFound IssueView
+
+
+instance ToHtml IssueDetail where
+  toHtml (IssueNotFound pid) =
+    toHtml
+      $ emptyState_
+        def{icon = Just "circle-xmark", action = ESLink ("/p/" <> pid.toText <> "/issues") "Back to Issues"}
+        "Issue not found"
+        "This issue may have been resolved, merged, or the link may be outdated."
+  toHtml (IssueFound v) = toHtml $ issueDetailPage v
+  toHtmlRaw = toHtml
+
+
 -- | Everything the issue detail page's sections read. Bundled because the
 -- values travelled together through every section as positional arguments.
 --
@@ -1169,7 +1192,7 @@ issueAggregate_ v@IssueView{..} = do
             span_ [class_ "ml-2 text-sm text-textWeak break-all"] $ toHtml path
     Just (Issues.QueryAlertP d) -> do
       let below = d.thresholdType == Issues.Below
-          meetsThreshold = if below then d.actualValue <= d.thresholdValue else d.actualValue >= d.thresholdValue
+          meetsThreshold = Issues.meetsThreshold d.thresholdType d.thresholdValue d.actualValue
       sideBySide_ (issueChartCard_ "Alert Query" "h-56" (Just d.thresholdValue) Nothing d.queryExpression)
         $ contextCard_ "p-4 flex flex-col gap-4" "Recorded evaluation" do
           div_ [class_ "flex items-start gap-6"] do

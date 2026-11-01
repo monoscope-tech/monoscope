@@ -1,0 +1,204 @@
+<form class="mx-4 mb-3 p-2 rounded-lg border border-strokeWeak bg-fillWeaker/40 flex flex-col gap-2 focus-within:border-strokeBrand-strong" data-hx-post="/p/<uuid>/issues/<uuid>/comment" data-hx-swap="none">
+<textarea name="body" required rows="2" placeholder="Add a comment…" aria-label="Comment" class="textarea textarea-ghost textarea-sm w-full min-h-16 border-0 bg-transparent shadow-none focus:outline-none text-base sm:text-sm">
+</textarea>
+<button type="submit" class="btn btn-xs btn-ghost bg-fillWeak border-0 shadow-none self-end">Comment</button>
+</form>
+<div class="px-4 pb-3 space-y-1">
+<h4 class="text-2xs font-semibold text-textWeak uppercase tracking-wide">External links</h4>
+<a href="https://github.com/acme/shop/issues/42" target="_blank" rel="noopener" class="flex items-center gap-1.5 text-sm text-textBrand hover:underline truncate">
+<svg class="icon w-3 h-3 shrink-0" width="1em" height="1em" viewBox="0 0 640 512">
+<g>
+<path d="M580.3 267.2c56.2-56.2 56.2-147.3 0-203.5C526.8 10.2 440.9 7.3 383.9 57.2l-6.1 5.4c-10 8.7-11 23.9-2.3 33.9s23.9 11 33.9 2.3l6.1-5.4c38-33.2 95.2-31.3 130.9 4.4c37.4 37.4 37.4 98.1 0 135.6L433.1 346.6c-37.4 37.4-98.2 37.4-135.6 0c-35.7-35.7-37.6-92.9-4.4-130.9l4.7-5.4c8.7-10 7.7-25.1-2.3-33.9s-25.1-7.7-33.9 2.3l-4.7 5.4c-49.8 57-46.9 142.9 6.6 196.4c56.2 56.2 147.3 56.2 203.5 0L580.3 267.2zM59.7 244.8C3.5 301 3.5 392.1 59.7 448.2c53.6 53.6 139.5 56.4 196.5 6.5l6.1-5.4c10-8.7 11-23.9 2.3-33.9s-23.9-11-33.9-2.3l-6.1 5.4c-38 33.2-95.2 31.3-130.9-4.4c-37.4-37.4-37.4-98.1 0-135.6L207 165.4c37.4-37.4 98.1-37.4 135.6 0c35.7 35.7 37.6 92.9 4.4 130.9l-5.4 6.1c-8.7 10-7.7 25.1 2.3 33.9s25.1 7.7 33.9-2.3l5.4-6.1c49.9-57 47-142.9-6.5-196.5c-56.2-56.2-147.3-56.2-203.5 0L59.7 244.8z"/>
+</g>
+</svg>
+<span class="text-xs text-textWeak shrink-0">GitHub</span>
+<span class="truncate">Cart crash</span>
+</a>
+</div>
+<details class="px-4 pb-3">
+<summary class="text-xs text-textBrand cursor-pointer list-none [&amp;::-webkit-details-marker]:hidden">+ Link issue</summary>
+<form class="mt-2 flex flex-col gap-2" data-hx-post="/p/<uuid>/issues/<uuid>/link" data-hx-swap="none">
+<input type="url" name="url" required placeholder="https://github.com/org/repo/issues/42" aria-label="Issue URL" class="input input-sm w-full">
+<input type="text" name="title" placeholder="Title (optional)" aria-label="Link title" class="input input-sm w-full">
+<button type="submit" class="btn btn-xs self-end">Link</button>
+</form>
+</details>
+<div class="px-4 pb-3 space-y-1 text-xs leading-relaxed text-textWeak break-words">
+<h4 class="text-2xs font-semibold uppercase tracking-wide">People</h4>
+<details class="group/people">
+<summary class="flex items-center gap-2 cursor-pointer list-none [&amp;::-webkit-details-marker]:hidden rounded focus-visible:outline-2 focus-visible:outline-offset-2">
+<span class="flex -space-x-1">
+<img src="/api/avatar/<uuid>" alt="firstName lastName" title="firstName lastName" loading="lazy" width="24" height="24" class="h-6 w-6 rounded-full bg-fillWeak outline outline-1 outline-black/10 dark:outline-white/10">
+</span>
+<span>1 person</span>
+<svg class="icon w-3 h-3 group-open/people:rotate-180" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M239 401c9.4 9.4 24.6 9.4 33.9 0L465 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-175 175L81 175c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9L239 401z" fill="currentColor" />
+</g>
+</svg>
+</summary>
+<div class="pt-2 space-y-1">
+<p>Participating: firstName lastName</p>
+</div>
+</details>
+</div>
+<div class="border-t border-strokeWeak">
+<div class="px-4 py-2 flex items-center gap-2 bg-fillWeaker/40">
+<svg class="icon w-3 h-3 text-textWeak" width="1em" height="1em" viewBox="0 0 20 20">
+<g>
+<path d="M10.0001 13.3334V10.0001M10.0001 6.66675H10.0084M18.3334 10.0001C18.3334 14.6025 14.6025 18.3334 10.0001 18.3334C5.39771 18.3334 1.66675 14.6025 1.66675 10.0001C1.66675 5.39771 5.39771 1.66675 10.0001 1.66675C14.6025 1.66675 18.3334 5.39771 18.3334 10.0001Z" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+</g>
+</svg>
+<span class="block text-2xs font-semibold text-textWeak uppercase tracking-wide ">Timeline</span>
+</div>
+</div>
+<div class="p-4 flex flex-col gap-0">
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillSuccess-weak text-fillSuccess-strong">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M256 163.9L222.1 130l-12-12c-21.7-21.7-52.5-31.6-82.7-26.5C81.6 99.1 48 138.7 48 185.1l0 5.8c0 23.9 8.4 46.9 23.5 65.1l51.1 0c6.5 0 12.3-3.9 14.8-9.8l31.8-76.3c2.5-5.9 8.2-9.8 14.5-9.8s12.2 3.6 14.8 9.4l58.2 129.3 48.9-97.9c2.7-5.4 8.3-8.8 14.3-8.8s11.6 3.4 14.3 8.8l23.2 46.3c2.7 5.4 8.2 8.8 14.3 8.8l68.7 0c15.1-18.2 23.5-41.2 23.5-65.1l0-5.8c0-46.4-33.6-86-79.3-93.6c-30.2-5-61.1 4.8-82.7 26.5l-12 12L256 163.9zM456 288l-48.6 0-35.6 0c-18.2 0-34.8-10.3-42.9-26.5L320 243.8l-49.7 99.4c-2.8 5.5-8.5 9-14.6 8.8s-11.7-3.8-14.3-9.4L184.6 216.2 167 258.5C159.5 276.3 142 288 122.7 288l-18 0L56 288l-20.3 0C12.8 261.1 0 226.7 0 190.9l0-5.8c0-69.9 50.5-129.5 119.4-141C165 36.5 211.4 51.4 244 84c0 0 0 0 0 0l12 12 12-12s0 0 0 0c32.6-32.6 79-47.5 124.6-39.9C461.5 55.6 512 115.2 512 185.1l0 5.8c0 35.8-12.8 70.1-35.7 97.1L456 288zM68.6 320l70.3 0L256 429.3 373.1 320l70.3 0L283.7 469.1c-7.5 7-17.4 10.9-27.7 10.9s-20.2-3.9-27.7-10.9L68.6 320z"/>
+</g>
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Recovered</span>
+<span class="text-xs text-textWeak">in 1 min</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillWeaker text-textWeak">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em" viewBox="0 0 640 640">
+<g>
+<path d="M88 64C101.3 64 112 74.7 112 88L112 166.1L139.1 139C239.1 39 401.2 39 501.1 139C601 239 601.1 401.1 501.1 501C401.1 600.9 239 601 139.1 501C124.2 486.1 111.5 469.8 101 452.5C94.1 441.2 97.8 426.4 109.1 419.5C120.4 412.6 135.2 416.3 142.1 427.6C150.6 441.6 160.9 454.9 173.1 467C254.3 548.2 386 548.2 467.3 467C548.6 385.8 548.5 254.1 467.3 172.8C386.1 91.5 254.4 91.6 173.1 172.8L146 199.9L224.2 199.9C237.5 199.9 248.2 210.6 248.2 223.9C248.2 237.2 237.5 247.9 224.2 247.9L88 248C74.7 248 64 237.3 64 224L64 88C64 74.7 74.7 64 88 64z" />
+</g>
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Unacknowledged by test@monoscope.tech</span>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillWeaker text-textWeak">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em">
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Archived by test@monoscope.tech</span>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillWeaker text-textWeak">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em">
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Unarchived by test@monoscope.tech</span>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillBrand-weak text-fillBrand-strong">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em" viewBox="0 0 640 512">
+<g>
+<path d="M224 48a80 80 0 1 1 0 160 80 80 0 1 1 0-160zm0 208A128 128 0 1 0 224 0a128 128 0 1 0 0 256zm-45.7 96h91.4c65.7 0 120.1 48.7 129 112H49.3c8.9-63.3 63.3-112 129-112zm0-48C79.8 304 0 383.8 0 482.3C0 498.7 13.3 512 29.7 512H418.3c16.4 0 29.7-13.3 29.7-29.7C448 383.8 368.2 304 269.7 304H178.3zM504 312c0 13.3 10.7 24 24 24s24-10.7 24-24V248h64c13.3 0 24-10.7 24-24s-10.7-24-24-24H552V136c0-13.3-10.7-24-24-24s-24 10.7-24 24v64H440c-13.3 0-24 10.7-24 24s10.7 24 24 24h64v64z" />
+</g>
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Assigned by test@monoscope.tech</span>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillWeaker text-textWeak">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em">
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Archived by test@monoscope.tech</span>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillBrand-weak text-fillBrand-strong">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em" viewBox="0 0 640 640">
+<g>
+<path d="M73 39.1C63.6 29.7 48.4 29.7 39.1 39.1C29.8 48.5 29.7 63.7 39 73.1L567 601.1C576.4 610.5 591.6 610.5 600.9 601.1C610.2 591.7 610.3 576.5 600.9 567.2L513.1 479.4C530.6 476.1 543.9 460.7 543.9 442.3C543.9 435.6 542.1 429 538.8 423.3L517 385.7C498 353.1 488 316.1 488 278.4L488 263.9C488 179.3 425.4 109.2 344 97.6L344 87.9C344 74.6 333.3 63.9 320 63.9C306.7 63.9 296 74.6 296 87.9L296 97.6C253.8 103.6 216.6 125.4 190.6 156.7L73 39.1zM224.8 190.9C246.7 162.4 281.2 144 320 144C386.3 144 440 197.7 440 264L440 278.5C440 324.7 452.3 370 475.5 409.9L488.4 432L465.8 432L224.7 190.9zM164.5 409.9C184 376.5 195.8 339.2 199.1 300.9L152.4 254.2C152.2 257.5 152.1 260.8 152.1 264.1L152.1 278.6C152.1 316.3 142.1 353.3 123.1 385.9L101.1 423.2C97.7 429 96 435.5 96 442.2C96 463.1 112.9 480 133.8 480L378.2 480L330.2 432L151.6 432L164.5 409.9zM252.1 528C262 556 288.7 576 320 576C351.3 576 378 556 387.9 528L252.1 528z" />
+</g>
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Acknowledged by test@monoscope.tech</span>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillBrand-weak text-fillBrand-strong">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M123.6 391.3c12.9-9.4 29.6-11.8 44.6-6.4c26.5 9.6 56.2 15.1 87.8 15.1c124.7 0 208-80.5 208-160s-83.3-160-208-160S48 160.5 48 240c0 32 12.4 62.8 35.7 89.2c8.6 9.7 12.8 22.5 11.8 35.5c-1.4 18.1-5.7 34.7-11.3 49.4c17-7.9 31.1-16.7 39.4-22.7zM21.2 431.9c1.8-2.7 3.5-5.4 5.1-8.1c10-16.6 19.5-38.4 21.4-62.9C17.7 326.8 0 285.1 0 240C0 125.1 114.6 32 256 32s256 93.1 256 208s-114.6 208-256 208c-37.1 0-72.3-6.4-104.1-17.9c-11.9 8.7-31.3 20.6-54.3 30.6c-15.1 6.6-32.3 12.6-50.1 16.1c-.8 .2-1.6 .3-2.4 .5c-4.4 .8-8.7 1.5-13.2 1.9c-.2 0-.5 .1-.7 .1c-5.1 .5-10.2 .8-15.3 .8c-6.5 0-12.3-3.9-14.8-9.9c-2.5-6-1.1-12.8 3.4-17.4c4.1-4.2 7.8-8.7 11.3-13.5c1.7-2.3 3.3-4.6 4.8-6.9l.3-.5z"/>
+</g>
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Commented by test@monoscope.tech</span>
+<p class="text-sm text-textStrong whitespace-pre-wrap break-words bg-fillWeaker rounded px-2 py-1">Rolled back the cart service</p>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillBrand-weak text-fillBrand-strong">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em" viewBox="0 0 640 512">
+<g>
+<path d="M580.3 267.2c56.2-56.2 56.2-147.3 0-203.5C526.8 10.2 440.9 7.3 383.9 57.2l-6.1 5.4c-10 8.7-11 23.9-2.3 33.9s23.9 11 33.9 2.3l6.1-5.4c38-33.2 95.2-31.3 130.9 4.4c37.4 37.4 37.4 98.1 0 135.6L433.1 346.6c-37.4 37.4-98.2 37.4-135.6 0c-35.7-35.7-37.6-92.9-4.4-130.9l4.7-5.4c8.7-10 7.7-25.1-2.3-33.9s-25.1-7.7-33.9 2.3l-4.7 5.4c-49.8 57-46.9 142.9 6.6 196.4c56.2 56.2 147.3 56.2 203.5 0L580.3 267.2zM59.7 244.8C3.5 301 3.5 392.1 59.7 448.2c53.6 53.6 139.5 56.4 196.5 6.5l6.1-5.4c10-8.7 11-23.9 2.3-33.9s-23.9-11-33.9-2.3l-6.1 5.4c-38 33.2-95.2 31.3-130.9-4.4c-37.4-37.4-37.4-98.1 0-135.6L207 165.4c37.4-37.4 98.1-37.4 135.6 0c35.7 35.7 37.6 92.9 4.4 130.9l-5.4 6.1c-8.7 10-7.7 25.1 2.3 33.9s25.1 7.7 33.9-2.3l5.4-6.1c49.9-57 47-142.9-6.5-196.5c-56.2-56.2-147.3-56.2-203.5 0L59.7 244.8z"/>
+</g>
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Linked an external issue by test@monoscope.tech</span>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillBrand-weak text-fillBrand-strong">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em" viewBox="0 0 640 640">
+<g>
+<path d="M73 39.1C63.6 29.7 48.4 29.7 39.1 39.1C29.8 48.5 29.7 63.7 39 73.1L567 601.1C576.4 610.5 591.6 610.5 600.9 601.1C610.2 591.7 610.3 576.5 600.9 567.2L513.1 479.4C530.6 476.1 543.9 460.7 543.9 442.3C543.9 435.6 542.1 429 538.8 423.3L517 385.7C498 353.1 488 316.1 488 278.4L488 263.9C488 179.3 425.4 109.2 344 97.6L344 87.9C344 74.6 333.3 63.9 320 63.9C306.7 63.9 296 74.6 296 87.9L296 97.6C253.8 103.6 216.6 125.4 190.6 156.7L73 39.1zM224.8 190.9C246.7 162.4 281.2 144 320 144C386.3 144 440 197.7 440 264L440 278.5C440 324.7 452.3 370 475.5 409.9L488.4 432L465.8 432L224.7 190.9zM164.5 409.9C184 376.5 195.8 339.2 199.1 300.9L152.4 254.2C152.2 257.5 152.1 260.8 152.1 264.1L152.1 278.6C152.1 316.3 142.1 353.3 123.1 385.9L101.1 423.2C97.7 429 96 435.5 96 442.2C96 463.1 112.9 480 133.8 480L378.2 480L330.2 432L151.6 432L164.5 409.9zM252.1 528C262 556 288.7 576 320 576C351.3 576 378 556 387.9 528L252.1 528z" />
+</g>
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Acknowledged by test@monoscope.tech</span>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillError-weak text-fillError-strong">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em" viewBox="0 0 640 640">
+<g>
+<path d="M320 64C306.7 64 296 74.7 296 88L296 97.7C214.6 109.3 152 179.4 152 264L152 278.5C152 316.2 142 353.2 123 385.8L101.1 423.2C97.8 429 96 435.5 96 442.2C96 463.1 112.9 480 133.8 480L506.2 480C527.1 480 544 463.1 544 442.2C544 435.5 542.2 428.9 538.9 423.2L517 385.7C498 353.1 488 316.1 488 278.4L488 263.9C488 179.3 425.4 109.2 344 97.6L344 87.9C344 74.6 333.3 63.9 320 63.9zM488.4 432L151.5 432L164.4 409.9C187.7 370 200 324.6 200 278.5L200 264C200 197.7 253.7 144 320 144C386.3 144 440 197.7 440 264L440 278.5C440 324.7 452.3 370 475.5 409.9L488.4 432zM252.1 528C262 556 288.7 576 320 576C351.3 576 378 556 387.9 528L252.1 528z" />
+</g>
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Alerted</span>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+<div class="flex items-start gap-3 relative pl-4 pb-4 last:pb-0 border-l border-strokeWeak ml-2">
+<div class="absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-fillSuccess-weak text-fillSuccess-strong">
+<svg class="icon w-2.5 h-2.5" width="1em" height="1em" viewBox="0 0 448 512">
+<g>
+<path d="M337 81c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-143 143L97 127c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l80 80c9.4 9.4 24.6 9.4 33.9 0L337 81zM441 201c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-247 247L41 295c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9L143 465c9.4 9.4 24.6 9.4 33.9 0L441 201z"/>
+</g>
+</svg>
+</div>
+<div class="flex flex-col gap-0.5 min-w-0">
+<span class="text-sm text-textStrong">Resolved by test@monoscope.tech</span>
+<span class="text-xs text-textWeak">just now</span>
+</div>
+</div>
+</div>
