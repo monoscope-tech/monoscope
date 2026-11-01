@@ -2507,6 +2507,43 @@ spec = around withTestResources do
           _ -> expectationFailure "Expected the stream to close with its last acknowledged task slots"
         for_ ["chat.startStream", "chat.stopStream", "chat.postMessage"] \method -> length [() | (url, _) <- requests, url == "https://slack.com/api/" <> method] `shouldBe` 1
 
+      it "slackStream_unobservedAppendDoesNotPreventClose" \tr -> do
+        let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_STREAM"}}}
+            target = Investigations.ProgressTarget testPid "T_STREAM_CLOSE" "CSTREAMCLOSE" "1735689600.000001" "1735689602.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"
+            scope = Investigations.Scope (UUIDId UUID.nil) testPid target.userId target.teamId target.channelId target.threadTs target.messageTs
+        setupSlackAgent resources testPid target.teamId
+        previous <- either (fail . toString) pure $ Investigations.mkStreamFrame "Investigating" [Investigations.Task "0" "Assess the evidence" Investigations.InProgress]
+        final <- either (fail . toString) pure $ Investigations.mkStreamFrame "Investigation response ready" [Investigations.Task "0" "Assess the evidence" Investigations.Complete]
+        timestamp <- maybe (fail "Invalid fixture timestamp") pure $ Investigations.slackTimestamp "1735689610.000001"
+        Just publication <- runQueryEffect resources $ Investigations.claimProgress target $ Just (frozenTime, previous)
+        let pending = Investigations.StreamPending $ Investigations.AppendStream (Investigations.StreamSession timestamp frozenTime) previous final
+        runQueryEffect resources (Investigations.commitStream publication.publicationId (Investigations.StreamPending $ Investigations.StartStream frozenTime previous) pending) >>= (`shouldBe` True)
+        runTestBg frozenTime resources $ for_ [Investigations.ModelStarted 0, Investigations.ModelReturned 0 $ Investigations.ModelAnswered $ Chat.Message Chat.Assistant "Done." Chat.defaultMessageData, Investigations.InvestigationFinished] $ Investigations.recordEvent scope
+        let observed =
+              AE.object
+                [ "app_id" AE..= ("A_STREAM" :: Text)
+                , "bot_id" AE..= ("B_STREAM" :: Text)
+                , "ts" AE..= timestamp
+                , "thread_ts" AE..= target.threadTs
+                , "streaming_state" AE..= ("in_progress" :: Text)
+                , "blocks" AE..= AE.Array [AE.object ["type" AE..= ("plan" :: Text), "title" AE..= Investigations.streamTitle previous, "tasks" AE..= fmap (\task -> task{Investigations.task_id = publication.publicationId.toText <> ":" <> task.task_id}) (Investigations.streamTasks previous)]]
+                ]
+            transport = withHTTPResponses \_ endpoint -> pure $ Just $ case endpoint of
+              "https://slack.com/api/conversations.replies" -> AE.encode $ AE.object ["ok" AE..= True, "messages" AE..= AE.Array [observed]]
+              "https://slack.com/api/chat.stopStream" -> AE.encode $ AE.object ["ok" AE..= True, "ts" AE..= timestamp]
+              _ -> "{\"ok\":true}"
+            work = runTestBgRecordingHTTP frozenTime resources . transport
+        (requests, _) <- work $ SlackPage.refreshSlackProgress publication.publicationId
+        Just confirmed <- runQueryEffect resources $ Investigations.loadProgress target
+        case confirmed.delivery of
+          Investigations.StreamDelivery (Investigations.StreamClosed actual) -> actual `shouldBe` timestamp
+          _ -> fail $ "Unobserved append prevented stream closure: " <> show confirmed.delivery
+        map fst requests `shouldBe` ["https://slack.com/api/conversations.replies", "https://slack.com/api/chat.stopStream", "https://slack.com/api/chat.update"]
+        let statuses = [status | (url, body) <- requests, url == "https://slack.com/api/chat.stopStream", Just value <- [AE.decode @AE.Value body], status <- value ^.. key "chunks" . _Array . traverse . key "status" . _String]
+        statuses `shouldBe` ["complete"]
+        (replayed, _) <- work $ SlackPage.refreshSlackProgress publication.publicationId
+        map fst replayed `shouldBe` ["https://slack.com/api/chat.update"]
+
       for_ [False, True] $ \lostStop ->
         it ("slackStream_recoversAccepted" <> if lostStop then "StopWithoutRepeatingIt" else "AppendWithoutRepeatingIt") \tr -> do
           let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_STREAM"}}}

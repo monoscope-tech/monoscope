@@ -1713,25 +1713,28 @@ updateProgressStream envCfg target publicationId checkpoint close progress = do
       let stop = close || progress.limited || now >= addUTCTime (9 * 60) session.startedAt
           retainedFrame = if progress.limited then previous else frame
           request = (if stop then Investigations.StopStream else Investigations.AppendStream) session previous retainedFrame
-          completion =
-            AE.object
-              [ "metadata" AE..= AE.object ["event_type" AE..= ("monoscope_investigation_progress" :: Text), "event_payload" AE..= AE.object ["publication_id" AE..= publicationId]]
-              , "blocks" AE..= filter (\block -> block ^? key "type" . _String /= Just "plan") (Progress.payload envCfg.hostUrl target.projectId progress ^.. key "blocks" . _Array . traverse)
-              ]
       when (stop || previous /= frame) do
-        retained <- Investigations.commitStream publicationId checkpoint $ Investigations.StreamPending request
-        unless retained $ throwIO SlackPublicationPending
-        AI.requireAgentAccess access target.projectId
-        confirmed <- sendProgressStream connection target publicationId request completion
+        confirmed <- transition connection $ Investigations.StreamPending request
         case confirmed of
           Investigations.StreamClosed timestamp -> refreshObservedProgress envCfg.hostUrl target $ Incidents.slackTimestampText timestamp
           _ -> pass
     Investigations.StreamClosed timestamp -> refreshObservedProgress envCfg.hostUrl target $ Incidents.slackTimestampText timestamp
     Investigations.StreamPending{} -> do
-      recovered <- reconcileProgressStream connection
+      recovered <- reconcileProgressStream connection frame
       updateProgressStream envCfg target publicationId recovered close progress
   where
-    reconcileProgressStream slackData = do
+    completion =
+      AE.object
+        [ "metadata" AE..= AE.object ["event_type" AE..= ("monoscope_investigation_progress" :: Text), "event_payload" AE..= AE.object ["publication_id" AE..= publicationId]]
+        , "blocks" AE..= filter (\block -> block ^? key "type" . _String /= Just "plan") (Progress.payload envCfg.hostUrl target.projectId progress ^.. key "blocks" . _Array . traverse)
+        ]
+    transition connection next = do
+      unlessM (Investigations.commitStream publicationId checkpoint next) $ throwIO SlackPublicationPending
+      case next of
+        Investigations.StreamPending request -> sendProgressStream connection target publicationId request completion
+        (Investigations.StreamReady{}; Investigations.StreamClosed{}) -> pure next
+    reconcileProgressStream slackData finalFrame = do
+      now <- Time.currentTime
       let appId = envCfg.slackAppId
       search <- Investigations.loadProgressSearch publicationId >>= maybe (throwIO SlackPublicationPending) pure
       unless (not (T.null appId) && search.teamId == target.teamId && search.channelId == target.channelId && search.threadTs == Just target.threadTs && search.oldest == target.messageTs) $ throwIO AI.AgentAccessDenied
@@ -1751,20 +1754,20 @@ updateProgressStream envCfg target publicationId checkpoint close progress = do
             next <- case (phase, checkpoint) of
               (Investigations.StreamCompleted, _) -> Just $ Investigations.StreamClosed timestamp
               (Investigations.StreamInProgress, Investigations.StreamPending (Investigations.StartStream startedAt frame)) -> Just $ Investigations.StreamReady (Investigations.StreamSession timestamp startedAt) frame
-              (Investigations.StreamInProgress, Investigations.StreamPending (Investigations.AppendStream session _ frame)) -> do
-                guard $ any (\block -> block ^? key "type" . _String == Just "plan" && block ^? key "title" . _String == Just (Investigations.streamTitle frame)) $ fromMaybe [] message.blocks
-                guard $ all (\task -> task{Investigations.task_id = prefix <> task.task_id} `elem` tasks) $ Investigations.streamTasks frame
-                Just $ Investigations.StreamReady session frame
+              (Investigations.StreamInProgress, Investigations.StreamPending (Investigations.AppendStream session previous frame)) ->
+                if any (\block -> block ^? key "type" . _String == Just "plan" && block ^? key "title" . _String == Just (Investigations.streamTitle frame)) (fromMaybe [] message.blocks)
+                  && all (\task -> task{Investigations.task_id = prefix <> task.task_id} `elem` tasks) (Investigations.streamTasks frame)
+                  then Just $ Investigations.StreamReady session frame
+                  else do
+                    guard $ close || progress.limited || now >= addUTCTime (9 * 60) session.startedAt
+                    Just $ Investigations.StreamPending $ Investigations.StopStream session previous $ if progress.limited then previous else finalFrame
               _ -> Nothing
             pure (timestamp, next)
           params = [("channel", target.channelId), ("ts", target.threadTs), ("oldest", target.messageTs), ("include_all_metadata", "true"), ("limit", "15")] <> foldMap (pure . ("cursor",)) search.cursor
       outcome <- readPublicationHistory slackData "conversations.replies" publicationId params search.cursor matching
       AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
       case outcome of
-        PublicationFound next -> do
-          confirmed <- Investigations.commitStream publicationId checkpoint next
-          unless confirmed $ throwIO SlackPublicationPending
-          pure next
+        PublicationFound next -> transition slackData next
         PublicationCursor cursor -> Investigations.saveProgressSearchCursor search cursor >> throwIO SlackPublicationPending
 
 
