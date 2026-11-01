@@ -4255,6 +4255,27 @@ spec = around withTestResources $ describe "Production impact reviews" do
       grantEvidence.requestedBy `shouldBe` Just user
       runQueryEffect tr (isJust <$> Fixes.claimJob testPid revokedId) `shouldReturn` False
     readIORef revokedReplies `shouldReturn` replicate 2 (True, True, True, True, True)
+    let interrupted = uid 40
+        retainedPage = uid 41
+    runQueryEffect tr (Fixes.createRun testPid interrupted issue mapping.id base image) `shouldReturn` Just interrupted
+    runQueryEffect tr (Fixes.queueJob testPid user interrupted) `shouldReturn` True
+    tryAny (run interrupted "--app-job-wiki-exit") >>= (`shouldSatisfy` isLeft)
+    [Only sharedId] <- withResource tr.trPool $ \conn -> query conn "SELECT agent_run_id FROM projects.issue_fix_jobs WHERE run_id = ?" (Only interrupted)
+    Just stopped <- runQueryEffect tr $ Issues.getRoutineRun testPid sharedId
+    stopped.status `shouldBe` Issues.RunFailed
+    [retainedOperation] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid sharedId
+    [revisionBefore] <- runQueryEffect tr $ Memory.pageHistory testPid retainedPage
+    (_, ()) <- run interrupted "--app-job-wiki-retry"
+    Just recovered <- runQueryEffect tr $ Issues.getRoutineRun testPid sharedId
+    recovered.status `shouldBe` Issues.RunSucceeded
+    [resumedOperation] <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid sharedId
+    (resumedOperation.id, AE.toJSON resumedOperation.proposal, AE.toJSON resumedOperation.outcome) `shouldBe` (retainedOperation.id, AE.toJSON retainedOperation.proposal, AE.toJSON retainedOperation.outcome)
+    runQueryEffect tr (Memory.pageHistory testPid retainedPage) `shouldReturn` [revisionBefore]
+    revisionBefore.author `shouldBe` Memory.Run sharedId
+    Just retriedFix <- runQueryEffect tr $ Fixes.completedResult testPid interrupted
+    retainedOperation.proposal.call `shouldSatisfy` \case
+      Operation.NativeCall (Operation.WriteWiki proposal) -> retriedFix.attemptId /= proposal.attemptId
+      _ -> False
     requireMinio tr pendingWith $ withSystemTempDirectory "retained-fix-media" \mediaRoot -> do
       current <- runQueryEffect tr (Fixes.getRun testPid fid) >>= either (fail . show) (maybe (fail "Completed run missing") pure)
       artifacts <- maybe (fail "Verified comparison missing") pure $ Fixes.artifactRequest "https://github.com/impact-org/checkout.git" current completed

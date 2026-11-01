@@ -17,6 +17,13 @@ const rpc = async (tag, contents) => {
 };
 const step = (value) => ({ id: randomUUID(), attemptId: request.attemptId, step: value });
 const candidate = { revision: 'b'.repeat(40), rootCause: 'The runtime drops retry tokens.' };
+if (mode === '--app-job-wiki-exit' || mode === '--app-job-wiki-retry') {
+  const edit = { pageId: '0000005f-0000-0000-0000-000000000029', version: 0, document: { title: 'Interrupted fix knowledge', body: 'Retain one revision across worker attempts.' } };
+  const saved = await rpc('Knowledge', { tag: 'ProjectMemory', contents: { tag: 'Write', contents: edit } });
+  assert.equal(saved.Right?.version, 1, 'retry must receive the original successful wiki response');
+  assert.deepEqual(saved.Right.document, edit.document);
+  if (mode === '--app-job-wiki-exit') process.exit(1);
+}
 assert.ok(Object.hasOwn(await rpc('Phase', step({ tag: 'RestartReproduction' })), 'Right'));
 if (mode.startsWith('--app-job')) {
   const observation = await rpc('Query', { service: 'test-service', query: '| summarize events = count()' });
