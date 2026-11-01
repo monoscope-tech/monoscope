@@ -913,20 +913,6 @@ currentSlackGrant settings subject grant = do
   pure $ maybe False ((== grant.accessToken) . (.accessToken)) current
 
 
-loadSlackEvidence :: (DB es, Time.Time :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Eff es AgenticConfig
-loadSlackEvidence config = do
-  result <-
-    Exception.handle (\(SlackRateLimit.SlackRateLimited deadline) -> pure $ Left $ SlackProviderCoolingDown deadline)
-      $ slackGrant config
-      >>= \case
-        Left failure -> pure $ Left failure
-        Right (settings, subject, grant) -> do
-          catalog <- first SlackProviderFailure <$> SlackRateLimit.withRateLimits subject.teamId (SlackMCP.discoverReads settings.slackAppId grant)
-          current <- currentSlackGrant settings subject grant
-          pure $ if current then catalog else Left (SlackCredentialFailure Integrations.SlackNotConnected)
-  pure config{slackEvidence = result}
-
-
 runSlackEvidence :: (DB es, IOE :> es, Time.Time :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Catalog.Tool AgentOperation -> SlackMCP.SlackRead -> Map.Map Text AE.Value -> Eff es ToolResult
 runSlackEvidence config tool operation proposed = do
   outcome <- runExceptT do
@@ -1053,17 +1039,6 @@ discoverableCatalog config = Map.filter visible $ agentCatalog config
       isJust tool.agentPolicy && case tool.dispatch of
         (ProjectOperation{}; SlackEvidenceOperation{}) -> True
         LocalOperation operation -> operation `elem` (RunSqlQuery : initialLocalOperations config)
-
-
-toolFunction :: OAITool.Tool -> Maybe OAITool.Function
-toolFunction (OAITool.Tool_Function fn) = Just fn
-toolFunction (OAITool.Tool_Code_Interpreter _) = Nothing
-toolFunction (OAITool.Tool_File_Search _) = Nothing
-toolFunction OAITool.Tool_Web_Search = Nothing
-
-
-toolName :: OAITool.Tool -> Maybe Text
-toolName = fmap (.name) . toolFunction
 
 
 -- * Main Entry Point
@@ -1249,6 +1224,18 @@ runAgenticChatWithHistory suppliedConfig requestedInput model apiKey = do
   case (config.access, config.conversationId) of
     (SlackInvestigationAccess investigation, Just convId) -> traverse (Investigations.saveAnswer $ Investigations.Turn config.projectId convId investigation.userId investigation.messageTs) result
     _ -> pure result
+  where
+    loadSlackEvidence config = do
+      result <-
+        Exception.handle (\(SlackRateLimit.SlackRateLimited deadline) -> pure $ Left $ SlackProviderCoolingDown deadline)
+          $ slackGrant config
+          >>= \case
+            Left failure -> pure $ Left failure
+            Right (settings, subject, grant) -> do
+              catalog <- first SlackProviderFailure <$> SlackRateLimit.withRateLimits subject.teamId (SlackMCP.discoverReads settings.slackAppId grant)
+              current <- currentSlackGrant settings subject grant
+              pure $ if current then catalog else Left (SlackCredentialFailure Integrations.SlackNotConnected)
+      pure config{slackEvidence = result}
 
 
 -- | Each attempt gets its own journal; a retry never overwrites partial evidence.
@@ -1355,10 +1342,13 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
     record event = for_ journal (`Investigations.recordEvent` event)
     continue updated = runAgenticLoopRaw updated journal config apiKey
     advance next = Investigations.commitProgress turn journal next Nothing >>= (`continue` next)
+    toolName = \case
+      OAITool.Tool_Function fn -> Just fn.name
+      (OAITool.Tool_Code_Interpreter{}; OAITool.Tool_File_Search{}; OAITool.Tool_Web_Search) -> Nothing
     requestedProjectTool call
       | LLM.toolFunctionName (LLM.toolCallFunction call) == "get_project_tool_schema" = do
           name <- getTextArg "name" $ LLM.toolFunctionArguments $ LLM.toolCallFunction call
-          projectToolDef config name
+          modelToolDef <$> Map.lookup name (discoverableCatalog config)
       | otherwise = Nothing
 
 
@@ -1371,10 +1361,6 @@ modelToolDef tool =
       , OAITool.parameters = Just tool.inputSchema
       , OAITool.strict = Just False
       }
-
-
-projectToolDef :: AgenticConfig -> Text -> Maybe OAITool.Tool
-projectToolDef config name = modelToolDef <$> Map.lookup name (discoverableCatalog config)
 
 
 mkToolResultMsg :: LLM.ToolCall -> ToolResult -> LLM.Message

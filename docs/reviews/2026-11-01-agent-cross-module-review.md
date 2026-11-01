@@ -211,6 +211,26 @@ Every checksum matches, with no missing or unknown file. No migration is run by 
 The branch also adds migration files without changing any migration already on master.
 Its receipt is `scripts/local/unified-agent-qa-migration-audit.json`.
 
+### Shared agent loop and discovery follow-up
+
+The complete AI module review follows response parsing, discovery, requester grants, retained model context, tool execution, operation admission, and output preparation.
+The first distillation pass localizes the single-caller Slack discovery helper and combines tool-name extraction beside its caller.
+It also removes the schema pass-through wrapper. The change removes 14 lines.
+The second pass finds no further material reduction within this module.
+
+Discovery preserves grant refresh, cooldown handling, current-token checks, and effect order.
+Tool loading preserves the retained request and appends only newly discovered definitions.
+Global deduplication is rejected because it would also rewrite existing retained request entries.
+The evasion and locality passes retain the opaque query/widget decoders, precise external effects, common operation guard, and local helper scope.
+No warning suppression, dependency, or client-side behavior is added.
+
+Both watchers compile the updated source. Pinned formatting, HLint, and whitespace checks pass.
+The existing stream, audience, incident, and API selection passes 155 examples in 60.6209 seconds.
+Four focused discovery examples then pass in 1.2608 seconds.
+All 279 recorded Haskell and manifest inputs remain unchanged through the focused run.
+The source receipt is `scripts/local/agent-discovery-locality-source.json`.
+Final exact-tree release checks remain separate.
+
 The source record is `scripts/local/agent-cross-module-review-source.json`.
 No runtime source changed during this review, so no additional test run is claimed.
 The preceding chart checkpoint passes 489 bot cases and 2,083 doctest examples.
