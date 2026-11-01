@@ -61,7 +61,12 @@ The supported `make test-doctests` run passes with 2,076 examples tried and no e
 The previous checkpoint contained 2,068 examples.
 The saved log is `scripts/local/review-interpreter-doctests.log`.
 The four source hashes remain unchanged after this run.
-The full native review group remains in progress.
+The full native review group then passes with all three Slack workflow cases.
+The result is **53 examples, 0 failures**, in 347.5340 seconds.
+This includes all 50 native review cases.
+The log is `scripts/local/review-interpreter-full-53-green.log`.
+The four reviewed source hashes remain unchanged through the full run.
+The earlier mixed failure remains recorded separately.
 
 ## Remaining boundaries
 
