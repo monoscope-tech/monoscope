@@ -1,6 +1,6 @@
 # Unified Monoscope agent
 
-Status: implementation in progress, 1 November 2026. This plan controls the complete branch scope; the checklist below does not replace the product contract.
+Status: final verification in progress, 1 November 2026. This plan controls the complete branch scope; the checklist below does not replace the product contract.
 
 Consolidate Slack, web, scheduled, and event work around one capability catalog, authority evaluator, executor, operation ledger, conversation, and artifact experience. Newly enabled background routines act autonomously within their member's current authority. Optional selected review must not become a mandatory permission loop.
 
