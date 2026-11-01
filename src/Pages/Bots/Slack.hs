@@ -25,6 +25,7 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Tuple.Extra (dupe)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Hasql.Interpolate qualified as HI
@@ -82,7 +83,7 @@ import System.Config (AuthContext (config, env, pool), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, ProjectToolCtx, RespHeaders, addRespHeaders)
 import UnliftIO (timeout, withRunInIO)
 import UnliftIO.Exception (Handler (..), bracket, catch, catches, finally, throwIO, tryAny)
-import Utils (encodeText, toUriStr)
+import Utils (encodeText, hostPath, toUriStr)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
 
@@ -848,7 +849,7 @@ classifySlackEvent workspaceId wire = do
     ("app_mention", Nothing) | isNothing header.bot_id -> human AppMention
     ("monoscope_message_shortcut", Nothing) -> do
       source <- AE.parseJSON @SlackShortcutEvent $ AE.toJSON wire
-      when (source.shortcut.team.id /= workspaceId || source.shortcut.callback_id /= "monoscope-investigate-message" || any T.null [source.shortcut.trigger_id, source.shortcut.team.id, source.shortcut.user.id, source.shortcut.channel.id] || any (isNothing . Incidents.slackTimestamp) (source.shortcut.message.ts : maybeToList source.shortcut.message.thread_ts)) $ fail "Invalid shortcut source"
+      when (source.shortcut.team.id /= workspaceId || source.shortcut.callback_id /= "monoscope-investigate-message" || any @[] T.null [source.shortcut.trigger_id, source.shortcut.team.id, source.shortcut.user.id, source.shortcut.channel.id] || any (isNothing . Incidents.slackTimestamp) (source.shortcut.message.ts : maybeToList source.shortcut.message.thread_ts)) $ fail "Invalid shortcut source"
       decoded <- human Relude.id
       unless (decoded == shortcutMessage source.shortcut) $ fail "Shortcut input does not match its signed source"
       pure $ MessageShortcut decoded
@@ -1076,7 +1077,7 @@ processSlackEventWithTools projectTools receiptId =
         $ AE.object
           [ "channel" AE..= request.channelId
           , "user" AE..= request.slackUserId
-          , "text" AE..= ("Link your Monoscope account and choose a project before investigating: <" <> T.dropWhileEnd (== '/') envCfg.hostUrl <> "/slack/link/" <> request.id.toText <> "|Link account>. This private link expires in 15 minutes.")
+          , "text" AE..= ("Link your Monoscope account and choose a project before investigating: <" <> hostPath envCfg.hostUrl ("slack/link/" <> request.id.toText) <> "|Link account>. This private link expires in 15 minutes.")
           ]
       Integrations.markSlackLinkDelivered request.id
 
@@ -1226,7 +1227,7 @@ processSlackEventWithTools projectTools receiptId =
                       ( \_ ->
                           race_
                             (forever $ requireRunAuthority >> Concurrent.threadDelay 500_000)
-                            (withInvestigationProgress envCfg.hostUrl slackData access deliverAnswer)
+                            (withInvestigationProgress envCfg slackData access deliverAnswer)
                       )
                     pure True
                 )
@@ -1258,7 +1259,7 @@ renderSlackReplies projectTools context envCfg access resolveThread = do
   input <- maybe (throwIO AI.AgentStopped) pure context.input
   (outcome, rendered) <- Writer.runWriter $ runBotQueryWithTools projectTools (AI.DurableRun context) Slack (Writer.tell @[AE.Value] . pure . botReplyPayload) envCfg access context.projectId input (raise resolveThread)
   replies <- maybe (throwIO $ ErrorCall "Slack query produced no reply") pure $ nonEmpty rendered
-  let link = "<" <> envCfg.hostUrl <> "p/" <> context.projectId.toText <> "/ai/" <> context.conversationId.toText <> "|View runs and artifacts>"
+  let link = "<" <> hostPath envCfg.hostUrl ("p/" <> context.projectId.toText <> "/ai/" <> context.conversationId.toText) <> "|View runs and artifacts>"
       linked reply = case reply ^? key "blocks" . _Array of
         Just _ -> reply & key "blocks" . _Array %~ (<> V.singleton (slackSection link))
         Nothing -> reply & key "text" . _String %~ (<> "\n\n" <> link)
@@ -1432,11 +1433,15 @@ refreshSlackProgress publicationId = do
   outcome <-
     tryAny
       $ Investigations.loadProgressRefresh publicationId
-      >>= traverse_ \(target, timestamp) ->
+      >>= traverse_ \(target, publication) ->
         withInvestigationLock target.teamId target.channelId target.threadTs
-          $ RateLimit.withRateLimits target.teamId do
-            recovered <- maybe (reconcileProgressHistory target publicationId) (pure . Just) timestamp
-            maybe (retryAfter 60) (refreshObservedProgress envCfg.hostUrl target) recovered
+          $ RateLimit.withRateLimits target.teamId case publication.delivery of
+            Investigations.StreamDelivery checkpoint -> do
+              snapshot <- loadProgressSnapshot target
+              for_ snapshot $ updateProgressStream envCfg target publicationId checkpoint True
+            Investigations.SnapshotDelivery _ -> do
+              recovered <- maybe (reconcileProgressHistory target publicationId) (pure . Just) $ Investigations.progressTimestamp publication
+              maybe (retryAfter 60) (refreshObservedProgress envCfg.hostUrl target) recovered
   for_ (leftToMaybe outcome) $ \err ->
     case fromException @RateLimit.SlackRateLimited err of
       Just (RateLimit.SlackRateLimited retryAt) -> scheduleProgressRefresh publicationId retryAt
@@ -1478,16 +1483,16 @@ reconcileProgressHistory target publicationId = do
       outcome <- searchPublicationHistory appId slackData "monoscope_investigation_progress" search
       AI.requireAgentAccess access target.projectId
       settlePublicationSearch (Investigations.confirmProgress publicationId) (Investigations.saveProgressSearchCursor search) outcome
-  ((.timestamp) =<<) <$> Investigations.loadProgress target
+  (Investigations.progressTimestamp =<<) <$> Investigations.loadProgress target
 
 
-data PublicationHistory = PublicationFound Incidents.SlackTimestamp | PublicationCursor (Maybe Text)
+data PublicationHistory result = PublicationFound result | PublicationCursor (Maybe Text)
   deriving stock (Show)
 
 
 -- | A found message settles its publication; anything else only advances the
 -- cursor, so the next attempt resumes the page this one reached.
-settlePublicationSearch :: IOE :> es => (Text -> Eff es Bool) -> (Maybe Text -> Eff es ()) -> PublicationHistory -> Eff es ()
+settlePublicationSearch :: IOE :> es => (Text -> Eff es Bool) -> (Maybe Text -> Eff es ()) -> PublicationHistory Incidents.SlackTimestamp -> Eff es ()
 settlePublicationSearch confirm saveCursor = \case
   PublicationFound timestamp -> do
     confirmed <- confirm $ Incidents.slackTimestampText timestamp
@@ -1496,7 +1501,7 @@ settlePublicationSearch confirm saveCursor = \case
 
 
 -- | Reuse identical author, publication and pagination checks for replies and progress.
-searchPublicationHistory :: (HTTP :> es, IOE :> es, Log.Log :> es) => Text -> SlackData -> Text -> Investigations.PublicationSearch kind -> Eff es PublicationHistory
+searchPublicationHistory :: (HTTP :> es, IOE :> es, Log.Log :> es) => Text -> SlackData -> Text -> Investigations.PublicationSearch kind -> Eff es (PublicationHistory Incidents.SlackTimestamp)
 searchPublicationHistory appId slackData eventType search = do
   let (method, placement) = case search.threadTs of
         Just thread -> ("conversations.replies", [("ts", thread)])
@@ -1506,7 +1511,8 @@ searchPublicationHistory appId slackData eventType search = do
         guard $ case search.threadTs of
           Just thread -> message.thread_ts == Just thread
           Nothing -> isNothing message.thread_ts || message.thread_ts == Just message.ts
-        publicationTimestamp appId eventType "publication_id" search.publicationId message
+        timestamp <- publicationTimestamp appId eventType "publication_id" search.publicationId message
+        pure (timestamp, timestamp)
   readPublicationHistory slackData method search.publicationId params search.cursor matching
 
 
@@ -1520,7 +1526,7 @@ publicationTimestamp appId eventType metadataKey publicationId message = do
   Incidents.slackTimestamp message.ts
 
 
-readPublicationHistory :: (HTTP :> es, IOE :> es, Log.Log :> es) => SlackData -> Text -> UUIDId kind -> [(Text, Text)] -> Maybe Text -> (SlackPublishedMessage -> Maybe Incidents.SlackTimestamp) -> Eff es PublicationHistory
+readPublicationHistory :: (HTTP :> es, IOE :> es, Log.Log :> es) => SlackData -> Text -> UUIDId kind -> [(Text, Text)] -> Maybe Text -> (SlackPublishedMessage -> Maybe (Incidents.SlackTimestamp, result)) -> Eff es (PublicationHistory result)
 readPublicationHistory slackData method publicationId params cursor matching = do
   let pending reason = do
         Log.logAttention "Slack publication history reconciliation remains pending" $ AE.object ["publication_id" AE..= publicationId, "reason" AE..= (reason :: Text)]
@@ -1533,8 +1539,8 @@ readPublicationHistory slackData method publicationId params cursor matching = d
         | statusIsSuccessful (received ^. Wreq.responseStatus)
         , page.ok
         , Just messages <- page.messages ->
-            case ordNubOn Incidents.slackTimestampText $ mapMaybe matching messages of
-              [timestamp] -> pure $ PublicationFound timestamp
+            case ordNubOn (Incidents.slackTimestampText . fst) $ mapMaybe matching messages of
+              [(_, result)] -> pure $ PublicationFound result
               [] -> case page.response_metadata >>= (.next_cursor) >>= guarded (not . T.null . T.strip) of
                 Just next | Just next /= cursor -> pure $ PublicationCursor $ Just next
                 Just _ -> pending "Repeated history cursor"
@@ -1587,7 +1593,7 @@ reconcileIncidentDeliveries = do
           retry = Incidents.saveIncidentSearchCursor search
       outcome <- tryAny $ RateLimit.withRateLimits search.teamId do
         slackData <- installation
-        page <- readPublicationHistory slackData method search.id params search.cursor matching
+        page <- readPublicationHistory slackData method search.id params search.cursor (fmap dupe . matching)
         void installation
         case page of
           PublicationFound timestamp -> do
@@ -1612,6 +1618,8 @@ data SlackPublishedMessage = SlackPublishedMessage
   , bot_id :: Maybe Text
   , bot_profile :: Maybe SlackBotProfile
   , metadata :: Maybe AE.Value
+  , blocks :: Maybe [AE.Value]
+  , streaming_state :: Maybe Investigations.StreamPhase
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -1640,8 +1648,8 @@ loadProgressSnapshot target = do
 -- | Poll only committed activity. The thread lock serializes publication and
 -- retries reuse an acknowledged progress message. Progress failure does not
 -- discard a completed investigation answer.
-withInvestigationProgress :: (Concurrent :> es, DB es, HTTP :> es, IOE :> es, Log.Log :> es) => Text -> SlackData -> AI.AgentAccess -> Eff es () -> Eff es ()
-withInvestigationProgress hostUrl slackData access action = case access of
+withInvestigationProgress :: (Concurrent :> es, DB es, HTTP :> es, IOE :> es, Log.Log :> es, Time.Time :> es) => EnvConfig -> SlackData -> AI.AgentAccess -> Eff es () -> Eff es ()
+withInvestigationProgress envCfg slackData access action = case access of
   AI.SlackInvestigationAccess run -> do
     previous <- newIORef Nothing
     let target = Investigations.ProgressTarget slackData.projectId run.teamId run.channelId run.threadTs run.messageTs run.userId run.slackUserId
@@ -1651,33 +1659,34 @@ withInvestigationProgress hostUrl slackData access action = case access of
           snapshot <- loadProgressSnapshot target
           for_ snapshot $ \progress -> do
             old <- readIORef previous
-            when (old /= Just progress) do
+            existing <- Investigations.loadProgress target
+            let activeStream = case (.delivery) <$> existing of
+                  Just (Investigations.StreamDelivery (Investigations.StreamReady{}; Investigations.StreamPending{})) -> True
+                  _ -> False
+            when (old /= Just progress || not allowCreate || activeStream) do
               let canCreate =
                     allowCreate || case progress.review of
                       Just Progress.PendingNotice{} -> True
                       (Nothing; Just Progress.EndedNotice{}) -> False
-                  body = mergeSlackContent (Progress.payload hostUrl slackData.projectId progress) $ AE.object ["channel" AE..= run.channelId]
+                  body = mergeSlackContent (Progress.payload envCfg.hostUrl slackData.projectId progress) $ AE.object ["channel" AE..= run.channelId]
                   remembered = writeIORef previous $ Just progress
-              existing <- Investigations.loadProgress target
               AI.requireAgentAccess progressAccess slackData.projectId
               case existing of
-                Just publication -> case publication.timestamp of
-                  Nothing -> unless allowCreate $ slackRetryTime 1 >>= scheduleProgressRefresh publication.publicationId
-                  Just ts -> do
-                    slackApiOrThrow "Slack progress update" slackData.botToken "chat.update" $ mergeSlackContent body $ AE.object ["ts" AE..= ts]
-                    remembered
-                Nothing ->
-                  when canCreate
-                    $ Investigations.claimProgress target
-                    >>= traverse_ \publication -> do
-                      publishReservedMessage
-                        "monoscope_investigation_progress"
-                        slackData.botToken
-                        publication.publicationId
-                        (mergeSlackContent body $ AE.object ["thread_ts" AE..= run.threadTs])
-                        (Investigations.rejectProgress publication.publicationId)
-                        (Investigations.confirmProgress publication.publicationId)
+                Just publication -> case publication.delivery of
+                  Investigations.StreamDelivery checkpoint -> updateProgressStream envCfg target publication.publicationId checkpoint (not allowCreate) progress >> remembered
+                  Investigations.SnapshotDelivery _ -> case Investigations.progressTimestamp publication of
+                    Nothing -> unless allowCreate $ slackRetryTime 1 >>= scheduleProgressRefresh publication.publicationId
+                    Just ts -> do
+                      slackApiOrThrow "Slack progress update" slackData.botToken "chat.update" $ mergeSlackContent body $ AE.object ["ts" AE..= ts]
                       remembered
+                Nothing -> when canCreate do
+                  frame <- either (throwIO . ErrorCall . toString) pure $ Progress.streamFrame progress
+                  startedAt <- Time.currentTime
+                  created <- Investigations.claimProgress target $ Just (startedAt, frame)
+                  for_ created \publication -> do
+                    confirmed <- sendProgressStream slackData target publication.publicationId (Investigations.StartStream startedAt frame) AE.Null
+                    unless allowCreate $ updateProgressStream envCfg target publication.publicationId confirmed True progress
+                    remembered
         publishSafely allowCreate = whenLeftM_ (tryAny $ publish allowCreate) $ \_ -> do
           Log.logAttention "Slack investigation progress update failed" $ AE.object ["channel_id" AE..= run.channelId, "thread_ts" AE..= run.threadTs]
           if allowCreate
@@ -1688,6 +1697,125 @@ withInvestigationProgress hostUrl slackData access action = case access of
         updates = forever $ liftIO (threadDelay 2_000_000) >> publishSafely True
     race_ updates action `finally` publishSafely False
   _ -> action
+
+
+-- | Each uncertain request is retained before HTTP. Only acknowledged or
+-- observed task state advances the stream; absence in history never reposts it.
+updateProgressStream :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es, Time.Time :> es) => EnvConfig -> Investigations.ProgressTarget -> UUIDId "slack_progress" -> Investigations.StreamState -> Bool -> Progress.Snapshot -> Eff es ()
+updateProgressStream envCfg target publicationId checkpoint close progress = do
+  let access = AI.SlackAccess target.teamId target.slackUserId target.userId
+  AI.requireAgentAccess access target.projectId
+  connection <- getProjectSlackData target.projectId >>= maybe (throwIO AI.AgentAccessDenied) pure
+  unless (connection.teamId == target.teamId) $ throwIO AI.AgentAccessDenied
+  frame <- either (throwIO . ErrorCall . toString) pure $ Progress.streamFrame progress
+  case checkpoint of
+    Investigations.StreamReady session previous -> do
+      now <- Time.currentTime
+      let stop = close || progress.limited || now >= addUTCTime (9 * 60) session.startedAt
+          retainedFrame = if progress.limited then previous else frame
+          request = (if stop then Investigations.StopStream else Investigations.AppendStream) session previous retainedFrame
+          completion =
+            AE.object
+              [ "metadata" AE..= AE.object ["event_type" AE..= ("monoscope_investigation_progress" :: Text), "event_payload" AE..= AE.object ["publication_id" AE..= publicationId]]
+              , "blocks" AE..= filter (\block -> block ^? key "type" . _String /= Just "plan") (Progress.payload envCfg.hostUrl target.projectId progress ^.. key "blocks" . _Array . traverse)
+              ]
+      when (stop || previous /= frame) do
+        retained <- Investigations.commitStream publicationId checkpoint $ Investigations.StreamPending request
+        unless retained $ throwIO SlackPublicationPending
+        AI.requireAgentAccess access target.projectId
+        confirmed <- sendProgressStream connection target publicationId request completion
+        case confirmed of
+          Investigations.StreamClosed timestamp -> refreshObservedProgress envCfg.hostUrl target $ Incidents.slackTimestampText timestamp
+          _ -> pass
+    Investigations.StreamClosed timestamp -> refreshObservedProgress envCfg.hostUrl target $ Incidents.slackTimestampText timestamp
+    Investigations.StreamPending{} -> do
+      recovered <- reconcileProgressStream connection
+      updateProgressStream envCfg target publicationId recovered close progress
+  where
+    reconcileProgressStream slackData = do
+      let appId = envCfg.slackAppId
+      search <- Investigations.loadProgressSearch publicationId >>= maybe (throwIO SlackPublicationPending) pure
+      unless (not (T.null appId) && search.teamId == target.teamId && search.channelId == target.channelId && search.threadTs == Just target.threadTs && search.oldest == target.messageTs) $ throwIO AI.AgentAccessDenied
+      let prefix = publicationId.toText <> ":"
+          matching message = do
+            guard $ (message.app_id <|> (message.bot_profile >>= (.app_id))) == Just appId && maybe False (not . T.null) message.bot_id && message.thread_ts == Just target.threadTs
+            timestamp <- Incidents.slackTimestamp message.ts
+            phase <- message.streaming_state
+            let tasks = foldMap (concatMap (mapMaybe (AE.parseMaybe AE.parseJSON) . taskValues)) message.blocks
+                taskValues block = case block ^? key "type" . _String of
+                  Just "task_card" -> [block]
+                  Just "plan" -> block ^.. key "tasks" . _Array . traverse
+                  _ -> []
+            guard $ any (T.isPrefixOf prefix . (.task_id)) tasks
+            let expected = Investigations.progressTimestamp $ Investigations.ProgressMessage publicationId $ Investigations.StreamDelivery checkpoint
+            guard $ maybe True (== Incidents.slackTimestampText timestamp) expected
+            next <- case (phase, checkpoint) of
+              (Investigations.StreamCompleted, _) -> Just $ Investigations.StreamClosed timestamp
+              (Investigations.StreamInProgress, Investigations.StreamPending (Investigations.StartStream startedAt frame)) -> Just $ Investigations.StreamReady (Investigations.StreamSession timestamp startedAt) frame
+              (Investigations.StreamInProgress, Investigations.StreamPending (Investigations.AppendStream session _ frame)) -> do
+                guard $ any (\block -> block ^? key "type" . _String == Just "plan" && block ^? key "title" . _String == Just (Investigations.streamTitle frame)) $ fromMaybe [] message.blocks
+                guard $ all (\task -> task{Investigations.task_id = prefix <> task.task_id} `elem` tasks) $ Investigations.streamTasks frame
+                Just $ Investigations.StreamReady session frame
+              _ -> Nothing
+            pure (timestamp, next)
+          params = [("channel", target.channelId), ("ts", target.threadTs), ("oldest", target.messageTs), ("include_all_metadata", "true"), ("limit", "15")] <> foldMap (pure . ("cursor",)) search.cursor
+      outcome <- readPublicationHistory slackData "conversations.replies" publicationId params search.cursor matching
+      AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
+      case outcome of
+        PublicationFound next -> do
+          confirmed <- Investigations.commitStream publicationId checkpoint next
+          unless confirmed $ throwIO SlackPublicationPending
+          pure next
+        PublicationCursor cursor -> Investigations.saveProgressSearchCursor search cursor >> throwIO SlackPublicationPending
+
+
+sendProgressStream :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => SlackData -> Investigations.ProgressTarget -> UUIDId "slack_progress" -> Investigations.StreamRequest -> AE.Value -> Eff es Investigations.StreamState
+sendProgressStream connection target publicationId request footer = case request of
+  Investigations.StartStream startedAt frame ->
+    execute
+      "chat.startStream"
+      (AE.object ["channel" AE..= target.channelId, "thread_ts" AE..= target.threadTs, "recipient_user_id" AE..= target.slackUserId, "recipient_team_id" AE..= target.teamId, "task_display_mode" AE..= ("plan" :: Text), "chunks" AE..= Progress.streamChunks publicationId frame])
+      (Investigations.rejectStreamStart publicationId startedAt frame)
+      (\timestamp -> Investigations.StreamReady (Investigations.StreamSession timestamp startedAt) frame)
+      Nothing
+  Investigations.AppendStream session previous frame ->
+    change session previous frame "chat.appendStream" (const $ Investigations.StreamReady session frame) AE.Null
+  Investigations.StopStream session previous frame ->
+    change session previous frame "chat.stopStream" Investigations.StreamClosed footer
+  where
+    pending = Investigations.StreamPending request
+    uncertain = do
+      Log.logAttention "Slack stream awaits reconciliation" $ AE.object ["publication_id" AE..= publicationId]
+      throwIO SlackPublicationPending
+    change session previous frame method accepted extra =
+      execute
+        method
+        (mergeSlackContent (AE.object ["channel" AE..= target.channelId, "ts" AE..= session.timestamp, "chunks" AE..= Progress.streamChunks publicationId frame]) extra)
+        (void $ Investigations.commitStream publicationId pending $ Investigations.StreamReady session previous)
+        accepted
+        (Just session.timestamp)
+    execute method body reject accepted expected = do
+      AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
+      response <- tryAny $ requestSlackApi connection.botToken method body
+      case response of
+        Left err -> maybe uncertain (\limited -> reject >> throwIO limited) $ fromException @RateLimit.SlackRateLimited err
+        Right received -> case AE.decode @SlackMessageAck (received ^. responseBody) of
+          Just ack
+            | statusIsSuccessful (received ^. Wreq.responseStatus)
+            , ack.ok
+            , Just timestamp <- ack.ts >>= Incidents.slackTimestamp -> do
+                unless (maybe True (== timestamp) expected) $ void uncertain
+                let next = accepted timestamp
+                confirmed <- Investigations.commitStream publicationId pending next
+                unless confirmed $ void uncertain
+                pure next
+            | statusIsSuccessful (received ^. Wreq.responseStatus)
+            , not ack.ok
+            , Just reason <- ack.error
+            , definiteSlackRejection reason -> do
+                reject
+                throwIO $ ErrorCall $ "Slack stream rejected: " <> toString reason
+          _ -> uncertain
 
 
 -- | Late observations can arrive after the answer receipt is complete. Refresh

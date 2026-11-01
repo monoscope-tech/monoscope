@@ -1,13 +1,13 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.Bots.SlackProgress (Snapshot (..), Task (..), TaskStatus (..), ReviewNotice (..), snapshot, endReview, payload, reviewDecision) where
+module Pages.Bots.SlackProgress (Snapshot (..), Task (..), TaskStatus (..), ReviewNotice (..), snapshot, endReview, payload, streamFrame, streamChunks, reviewDecision) where
 
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
 import Langchain.LLM.Core qualified as LLM
+import Models.Apis.Investigations (Task (..), TaskStatus (..))
 import Models.Apis.Investigations qualified as Investigations
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId, encodeEnumSC)
@@ -20,16 +20,6 @@ import Web.HttpApiData (parseUrlPiece)
 -- >>> import Data.Time (UTCTime(..), fromGregorian)
 -- >>> import Pkg.DeriveUtils (UUIDId(..))
 -- >>> let activity :: Investigations.Event -> Investigations.Entry; activity = Investigations.Entry (UUIDId $ UUID.fromWords 0 0 0 1) "1.0" (UTCTime (fromGregorian 2025 1 1) 0)
-
-
-data TaskStatus = Pending | InProgress | Complete | Error
-  deriving stock (Eq, Generic, Show)
-  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier DAE.CamelToSnake] TaskStatus
-
-
-data Task = Task {task_id :: Text, title :: Text, status :: TaskStatus}
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.ToJSON)
 
 
 data TaskKind = Decision | HistoryRead | FollowupRead | Evidence Text
@@ -193,3 +183,15 @@ payload hostUrl project progress =
         InProgress -> "in progress"
         Complete -> "response recorded"
         Error -> "did not finish"
+
+
+streamFrame :: Snapshot -> Either Text Investigations.StreamFrame
+streamFrame progress = Investigations.mkStreamFrame progress.title progress.tasks
+
+
+streamChunks :: UUIDId "slack_progress" -> Investigations.StreamFrame -> [AE.Value]
+streamChunks publication frame =
+  AE.object ["type" AE..= ("plan_update" :: Text), "title" AE..= Investigations.streamTitle frame]
+    : [ AE.object ["type" AE..= ("task_update" :: Text), "id" AE..= (publication.toText <> ":" <> task.task_id), "title" AE..= task.title, "status" AE..= task.status]
+      | task <- toList $ Investigations.streamTasks frame
+      ]

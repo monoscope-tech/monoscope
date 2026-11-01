@@ -140,3 +140,54 @@ The log is `scripts/local/atomic-slack-identity-bots-460-green.log`.
 The input hashes in `scripts/local/atomic-slack-identity-bots-run-source.json` match after the run.
 This checkpoint also includes the narrower start-rejection helper, which cannot delete an append or stop reservation.
 It remains fixture-backed application acceptance; the QA app has not yet exercised this application streaming path live.
+
+## Bounded journal and stream locality
+
+The post-locality checkpoint passes all 460 bot examples in 174.8782 seconds.
+The log is `scripts/local/slack-stream-locality-bots-460-green.log`.
+The hashes in `scripts/local/slack-stream-locality-source.json` match after that run.
+The single-caller reconciliation helper now lives beside its caller and captures its publication context.
+All four recovery cases pass after that reduction in 16.0106 seconds.
+
+Slack's [streaming reference](https://docs.slack.dev/reference/methods/chat.startStream/) describes task updates by ID and a lifetime limit of fifty unique tasks.
+The application's journal retains only fifty recent events.
+A new application regression confirms that the stream previously stayed open beyond that window.
+The open stream could therefore receive task slots reassigned by the bounded projection.
+The failing-first regression reports `expected: True, but got: False` in 13.3036 seconds.
+
+The stream now closes when the journal window fills.
+Its stop request retains the last acknowledged task frame.
+The existing message refresh replaces that frame with the current bounded snapshot and its “recent activity only” notice.
+The regression verifies that transition before the model returns its answer and checks one start, one stop, and one final reply.
+It passes in 4.5489 seconds.
+Logs are `scripts/local/slack-stream-journal-limit-{red,green}.log`.
+HLint reports no hints in the four streaming runtime modules.
+All five stream cases pass together in 20.7497 seconds.
+The log is `scripts/local/slack-stream-five-green.log`; input hashes are in `scripts/local/slack-stream-five-source.json`.
+The combined broader suite then passes all 461 bot examples in 179.3629 seconds, including the wiki-result link fix in `57f00e4ef`.
+The log is `scripts/local/slack-stream-bots-461-green.log`; matching observed source hashes are in `scripts/local/slack-stream-bots-461-source.json`.
+
+The scoped `hs-distill`, `hs-evasion-review`, and `hs-lob-review` loop found no further material issue in this streaming slice.
+The frame encoder stays explicit because exposing `Generic` would bypass its invariant.
+The task types and history reader are shared; there is no second worker or publication store.
+The reconciliation helper stays beside its only caller.
+No new browser behavior or styling was introduced.
+Whole-branch review and remaining live application acceptance remain open.
+
+
+## Private-channel application acceptance
+
+An independent API readback confirms one completed progress stream and one final reply from QA app `A0CDFCWNBNK` and bot `B0CDWJNP6MQ` in the controlled thread.
+Their metadata types are `monoscope_investigation_progress` and `monoscope_investigation_reply`.
+The live source snapshot matches the current model and integration modules.
+It predates the local reconciliation cleanup, journal-window guard, and wiki-result URL improvement; those differences remain covered by the recorded application regressions, not by this live readback.
+
+The separate QA app is installed in the private channel `monoscope-local-qa-20261101` (`C0CERB6P8QY`). Slack confirms that its only two members are the QA bot and the current human account. The temporary channel-creation scope was removed; the temporary token was revoked and the replacement installation retains only the original eleven bot scopes. The current human account restored the bot's channel membership through Slack's own invite command.
+
+A real human app mention reached the signed callback and production job runner. The unlinked-user response was accepted as an ephemeral message; its visual appearance was not established. The actual identity-link GET and POST handlers and routine activation handler returned HTTP 200. The resulting routine uses Autonomous policy. The isolated fixture seeds the installation association and member session; this does not verify project OAuth association.
+
+A second real mention requested one wiki page. The real model and shared executor saved **Slack QA acceptance**, version one, with the requested body and the writing run as author. Run `add3c313-5dbd-4a61-b84b-9ecc31a855f3` succeeded. Live Slack history shows one completed progress stream and one final reply in thread `1793531889.016649`. Authenticated conversation and wiki GETs both returned HTTP 200 with the saved title.
+
+Replaying the exact accepted payload with a locally generated valid Slack signature returned HTTP 200. Before and after counts remained two event receipts, one run, one wiki revision, one operation receipt, one final publication, one progress record, and sixteen journal entries. This establishes duplicate-delivery handling at that checkpoint, not provider-induced retry or application host-loss recovery. The private local receipt is `scripts/local/slack-private-stream-acceptance.json`; the source snapshot is `scripts/local/slack-stream-live-source.json`.
+
+The response exposed a usability issue: it returned the raw wiki ID and a conversation link, rather than a direct wiki link. Shared wiki read/write results now include the canonical wiki URL, using the saved page path and existing host-path helper. The existing recovery integration test first failed because the URL was absent, then passed in 0.7442 seconds. It checks both read and write results, retains the existing title field, rejects cross-project disclosure, and preserves the original writing run and stale-edit behavior. Logs are `/tmp/wiki-tool-link-{red,green}.log`. The server watcher compiles all 167 modules; HLint reports no hints for `Pkg.AI`, and the pinned formatter passes both changed files. Scoped distillation, evasion, and locality reviews found no further material issue: one local renderer serves both read and write, no authority or effect contract changed, and no new client behavior was introduced. All 461 bot examples then passed in 179.3629 seconds with unchanged recorded source hashes. The log is `scripts/local/wiki-tool-link-bots-461-green.log`; hashes are in `scripts/local/wiki-tool-link-bots-source.json`. This is focused regression evidence, not whole-branch release signoff or live verification of the improved reply text. Live cancellation, application interruption, rate limits, selected review, proactive recovery, and MCP eligibility remain separate acceptance work. The local server and temporary tunnel must remain running for callbacks.

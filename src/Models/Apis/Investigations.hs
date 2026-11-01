@@ -72,6 +72,23 @@ module Models.Apis.Investigations (
   recentEvents,
   ProgressTarget (..),
   ProgressMessage (..),
+  ProgressDelivery (..),
+  progressTimestamp,
+  SlackTimestamp,
+  slackTimestamp,
+  slackTimestampText,
+  Task (..),
+  TaskStatus (..),
+  StreamFrame,
+  mkStreamFrame,
+  streamTasks,
+  streamTitle,
+  StreamSession (..),
+  StreamState (..),
+  StreamRequest (..),
+  StreamPhase (..),
+  rejectStreamStart,
+  commitStream,
   loadProgress,
   loadProgressRefresh,
   loadProgressSearch,
@@ -95,6 +112,7 @@ module Models.Apis.Investigations (
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.Char (isDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM ()
 import Data.Effectful.Wreq qualified as HTTP
@@ -104,6 +122,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID.V5 qualified as UUID5
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Deriving.Aeson qualified as JSON
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Exception (throwIO)
@@ -124,6 +143,12 @@ import Relude
 import System.Types (DB)
 import Web.HttpApiData (FromHttpApiData)
 import Prelude (until)
+
+
+-- $setup
+-- >>> import Relude
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Data.Aeson.Types qualified as AET
 
 
 data Scope = Scope
@@ -1099,24 +1124,197 @@ recentProgressEvents :: DB es => ProgressTarget -> Eff es History
 recentProgressEvents target = readEvents target.projectId target.teamId target.channelId target.threadTs (Just target.messageTs)
 
 
-data ProgressMessage = ProgressMessage {publicationId :: UUIDId "slack_progress", timestamp :: Maybe Text}
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+newtype SlackTimestamp = SlackTimestamp Text
+  deriving stock (Eq, Show)
+  deriving newtype (AE.ToJSON, HI.EncodeValue)
+
+
+instance AE.FromJSON SlackTimestamp where
+  parseJSON = AE.withText "Slack timestamp" $ maybe (fail "Invalid Slack timestamp") pure . slackTimestamp
+
+
+-- | Parse Slack's decimal timestamp without losing precision.
+--
+-- >>> fmap slackTimestampText (slackTimestamp "1788900000.000001")
+-- Just "1788900000.000001"
+-- >>> all (isNothing . slackTimestamp) ["", "1", ".1", "1.", "1.2.3", "-1.1"]
+-- True
+-- >>> AE.encode <$> slackTimestamp "1788900000.000001"
+-- Just "\"1788900000.000001\""
+-- >>> isLeft (AE.eitherDecode @SlackTimestamp "\"invalid\"")
+-- True
+-- >>> AET.parseEither (AE.genericParseJSON AE.defaultOptions :: AE.Value -> AET.Parser SlackTimestamp) (AE.String "invalid")
+-- ...
+-- ...No instance for...Generic SlackTimestamp...
+-- ...
+slackTimestamp :: Text -> Maybe SlackTimestamp
+slackTimestamp value =
+  let (seconds, fraction) = T.breakOn "." value
+      digits text = not (T.null text) && T.all isDigit text
+   in SlackTimestamp value <$ guard (digits seconds && digits (T.drop 1 fraction))
+
+
+slackTimestampText :: SlackTimestamp -> Text
+slackTimestampText (SlackTimestamp value) = value
+
+
+data TaskStatus = Pending | InProgress | Complete | Error
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via JSON.CustomJSON '[JSON.ConstructorTagModifier JSON.CamelToSnake] TaskStatus
+
+
+data Task = Task {task_id :: Text, title :: Text, status :: TaskStatus}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data StreamFrame = StreamFrame {title :: Text, tasks :: NonEmpty Task}
+  deriving stock (Eq, Show)
+
+
+instance AE.ToJSON StreamFrame where
+  toJSON frame = AE.object ["title" AE..= frame.title, "tasks" AE..= frame.tasks]
+
+
+instance AE.FromJSON StreamFrame where
+  parseJSON = AE.withObject "Slack stream frame" \fields -> do
+    title <- fields AE..: "title"
+    tasks <- fields AE..: "tasks"
+    either (fail . toString) pure $ mkStreamFrame title tasks
+
+
+-- | Reuse fifty canonical task IDs across frames, so the whole stream stays
+-- within Slack's lifetime task limit, including after history truncation.
+--
+-- >>> let task = Task "0" "Read evidence" InProgress
+-- >>> (toList . streamTasks <$> mkStreamFrame "Investigating" [task]) == Right [task]
+-- True
+-- >>> mkStreamFrame "" [task]
+-- Left "A Slack stream frame needs a title"
+-- >>> mkStreamFrame "Investigating" []
+-- Left "A Slack stream frame needs a task"
+-- >>> isLeft $ mkStreamFrame "Investigating" [task, task]
+-- True
+-- >>> isLeft $ mkStreamFrame "Investigating" [task{task_id = "50"}]
+-- True
+-- >>> isLeft $ mkStreamFrame "Investigating" [task{task_id = "01"}]
+-- True
+-- >>> isLeft $ mkStreamFrame "Investigating" [task{task_id = show n} | n <- [1..51 :: Int]]
+-- True
+-- >>> fmap (AE.eitherDecode @StreamFrame . AE.encode) (mkStreamFrame "Investigating" [task]) == fmap Right (mkStreamFrame "Investigating" [task])
+-- True
+-- >>> (AE.toJSON <$> mkStreamFrame "Investigating" [task]) == Right (AE.object ["title" AE..= ("Investigating" :: Text), "tasks" AE..= ([task] :: [Task])])
+-- True
+-- >>> AE.eitherDecode @StreamFrame "{\"title\":\"Investigating\",\"tasks\":[]}"
+-- Left "Error in $: A Slack stream frame needs a task"
+-- >>> AET.parseEither (AE.genericParseJSON AE.defaultOptions :: AE.Value -> AET.Parser StreamFrame) (AE.object ["title" AE..= ("" :: Text), "tasks" AE..= ([task] :: [Task])])
+-- ...
+-- ...No instance for...Generic StreamFrame...
+-- ...
+mkStreamFrame :: Text -> [Task] -> Either Text StreamFrame
+mkStreamFrame title tasks = do
+  when (T.null $ T.strip title) $ Left "A Slack stream frame needs a title"
+  items <- maybeToRight "A Slack stream frame needs a task" $ nonEmpty tasks
+  unless (length items <= 50) $ Left "A Slack stream permits at most fifty tasks"
+  let identifiers = S.fromList $ map (.task_id) tasks
+  unless (S.size identifiers == length items && identifiers `S.isSubsetOf` S.fromList (map show [0 .. 49 :: Int])) $ Left "Slack stream task IDs must be unique indices from zero through forty-nine"
+  pure $ StreamFrame title items
+
+
+streamTasks :: StreamFrame -> NonEmpty Task
+streamTasks = (.tasks)
+
+
+streamTitle :: StreamFrame -> Text
+streamTitle = (.title)
+
+
+data StreamSession = StreamSession {timestamp :: SlackTimestamp, startedAt :: UTCTime}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data StreamPhase = StreamInProgress | StreamCompleted
+  deriving stock (Eq, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "Stream" StreamPhase
+
+
+data StreamRequest
+  = StartStream UTCTime StreamFrame
+  | AppendStream StreamSession StreamFrame StreamFrame
+  | StopStream StreamSession StreamFrame StreamFrame
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data StreamState
+  = StreamPending StreamRequest
+  | StreamReady StreamSession StreamFrame
+  | StreamClosed SlackTimestamp
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ProgressDelivery = SnapshotDelivery (Maybe SlackTimestamp) | StreamDelivery StreamState
+  deriving stock (Eq, Show)
+
+
+data ProgressMessage = ProgressMessage {publicationId :: UUIDId "slack_progress", delivery :: ProgressDelivery}
+  deriving stock (Show)
+
+
+-- | A publication cannot be both a legacy receipt and a stream receipt.
+--
+-- >>> isRight $ AE.eitherDecode @ProgressMessage "{\"publication_id\":\"00000000-0000-0000-0000-000000000001\",\"stream_state\":{\"tag\":\"StreamClosed\",\"contents\":\"1.1\"}}"
+-- True
+-- >>> isLeft $ AE.eitherDecode @ProgressMessage "{\"publication_id\":\"00000000-0000-0000-0000-000000000001\",\"progress_ts\":\"1.0\",\"stream_state\":{\"tag\":\"StreamClosed\",\"contents\":\"1.1\"}}"
+-- True
+instance AE.FromJSON ProgressMessage where
+  parseJSON = AE.withObject "Slack progress publication" \fields -> do
+    publicationId <- fields AE..: "publication_id"
+    stream <- fields AE..:? "stream_state"
+    timestamp <- fields AE..:? "progress_ts"
+    delivery <- case (stream, timestamp) of
+      (Nothing, legacy) -> pure $ SnapshotDelivery legacy
+      (Just checkpoint, Nothing) -> pure $ StreamDelivery checkpoint
+      (Just _, Just _) -> fail "Conflicting Slack progress receipts"
+    pure ProgressMessage{..}
+
+
+progressTimestamp :: ProgressMessage -> Maybe Text
+progressTimestamp publication =
+  slackTimestampText <$> case publication.delivery of
+    SnapshotDelivery timestamp -> timestamp
+    StreamDelivery checkpoint -> case checkpoint of
+      StreamPending request -> case request of
+        StartStream{} -> Nothing
+        AppendStream session _ _ -> Just session.timestamp
+        StopStream session _ _ -> Just session.timestamp
+      StreamReady session _ -> Just session.timestamp
+      StreamClosed timestamp -> Just timestamp
+
+
+commitStream :: DB es => UUIDId "slack_progress" -> StreamState -> StreamState -> Eff es Bool
+commitStream publicationId previous next =
+  isJust
+    <$> Hasql.interpOne @(HI.OneColumn Bool)
+      [HI.sql|UPDATE apis.slack_investigation_progress SET stream_state = #{Aeson next}, history_cursor = NULL
+      WHERE publication_id = #{publicationId} AND stream_state = #{Aeson previous} RETURNING TRUE|]
 
 
 loadProgress :: DB es => ProgressTarget -> Eff es (Maybe ProgressMessage)
 loadProgress target =
-  Hasql.interpOne
-    [HI.sql|SELECT publication_id, progress_ts FROM apis.slack_investigation_progress
+  Hasql.interpOneJson
+    [HI.sql|SELECT to_jsonb(p) FROM apis.slack_investigation_progress p
     WHERE project_id = #{target.projectId} AND team_id = #{target.teamId}
       AND channel_id = #{target.channelId} AND thread_ts = #{target.threadTs} AND message_ts = #{target.messageTs}|]
 
 
-loadProgressRefresh :: DB es => UUIDId "slack_progress" -> Eff es (Maybe (ProgressTarget, Maybe Text))
+loadProgressRefresh :: DB es => UUIDId "slack_progress" -> Eff es (Maybe (ProgressTarget, ProgressMessage))
 loadProgressRefresh publicationId =
-  fmap (\(Aeson target, timestamp) -> (target, timestamp))
+  fmap (\(Aeson target, Aeson publication) -> (target, publication))
     <$> Hasql.interpOne
-      [HI.sql|SELECT to_jsonb(p), progress_ts FROM apis.slack_investigation_progress p
+      [HI.sql|SELECT to_jsonb(p), to_jsonb(p) FROM apis.slack_investigation_progress p
       WHERE publication_id = #{publicationId} AND user_id IS NOT NULL AND slack_user_id IS NOT NULL|]
 
 
@@ -1135,14 +1333,14 @@ saveProgressSearchCursor search next =
       AND history_cursor IS NOT DISTINCT FROM #{search.cursor}|]
 
 
-claimProgress :: DB es => ProgressTarget -> Eff es (Maybe ProgressMessage)
-claimProgress target =
-  Hasql.interpOne
+claimProgress :: DB es => ProgressTarget -> Maybe (UTCTime, StreamFrame) -> Eff es (Maybe ProgressMessage)
+claimProgress target stream =
+  Hasql.interpOneJson
     [HI.sql|INSERT INTO apis.slack_investigation_progress
-    (project_id, team_id, channel_id, thread_ts, message_ts, user_id, slack_user_id)
-    VALUES (#{target.projectId}, #{target.teamId}, #{target.channelId}, #{target.threadTs}, #{target.messageTs}, #{target.userId}, #{target.slackUserId})
+    AS p (project_id, team_id, channel_id, thread_ts, message_ts, user_id, slack_user_id, stream_state)
+    VALUES (#{target.projectId}, #{target.teamId}, #{target.channelId}, #{target.threadTs}, #{target.messageTs}, #{target.userId}, #{target.slackUserId}, #{Aeson . StreamPending . uncurry StartStream <$> stream})
     ON CONFLICT (project_id, team_id, channel_id, thread_ts, message_ts) DO NOTHING
-    RETURNING publication_id, progress_ts|]
+    RETURNING to_jsonb(p)|]
 
 
 confirmProgress :: DB es => UUIDId "slack_progress" -> Text -> Eff es Bool
@@ -1150,7 +1348,7 @@ confirmProgress publicationId timestamp =
   isJust
     <$> Hasql.interpOne @(HI.OneColumn Bool)
       [HI.sql|UPDATE apis.slack_investigation_progress SET progress_ts = #{timestamp}
-    WHERE publication_id = #{publicationId} AND (progress_ts IS NULL OR progress_ts = #{timestamp}) RETURNING TRUE|]
+    WHERE publication_id = #{publicationId} AND stream_state IS NULL AND (progress_ts IS NULL OR progress_ts = #{timestamp}) RETURNING TRUE|]
 
 
 -- | Release only a definitely rejected publication. A concurrent signed
@@ -1159,7 +1357,15 @@ rejectProgress :: DB es => UUIDId "slack_progress" -> Eff es ()
 rejectProgress publicationId =
   Hasql.interpExecute_
     [HI.sql|DELETE FROM apis.slack_investigation_progress
-    WHERE publication_id = #{publicationId} AND progress_ts IS NULL|]
+    WHERE publication_id = #{publicationId} AND stream_state IS NULL AND progress_ts IS NULL|]
+
+
+rejectStreamStart :: DB es => UUIDId "slack_progress" -> UTCTime -> StreamFrame -> Eff es ()
+rejectStreamStart publicationId startedAt frame =
+  let pending = StreamPending $ StartStream startedAt frame
+   in Hasql.interpExecute_
+        [HI.sql|DELETE FROM apis.slack_investigation_progress
+      WHERE publication_id = #{publicationId} AND stream_state = #{Aeson pending}|]
 
 
 -- | Mirror incident-root reconciliation: require a signed stored receipt and
@@ -1170,7 +1376,7 @@ captureProgress appId receiptId =
     <$> Hasql.interp
       [HI.sql|UPDATE apis.slack_investigation_progress p SET progress_ts = se.payload #>> '{event,ts}'
     FROM apis.slack_events se, apis.slack s
-    WHERE se.id = #{receiptId} AND #{appId} <> ''
+    WHERE se.id = #{receiptId} AND #{appId} <> '' AND p.stream_state IS NULL
       AND p.user_id IS NOT NULL AND p.slack_user_id IS NOT NULL
       AND s.project_id = p.project_id AND s.team_id = p.team_id
       AND p.publication_id::text = se.payload #>> '{event,metadata,event_payload,publication_id}'

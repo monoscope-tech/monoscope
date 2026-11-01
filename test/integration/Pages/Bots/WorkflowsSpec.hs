@@ -2072,7 +2072,7 @@ spec = around withTestResources do
                 ELLM.CallLLM{} -> pure $ Left "No title model"
                 ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
               transport = withHTTPResponses \_ endpoint -> do
-                number <- if endpoint == "https://slack.com/api/chat.postMessage" then atomicModifyIORef' notices (\n -> (n + 1, n)) else pure (-1)
+                number <- if endpoint == "https://slack.com/api/chat.stopStream" then atomicModifyIORef' notices (\n -> (n + 1, n)) else pure (-1)
                 when (reviewCase == ApproveDuringNotice && number == 0) do
                   Just identifier <- runQueryEffect tr $ Hasql.interpOne @(UUIDId "agent_operation") [HI.sql|SELECT id FROM apis.ai_agent_operations WHERE project_id = #{testPid} AND outcome->>'tag' = 'OperationUnstarted'|]
                   void $ runTestBgNoReset tr $ JobQueue.reviewOperation testPid routine.requestedBy identifier Investigations.ReviewApproved
@@ -2230,11 +2230,11 @@ spec = around withTestResources do
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             responses = withHTTPResponses $ \_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
             throttle = interpose @HTTP.HTTP $ \_ request -> case request of
-              HTTP.PostWith options url body | url == "https://slack.com/api/chat.postMessage" -> do
+              HTTP.PostWith options url body | url == "https://slack.com/api/chat.startStream" || url == "https://slack.com/api/chat.postMessage" -> do
                 number <- atomicModifyIORef' posts (\n -> (n + 1, n))
                 response <- send $ HTTP.PostWith options url body
                 pure
-                  $ if number == 0
+                  $ if number < 2
                     then response & Wreq.responseStatus .~ status429 & Wreq.responseHeaders .~ [("Retry-After", "60")] & Wreq.responseBody .~ "{\"ok\":false,\"error\":\"ratelimited\"}"
                     else response
               _ -> send @HTTP.HTTP $ coerce request
@@ -2245,7 +2245,7 @@ spec = around withTestResources do
           timeout
             10_000_000
             ( fix $ \retry -> do
-                rows <- withResource tr.trPool $ \conn -> PGS.query_ conn [sql|SELECT EXISTS (SELECT 1 FROM apis.slack_api_cooldowns WHERE team_id = 'T_RATE_LIMIT' AND method = 'chat.postMessage' AND retry_at > clock_timestamp() + interval '50 seconds')|]
+                rows <- withResource tr.trPool $ \conn -> PGS.query_ conn [sql|SELECT EXISTS (SELECT 1 FROM apis.slack_api_cooldowns WHERE team_id = 'T_RATE_LIMIT' AND method = 'chat.startStream' AND retry_at > clock_timestamp() + interval '50 seconds')|]
                 unless (rows == [PGS.Only True]) $ threadDelay 20_000 >> retry
             )
             >>= (`shouldBe` Just ())
@@ -2258,7 +2258,7 @@ spec = around withTestResources do
         runQueryEffect tr (Investigations.loadProgress target) >>= (`shouldSatisfy` isNothing)
         (_, deferredAgain) <- work receipt
         deferredAgain `shouldSatisfy` isRight
-        readIORef posts >>= (`shouldBe` 1)
+        readIORef posts >>= (`shouldBe` 2)
         readIORef modelCalls >>= (`shouldBe` 1)
         scheduled <- withResource tr.trPool $ \conn ->
           PGS.query
@@ -2271,21 +2271,229 @@ spec = around withTestResources do
         withResource tr.trPool $ \conn -> assertDeferredJobRunnable conn $ AE.toJSON $ Jobs.ProcessSlackEvent receipt
         (_, otherWorkspace) <- runTestBgRecordingHTTP frozenTime tr $ responses $ throttle $ RateLimit.withRateLimits "T_OTHER" $ tryAny $ void $ HTTP.postWith Wreq.defaults "https://slack.com/api/chat.postMessage" (AE.object [])
         otherWorkspace `shouldSatisfy` isRight
-        readIORef posts >>= (`shouldBe` 2)
+        readIORef posts >>= (`shouldBe` 3)
         withResource tr.trPool $ \conn -> void $ PGS.execute_ conn [sql|UPDATE apis.slack_api_cooldowns SET retry_at = clock_timestamp() - interval '1 second' WHERE team_id = 'T_RATE_LIMIT'|]
         (_, delivered) <- work receipt
         delivered `shouldSatisfy` isRight
-        readIORef posts >>= (`shouldBe` 3)
+        readIORef posts >>= (`shouldBe` 4)
         readIORef modelCalls >>= (`shouldBe` 1)
         (replayed, _) <- work receipt
         replayed `shouldBe` []
 
+      it "slackStream_lostStartKeepsItsReservationForTaskIdRecovery" \tr -> do
+        let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_STREAM"}}}
+            target = Investigations.ProgressTarget testPid "T_STREAM" "CSTREAM" "1735689600.000001" "1735689602.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"
+        setupSlackAgent resources testPid "T_STREAM"
+        sent <- newEmptyMVar
+        history <- newIORef ([] :: [AE.Value])
+        modelCalls <- newIORef (0 :: Int)
+        let transport = withHTTPResponses \opts endpoint -> case endpoint of
+              "https://slack.com/api/chat.startStream" -> void (tryPutMVar sent ()) $> Just "{\"ok\":true}"
+              "https://slack.com/api/conversations.replies" | opts ^. Wreq.param "include_all_metadata" == ["true"] -> do
+                messages <- readIORef history
+                pure $ Just $ AE.encode $ AE.object ["ok" AE..= True, "messages" AE..= messages]
+              "https://slack.com/api/chat.postMessage" -> pure $ Just "{\"ok\":true,\"ts\":\"1735689611.000001\"}"
+              _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> do
+                number <- atomicModifyIORef' modelCalls (\n -> (n + 1, n))
+                if number == 0
+                  then liftIO do
+                    timeout 10_000_000 (takeMVar sent) >>= (`shouldBe` Just ())
+                    throwIO $ ErrorCall "Worker interrupted after Slack accepted stream start"
+                  else pure $ Right $ Chat.Message Chat.Assistant "The investigation resumed." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        receipt <- receiveSlackEvent resources $ slackThreadedEvent "T_STREAM" "CSTREAM" "Investigate checkout" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+        let work = runTestBgRecordingHTTP frozenTime resources . transport . provider . tryAny
+        (requests, interrupted) <- work $ processSlackEvent receipt
+        interrupted `shouldSatisfy` isLeft
+        Just publication <- runQueryEffect resources $ Investigations.loadProgress target
+        Investigations.progressTimestamp publication `shouldBe` Nothing
+        let starts = [value | (url, body) <- requests, url == "https://slack.com/api/chat.startStream", Just value <- [AE.decode @AE.Value body]]
+        length starts `shouldBe` 1
+        concatMap (^.. key "chunks" . _Array . traverse . key "id" . _String) starts `shouldBe` [publication.publicationId.toText <> ":0"]
+        fmap (^? key "task_display_mode" . _String) starts `shouldBe` [Just "plan"]
+        runQueryEffect resources (Investigations.claimProgress target Nothing) >>= (`shouldSatisfy` isNothing)
+
+        let observed =
+              AE.object
+                [ "type" AE..= ("message" :: Text)
+                , "app_id" AE..= ("A_STREAM" :: Text)
+                , "bot_id" AE..= ("B_STREAM" :: Text)
+                , "ts" AE..= ("1735689610.000001" :: Text)
+                , "thread_ts" AE..= target.threadTs
+                , "streaming_state" AE..= ("in_progress" :: Text)
+                , "blocks" AE..= ([AE.object ["type" AE..= ("task_card" :: Text), "task_id" AE..= (publication.publicationId.toText <> ":0"), "title" AE..= ("Assess the evidence" :: Text), "status" AE..= ("in_progress" :: Text)]] :: [AE.Value])
+                ]
+            refresh = work $ SlackPage.refreshSlackProgress publication.publicationId
+            pending = runQueryEffect resources (Investigations.loadProgress target) >>= (\saved -> fmap Investigations.progressTimestamp saved `shouldBe` Just Nothing)
+        writeIORef history [observed & key "app_id" . _String .~ "A_OTHER"]
+        (_, wrongAuthor) <- refresh
+        wrongAuthor `shouldSatisfy` isRight
+        pending
+        writeIORef history [observed, observed & key "ts" . _String .~ "1735689620.000001"]
+        (_, ambiguous) <- refresh
+        ambiguous `shouldSatisfy` isRight
+        pending
+        writeIORef history [observed]
+        (recoveryRequests, recovered) <- refresh
+        recovered `shouldSatisfy` isRight
+        map fst recoveryRequests `shouldSatisfy` elem "https://slack.com/api/chat.stopStream"
+        confirmed <- runQueryEffect resources $ Investigations.loadProgress target
+        fmap Investigations.progressTimestamp confirmed `shouldBe` Just (Just "1735689610.000001")
+        (retryRequests, resumed) <- work $ processSlackEvent receipt
+        resumed `shouldSatisfy` isRight
+        length [() | (url, _) <- retryRequests, url == "https://slack.com/api/chat.postMessage"] `shouldBe` 1
+        map fst (recoveryRequests <> retryRequests) `shouldSatisfy` notElem "https://slack.com/api/chat.startStream"
+        readIORef modelCalls >>= (`shouldBe` 2)
+        (replayed, _) <- work $ processSlackEvent receipt
+        replayed `shouldBe` []
+
+      it "slackStream_idleProgressStopsBeforeTheProviderDeadline" \tr -> do
+        let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_STREAM"}}}
+        setupSlackAgent resources testPid "T_STREAM_IDLE"
+        started <- newEmptyMVar
+        stopped <- newEmptyMVar
+        stoppedBeforeAnswer <- newIORef False
+        let transport = withHTTPResponses \_ endpoint -> do
+              when (endpoint == "https://slack.com/api/chat.startStream") $ void $ tryPutMVar started ()
+              when (endpoint == "https://slack.com/api/chat.stopStream") $ void $ tryPutMVar stopped ()
+              pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> liftIO do
+                timeout 10_000_000 (takeMVar started) >>= (`shouldBe` Just ())
+                advanceTime resources.trTestClock (9 * 60)
+                ended <- timeout 10_000_000 $ takeMVar stopped
+                writeIORef stoppedBeforeAnswer $ isJust ended
+                pure $ Right $ Chat.Message Chat.Assistant "The investigation finished after the idle interval." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        receipt <- receiveSlackEvent resources $ slackThreadedEvent "T_STREAM_IDLE" "CSTREAMIDLE" "Investigate checkout" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+        (requests, outcome) <- runTestBgRecordingHTTP frozenTime resources $ transport $ provider $ tryAny $ processSlackEvent receipt
+        outcome `shouldSatisfy` isRight
+        readIORef stoppedBeforeAnswer >>= (`shouldBe` True)
+        length [() | (url, _) <- requests, url == "https://slack.com/api/chat.startStream"] `shouldBe` 1
+        length [() | (url, _) <- requests, url == "https://slack.com/api/chat.stopStream"] `shouldBe` 1
+        length [() | (url, _) <- requests, url == "https://slack.com/api/chat.postMessage"] `shouldBe` 1
+
+      it "slackStream_boundedJournalSwitchesToTheCurrentSnapshotBeforeTheAnswer" \tr -> do
+        let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_STREAM"}}}
+        setupSlackAgent resources testPid "T_STREAM_LIMIT"
+        started <- newEmptyMVar
+        stopped <- newEmptyMVar
+        rounds <- newIORef (0 :: Int)
+        stoppedBeforeAnswer <- newIORef False
+        let transport = withHTTPResponses \_ endpoint -> do
+              when (endpoint == "https://slack.com/api/chat.startStream") $ void $ tryPutMVar started ()
+              when (endpoint == "https://slack.com/api/chat.stopStream") $ void $ tryPutMVar stopped ()
+              pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> do
+                roundNumber <- atomicModifyIORef' rounds (\n -> (n + 1, n))
+                if roundNumber == 0
+                  then do
+                    liftIO $ timeout 10_000_000 (takeMVar started) >>= (`shouldBe` Just ())
+                    pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall ("schema-" <> show n) "function" $ Chat.ToolFunction "get_schema" mempty | n <- [0 .. 25 :: Int]]}
+                  else do
+                    ended <- liftIO $ timeout 10_000_000 $ takeMVar stopped
+                    writeIORef stoppedBeforeAnswer $ isJust ended
+                    pure $ Right $ Chat.Message Chat.Assistant "The investigation continued beyond the journal window." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        receipt <- receiveSlackEvent resources $ slackThreadedEvent "T_STREAM_LIMIT" "CSTREAMLIMIT" "Investigate checkout" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+        (requests, outcome) <- runTestBgRecordingHTTP frozenTime resources $ transport $ provider $ tryAny $ processSlackEvent receipt
+        outcome `shouldSatisfy` isRight
+        readIORef stoppedBeforeAnswer >>= (`shouldBe` True)
+        requests `shouldSatisfy` any (\(url, body) -> url == "https://slack.com/api/chat.update" && "Showing recent activity only." `T.isInfixOf` decodeUtf8 body)
+        let sentFrames = [chunks | (url, body) <- requests, url `elem` ["https://slack.com/api/chat.startStream", "https://slack.com/api/chat.appendStream", "https://slack.com/api/chat.stopStream"], Just chunks <- [AE.decode @AE.Value body >>= (^? key "chunks" . _Array)]]
+        case reverse sentFrames of
+          stoppedChunks : priorChunks : _ -> stoppedChunks `shouldBe` priorChunks
+          _ -> expectationFailure "Expected the stream to close with its last acknowledged task slots"
+        for_ ["chat.startStream", "chat.stopStream", "chat.postMessage"] \method -> length [() | (url, _) <- requests, url == "https://slack.com/api/" <> method] `shouldBe` 1
+
+      for_ [False, True] $ \lostStop ->
+        it ("slackStream_recoversAccepted" <> if lostStop then "StopWithoutRepeatingIt" else "AppendWithoutRepeatingIt") \tr -> do
+          let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_STREAM"}}}
+              target = Investigations.ProgressTarget testPid "T_STREAM_ACK" "CSTREAMACK" "1735689600.000001" "1735689602.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"
+          setupSlackAgent resources testPid "T_STREAM_ACK"
+          started <- newEmptyMVar
+          appended <- newEmptyMVar
+          interrupt <- newIORef True
+          modelCalls <- newIORef (0 :: Int)
+          history <- newIORef ([] :: [AE.Value])
+          let accepted = Just "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
+              transport = withHTTPResponses \opts endpoint -> case endpoint of
+                "https://slack.com/api/chat.startStream" -> void (tryPutMVar started ()) $> accepted
+                "https://slack.com/api/chat.appendStream" -> void (tryPutMVar appended ()) $> if lostStop then accepted else Just "{\"ok\":true}"
+                "https://slack.com/api/chat.stopStream" -> pure $ if lostStop then Just "{\"ok\":true}" else accepted
+                "https://slack.com/api/chat.postMessage" -> pure $ Just "{\"ok\":true,\"ts\":\"1735689611.000001\"}"
+                "https://slack.com/api/conversations.replies" | opts ^. Wreq.param "include_all_metadata" == ["true"] -> do
+                  messages <- readIORef history
+                  pure $ Just $ AE.encode $ AE.object ["ok" AE..= True, "messages" AE..= messages]
+                _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"members\":[\"U0123ABCDEF\"]}"
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat messages _ _ -> do
+                  modifyIORef' modelCalls (+ 1)
+                  if null [message | message <- toList messages, message.role == Chat.Tool]
+                    then do
+                      liftIO $ timeout 10_000_000 (takeMVar started) >>= (`shouldBe` Just ())
+                      pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" $ Chat.ToolFunction "get_schema" mempty]}
+                    else do
+                      firstAttempt <- atomicModifyIORef' interrupt (\pending -> (False, pending))
+                      when firstAttempt $ liftIO do
+                        timeout 10_000_000 (takeMVar appended) >>= (`shouldBe` Just ())
+                        when lostStop do
+                          timeout
+                            10_000_000
+                            ( fix $ \retry -> do
+                                publication <- runQueryEffect resources $ Investigations.loadProgress target
+                                unless (maybe False (\saved -> case saved.delivery of Investigations.StreamDelivery Investigations.StreamReady{} -> True; _ -> False) publication) $ threadDelay 20_000 >> retry
+                            )
+                            >>= (`shouldBe` Just ())
+                        unless lostStop $ throwIO $ ErrorCall "Worker interrupted after an accepted stream append"
+                      pure $ Right $ Chat.Message Chat.Assistant "The investigation finished." Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+              work = runTestBgRecordingHTTP frozenTime resources . transport . provider . tryAny
+          receipt <- receiveSlackEvent resources $ slackThreadedEvent "T_STREAM_ACK" "CSTREAMACK" "Investigate checkout" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+          (firstRequests, result) <- work $ processSlackEvent receipt
+          isRight result `shouldBe` lostStop
+          Just publication <- runQueryEffect resources $ Investigations.loadProgress target
+          frame <- case publication.delivery of
+            Investigations.StreamDelivery (Investigations.StreamPending (Investigations.AppendStream _ _ frame)) | not lostStop -> pure frame
+            Investigations.StreamDelivery (Investigations.StreamPending (Investigations.StopStream _ _ frame)) | lostStop -> pure frame
+            _ -> fail "Accepted stream request was not retained for reconciliation"
+          let observed =
+                AE.object
+                  [ "type" AE..= ("message" :: Text)
+                  , "app_id" AE..= ("A_STREAM" :: Text)
+                  , "bot_id" AE..= ("B_STREAM" :: Text)
+                  , "ts" AE..= ("1735689610.000001" :: Text)
+                  , "thread_ts" AE..= target.threadTs
+                  , "streaming_state" AE..= (if lostStop then "completed" else "in_progress" :: Text)
+                  , "blocks" AE..= AE.Array [AE.object ["type" AE..= ("plan" :: Text), "title" AE..= Investigations.streamTitle frame, "tasks" AE..= fmap (\task -> task{Investigations.task_id = publication.publicationId.toText <> ":" <> task.task_id}) (Investigations.streamTasks frame)]]
+                  ]
+          writeIORef history [observed]
+          (recoveryRequests, recovered) <- work $ SlackPage.refreshSlackProgress publication.publicationId
+          recovered `shouldSatisfy` isRight
+          Just confirmed <- runQueryEffect resources $ Investigations.loadProgress target
+          case confirmed.delivery of
+            Investigations.StreamDelivery (Investigations.StreamClosed timestamp) -> Investigations.slackTimestampText timestamp `shouldBe` "1735689610.000001"
+            _ -> fail "Reconciled stream did not finish"
+          (retryRequests, resumed) <- work $ processSlackEvent receipt
+          resumed `shouldSatisfy` isRight
+          let requests = firstRequests <> recoveryRequests <> retryRequests
+          for_ ["chat.startStream", "chat.appendStream", "chat.stopStream", "chat.postMessage"] \method -> length [() | (url, _) <- requests, url == "https://slack.com/api/" <> method] `shouldBe` 1
+          readIORef modelCalls >>= (`shouldBe` if lostStop then 2 else 3)
+          (replayed, _) <- work $ processSlackEvent receipt
+          replayed `shouldBe` []
+
       for_ [False, True] $ \fromHistory ->
-        it ("reconciles a lost progress acknowledgement from " <> if fromHistory then "thread history" else "a signed app observation") \tr -> do
+        it ("adopts a legacy lost progress acknowledgement from " <> if fromHistory then "thread history" else "a signed app observation") \tr -> do
           let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_PROGRESS"}}}
               target = Investigations.ProgressTarget testPid "T_RECONCILE" "CRECONCILE" "1735689600.000001" "1735689602.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"
           setupSlackAgent resources testPid "T_RECONCILE"
-          lostAck <- newEmptyMVar
           posts <- newIORef (0 :: Int)
           modelCalls <- newIORef (0 :: Int)
           pages <- newIORef ([] :: [(Maybe Text, AE.Value)])
@@ -2307,30 +2515,27 @@ spec = around withTestResources do
                   else
                     if endpoint == "https://slack.com/api/chat.postMessage"
                       then do
-                        number <- atomicModifyIORef' posts (\n -> (n + 1, n))
-                        if number == 0
-                          then void (tryPutMVar lostAck ()) $> Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}"
-                          else pure $ Just "{\"ok\":true,\"ts\":\"1735689611.000001\",\"members\":[\"U0123ABCDEF\"]}"
+                        modifyIORef' posts (+ 1)
+                        pure $ Just "{\"ok\":true,\"ts\":\"1735689611.000001\",\"members\":[\"U0123ABCDEF\"]}"
                       else pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat{} -> do
                   number <- atomicModifyIORef' modelCalls (\n -> (n + 1, n))
                   if number == 0
-                    then liftIO do
-                      timeout 10_000_000 (takeMVar lostAck) >>= (`shouldBe` Just ())
-                      throwIO $ ErrorCall "Interrupted after Slack accepted progress"
+                    then liftIO $ throwIO $ ErrorCall "Interrupted while adopting an unacknowledged legacy progress message"
                     else pure $ Right $ Chat.Message Chat.Assistant "The investigation resumed." Chat.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
                 ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
               work receipt = runTestBgRecordingHTTP frozenTime resources $ transport $ provider $ tryAny $ processSlackEvent receipt
           receipt <- receiveSlackEvent resources $ slackThreadedEvent "T_RECONCILE" "CRECONCILE" "Investigate checkout" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+          runQueryEffect resources (Investigations.claimProgress target Nothing) >>= (`shouldSatisfy` isJust)
           (firstRequests, interrupted) <- work receipt
           interrupted `shouldSatisfy` isLeft
           Just publication <- runQueryEffect resources $ Investigations.loadProgress target
-          publication.timestamp `shouldBe` Nothing
+          Investigations.progressTimestamp publication `shouldBe` Nothing
           let postedIds = [value | (url, body) <- firstRequests, url == "https://slack.com/api/chat.postMessage", Just value <- [AE.decode @AE.Value body >>= (^? key "metadata" . key "event_payload" . key "publication_id")]]
-          postedIds `shouldBe` [AE.toJSON publication.publicationId]
-          runQueryEffect resources (Investigations.claimProgress target) >>= (`shouldSatisfy` isNothing)
+          postedIds `shouldBe` []
+          runQueryEffect resources (Investigations.claimProgress target Nothing) >>= (`shouldSatisfy` isNothing)
           let observation =
                 slackThreadedEvent "T_RECONCILE" "CRECONCILE" "Recorded progress" "1735689610.000001" "1735689600.000001"
                   & key "api_app_id"
@@ -2363,10 +2568,10 @@ spec = around withTestResources do
               (_, result) <- observe $ spoofed & key "event_id" . _String .~ ("spoofed-progress-" <> show number)
               result `shouldSatisfy` isRight
               pending <- runQueryEffect resources $ Investigations.loadProgress target
-              fmap (.timestamp) pending `shouldBe` Just Nothing
+              fmap Investigations.progressTimestamp pending `shouldBe` Just Nothing
           (_, resumed) <- work receipt
           resumed `shouldSatisfy` isRight
-          readIORef posts >>= (`shouldBe` 2)
+          readIORef posts >>= (`shouldBe` 1)
           readIORef modelCalls >>= (`shouldBe` 2)
           (requests, observed) <-
             if fromHistory
@@ -2377,7 +2582,7 @@ spec = around withTestResources do
                     conflicting = page [message, message & key "ts" . _String .~ "1735689620.000001"] ""
                     matching = page [message] ""
                     refresh = runTestBgRecordingHTTP frozenTime resources $ transport $ tryAny $ SlackPage.refreshSlackProgress publication.publicationId
-                    pending = runQueryEffect resources (Investigations.loadProgress target) >>= (\saved -> fmap (.timestamp) saved `shouldBe` Just Nothing)
+                    pending = runQueryEffect resources (Investigations.loadProgress target) >>= (\saved -> fmap Investigations.progressTimestamp saved `shouldBe` Just Nothing)
                 writeIORef pages [(Nothing, wrong), (Just "next", conflicting), (Just "next", matching), (Just "next", matching)]
                 replicateM_ 2 do
                   (_, result) <- refresh
@@ -2395,15 +2600,15 @@ spec = around withTestResources do
                 refresh
               else observe $ observation & key "event_id" . _String .~ "observed-progress"
           observed `shouldSatisfy` isRight
-          readIORef posts >>= (`shouldBe` 2)
+          readIORef posts >>= (`shouldBe` 1)
           readIORef modelCalls >>= (`shouldBe` 2)
           confirmed <- runQueryEffect resources $ Investigations.loadProgress target
-          fmap (.timestamp) confirmed `shouldBe` Just (Just "1735689610.000001")
+          fmap Investigations.progressTimestamp confirmed `shouldBe` Just (Just "1735689610.000001")
           runQueryEffect resources (Investigations.confirmProgress publication.publicationId "1735689620.000001") >>= (`shouldBe` False)
           runQueryEffect resources $ Investigations.rejectProgress publication.publicationId
           void $ observe $ observation & key "event_id" . _String .~ "conflicting-progress" & key "event" . key "ts" . _String .~ "1735689620.000001"
           unchanged <- runQueryEffect resources $ Investigations.loadProgress target
-          fmap (.timestamp) unchanged `shouldBe` Just (Just "1735689610.000001")
+          fmap Investigations.progressTimestamp unchanged `shouldBe` Just (Just "1735689610.000001")
           let updates = [body | (url, body) <- requests, url == "https://slack.com/api/chat.update"]
           updates `shouldSatisfy` (not . null)
           for_ updates $ \body -> do
@@ -2412,25 +2617,23 @@ spec = around withTestResources do
           (replayed, _) <- work receipt
           replayed `shouldBe` []
           let rejectedTarget = (target{Investigations.messageTs = "1735689630.000001"} :: Investigations.ProgressTarget)
-          Just rejected <- runQueryEffect resources $ Investigations.claimProgress rejectedTarget
+          Just rejected <- runQueryEffect resources $ Investigations.claimProgress rejectedTarget Nothing
           runQueryEffect resources $ Investigations.rejectProgress rejected.publicationId
           runQueryEffect resources (Investigations.loadProgress rejectedTarget) >>= (`shouldSatisfy` isNothing)
-          runQueryEffect resources (Investigations.claimProgress rejectedTarget) >>= (`shouldSatisfy` isJust)
+          runQueryEffect resources (Investigations.claimProgress rejectedTarget Nothing) >>= (`shouldSatisfy` isJust)
 
-      it "updates one progress checklist while investigating and reuses it after a rejected answer delivery" \tr -> do
+      it "streams one progress checklist and reuses it after a rejected answer delivery" \tr -> do
         setupSlackAgent tr testPid "T_PROGRESS"
         started <- newEmptyMVar
         updated <- newEmptyMVar
         posts <- newIORef (0 :: Int)
         modelCalls <- newIORef (0 :: Int)
         let transport = withHTTPResponses \_ endpoint -> case endpoint of
+              "https://slack.com/api/chat.startStream" -> void (tryPutMVar started ()) $> Just "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
+              "https://slack.com/api/chat.appendStream" -> void (tryPutMVar updated ()) $> Just "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
               "https://slack.com/api/chat.postMessage" -> do
                 number <- atomicModifyIORef' posts (\n -> (n + 1, n))
-                case number of
-                  0 -> void (tryPutMVar started ()) $> Just "{\"ok\":true,\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
-                  1 -> pure $ Just "{\"ok\":false,\"error\":\"ratelimited\"}"
-                  _ -> pure $ Just "{\"ok\":true,\"ts\":\"1735689611.000001\",\"members\":[\"U0123ABCDEF\"]}"
-              "https://slack.com/api/chat.update" -> void (tryPutMVar updated ()) $> Just "{\"ok\":true,\"members\":[\"U0123ABCDEF\"]}"
+                pure $ Just $ if number == 0 then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true,\"ts\":\"1735689611.000001\"}"
               _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}"
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> do
@@ -2452,8 +2655,8 @@ spec = around withTestResources do
         succeeded `shouldSatisfy` isRight
         readIORef modelCalls >>= (`shouldBe` 2)
         let bodies requests endpoint = [value | (url, body) <- requests, url == endpoint, Just value <- [AE.decode @AE.Value body]]
-            progressPosts = filter (\value -> value ^? key "blocks" . _Array . ix 0 . key "type" . _String == Just "plan") $ bodies (firstRequests <> retryRequests) "https://slack.com/api/chat.postMessage"
-            updates = bodies (firstRequests <> retryRequests) "https://slack.com/api/chat.update"
+            progressPosts = bodies (firstRequests <> retryRequests) "https://slack.com/api/chat.startStream"
+            updates = concatMap (bodies $ firstRequests <> retryRequests) ["https://slack.com/api/chat.appendStream", "https://slack.com/api/chat.stopStream", "https://slack.com/api/chat.update"]
         length progressPosts `shouldBe` 1
         for_ progressPosts $ \value -> value ^? key "thread_ts" . _String `shouldBe` Just "1735689600.000001"
         updates `shouldSatisfy` (not . null)
@@ -2461,7 +2664,9 @@ spec = around withTestResources do
           value ^? key "channel" . _String `shouldBe` Just "CPROGRESS"
           value ^? key "ts" . _String `shouldBe` Just "1735689610.000001"
           T.isInfixOf "private model narration" (decodeUtf8 $ AE.encode value) `shouldBe` False
-        updates `shouldSatisfy` any (\value -> value ^? key "blocks" . _Array . ix 0 . key "title" . _String == Just "Investigation response ready")
+        updates `shouldSatisfy` any (\value -> "Investigation response ready" `elem` (value ^.. key "chunks" . _Array . traverse . key "title" . _String <> value ^.. key "blocks" . _Array . traverse . key "title" . _String))
+        length (bodies (firstRequests <> retryRequests) "https://slack.com/api/chat.stopStream") `shouldBe` 1
+        bodies firstRequests "https://slack.com/api/chat.update" `shouldSatisfy` (not . null)
         bodies retryRequests "https://slack.com/api/chat.update" `shouldSatisfy` (not . null)
         (replayed, _) <- work receipt
         replayed `shouldBe` []
@@ -4348,6 +4553,7 @@ spec = around withTestResources do
             stop user ts = event ts & key "event_id" . _String .~ ("stop-" <> user <> ts) & key "event" .~ AE.object ["type" AE..= ("agent_session_stopped" :: Text), "channel" AE..= ("CSTOP" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= (user :: Text), "event_ts" AE..= (ts :: Text)]
             transport = withHTTPResponses \_ endpoint -> do
               reject <- case endpoint of
+                "https://slack.com/api/chat.stopStream" -> readIORef rejectRefresh
                 "https://slack.com/api/chat.update" -> readIORef rejectRefresh
                 "https://slack.com/api/agents.sessions.setStatus" -> do
                   attempt <- atomicModifyIORef' sessionCalls (\n -> (n + 1, n))
@@ -4361,6 +4567,7 @@ spec = around withTestResources do
             stopped ts = toBaseServantResponse tr $ Slack.slackInvestigationStopped testPid "T_STOP" "CSTOP" "1735689600.000001" ts
         receipt <- receiveSlackEvent tr $ event "1735689601.000001"
         let uid = (getResponse tr.trSessAndHeader).user.id
+            target = Investigations.ProgressTarget testPid "T_STOP" "CSTOP" "1735689600.000001" "1735689601.000001" uid "U0123ABCDEF"
             resetJob = Jobs.ResetSlackSession testPid uid receipt
             reset = runTestBgRecordingHTTP frozenTime tr $ transport $ tryAny $ SlackPage.resetSlackSession testPid uid receipt
             resetCount = withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT count(*) FROM background_jobs WHERE payload = ? AND status = 'queued'|] (PGS.Only $ Aeson $ AE.toJSON resetJob)
@@ -4375,14 +4582,8 @@ spec = around withTestResources do
           timeout
             10_000_000
             ( fix $ \retry -> do
-                published <- withResource tr.trPool $ \conn ->
-                  PGS.query
-                    conn
-                    [sql|SELECT EXISTS (SELECT 1 FROM apis.slack_investigation_progress
-                WHERE project_id = ? AND team_id = 'T_STOP' AND channel_id = 'CSTOP'
-                  AND thread_ts = '1735689600.000001' AND message_ts = '1735689601.000001' AND progress_ts IS NOT NULL)|]
-                    (PGS.Only testPid)
-                unless (published == [PGS.Only True]) $ threadDelay 20_000 >> retry
+                published <- runQueryEffect tr $ Investigations.loadProgress target
+                unless (isJust $ Investigations.progressTimestamp =<< published) $ threadDelay 20_000 >> retry
             )
             >>= (`shouldBe` Just ())
           void $ receiveSlackEvent tr $ stop "U_UNLINKED" "1735689603.000001"
@@ -4396,13 +4597,13 @@ spec = around withTestResources do
               outcome `shouldSatisfy` isRight
               mapMaybe (\(_, body) -> AE.decode @AE.Value body >>= (^? key "status" . _String)) requests `shouldBe` ["processing", "active"]
               let messages = [value | (_, body) <- requests, Just value <- [AE.decode @AE.Value body]]
-                  progressUpdates = [value | (url, body) <- requests, url == "https://slack.com/api/chat.update", Just value <- [AE.decode @AE.Value body]]
+                  progressUpdates = [value | (url, body) <- requests, url == "https://slack.com/api/chat.stopStream", Just value <- [AE.decode @AE.Value body]]
               mapMaybe (\value -> if value ^? key "blocks" . _Array . ix 0 . key "type" . _String == Just "plan" then Nothing else value ^? key "text" . _String) messages `shouldBe` ["Investigation stopped. Send another message to continue."]
               progressUpdates `shouldSatisfy` (not . null)
               for_ progressUpdates $ \value -> do
                 value ^? key "ts" . _String `shouldBe` Just "1735689610.000001"
-                value ^? key "blocks" . _Array . ix 0 . key "title" . _String `shouldBe` Just "Investigation interrupted"
-                value ^? key "blocks" . _Array . ix 0 . key "tasks" . _Array . ix 0 . key "status" . _String `shouldBe` Just "error"
+                value ^? key "chunks" . _Array . ix 0 . key "title" . _String `shouldBe` Just "Investigation interrupted"
+                value ^? key "chunks" . _Array . ix 1 . key "status" . _String `shouldBe` Just "error"
           readIORef interrupted >>= (`shouldBe` True)
           void $ runTestBgRecordingHTTP frozenTime tr $ processSlackEvent stopReceipt
         resetCount >>= (`shouldBe` [PGS.Only (1 :: Int)])
@@ -4420,7 +4621,6 @@ spec = around withTestResources do
         revokedReset `shouldSatisfy` isRight
         revokedRequests `shouldBe` []
         withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = TRUE WHERE project_id = ?|] (PGS.Only testPid)
-        let target = Investigations.ProgressTarget testPid "T_STOP" "CSTOP" "1735689600.000001" "1735689601.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"
         publication <- runQueryEffect tr (Investigations.loadProgress target) >>= maybe (fail "Expected stopped progress publication") pure
         let refresh = runTestBgRecordingHTTP frozenTime tr $ transport $ tryAny $ SlackPage.refreshSlackProgress publication.publicationId
             queued = withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT count(*) FROM background_jobs WHERE payload = ? AND status = 'queued' AND run_at > clock_timestamp()|] (PGS.Only $ Aeson $ AE.toJSON $ Jobs.RefreshSlackProgress publication.publicationId)
@@ -4439,11 +4639,11 @@ spec = around withTestResources do
         writeIORef rejectRefresh False
         (refreshed, refreshOutcome) <- refresh
         refreshOutcome `shouldSatisfy` isRight
-        map fst refreshed `shouldBe` ["https://slack.com/api/chat.update"]
+        map fst refreshed `shouldBe` ["https://slack.com/api/chat.stopStream", "https://slack.com/api/chat.update"]
         for_ refreshed $ \(_, body) -> do
           let value = AE.decode @AE.Value body
           (value >>= (^? key "ts" . _String)) `shouldBe` Just "1735689610.000001"
-          (value >>= (^? key "blocks" . _Array . ix 0 . key "title" . _String)) `shouldBe` Just "Investigation interrupted"
+          (value >>= (\rendered -> rendered ^? key "chunks" . _Array . ix 0 . key "title" . _String <|> rendered ^? key "blocks" . _Array . ix 0 . key "title" . _String)) `shouldBe` Just "Investigation interrupted"
         void $ receiveSlackEvent tr $ stop "U0123ABCDEF" "1735689600.000002"
         stopped "1735689601.000001" >>= (`shouldBe` True)
         stopped "1735689603.000001" >>= (`shouldBe` False)

@@ -57,7 +57,6 @@ module Models.Apis.Incidents (
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
-import Data.Char (isDigit)
 import Data.Effectful.Hasql (executeTx, oneTx, queryTx)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.OpenApi (ToParamSchema, ToSchema)
@@ -73,6 +72,7 @@ import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Integrations qualified as Integrations
+import Models.Apis.Investigations (SlackTimestamp, slackTimestamp, slackTimestampText)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -648,28 +648,6 @@ recordIncidentEventTx update = do
                                 AND NOT (threadless AND #{operation} = 'update_root')
                               ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
                     pure $ Recorded current eventId
-
-
-newtype SlackTimestamp = SlackTimestamp Text
-  deriving stock (Eq, Show)
-  deriving newtype (AE.ToJSON, HI.EncodeValue)
-
-
--- | Parse Slack's decimal timestamp without losing precision.
---
--- >>> fmap slackTimestampText (slackTimestamp "1788900000.000001")
--- Just "1788900000.000001"
--- >>> all (isNothing . slackTimestamp) ["", "1", ".1", "1.", "1.2.3", "-1.1"]
--- True
-slackTimestamp :: Text -> Maybe SlackTimestamp
-slackTimestamp value =
-  let (seconds, fraction) = T.breakOn "." value
-      digits text = not (T.null text) && T.all isDigit text
-   in SlackTimestamp value <$ guard (digits seconds && digits (T.drop 1 fraction))
-
-
-slackTimestampText :: SlackTimestamp -> Text
-slackTimestampText (SlackTimestamp value) = value
 
 
 -- | 'PostStandalone' is a reply with no thread to join. It posts like a root but
