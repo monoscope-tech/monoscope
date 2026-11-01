@@ -123,6 +123,22 @@ A further failing-first verified-fix case ended with “Draft accepted” and th
 
 The existing visual artifact now explains both PR-analysis interruptions and accepted fix/admission/peer result recovery, with file/line excerpts from `4eb4ae142`. Displayed excerpts remove their common left indentation and preserve relative indentation. Chrome checks all twelve walkthroughs, code comparisons, and roadmap at widths 390/768/1280. Expanded native recovery and fix excerpts remain within the phone viewport; keyboard step navigation passes. Sampled text tokens exceed 7:1 contrast. Visual inspection confirms the provider-result step is readable at 390 pixels. These are local artifact checks, not live Slack acceptance.
 
+## Native fix session continuation
+
+The existing retained-session interpreter now serves PR analysis, fixes, regression admission, and independent review. A typed session subject selects the original fix context or child model attempt. Native checkpoint matching retains the real model attempt. A retry of the same verified comparison retains its original peer decision and reviewer attempt; an independent review uses a separate request root. Admission keys also bind the exact regression artifact. Current credentials and authority are resolved again.
+
+`FixContext` retains the original model specification, issue prompt, evidence window, queried evidence, staged notes, and model attempt. The producer loads it before creating another attempt. The private checkpoint adds a fix-workflow state alongside the existing SDK/guest pair; the PR checkpoint format remains readable. A resumed fix retains its verifier-session identity and phase receipts instead of issuing another reproduction restart.
+
+`FixProgress` is traversable over candidate descriptors. Saved reproduction state includes its original failing execution; checked state also includes both comparison receipts. Restore verifies admission metadata, native reports, logs, source fingerprints, image identity, patch and bundle hashes, and Git history through the shared artifact verifier. The current clean workspace lease supplies the verifier baseline. A suspended disk carries live edits and tool logs, never that baseline.
+
+A private candidate manifest supplies one wire representation for two opaque wrappers. `CandidateSnapshot` is an unverified descriptor. `CapturedCandidate` has neither a `Generic` nor a `FromJSON` instance. Only capture or checked restore can construct that proof. Completed fix checkpoints retain the actual validated `FixResult`; recovery revalidates it and reconstructs the reviewed proof through the existing artifact and peer checks.
+
+A nested admission or peer interruption suspends both the child and its pending parent tool. A typed pause signal preserves that distinction from rejection. An unresolved admission does not consume another query charge on every wake. End-of-input cancels the SDK before another model start; cancelled tool events retain their attempt and cancellation status instead of appearing as completed failures.
+
+The existing real-SDK/VM fixture now interrupts admission, candidate capture, and independent inspection, then completes the same fix. It has passed with forty provider requests, including eight recorded failures, eight original phase receipts, and ten released agent allocations. Its finished-result replay starts no inference; a changed native attempt is refused. Snapshot codec round-trip and corrupted metadata, patch, and bundle cases pass. The final sealed-proof source passes the same focused case, including finished replay and corruption rejection. Broader native verification is in progress. The current SDK worker suite passes all nineteen cases. No migration, worker, scheduler, VM manager, dependency, or product page was added.
+
+This covers cooperative provider interruption and the existing typed wait frontiers. Arbitrary host-loss coverage, production-job acceptance of the complete SDK continuation, Linux/KVM acceptance, streaming, controlled live Slack acceptance, and final release gates remain open.
+
 ## Shared review controls: interface review
 
 Full review scope: the shared run inspector's waiting, submitted, and failed-decision states. Stack: Lucid, HTMX 4, Tailwind/DaisyUI, existing semantic theme tokens. This is not a review of every agent screen or live Slack.

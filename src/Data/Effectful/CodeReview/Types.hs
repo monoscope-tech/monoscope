@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Types (ReviewInput (..), ReviewMemory (..), ReviewContext (..), Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
+module Data.Effectful.CodeReview.Types (ReviewInput (..), ReviewMemory (..), ReviewContext (..), FixContext (..), Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
@@ -70,6 +70,11 @@ data ReviewMemory = ReviewMemory {evidence :: Map TelemetryQuery Evidence, notes
 
 
 data ReviewContext = ReviewContext {input :: ReviewInput, memory :: ReviewMemory}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data FixContext = FixContext {attempt :: UUIDId "agent_attempt", issue :: Text, context :: ReviewContext}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 

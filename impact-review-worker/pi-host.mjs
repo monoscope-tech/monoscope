@@ -269,7 +269,9 @@ async function main() {
     exchange = (tag, contents) => {
       const reply = pending.then(async () => {
         process.stdout.write(JSON.stringify({ tag, contents }) + '\n');
-        const response = JSON.parse((await messages.next()).value);
+        const line = await messages.next();
+        if (line.done) { controller.abort(); signal.throwIfAborted(); }
+        const response = JSON.parse(line.value);
         if (typeof response.Left !== 'string' && !Object.hasOwn(response, 'Right')) throw new Error('Invalid query response');
         if (['Call', 'Usage'].includes(tag) && Object.hasOwn(response, 'Left')) throw new Error('Receipt was rejected');
         return response;
@@ -323,7 +325,8 @@ async function main() {
           void persistReceipt('Usage', modelUsage(message, modelRuntime.getModel(message.provider, message.model)?.cost ?? null, attemptId, event.callId)).catch(() => controller.abort());
         }
         if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
-          process.stderr.write(JSON.stringify({ event: event.type, tool: event.toolName, failed: event.isError ?? false }) + '\n');
+          const type = signal.aborted && event.type === 'tool_execution_end' ? 'tool_execution_cancelled' : event.type;
+          process.stderr.write(JSON.stringify({ event: type, attemptId, tool: event.toolName, failed: event.isError ?? false }) + '\n');
         }
       },
     });
