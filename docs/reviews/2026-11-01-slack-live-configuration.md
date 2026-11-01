@@ -423,3 +423,53 @@ Two scoped hs-distill, hs-evasion-review, and hs-lob-review passes retain these 
 Before this change, the complete bot group plus ingestion, catalog and checkout selection passes 587 examples in 216.8456 seconds with all 212 recorded Haskell inputs unchanged. Afterward, the stream, audience, incident and API selection passes 155 examples in 63.5426 seconds. The supported complete doctest target passes all 2,104 examples, with zero errors and failures.
 
 Private receipts: `scripts/local/slack-channel-constructor-red.log`, `slack-channel-record-constructor-red.log`, `slack-channel-constructor-green.log`, `slack-channel-proof-hlint.json`, and `slack-stream-branch-regression-source.json`. These checks do not replace final whole-branch review and release signoff.
+
+
+## Slack Connect personal evidence and retained access
+
+The isolated QA app now completes an actual Slack Connect read in the requester's personal DM. Provider metadata confirms that the requester belongs to the existing shared channel and that the bot has not joined it. No shared-channel invitation, membership change, or message is made.
+
+The requester completes fresh native consent for the existing eight read-only personal scopes. The authorized callback stores one encrypted grant bound to this project, workspace, and Slack user. The native request invokes the canonical slack_read_channel and slack_read_thread capabilities. Both return ReadSucceeded, and the final answer contains only the channel identifier and the verified provider citation. This check deliberately avoids quoting shared-channel content in the answer or this review.
+
+Run `af35952f-bf10-4758-a362-8e3e85cccaeb` and logical conversation `0b3a4424-3ac8-5b81-8d2a-4417a06d4180` both retain PersonalAudience for the requester. A second actual project administrator, without sudo or a Slack identity/grant, can load the project dashboard and conversation list. That list omits the personal conversation and run. Direct conversation and run requests return 403; both return 200 for the requester and redirect anonymous access. Denied responses contain neither the source channel identifier nor its message coordinate. The callback queue drains.
+
+A freshly signed replay of the actual Slack Connect event returns HTTP 200 and preserves its exact run, event, journal, progress, reply reservations, operation count, and queued-job count. No matching job is queued.
+
+The second administrator and persistent sessions are isolated QA fixtures. They exercise real handlers and stored membership, not an injected authorization result. The conversation row's primary key differs from its logical conversation_id; an initial observer query used the wrong key and was corrected without changing application behavior.
+
+Private receipts are `scripts/local/slack-connect-personal-consent.json`, `slack-connect-read-observation.json`, and `slack-connect-live-acceptance.json`. This acceptance proves existing shared-channel reads and personal retention. It does not establish all public/private destination confinement cases.
+
+## Private-channel evidence through the native command
+
+Native `/monoscope-qa` run `045ae75a-698b-4635-8dc8-78e23902778e` invokes the canonical slack_read_channel capability for private QA channel `C0CERB6P8QY`. The actual provider returns ReadSucceeded, and the final native answer contains only that channel identifier plus its standard run link. Both the run and logical conversation retain SlackChannelAudience for the same workspace/channel. The requester receives HTTP 200 for each retained page; the unlinked second administrator receives 403, and anonymous requests redirect. There is no project mutation. All 237 recorded QA application/shared/integration inputs and package manifests remain unchanged.
+
+A separate native request asks for a different shared channel. The model refuses without reading Slack. That demonstrates a safe observed response, not proof of the canonical argument-rewriting boundary; controlled integration cases still supply that proof. The live receipts are `scripts/local/slack-private-evidence-acceptance.json` and `slack-channel-confinement-observation.json`.
+
+## Controlled Slack stream rate limit
+
+A native QA DM reaches the real shared worker, model, production rate-limit interpreter, and Slack streaming methods. A loopback gateway returns exactly one controlled HTTP 429 with Retry-After 10 for chat.appendStream, before forwarding that request. This is not a Slack-generated rate limit.
+
+The production interpreter persists the workspace/method cooldown. No append is forwarded before its deadline. The run finishes before another append is necessary, so the final stop supplies the final frame: this observation does not prove that an append was retried. Real Slack retains exactly one accepted start, one completed stream, and one final answer. The queue drains without intervention, and all recorded runtime, harness, and gateway input hashes remain unchanged.
+
+Run `1eaef94c-ccdf-428e-919b-755cb8c17a9f` returns authenticated HTTP 200. A freshly signed duplicate of the native event returns 200 and changes no run, journal, publication, operation, or job state. The request makes no project mutation or conversation artifact. The receipt is `scripts/local/slack-stream-rate-acceptance.json`; the source manifest is `slack-stream-rate-source.json`.
+
+## Retained conversation browser destination
+
+The actual Slack answer exposes View runs and artifacts with the correct QA conversation URL. Chrome loads that published destination using the existing QA requester fixture session. It displays the retained answer, canonical citation, and a visible Succeeded link for the original run. This is the real integrated conversation page, without a temporary rendering adapter.
+
+The automated native link click did not open a new tab. macOS also denies automated keystrokes. The destination check therefore navigates Chrome to the exact original href read from Slack's DOM. Native new-tab interaction remains unverified; destination rendering and requester access pass. The fixture session is seeded only on the isolated QA origin, so this is not an Auth0 login acceptance. The private browser receipt is `scripts/local/slack-connect-artifact-link-browser.json`.
+
+## Interrupted stream acknowledgement
+
+In the first native application-loss probe, real Slack accepts chat.startStream while the gateway holds its acknowledgement. The stored state is still StreamPending StartStream when the entire QA application receives SIGKILL. The normal watcher restarts it, and the original job's lease expires naturally without database time or lease edits. Original run `bfb942a9-042d-43d4-ae87-b74927e63da1` succeeds, closes the original provider stream, and delivers exactly one final answer. The recorded application inputs remain unchanged through that main completion.
+
+Two bot-callback jobs remain locked after that recovery. They drain only after a later diagnostic harness reload and natural lease expiry. The main run's recovery passes; complete automatic callback-queue recovery does not pass from this first probe. No dependency or production queue fix is inferred from the incomplete observation. Its receipt is `scripts/local/slack-stream-application-loss.json`.
+
+A new named probe repeats the same failure with diagnostic logging already enabled before launch, all tracked application/shared/integration inputs and package manifests recorded, and no intervening runtime source edits. Its authoritative state is retained in `scripts/local/slack-stream-application-loss-spruce.json`. Completion is not claimed until the original run, provider stream, final answer, unchanged inputs, and naturally drained queue all pass together. These probes kill the application process, not the physical Mac.
+
+
+## Review artifact and current cross-entry regression
+
+The existing review Page is updated in place at sequence 75. Its native Slack evidence section renders in Chrome. The single hosted visualization matches the local 239,130-byte HTML by SHA-256. All twenty unrelated prior native blocks remain unchanged, all 116 source entries remain, and all twelve walkthroughs keep their 103 steps. The complete local walkthrough check passes at 320, 390, 768 and 1280 pixels, with no overflow or browser errors. Hosted embedded interaction remains unverified. The private preservation/readback receipt is `scripts/local/slack-connect-review-page-refresh.json`.
+
+The complete bot group plus selected API, native-job, queued/web-conversation and slash-entry cases passes 651 examples, zero failures, in 218.6509 seconds. All 253 recorded inputs remain unchanged. The source, output and result are `scripts/local/slack-final-cross-entry-source.json`, `slack-final-cross-entry-green.log`, and `slack-final-cross-entry-result.json`. This checkpoint precedes integration of newly merged master PR #760; it is not final branch signoff. No canonical runtime code is added by this live acceptance slice.
