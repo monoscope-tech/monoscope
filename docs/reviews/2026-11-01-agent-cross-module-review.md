@@ -188,6 +188,29 @@ Their JSON and database decoders use the same refinements.
 Two scoped skill passes find no further material issue, and no runtime source changes are made.
 The source receipt is `scripts/local/project-memory-boundary-review.json`; no additional test result is claimed for this source review.
 
+### Operation, checkpoint, and audience follow-up
+
+The complete Investigations module review follows immutable proposals, claim locks, selected review, operation completion, checkpoints, reply reservations, progress streams, and evidence audiences.
+Caller reads follow transaction admission in AI, current run authority, and parsed acknowledgement publication in Slack.
+Two scoped skill passes find no further material issue. No runtime source changes or additional test results are claimed.
+
+Claims bind the current running attempt, requester, conversation, checkpoint revision, and pending call.
+Mutation and receipt completion share one transaction; uncertain external outcomes remain explicit.
+Review execution checks the current approver role and caller authority again.
+Checkpoint updates reject stale revisions, and accepted follow-ups commit with their journal entry and signed receipt.
+Legacy adoption retains Observe authority and stops unresolved mutations instead of replaying them.
+
+Reply reservations precede HTTP publication. Production acknowledgement callers parse timestamps before confirmation.
+Progress streams retain their exact previous state and canonical task identities.
+Evidence permissions only increase, while private audiences intersect rather than widen.
+Legacy source classification preserves unknown evidence as administrator-only.
+The source receipt is `scripts/local/investigation-ledger-boundary-review.json`.
+
+The separate migration audit compares all 295 local files with the isolated QA ledger.
+Every checksum matches, with no missing or unknown file. No migration is run by this audit.
+The branch also adds migration files without changing any migration already on master.
+Its receipt is `scripts/local/unified-agent-qa-migration-audit.json`.
+
 The source record is `scripts/local/agent-cross-module-review-source.json`.
 No runtime source changed during this review, so no additional test run is claimed.
 The preceding chart checkpoint passes 489 bot cases and 2,083 doctest examples.
