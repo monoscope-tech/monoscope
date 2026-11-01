@@ -2980,7 +2980,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         map (\page -> (page.version, AE.toJSON page.author)) pages `shouldBe` [(1, AE.toJSON $ Memory.Run writingRun) | writes]
 
   for_ ([(ReviewSuspension, 0, 1), (ProviderFailure, 1, 0), (FinalProviderFailure, 0, 1)] :: [(NativeInterruption, Int, Int)]) $ \(interruption, extraCalls, initialCallbacks) ->
-    it ("nativeReview_resumeKeepsTheSdkTranscriptAndCompletedGuestEdit: " <> show interruption) \_ -> withSystemTempDirectory "native-review-resume" \temporary -> do
+    it ("nativeReview_resumeKeepsTheSdkTranscriptAndCompletedGuestEdit_andRejectsMissingManifest: " <> show interruption) \_ -> withSystemTempDirectory "native-review-resume" \temporary -> do
       directory <- canonicalizePath temporary
       image <- nativeTestImage
       let repository = directory </> "repository"
@@ -3023,9 +3023,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
               else (`SdkResponse` SdkTokens 7 0) <$> next replies
       withSdkProvider directory "resume-fixture" provider \models observed -> do
         let request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = toText repository, base = commit, head = commit, gitToken = "fixture-git-secret-must-not-be-retained", prompt = "Resume the original review.", provider = "resume-fixture", model = "fixture", thinkingLevel = Agent.Off}
+            native :: Eff '[Agent.CodeReview, IOE] a -> IO a
+            native action = runEff $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"] action
             invoke root configured =
-              runEff
-                $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"]
+              native
                 $ Agent.reviewRepository
                   (Agent.Retained root $ pure $ Agent.ReviewContext Agent.ReviewInput{base = commitRevision, head = commitRevision, provider = configured.provider, model = "fixture", files = [], evidence = [], coverage = [], windowStart = frozenTime, windowEnd = frozenTime, prompt = configured.prompt} (Agent.ReviewMemory mempty []))
                   configured
@@ -3068,6 +3069,16 @@ spec = around withTestResources $ describe "Production impact reviews" do
             length <$> observed `shouldReturn` initialCalls
             readIORef callbacks `shouldReturn` initialCallbacks
             writeFileBS transcript frozen
+        let manifestPath = sessionDirectory </> "checkpoint.json"
+        manifestBytes <- readFileBS manifestPath
+        transcriptBytes <- readFileBS $ sessionDirectory </> "active.jsonl"
+        bracket_ (removeFile manifestPath) (Native.writePrivateArtifact sessionDirectory "checkpoint.json" $ fromStrict manifestBytes) do
+          orphanedContext <- native $ Agent.readSessionContext (Agent.ReviewSubject request.runId) (uid 4)
+          isLeft orphanedContext `shouldBe` True
+          run >>= (`shouldSatisfy` isLeft)
+          length <$> observed `shouldReturn` initialCalls
+          readIORef callbacks `shouldReturn` initialCallbacks
+          readFileBS (sessionDirectory </> "active.jsonl") `shouldReturn` transcriptBytes
         resumed <- run
         when (isLeft resumed) do
           diagnostic <- readFileBS $ directory </> "worker.log"

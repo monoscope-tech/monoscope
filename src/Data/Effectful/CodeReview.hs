@@ -852,7 +852,9 @@ readNativeCheckpoint :: AE.FromJSON context => FilePath -> IO (Maybe (NativeChec
 readNativeCheckpoint directory = do
   stored <- tryIOError $ Native.readPrivateArtifact directory "checkpoint.json" (16 * 1048576)
   case stored of
-    Left failed | isDoesNotExistError failed -> pure Nothing
+    Left failed | isDoesNotExistError failed -> do
+      unlessM (null <$> listDirectory directory) $ fail "Native continuation manifest is missing"
+      pure Nothing
     Left failed -> throwIO failed
     Right bytes -> either (const $ fail "Invalid native continuation") (pure . Just) $ AE.eitherDecodeStrict bytes
 
