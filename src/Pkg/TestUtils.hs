@@ -1326,8 +1326,9 @@ seedIssue tr s =
 
 
 -- | Snapshot @tests/golden/html/<name>.html@, one tag per line, so the diff is reviewable.
--- UUIDs, trace ids and issue numbers (a counter every upsert attempt consumes) are
--- scrubbed to keep it stable. @UPDATE_GOLDEN=true@, or a missing file, (re)writes it.
+-- UUIDs, trace ids and issue numbers are scrubbed to keep it stable. Issue numbers gap
+-- because the seq-num trigger (migration 0051) consumes one per upsert attempt, a known
+-- product bug this scrub does not fix. @UPDATE_GOLDEN=true@, or a missing file, (re)writes it.
 goldenHtml :: Lucid.ToHtml a => FilePath -> a -> Expectation
 goldenHtml name html = do
   let path = "./tests/golden/html/" <> name <> ".html"
@@ -1893,22 +1894,18 @@ mkSpanRequest trId spanId parentSpanIdM spanName events statusM attrs resource t
       otelSpan =
         defMessage
           & PTF.traceId
-          .~ hexPad 32 trId
-            & PTF.spanId
+          .~ hexPad 32 trId & PTF.spanId
           .~ hexPad 16 spanId
             & PTF.parentSpanId
           .~ maybe "" (hexPad 16) parentSpanIdM
             & PTF.name
-          .~ spanName
-            & PTF.kind
+          .~ spanName & PTF.kind
           .~ PT.Span'SPAN_KIND_SERVER
             & PTF.startTimeUnixNano
-          .~ startTime
-            & PTF.endTimeUnixNano
+          .~ startTime & PTF.endTimeUnixNano
           .~ endTime
             & PTF.attributes
-          .~ attrs
-            & PTF.events
+          .~ attrs & PTF.events
           .~ events
             & maybe id (PTF.status .~) statusM
       scopeSpan = defMessage & PTF.spans .~ [otelSpan]

@@ -483,9 +483,9 @@ insertAnomalies :: DB es => V.Vector AnomalyInsertRow -> Eff es Int64
 insertAnomalies rows | V.null rows = pure 0
 insertAnomalies rows =
   Hasql.interpExecute
-    [HI.sql| INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash, method, host, url_path, new_fields, modified_fields, field_evidence, created_at)
+    [HI.sql| INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash, method, host, url_path, new_fields, modified_fields, field_evidence)
              SELECT pid, atype::apis.anomaly_type, 'created'::apis.anomaly_action, th, mth, hst, up,
-                    ARRAY(SELECT jsonb_array_elements_text(nf)), ARRAY(SELECT jsonb_array_elements_text(mf)), evidence, app_now()
+                    ARRAY(SELECT jsonb_array_elements_text(nf)), ARRAY(SELECT jsonb_array_elements_text(mf)), evidence
              FROM unnest(#{pids}::uuid[], #{atypes}::text[], #{ths}::text[], #{methods}::text[], #{hosts}::text[], #{paths}::text[], #{nfs}::jsonb[], #{mfs}::jsonb[], #{evidences}::jsonb[])
                     AS m(pid, atype, th, mth, hst, up, nf, mf, evidence)
              ON CONFLICT (project_id, target_hash) DO NOTHING |]

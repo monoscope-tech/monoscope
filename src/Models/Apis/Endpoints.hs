@@ -125,8 +125,8 @@ bulkInsertEndpoints :: DB es => V.Vector Endpoint -> Eff es ()
 bulkInsertEndpoints eps | V.null eps = pass
 bulkInsertEndpoints eps = do
   Hasql.interpExecute_
-    [HI.sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, service_name, environment, created_at)
-           SELECT *, app_now() FROM unnest(#{V.map (.projectId) eps}::uuid[], #{V.map (.urlPath) eps}::text[], #{V.map (.urlParams) eps}::jsonb[],
+    [HI.sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, service_name, environment)
+           SELECT * FROM unnest(#{V.map (.projectId) eps}::uuid[], #{V.map (.urlPath) eps}::text[], #{V.map (.urlParams) eps}::jsonb[],
              #{V.map (.method) eps}::text[], #{V.map (.host) eps}::text[], #{V.map (.hash) eps}::text[], #{V.map (.outgoing) eps}::bool[],
              #{V.map (.serviceName) eps}::text[], #{V.map (.environment) eps}::text[])
            ON CONFLICT (hash) DO NOTHING |]

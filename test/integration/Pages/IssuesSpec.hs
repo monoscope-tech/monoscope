@@ -6,7 +6,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (NominalDiffTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as DataUUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -20,6 +20,7 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -49,7 +50,7 @@ spec = around withTestResources $ describe "Issues" do
     dbOne tr [sql| SELECT recommended_action FROM apis.issues WHERE id=? |] (Only iid) `shouldReturn` Issues.defaultRecommendedAction
 
     void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True iid Nothing
-    fmap (isJust . (.acknowledgedAt)) <$> runTestBg frozenTime tr (Issues.selectIssueById testPid iid) `shouldReturn` Just True
+    stamped tr "acknowledged_at" iid `shouldReturn` True
     otherPid <- createTestProject tr "other"
     runTestBg frozenTime tr (Issues.selectIssueById otherPid iid) >>= (`shouldSatisfy` isNothing)
     map issueIdOf <$> listRows tr "Acknowledged" [] `shouldReturn` [iid]
@@ -81,19 +82,20 @@ spec = around withTestResources $ describe "Issues" do
     drift "/v1/grouped-drift" "eyJ1c2VybmFtZSI6ImFAYi5jbyJ9"
     drift "/v1/grouped-drift" "eyJ1c2VybmFtZSI6Mn0="
     dbExec tr [sql| UPDATE apis.issues SET service=NULL WHERE project_id=? AND issue_type='api_change' |] (Only testPid)
-    let typed perPage = call tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just perPage) Nothing Nothing [] ["api_change"]
+    let typed perPage = list tr "Inbox" Nothing (Just perPage) Nothing [] ["api_change"]
     grouped <- listHtml =<< typed "100"
     singleton <- listHtml =<< typed "1"
     goldenHtml "issue-list-api-change-groups" do grouped; singleton
 
     -- Detail resolves the originating trace and honours relative and absolute ranges on both routes.
-    (.traceRef) <$> found (detail tr iid) >>= (`shouldSatisfy` isJust)
-    hashed <- found $ inner $ call tr $ IssuesPage.issueDetailHashGetH testPid i0.targetHash Nothing (Just "14D") Nothing Nothing Nothing
+    endpointTraces <- map fromOnly <$> dbQuery tr [sql| SELECT DISTINCT context___trace_id FROM otel_logs_and_spans WHERE project_id=? AND attributes___url___path='/' AND context___trace_id IS NOT NULL |] (Only testPid)
+    fmap fst . (.traceRef) <$> detailView tr iid >>= (`shouldSatisfy` maybe False (`elem` endpointTraces))
+    hashed <- viewOf tr $ IssuesPage.issueDetailHashGetH testPid i0.targetHash Nothing (Just "14D") Nothing Nothing Nothing
     hashed.tp.since `shouldBe` Just "14D"
     let (from, to) = ("2026-09-02T06:04:43Z", "2026-09-02T10:04:43Z")
     absolute <-
       forM [IssuesPage.issueDetailGetH testPid i0.id, IssuesPage.issueDetailHashGetH testPid i0.targetHash] \h ->
-        found (inner $ call tr $ h Nothing Nothing (Just from) (Just to) Nothing)
+        viewOf tr (h Nothing Nothing (Just from) (Just to) Nothing)
     map (\v -> (v.tp.from, v.tp.to, v.isFirst)) absolute `shouldBe` replicate 2 (Just from, Just to, False)
     dbExec tr [sql| UPDATE apis.anomalies SET field_evidence='null'::jsonb WHERE project_id=? |] (Only testPid)
     unavailable <- detail tr i2.id
@@ -119,7 +121,7 @@ spec = around withTestResources $ describe "Issues" do
     let spanTrace = "5d0e0000000000000000000000000001"
     ingestSpanLinked tr apiKey spanTrace "5d0e000000000001" Nothing "GET /checkout" [] frozenTime
     traced <- errorIssue "SyntaxError" "JSON parse failed" "at parse (a.js:1)" Nothing (Just spanTrace) (Just "checkout") Nothing
-    fmap fst . (.traceRef) <$> found (inner $ call tr $ IssuesPage.issueDetailGetH testPid traced (Just "true") Nothing Nothing Nothing Nothing) `shouldReturn` Just spanTrace
+    fmap fst . (.traceRef) <$> viewOf tr (IssuesPage.issueDetailGetH testPid traced (Just "true") Nothing Nothing Nothing Nothing) `shouldReturn` Just spanTrace
     let fetchTrace tr' t = call tr' $ Trace.traceH testPid t (Just frozenTime) Nothing Nothing (Just "true") Nothing
         starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
     fetchTrace tr spanTrace >>= \case Trace.TraceDetails{} -> pass; _ -> expectationFailure "default budget renders the trace"
@@ -130,8 +132,7 @@ spec = around withTestResources $ describe "Issues" do
       _ -> expectationFailure "expected timed-out and empty trace states"
 
     -- A query alert carries its own query and monitor; its id is stored as a `show` blob.
-    let monitorId = "7a3e1b52-0000-4000-8000-000000000001" :: Text
-        storedQueryId = "QueryMonitorId {unQueryMonitorId = " <> monitorId <> "}"
+    let storedQueryId = Monitors.queryAlertKey $ Monitors.QueryMonitorId DataUUID.nil
     alert <-
       seedIssue tr (issueSeed Issues.QueryAlert "alert-hash"){title = "checkout throughput dropped", service = Just "Monitoring", payload = [aesonQQ|{ "query_id": #{storedQueryId}, "query_name": "checkout throughput", "query_expression": "resource.service.name == \"checkout\" | summarize count(*) by bin_auto(timestamp)", "threshold_value": 5, "actual_value": 0, "threshold_type": "below", "triggered_at": #{frozenTime} }|]}
 
@@ -140,13 +141,13 @@ spec = around withTestResources $ describe "Issues" do
         pat = "kind;text-weak\8658rpc duration;badge-neutral\8658<*> min" :: Text
     dbExec tr [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, first_seen_at, last_seen_at, occurrence_count) VALUES (?, ?, 'live-pattern', 'summary', ?, ?, 92) |] (testPid, pat, detectedAt, addUTCTime (-120) frozenTime)
     logPattern <- seedIssue tr (issueSeed Issues.LogPattern "live-pattern"){service = Just "checkout", payload = AE.toJSON $ Issues.LogPatternData "live-pattern" pat Nothing Nothing (Just "checkout") "summary" detectedAt 2, at = detectedAt}
-    ((.occurrenceCount) <$>) . (.patternM) <$> found (detail tr logPattern) `shouldReturn` Just (92 :: Int64)
+    ((.occurrenceCount) <$>) . (.patternM) <$> detailView tr logPattern `shouldReturn` Just (92 :: Int64)
 
     -- A span schema has no HTTP endpoint, so no trace may be looked up by placeholder method/path.
     let subject = ApiChanges.SpanSchema Catalog.emptyScope{Catalog.service = Just "checkout", Catalog.spanName = Just "process-order"}
     dbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, attributes___http___request___method, attributes___url___path, context___trace_id, summary) VALUES (gen_random_uuid(), ?, ?, ?, 'UNKNOWN', '/', 'placeholder-trace', '{}') |] (testPid, frozenTime, frozenTime)
     spanSchema <- seedIssue tr (issueSeed Issues.ApiChange "span-schema"){title = "Span schema changed", payload = [aesonQQ|{ "subject": #{subject}, "endpoint_method": "UNKNOWN", "endpoint_path": "/", "endpoint_host": "Unknown", "anomaly_hashes": [], "shape_changes": [], "format_changes": [], "new_fields": [], "deleted_fields": [], "modified_fields": [] }|]}
-    (.traceRef) <$> found (detail tr spanSchema) `shouldReturn` Nothing
+    (.traceRef) <$> detailView tr spanSchema `shouldReturn` Nothing
 
     pages <- forM [java, go, noTrace, traced, alert, logPattern, spanSchema] (detail tr)
     goldenHtml "issue-detail-types" $ traverse_ toHtml pages
@@ -171,7 +172,7 @@ spec = around withTestResources $ describe "Issues" do
     bulk IssuesPage.BAPriority (Just "warning") [b]
     bulk IssuesPage.BAAssign (Just member.userId.toText) [b]
     ((.severity) &&& (.assigneeId)) <$> reload b `shouldReturn` (Issues.Warning, Just member.userId)
-    listed <- listHtml =<< call tr (IssuesPage.issueListGetH testPid (Just "Inbox") (Just "-users_count") (Just "7d") Nothing (Just "100") Nothing (Just "24h") [] [])
+    listed <- listHtml =<< list tr "Inbox" (Just "-users_count") (Just "100") (Just "24h") [] []
     goldenHtml "issue-list-triaged" listed
 
     -- Timed archive expires; until-escalating wakes only on escalation.
@@ -215,7 +216,7 @@ spec = around withTestResources $ describe "Issues" do
     let saved = map (.name) <$> runTestBg frozenTime tr (Issues.selectIssueViews testPid)
     void $ call tr $ IssuesPage.saveViewPostH testPid (IssuesPage.SaveViewForm "My errors" "filter=Inbox&sort=-created_at&period=24h&type=runtime_exception")
     saved `shouldReturn` ["My errors"]
-    views <- forM [[], ["runtime_exception"]] \types -> listHtml =<< call tr (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] types)
+    views <- forM [[], ["runtime_exception"]] \types -> listHtml =<< list tr "Inbox" Nothing Nothing (Just "24h") [] types
     goldenHtml "issue-list-saved-views" $ sequence_ views
     runTestBg frozenTime tr (Issues.selectIssueViews testPid) >>= traverse_ (call tr . IssuesPage.deleteViewPostH testPid . (.id))
     saved `shouldReturn` []
@@ -280,7 +281,7 @@ spec = around withTestResources $ describe "Issues" do
     stepTo Telemetry.Older (IssuesPage.EventRef ta (at (-600))) >>= (`shouldSatisfy` T.isInfixOf ta)
     -- A triage edit must not move a chosen event's window off the event.
     dbExec tr [sql| UPDATE apis.issues SET updated_at=? WHERE id=? |] (at 86400, iid)
-    chosen <- found $ inner $ call tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef tb (at (-300)))
+    chosen <- viewOf tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef tb (at (-300)))
     (chosen.traceRef, chosen.tp.from, chosen.tp.to) `shouldBe` (Just (tb, at (-300)), Just "2024-12-31T21:55:00Z", Just "2025-01-01T01:55:00Z")
 
     -- gRPC instrumentation emits a bare `message` event per RPC message; the journey skips them.
@@ -315,7 +316,6 @@ spec = around withTestResources $ describe "Issues" do
     let uid = (Servant.getResponse tr.trSessAndHeader).user.id
     otherPid <- createTestProject tr "other"
     let seed pid h = seedIssue tr (issueSeed Issues.RuntimeException h){pid}
-        acked iid = isJust <$> dbOne @_ @(Maybe UTCTime) tr [sql| SELECT acknowledged_at FROM apis.issues WHERE id=? |] (Only iid)
     -- The cascade sweeps by hash prefix, including targets shorter than the indexed prefix, and
     -- reports every swept sibling so its timeline can say why it went quiet.
     parent <- seed testPid "casc-legacy-001"
@@ -325,13 +325,13 @@ spec = around withTestResources $ describe "Issues" do
     short <- seed testPid "ab1"
     shortChild <- seed testPid "ab1cdef9999"
     void $ runTestBg frozenTime tr $ Issues.ackCascade testPid uid Issues.AckIndefinite [short]
-    mapM acked [child, foreignChild, shortChild] `shouldReturn` [True, False, True]
+    mapM (stamped tr "acknowledged_at") [child, foreignChild, shortChild] `shouldReturn` [True, False, True]
 
     -- A tampered bulk form naming another project's issue archives only the caller's.
     own <- seed testPid "arch-shared"
     theirs <- seed otherPid "arch-shared"
     void $ runTestBg frozenTime tr $ Issues.setArchiveState testPid [own, theirs] (Just (frozenTime, Issues.ArchiveIndefinite))
-    mapM (\i -> isJust <$> dbOne @_ @(Maybe UTCTime) tr [sql| SELECT archived_at FROM apis.issues WHERE id=? |] (Only i)) [own, theirs] `shouldReturn` [True, False]
+    mapM (stamped tr "archived_at") [own, theirs] `shouldReturn` [True, False]
 
     -- Error-group reads and unmerges are scoped to the caller's project.
     [canonical, member] <- replicateM 2 UUID.nextRandom
@@ -371,7 +371,7 @@ spec = around withTestResources $ describe "Issues" do
     map (.id) . fst <$> runHasqlEffect tr (Issues.selectIssues testPid Issues.PIssue Issues.defIssueFilters{Issues.service = Just "scope-checkout", Issues.environment = Just "production", Issues.limit = 100})
       `shouldReturn` [prod]
     let scoped = tr{trSessAndHeader = (\s -> s{Projects.service = Just "scope-checkout", Projects.environment = Just "production"}) <$> tr.trSessAndHeader}
-    call scoped (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just "100") Nothing (Just "24h") ["scope-catalog"] []) >>= rowsOf >>= (`shouldSatisfy` V.null)
+    list scoped "Inbox" Nothing (Just "100") (Just "24h") ["scope-catalog"] [] >>= rowsOf >>= (`shouldSatisfy` V.null)
   where
     isoNow = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
     encMsg = toStrict . AE.encode . Unsafe.fromJust . convert
@@ -386,6 +386,8 @@ spec = around withTestResources $ describe "Issues" do
     issuesOfType tr ty = dbQuery @_ @(Issues.IssueId, Text) tr [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = ? ORDER BY title |] (testPid, ty)
     inner = fmap \(PageCtx _ x) -> x
     detail tr iid = inner $ call tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing Nothing
+    detailView tr = found . detail tr
+    viewOf tr = found . inner . call tr
     found act =
       act >>= \case
         IssuesPage.IssueFound v -> pure v
@@ -396,5 +398,7 @@ spec = around withTestResources $ describe "Issues" do
     rowsOf = fmap ((.rows) . snd) . listPage
     -- The category and saved-view menus live in the shell's nav tabs, beside the table.
     listHtml = fmap (\(bw, t) -> sequence_ bw.navTabs >> toHtml t) . listPage
-    listRows tr tab types = V.toList <$> (rowsOf =<< call tr (IssuesPage.issueListGetH testPid (Just tab) Nothing Nothing Nothing (Just "100") Nothing Nothing [] types))
+    list tr tab sortM perPage period services types = call tr $ IssuesPage.issueListGetH testPid (Just tab) sortM Nothing Nothing perPage Nothing period services types
+    listRows tr tab types = V.toList <$> (rowsOf =<< list tr tab Nothing (Just "100") Nothing [] types)
+    stamped tr col iid = dbOne @_ @Bool tr ("SELECT " <> col <> " IS NOT NULL FROM apis.issues WHERE id=?") (Only iid)
     issueIdOf (IssuesPage.IssueVM _ i) = i.base.id

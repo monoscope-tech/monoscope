@@ -20,7 +20,6 @@ module Pages.Issues (
   issueDetailGetH,
   IssueDetail (..),
   IssueView (..),
-  issueDetailPage,
   IssueSample (..),
   IssueSampleResult (..),
   IssueBulkForm (..),
@@ -636,10 +635,8 @@ data IssueSample = IssueSample Projects.ProjectId (Maybe Text) IssueSampleResult
 
 
 instance ToHtml IssueSample where
-  toHtml =
-    toHtmlRaw @(Html ()) . \case
-      IssueSample pid snapshot sample -> issueSampleCard_ pid snapshot sample
-      NoIssueSample -> p_ [class_ "px-4 text-sm text-textWeak"] "This issue has no event sample."
+  toHtml (IssueSample pid snapshot sample) = toHtml $ issueSampleCard_ pid snapshot sample
+  toHtml NoIssueSample = p_ [class_ "px-4 text-sm text-textWeak"] "This issue has no event sample."
   toHtmlRaw = toHtml
 
 
@@ -912,6 +909,20 @@ issueFactRow_ now issue errM patternM =
         ]
 
 
+data IssueDetail = IssueNotFound Projects.ProjectId | IssueFound IssueView
+
+
+instance ToHtml IssueDetail where
+  toHtml (IssueNotFound pid) =
+    toHtml
+      $ emptyState_
+        def{icon = Just "circle-xmark", action = ESLink ("/p/" <> pid.toText <> "/issues") "Back to Issues"}
+        "Issue not found"
+        "This issue may have been resolved, merged, or the link may be outdated."
+  toHtml (IssueFound v) = toHtml $ issueDetailPage v
+  toHtmlRaw = toHtml
+
+
 -- | Everything the issue detail page's sections read. Bundled because the
 -- values travelled together through every section as positional arguments.
 --
@@ -920,21 +931,6 @@ issueFactRow_ now issue errM patternM =
 -- page. @replaySession@ is the only value the page still needs out of that trace.
 -- @errM@ carries a runtime exception's real first\/last seen, which live on the
 -- error pattern rather than the issue row.
-data IssueDetail = IssueNotFound Projects.ProjectId | IssueFound IssueView
-
-
-instance ToHtml IssueDetail where
-  toHtml =
-    toHtmlRaw @(Html ()) . \case
-      IssueNotFound pid ->
-        emptyState_
-          def{icon = Just "circle-xmark", action = ESLink ("/p/" <> pid.toText <> "/issues") "Back to Issues"}
-          "Issue not found"
-          "This issue may have been resolved, merged, or the link may be outdated."
-      IssueFound v -> issueDetailPage v
-  toHtmlRaw = toHtml
-
-
 data IssueView = IssueView
   { pid :: Projects.ProjectId
   , issue :: Issues.Issue
