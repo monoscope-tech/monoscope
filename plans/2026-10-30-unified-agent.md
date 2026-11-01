@@ -506,9 +506,10 @@ pass. Logs and input hashes are `scripts/local/local-image-policy-*` and
 `scripts/local/local-cold-cache-*`. These are focused checks, not final release
 attestations or a production application image build.
 
-The review artifact is committed at `5ca2fb59b`. Its hosted HTML readback matches
-the local 232,534-byte file. All 102 steps across twelve walkthroughs pass at four
-widths. The actual hosted Page opens in Chrome and its desktop image decodes;
+The existing visual review now includes the live synthetic incident and verified
+citation checkpoints. Its hosted HTML readback matches the local 232,609-byte
+file at Page sequence 60. All 102 steps across twelve walkthroughs pass at four
+widths; the 114 embedded source entries and all walkthrough steps are preserved. The actual hosted Page opens in Chrome and its desktop image decodes;
 interaction within its embedded visualization remains unverified. See the
 [interface evidence](2026-10-29-routine-interface-review.md) for the exact scope.
 

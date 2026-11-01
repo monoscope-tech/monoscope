@@ -268,3 +268,23 @@ The live QA snapshot contains `b8d22c46d`, not the subsequent credential-failure
 ## Proactive channel controls against the QA server
 
 Locally signed slash-command HTTP requests against the isolated QA installation pass opt-in, duplicate opt-in, and opt-out. An invalid signature returns HTTP 401 without changing state. Valid requests return ephemeral responses, retain one channel routine in Observe, and do not create an investigation. Opt-out leaves that same routine paused. The owner-only receipt is `scripts/local/slack-proactive-controls-acceptance.json`. This is real handler/database acceptance with locally generated signatures; native Slack slash delivery, incident execution, measured recovery, and closing reports remain unverified live.
+
+
+## Current-runtime proactive and citation acceptance
+
+The QA watcher now loads the canonical runtime and migrations, including `7e4229eb0` and migration `0282`. Hash comparison confirms those files match. Its worker now receives `Routes.mcpProjectTools`, as production startup does. The temporary harness adds only loopback fixture controls; the public tunnel returns HTTP 404 for those controls. All fixture code stays outside the canonical branch. The prior temporary database has an owner-only logical backup; restore remains unverified. Source evidence is `scripts/local/slack-proactive-live-source.json`.
+
+Project `e11c591d-5346-49bd-9572-3b1be4350c99` uses the same installed QA app and two-member private channel. Fresh identity linking, routine installation, native requester consent, and the real OAuth callback succeed again; one encrypted, correctly bound user grant is stored. Locally signed opt-in creates an Observe incident routine. The fixture records explicitly synthetic values through the existing incident domain functions, then uses the production worker, real model, shared run/completion, and real Slack outbox delivery:
+
+- Synthetic alert value 84 above threshold 60 produces one analysis and one real thread reply. The report explicitly identifies the test and refuses to infer production impact or recovery.
+- A measurement gap leaves the episode active, with no new analysis or closing report.
+- Explicit synthetic recovery value 18 produces one closing analysis in the same thread. Its report identifies the recorded recovery and preserves the boundary from production telemetry.
+- Repeated delivery sweeps retain exactly two incident runs and two analysis publications, with no project mutations. Both retained run links return HTTP 200 with their results.
+- After opt-out, a second synthetic alert/recovery still delivers normal notifications, starts no additional analysis, and leaves both episodes recovered with no pending deliveries. The incident routine remains paused.
+
+Runs `7c0bda8a-1a76-4517-a7a9-8804a3523e32` and `4978d15c-04d8-4681-98cb-20a56dec2ae2` retain those analyses. The receipt is `scripts/local/slack-proactive-live-acceptance.json`. This establishes synthetic event-to-Slack acceptance, replay, and opt-out through the shared application path. It does not establish telemetry ingestion, monitor measurement, native slash delivery, or arbitrary host interruption.
+
+A fresh real human request also repeats canonical requester-bound discovery/thread read and permalink lookup on this current runtime. Run `c2753e4c-2f85-4cbb-ba26-4bdf3fcdabba` succeeds. Its single final reply quotes the controlled stop confirmation and uses the exact verified provider source URL. A locally signed replay leaves three total runs (two incident, one requested), sixteen journal entries, one requested final publication, zero operation records, and zero wiki revisions unchanged. The authenticated conversation returns HTTP 200 with the quote; anonymous access redirects with HTTP 302. Evidence is `scripts/local/slack-current-source-citation-acceptance.json`. The earlier 479/41/2,068 verification still matches the runtime inputs. Slack Connect, remaining audience boundaries, native controls, and application interruption acceptance remain open.
+
+
+The existing [visual review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a919) now reflects these proactive and citation checkpoints. Page sequence 60 retains the same review structure, twelve walkthroughs, 102 steps, and 114 source entries. Local Chromium passes all steps at 320, 390, 768, and 1280 pixels with no overflow or JavaScript errors; both fixture captures decode. Hosted source readback exactly matches the 232,609-byte local artifact. Evidence is `scripts/local/agent-artifact-proactive-refresh.json` and `scripts/local/unified-artifact-refresh-checks.json`. Hosted embedded interaction remains separately unverified.
