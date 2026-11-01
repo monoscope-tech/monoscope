@@ -36,7 +36,7 @@ import Pkg.DeriveUtils (DB)
 import Pkg.Git qualified as Git
 import Pkg.TestUtils
 import Relude hiding (head)
-import Servant (ServerError (..), getResponse)
+import Servant (ResponseHeader (..), ServerError (..), getResponse, lookupResponseHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
 import UnliftIO.Exception (bracket, try)
@@ -321,9 +321,16 @@ spec = sequential do
         status <- runAuthHandler isolated $ catchError @ServerError (GitSyncPage.githubAppSelectRepoH testPid (GitSyncPage.RepoSelectForm ["foreign/private"] "main" Nothing 424242) $> 200) (\_ err -> pure err.errHTTPCode)
         status `shouldBe` 403
         runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
-      it "tokenConnection_queuesItsFirstImportWithoutRequeuingActiveSettingsEdits" \tr -> do
+      it "tokenConnection_rejectsMissingTokenAndQueuesOnlyFirstImport" \tr -> do
         let form owner repo branch token prefix = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
         clearJobs tr
+        for_ ["", " "] \token -> do
+          (headers, _) <- testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing)
+          case lookupResponseHeader @"HX-Trigger" headers of
+            Header value -> value `shouldSatisfy` T.isInfixOf "Enter an access token."
+            _ -> expectationFailure "Missing token error was not shown"
+          runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
+          getPendingBackgroundJobs tr.trATCtx >>= (`shouldSatisfy` V.null)
         void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
         sync <- maybe (fail "Git connection was not created") pure =<< runTestBg frozenTime tr (onlySync testPid)
         (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)

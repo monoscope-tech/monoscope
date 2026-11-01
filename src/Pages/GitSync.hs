@@ -153,10 +153,13 @@ saveGitSyncH pid existingM form = do
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
       host = fromMaybe Git.GitHub form.host
+      validation = case existingM of
+        Nothing -> void $ Git.mkGitConn host form.apiBase form.accessToken
+        Just _ -> void $ Git.validateOrigin host form.apiBase
   -- The host/origin pair is vetted on its own: an update that keeps the stored token has no
   -- token to build a connection with, and 'Git.validateOrigin' is the half of the check that
   -- never needed one.
-  case Git.validateOrigin host form.apiBase of
+  case validation of
     Left err -> do
       addErrorToast ("Could not connect to " <> Git.hostLabel host) (Just err)
       addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid existingM
