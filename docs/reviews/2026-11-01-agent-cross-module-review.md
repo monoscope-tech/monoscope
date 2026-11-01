@@ -121,6 +121,33 @@ No source changes or additional test run are claimed for this follow-up.
 The separate [workspace review](2026-11-01-workspace-interpreter.md) records the passing Linux application cases
 and distinguishes their controlled provider/publication interpreters from live acceptance.
 
+### Retention and job persistence follow-up
+
+A further complete source read covers Outbox, Explanation, ReviewEvaluation, IssueFixes, AgentUsage, and ImpactReviews.
+It follows their native interpreter callbacks, shared event-run context, current authority, media readers, and usage writers.
+Two distillation, evasion, and locality passes find no further material issue within this scope.
+No runtime source changes are made in this follow-up.
+
+Receipt replay decodes the complete journal before callbacks and removes entries only after database acceptance.
+Conflicting receipt identities remain rejected. Phase receipts retain their issue-fix scope.
+The explanation cache binds its renderer, source result, regression, media hashes, and measured sizes.
+Its reader compares the retained manifest before returning media bytes.
+The evaluation interpreter retains rejected submissions and bounds source reads, output, and execution time.
+Its test interpreter remains beside the production interpreter.
+
+Issue-fix progress replays admitted steps into private reproduction and comparison proofs.
+Leased persistence binds the current requester, source mapping, installation, revision, and independent review.
+Completion updates the native result and shared routine run in the same transaction.
+PR review events use the shared routine context and operation ledger for publication.
+Usage writers bind attempts to their project and native run, preserve billing attribution, and reject conflicting replays.
+The two short numeric Semigroup instances remain explicit; another generic wrapper would add machinery for little reduction.
+
+Three focused Linux cases pass with zero failures in 1.3783 seconds.
+They cover interrupted phase delivery, call attribution across billing changes, and frozen regression progress.
+All six reviewed module hashes match the compiled Linux snapshot.
+The receipt is `scripts/local/native-retention-followup-source.json`.
+These focused checks do not replace whole-branch or live publication acceptance.
+
 The source record is `scripts/local/agent-cross-module-review-source.json`.
 No runtime source changed during this review, so no additional test run is claimed.
 The preceding chart checkpoint passes 489 bot cases and 2,083 doctest examples.
