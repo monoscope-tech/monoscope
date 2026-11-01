@@ -4479,11 +4479,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
           pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
         permission role = void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (role, testPid, user)
     adminPage <- renderRun
-    for_ ["Code fix", "Fix workflow", "Review verified fix"] $ \label -> adminPage `shouldSatisfy` T.isInfixOf label
+    for_ ["Code fix", "Fix workflow", "Verified fix evidence", "Bug reproduction and verified fix"] $ \label -> (label, label `T.isInfixOf` adminPage) `shouldBe` (label, True)
     permission ProjectMembers.PView
     viewerPage <- renderRun `finally` permission ProjectMembers.PAdmin
     viewerPage `shouldSatisfy` T.isInfixOf "The verified fix is retained. Administrators can review its artifacts."
-    viewerPage `shouldNotSatisfy` T.isInfixOf "Review verified fix"
+    viewerPage `shouldNotSatisfy` T.isInfixOf "Verified fix evidence"
     viewerPage `shouldNotSatisfy` T.isInfixOf ("/issue-fixes/" <> fid.toText)
     operations <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid shared.id
     length operations `shouldBe` 4

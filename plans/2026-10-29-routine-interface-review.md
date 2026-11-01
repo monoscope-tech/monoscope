@@ -577,6 +577,11 @@ in 19.7781 seconds. This confirms the existing standalone handler and access che
 after the shared-view extraction. The pinned formatter accepts both runtime files.
 HLint reports no hints in those files.
 
+The application-job acceptance case also passes in 3.0557 seconds.
+Its administrator assertions now require the inline evidence and named video.
+The view-only member still reads the retained result without private media URLs.
+The saved log is `scripts/local/native-fix-inline/native-application-authority-green.log`.
+
 The scoped `hs-distill` loop reuses the existing evidence view instead of copying it.
 The evasion pass retains current membership checks and the demo-session denial.
 The locality pass adds no client behavior or separate navigation state.
