@@ -1006,12 +1006,27 @@ spec = around withTestResources do
           widgetAnswer :: Maybe Text -> Maybe Text -> Text
           widgetAnswer query commentary = decodeUtf8 $ AE.encode $ AE.object ["explanation" AE..= commentary, "query" AE..= query, "widgets" AE..= widgets]
           explanation = "Error volume and request count."
+          longExplanation = T.replicate 7000 "Value 🔎.\n" <> "End of the retained answer."
+          longWords = T.replace "\n" " " longExplanation
+          unbroken = T.replicate 50000 "x"
       for_
-        ( [("show errors", 1, "No errors were found.", "No errors were found.", 0), ("show weekly report", 0, "report found", "No errors were found.", 0), ("Call send_to_slack exactly once, then report completion.", 1, "No errors were found.", "No errors were found.", 0), ("Show charts of error volume and request count", 1, explanation, widgetAnswer Nothing (Just explanation), 2), ("Show charts with a legacy primary query", 1, explanation, widgetAnswer (Just "summarize count()") (Just explanation), 2), ("Show charts without commentary", 1, "", widgetAnswer Nothing Nothing, 2), ("Describe schema without querying", 1, "Available fields include resource.service.name.", "{\"explanation\":\"Available fields include resource.service.name.\",\"query\":\"get_schema was called once; no telemetry query was executed.\"}", 0)]
-            <> [("Show " <> shape <> bool " from a primary query: " " from a widget: " modern <> query, 1, expected, decodeUtf8 $ AE.encode $ if modern then AE.object ["widgets" AE..= ([AE.object ["type" AE..= shape, "query" AE..= query]] :: [AE.Value])] else AE.object ["query" AE..= query, "visualization" AE..= shape], 0) | shape <- ["logs", "table", "top_list"], modern <- [False, True], (query, expected) <- [("name == \"qa-missing-event\"", "No data found"), ("summarize matches=count()", "matches\n0")]]
-            :: [(Text, Int, Text, Text, Int)]
+        ( [ ("show errors", 1, "No errors were found.", "No errors were found.", 0, 1)
+          , ("show weekly report", 0, "report found", "No errors were found.", 0, 1)
+          , ("Call send_to_slack exactly once, then report completion.", 1, "No errors were found.", "No errors were found.", 0, 1)
+          , ("Show charts of error volume and request count", 1, explanation, widgetAnswer Nothing (Just explanation), 2, 1)
+          , ("Show charts with a legacy primary query", 1, explanation, widgetAnswer (Just "summarize count()") (Just explanation), 2, 1)
+          , ("Show charts without commentary", 1, "", widgetAnswer Nothing Nothing, 2, 0)
+          , ("Describe schema without querying", 1, "Available fields include resource.service.name.", "{\"explanation\":\"Available fields include resource.service.name.\",\"query\":\"get_schema was called once; no telemetry query was executed.\"}", 0, 1)
+          , ("Keep an empty explanation visible", 1, "No response available", "{\"explanation\":\"\"}", 0, 1)
+          , ("Keep charts without empty commentary", 1, "", widgetAnswer Nothing (Just ""), 2, 0)
+          , ("Keep a long plain answer", 1, longExplanation, longExplanation, 0, 3)
+          , ("Keep a long chart explanation", 1, longWords, widgetAnswer Nothing (Just longWords), 2, 3)
+          , ("Keep an unbroken answer", 1, unbroken, unbroken, 0, 3)
+          ]
+            <> [("Show " <> shape <> bool " from a primary query: " " from a widget: " modern <> query, 1, expected, decodeUtf8 $ AE.encode $ if modern then AE.object ["widgets" AE..= ([AE.object ["type" AE..= shape, "query" AE..= query]] :: [AE.Value])] else AE.object ["query" AE..= query, "visualization" AE..= shape], 0, 1) | shape <- ["logs", "table", "top_list"], modern <- [False, True], (query, expected) <- [("name == \"qa-missing-event\"", "No data found"), ("summarize matches=count()", "matches\n0")]]
+            :: [(Text, Int, Text, Text, Int, Int)]
         )
-        \(prompt, expectedCalls, expectedReply, answer, expectedCharts) ->
+        \(prompt, expectedCalls, expectedReply, answer, expectedCharts, expectedTextParts) ->
           it ("Slack: handles queued query end-to-end: " <> toString prompt) \tr -> do
             setupSlackAgent tr testPid "T_WF_SLACK"
             calls <- newIORef (0 :: Int)
@@ -1029,9 +1044,15 @@ spec = around withTestResources do
             length queued `shouldBe` 1
             (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ for_ queued \(HI.OneColumn (Aeson job)) -> Jobs.processBackgroundJob tr.trATCtx job
             let replies = [body | (url, body) <- requests, url == "https://slack.com/api/chat.postMessage"]
-            length replies `shouldBe` expectedCharts + if T.null expectedReply then 0 else 1
             payloads <- traverse (either fail pure . AE.eitherDecode @AE.Value) replies
-            let rendered = T.concat $ mapMaybe extractResponseText payloads <> concatMap (toListOf $ key "blocks" . _Array . traverse . key "text" . key "text" . _String) payloads
+            for_ payloads $ \payload -> do
+              let sections = toListOf (key "blocks" . _Array . traverse . key "text" . key "text" . _String) payload
+              all (\text -> not (T.null text) && T.length text <= 3000) sections `shouldBe` True
+              sum (map T.length sections) `shouldSatisfy` (< 40000)
+              length (toListOf (key "blocks" . _Array . traverse) payload) `shouldSatisfy` (<= 50)
+            length replies `shouldBe` expectedCharts + expectedTextParts
+            let messageTexts = filter (not . T.isSuffixOf "|View runs and artifacts>") . toListOf (key "blocks" . _Array . traverse . key "text" . key "text" . _String)
+                rendered = T.concat $ mapMaybe extractResponseText payloads <> concatMap messageTexts payloads
             rendered `shouldSatisfy` T.isInfixOf expectedReply
             let images = concatMap (toListOf $ key "blocks" . _Array . traverse . key "image_url" . _String) payloads
             length images `shouldBe` expectedCharts
@@ -1039,6 +1060,12 @@ spec = around withTestResources do
             readIORef calls >>= (`shouldBe` expectedCalls)
             Just completed <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackCommand $ Issues.slackCommandConversationId testPid interaction.team_id interaction.channel_id interaction.trigger_id
             completed.status `shouldBe` Issues.RunSucceeded
+            when (expectedTextParts > 1) do
+              let delivered = concatMap messageTexts $ drop expectedCharts payloads
+              T.concat delivered `shouldBe` expectedReply
+              when (T.any (\char -> char == ' ' || char == '\n') expectedReply) $ all (\text -> T.isSuffixOf "\n" text || T.isSuffixOf " " text) (drop 1 $ reverse delivered) `shouldBe` True
+              history <- runQueryEffect tr $ Issues.selectChatHistory testPid completed.conversationId
+              [message.content | message <- history, message.role == Issues.ChatAssistant] `shouldBe` [expectedReply]
             when (expectedCharts > 0) do
               history <- runQueryEffect tr $ Issues.selectChatHistory testPid completed.conversationId
               [V.length values | message <- history, Just (Aeson (AE.Array values)) <- [message.widgets]] `shouldBe` [expectedCharts]

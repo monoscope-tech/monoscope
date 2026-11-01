@@ -8,7 +8,7 @@ import Data.Aeson.Lens (key, _Number)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
-import Data.Char (isAlphaNum)
+import Data.Char (isAlphaNum, isSpace)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (Options, header)
@@ -507,6 +507,9 @@ botReplyPayload :: BotReply -> AE.Value
 botReplyPayload r = r.payload
 
 
+data SlackTextLimit = SectionText | MessageText
+
+
 -- | The shared bot ask pipeline: intent detection → report or agentic query →
 -- per-platform rendering → the supplied reply sink. Slack collects replies for
 -- durable publication; other adapters can send them directly.
@@ -528,7 +531,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
       fmap Right
         $ Issues.getLatestReportByType pid reportType
         >>= \case
-          Nothing -> send $ ReplyText $ textReply $ "No " <> display reportType <> " report found. Reports are generated automatically on schedule."
+          Nothing -> sendText $ "No " <> display reportType <> " report found. Reports are generated automatically on schedule."
           Just report -> do
             let stamp = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
                 png q theme = Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just q, Widget.theme = theme} Nothing (Just $ stamp report.startTime) (Just $ stamp report.endTime)
@@ -546,7 +549,18 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
     textReply txt = case target of
       Discord -> AE.object ["content" AE..= txt]
       WhatsApp -> AE.object ["body" AE..= txt]
-      Slack -> slackResponse [slackSection txt]
+      Slack -> slackResponse $ map slackSection $ textChunks SectionText txt
+
+    sendText txt = traverse_ (send . ReplyText . textReply) $ case target of
+      Slack -> textChunks MessageText txt
+      (Discord; WhatsApp) -> [txt]
+
+    textChunks part = unfoldr $ \txt -> do
+      guard $ not $ T.null txt
+      let limit = case part of SectionText -> 3000; MessageText -> 24000
+          (prefix, remainder) = T.splitAt limit txt
+          (whole, suffix) = runIdentity $ T.spanEndM (pure . not . isSpace) prefix
+      pure $ if T.null remainder || T.null whole then (prefix, remainder) else (whole, suffix <> remainder)
 
     -- WhatsApp goes out as a plain-text template body (Twilio has no rich-message
     -- equivalent), so it reuses the text envelope rather than embedding the chart PNGs.
@@ -632,11 +646,12 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
                       , "3" AE..= ("time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr pid.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr (fold $ iso fromTimeM) <> "&to=" <> toUriStr (fold $ iso toTimeM))
                       , "4" AE..= (pid.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query)
                       ]
+      let explanation = mfilter (not . T.null . T.strip) resp.explanation
       case AI.responseWidgets resp of
-        [] -> send $ ReplyText $ textReply $ fromMaybe "No response available" resp.explanation
+        [] -> sendText $ fromMaybe "No response available" explanation
         widgets -> do
           traverse_ renderWidget $ take 10 widgets
-          whenJust resp.explanation (send . ReplyText . textReply)
+          whenJust explanation sendText
 
     tableReply query = \case
       Left _ -> formatBotError target (QueryParseError query)
