@@ -114,7 +114,7 @@ data SlackEvidenceCase = EvidenceRead | DisconnectDuringRead | WrongDMPeer | Sch
   deriving stock (Bounded, Enum, Eq, Show)
 
 
-data SlackChannelReadCase = CurrentChannel | CurrentThread | ThreadLocatorRejected | ExtraTargetArgument | ChannelMemberRemoved | PersonalGrantMissing | BroaderChannelSearch
+data SlackChannelReadCase = CurrentChannel | CurrentThread | ThreadLocatorRejected | ExtraTargetArgument | ChannelMemberRemoved | PersonalGrantMissing | BroaderChannelSearch | ThreadCitationRejected | ThreadCitationWrongTarget | ThreadCitationWrongQuery | ThreadCitationUntrustedHost | ThreadCitationRateLimited | ThreadCitationRevoked
   deriving stock (Bounded, Enum, Eq, Show)
 
 
@@ -1112,25 +1112,30 @@ spec = around withTestResources do
               user = (getResponse tr.trSessAndHeader).user.id
               conversation = Issues.slackScopedConversationId testPid "T_MCP_CHANNEL" channel "1735689600.000001"
               access = if command then AI.SlackCommandAccess (fromRightShow $ Issues.commandOrigin "T_MCP_CHANNEL" channel "U0123ABCDEF") user else AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_CHANNEL" "U0123ABCDEF" user channel "1735689600.000001" "1735689600.000001"
+              threadRead = scenario `elem` [CurrentThread, ThreadLocatorRejected, ThreadCitationRejected, ThreadCitationWrongTarget, ThreadCitationWrongQuery, ThreadCitationUntrustedHost, ThreadCitationRateLimited, ThreadCitationRevoked]
               operation
                 | scenario == BroaderChannelSearch = "slack_search_public"
-                | scenario `elem` [CurrentThread, ThreadLocatorRejected] = "slack_read_thread"
+                | threadRead = "slack_read_thread"
                 | otherwise = "slack_read_channel"
               secret = "current-channel-mcp-evidence"
+              source = "https://monoscope-test.slack.com/archives/G123MCP/p1735689600000001?thread_ts=1735689600.000001&cid=G123MCP"
               schema = AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object ["channel_id" AE..= AE.object ["type" AE..= ("string" :: Text)], "team_id" AE..= AE.object ["type" AE..= ("string" :: Text)], "message_ts" AE..= AE.object ["type" AE..= ("string" :: Text)], "response_format" AE..= AE.object ["type" AE..= ("string" :: Text)]]]
           mode <- interactiveInvocation tr testPid conversation "Read Slack context" Issues.Observe
           let config = (agentConfig testPid){AI.access = access, AI.conversationId = Just conversation, AI.invocationMode = mode, AI.sourceConfig = Just tr.trATCtx.config{Config.slackAppId = "A123MONOSCOPE"}}
-              arguments = Map.fromList $ [("channel_id", AE.String "G_OTHER"), ("channel", AE.String "G_ALTERNATE"), ("team_id", AE.String "T_OTHER"), ("message_ts", AE.String $ if scenario == ThreadLocatorRejected then "https://example.invalid/another-channel" else "1735689600.000001")] <> [("url", AE.String "https://example.invalid/another-channel") | scenario == ExtraTargetArgument] <> [("response_format", AE.String "detailed") | scenario `elem` [CurrentChannel, CurrentThread]]
+              arguments = Map.fromList $ [("channel_id", AE.String "G_OTHER"), ("channel", AE.String "G_ALTERNATE"), ("team_id", AE.String "T_OTHER"), ("message_ts", AE.String $ if scenario == ThreadLocatorRejected then "https://example.invalid/another-channel" else "1735689600.000001")] <> [("url", AE.String "https://example.invalid/another-channel") | scenario == ExtraTargetArgument] <> [("response_format", AE.String "detailed") | scenario == CurrentChannel || threadRead]
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat history _ _ -> do
                   let system = case history of message :| _ -> message.content
                   liftIO $ system `shouldSatisfy` T.isInfixOf ("\"channel_id\":\"" <> channel <> "\"")
                   liftIO $ system `shouldSatisfy` T.isInfixOf "\"team_id\":\"T_MCP_CHANNEL\""
                   liftIO $ system `shouldSatisfy` T.isInfixOf (if command then "\"thread_ts\":null" else "\"thread_ts\":\"1735689600.000001\"")
-                  pure $ Right $ case [message.content | message <- toList history, message.role == Chat.Tool] of
-                    [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" $ Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String operation)]}
-                    [_] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "bounded-read" "function" $ Chat.ToolFunction operation arguments]}
-                    results -> Chat.Message Chat.Assistant (if any (T.isInfixOf secret) results then "Channel evidence read." else "Slack read unavailable.") Chat.defaultMessageData
+                  case [message.content | message <- toList history, message.role == Chat.Tool] of
+                    [] -> pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" $ Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String operation)]}
+                    [_] -> pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "bounded-read" "function" $ Chat.ToolFunction operation arguments]}
+                    results -> do
+                      when (threadRead && any (T.isInfixOf secret) results) $ liftIO $ T.unwords results `shouldSatisfy` T.isInfixOf (if scenario == CurrentThread then source else "No verified source link is available.")
+                      liftIO $ all ((<= 8192) . T.length) results `shouldBe` True
+                      pure $ Right $ Chat.Message Chat.Assistant (if any (T.isInfixOf secret) results then "Channel evidence read." else "Slack read unavailable.") Chat.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Left "No title model"
                 ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
               transport = withSlackMCPResponses \options request -> do
@@ -1141,17 +1146,37 @@ spec = around withTestResources do
                   request ^? key "params" . key "arguments" . key "channel" `shouldBe` Nothing
                   request ^? key "params" . key "arguments" . key "response_format" . _String `shouldBe` Just "detailed"
                   runQueryEffect tr (Investigations.conversationEvidenceAudience testPid conversation) >>= (`shouldBe` Investigations.SlackChannelAudience (fromRightShow $ Slack.slackChannel "T_MCP_CHANNEL" channel))
-                pure $ slackMCPReply request (slackMCPTools schema) $ AE.object ["content" AE..= V.singleton (AE.object ["type" AE..= ("text" :: Text), "text" AE..= secret])]
-              membership = withHTTPResponses \_ url ->
-                pure
-                  $ if url == "https://slack.com/api/conversations.members"
-                    then Just $ AE.encode $ AE.object ["ok" AE..= True, "members" AE..= (["U0123ABCDEF" | scenario /= ChannelMemberRemoved] :: [Text])]
-                    else Nothing
+                pure $ slackMCPReply request (slackMCPTools schema) $ AE.object ["content" AE..= V.singleton (AE.object ["type" AE..= ("text" :: Text), "text" AE..= (secret <> if scenario == CurrentThread then T.replicate 10000 "x" else "")])]
+              membership = withHTTPResponses \options url -> case url of
+                "https://slack.com/api/conversations.members" -> pure $ Just $ AE.encode $ AE.object ["ok" AE..= True, "members" AE..= (["U0123ABCDEF" | scenario /= ChannelMemberRemoved] :: [Text])]
+                "https://slack.com/api/chat.getPermalink" -> do
+                  options ^. Wreq.header "Authorization" `shouldBe` ["Bearer channel-user-token"]
+                  options ^. Wreq.param "channel" `shouldBe` [channel]
+                  options ^. Wreq.param "message_ts" `shouldBe` ["1735689600.000001"]
+                  when (scenario == ThreadCitationRevoked) $ runQueryEffect tr $ Slack.revokeSlackEvidence testPid user
+                  when (scenario == ThreadCitationRateLimited) $ throwIO $ RateLimit.SlackRateLimited $ addUTCTime 60 frozenTime
+                  pure $ Just $ AE.encode $ case scenario of
+                    ThreadCitationRejected -> AE.object ["ok" AE..= False, "error" AE..= ("message_not_found" :: Text)]
+                    _ ->
+                      AE.object
+                        [ "ok" AE..= True
+                        , "permalink" AE..= case scenario of
+                            ThreadCitationWrongTarget -> "https://monoscope-test.slack.com/archives/G_OTHER/p1735689600000001"
+                            ThreadCitationWrongQuery -> source <> "&cid=G_OTHER"
+                            ThreadCitationUntrustedHost -> "https://example.invalid/archives/G123MCP/p1735689600000001"
+                            _ -> source
+                        ]
+                _ -> pure Nothing
           (requests, answer) <- runTestBgRecordingHTTP frozenTime tr $ membership $ transport $ provider $ AI.runAgenticChatWithHistory config "Read Slack context" "model" "key"
-          let expected = scenario `elem` [CurrentChannel, CurrentThread]
+          let expected = scenario == CurrentChannel || threadRead && scenario `notElem` [ThreadLocatorRejected, ThreadCitationRevoked]
               calls = [request | (_, bytes) <- requests, Just request <- [AE.decode @AE.Value bytes], request ^? key "method" . _String == Just "tools/call"]
           fmap (.response) answer `shouldBe` Right (if expected then "Channel evidence read." else "Slack read unavailable.")
-          length calls `shouldBe` if expected then 1 else 0
+          length calls `shouldBe` if expected || scenario == ThreadCitationRevoked then 1 else 0
+          length (filter ((== "https://slack.com/api/chat.getPermalink") . fst) requests) `shouldBe` if threadRead && scenario /= ThreadLocatorRejected then 1 else 0
+          when expected do
+            let evidence = either (const Nothing) (\result -> find ((== operation) . (.name)) result.toolCalls >>= (.rawData)) answer
+            (evidence >>= (^? key "source")) `shouldBe` Just (if scenario == CurrentThread then AE.String source else AE.Null)
+            decodeUtf8 @Text (AE.encode evidence) `shouldSatisfy` (not . T.isInfixOf "channel-user-token")
           when (scenario == PersonalGrantMissing) $ filter ((== "https://mcp.slack.com/mcp") . fst) requests `shouldBe` []
 
       for_ [minBound .. maxBound] $ \scenario ->
