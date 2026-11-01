@@ -156,7 +156,7 @@ data LLMResponse = LLMResponse
   { explanation :: Maybe Text -- Markdown analysis/commentary
   , query :: Maybe Text -- Primary KQL query
   , visualization :: Maybe Text -- Chart type
-  , widgets :: [Widget.Widget] -- Widget configs
+  , widgets :: [Widget.ModelWidget] -- Model-supplied visualization configs
   , timeRange :: Maybe TimePicker -- Time range (relative or absolute)
   , toolCalls :: Maybe [ToolCallInfo] -- Tool execution results (for widget data reuse)
   }
@@ -225,12 +225,16 @@ agenticResponseHasFindings answer =
 
 -- | One widget shape for every chat surface. Older answers emitted a top-level
 -- query/visualization pair; current answers emit the extensible widgets array.
+--
+-- >>> fmap (length . responseWidgets) $ parseLLMResponse "{\"query\":\"summarize count()\",\"widgets\":[{\"type\":\"stat\",\"query\":\"summarize count()\"}]}"
+-- Right 1
 responseWidgets :: LLMResponse -> [Widget.Widget]
-responseWidgets response =
-  response.widgets <|> maybeToList do
+responseWidgets response = case response.widgets of
+  [] -> maybeToList do
     query <- response.query
     let wType = fromMaybe Widget.WTTable $ response.visualization >>= parseMaybe AE.parseJSON . AE.String
     pure (def :: Widget.Widget){Widget.wType = wType, Widget.query = Just query}
+  widgets -> map Widget.modelWidget widgets
 
 
 completeAgenticResponse :: (DB es, ELLM.LLM :> es, IOE :> es, Time.Time :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> Text -> AgenticChatResult -> Eff es (Either Text LLMResponse)

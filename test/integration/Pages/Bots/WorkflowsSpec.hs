@@ -1002,7 +1002,11 @@ spec = around withTestResources do
             runQueryEffect tr (Hasql.interpScalar @Int64 [HI.sql|SELECT count(DISTINCT root_run_id) FROM apis.ai_routine_runs WHERE project_id = #{testPid} AND conversation_id = #{conversation}|]) >>= (`shouldBe` 1)
             when (expectedWrites == 1) $ runQueryEffect tr (Hasql.interpScalar @Projects.UserId [HI.sql|SELECT created_by FROM projects.dashboards WHERE project_id = #{testPid} AND title = 'Slack autonomous dashboard'|]) >>= (`shouldBe` requester.id)
 
-      for_ ([("show errors", 1, "No errors were found."), ("show weekly report", 0, "report found"), ("Call send_to_slack exactly once, then report completion.", 1, "No errors were found.")] :: [(Text, Int, Text)]) \(prompt, expectedCalls, expectedReply) ->
+      let widgets = [AE.object ["type" AE..= ("timeseries_line" :: Text), "title" AE..= ("Error volume" :: Text), "query" AE..= ("summarize count() by bin_auto(timestamp)" :: Text)], AE.object ["type" AE..= ("stat" :: Text), "title" AE..= ("Request count" :: Text), "query" AE..= ("summarize count()" :: Text)], AE.object ["type" AE..= ("stat" :: Text), "sql" AE..= ("SELECT 1" :: Text)]] :: [AE.Value]
+          widgetAnswer :: Maybe Text -> Maybe Text -> Text
+          widgetAnswer query commentary = decodeUtf8 $ AE.encode $ AE.object ["explanation" AE..= commentary, "query" AE..= query, "widgets" AE..= widgets]
+          explanation = "Error volume and request count."
+      for_ ([("show errors", 1, "No errors were found.", "No errors were found.", 0), ("show weekly report", 0, "report found", "No errors were found.", 0), ("Call send_to_slack exactly once, then report completion.", 1, "No errors were found.", "No errors were found.", 0), ("Show charts of error volume and request count", 1, explanation, widgetAnswer Nothing (Just explanation), 2), ("Show charts with a legacy primary query", 1, explanation, widgetAnswer (Just "summarize count()") (Just explanation), 2), ("Show charts without commentary", 1, "", widgetAnswer Nothing Nothing, 2)] :: [(Text, Int, Text, Text, Int)]) \(prompt, expectedCalls, expectedReply, answer, expectedCharts) ->
         it ("Slack: handles queued query end-to-end: " <> toString prompt) \tr -> do
           setupSlackAgent tr testPid "T_WF_SLACK"
           calls <- newIORef (0 :: Int)
@@ -1010,7 +1014,7 @@ spec = around withTestResources do
               provider = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat{} -> do
                   modifyIORef' calls (+ 1)
-                  pure $ Right $ Chat.Message Chat.Assistant "No errors were found." Chat.defaultMessageData
+                  pure $ Right $ Chat.Message Chat.Assistant answer Chat.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Left "No title model"
                 ELLM.EmbedDocuments{} -> pure $ Left "No embeddings"
               transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"channel\":\"C0123ABCDEF\",\"ts\":\"1735689601.000001\",\"members\":[\"U0123ABCDEF\"]}"
@@ -1020,11 +1024,23 @@ spec = around withTestResources do
           length queued `shouldBe` 1
           (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ for_ queued \(HI.OneColumn (Aeson job)) -> Jobs.processBackgroundJob tr.trATCtx job
           let replies = [body | (url, body) <- requests, url == "https://slack.com/api/chat.postMessage"]
-          length replies `shouldBe` 1
-          for_ replies $ \body -> decodeUtf8 @Text body `shouldSatisfy` T.isInfixOf expectedReply
+          length replies `shouldBe` expectedCharts + if T.null expectedReply then 0 else 1
+          T.concat (map (decodeUtf8 @Text) replies) `shouldSatisfy` T.isInfixOf expectedReply
+          payloads <- traverse (either fail pure . AE.eitherDecode @AE.Value) replies
+          let images = concatMap (toListOf $ key "blocks" . _Array . traverse . key "image_url" . _String) payloads
+          length images `shouldBe` expectedCharts
+          for_ images $ \url -> url `shouldSatisfy` T.isInfixOf ("p/" <> testPid.toText <> "/widget.png?widgetZ=")
           readIORef calls >>= (`shouldBe` expectedCalls)
           Just completed <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackCommand $ Issues.slackCommandConversationId testPid interaction.team_id interaction.channel_id interaction.trigger_id
           completed.status `shouldBe` Issues.RunSucceeded
+          when (expectedCharts > 0) do
+            history <- runQueryEffect tr $ Issues.selectChatHistory testPid completed.conversationId
+            [V.length values | message <- history, Just (Aeson (AE.Array values)) <- [message.widgets]] `shouldBe` [expectedCharts]
+            let buttons = concatMap (toListOf $ key "blocks" . _Array . traverse . key "elements" . _Array . traverse . key "url" . _String) payloads
+            buttons `shouldSatisfy` any (T.isInfixOf $ "/ai/" <> completed.conversationId.toText)
+            (retried, ()) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ for_ queued \(HI.OneColumn (Aeson job)) -> Jobs.processBackgroundJob tr.trATCtx job
+            [url | (url, _) <- retried, url == "https://slack.com/api/chat.postMessage"] `shouldBe` []
+            readIORef calls >>= (`shouldBe` expectedCalls)
 
       for_ [False, True] $ \shared ->
         it ("slackEvidenceDiscovery_usesRequesterGrantAndExcludesProviderWrites: shared=" <> show shared) \tr -> do

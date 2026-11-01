@@ -575,6 +575,15 @@ widths; the 114 embedded source entries and all walkthrough steps are preserved.
 interaction within its embedded visualization remains unverified. See the
 [interface evidence](2026-10-29-routine-interface-review.md) for the exact scope.
 
+The Slack widget-array gap now has a focused implementation and regression check.
+Chart replies preserve widget configuration and link to the retained conversation.
+An explicit widget array takes precedence over a legacy primary query.
+The opaque model-widget decoder rejects SQL, executable content, and server context before signing.
+All 489 bot examples pass, including retained charts and replay without duplicate delivery.
+All 2,083 doctest examples also pass, including the seven new parser examples.
+Live Slack image display remains pending at this checkpoint.
+See [Slack chart replies](../docs/reviews/2026-11-01-slack-widgets.md).
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

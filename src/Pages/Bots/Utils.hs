@@ -58,7 +58,7 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
-import Utils (faSprite_, formatUTC, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
+import Utils (faSprite_, formatUTC, getDurationNSMS, hostPath, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
 import Web.HttpApiData (parseUrlPiece)
 
 
@@ -537,7 +537,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
     GeneralQueryIntent -> do
       threadM <- resolveThread
       processAIQueryWithMode (Just envCfg) envCfg.enableTimefusionReads projectTools invocationMode access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
-        >>= either (\err -> send (ReplyText $ formatBotError target ServiceError) $> Left err) (\response -> dispatchAIResponse response $> Right ())
+        >>= either (\err -> send (ReplyText $ formatBotError target ServiceError) $> Left err) (\response -> dispatchAIResponse threadM response $> Right ())
   where
     send reply = AI.requireAgentAccess access pid >> deliver reply
     explorerUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/log_explorer?"
@@ -579,58 +579,66 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
 
     -- Renders a chart when the model picked a visualization, a result table when
     -- it produced a bare query, then any accompanying explanation.
-    dispatchAIResponse resp = do
+    dispatchAIResponse conversation resp = do
       AI.requireAgentAccess access pid
       now <- Time.currentTime
       let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
           iso = fmap (toText . iso8601Show)
-      case resp.query of
-        Nothing -> send $ ReplyText $ textReply $ fromMaybe "No response available" resp.explanation
-        Just query -> do
-          case resp.visualization of
-            Just vizType -> do
-              let wType = Widget.mapChartTypeToWidgetType vizType
-                  chartType = Widget.mapWidgetTypeToChartType wType
-                  queryUrl = explorerUrl <> "viz_type=" <> chartType <> "&query=" <> toUriStr query
-              imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing (iso fromTimeM) (iso toTimeM)
-              send $ ReplyChart $ case target of
-                Slack ->
-                  AE.object
-                    [ "blocks"
-                        AE..= arr
-                          ( [slackHeader (botEmoji EmojiChart <> " " <> userQuery)]
-                              <> maybeToList (slackImage ("Chart: " <> userQuery) Nothing <$> imageUrl)
-                              <> [ slackContext ["*Query:* `" <> query <> "`"]
-                                 , slackActions [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " View in Log Explorer") queryUrl]
-                                 ]
-                          )
-                    , "response_type" AE..= ("in_channel" :: Text)
-                    , "replace_original" AE..= True
-                    ]
-                Discord ->
-                  dcContainer 26879
-                    $ [dcText $ botEmoji EmojiChart <> " **" <> userQuery <> "**"]
-                    <> dcGallery [(imageUrl, "Chart visualization: " <> userQuery)]
-                    <> [ dcText $ "**Query:** `" <> query <> "`"
-                       , dcLinkButton (botEmoji EmojiSearch <> " View in Log Explorer") queryUrl
-                       ]
-                -- Twilio content-template variables: WhatsApp renders the chart itself, so
-                -- "3" is the query string the template appends to the chart endpoint, "4"
-                -- the (host-relative) explorer link.
-                WhatsApp ->
-                  AE.object
-                    [ "1" AE..= ("*" <> userQuery <> "*")
-                    , "2" AE..= ("`" <> query <> "`")
-                    , "3" AE..= ("time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr pid.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr (fold $ iso fromTimeM) <> "&to=" <> toUriStr (fold $ iso toTimeM))
-                    , "4" AE..= (pid.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query)
-                    ]
-            Nothing -> case parseQueryToAST query of
-              Left _ -> send $ ReplyText $ formatBotError target (QueryParseError query)
-              Right query' ->
-                LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing Nothing
-                  >>= send
-                  . ReplyText
-                  . tableReply query
+          renderWidget widget = do
+            let query = fromMaybe "" widget.query
+                chartType = Widget.mapWidgetTypeToChartType widget.wType
+                queryUrl = maybe (explorerUrl <> "viz_type=" <> chartType <> "&query=" <> toUriStr query) (\identifier -> hostPath envCfg.hostUrl $ "p/" <> pid.toText <> "/ai/" <> identifier.toText) conversation
+                viewLabel = bool "View in Log Explorer" "View in Monoscope" (isJust conversation)
+                title = fromMaybe userQuery widget.title
+            imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid widget Nothing (iso fromTimeM) (iso toTimeM)
+            send $ ReplyChart $ case target of
+              Slack ->
+                AE.object
+                  [ "blocks"
+                      AE..= arr
+                        ( [slackHeader (T.take 150 $ botEmoji EmojiChart <> " " <> title)]
+                            <> maybeToList (slackImage (T.take 2000 $ "Chart: " <> title) Nothing <$> mfilter ((<= 3000) . T.length) imageUrl)
+                            <> [ slackContext ["*Query:* `" <> query <> "`"]
+                               , slackActions [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " " <> viewLabel) queryUrl]
+                               ]
+                        )
+                  , "response_type" AE..= ("in_channel" :: Text)
+                  , "replace_original" AE..= True
+                  ]
+              Discord ->
+                dcContainer 26879
+                  $ [dcText $ botEmoji EmojiChart <> " **" <> title <> "**"]
+                  <> dcGallery [(imageUrl, "Chart visualization: " <> title)]
+                  <> [ dcText $ "**Query:** `" <> query <> "`"
+                     , dcLinkButton (botEmoji EmojiSearch <> " " <> viewLabel) queryUrl
+                     ]
+              -- Twilio content-template variables: WhatsApp renders the chart itself, so
+              -- "3" is the query string the template appends to the chart endpoint, "4"
+              -- the (host-relative) explorer link.
+              WhatsApp ->
+                AE.object
+                  [ "1" AE..= ("*" <> title <> "*")
+                  , "2" AE..= ("`" <> query <> "`")
+                  , "3" AE..= ("time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr pid.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr (fold $ iso fromTimeM) <> "&to=" <> toUriStr (fold $ iso toTimeM))
+                  , "4" AE..= (pid.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query)
+                  ]
+      if null resp.widgets
+        then do
+          case resp.query of
+            Nothing -> send $ ReplyText $ textReply $ fromMaybe "No response available" resp.explanation
+            Just query -> do
+              case resp.visualization of
+                Just _ -> traverse_ renderWidget $ AI.responseWidgets resp
+                Nothing -> case parseQueryToAST query of
+                  Left _ -> send $ ReplyText $ formatBotError target (QueryParseError query)
+                  Right query' ->
+                    LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing Nothing
+                      >>= send
+                      . ReplyText
+                      . tableReply query
+              whenJust resp.explanation (send . ReplyText . textReply)
+        else do
+          traverse_ renderWidget $ take 10 $ AI.responseWidgets resp
           whenJust resp.explanation (send . ReplyText . textReply)
 
     tableReply query = \case
