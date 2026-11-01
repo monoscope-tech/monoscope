@@ -81,6 +81,7 @@ import Pkg.ImpactReview qualified as Impact
 import Pkg.Minio qualified as Storage
 import Pkg.Parser.Stats qualified as KQL
 import Pkg.TestUtils hiding (call)
+import Pkg.TestUtils qualified as Test
 import Relude
 import Servant (ServerError (..), getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
@@ -2791,14 +2792,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     deliver tr firstEvent `shouldReturn` AE.object ["status" AE..= ("ok" :: Text)]
     for_ @[] [AE.object [], payload "edited" revision "2025-01-01T00:00:00Z"] \ignored ->
       deliver tr ignored `shouldReturn` AE.object ["status" AE..= ("ignored" :: Text)]
-    queued <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () :: IO [Only Int]
+    queued <- dbQuery tr "SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () :: IO [Only Int]
     queued `shouldBe` [Only 1]
     [old] <- runQueryEffect tr $ Reviews.latestRuns testPid
     runQueryEffect tr (Reviews.claimRun old) `shouldReturn` True
     runQueryEffect tr (Reviews.currentRun old) `shouldReturn` True
-    leaseCoversReview <- withResource tr.trPool \conn -> query conn "SELECT lease_until > now() + interval '9 minutes' FROM projects.pr_review_threads WHERE id = ?" (Only old.threadId) :: IO [Only Bool]
+    leaseCoversReview <- dbQuery tr "SELECT lease_until > now() + interval '9 minutes' FROM projects.pr_review_threads WHERE id = ?" (Only old.threadId) :: IO [Only Bool]
     leaseCoversReview `shouldBe` [Only True]
-    queuedPayload <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () :: IO [Only (Aeson AE.Value)]
+    queuedPayload <- dbQuery tr "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () :: IO [Only (Aeson AE.Value)]
     queuedPayload `shouldBe` [Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest old.id]
     (_, ()) <- runTestBgRecordingHTTP frozenTime tr $ Impact.reviewPullRequest old.id
     retainedRetry <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM background_jobs WHERE payload = ? AND status = 'queued'" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest old.id) :: IO [Only Int]
@@ -2810,12 +2811,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     map (.latestRevision) runs `shouldBe` [next, next]
     new <- maybe (fail "new revision missing") pure $ find ((== next) . (.revision)) runs
     runQueryEffect tr (Reviews.claimRun new) `shouldReturn` False
-    deferred <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE run_at > now() AND payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest new.id) :: IO [Only (Aeson AE.Value)]
+    deferred <- dbQuery tr "SELECT payload FROM background_jobs WHERE run_at > now() AND payload = ?" (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest new.id) :: IO [Only (Aeson AE.Value)]
     deferred `shouldBe` [Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest new.id]
     runQueryEffect tr $ Reviews.releaseRun old
     runQueryEffect tr (Reviews.claimRun new) `shouldReturn` True
     runQueryEffect tr (Reviews.currentRun new) `shouldReturn` True
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.pr_review_threads SET lease_until = now() - interval '1 second' WHERE id = ?" (Only new.threadId)
+    dbExec tr "UPDATE projects.pr_review_threads SET lease_until = now() - interval '1 second' WHERE id = ?" (Only new.threadId)
     runQueryEffect tr (Reviews.currentRun new) `shouldReturn` False
     runQueryEffect tr (Reviews.claimRun new) `shouldReturn` True
     void $ deliver tr $ payload "converted_to_draft" next "2025-01-01T00:01:30Z"
@@ -3536,9 +3537,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
     invalidRecovery <- runQueryEffect tr $ Issues.listRoutineRuns reviewPid 12
     map (.status) invalidRecovery `shouldBe` [Issues.RunFailed]
     -- Reruns recover the app-owned comment and keep production prose out of links-only output.
-    void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
-    void $ testServant tr $ CodeContextPage.impactReviewRetryH reviewPid run.id
-    retryPayloads <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest' AND payload->>'contents' = ?" (Only run.id.toText) :: IO [Only (Aeson AE.Value)]
+    void $ Test.call tr $ CodeContextPage.impactReviewSettingsPostH reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
+    void $ Test.call tr $ CodeContextPage.impactReviewRetryH reviewPid run.id
+    retryPayloads <- dbQuery tr "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest' AND payload->>'contents' = ?" (Only run.id.toText) :: IO [Only (Aeson AE.Value)]
     retryPayloads `shouldBe` replicate 2 (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id)
     (linksRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeAgentWith ["--expect-knowledge"] result $ Impact.reviewPullRequest run.id
     runQueryEffect tr (Reviews.priorKnowledge run "test-service") >>= (\notes -> length notes `shouldBe` 1)
@@ -3727,7 +3728,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     revokedRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/" . fst)
     runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
     -- Unmapped repositories publish a coverage gap without calling the model.
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.code_mappings SET service = NULL WHERE project_id = ?" (Only reviewPid)
+    dbExec tr "UPDATE projects.code_mappings SET service = NULL WHERE project_id = ?" (Only reviewPid)
     runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     (unmappedRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ interpose @Agent.CodeReview (\_ _ -> liftIO $ fail "Review agent called without measured evidence") $ Impact.reviewPullRequest run.id
     let unmapped = T.intercalate " " $ map (decodeUtf8 . snd) $ filter (T.isInfixOf "/issues/comments/99" . fst) unmappedRequests

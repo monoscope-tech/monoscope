@@ -295,7 +295,7 @@ spec = do
           html invalidPath `shouldSatisfy` T.isInfixOf "Use a relative path"
           html invalidPath `shouldSatisfy` T.isInfixOf "Unsaved path draft"
         let legacyPage = UUIDId $ UUID.fromWords 50 0 0 3 :: Memory.PageId
-        void $ withResource tr.trPool \conn -> PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, ?::uuid, 1, document, author FROM projects.memory_revisions WHERE project_id = ? AND page_id = ? AND version = 1" (legacyPage, testPid, page)
+        dbExec tr "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, ?::uuid, 1, document, author FROM projects.memory_revisions WHERE project_id = ? AND page_id = ? AND version = 1" (legacyPage, testPid, page)
         legacyPath <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/" <> legacyPage.toText) []
         H.statusCode legacyPath.simpleStatus `shouldBe` 200
         firstHistory <- runQueryEffect tr $ Memory.pageHistory testPid page
@@ -312,7 +312,7 @@ spec = do
         html viewed `shouldSatisfy` T.isInfixOf "Revision history"
         html viewed `shouldSatisfy` T.isInfixOf "Keep retry tokens. &lt;script&gt;"
         T.isInfixOf "href=\"script\"" (html viewed) `shouldBe` False
-        (_, typedWiki) <- testServant tr $ PageCodeContext.memoryGetH testPid $ Just page
+        typedWiki <- call tr $ PageCodeContext.memoryGetH testPid $ Just page
         typedWiki.content.form.version `shouldBe` 2
         typedWiki.content.canEdit `shouldBe` True
         stale <- save testPid 1 "Preserved draft" "Stale edit must not advance its expected revision"
@@ -333,7 +333,7 @@ spec = do
         hidden <- request H.methodGet (base other <> "?page=" <> page.toText) []
         H.statusCode hidden.simpleStatus `shouldBe` 404
         runQueryEffect tr (Memory.pageHistory other page) `shouldReturn` []
-        void $ withResource tr.trPool \conn -> PG.execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PView, testPid, user)
+        dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PView, testPid, user)
         readOnly <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
         H.statusCode readOnly.simpleStatus `shouldBe` 200
         html readOnly `shouldNotSatisfy` T.isInfixOf "Save page"
@@ -348,7 +348,7 @@ spec = do
         html demo `shouldNotSatisfy` T.isInfixOf "Project wiki"
         demoWiki <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ base testPid) app
         H.statusCode demoWiki.simpleStatus `shouldBe` 404
-        void $ withResource tr.trPool \conn -> PG.execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
+        dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
         otherPage <- request H.methodPost (base testPid) [("pageId", duplicate.toText), ("version", "0"), ("path", "services/other"), ("title", "Other page"), ("body", "Other notes")]
         H.statusCode otherPage.simpleStatus `shouldBe` 200
         blockedRename <- request H.methodPost (base testPid) [("pageId", page.toText), ("version", "2"), ("path", "services/other"), ("title", "Blocked rename"), ("body", "Unsaved rename draft")]
@@ -384,10 +384,9 @@ spec = do
         legacy <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
         H.statusCode legacy.simpleStatus `shouldBe` 200
         length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 3
-        void $ withResource tr.trPool \conn -> do
-          void $ PG.execute conn "INSERT INTO projects.memory_pages (project_id, page_id, path) SELECT project_id, md5(page_id::text || n::text)::uuid, md5(page_id::text || n::text) FROM projects.memory_revisions CROSS JOIN generate_series(1, 100) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
-          void $ PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, md5(page_id::text || n::text)::uuid, 1, document, author FROM projects.memory_revisions CROSS JOIN generate_series(1, 100) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
-          PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, page_id, n, document, author FROM projects.memory_revisions CROSS JOIN generate_series(4, 102) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
+        dbExec tr "INSERT INTO projects.memory_pages (project_id, page_id, path) SELECT project_id, md5(page_id::text || n::text)::uuid, md5(page_id::text || n::text) FROM projects.memory_revisions CROSS JOIN generate_series(1, 100) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
+        dbExec tr "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, md5(page_id::text || n::text)::uuid, 1, document, author FROM projects.memory_revisions CROSS JOIN generate_series(1, 100) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
+        dbExec tr "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, page_id, n, document, author FROM projects.memory_revisions CROSS JOIN generate_series(4, 102) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
         capped <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
         html capped `shouldSatisfy` T.isInfixOf "More pages"
         later <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki?after=f") []
@@ -480,7 +479,7 @@ spec = do
               W.GetWith _ "https://api.github.com/user/installations?per_page=100&page=1" -> pure $ httpResponse "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}"
               W.GetWith _ "https://api.github.com/user" -> pure $ httpResponse "{\"login\":\"team\"}"
               _ -> liftIO $ expectationFailure "Unexpected authorization request" >> throwIO (InvalidUrlException "https://git.invalid" "Unexpected authorization request")
-        (_, forged) <- testServant configured $ withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ testPid.toText <> ":code") Nothing
+        forged <- call configured $ withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ testPid.toText <> ":code") Nothing
         render forged `shouldSatisfy` T.isInfixOf "missing, expired, or already used"
         runQueryEffect tr (GitSync.getGitHubCredentials testPid) >>= (`shouldSatisfy` null)
         (installState, authorize) <- runAuthHandler configured do
@@ -491,13 +490,13 @@ spec = do
         runQueryEffect tr (GitSync.consumeInstallationAttempt session installState) `shouldReturn` Nothing
         Just (HI.OneColumn nonce) <- runQueryEffect tr $ Hasql.interpOne @(HI.OneColumn UUID.UUID) [HI.sql| SELECT id FROM projects.github_installation_attempts WHERE project_id = #{testPid} AND session_id = #{session} AND installation_id = 42 |]
         nonce `shouldNotBe` installState
-        (_, verified) <- testServant configured $ provider $ GitSyncPage.githubAppCallbackH (Just 999999) Nothing (Just $ UUID.toText nonce) (Just "private-code")
+        verified <- call configured $ provider $ GitSyncPage.githubAppCallbackH (Just 999999) Nothing (Just $ UUID.toText nonce) (Just "private-code")
         let html = render verified
         html `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/repositories/connect")
         for_ ["private-user-token", "private-code", "fixture-secret"] \secret -> html `shouldNotSatisfy` T.isInfixOf secret
         [account] <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
         account.installationId `shouldBe` Just 42
-        (_, replay) <- testServant configured $ withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ UUID.toText nonce) (Just "private-code")
+        replay <- call configured $ withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ UUID.toText nonce) (Just "private-code")
         render replay `shouldSatisfy` T.isInfixOf "missing, expired, or already used"
         runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
 
@@ -510,11 +509,11 @@ spec = do
                 pure $ httpResponse "{\"full_name\":\"team/checkout\",\"private\":true,\"default_branch\":\"trunk\"}"
               _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Token connection must only read repository metadata"
             encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        (_, rejected) <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryTokenPostH testPid form
+        rejected <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryTokenPostH testPid form
         rejected.content.connectionError `shouldSatisfy` isJust
         rejected.content.repoFullName `shouldBe` "team/checkout"
         render (Lucid.toHtml rejected.content) `shouldNotSatisfy` T.isInfixOf "fixture-token"
-        (_, incomplete) <- testServant tr $ interpose @W.HTTP (\_ -> \case W.GetWith _ _ -> pure $ httpResponse "{\"full_name\":\"\"}"; _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Unexpected request") $ PageCodeContext.repositoryTokenPostH testPid form
+        incomplete <- call tr $ interpose @W.HTTP (\_ -> \case W.GetWith _ _ -> pure $ httpResponse "{\"full_name\":\"\"}"; _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Unexpected request") $ PageCodeContext.repositoryTokenPostH testPid form
         incomplete.content.connectionError `shouldSatisfy` isJust
         runQueryEffect tr (GitSync.getGitHubCredentials testPid) >>= (`shouldSatisfy` null)
         connections <- replicateM 2 $ testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form
@@ -529,17 +528,17 @@ spec = do
         savedToken `shouldReturn` Just "fixture-token"
         runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "team" "concurrent-token" Nothing) >>= (`shouldSatisfy` isNothing)
         savedToken `shouldReturn` Just "fixture-token"
-        (_, conflict) <- testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.accessToken = "replacement-token"}
+        conflict <- call tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.accessToken = "replacement-token"}
         conflict.content.connectionError `shouldSatisfy` isJust
         savedToken `shouldReturn` Just "fixture-token"
         _ <- testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.accessToken = "replacement-token", PageCodeContext.replaceToken = Just True}
         savedToken `shouldReturn` Just "replacement-token"
         runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "team" "concurrent-token" (Just account)) >>= (`shouldSatisfy` isNothing)
         savedToken `shouldReturn` Just "replacement-token"
-        (_, source) <- testServant tr $ metadata $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing
+        source <- call tr $ metadata $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing
         render source `shouldSatisfy` T.isInfixOf "value=\"trunk\""
-        (_, picker) <-
-          testServant tr
+        picker <-
+          call tr
             $ interpose @W.HTTP
               ( \_ -> \case
                   W.GetWith _ endpoint -> do
@@ -551,7 +550,7 @@ spec = do
         picker.content.repositories `shouldBe` Right [Git.GitRepo "team/checkout" "checkout" True "trunk"]
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.git_credentials SET installation_id = 42, access_token = NULL WHERE id = #{account.id} |]
         runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "team" "concurrent-token" (Just account)) >>= (`shouldSatisfy` isNothing)
-        (_, appDenied) <- testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.replaceToken = Just True}
+        appDenied <- call tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.replaceToken = Just True}
         appDenied.content.connectionError `shouldSatisfy` isJust
         Just app <- runQueryEffect tr $ GitSync.getGitHubCredential encKey testPid account.id
         app.installationId `shouldBe` Just 42
@@ -566,7 +565,7 @@ spec = do
             repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
             repository <- maybe (fail "Expected repository for this Git host") pure $ find ((== host) . (.host)) repositories
             (repository.owner, repository.repo) `shouldBe` Git.splitFullName name
-            (_, source) <- testServant tr $ metadata $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing
+            source <- call tr $ metadata $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing
             render source `shouldSatisfy` T.isInfixOf "value=\"stable\""
         runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
 
@@ -577,12 +576,12 @@ spec = do
         runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" "checkout" "main") (Just "checkout") "/app/" "src"
         [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid} |]
-        (_, details) <- testServant tr $ PageCodeContext.repositoryGetH testPid repository.id
+        details <- call tr $ PageCodeContext.repositoryGetH testPid repository.id
         render (Lucid.toHtml details.content) `shouldSatisfy` T.isInfixOf "View source context"
         render (Lucid.toHtml details.content) `shouldNotSatisfy` T.isInfixOf "Configure source context"
         let noProvider = interpose @W.HTTP \_ _ -> liftIO $ expectationFailure "Read-only repository settings must not contact the provider" >> throwIO (InvalidUrlException "https://git.invalid" "Unexpected provider call")
         for_ [PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing, PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing, PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing] \handler -> do
-          (_, page) <- testServant tr $ noProvider handler
+          page <- call tr $ noProvider handler
           let html = render page
           html `shouldSatisfy` T.isInfixOf "team/checkout"
           html `shouldNotSatisfy` T.isInfixOf "name=\"credentialId\""
@@ -673,9 +672,9 @@ spec = do
             repositories = [Git.GitRepo "team/checkout" "checkout" True "trunk", Git.GitRepo "team/catalog" "catalog" False "main"]
         Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
         Cache.insert tr.trATCtx.repoListCache account.id repositories
-        (_, picker) <- testServant tr $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
+        picker <- call tr $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
         picker.content.repositories `shouldBe` Right repositories
-        (_, rejected) <- testServant tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (PageCodeContext.RepositoryConnectForm ["team/checkout", "foreign/private"])
+        rejected <- call tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (PageCodeContext.RepositoryConnectForm ["team/checkout", "foreign/private"])
         rejected.content.selected `shouldBe` ["team/checkout", "foreign/private"]
         rejected.content.connectionError `shouldSatisfy` isJust
         runQueryEffect tr (GitSync.getRepositories testPid) >>= (`shouldSatisfy` null)
@@ -691,16 +690,16 @@ spec = do
         Just foreignAccount <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey otherPid Git.GitHub Nothing "foreign" (Just 43) Nothing
         Cache.insert tr.trATCtx.repoListCache foreignAccount.id repositories
         runQueryEffect tr (GitSync.connectRepository testPid foreignAccount.id (Git.GitRepo "foreign/private" "private" True "main")) >>= (`shouldSatisfy` isNothing)
-        (_, denied) <- testServant tr $ PageCodeContext.repositoryConnectPostH testPid (Just foreignAccount.id) (PageCodeContext.RepositoryConnectForm ["team/catalog"])
+        denied <- call tr $ PageCodeContext.repositoryConnectPostH testPid (Just foreignAccount.id) (PageCodeContext.RepositoryConnectForm ["team/catalog"])
         denied.content.connectionError `shouldSatisfy` isJust
         runQueryEffect tr (GitSync.getRepositories otherPid) >>= (`shouldSatisfy` null)
         Cache.insert tr.trATCtx.repoListCache account.id []
-        (_, emptyPicker) <- testServant tr $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
+        emptyPicker <- call tr $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
         emptyPicker.content.repositories `shouldBe` Right []
         render (Lucid.toHtml emptyPicker.content) `shouldSatisfy` T.isInfixOf "No repositories are available"
         Cache.delete tr.trATCtx.repoListCache account.id
         let unavailable = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppPrivateKey = ""}}}
-        (_, failed) <- testServant unavailable $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
+        failed <- call unavailable $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
         failed.content.repositories `shouldSatisfy` isLeft
         render (Lucid.toHtml failed.content) `shouldSatisfy` T.isInfixOf "Could not load repositories"
         render (Lucid.toHtml failed.content) `shouldSatisfy` T.isInfixOf "Retry"
@@ -710,9 +709,9 @@ spec = do
         map (.credentialId) retained `shouldBe` [Nothing, Nothing]
 
       it "repositoryFeatures_areDiscoverableOutsideNotificationSettings" \tr -> do
-        (_, connection) <- testServant tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
+        connection <- call tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
         render (Lucid.toHtml connection.content) `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/connect/token\"")
-        (_, html) <- testServant tr $ PageCodeContext.codeMappingsGetH testPid Nothing
+        html <- call tr $ PageCodeContext.codeMappingsGetH testPid Nothing
         let out = render html
         out `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories\"")
         out `shouldSatisfy` T.isInfixOf "Pull requests"
@@ -721,7 +720,7 @@ spec = do
       it "sourceRepositoryPicker_preservesTheSelectedNamespaceInsteadOfUsingTheAccountName" \tr -> do
         Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitLab (Just "https://git.example.com") "team" Nothing (Just "fixture")
         Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team/platform/checkout" "checkout" True "trunk"]
-        (_, picker) <- testServant tr $ PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing
+        picker <- call tr $ PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing
         render picker `shouldSatisfy` T.isInfixOf "value=\"team/platform/checkout\""
         _ <- testServant tr $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "team/platform/checkout") (Just "trunk") (Just "checkout") Nothing Nothing Nothing (Just account.id))
         [mapping] <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
@@ -731,7 +730,7 @@ spec = do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
         Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
         Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/checkout" "checkout" True "main")
-        (_, legacy) <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing
+        legacy <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing
         let html = render legacy
         html `shouldSatisfy` T.isInfixOf ("/repositories/" <> repository.id.toText)
         for_ ["Connect a dashboard repository", "Link repository", ">Configuration<"] \label -> html `shouldNotSatisfy` T.isInfixOf label
@@ -741,7 +740,7 @@ spec = do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
         Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" Nothing (Just "fixture")
         Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/checkout" "checkout" True "main")
-        withResource tr.trPool \conn -> void $ PG.execute conn "INSERT INTO apis.schema_summary (project_id, doc) VALUES (?, '{\"fields\":{},\"services\":[\"checkout\",\"billing\"],\"top_values_by_field\":{}}')" (PG.Only testPid)
+        dbExec tr "INSERT INTO apis.schema_summary (project_id, doc) VALUES (?, '{\"fields\":{},\"services\":[\"checkout\",\"billing\"],\"top_values_by_field\":{}}')" (PG.Only testPid)
         let analyze = BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.AnalyzeRepository testPid repository.id)
             provider = withHTTPResponses \_ endpoint -> pure $ Just if "/commits/" `T.isInfixOf` toText endpoint then "{\"sha\":\"head\"}" else if "/git/trees/" `T.isInfixOf` toText endpoint then "{\"tree\":[{\"path\":\"config/monitors\",\"type\":\"tree\",\"sha\":\"folder\"}]}" else "{\"full_name\":\"team/checkout\",\"name\":\"checkout\",\"private\":true,\"default_branch\":\"main\"}"
         void $ runTestBgRecordingHTTP frozenTime tr $ withUnavailableRepositoryAPI analyze
@@ -813,7 +812,7 @@ spec = do
         runQueryEffect tr (RepositorySync.importDefinition resource Nothing $ Just original) `shouldReturn` Right ()
         [freshResource] <- runQueryEffect tr $ RepositorySync.resources testPid sync.id
         observed <- runQueryEffect tr $ RepositorySync.resourceSnapshot freshResource
-        withResource tr.trPool \conn -> void $ PG.execute conn "UPDATE apis.cron_monitors SET name = 'Local edit' WHERE id = ?" (PG.Only localId)
+        dbExec tr "UPDATE apis.cron_monitors SET name = 'Local edit' WHERE id = ?" (PG.Only localId)
         result <- runQueryEffect tr $ RepositorySync.importDefinition freshResource observed (Just original)
         result `shouldSatisfy` isLeft
         Just current <- runQueryEffect tr $ RepositorySync.localDefinition resource
@@ -869,11 +868,11 @@ spec = do
         Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "acme" (Just 42) Nothing
         runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "acme" "checkout-service" "main") (Just "checkout") "/srv/app/" ""
         _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
-        (_, html) <- testServant tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
+        html <- call tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
         let out = render html
         for_ (["acme/checkout-service", "checkout", "acme/dashboards", "Awaiting first sync", "Production impact reviews"] :: [Text]) \label ->
           T.isInfixOf label out `shouldBe` True
-        (_, reviews) <- testServant tr $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.PullRequests) Nothing
+        reviews <- call tr $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.PullRequests) Nothing
         T.isInfixOf "No pull requests reviewed yet" (render reviews) `shouldBe` True
 
       it "serviceRepositories_showOnlyApplicableOriginsAndExplainMissingLinksWithoutOfferingViewerEdits" \tr -> do
@@ -885,7 +884,7 @@ spec = do
           runQueryEffect tr $ CodeContext.insertCodeMapping testPid cid (Git.RepoRef "acme" repo "main") svc prefix ""
         void $ runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
         repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
-        (_, scoped) <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.serviceRepositoriesGetH testPid service
+        scoped <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.serviceRepositoriesGetH testPid service
         let html = render scoped
         forM_ repositories \repository ->
           T.isInfixOf ("/repositories/" <> repository.id.toText <> "\"") html `shouldBe` (isNothing repository.apiBase && repository.repo `elem` ["checkout-service", "shared-source"])
@@ -894,7 +893,7 @@ spec = do
         html `shouldSatisfy` T.isInfixOf "Source mappings that apply to this service, including mappings for all services."
         html `shouldNotSatisfy` T.isInfixOf "id=\"repository-nav\""
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| DELETE FROM projects.code_mappings WHERE project_id = #{testPid} |]
-        (_, unlinkedPage) <- testServant tr $ PageCodeContext.serviceRepositoriesGetH testPid service
+        unlinkedPage <- call tr $ PageCodeContext.serviceRepositoriesGetH testPid service
         render unlinkedPage `shouldSatisfy` T.isInfixOf "No repositories linked to this service"
         render unlinkedPage `shouldSatisfy` T.isInfixOf "Choose a repository"
         let uid = (getResponse tr.trSessAndHeader).user.id
@@ -902,7 +901,7 @@ spec = do
           Hasql.interpExecute_ [HI.sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid} |]
           Hasql.interpExecute_ [HI.sql| DELETE FROM projects.repositories WHERE project_id = #{testPid} |]
         forM_ [PageCodeContext.serviceRepositoriesGetH testPid service, PageCodeContext.repositoriesGetH testPid Nothing Nothing] \handler -> do
-          (_, readonly) <- testServant tr handler
+          readonly <- call tr handler
           render readonly `shouldNotSatisfy` T.isInfixOf "Add repositories"
           render readonly `shouldNotSatisfy` T.isInfixOf "Choose a repository"
           render readonly `shouldNotSatisfy` T.isInfixOf "Connect repositories"
@@ -914,7 +913,7 @@ spec = do
         Just syncA <- connect "team-a"
         Just syncB <- connect "team-b"
         syncA.id `shouldNotBe` syncB.id
-        (_, html) <- testServant tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
+        html <- call tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
         for_ (["team-a/dashboards", "team-b/dashboards"] :: [Text]) \repo ->
           T.isInfixOf repo (render html) `shouldBe` True
 
@@ -924,12 +923,12 @@ spec = do
           Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing account (Just 42) Nothing
           Cache.insert tr.trATCtx.repoListCache credential.id []
           pure credential
-        (_, html) <- testServant tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
+        html <- call tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
         render (Lucid.toHtml html.content) `shouldSatisfy` T.isInfixOf "Choose an account"
         _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout") (Just "main") Nothing Nothing Nothing Nothing Nothing)
         runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
         for_ accounts \account -> do
-          (_, editor) <- testServant tr $ PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) (Just "/srv/app/main.py")
+          editor <- call tr $ PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) (Just "/srv/app/main.py")
           T.isInfixOf ("name=\"credentialId\" value=\"" <> account.id.toText <> "\"") (render editor) `shouldBe` True
           T.isInfixOf "value=\"/srv/app/main.py\"" (render editor) `shouldBe` True
           _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout") (Just "main") (Just account.account) Nothing Nothing Nothing (Just account.id))
@@ -948,7 +947,7 @@ spec = do
         runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "team" "checkout" "main") (Just "checkout") "/app/" "src"
         Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "checkout" "main" (GitSync.AppInstallation 42) Nothing "ops"
         [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
-        (_, details) <- testServant configured $ PageCodeContext.repositoryGetH testPid repository.id
+        details <- call configured $ PageCodeContext.repositoryGetH testPid repository.id
         render (Lucid.toHtml details.content) `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/" <> repository.id.toText <> "/source\"")
         map (.service) details.content.mappings `shouldBe` [Just "checkout"]
         fmap (.id) details.content.dashboardSync `shouldBe` Just sync.id
@@ -961,16 +960,16 @@ spec = do
         render (Lucid.toHtml noRunner.content) `shouldNotSatisfy` T.isInfixOf "Ready for pull requests"
         render (Lucid.toHtml noRunner.content) `shouldSatisfy` T.isInfixOf "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
         let incomplete = configured{trATCtx = configured.trATCtx{config = configured.trATCtx.config{githubAppPrivateKey = ""}}}
-        (_, unavailable) <- testServant incomplete $ PageCodeContext.repositoryGetH testPid repository.id
+        unavailable <- call incomplete $ PageCodeContext.repositoryGetH testPid repository.id
         unavailable.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsServer -> True; _ -> False
         runQueryEffect tr $ ImpactReviews.updateSettings testPid (ImpactReviews.ReviewSettings "team" "checkout" False False)
-        (_, disabled) <- testServant withoutAgent $ PageCodeContext.repositoryGetH testPid repository.id
+        disabled <- call withoutAgent $ PageCodeContext.repositoryGetH testPid repository.id
         disabled.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewDisabled -> True; _ -> False
         for_ details.content.mappings \mapping -> runQueryEffect tr $ CodeContext.deleteCodeMapping testPid mapping.id
         void $ runQueryEffect tr $ GitSync.deleteGitHubSync sync.id
         [retained] <- runQueryEffect tr $ GitSync.getRepositories testPid
         retained.id `shouldBe` repository.id
-        (_, disconnected) <- testServant configured $ PageCodeContext.repositoryGetH testPid repository.id
+        disconnected <- call configured $ PageCodeContext.repositoryGetH testPid repository.id
         disconnected.content.mappings `shouldSatisfy` null
         disconnected.content.dashboardSync `shouldSatisfy` isNothing
         disconnected.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsService -> True; _ -> False
@@ -1032,16 +1031,16 @@ spec = do
         let repo = Git.GitRepo "team/checkout" "checkout" True "trunk"
         Cache.insert tr.trATCtx.repoListCache account.id [repo]
         Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id repo
-        (_, initial) <- testServant configured $ GitSyncPage.repositoryDashboardGetH testPid repository.id
+        initial <- call configured $ GitSyncPage.repositoryDashboardGetH testPid repository.id
         initial.content.form.branch `shouldBe` "trunk"
         initial.content.form.credentialId `shouldBe` Just account.id
         initial.content.sync `shouldSatisfy` isNothing
         let selection = GitSyncPage.RepositoryDashboardForm (Just account.id) "trunk" (Just "/ops/")
-        (_, missingConfig) <- testServant tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = ""}}} $ GitSyncPage.repositoryDashboardPostH testPid repository.id selection
+        missingConfig <- call tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = ""}}} $ GitSyncPage.repositoryDashboardPostH testPid repository.id selection
         missingConfig.content.setupError `shouldSatisfy` isJust
         missingConfig.content.form.pathPrefix `shouldBe` Just "/ops/"
         runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
-        (_, connected) <- testServant configured $ GitSyncPage.repositoryDashboardPostH testPid repository.id selection
+        connected <- call configured $ GitSyncPage.repositoryDashboardPostH testPid repository.id selection
         sync <- maybe (fail "Expected dashboard sync") pure connected.content.sync
         (sync.owner, sync.repo, sync.branch, sync.pathPrefix, sync.installationId, sync.webhookSecret) `shouldBe` ("team", "checkout", "trunk", "ops", Just 42, Just "fixture")
         _ <- testServant configured $ GitSyncPage.repositoryDashboardPostH testPid repository.id selection{GitSyncPage.branch = "different"}
@@ -1054,11 +1053,11 @@ spec = do
         runQueryEffect tr (GitSync.enableRepositoryDashboardSync testPid repository.id foreignAccount.id "main" "" Nothing) >>= (`shouldSatisfy` isNothing)
         Just tokenAccount <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitLab (Just "https://git.example.com") "team" Nothing (Just "fixture-token")
         Just tokenRepo <- runQueryEffect tr $ GitSync.connectRepository testPid tokenAccount.id (Git.GitRepo "team/catalog" "catalog" True "main")
-        (_, unavailableBranch) <- testServant tr $ withUnavailableRepositoryAPI $ GitSyncPage.repositoryDashboardPostH testPid tokenRepo.id (GitSyncPage.RepositoryDashboardForm (Just tokenAccount.id) "" (Just "ops"))
+        unavailableBranch <- call tr $ withUnavailableRepositoryAPI $ GitSyncPage.repositoryDashboardPostH testPid tokenRepo.id (GitSyncPage.RepositoryDashboardForm (Just tokenAccount.id) "" (Just "ops"))
         unavailableBranch.content.setupError `shouldSatisfy` isJust
         unavailableBranch.content.sync `shouldSatisfy` isNothing
-        (_, tokenSetup) <-
-          testServant tr
+        tokenSetup <-
+          call tr
             $ interpose @W.HTTP (\_ -> \case W.GetWith _ _ -> pure $ httpResponse "{\"default_branch\":\"stable\"}"; _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Branch detection must only GET repository metadata")
             $ GitSyncPage.repositoryDashboardPostH testPid tokenRepo.id (GitSyncPage.RepositoryDashboardForm (Just tokenAccount.id) "" Nothing)
         tokenSync <- maybe (fail "Expected token dashboard sync") pure tokenSetup.content.sync
@@ -1075,7 +1074,7 @@ spec = do
         Cache.insert tr.trATCtx.repoListCache account.id repos
         Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/checkout" "checkout" True "trunk")
         runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" "catalog" "main") (Just "catalog") "/catalog/" ""
-        (_, source) <- testServant tr $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing (Just "/app/main.py")
+        source <- call tr $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing (Just "/app/main.py")
         let html = render source
         for_ ["value=\"team/checkout\"", "value=\"trunk\"", "value=\"/app/main.py\"", "name=\"credentialId\" value=\"" <> account.id.toText <> "\""] \value -> html `shouldSatisfy` T.isInfixOf value
         html `shouldNotSatisfy` T.isInfixOf "Unlink team/catalog"
@@ -1102,7 +1101,7 @@ spec = do
         sort (map (.apiBase) syncs) `shouldBe` [Nothing, Just "https://git.example.com"]
         credentials <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
         sort (map (.apiBase) credentials) `shouldBe` [Nothing, Just "https://git.example.com"]
-        (_, overview) <- testServant tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
+        overview <- call tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
         T.count "team/dashboards" (render overview) `shouldBe` 2
 
       it "repositoryConnection_reportsUnreadableTokensWithoutChangingTheFailedOperation" \tr -> do
@@ -1165,7 +1164,7 @@ spec = do
         (retained.title, retained.gitSyncId, retained.filePath, retained.fileSha) `shouldBe` ("Overview", Nothing, Nothing, Nothing)
         Just untouched <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid dashB.id
         (untouched.gitSyncId, untouched.fileSha) `shouldBe` (Just syncB.id, Just "sha-b")
-        (_, overview) <- testServant tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
+        overview <- call tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
         for_ (["team-a/dashboards", "team-b/dashboards"] :: [Text]) \repo ->
           T.isInfixOf repo (render overview) `shouldBe` True
 
@@ -1175,7 +1174,7 @@ spec = do
           did <- UUIDId <$> UUID.nextRandom
           runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Retained overview", Dashboards.updatedAt = addUTCTime (fromIntegral n) frozenTime, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just path, Dashboards.fileSha = Just "blob"}
         migration <- Query <$> readFileBS "static/migrations/0216_repository_relative_paths.sql"
-        withResource tr.trPool \conn -> void $ PG.execute_ conn migration
+        dbExec tr migration ()
         retained <- forM dashboards \dash -> runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid dash.id
         map (fmap (\d -> (d.title, d.gitSyncId, d.filePath, d.fileSha))) retained
           `shouldBe` [ Just ("Retained overview", Nothing, Nothing, Nothing)
@@ -1192,9 +1191,9 @@ spec = do
         Just syncA <- connect testPid "team-a"
         Just syncB <- connect testPid "team-b"
         dash <- create
-        (_, initial) <- testServant tr $ GitSyncPage.dashboardRepositoryGetH testPid dash.id
+        initial <- call tr $ GitSyncPage.dashboardRepositoryGetH testPid dash.id
         length initial.content.repositories `shouldBe` 2
-        (_, assigned) <- testServant tr $ GitSyncPage.dashboardRepositoryPostH testPid dash.id (GitSyncPage.DashboardRepositoryForm syncB.id)
+        assigned <- call tr $ GitSyncPage.dashboardRepositoryPostH testPid dash.id (GitSyncPage.DashboardRepositoryForm syncB.id)
         let owned = assigned.content.dashboard
         (owned.gitSyncId, owned.filePath, owned.fileSha, isJust owned.schema) `shouldBe` (Just syncB.id, Just "overview.yaml", Nothing, True)
         (owned.schema >>= (.file)) `shouldBe` Just "redis.yaml"
@@ -1205,15 +1204,15 @@ spec = do
                 BackgroundJobs.GitSyncPushDashboard project did -> project == testPid && did == dash.id.unwrap
                 _ -> False
             )
-        (_, reassigned) <- testServant tr $ GitSyncPage.dashboardRepositoryPostH testPid dash.id (GitSyncPage.DashboardRepositoryForm syncA.id)
+        reassigned <- call tr $ GitSyncPage.dashboardRepositoryPostH testPid dash.id (GitSyncPage.DashboardRepositoryForm syncA.id)
         reassigned.content.assignmentError `shouldBe` Just (GitSync.OwnedByRepository syncB.id)
         other <- create
-        (_, conflict) <- testServant tr $ GitSyncPage.dashboardRepositoryPostH testPid other.id (GitSyncPage.DashboardRepositoryForm syncB.id)
+        conflict <- call tr $ GitSyncPage.dashboardRepositoryPostH testPid other.id (GitSyncPage.DashboardRepositoryForm syncB.id)
         conflict.content.assignmentError `shouldBe` Just (GitSync.FileOwnedByDashboard dash.id)
         conflict.content.dashboard.gitSyncId `shouldBe` Nothing
         otherPid <- createTestProject tr "Other repository owner"
         Just foreignRepo <- connect otherPid "foreign"
-        (_, foreignResult) <- testServant tr $ GitSyncPage.dashboardRepositoryPostH testPid other.id (GitSyncPage.DashboardRepositoryForm foreignRepo.id)
+        foreignResult <- call tr $ GitSyncPage.dashboardRepositoryPostH testPid other.id (GitSyncPage.DashboardRepositoryForm foreignRepo.id)
         foreignResult.content.assignmentError `shouldBe` Just GitSync.RepositoryMissing
 
       it "repositoryEdits_updateOneConfigurationPRWithoutWritingToTheTargetBranch" \tr -> do
@@ -1321,7 +1320,7 @@ spec = do
         conflicts <- runQueryEffect tr $ RepositorySync.resources testPid sync.id
         conflicts `shouldSatisfy` any (.conflicted)
         [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
-        (_, status) <- testServant tr $ PageCodeContext.repositoryGetH testPid repository.id
+        status <- call tr $ PageCodeContext.repositoryGetH testPid repository.id
         let html = render $ Lucid.toHtml status.content
         html `shouldSatisfy` T.isInfixOf "Both versions changed"
         html `shouldSatisfy` T.isInfixOf "Keep Monoscope"
@@ -1343,7 +1342,7 @@ spec = do
           void $ PG.execute_ conn "ALTER TABLE projects.git_sync ALTER COLUMN last_error TYPE TEXT USING last_error->>'message'"
           void $ PG.execute conn "UPDATE projects.git_sync SET last_error = 'Legacy provider failure' WHERE id = ?" (PG.Only failed.id)
         migration <- Query <$> readFileBS "static/migrations/0222_repository_sync_failures.sql"
-        withResource tr.trPool \conn -> void $ PG.execute_ conn migration
+        dbExec tr migration ()
         Just migrated <- runQueryEffect tr $ GitSync.getGitSyncById testPid failed.id
         migrated.lastError `shouldBe` Just (GitSync.SyncFailure GitSync.ImportDashboards "Legacy provider failure")
         Just unchanged <- runQueryEffect tr $ GitSync.getGitSyncById testPid healthy.id
@@ -1358,7 +1357,7 @@ spec = do
         void $ runTestBgRecordingHTTP frozenTime tr $ failedExport job
         Just failed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
         failed.lastError `shouldBe` Just (GitSync.SyncFailure GitSync.ExportDashboards "GitHub did not return the target tree.")
-        (_, retried) <- testServant tr $ GitSyncPage.gitSyncRepositoryRetryH testPid sync.id
+        retried <- call tr $ GitSyncPage.gitSyncRepositoryRetryH testPid sync.id
         render retried `shouldSatisfy` T.isInfixOf "Retry export"
         queued <- getPendingBackgroundJobs tr.trATCtx
         [sid | (_, BackgroundJobs.GitSyncPushRepository pid sid) <- toList queued, pid == testPid] `shouldBe` [sync.id]
@@ -1439,10 +1438,10 @@ spec = do
                   else pure $ Just $ if "/git/trees/" `T.isInfixOf` path then "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"blob\",\"type\":\"blob\"},{\"path\":\"dashboards/local.yaml\",\"sha\":\"blob-local\",\"type\":\"blob\"}]}" else "{\"sha\":\"head\"}"
           withAsync (runTestBgRecordingHTTP frozenTime tr $ provider $ BackgroundJobs.processBackgroundJob tr.trATCtx job) \worker -> do
             timeout 5000000 (takeMVar fetching) `shouldReturn` Just ()
-            (_, refused) <- testServant tr $ PageCodeContext.repositoryDeleteH testPid repository.id
+            refused <- call tr $ PageCodeContext.repositoryDeleteH testPid repository.id
             render refused `shouldSatisfy` T.isInfixOf "A sync is running"
             runQueryEffect tr (GitSync.getRepository testPid repository.id) >>= (`shouldSatisfy` isJust)
-            (_, disconnected) <- testServant tr $ GitSyncPage.gitSyncRepositoryDeleteH testPid sync.id
+            disconnected <- call tr $ GitSyncPage.gitSyncRepositoryDeleteH testPid sync.id
             render disconnected `shouldSatisfy` T.isInfixOf "A dashboard sync is running"
             Just retained <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid did
             retained.gitSyncId `shouldBe` Just sync.id
@@ -1566,7 +1565,7 @@ spec = do
       -- Without a credential there is nothing to read repos through, so the page must point at
       -- the control that fixes that rather than offer a form whose every submission is discarded.
       it "asks for an account connection before it asks for a mapping" \tr -> do
-        (_, html) <- testServant tr $ PageCodeContext.codeMappingsGetH testPid Nothing
+        html <- call tr $ PageCodeContext.codeMappingsGetH testPid Nothing
         let out = render html
         out `shouldSatisfy` T.isInfixOf "Connect repositories"
         out `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/connect\"")
@@ -1607,7 +1606,7 @@ spec = do
 
         case mappings of
           (cm : _) -> do
-            (_, afterDelete) <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsDeleteH testPid cm.id
+            afterDelete <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsDeleteH testPid cm.id
             render afterDelete `shouldNotSatisfy` T.isInfixOf (cm.owner <> "/" <> cm.repo)
             runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \ms -> length ms `shouldBe` 1
           [] -> expectationFailure "expected two mappings, got none"
@@ -1618,7 +1617,7 @@ spec = do
         for_ ["aaa-stray", "zzz-ours"] \account -> do
           Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing account (Just 222) Nothing
           Cache.insert tr.trATCtx.repoListCache credential.id []
-        (_, accountPage) <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid Nothing
+        accountPage <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid Nothing
         let out = render $ Lucid.toHtml accountPage.content
         for_ (["zzz-ours", "aaa-stray", "Choose an account"] :: [Text]) \label ->
           T.isInfixOf label out `shouldBe` True
@@ -1629,10 +1628,10 @@ spec = do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
         _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "monoscope-config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
 
-        (_, unmapped) <- testServant tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
+        unmapped <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
         render unmapped `shouldSatisfy` T.isInfixOf "repositories?sample=%2Fsrv%2Fapp%2Fcheckout.py"
 
-        (_, form) <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsGetH testPid (Just "/srv/app/checkout.py")
+        form <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsGetH testPid (Just "/srv/app/checkout.py")
         render form `shouldSatisfy` T.isInfixOf "sample=%2Fsrv%2Fapp%2Fcheckout.py"
 
       -- Membership is checked per handler, not by the router, and these two never checked it:
@@ -1656,8 +1655,8 @@ spec = do
       -- must see a sentence, not a failure it did not cause — and the sentence has to say
       -- which of the two possible problems it is.
       it "explains an unresolvable frame instead of failing the panel" \tr -> do
-        (_, unmapped) <- testServant tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
+        unmapped <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
         render unmapped `shouldSatisfy` T.isInfixOf "No linked repository covers /srv/app/checkout.py"
 
-        (_, noLine) <- testServant tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") Nothing Nothing Nothing
+        noLine <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") Nothing Nothing Nothing
         render noLine `shouldSatisfy` T.isInfixOf "no file and line"

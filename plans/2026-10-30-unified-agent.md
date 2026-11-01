@@ -10,7 +10,7 @@ The [visual review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a
 
 ## Current implementation and remaining work
 
-All twenty selected incoming PR heads remain included. A fresh inventory found 28 open PRs with no selected head missing. The [integration plan](2026-10-30-agent-pr-integration.md) defines that selection. Published PR 619 and fresh master `2c15b4bc5` are ancestors of this branch. Rebase `59f1d374c` preserves the verified tree from merge `b418cea23`, including PR #760’s typed issue handlers, concise lifecycle tests, snapshots, and unchanged migration. Durable agent requests and the shared operation ledger remain integrated. The latest local changes have not been pushed or deployed.
+All twenty selected incoming PR heads remain included. A fresh inventory found 28 open PRs with no selected head missing. The [integration plan](2026-10-30-agent-pr-integration.md) defines that selection. Published PR 619 and fresh master `e01755539` are ancestors of this branch. Merge `b9428a896` integrates PR #761’s shared test helpers, and `004bfaf37` adapts retained agent fixtures without losing their stronger assertions. The combined post-merge verification is running. Rebase `59f1d374c` preserves the verified tree from merge `b418cea23`, including PR #760’s typed issue handlers, concise lifecycle tests, snapshots, and unchanged migration. Durable agent requests and the shared operation ledger remain integrated. The latest local changes have not been pushed or deployed.
 
 | Requirement | Current implementation | Work still required |
 | --- | --- | --- |

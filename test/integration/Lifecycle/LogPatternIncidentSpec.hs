@@ -216,5 +216,3 @@ countLogs tr marker =
 
 countReports :: TestResources -> IO Int
 countReports tr = dbOne @_ @Int tr [sql|SELECT COUNT(*)::INT FROM apis.reports WHERE project_id = ?|] (Only testPid)
-
-

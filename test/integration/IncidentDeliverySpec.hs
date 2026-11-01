@@ -11,7 +11,6 @@ import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified as Notify
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
@@ -71,14 +70,14 @@ spec = around withTestResources do
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             drain = do
-              queued <- liftIO $ withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT payload FROM background_jobs WHERE payload ->> 'tag' = 'InvestigateIncident' ORDER BY id|]
+              queued <- liftIO $ dbQuery tr [sql|SELECT payload FROM background_jobs WHERE payload ->> 'tag' = 'InvestigateIncident' ORDER BY id|] ()
               for_ queued \(PGS.Only (Aeson job)) -> Jobs.processBackgroundJobWithTools (Just Routes.mcpProjectTools) tr.trATCtx job
             work = captureNotifs tr $ model do
               runSlackIncidentDeliveries
               replicateM_ 2 $ drain >> runSlackIncidentDeliveries
             reports notifications = [sd | Notify.SlackNotification sd <- notifications, maybe False (T.isPrefixOf "AI incident analysis") (sd.payload ^? key "text" . _String)]
         (opened, _) <- work
-        runs <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.ai_routine_runs WHERE project_id = ?|] (PGS.Only testPid)
+        runs <- dbQuery tr [sql|SELECT count(*) FROM apis.ai_routine_runs WHERE project_id = ?|] (PGS.Only testPid)
         (runs :: [PGS.Only Int64]) `shouldBe` [PGS.Only 1]
         readIORef calls `shouldReturn` 1
         map (.channelId) (reports opened) `shouldBe` ["C1"]
@@ -116,7 +115,7 @@ spec = around withTestResources do
         runTestBgNoReset tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId policy
         I.Recorded _ event <- runTestBgNoReset tr $ I.recordIncidentEvent update
         void $ captureNotifs tr runSlackIncidentDeliveries
-        [PGS.Only root] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
+        [PGS.Only root] <- dbQuery tr [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
         invoked <- newIORef ([] :: [Text])
         interrupt <- newIORef interrupted
         let original = Routes.mcpProjectTools
@@ -153,7 +152,7 @@ spec = around withTestResources do
           failed.status `shouldBe` Issues.RunFailed
         replicateM_ 2 execute
         readIORef invoked `shouldReturn` if policy == Issues.Autonomous then ["create_dashboard"] else []
-        dashboards <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT title, created_by FROM projects.dashboards WHERE project_id = ? AND title = 'Incident remediation dashboard'|] (PGS.Only testPid)
+        dashboards <- dbQuery tr [sql|SELECT title, created_by FROM projects.dashboards WHERE project_id = ? AND title = 'Incident remediation dashboard'|] (PGS.Only testPid)
         (dashboards :: [(Text, Projects.UserId)]) `shouldBe` if policy == Issues.Autonomous then [("Incident remediation dashboard", routine.requestedBy)] else []
         Just run <- runTestBgNoReset tr $ Issues.getEventRun testPid $ Issues.IncidentEvent event root
         run.status `shouldBe` Issues.RunSucceeded
@@ -169,7 +168,7 @@ spec = around withTestResources do
         runTestBgNoReset tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
         I.Recorded _ event <- runTestBgNoReset tr $ I.recordIncidentEvent update
         void $ captureNotifs tr runSlackIncidentDeliveries
-        [PGS.Only root] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
+        [PGS.Only root] <- dbQuery tr [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
         calls <- newIORef (0 :: Int)
         invoked <- newIORef ([] :: [Text])
         let job = Jobs.InvestigateIncident testPid event root
@@ -188,7 +187,7 @@ spec = around withTestResources do
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             work = captureNotifs tr $ model $ Jobs.processBackgroundJobWithTools (Just backend) tr.trATCtx job >> runSlackIncidentDeliveries
             reports notifications = [sd | Notify.SlackNotification sd <- notifications, maybe False (T.isPrefixOf "AI incident analysis") (sd.payload ^? key "text" . _String)]
-        void $ withResource tr.trPool \conn -> PGS.execute conn [sql|DELETE FROM background_jobs WHERE payload = ?|] (PGS.Only $ Aeson $ AE.toJSON job)
+        dbExec tr [sql|DELETE FROM background_jobs WHERE payload = ?|] (PGS.Only $ Aeson $ AE.toJSON job)
         (initial, _) <- work
         reports initial `shouldSatisfy` null
         Just waiting <- runTestBgNoReset tr $ Issues.getEventRun testPid $ Issues.IncidentEvent event root
@@ -196,7 +195,7 @@ spec = around withTestResources do
         [operation] <- runTestBgNoReset tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
         (_, page) <- testServant tr $ AIThreads.operationGetH testPid operation.id
         decodeUtf8 @Text (Lucid.renderBS $ Lucid.toHtml page) `shouldSatisfy` T.isInfixOf "Approve action"
-        queued <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM background_jobs WHERE payload = ? AND status = 'queued'|] (PGS.Only $ Aeson $ AE.toJSON job)
+        queued <- dbQuery tr [sql|SELECT count(*) FROM background_jobs WHERE payload = ? AND status = 'queued'|] (PGS.Only $ Aeson $ AE.toJSON job)
         (queued :: [PGS.Only Int]) `shouldBe` [PGS.Only 1]
         void work
         readIORef calls `shouldReturn` 1
@@ -212,7 +211,7 @@ spec = around withTestResources do
         readIORef invoked `shouldReturn` ["create_dashboard" | decision == Just Investigations.ReviewApproved]
         Just finished <- runTestBgNoReset tr $ Issues.getEventRun testPid $ Issues.IncidentEvent event root
         (finished.id, finished.attempt, finished.status) `shouldBe` (waiting.id, 1, Issues.RunSucceeded)
-        dashboards <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT created_by FROM projects.dashboards WHERE project_id = ? AND title = 'Reviewed incident remediation'|] (PGS.Only testPid)
+        dashboards <- dbQuery tr [sql|SELECT created_by FROM projects.dashboards WHERE project_id = ? AND title = 'Reviewed incident remediation'|] (PGS.Only testPid)
         (dashboards :: [PGS.Only Projects.UserId]) `shouldBe` [PGS.Only routine.requestedBy | decision == Just Investigations.ReviewApproved]
 
     for_ [minBound .. maxBound] \interruption ->
@@ -221,14 +220,14 @@ spec = around withTestResources do
         setupLinkedSlackData tr testPid "T1"
         let command = (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
             user = (Servant.getResponse tr.trSessAndHeader).user.id
-            revoke = liftIO $ withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = false WHERE project_id = ? AND user_id = ?|] (testPid, user)
+            revoke = liftIO $ dbExec tr [sql|UPDATE projects.project_members SET active = false WHERE project_id = ? AND user_id = ?|] (testPid, user)
         unless (interruption == NoIncidentOptIn) $ void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH command
         channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
         let installation = Issues.incidentRoutineConversationId testPid channel
         I.Recorded episode event <- runTestBgNoReset tr $ I.recordIncidentEvent update
         issue <- maybe (fail "Fixture episode has no issue") pure episode.issueId
         void $ captureNotifs tr runSlackIncidentDeliveries
-        [PGS.Only root] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
+        [PGS.Only root] <- dbQuery tr [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
         calls <- newIORef (0 :: Int)
         let model :: ATBackgroundCtx a -> ATBackgroundCtx a
             model = interpose @ELLM.LLM \_ -> \case
@@ -265,7 +264,7 @@ spec = around withTestResources do
       I.Recorded episode event <- runTestBgNoReset tr $ I.recordIncidentEvent update
       issue <- maybe (fail "Fixture episode has no issue") pure episode.issueId
       void $ captureNotifs tr runSlackIncidentDeliveries
-      [PGS.Only root, PGS.Only otherRoot] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? ORDER BY channel_id|] (PGS.Only event)
+      [PGS.Only root, PGS.Only otherRoot] <- dbQuery tr [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? ORDER BY channel_id|] (PGS.Only event)
       let conversation = UUIDId issue.unUUIDId
           otherConversation = UUIDId $ UUID.fromWords 0 0 0 983
           run :: ATBackgroundCtx a -> IO a
@@ -290,7 +289,7 @@ spec = around withTestResources do
       void $ toBaseServantResponse resources $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
       I.Recorded _ event <- run $ I.recordIncidentEvent update
       void $ captureNotifs resources runSlackIncidentDeliveries
-      [PGS.Only root] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
+      [PGS.Only root] <- dbQuery tr [sql|SELECT id FROM apis.slack_incident_roots WHERE first_event_id = ? AND channel_id = 'C1'|] (PGS.Only event)
       calls <- newIORef (0 :: Int)
       let report = T.replicate 5000 "r"
           model :: ATBackgroundCtx a -> ATBackgroundCtx a
@@ -299,7 +298,7 @@ spec = around withTestResources do
             ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
             ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
           work = run $ model $ Jobs.processBackgroundJob resources.trATCtx $ Jobs.InvestigateIncident testPid event root
-          ddl statement = withResource tr.trPool \conn -> void $ PGS.execute_ conn statement
+          ddl statement = dbExec tr statement ()
       bracket_
         (ddl [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_agent_report CHECK (operation <> 'post_analysis') NOT VALID|])
         (ddl [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_agent_report|])
@@ -313,7 +312,7 @@ spec = around withTestResources do
       Just summary <- pure $ AE.toJSON delivery.payload ^? key "text" . _String
       T.length summary `shouldSatisfy` (< 3500)
       summary `shouldSatisfy` T.isInfixOf reportRun.toText
-      retained <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT content FROM apis.ai_routine_run_artifacts WHERE run_id = ? AND key = 'latest-result'|] (PGS.Only reportRun)
+      retained <- dbQuery tr [sql|SELECT content FROM apis.ai_routine_run_artifacts WHERE run_id = ? AND key = 'latest-result'|] (PGS.Only reportRun)
       (retained :: [PGS.Only Text]) `shouldBe` [PGS.Only report]
       run (I.finishSlackDelivery now delivery $ I.DeliveryUncertain "lost_ack") `shouldReturn` True
       searches <- run $ I.claimIncidentSearches now
@@ -346,33 +345,32 @@ spec = around withTestResources do
       (sent, _) <- captureNotifs resources runSlackIncidentDeliveries
       sent `shouldSatisfy` null
       readIORef calls `shouldReturn` 1
-      stored <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT state, message_ts FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only delivery.id)
+      stored <- dbQuery tr [sql|SELECT state, message_ts FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only delivery.id)
       (stored :: [(Text, Maybe Text)]) `shouldBe` [("delivered", Just $ I.slackTimestampText observed)]
 
     it "commits ingested error notification claims with two destination roots and retries an outbox failure" \tr -> do
       setupSlackData tr testPid "T1"
-      withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1','C2','C1'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
-        void $ PGS.execute conn [sql|UPDATE projects.projects SET error_alerts = true WHERE id = ?|] (PGS.Only testPid)
-        void $ PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_ingested_delivery CHECK (false) NOT VALID|]
+      dbExec tr [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1','C2','C1'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
+      dbExec tr [sql|UPDATE projects.projects SET error_alerts = true WHERE id = ?|] (PGS.Only testPid)
+      dbExec tr [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_ingested_delivery CHECK (false) NOT VALID|] ()
       let sample = def{Errors.when = frozenTime, Errors.hash = "ingested-outbox", Errors.errorType = "CheckoutError", Errors.message = "Payment failed"}
           ingest = captureNotifs tr $ processProjectErrors testPid [sample] frozenTime
           messages ns = [sd | Notify.SlackNotification sd <- ns]
       ingest `shouldThrow` anyException
       Just unnotified <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid sample.hash
       unnotified.lastNotifiedAt `shouldBe` Nothing
-      tokens <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.notification_rate_limit WHERE project_id = ?|] (PGS.Only testPid)
+      tokens <- dbQuery tr [sql|SELECT count(*) FROM apis.notification_rate_limit WHERE project_id = ?|] (PGS.Only testPid)
       (tokens :: [PGS.Only Int64]) `shouldBe` [PGS.Only 0]
-      slots <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT last_notified_at FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, sample.hash)
+      slots <- dbQuery tr [sql|SELECT last_notified_at FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, sample.hash)
       (slots :: [PGS.Only (Maybe UTCTime)]) `shouldBe` [PGS.Only Nothing]
-      void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_ingested_delivery|]
+      dbExec tr [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_ingested_delivery|] ()
       ((batchA, _), (batchB, _)) <- concurrently ingest ingest
       let initial = messages $ batchA <> batchB
       sort (map (.channelId) initial) `shouldBe` ["C1", "C2"]
       map (.threadTs) initial `shouldBe` [Nothing, Nothing]
       Just notified <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid sample.hash
       notified.lastNotifiedAt `shouldSatisfy` isJust
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.error_patterns SET subscribed = true, notify_every_minutes = 1 WHERE id = ?|] (PGS.Only notified.id)
+      dbExec tr [sql|UPDATE apis.error_patterns SET subscribed = true, notify_every_minutes = 1 WHERE id = ?|] (PGS.Only notified.id)
       advanceMinutes tr 2
       (reminder, _) <- captureNotifs tr do
         notifyErrorSubscriptions testPid [sample.hash]
@@ -380,39 +378,35 @@ spec = around withTestResources do
       let updates = messages reminder
       length updates `shouldBe` 4
       length [sd | sd <- updates, isJust sd.threadTs] `shouldBe` 2
-      roots <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.source_kind = 'error' AND e.source_id = ?|] (PGS.Only notified.id)
+      roots <- dbQuery tr [sql|SELECT count(*) FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.source_kind = 'error' AND e.source_id = ?|] (PGS.Only notified.id)
       (roots :: [PGS.Only Int64]) `shouldBe` [PGS.Only 2]
       -- Quiet counters alone cannot close an error or establish recovery.
-      void $ withResource tr.trPool \conn ->
-        PGS.execute
-          conn
-          [sql|UPDATE apis.error_patterns SET quiet_minutes = resolution_threshold_minutes + 1,
+      dbExec
+        tr
+        [sql|UPDATE apis.error_patterns SET quiet_minutes = resolution_threshold_minutes + 1,
           occurrences_1m = 0, occurrences_5m = 0, occurrences_1h = 0, occurrences_24h = 0 WHERE id = ?|]
-          (PGS.Only notified.id)
+        (PGS.Only notified.id)
       now <- getTestTime tr.trTestClock
       void $ runTestBgNoReset tr $ Errors.updateOccurrenceCountsBatch [testPid] now
       Just quietPattern <- runTestBgNoReset tr $ Errors.getErrorPatternById notified.id
       (quietPattern.state, isNothing quietPattern.resolvedAt, quietPattern.resolvedBy) `shouldBe` (notified.state, True, Nothing)
       -- A newer acknowledged issue must win over an older unnotified escalation.
-      withResource tr.trPool \conn ->
-        void
-          $ PGS.execute
-            conn
-            [sql|UPDATE apis.issues SET acknowledged_at = ?, acknowledged_until = ? WHERE project_id = ? AND target_hash = ?|]
-            (frozenTime, addUTCTime 3600 frozenTime, testPid, sample.hash)
+      dbExec
+        tr
+        [sql|UPDATE apis.issues SET acknowledged_at = ?, acknowledged_until = ? WHERE project_id = ? AND target_hash = ?|]
+        (frozenTime, addUTCTime 3600 frozenTime, testPid, sample.hash)
       newer <- runTestBgNoReset tr $ Issues.createNewErrorIssue testPid notified >>= Issues.insertIssueReturningId
-      withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql|UPDATE apis.issues SET acknowledged_at = ?, acknowledged_until = ?, last_notified_at = ? WHERE id = ?|]
-            (frozenTime, addUTCTime 3600 frozenTime, frozenTime, newer)
-        void
-          $ PGS.execute
-            conn
-            [sql|UPDATE apis.issues SET acknowledged_at = NULL, acknowledged_until = NULL, last_notified_at = NULL WHERE project_id = ? AND target_hash = ? AND id <> ?|]
-            (testPid, sample.hash, newer)
-        void $ PGS.execute conn [sql|UPDATE apis.error_patterns SET state = 'escalating' WHERE id = ?|] (PGS.Only notified.id)
+      void
+        $ dbExec
+          tr
+          [sql|UPDATE apis.issues SET acknowledged_at = ?, acknowledged_until = ?, last_notified_at = ? WHERE id = ?|]
+          (frozenTime, addUTCTime 3600 frozenTime, frozenTime, newer)
+      void
+        $ dbExec
+          tr
+          [sql|UPDATE apis.issues SET acknowledged_at = NULL, acknowledged_until = NULL, last_notified_at = NULL WHERE project_id = ? AND target_hash = ? AND id <> ?|]
+          (testPid, sample.hash, newer)
+      dbExec tr [sql|UPDATE apis.error_patterns SET state = 'escalating' WHERE id = ?|] (PGS.Only notified.id)
       advanceMinutes tr 1
       (silenced, _) <- captureNotifs tr $ notifyErrorSubscriptions testPid [sample.hash]
       messages silenced `shouldBe` []
@@ -449,7 +443,7 @@ spec = around withTestResources do
       I.Recorded episode firstEvent <- runTestBgNoReset tr $ I.recordIncidentEvent initial
       void $ captureNotifs tr runSlackIncidentDeliveries
       -- Escalation can produce another issue row while the error remains active.
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.issues SET archived_at = ? WHERE id = ?|] (frozenTime, issue.id)
+      dbExec tr [sql|UPDATE apis.issues SET archived_at = ? WHERE id = ?|] (frozenTime, issue.id)
       advanceMinutes tr 1
       nextIssue <- runTestBgNoReset tr do
         created <- Issues.createNewErrorIssue testPid err
@@ -459,9 +453,9 @@ spec = around withTestResources do
       now <- getTestTime tr.trTestClock
       runTestBgNoReset tr (I.recordIncidentEvent initial{I.projectId = UUIDId $ UUID.fromWords 0 0 0 999}) `shouldReturn` I.Rejected I.UnknownIncidentSource
       runTestBgNoReset tr (I.recordIncidentEvent initial{I.issueId = Nothing}) `shouldReturn` I.Rejected I.IncidentIssueMismatch
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.issues SET target_hash = 'another-error' WHERE id = ?|] (PGS.Only nextIssue.id)
+      dbExec tr [sql|UPDATE apis.issues SET target_hash = 'another-error' WHERE id = ?|] (PGS.Only nextIssue.id)
       runTestBgNoReset tr (I.recordIncidentEvent initial{I.issueId = Just nextIssue.id, I.observedAt = now}) `shouldReturn` I.Rejected I.IncidentIssueMismatch
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.issues SET target_hash = ? WHERE id = ?|] (sample.hash, nextIssue.id)
+      dbExec tr [sql|UPDATE apis.issues SET target_hash = ? WHERE id = ?|] (sample.hash, nextIssue.id)
       I.Recorded ongoing _ <- runTestBgNoReset tr $ I.recordIncidentEvent initial{I.issueId = Just nextIssue.id, I.observedAt = now, I.change = I.IncidentReminder}
       (ongoing.id, ongoing.issueId) `shouldBe` (episode.id, Just issue.id)
       void $ captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
@@ -475,7 +469,7 @@ spec = around withTestResources do
         let body = decodeUtf8 @Text $ toStrict $ AE.encode sd.payload
         body `shouldSatisfy` T.isInfixOf issue.id.toText
         body `shouldSatisfy` not . T.isInfixOf nextIssue.id.toText
-      roots <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT channel_id FROM apis.slack_incident_roots WHERE episode_id = ? ORDER BY channel_id|] (PGS.Only episode.id)
+      roots <- dbQuery tr [sql|SELECT channel_id FROM apis.slack_incident_roots WHERE episode_id = ? ORDER BY channel_id|] (PGS.Only episode.id)
       roots `shouldBe` [PGS.Only ("C1" :: Text), PGS.Only "C2"]
       closedAt <- getTestTime tr.trTestClock
       runTestBgNoReset tr (I.recordIncidentEvent initial{I.observedAt = addUTCTime 1 closedAt}) `shouldReturn` I.Rejected I.InactiveIncidentSource
@@ -485,13 +479,13 @@ spec = around withTestResources do
       let canonicalSample = sample{Errors.hash = "canonical-error"} :: Errors.ATError
       void $ runTestBgNoReset tr $ Errors.batchUpsertErrorPatterns testPid [sample{Errors.when = againAt}, canonicalSample] againAt
       Just canonical <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid canonicalSample.hash
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.error_patterns SET canonical_id = ? WHERE id = ?|] (canonical.id, err.id)
+      dbExec tr [sql|UPDATE apis.error_patterns SET canonical_id = ? WHERE id = ?|] (canonical.id, err.id)
       runTestBgNoReset tr (I.recordIncidentEvent initial{I.observedAt = againAt}) `shouldReturn` I.Rejected I.InactiveIncidentSource
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.error_patterns SET canonical_id = NULL WHERE id = ?|] (PGS.Only err.id)
+      dbExec tr [sql|UPDATE apis.error_patterns SET canonical_id = NULL WHERE id = ?|] (PGS.Only err.id)
       I.Recorded recurring _ <- runTestBgNoReset tr $ I.recordIncidentEvent initial{I.issueId = Just nextIssue.id, I.observedAt = againAt, I.rootPayload = payload nextIssue.id}
       recurring.id `shouldNotBe` episode.id
       void $ captureNotifs tr runSlackIncidentDeliveries
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|DELETE FROM apis.issues WHERE id = ?|] (PGS.Only nextIssue.id)
+      dbExec tr [sql|DELETE FROM apis.issues WHERE id = ?|] (PGS.Only nextIssue.id)
       advanceMinutes tr 1
       void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid recurring.id) `shouldReturn` Just I.EpisodeResolved
@@ -517,36 +511,35 @@ spec = around withTestResources do
       I.Recorded episode _ <- runTestBgNoReset tr $ I.recordIncidentEvent update{I.source = I.IssueIncident issue.id, I.issueId = Just issue.id}
       void $ captureNotifs tr runSlackIncidentDeliveries
       advanceMinutes tr 1
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
+      dbExec tr [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
       void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False
       Just denied <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
       denied.state `shouldBe` Errors.ESNew
       let resolve pid = runTestBgNoReset tr $ I.resolveErrorIncident pid err.id actor.id (addUTCTime 60 frozenTime) (const update.rootPayload)
       resolve testPid `shouldReturn` I.ErrorResolutionDenied
       resolve (UUIDId $ UUID.fromWords 0 0 0 999) `shouldReturn` I.ErrorResolutionDenied
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.error_patterns SET assignee_id = ? WHERE id = ?|] (actor.id, err.id)
+      dbExec tr [sql|UPDATE apis.error_patterns SET assignee_id = ? WHERE id = ?|] (actor.id, err.id)
       runTestBgNoReset tr (I.resolveErrorIncident testPid err.id actor.id (addUTCTime (-1) frozenTime) (const update.rootPayload))
         `shouldReturn` I.ErrorResolutionConflict I.OlderThanCurrentEpisode
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET active = false WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
+      dbExec tr [sql|UPDATE projects.project_members SET active = false WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
       resolve testPid `shouldReturn` I.ErrorResolutionDenied
-      withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = true WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
-        void $ PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_resolution CHECK (false) NOT VALID|]
+      dbExec tr [sql|UPDATE projects.project_members SET active = true WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
+      dbExec tr [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_resolution CHECK (false) NOT VALID|] ()
       testServant tr (IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False) `shouldThrow` anyException
       Just rolledBack <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
       (rolledBack.state, rolledBack.resolvedAt, rolledBack.resolvedBy) `shouldBe` (Errors.ESNew, Nothing, Nothing)
       activityBefore <- runTestBgNoReset tr $ Issues.selectIssueActivity testPid issue.id
       activityBefore `shouldSatisfy` all (\a -> a.event `notElem` map Issues.Lifecycle [Issues.IEResolved, Issues.IEAutoResolved])
-      void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_resolution|]
+      dbExec tr [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_resolution|] ()
       void
         $ concurrently
           (testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False)
           (testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False)
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid episode.id) `shouldReturn` Just I.EpisodeResolved
       void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False
-      events <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event_kind, actor_id FROM apis.incident_events WHERE episode_id = ? AND event_kind <> 'alert'|] (PGS.Only episode.id)
+      events <- dbQuery tr [sql|SELECT event_kind, actor_id FROM apis.incident_events WHERE episode_id = ? AND event_kind <> 'alert'|] (PGS.Only episode.id)
       events `shouldBe` [("resolved" :: Text, Just actor.id)]
-      activity <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event, created_by FROM apis.issue_activity_log WHERE issue_id = ? AND event IN ('resolved', 'auto_resolved')|] (PGS.Only issue.id)
+      activity <- dbQuery tr [sql|SELECT event, created_by FROM apis.issue_activity_log WHERE issue_id = ? AND event IN ('resolved', 'auto_resolved')|] (PGS.Only issue.id)
       activity `shouldBe` [("resolved" :: Text, Just actor.id)]
       runTestBgNoReset tr (Errors.updateErrorPatternState err.id Errors.ESResolved (addUTCTime 61 frozenTime)) `shouldReturn` 0
       Just resolved <- runTestBgNoReset tr $ Errors.getErrorPatternLByHash testPid sample.hash (addUTCTime 61 frozenTime)
@@ -573,20 +566,20 @@ spec = around withTestResources do
       I.Recorded recurring _ <- runTestBgNoReset tr $ I.recordIncidentEvent update{I.source = I.IssueIncident issue.id, I.issueId = Just issue.id, I.observedAt = now}
       recurring.id `shouldNotBe` episode.id
       void $ runTestBgNoReset tr $ Errors.updateErrorPatternState err.id Errors.ESResolved now
-      activityAfter <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event, created_by FROM apis.issue_activity_log WHERE issue_id = ? AND event IN ('resolved', 'auto_resolved') ORDER BY created_at|] (PGS.Only issue.id)
+      activityAfter <- dbQuery tr [sql|SELECT event, created_by FROM apis.issue_activity_log WHERE issue_id = ? AND event IN ('resolved', 'auto_resolved') ORDER BY created_at|] (PGS.Only issue.id)
       activityAfter `shouldBe` [("resolved" :: Text, Just actor.id), ("auto_resolved", Nothing)]
       void $ runTestBgNoReset tr $ Errors.updateErrorPatternState err.id Errors.ESOngoing now
       advanceMinutes tr 1
       autoAt <- getTestTime tr.trTestClock
       -- A SQL state transition can retain the previous resolved_at; activity must use this transition's clock.
       void $ runHasqlEffect tr $ EHasql.interpExecute [HI.sql|UPDATE apis.error_patterns SET state = 'resolved' WHERE id = #{err.id}|]
-      autoTimes <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT created_at FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'auto_resolved' ORDER BY created_at DESC LIMIT 1|] (PGS.Only issue.id)
+      autoTimes <- dbQuery tr [sql|SELECT created_at FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'auto_resolved' ORDER BY created_at DESC LIMIT 1|] (PGS.Only issue.id)
       autoTimes `shouldBe` [PGS.Only autoAt]
       let legacy = sample{Errors.hash = "legacy-resolution"} :: Errors.ATError
       void $ runTestBgNoReset tr $ Errors.batchUpsertErrorPatterns testPid [legacy] now
       Just legacyErr <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid legacy.hash
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
-      let deliveryCount = withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.slack_incident_deliveries|] :: IO [PGS.Only Int64]
+      dbExec tr [sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
+      let deliveryCount = dbQuery tr [sql|SELECT count(*) FROM apis.slack_incident_deliveries|] () :: IO [PGS.Only Int64]
       beforeLegacy <- deliveryCount
       void $ testServant tr $ IssuesPage.resolveErrorPostH testPid legacyErr.id.unErrorPatternId False
       deliveryCount `shouldReturn` beforeLegacy
@@ -597,20 +590,19 @@ spec = around withTestResources do
       update <- setupWithIssue tr
       I.MonitorIncident mid <- pure update.source
       setupSlackData tr testPid "T1"
-      withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1','C2'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
-        void $ PGS.execute conn [sql|UPDATE monitors.query_monitors SET alert_threshold = 60, log_query = 'name == "missing-monitor-reading" | summarize max(duration)', check_interval_mins = 1 WHERE id = ?|] (PGS.Only mid)
+      dbExec tr [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1','C2'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
+      dbExec tr [sql|UPDATE monitors.query_monitors SET alert_threshold = 60, log_query = 'name == "missing-monitor-reading" | summarize max(duration)', check_interval_mins = 1 WHERE id = ?|] (PGS.Only mid)
       let messages ns = [sd | Notify.SlackNotification sd <- ns]
           check = fst <$> captureNotifs tr (checkTriggeredQueryMonitors >> replicateM_ 2 runSlackIncidentDeliveries)
       runTestBgNoReset tr (I.recordIncidentEvent update{I.change = I.IncidentDataUnavailable}) `shouldReturn` I.NoOpenEpisode
       initial <- messages <$> evaluateMonitor tr mid 84
       length initial `shouldBe` 2
       advanceMinutes tr 2
-      void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_data_gap CHECK (false) NOT VALID|]
+      dbExec tr [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_data_gap CHECK (false) NOT VALID|] ()
       check `shouldReturn` []
       Just uncommitted <- runTestBgNoReset tr $ Monitors.queryMonitorById mid
       uncommitted.lastEvaluated `shouldBe` Just frozenTime
-      void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_data_gap|]
+      dbExec tr [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_data_gap|] ()
       missing <- messages <$> check
       length missing `shouldBe` 4
       length [sd | sd <- missing, isJust sd.threadTs] `shouldBe` 2
@@ -625,13 +617,13 @@ spec = around withTestResources do
       length [sd | sd <- repeated, isJust sd.threadTs] `shouldBe` 0
       advanceMinutes tr 1
       void $ evaluateMonitor tr mid 84
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE monitors.query_monitors SET log_query = 'SELECT * FROM missing_monitor_table' WHERE id = ?|] (PGS.Only mid)
+      dbExec tr [sql|UPDATE monitors.query_monitors SET log_query = 'SELECT * FROM missing_monitor_table' WHERE id = ?|] (PGS.Only mid)
       advanceMinutes tr 1
       failed <- messages <$> check
       length failed `shouldBe` 4
       for_ failed \sd -> AE.encode sd.payload `shouldSatisfy` (T.isInfixOf "The evaluation failed" . decodeUtf8 . toStrict)
       advanceMinutes tr 1
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE monitors.query_monitors SET stop_after_count = 3 WHERE id = ?|] (PGS.Only mid)
+      dbExec tr [sql|UPDATE monitors.query_monitors SET stop_after_count = 3 WHERE id = ?|] (PGS.Only mid)
       void $ evaluateMonitor tr mid 84
       advanceMinutes tr 1
       limited <- messages <$> check
@@ -640,16 +632,15 @@ spec = around withTestResources do
       recovered <- messages <$> evaluateMonitor tr mid 18
       length recovered `shouldBe` 4
       for_ recovered \sd -> AE.encode sd.payload `shouldSatisfy` (T.isInfixOf "RECOVERED" . decodeUtf8 . toStrict)
-      roots <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.source_kind = 'monitor' AND e.source_id = ?|] (PGS.Only mid)
+      roots <- dbQuery tr [sql|SELECT count(*) FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.source_kind = 'monitor' AND e.source_id = ?|] (PGS.Only mid)
       (roots :: [PGS.Only Int64]) `shouldBe` [PGS.Only 2]
 
     it "keeps warning, escalation, and recovery in two monitor threads and preserves the onset snapshot" \tr -> do
       update <- setupWithIssue tr
       I.MonitorIncident mid <- pure update.source
       setupSlackData tr testPid "T1"
-      withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1','C2','C1'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
-        void $ PGS.execute conn [sql|UPDATE monitors.query_monitors SET alert_threshold = 60, warning_threshold = 40 WHERE id = ?|] (PGS.Only mid)
+      dbExec tr [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1','C2','C1'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
+      dbExec tr [sql|UPDATE monitors.query_monitors SET alert_threshold = 60, warning_threshold = 40 WHERE id = ?|] (PGS.Only mid)
       let evaluate = evaluateMonitor tr mid
           slackMessages ns = [sd | Notify.SlackNotification sd <- ns]
       (initialA, initialB) <- concurrently (evaluate 50) (evaluate 50)
@@ -672,7 +663,7 @@ spec = around withTestResources do
         body `shouldSatisfy` T.isInfixOf "Initial value: 50.0"
         body `shouldSatisfy` T.isInfixOf "widgetZ="
         body `shouldSatisfy` T.isInfixOf "/issues/"
-      episodes <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT phase FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, mid)
+      episodes <- dbQuery tr [sql|SELECT phase FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, mid)
       (episodes :: [PGS.Only Text]) `shouldBe` [PGS.Only "recovered"]
       advanceMinutes tr 1
       recurring <- slackMessages <$> evaluate 84
@@ -683,12 +674,12 @@ spec = around withTestResources do
       update <- setupWithIssue tr
       I.MonitorIncident mid <- pure update.source
       setupSlackData tr testPid "T1"
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
+      dbExec tr [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
       void $ evaluateMonitor tr mid 84
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE monitors.query_monitors SET muted_until = ? WHERE id = ?|] (addUTCTime 180 frozenTime, mid)
+      dbExec tr [sql|UPDATE monitors.query_monitors SET muted_until = ? WHERE id = ?|] (addUTCTime 180 frozenTime, mid)
       advanceMinutes tr 1
       evaluateMonitor tr mid 18 `shouldReturn` []
-      phases <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT phase FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, mid)
+      phases <- dbQuery tr [sql|SELECT phase FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, mid)
       (phases :: [PGS.Only Text]) `shouldBe` [PGS.Only "recovered"]
       advanceMinutes tr 2
       (resumed, _) <- captureNotifs tr runSlackIncidentDeliveries
@@ -703,17 +694,16 @@ spec = around withTestResources do
       update <- setup tr
       I.MonitorIncident mid <- pure update.source
       setupSlackData tr testPid "T1"
-      withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql|UPDATE projects.teams SET disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
-        void $ PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_test_delivery CHECK (false) NOT VALID|]
+      dbExec tr [sql|UPDATE projects.teams SET disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
+      dbExec tr [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_test_delivery CHECK (false) NOT VALID|] ()
       Just monitor <- runTestBgNoReset tr $ Monitors.queryMonitorById mid
       runTestBgNoReset tr (evaluateQueryMonitorValue monitor frozenTime 84) `shouldThrow` anyException
       Just unchanged <- runTestBgNoReset tr $ Monitors.queryMonitorById mid
       (unchanged.currentStatus, unchanged.notificationCount, unchanged.lastEvaluated) `shouldBe` (Monitors.MSNormal, 0, Nothing)
       runTestBgNoReset tr (Monitors.getEvaluations testPid mid frozenTime frozenTime) `shouldReturn` []
-      counts <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
+      counts <- dbQuery tr [sql|SELECT count(*) FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
       (counts :: [PGS.Only Int64]) `shouldBe` [PGS.Only 0]
-      void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_test_delivery|]
+      dbExec tr [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_test_delivery|] ()
       runTestBgNoReset tr $ evaluateQueryMonitorValue unchanged frozenTime 84
       Just committed <- runTestBgNoReset tr $ Monitors.queryMonitorById mid
       committed.currentStatus `shouldBe` Monitors.MSAlerting
@@ -739,9 +729,9 @@ spec = around withTestResources do
         for_ (messages notifications) $ \message -> do
           message.payload ^? key "metadata" . key "event_type" . _String `shouldBe` Just eventType
           Just metadata <- pure $ message.payload ^? key "metadata" . key "event_payload"
-          stored <- withResource tr.trPool $ \conn ->
-            PGS.query
-              conn
+          stored <-
+            dbQuery
+              tr
               [sql|SELECT jsonb_build_object('root_id', r.id, 'delivery_id', d.id)
             FROM apis.slack_incident_deliveries d JOIN apis.slack_incident_roots r ON r.id = d.root_id
             WHERE r.channel_id = ? AND d.operation = ?|]
@@ -823,13 +813,12 @@ spec = around withTestResources do
       I.MonitorIncident mid <- pure update.source
       setupSlackData tr testPid "T1"
       let issueRows :: IO [(Issues.IssueId, Maybe UTCTime, Maybe UTCTime)]
-          issueRows = withResource tr.trPool \conn ->
-            PGS.query conn [sql|SELECT id, acknowledged_until, archived_at FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
+          issueRows = dbQuery tr [sql|SELECT id, acknowledged_until, archived_at FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
       void $ evaluateMonitor tr mid 84
       [(firstIssue, _, _)] <- issueRows
       -- Archived, then firing again: the same row comes back rather than a second one.
       advanceMinutes tr 1
-      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.issues SET archived_at = ? WHERE id = ?|] (frozenTime, firstIssue)
+      dbExec tr [sql|UPDATE apis.issues SET archived_at = ? WHERE id = ?|] (frozenTime, firstIssue)
       void $ evaluateMonitor tr mid 18
       advanceMinutes tr 1
       void $ evaluateMonitor tr mid 84
@@ -839,8 +828,7 @@ spec = around withTestResources do
       -- the issue, or "snooze for an hour" would mean nothing to a noisy monitor.
       advanceMinutes tr 1
       let ackUntil = addUTCTime 86400 frozenTime
-      void $ withResource tr.trPool \conn ->
-        PGS.execute conn [sql|UPDATE apis.issues SET acknowledged_at = ?, acknowledged_until = ? WHERE id = ?|] (frozenTime, ackUntil, firstIssue)
+      dbExec tr [sql|UPDATE apis.issues SET acknowledged_at = ?, acknowledged_until = ? WHERE id = ?|] (frozenTime, ackUntil, firstIssue)
       void $ evaluateMonitor tr mid 18
       advanceMinutes tr 1
       void $ evaluateMonitor tr mid 84
@@ -855,8 +843,7 @@ spec = around withTestResources do
       I.MonitorIncident mid <- pure update.source
       setupSlackData tr testPid "T1"
       let affected :: IO [PGS.Only Int64]
-          affected = withResource tr.trPool \conn ->
-            PGS.query conn [sql|SELECT affected_requests FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
+          affected = dbQuery tr [sql|SELECT affected_requests FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
       void $ evaluateMonitor tr mid 84
       firstCount <- affected
       -- Three more ticks, all still alerting: the status never changes, so none
@@ -885,9 +872,9 @@ spec = around withTestResources do
       run (I.finishSlackDelivery now root (I.WebhookAccepted I.Threadless)) `shouldReturn` True
       -- Claiming settles the stray edit rather than leaving it to block the root.
       void $ run $ I.claimSlackDeliveries now
-      stuck <- withResource tr.trPool \conn ->
-        PGS.query
-          conn
+      stuck <-
+        dbQuery
+          tr
           [sql|SELECT d.operation, d.state FROM apis.slack_incident_deliveries d
                JOIN apis.slack_incident_roots r ON r.id = d.root_id
                WHERE r.threadless AND d.state NOT IN ('delivered','failed','sending')|]
@@ -909,8 +896,7 @@ spec = around withTestResources do
       [root] <- run $ I.claimSlackDeliveries update.observedAt
       -- Accepted by a transport that can never produce a timestamp.
       run (I.finishSlackDelivery update.observedAt root (I.WebhookAccepted I.Threadless)) `shouldReturn` True
-      rootState <- withResource tr.trPool \conn ->
-        PGS.query conn [sql|SELECT d.state, r.threadless, r.message_ts IS NULL FROM apis.slack_incident_deliveries d JOIN apis.slack_incident_roots r ON r.id = d.root_id WHERE d.id = ?|] (PGS.Only root.id)
+      rootState <- dbQuery tr [sql|SELECT d.state, r.threadless, r.message_ts IS NULL FROM apis.slack_incident_deliveries d JOIN apis.slack_incident_roots r ON r.id = d.root_id WHERE d.id = ?|] (PGS.Only root.id)
       (rootState :: [(Text, Bool, Bool)]) `shouldBe` [("delivered", True, True)]
       -- The follow-up is claimable, and goes out as a standalone post rather
       -- than a reply to a thread that does not exist.
@@ -924,9 +910,9 @@ spec = around withTestResources do
       -- reply — and because noEarlierUnsettledDelivery blocks on the earliest
       -- unsettled row, that one row silences the whole root from then on. Assert
       -- on the queue itself, not just on what came back.
-      stranded <- withResource tr.trPool \conn ->
-        PGS.query
-          conn
+      stranded <-
+        dbQuery
+          tr
           [sql|SELECT d.operation, d.state FROM apis.slack_incident_deliveries d
                JOIN apis.slack_incident_roots r ON r.id = d.root_id
                WHERE r.threadless AND d.state NOT IN ('delivered','failed','sending')|]
@@ -956,9 +942,9 @@ spec = around withTestResources do
       -- operation/state CHECK rejects, losing the completion and wedging the root.
       map (.operation) followups `shouldContain` [I.PostStandalone]
       for_ followups \followup -> run (I.finishSlackDelivery late followup (I.WebhookAccepted I.ThreadCapable)) `shouldReturn` True
-      unsettled <- withResource tr.trPool \conn ->
-        PGS.query
-          conn
+      unsettled <-
+        dbQuery
+          tr
           [sql|SELECT d.operation, d.state FROM apis.slack_incident_deliveries d
                WHERE d.state NOT IN ('delivered','failed')|]
           ()
@@ -968,8 +954,7 @@ spec = around withTestResources do
       update <- setup tr
       setupSlackData tr testPid "T1"
       runTestBgNoReset tr (I.recordIncidentEvent update) `shouldReturn` I.Rejected I.EpisodeWithoutIssue
-      episodes <- withResource tr.trPool \conn ->
-        PGS.query conn [sql|SELECT count(*) FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, case update.source of I.MonitorIncident m -> m; _ -> error "monitor source")
+      episodes <- dbQuery tr [sql|SELECT count(*) FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, case update.source of I.MonitorIncident m -> m; _ -> error "monitor source")
       (episodes :: [PGS.Only Int64]) `shouldBe` [PGS.Only 0]
 
     -- Ask the bot in an alert thread and the answer belongs to that alert's issue,
@@ -1026,7 +1011,7 @@ spec = around withTestResources do
         [root] <- run $ I.claimSlackDeliveries frozenTime
         run (I.finishSlackDelivery frozenTime root accepted) `shouldReturn` True
         void $ run $ I.recordIncidentEvent update{I.observedAt = addUTCTime 60 frozenTime, I.change = I.IncidentRecovered, I.destinations = [I.SlackDestination "T1" "C1"]}
-        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack_incident_deliveries SET history_retry_at = ? WHERE id = ?|] (frozenTime, root.id)
+        dbExec tr [sql|UPDATE apis.slack_incident_deliveries SET history_retry_at = ? WHERE id = ?|] (frozenTime, root.id)
         [abandoned] <- run $ I.claimIncidentSearches frozenTime
         AE.Object fields <- maybe (fail "Expected root event") pure $ slackRootEvent "unused" "T1" "C1" root.rootId "1788900000.000001" "A_TEST" ^? key "event"
         let message = AE.Object fields
@@ -1051,7 +1036,7 @@ spec = around withTestResources do
                       opts ^. Wreq.param "cursor" `shouldBe` maybeToList cursor
                       when (cursor == Just "next") do
                         replace <- atomicModifyIORef' replaceInstallation (\flag -> (False, flag))
-                        when replace $ withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET team_id = 'T_OTHER' WHERE project_id = ?|] (PGS.Only testPid)
+                        when replace $ dbExec tr [sql|UPDATE apis.slack SET team_id = 'T_OTHER' WHERE project_id = ?|] (PGS.Only testPid)
                       pure $ Just $ AE.encode body
                   )
                   SlackPage.reconcileIncidentDeliveries
@@ -1061,12 +1046,12 @@ spec = around withTestResources do
         (searched, _) <- work
         map fst searched `shouldBe` ["https://slack.com/api/conversations.history"]
         run $ I.saveIncidentSearchCursor abandoned (I.SearchAdvanced (Just "stale")) frozenTime
-        cursors <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT history_cursor FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only root.id)
+        cursors <- dbQuery tr [sql|SELECT history_cursor FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only root.id)
         cursors `shouldBe` [PGS.Only (Just "next" :: Maybe Text)]
         advanceMinutes tr 1
         void work
         run (I.claimSlackDeliveries (addUTCTime 300 frozenTime)) `shouldReturn` []
-        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET team_id = 'T1' WHERE project_id = ?|] (PGS.Only testPid)
+        dbExec tr [sql|UPDATE apis.slack SET team_id = 'T1' WHERE project_id = ?|] (PGS.Only testPid)
         advanceMinutes tr 1
         void work
         [reply] <- run $ I.claimSlackDeliveries (addUTCTime 300 frozenTime)
@@ -1091,7 +1076,7 @@ spec = around withTestResources do
           now <- getTestTime tr.trTestClock
           [delivery] <- run $ I.claimSlackDeliveries now
           when lostAck $ run (I.finishSlackDelivery now delivery $ I.DeliveryUncertain "lost_ack") >>= (`shouldBe` True)
-          withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack_incident_deliveries SET history_retry_at = ? WHERE id = ?|] (now, delivery.id)
+          dbExec tr [sql|UPDATE apis.slack_incident_deliveries SET history_retry_at = ? WHERE id = ?|] (now, delivery.id)
           unless lostAck do
             run (I.claimIncidentSearches now) >>= (\searches -> length searches `shouldBe` 0)
             advanceMinutes tr 3
@@ -1146,7 +1131,7 @@ spec = around withTestResources do
           advanceMinutes tr 1
           (matched, _) <- work
           map fst matched `shouldBe` ["https://slack.com/api/" <> toText method]
-          stored <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT state, message_ts FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only delivery.id)
+          stored <- dbQuery tr [sql|SELECT state, message_ts FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only delivery.id)
           stored `shouldBe` [("delivered" :: Text, Just expectedTs)]
           readIORef pages >>= (`shouldBe` [])
         completedAt <- getTestTime tr.trTestClock
