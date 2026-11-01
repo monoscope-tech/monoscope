@@ -4121,6 +4121,148 @@ spec = around withTestResources $ describe "Production impact reviews" do
       stopped.status `shouldBe` Issues.RunCancelled
       void $ withResource tr.trPool $ \conn -> execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
 
+  it "nativeFix_applicationResumesSdkSessionsWithoutReplacingItsRunOrAttempts" \tr -> withSystemTempDirectory "native-fix-job" \temporary -> do
+    directory <- canonicalizePath temporary
+    image <- nativeTestImage
+    let repository = directory </> "repository"
+        store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
+        uid n = UUIDId $ UUID.fromWords 96 0x4000 0x80000000 n
+        issue = uid 1
+        fid = uid 2
+        field key = AE.withObject "Native fix job" (AE..: key)
+        parse parser = either fail pure . AET.parseEither parser
+        git args = T.strip . decodeUtf8 @Text <$> readProcessStdout_ (setWorkingDir repository $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] <> args)
+        bash command = SdkTool "bash" $ AE.object ["command" AE..= (command :: Text)]
+        script = "set -eu\n. ./runtime.sh\n[ \"$(retry_token original)\" = original ] || { echo 'retry token lost'; exit 1; }\n" :: Text
+        steps =
+          [ SdkTool "reproduce_issue" $ AE.object ["script" AE..= ("bash regression.sh" :: Text), "failureMessage" AE..= ("retry token lost" :: Text), "testFiles" AE..= V.singleton (AE.object ["path" AE..= ("regression.sh" :: Text), "content" AE..= script])]
+          , SdkTool "write" $ AE.object ["path" AE..= ("runtime.sh" :: Text), "content" AE..= ("retry_token() { printf '%s\\n' \"$1\"; }\n" :: Text)]
+          , SdkTool "propose_fix" $ AE.object ["rootCause" AE..= ("retry_token drops its caller's token." :: Text)]
+          , SdkTool "verify_fix" $ AE.object []
+          , SdkTool "submit_fix" $ AE.object ["summary" AE..= ("Preserve the caller's retry token." :: Text)]
+          , SdkText "Fix complete."
+          ]
+    traverse_ (createDirectoryIfMissing True) [repository, store.usageDir, store.cacheDir]
+    void $ git ["init", "--quiet"]
+    void $ git ["config", "user.name", "Fix job fixture"]
+    void $ git ["config", "user.email", "fixture@example.invalid"]
+    writeFileBS (repository </> "runtime.sh") "retry_token() { printf 'lost\\n'; }\n"
+    void $ git ["add", "."]
+    void $ git ["commit", "--quiet", "-m", "broken runtime"]
+    base <- git ["rev-parse", "HEAD"]
+    imageId <- readFileBS (image </> "manifest.json") >>= either fail pure . AE.eitherDecodeStrict >>= parse (field "buildId")
+    setup tr
+    [mapping] <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
+    void $ withResource tr.trPool \conn -> execute conn "INSERT INTO apis.issues (id, project_id, issue_type, service, target_hash, title) VALUES (?, ?, 'runtime_exception', 'test-service', 'sdk-job-recovery', 'Retain retry tokens')" (issue, testPid)
+    baseRevision <- either (fail . show) pure $ Fixes.mkRevision base
+    runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id baseRevision imageId) `shouldReturn` Just fid
+    runQueryEffect tr (Fixes.queueJob testPid (getResponse tr.trSessAndHeader).user.id fid) `shouldReturn` True
+    [original] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+    original.source `shouldBe` Issues.FixRun fid
+    pem <- readFileBS "test/fixtures/github-app-test.pem"
+    nativeFailures <- newIORef ([] :: [Text])
+    interruptions <- newIORef (["admission", "candidate", "peer"] :: [Text])
+    let provider body results = do
+          tools <- parse (field "tools" >=> traverse (field "function" >=> field "name")) body :: IO [Text]
+          let admission = "submit_admission" `elem` tools
+              peer = "submit_fix_review" `elem` tools
+              boundary
+                | admission && length results == 1 = Just "admission"
+                | peer && length results == 1 = Just "peer"
+                | not admission && not peer && length results == 3 = Just "candidate"
+                | otherwise = Nothing
+          remainingInterruptions <- readIORef interruptions
+          if maybe False (`elem` remainingInterruptions) boundary
+            then do
+              modifyIORef' interruptions $ filter (\value -> Just value /= boundary)
+              pure $ SdkUnavailable "Fixture interrupts an unfinished native session"
+            else
+              pure
+                $ (`SdkResponse` SdkTokens 7 0)
+                $ if admission
+                  then case length results of
+                    0 -> bash "cat runtime.sh /run/monoscope-admission.json"
+                    1 -> SdkTool "submit_admission" $ AE.toJSON $ Agent.Admitted "The regression exercises the caller's retry token."
+                    _ -> SdkText "Admission complete."
+                  else
+                    if peer
+                      then case length results of
+                        0 -> bash "cat runtime.sh regression.sh /run/monoscope-fix-review.json"
+                        1 -> SdkTool "submit_fix_review" $ AE.toJSON $ Agent.ReviewApproved "The retained regression and source change preserve the caller's token."
+                        _ -> SdkText "Review complete."
+                      else fromMaybe (SdkText "Unexpected repeated inference") $ viaNonEmpty head $ drop (length results) steps
+        cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem, impactReviewUsageDir = Just store.usageDir, impactReviewCacheDir = Just store.cacheDir, impactReviewProvider = "fix-job-fixture", openaiModel = "fixture", impactReviewArtifactBucket = Just "fixture-bucket"}
+        transport = withHTTPResponses \_ endpoint -> pure $ if "/access_tokens" `T.isSuffixOf` toText endpoint then Just (AE.encode $ AE.object ["token" AE..= ("fixture-token" :: Text), "expires_at" AE..= ("2030-01-01T00:00:00Z" :: Text)]) else Nothing
+    withSdkProvider directory "fix-job-fixture" provider \models observed -> do
+      let native :: Eff '[Agent.CodeReview, IOE] (Either Text a) -> IO (Either Text a)
+          native action = do
+            answer <- runEff $ sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"] action
+            for_ (leftToMaybe answer) (\message -> modifyIORef' nativeFailures (<> [message]))
+            pure answer
+          localRequest :: Agent.Request run -> Agent.Request run
+          localRequest request = request{Agent.repository = toText repository}
+          localFix :: Agent.FixRequest -> Agent.FixRequest
+          localFix request = request{Agent.request = localRequest request.request}
+          localArtifacts :: Agent.ArtifactRequest -> Agent.ArtifactRequest
+          localArtifacts artifacts = artifacts{Agent.repository = toText repository}
+          scope unlift = \case Agent.Isolated -> Agent.Isolated; Agent.Retained root capture -> Agent.Retained root $ liftIO $ unlift capture
+          backend :: ATBackgroundCtx a -> ATBackgroundCtx a
+          backend =
+            interpose @Artifacts.AgentArtifacts
+              ( \_ -> \case
+                  Artifacts.RetainFixMedia explained -> Artifacts.runAgentArtifactsTest (const $ Right ()) (\_ _ -> Left Artifacts.ArtifactUnavailable) $ Artifacts.retainFixMedia explained
+                  _ -> liftIO $ fail "Unexpected artifact publication"
+              )
+              . interpose @LLM.LLM (\_ _ -> liftIO $ fail "Legacy LLM used by native continuation")
+              . interpose @Agent.CodeReview
+                ( \env -> \case
+                    Agent.ReadSessionContext (Agent.PeerSubject fixId artifacts) root -> liftIO $ native $ Agent.readSessionContext (Agent.PeerSubject fixId $ localArtifacts artifacts) root
+                    Agent.ReadSessionContext subject root -> liftIO $ native $ Agent.readSessionContext subject root
+                    Agent.FixRepository selected request queryTelemetry knowledge admit calls usage allocations checks phase validate -> localSeqUnliftIO env \unlift ->
+                      liftIO
+                        $ native
+                        $ Agent.fixRepository (scope unlift selected) (localFix request) (liftIO . unlift . queryTelemetry) (liftIO . unlift . knowledge) (liftIO . unlift . admit) (liftIO . unlift . calls) (liftIO . unlift . usage) (liftIO . unlift . allocations) (liftIO . unlift . checks) (liftIO . unlift . phase) (liftIO . unlift . validate)
+                    Agent.AdmitRegression selected request knowledge calls usage allocations -> localSeqUnliftIO env \unlift ->
+                      liftIO
+                        $ native
+                        $ Agent.admitRegression (scope unlift selected) request{Agent.fix = localFix request.fix} (liftIO . unlift . knowledge) (liftIO . unlift . calls) (liftIO . unlift . usage) (liftIO . unlift . allocations)
+                    Agent.VerifyFixArtifacts artifacts request -> liftIO $ native $ Agent.verifyFixArtifacts artifacts $ localArtifacts request
+                    Agent.ReviewVerifiedFix selected request verified knowledge calls usage allocations -> localSeqUnliftIO env \unlift ->
+                      liftIO
+                        $ native
+                        $ Agent.reviewVerifiedFix (scope unlift selected) request{Agent.fix = localFix request.fix, Agent.artifacts = localArtifacts request.artifacts} verified (liftIO . unlift . knowledge) (liftIO . unlift . calls) (liftIO . unlift . usage) (liftIO . unlift . allocations)
+                    Agent.ExplainVerifiedFix artifacts request verified -> liftIO $ native $ Agent.explainVerifiedFix artifacts (localArtifacts request) verified
+                    _ -> liftIO $ fail "Unexpected native workflow"
+                )
+          worker at = runTestBgRecordingHTTP at tr $ Reader.local (\ctx -> ctx{config = if at == frozenTime then cfg else cfg{impactReviewProvider = "changed-after-interruption", openaiModel = "changed-after-interruption"}}) $ transport $ backend $ BackgroundJobs.processBackgroundJob tr.trATCtx $ Jobs.FixIssue testPid fid
+      for_ [0, 60, 120] \elapsed -> do
+        outcome <- tryAny $ worker $ addUTCTime elapsed frozenTime
+        isLeft outcome `shouldBe` True
+        Just failed <- runQueryEffect tr $ Issues.getRoutineRun testPid original.id
+        failed.status `shouldBe` Issues.RunFailed
+        failed.source `shouldBe` original.source
+      readIORef interruptions `shouldReturn` []
+      continued <- tryAny $ worker $ addUTCTime 180 frozenTime
+      whenLeft_ continued \failure -> readIORef nativeFailures >>= fail . toString . ((show failure <> "\n") <>) . T.intercalate "\n"
+      result <- maybe (fail "Resumed job did not retain its verified fix") pure =<< runQueryEffect tr (Fixes.completedResult testPid fid)
+      result.runId `shouldBe` fid
+      result.summary `shouldBe` "Preserve the caller's retry token."
+      Just completed <- runQueryEffect tr $ Issues.getRoutineRun testPid original.id
+      completed.status `shouldBe` Issues.RunSucceeded
+      artifacts <- runQueryEffect tr $ Issues.listRunArtifacts testPid original.id
+      map (toText . (.key)) artifacts `shouldContain` ["latest-result"]
+      runs <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+      map (.id) runs `shouldBe` [original.id]
+      [Only attempts] <- withResource tr.trPool (\conn -> query conn "SELECT count(*) FROM projects.pr_review_attempts WHERE project_id = ? AND fix_run_id = ?" (testPid, fid)) :: IO [Only Int]
+      attempts `shouldBe` 3
+      [Only checks] <- withResource tr.trPool (\conn -> query conn "SELECT count(*) FROM projects.pr_review_checks WHERE project_id = ? AND fix_run_id = ?" (testPid, fid)) :: IO [Only Int]
+      checks `shouldBe` 3
+      beforeReplay <- length <$> observed
+      (_, ()) <- worker $ addUTCTime 240 frozenTime
+      length <$> observed `shouldReturn` beforeReplay
+      runQueryEffect tr (Fixes.completedResult testPid fid) >>= (`shouldSatisfy` isJust)
+      map (toText . (.key)) <$> runQueryEffect tr (Issues.listRunArtifacts testPid original.id) `shouldReturn` map (toText . (.key)) artifacts
+
   it "nativeFix_applicationJobSharesRunAuthorityReceiptsAndCompletion" \tr -> do
     setup tr
     [mapping] <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
