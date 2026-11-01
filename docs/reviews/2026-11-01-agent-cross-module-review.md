@@ -67,6 +67,32 @@ Removing the wrapper would expand this change across unrelated chart callers.
 
 ## Evidence and remaining work
 
+### Membership, secrets, and enrichment follow-up
+
+The eligibility review follows changed permission queries and every activeMembership composition site.
+Each supplies the required member, account, and project aliases.
+Shared eligibility checks account, project, membership, and free-plan ownership together.
+Session-only sudo fallback remains separate from member and Slack grants.
+Permission order and current-role checks retain the existing viewer, editor, and administrator boundaries.
+
+The secret review reads ProjectApiKeys completely and follows Git and Slack token callers.
+New provider secrets use authenticated encryption with a nonce from the UUID effect.
+Version, envelope, key, and authentication failures retain explicit SecretError cases.
+The legacy API-key cipher and Git token fallback remain compatibility paths; new tokens use the authenticated format.
+Slack credential reads remain bound to the requester, project, installation, identity, and current membership.
+
+The enrichment review reads IssueEnhancement and its Types module completely.
+It follows the worker, retained native proposal, operation scope check, issue lock, and atomic completion.
+An inactive template makes no inference call. Observe produces retained findings without changing issue metadata.
+Mutation, result, artifact, and operation receipt share the existing completion transaction.
+The small Types module breaks the operation/enrichment import cycle rather than introducing another executor.
+
+Two distillation, evasion, and locality passes find no additional material issue in this scope.
+No runtime source changes are made. Four focused Linux cases pass in 1.1473 seconds.
+They cover current account/project/plan eligibility, revoked authority, private demo evidence, and the enrichment lifecycle.
+All ten scoped runtime/test inputs match the compiled Linux snapshot.
+The exact scope, hashes, and test log are recorded in scripts/local/agent-membership-enrichment-review.json.
+
 ### Native execution follow-up
 
 A further review reads CodeReview and AgentOperation completely, then follows role policies
