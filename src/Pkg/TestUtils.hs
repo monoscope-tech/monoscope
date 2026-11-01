@@ -1328,14 +1328,17 @@ seedIssue tr s =
 -- | Snapshot @tests/golden/html/<name>.html@, one tag per line, so the diff is reviewable.
 -- UUIDs, trace ids and issue numbers are scrubbed to keep it stable. Issue numbers gap
 -- because the seq-num trigger (migration 0051) consumes one per upsert attempt, a known
--- product bug this scrub does not fix. @UPDATE_GOLDEN=true@, or a missing file, (re)writes it.
+-- product bug this scrub does not fix. @UPDATE_GOLDEN=true@ (re)writes it; a missing file fails.
 goldenHtml :: Lucid.ToHtml a => FilePath -> a -> Expectation
 goldenHtml name html = do
   let path = "./tests/golden/html/" <> name <> ".html"
       actual = T.replace "><" ">\n<" (renderT html) *=~/ [ed|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}///<uuid>|] *=~/ [ed|[0-9a-f]{32,}///<hex>|] *=~/ [ed|>#[0-9]+///>#<n>|]
   update <- (== Just "true") <$> lookupEnv "UPDATE_GOLDEN"
   exists <- doesFileExist path
-  if update || not exists then writeFileText path actual else readFileBS path >>= (actual `shouldBe`) . decodeUtf8
+  if
+    | update -> writeFileText path actual
+    | exists -> readFileBS path >>= (actual `shouldBe`) . decodeUtf8
+    | otherwise -> expectationFailure $ "missing golden " <> path <> "; rerun with UPDATE_GOLDEN=true"
 
 
 -- | Every frame a streaming handler emitted, or the stream's own error.
