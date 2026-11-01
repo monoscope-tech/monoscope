@@ -594,8 +594,11 @@ Retained run evidence now renders interactive widgets inside the existing inspec
 Chat and run views share the widget renderer, text-relative minimum sizes, and indexed top-level IDs.
 New and stored model widgets reject executable column links while preserving valid siblings.
 The failing-first handler lifecycle and all eleven conversation browser cases pass at the recorded UI checkpoint.
-The temporary browser adapter is removed. Broader bot and doctest checks are running.
-The review Page includes the synthetic chart capture at sequence 65.
+The temporary browser adapter is removed. All 504 bot cases and 2,089 doctest examples pass.
+The final bot run preserves all 280 recorded Haskell and manifest input hashes.
+The review Page includes the synthetic chart capture and retained-widget source step at sequence 67.
+All 103 steps across twelve flows pass at four widths; all 115 prior source entries remain, with one addition.
+Hosted source readback matches the 237,838-byte local artifact. Whole-branch reviews and final release gates remain open.
 See [retained widgets](../docs/reviews/2026-11-01-retained-widgets.md) for the scoped review and exact evidence.
 
 ## External references

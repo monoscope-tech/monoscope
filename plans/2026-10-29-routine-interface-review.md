@@ -624,3 +624,26 @@ The scoped design pass preserves the existing typography, spacing, colors, keybo
 The second pass found no further material issue in this refresh.
 Evidence is `scripts/local/agent-artifact-inline-charts-refresh.json` and
 `scripts/local/unified-artifact-refresh-checks.json`.
+
+
+## Retained interactive widgets and safe stored output
+
+The scoped review and its failing-first evidence are in
+[retained widgets](../docs/reviews/2026-11-01-retained-widgets.md).
+The implementation is `6a11be319`.
+The actual application inspector now renders retained charts without creating another chat answer.
+The permanent browser case covers a visible plot and stat at both widths and themes,
+actual doubled text, retained drafts, focus, and unchanged conversation identity.
+All eleven conversation browser cases pass in the final 27.0-second run.
+The temporary adapter is removed.
+
+The existing review Page includes the synthetic chart capture.
+Its visualization preserves all 115 previous source entries and all 102 previous steps,
+then adds one source entry and one step for the retained inspector.
+All 103 steps across twelve flows pass local Chromium at 320, 390, 768 and 1280 pixels.
+Both embedded mobile captures still decode; no JavaScript error or horizontal overflow occurs.
+At Page sequence 67, hosted source readback exactly matches the 237,838-byte local HTML.
+The native Page title remains unchanged, and Chrome decodes the new 1280 by 900 capture.
+Hosted interaction inside the visualization remains unverified.
+Evidence is `scripts/local/agent-artifact-retained-widgets-refresh.json` and
+`scripts/local/unified-artifact-refresh-checks.json`.

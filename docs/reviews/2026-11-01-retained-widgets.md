@@ -97,7 +97,17 @@ The outer Hspec run passes two cases in 28.1864 seconds.
 The final browser log is `scripts/local/retained-widgets-browser-final-eleven-green.log`.
 Desktop light and enlarged mobile dark captures received visual inspection after chart loading completed.
 The temporary adapter is removed; only the permanent handler and browser tests remain.
-The full bot group and supported doctest run are in progress.
+The supported `make test-doctests` run passes: **2,089 tried, 0 errors, 0 failures**.
+Its log is `scripts/local/retained-widgets-doctests.log`.
+The first full bot run reports 504 examples and three failures in query fixtures after the concurrent ModelQuery change.
+Those failures are recorded in `scripts/local/retained-widgets-bots-504-mixed.log`.
+Valid KQL replaces the malformed or unknown-field fixture queries in `9bb232244`.
+All three repaired cases pass with the retained-widget lifecycle: **4 examples, 0 failures**, in 1.5586 seconds.
+The final full bot rerun passes: **504 examples, 0 failures**, in 185.2532 seconds.
+The log is `scripts/local/retained-widgets-bots-504-green.log`.
+All 280 recorded Haskell and manifest inputs remain unchanged through the final run.
+The five owned inputs also remain unchanged.
+The input records and final summary are under `scripts/local/retained-widgets-*`.
 The owned source hashes are `scripts/local/retained-widgets-source.json`.
 
 ## Live observation boundary
@@ -113,7 +123,7 @@ The private receipt is `scripts/local/slack-live-widget-readonly-acceptance.json
 ## Review Page
 
 The existing review Page now includes the interactive chart inspector capture.
-At Page sequence 65, the original title is retained and the Page contains twelve blocks after insertion.
+At Page sequence 67, the original title is retained and the Page contains twelve blocks after insertion.
 Chrome decodes the new 1280 by 900 image and displays the native section heading.
 The caption identifies the synthetic values and keeps live Slack delivery separate.
 Hosted visualization interaction remains unverified.
