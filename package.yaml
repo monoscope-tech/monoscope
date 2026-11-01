@@ -218,6 +218,7 @@ tests:
       - monoscope-shared
       # EmbeddingFairnessSpec inspects documents passed to the LLM effect.
       - langchain-hs
+      - openai
       # AuthSpec builds a Set-Cookie header the way a browser round-trips it.
       - cookie
       - case-insensitive

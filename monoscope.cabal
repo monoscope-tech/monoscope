@@ -317,6 +317,10 @@ extra-source-files:
     static/migrations/0274_legacy_slack_evidence_audience.sql
     static/migrations/0275_agent_operation_review.sql
     static/migrations/0276_agent_review_policy.sql
+    static/migrations/0277_member_conversation_runs.sql
+    static/migrations/0278_run_reply_publications.sql
+    static/migrations/0279_retained_command_origin.sql
+    static/migrations/0280_native_fix_runs.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs
@@ -998,6 +1002,7 @@ test-suite integration-tests
     , monoscope-cli
     , monoscope-shared
     , odd-jobs
+    , openai
     , openapi3
     , optparse-applicative
     , pg-entity
