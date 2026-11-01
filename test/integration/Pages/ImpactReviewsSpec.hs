@@ -3169,17 +3169,19 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let uid n = UUIDId $ UUID.fromWords 59 0 0 n
         request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = "unavailable-source", base = revision, head = revision, gitToken = "", prompt = "Retain pending work", provider = "fixture", model = "fixture", thinkingLevel = Agent.Off}
         script = directory </> "review.sh"
-    writeFileBS script "read request\nprintf '%s\\n' '{\"tag\":\"Knowledge\",\"contents\":{\"tag\":\"Recall\",\"contents\":\"test-service\"}}'\nread reply\n"
+        drained = directory </> "drained"
+    writeFileBS script "read request\nprintf '%s\\n' '{\"tag\":\"Knowledge\",\"contents\":{\"tag\":\"Recall\",\"contents\":\"test-service\"}}'\nread reply\nsleep 0.25\nprintf drained > \"$1\"\n"
     outcome <-
       tryAny
         $ runEff
-        $ Agent.runCodeReviewReal Nothing (Right Nothing) (Just "sh") [script]
+        $ Agent.runCodeReviewReal Nothing (Right Nothing) (Just "sh") [script, drained]
         $ Agent.reviewRepository Agent.Isolated request (const $ pure $ Left "Unexpected telemetry") (const $ throwIO $ AI.AgentAwaitingReview (uid 3) frozenTime) (const pass) (const pass) (const pass) (const pass) (const $ pure $ Left "Unexpected result")
     case outcome of
       Left err -> case fromException err of
         Just (AI.AgentAwaitingReview identifier deadline) -> (identifier, deadline) `shouldBe` (uid 3, frozenTime)
         Nothing -> expectationFailure $ "Wrong native operation exception: " <> displayException err
       Right result -> expectationFailure $ "Native operation suspension was lost: " <> show result
+    doesFileExist drained `shouldReturn` True
 
   for_ [Just Investigations.ReviewApproved, Just Investigations.ReviewRejected, Nothing] $ \decision ->
     it ("nativeReview_pullRequestPublicationResumesRetainedAnalysis: " <> show decision) \tr -> do

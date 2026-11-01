@@ -789,8 +789,11 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             status <- waitExitCode process
                             if status == ExitSuccess then persist (Finished checked.validated) $> Right checked.result else pure $ Left "Review agent did not produce a validated result"
                           _ -> pure $ Left "Review agent returned an unvalidated draft"
-                writeMessage payload
-                receive Nothing Nothing (maybe queryLimit (.remaining) paused) (maybe submissionLimit (.submissions) paused) Nothing
+                ( do
+                    writeMessage payload
+                    receive Nothing Nothing (maybe queryLimit (.remaining) paused) (maybe submissionLimit (.submissions) paused) Nothing
+                  )
+                  `finally` stop
         -- Replay persisted work before starting a child, fetching source or calling a model.
         outcome <- tryAny $ Timeout.timeout (480 * 1000000) $ withJournal \journal -> do
           recovered <- maybe (pure $ Right ()) (`Outbox.replay` record) journal
