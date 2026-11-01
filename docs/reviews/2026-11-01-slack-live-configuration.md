@@ -501,3 +501,16 @@ A fresh native mention in public QA channel `C0CDT6YG2J1` invokes canonical `Rea
 Both retained pages return 200 for the requester, 403 for another actual project administrator without a linked Slack identity, and 302 for anonymous access. The other administrator retains project dashboard access; denied pages disclose no channel identifier. A freshly signed replay of the real event returns 200 and leaves the run, channel receipts, journal, progress publications, operation count and queue unchanged. This closes the live public destination case alongside the separate private-channel and personal Slack Connect cases; the controlled 64-case matrix supplies argument-confinement coverage beyond these observed model outcomes.
 
 Owner-only receipts are `scripts/local/slack-qa-app-installed-verification.json`, `slack-public-evidence-journal.json`, `slack-public-evidence-acceptance.json`, and `slack-public-qa-tunnel-repair.json`. The tunnel remains temporary and requires this Mac to stay available. Final branch gates and hosted visualization interaction remain separate.
+
+
+## Recovering a stop that never reached Slack
+
+The persisted-state stream lifecycle now covers both an unobserved append and an unobserved stop through one table. On the old runtime, the new stop case fails with the exact retained `StreamPending (StopStream ...)` state: Slack still reports the owned stream as running, but refresh cannot finalize it.
+
+One added constructor match reuses the existing reconciliation and compare-and-set sender. Only history that verifies the app, bot, thread, timestamp and publication task IDs can release the saved stop request. The request retains its original stream and task frame; the sender rechecks current authority and records closure only after acknowledgement or a completed-stream observation. It never creates a replacement stream or replays the uncertain append. Slack's [stop method](https://docs.slack.dev/reference/methods/chat.stopStream/) finalizes the existing message and accepts its final task chunks.
+
+The same lifecycle checks exact request order, completed final task state, and replay without another stop. Both accepted-request interruption cases remain unchanged. The change adds one runtime line and one net test line. After the failing-first stop case, the focused watcher passes 30 examples in 14.2304 seconds. The broader bot, API, native-job, issue and conversation selection passes all 693 examples in 323.0954 seconds, with all 557 recorded inputs unchanged.
+
+Two scoped distillation, evasion and locality passes retain this small match and shared test body. Pinned Fourmolu and whitespace checks pass; runtime HLint reports no hints. The manual final simplification pass adds no abstraction or state. The supported `make test-doctests` rerun is still running at this checkpoint; it is not claimed as passed. This is application/database acceptance with controlled HTTP responses, not a live stop-loss fault injection.
+
+Receipts are `scripts/local/slack-unobserved-stop-red.log`, `slack-unobserved-stop-focused-green.log`, `slack-unobserved-stop-broad-source.json`, `slack-unobserved-stop-broad-result.json`, `slack-unobserved-stop-review.json`, and `slack-unobserved-stop-doctests.log`. Final exact-tree release gates remain required.

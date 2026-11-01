@@ -1761,6 +1761,7 @@ updateProgressStream envCfg target publicationId checkpoint close progress = do
                   else do
                     guard $ close || progress.limited || now >= addUTCTime (9 * 60) session.startedAt
                     Just $ Investigations.StreamPending $ Investigations.StopStream session previous $ if progress.limited then previous else finalFrame
+              (Investigations.StreamInProgress, Investigations.StreamPending request@Investigations.StopStream{}) -> Just $ Investigations.StreamPending request
               _ -> Nothing
             pure (timestamp, next)
           params = [("channel", target.channelId), ("ts", target.threadTs), ("oldest", target.messageTs), ("include_all_metadata", "true"), ("limit", "15")] <> foldMap (pure . ("cursor",)) search.cursor
