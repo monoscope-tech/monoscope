@@ -14,7 +14,7 @@ import GHC.Clock (getMonotonicTimeNSec)
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
 import Pkg.GitCommand qualified as HostGit
 import Relude
-import System.Directory (canonicalizePath, createDirectoryIfMissing)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesPathExist, removePathForcibly)
 import System.Environment (getEnvironment)
 import System.FileLock (SharedExclusive (..), withFileLock)
 import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
@@ -22,8 +22,8 @@ import System.IO (hClose)
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Files qualified as Posix
-import System.Process.Typed (ExitCode (..), createPipe, getStdout, readProcessStdout_, setStdout, waitExitCode, withProcessTerm)
-import UnliftIO.Exception (throwIO, tryAny)
+import System.Process.Typed (ExitCode (..), ExitCodeException, createPipe, getStdout, readProcessStdout_, setStdout, waitExitCode, withProcessTerm)
+import UnliftIO.Exception (catch, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
 
 
@@ -122,13 +122,19 @@ withCheckout store source action = do
         Posix.setFileMode directory 0o700
       status <- withFileLock (mirror <> ".native.lock") Exclusive \_ -> do
         let cached args = git temporary (["--git-dir", mirror] <> args) access
-        cached ["init", "--bare", "--quiet"]
-        available <- tryAny $ traverse_ (\revision -> cached ["cat-file", "-e", toString (revisionText revision) <> "^{commit}"]) [baseRevision, headRevision]
-        -- A cache hit is not proof that this request still has source access.
-        cached ["ls-remote", "--quiet", "--", sourcePath, "HEAD"]
-        cached $ ["fetch", "--quiet", "--no-tags", "--", sourcePath] <> ["+" <> revision <> ":refs/heads/monoscope/" <> revision | revision <- nubOrd $ map (toString . revisionText) [baseRevision, headRevision]]
-        git temporary ["clone", "--quiet", "--no-local", "--no-checkout", "--", mirror, checkout] HostGit.Local
-        pure $ if isRight available then Hit else Miss
+            populate = do
+              cached ["init", "--bare", "--quiet"]
+              available <- tryAny $ traverse_ (\revision -> cached ["cat-file", "-e", toString (revisionText revision) <> "^{commit}"]) [baseRevision, headRevision]
+              -- A cache hit is not proof that this request still has source access.
+              cached ["ls-remote", "--quiet", "--", sourcePath, "HEAD"]
+              cached $ ["fetch", "--quiet", "--no-tags", "--", sourcePath] <> ["+" <> revision <> ":refs/heads/monoscope/" <> revision | revision <- nubOrd $ map (toString . revisionText) [baseRevision, headRevision]]
+              git temporary ["clone", "--quiet", "--no-local", "--no-checkout", "--", mirror, checkout] HostGit.Local
+              pure $ if isRight available then Hit else Miss
+        populate `catch` \(_ :: ExitCodeException) -> do
+          for_ [mirror, checkout] $ \path -> whenM (doesPathExist path) $ removePathForcibly path
+          createDirectoryIfMissing True mirror
+          Posix.setFileMode mirror 0o700
+          populate
       git checkout ["remote", "set-url", "origin", toString request.repository] HostGit.Local
       git checkout ["checkout", "--quiet", "--detach", toString $ revisionText headRevision] HostGit.Local
       pure (checkout, baseRevision, headRevision, status)

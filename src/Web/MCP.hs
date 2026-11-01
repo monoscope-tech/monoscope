@@ -19,11 +19,12 @@ module Web.MCP (
   toolError,
 ) where
 
-import Control.Lens (preview, (^.))
+import Control.Lens (cosmos, over, preview, transform, (^.), (^..))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson.Lens (_Number, _Object, _String)
+import Data.Aeson.Lens (key, _Number, _Object, _String)
+import Data.Graph qualified as Graph
 import Data.HashMap.Strict.InsOrd qualified as IOH
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (OpenApi)
@@ -109,8 +110,31 @@ agentExclusions = one ("submit_rrweb_event", "Browser session telemetry ingestio
 -- always wins on a name collision (none expected today, but cheap to enforce).
 allTools :: OpenApi -> (Projects.ProjectId -> Maybe Text -> Text -> ATBaseCtx (Either Text AE.Value)) -> Map Text (Tool Dispatch)
 allTools spec nlSearch =
-  Map.fromList [(tool.name, fmap (ViaComposite . interpretComposite) tool) | tool <- Catalog.compositeTools] <> mkToolsFromOpenApi spec
+  Map.fromList [(tool.name, fmap (ViaComposite . interpretComposite) tool) | tool <- Catalog.compositeTools] <> mkToolsFromOpenApi
   where
+    mkToolsFromOpenApi :: Map Text (Tool Dispatch)
+    mkToolsFromOpenApi =
+      Map.fromList
+        [ (tool.name, tool)
+        | (rawPath, item) <- IOH.toList (spec ^. OA.paths)
+        , let p = toText rawPath
+        , (m, op) <- pathItemOps item
+        , (m, p) /= ("POST", "/mcp") -- never expose MCP itself as a tool
+        , let tool = openApiTool spec p m op
+        ]
+      where
+        pathItemOps i =
+          catMaybes
+            [ ("GET",) <$> i ^. OA.get
+            , ("POST",) <$> i ^. OA.post
+            , ("PUT",) <$> i ^. OA.put
+            , ("PATCH",) <$> i ^. OA.patch
+            , ("DELETE",) <$> i ^. OA.delete
+            , ("HEAD",) <$> i ^. OA.head_
+            , ("OPTIONS",) <$> i ^. OA.options
+            , ("TRACE",) <$> i ^. OA.trace
+            ]
+
     interpretComposite :: Catalog.CompositeOperation -> Projects.ProjectId -> AE.Object -> ATBaseCtx AE.Value
     interpretComposite operation pid args = case operation of
       Catalog.FindErrorPatterns -> do
@@ -165,42 +189,24 @@ allTools spec nlSearch =
     intArg k o = floor <$> (KM.lookup (AK.fromText k) o >>= preview _Number)
 
 
-mkToolsFromOpenApi :: OpenApi -> Map Text (Tool Dispatch)
-mkToolsFromOpenApi spec =
-  Map.fromList
-    [ (t.name, t)
-    | t <-
-        [ openApiTool p m op
-        | (rawPath, item) <- IOH.toList (spec ^. OA.paths)
-        , let p = toText rawPath
-        , (m, op) <- pathItemOps item
-        , (m, p) /= ("POST", "/mcp") -- never expose MCP itself as a tool
-        ]
-    ]
-  where
-    pathItemOps i =
-      catMaybes
-        [ ("GET",) <$> i ^. OA.get
-        , ("POST",) <$> i ^. OA.post
-        , ("PUT",) <$> i ^. OA.put
-        , ("PATCH",) <$> i ^. OA.patch
-        , ("DELETE",) <$> i ^. OA.delete
-        , ("HEAD",) <$> i ^. OA.head_
-        , ("OPTIONS",) <$> i ^. OA.options
-        , ("TRACE",) <$> i ^. OA.trace
-        ]
-
-
-openApiTool :: Text -> ByteString -> OA.Operation -> Tool Dispatch
-openApiTool p m op =
+openApiTool :: OpenApi -> Text -> ByteString -> OA.Operation -> Tool Dispatch
+openApiTool spec p m op =
   Tool
     { name = maybe derivedName fst operation
     , description = fromMaybe (decodeUtf8 m <> " " <> p) ((op ^. OA.summary) <|> (op ^. OA.description))
-    , inputSchema = schemaObject (maybe id (KM.insert "body") bodySchema $ KM.fromList [(AK.fromText (q ^. OA.name), paramSchemaJson q) | q <- params]) requireds
+    , inputSchema = withDefinitions $ schemaObject (maybe id (KM.insert "body") bodySchema $ KM.fromList [(AK.fromText (q ^. OA.name), paramSchemaJson q) | q <- params]) requireds
     , agentPolicy = operation >>= snd
     , dispatch = ViaOpenApi OpenApiBinding{method = m, path = p, pathParams = namesIn OA.ParamPath, queryParams = namesIn OA.ParamQuery, bodyRequired = bodyReq}
     }
   where
+    -- Keep recursive schemas finite and include only their reachable definitions.
+    withDefinitions input =
+      let references value = mapMaybe (T.stripPrefix "#/components/schemas/") $ value ^.. cosmos . key "$ref" . _String
+          rewrite = transform $ over (key "$ref" . _String) $ \reference -> maybe reference ("#/$defs/" <>) $ T.stripPrefix "#/components/schemas/" reference
+          (graph, definitionAt, vertexFor) = Graph.graphFromEdges [(value, name, references value) | (name, schema) <- IOH.toList $ spec ^. OA.components . OA.schemas, let value = AE.toJSON schema]
+          needed = ordNub $ concatMap (maybe [] (Graph.reachable graph) . vertexFor) $ references input
+          definitions = AE.object [AK.fromText name AE..= rewrite value | vertex <- needed, let (value, name, _) = definitionAt vertex]
+       in if null needed then input else over _Object (KM.insert "$defs" definitions) $ rewrite input
     operation = Map.lookup (m, p) apiOperations
     params = mapMaybe (preview OA._Inline) (op ^. OA.parameters)
     namesIn loc = [q ^. OA.name | q <- params, q ^. OA.in_ == loc]

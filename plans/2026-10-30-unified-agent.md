@@ -666,6 +666,16 @@ This closes the selected Linux application gap, not full-suite, live GitHub, or 
 See the [workspace review](../docs/reviews/2026-11-01-workspace-interpreter.md) for evidence and limits.
 Remaining live scenarios, host-loss limits, whole-branch review, final gates, and publication remain open.
 
+The Linux virtual-host-loss probe exposes a truncated disposable Git mirror after the abrupt stop.
+The checkout interpreter now rebuilds that cache under its existing lock and retries once with current source access.
+The same interrupted run then resumes from its retained checkpoint: one case passes in 19.2457 seconds.
+Its original attempts, regression, wiki revision, and operation remain; completed replay adds no inference.
+Four observed guests use real KVM. The recovery binary includes the fix, so this is not an unchanged-binary crash cycle.
+The same review fixes unresolved MCP input references using reachable local schema definitions.
+Both regressions fail first, then pass within the 76-case focused run; all 2,098 Linux doctests also pass.
+See [checkout and tool schemas](../docs/reviews/2026-11-01-checkout-and-tool-schemas.md) for receipts and controlled-provider limits.
+Whole-branch review, remaining live acceptance, physical-host-loss limits, final gates, and publication remain open.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

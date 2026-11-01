@@ -1,7 +1,7 @@
 module Web.ApiV1Spec (spec) where
 
 import CLI.Resource qualified as Resource
-import Control.Lens (ix, (^.), (^..), (^?), _Just)
+import Control.Lens (cosmos, ix, (^.), (^..), (^?), _Just)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
@@ -835,6 +835,25 @@ spec = around withTestResources do
           (t : _) -> for_ ["name", "description", "inputSchema"] $ \k ->
             (t ^? key (AEK.fromText k)) `shouldSatisfy` isJust
           [] -> expectationFailure "expected at least one tool"
+
+      it "toolsList_bodySchemaIncludesReferencedApiFields" $ \tr -> do
+        let req = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (1 :: Int), "method" AE..= ("tools/list" :: Text)]
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        let tools = resp ^.. key "result" . key "tools" . _Array . traverse
+            body name = do
+              input <- find (\tool -> (tool ^? key "name" . _String) == Just name) tools >>= (^? key "inputSchema")
+              schema <- input ^? key "properties" . key "body"
+              pure $ fromMaybe schema do
+                reference <- schema ^? key "$ref" . _String
+                definition <- T.stripPrefix "#/$defs/" reference
+                input ^? key "$defs" . key (AEK.fromText definition)
+        for_ ([("create_monitor", ["title", "query", "alert_threshold"]), ("search_events", ["query", "since"])] :: [(Text, [Text])]) $ \(name, fields) -> do
+          schema <- maybe (fail $ "Missing body schema: " <> toString name) pure $ body name
+          for_ fields $ \field -> schema ^? key "properties" . key (AEK.fromText field) `shouldSatisfy` isJust
+        for_ (tools ^.. traverse . key "inputSchema") $ \schema ->
+          for_ (schema ^.. cosmos . key "$ref" . _String) $ \reference -> do
+            definition <- maybe (fail $ "Unbound schema reference: " <> toString reference) pure $ T.stripPrefix "#/$defs/" reference
+            schema ^? key "$defs" . key (AEK.fromText definition) `shouldSatisfy` isJust
 
       it "tools/list derives read hints from operation policy, including POST queries and privileged reads" $ \tr -> do
         let req = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (1 :: Int), "method" AE..= ("tools/list" :: Text)]

@@ -2233,7 +2233,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     proof <- runEff $ Agent.runCodeReviewReal Nothing (Right Nothing) (Just "test/fixtures/issue-fix-agent.mjs") [directory </> "failure.txt", toString baseline.imageBuildId, ""] $ Agent.verifyFixArtifacts (Agent.ArtifactStore directory directory) request
     isLeft proof `shouldBe` True
 
-  it "checkout_cleanupWaitsForChildExit_withPinnedSourceAccess" \_tr -> withSystemTempDirectory "native-checkout" \temporary -> do
+  it "checkout_cleanupWaitsForChildExit_withPinnedSourceAccess_andRebuildsInterruptedCache" \_tr -> withSystemTempDirectory "native-checkout" \temporary -> do
     directory <- canonicalizePath temporary
     let repository = directory </> "repository"
         store = Agent.ArtifactStore directory (directory </> "cache")
@@ -2266,6 +2266,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     recoveredCalls <- newIORef (0 :: Int)
     let request :: Agent.Request "pr_review"
         request = Agent.Request{projectId = testPid, runId = UUIDId $ UUID.fromWords 42 0 0 1, attemptId = UUIDId $ UUID.fromWords 42 0 0 2, repository = toText repository, base, head = headRevision, gitToken = "fixture-secret-token", prompt = "Review actual callers", provider = "fixture", model = "fixture", thinkingLevel = Agent.Off}
+        mirror = store.cacheDir </> toString testPid.toText </> toString (show (hash (encodeUtf8 request.repository :: ByteString) :: Digest SHA256) :: Text)
         decode = either (fail . toString) pure . AE.eitherDecodeStrict @AE.Value . encodeUtf8
         field key = AET.parseEither $ AE.withObject "Prepared checkout" (AE..: key)
         cleaned value = for_ ["directory", "repositorySkills"] $ \key -> either fail pure (field key value) >>= doesDirectoryExist >>= (`shouldBe` False)
@@ -2314,6 +2315,16 @@ spec = around withTestResources $ describe "Production impact reviews" do
     for_ [preparedSecond, preparedThird] \value -> do
       field "cacheStatus" value `shouldBe` Right ("hit" :: Text)
       cleaned value
+    -- A host crash can retain objects while losing the mirror's Git metadata.
+    for_ ([("HEAD", ""), ("config", "not git configuration\n")] :: [(FilePath, ByteString)]) $ \(path, bytes) -> do
+      writeFileBS (mirror </> path) bytes
+      rebuilt <- check request []
+      field "head" rebuilt `shouldBe` Right headRevision
+      field "cacheStatus" rebuilt `shouldBe` Right ("miss" :: Text)
+      cleaned rebuilt
+      reused <- check request []
+      field "cacheStatus" reused `shouldBe` Right ("hit" :: Text)
+      cleaned reused
     let isolated = request{Agent.projectId = UUIDId $ UUID.fromWords 42 0 0 3} :: Agent.Request "pr_review"
     (isolatedFirst, isolatedSecond) <- concurrently (check (withRun 4 isolated) []) (check (withRun 5 isolated) [])
     sort <$> traverse (either fail pure . field "cacheStatus") [isolatedFirst, isolatedSecond] `shouldReturn` (["hit", "miss"] :: [Text])
@@ -2340,8 +2351,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ git ["commit", "--quiet", "--allow-empty", "-m", "unrelated history"]
     unrelated <- git ["rev-parse", "HEAD"]
     run (request{Agent.base = unrelated, Agent.head = unrelated} :: Agent.Request "pr_review") ["--override-instructions"] (const $ pure $ Right ()) >>= (`shouldSatisfy` isRight)
-    let mirror = store.cacheDir </> toString testPid.toText </> toString (show (hash (encodeUtf8 request.repository :: ByteString) :: Digest SHA256) :: Text)
-        snapshot = directory </> "mirror-snapshot"
+    let snapshot = directory </> "mirror-snapshot"
     void $ git ["clone", "--quiet", "--no-local", "--no-checkout", "--", mirror, snapshot]
     retainedBase <- tryAny $ git ["-C", snapshot, "cat-file", "-e", toString base <> "^{commit}"]
     isRight retainedBase `shouldBe` True
