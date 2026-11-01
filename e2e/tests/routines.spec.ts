@@ -515,10 +515,29 @@ test('selected review decisions stay in the conversation and respect current rev
       await expect(action.getByText('Awaiting review', { exact: true })).toBeVisible();
       await expect(action.getByRole('button', { name: 'Approve action', exact: true })).toBeVisible();
       sql(`UPDATE projects.project_members SET permission = 'edit' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
-      const rejected = await page.request.post(`/p/${pid}/ai/operations/${operation}/review`, { form: { decision } });
+      const decisionButton = action.getByRole('button', { name: decision === 'approved' ? 'Approve action' : 'Decline action', exact: true });
+      const [rejected] = await Promise.all([
+        page.waitForResponse(response => response.url().endsWith(`/operations/${operation}/review`) && response.request().method() === 'POST'),
+        decisionButton.click(),
+      ]);
       expect(rejected.status()).toBe(403);
+      const denied = page.getByRole('alert').filter({ hasText: 'Could not confirm the decision. Refresh actions to check its status.' });
+      await expect.soft(denied).toBeVisible({ timeout: 1000 });
+      await expect(decisionButton).toBeEnabled();
+      await expect(page.locator('textarea[aria-label="Message Monoscope AI"]')).toHaveValue('Keep my review follow-up.');
+      if (await denied.count()) await denied.getByRole('button', { name: 'Dismiss notification', exact: true }).click();
       expect(JSON.parse(sql(`SELECT review FROM apis.ai_agent_operations WHERE id = '${operation}'`).toString().trim()).tag).toBe('ReviewPending');
       sql(`UPDATE projects.project_members SET permission = 'admin' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
+      const reviewRoute = `**/operations/${operation}/review`;
+      await page.route(reviewRoute, route => route.abort('failed'));
+      await decisionButton.click();
+      await expect(denied).toBeVisible();
+      await expect(decisionButton).toBeEnabled();
+      expect(JSON.parse(sql(`SELECT review FROM apis.ai_agent_operations WHERE id = '${operation}'`).toString().trim()).tag).toBe('ReviewPending');
+      await expect(denied).toHaveCSS('opacity', '1');
+      await page.screenshot({ path: testInfo.outputPath(`selected-review-error-${width}.png`) });
+      await denied.getByRole('button', { name: 'Dismiss notification', exact: true }).click();
+      await page.unroute(reviewRoute);
       await Promise.all([
         page.waitForResponse(response => response.url().endsWith(`/operations/${operation}/review`) && response.request().method() === 'POST'),
         action.getByRole('button', { name: decision === 'approved' ? 'Approve action' : 'Decline action', exact: true }).click(),

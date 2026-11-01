@@ -299,3 +299,39 @@ All eight permanent browser cases pass in 22.9 seconds on the final fixture.
 The successful log is `scripts/local/selected-review-browser-green.log`; the two
 inspected captures and source hashes are under `scripts/local/selected-review-browser/`.
 The temporary live-server adapter is removed. No product change was needed.
+
+
+## Review decision failure feedback (1 November)
+
+The selected-review browser case now clicks the visible decision button after the
+reviewer's role changes. It reproduced a silent HTTP 403: permission enforcement worked,
+but the form gave no recovery feedback. A listener on that form now sends the existing
+error toast for response errors and failed requests.
+
+| Before | After | Evidence |
+| --- | --- | --- |
+| A stale review form silently rejected a decision | A visible alert explains that the decision could not be confirmed and directs the user to refresh action history | Real HTTP 403 after administrator-to-editor downgrade |
+| Dropped-connection feedback was untested | The same alert appears and decision buttons become usable again | Aborted request, followed by a successful real retry |
+
+The copy deliberately says “Could not confirm the decision” rather than claiming the
+server did not save it. A lost acknowledgement can leave a successful decision uncertain.
+The existing immutable decision receipt remains authoritative. No permission rule,
+review deadline, operation outcome, or database guard changed.
+
+Accessibility coverage includes the alert role, named dismiss/action buttons, usable
+buttons after failure, Escape, and restored composer focus. Layout, typography, and
+color reuse the existing toast and inspector at desktop/light and mobile/dark sizes.
+The error copy gives one concrete recovery action. Drafts, pending decisions, chosen
+reviewer, and conversation URLs are checked throughout the browser flow.
+
+Distill and evasion review find no new type, effect, IO, suppression, or duplicate state.
+Locality review keeps the listener on the submitting form and uses the existing toast;
+no JavaScript manager, modal, or separate error page is added. The follow-up review finds
+no further material issue in this patch. Pinned Fourmolu and HLint pass `AIThreads.hs`.
+This remains scoped browser acceptance, not whole-branch signoff or live Slack acceptance.
+
+All eight permanent cases pass in 22.6 seconds. The failing and final logs are
+`scripts/local/review-decision-feedback-red.log` and
+`scripts/local/review-decision-feedback-green.log`. The inspected mobile error capture,
+desktop capture, decision captures, and source hashes are in
+`scripts/local/review-decision-feedback/`. The temporary browser adapter is removed.

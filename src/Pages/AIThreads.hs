@@ -418,9 +418,19 @@ threadPageGetH pid convId docM runM hxTarget = do
                     "Review deadline: "
                     localTimeFmt_ "MMM d, HH:mm" request.expiresAt
                   when (viewerPermission >= max required (Catalog.approverPermission request.approver))
-                    $ form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/operations/" <> operation.id.toText <> "/review", hxTarget_ "closest #routine-run", hxSelect_ "#routine-run", hxSwap_ "outerMorph", term "hx-disable" $ "#operation-" <> operation.id.toText <> " button", class_ "flex flex-wrap gap-2"] do
-                      button_ [type_ "submit", name_ "decision", value_ "approved", class_ "btn btn-sm btn-primary"] "Approve action"
-                      button_ [type_ "submit", name_ "decision", value_ "rejected", class_ "btn btn-sm btn-ghost"] "Decline action"
+                    $ form_
+                      [ hxPost_ $ "/p/" <> pid.toText <> "/ai/operations/" <> operation.id.toText <> "/review"
+                      , hxTarget_ "closest #routine-run"
+                      , hxSelect_ "#routine-run"
+                      , hxSwap_ "outerMorph"
+                      , term "hx-disable" $ "#operation-" <> operation.id.toText <> " button"
+                      , [__|on htmx:response:error or htmx:error
+                        send errorToast(value: ['Could not confirm the decision. Refresh actions to check its status.']) to <body/>|]
+                      , class_ "flex flex-wrap gap-2"
+                      ]
+                      do
+                        button_ [type_ "submit", name_ "decision", value_ "approved", class_ "btn btn-sm btn-primary"] "Approve action"
+                        button_ [type_ "submit", name_ "decision", value_ "rejected", class_ "btn btn-sm btn-ghost"] "Decline action"
                 _ -> pass
               time_ [datetime_ $ show operation.createdAt, class_ "text-xs text-textWeak"] $ localTimeFmt_ "MMM d, HH:mm" operation.createdAt
               when (operation.runId /= run.id)
