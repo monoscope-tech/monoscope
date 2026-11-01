@@ -58,38 +58,38 @@ spec = do
       let compile = fromRight' . parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing)
           rows = fst . compile
           summary = fromMaybe "" . (.finalSummarizeQuery) . snd . compile
-          cases :: [(Text -> Text, Text)]
+          cases :: [(Text, Text -> Text, Text)]
           cases =
-            [ (rows, "timestamp >= ago(7d)")
-            , (rows, "timestamp == now()")
-            , (rows, "name==\"GET\"")
+            [ ("rows", rows, "timestamp >= ago(7d)")
+            , ("rows", rows, "timestamp == now()")
+            , ("rows", rows, "name==\"GET\"")
               -- Lowercase `desc`: this branch now builds its ORDER BY with buildOrderBy
               -- like every other path, rather than hand-rolling an uppercase one.
-            , (summary, "name==\"GET\"")
-            , (summary, "name==\"GET\" | summarize count(*) by bin(timestamp, 1d)")
+            , ("summary", summary, "name==\"GET\"")
+            , ("summary", summary, "name==\"GET\" | summarize count(*) by bin(timestamp, 1d)")
               -- `bin(timestamp, 60)` is 60 SECONDS. These two previously asserted
               -- `5 minutes`, which was the silent fallback for any width the parser could
               -- not read — the bug, encoded as the expectation.
-            , (rows, "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)")
+            , ("rows", rows, "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)")
               -- ORDER BY uses GROUP BY column (kind) since timestamp is not in GROUP BY
-            , (rows, "timestamp >= ago(7d) | summarize TotalCount = count() by kind")
-            , (rows, "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000")
-            , (rows, "| summarize count(*) by bin_auto(timestamp)")
-            , (rows, "| summarize count() / 5.0 by bin_auto(timestamp)")
-            , (rows, "metrics | where metric_name == \"app_recommendations_counter\" | summarize count(*) by bin_auto(timestamp),attributes")
-            , (rows, "resource.service.name == \"cart\" | where duration != null | summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)")
-            , (rows, "| extend error_cat = case(attributes.http.response.status_code >= 500, \"5xx\", \"ok\")")
-            , (rows, "| extend error_rate = round(countif(attributes.http.response.status_code >= 400), 3)")
-            , (rows, "| project total_duration = toint(sum(duration))")
-            , (rows, "| project service = resource.service.name")
-            , (rows, "coalesce(status_code, 0) >= 400")
-            , (rows, "isnull(status_message)")
-            , (rows, "isnotnull(trace_id)")
-            , (rows, "toint(status_code) >= 400")
-            , (rows, "toint(coalesce(status_code, 0)) >= 400")
-            , (rows, "name == \"O'Brien\"")
+            , ("rows", rows, "timestamp >= ago(7d) | summarize TotalCount = count() by kind")
+            , ("rows", rows, "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000")
+            , ("rows", rows, "| summarize count(*) by bin_auto(timestamp)")
+            , ("rows", rows, "| summarize count() / 5.0 by bin_auto(timestamp)")
+            , ("rows", rows, "metrics | where metric_name == \"app_recommendations_counter\" | summarize count(*) by bin_auto(timestamp),attributes")
+            , ("rows", rows, "resource.service.name == \"cart\" | where duration != null | summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)")
+            , ("rows", rows, "| extend error_cat = case(attributes.http.response.status_code >= 500, \"5xx\", \"ok\")")
+            , ("rows", rows, "| extend error_rate = round(countif(attributes.http.response.status_code >= 400), 3)")
+            , ("rows", rows, "| project total_duration = toint(sum(duration))")
+            , ("rows", rows, "| project service = resource.service.name")
+            , ("rows", rows, "coalesce(status_code, 0) >= 400")
+            , ("rows", rows, "isnull(status_message)")
+            , ("rows", rows, "isnotnull(trace_id)")
+            , ("rows", rows, "toint(status_code) >= 400")
+            , ("rows", rows, "toint(coalesce(status_code, 0)) >= 400")
+            , ("rows", rows, "name == \"O'Brien\"")
             ]
-      goldenText "kql-to-sql.txt" $ T.intercalate "\n" [kql <> "\n" <> normT (render kql) <> "\n" | (render, kql) <- cases]
+      goldenText "kql-to-sql.txt" $ T.intercalate "\n" [kql <> "\n" <> label <> ": " <> normT (render kql) <> "\n" | (label, render, kql) <- cases]
 
     it "newer pagination scans forward from its cursor and returns the adjacent page" do
       let cfg = (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing){cursorM = Just (PageCursor PageNewer fixedUTCTime), dateRange = (Nothing, Just $ addUTCTime 60 fixedUTCTime)}
