@@ -269,18 +269,31 @@ queueJob pid uid fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
           pure True
 
 
--- Only a successful claim constructs authority to mutate this job.
+-- $setup
+-- >>> import Data.Aeson.Types qualified as AET
+
+
+-- | Only a successful claim constructs authority to mutate this job.
+--
+-- >>> AET.parseEither (AE.genericParseJSON AE.defaultOptions :: AE.Value -> AET.Parser Lease) AE.Null
+-- ...
+-- ...No instance for...Generic Lease...
+-- ...
+-- >>> HI.decodeRow @Lease `seq` ()
+-- ...
+-- ...No instance for...DecodeRow Lease...
+-- ...
 data Lease = Lease ProjectId FixId (UUIDId "fix_lease")
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving stock (Show)
 
 
 claimJob :: DB es => ProjectId -> FixId -> Eff es (Maybe Lease)
 claimJob pid fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
   Issues.retireFixRunTx pid fid
   leased <-
-    Hasql.queryTx @[Lease]
-      [HI.sql|UPDATE projects.issue_fix_jobs job SET lease_owner = gen_random_uuid(), lease_until = now() + interval '10 minutes', failure = NULL, finished_at = NULL
+    map (\(project, identifier, owner) -> Lease project identifier owner)
+      <$> Hasql.queryTx @[(ProjectId, FixId, UUIDId "fix_lease")]
+        [HI.sql|UPDATE projects.issue_fix_jobs job SET lease_owner = gen_random_uuid(), lease_until = now() + interval '10 minutes', failure = NULL, finished_at = NULL
       FROM projects.issue_fix_run_access allowed, apis.ai_routine_runs run
       WHERE job.run_id = #{fid} AND allowed.run_id = job.run_id AND allowed.project_id = #{pid} AND allowed.user_id = job.requested_by
         AND run.id = job.agent_run_id AND run.status IN ('running', 'failed', 'timed_out') AND run.policy_limit = #{Issues.Autonomous}
