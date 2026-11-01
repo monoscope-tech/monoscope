@@ -279,9 +279,9 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
         Right result -> do
           ctx <- ask @AuthContext
           let body =
-                maybe "Documentation-only change. No production impact review was needed." (renderReview ctx.config.hostUrl completed True) result <> case authority of
-                  Just Issues.RunAuthority{policy = Issues.Observe} -> "\n\nObserve policy: the GitHub comment was not updated."
-                  _ -> ""
+                maybe "Documentation-only change. No production impact review was needed." (renderReview ctx.config.hostUrl completed True) result <> case fmap (.policy) authority of
+                  Just Issues.Observe -> "\n\nObserve policy: the GitHub comment was not updated."
+                  (Nothing; Just Issues.Autonomous; Just Issues.ReviewSelected{}) -> ""
               findings = if maybe True ((== NoFinding) . (.verdict)) result then Issues.ResultNoFindings else Issues.ResultSucceeded
           pure $ Issues.CompletedResult findings Issues.PublishAnswer $ Issues.reportAnswer body completed.result
       void $ Issues.completeRun context completion
@@ -469,7 +469,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
         appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
         observed <- either (throwError . ReviewFailure) pure =<< Git.listPullRequestComments conn (Git.RepoRef run.owner run.repo run.revision) run.number
         pure $ Right . AE.toJSON . (.id) <$> find (\comment -> fmap (.id) comment.performedViaGithubApp == Just appId && comment.body == retained.body) observed
-      _ -> pure Nothing
+      (Operation.ModelCall{}; Operation.NativeCall Operation.WriteWiki{}; Operation.NativeCall Operation.EnrichIssue{}; Operation.NativeCall Operation.PublishPullRequestComment{}) -> pure Nothing
 
     requireActive :: (DB es, Error ReviewFailure :> es) => Reviews.ReviewRun -> Issues.EventRun -> Eff es ()
     requireActive run execution = do

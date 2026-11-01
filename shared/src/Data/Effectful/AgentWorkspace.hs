@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, CheckpointSummary, checkpointSummary, Leased (..), Request, mkRequest, leaseWorkspace, Baseline, leasedBaseline, Snapshot, captureSnapshot, restoreSnapshot, Revision, mkRevision, revisionText, TestArtifact (..), mkTestArtifact, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, RPC, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), agentCommand, checkoutGuest, withOwner, RegressionRequest, mkRegressionRequest, verifyRegression, regressionLogs, TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
@@ -730,7 +732,7 @@ runWorkspaceReal = interpret $ \env -> \case
         Lookup -> do
           root <- canonicalizePath options.cacheDir
           withProjectLock root request.projectId $ lookupWorkspace options operation request
-        _ -> lookupWorkspace options operation request
+        (Prepare{}; Archive{}; Restore{}) -> lookupWorkspace options operation request
     pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Workspace preparation or integrity verification failed"
   WithWorkspace options requestFile action -> localSeqUnliftIO env $ \unlift -> liftIO do
     outcome <- tryAny do

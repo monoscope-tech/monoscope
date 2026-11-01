@@ -2154,7 +2154,7 @@ conversationSummarySql fallback filters =
 conversationIssueId :: ConversationSummary -> Maybe IssueId
 conversationIssueId conversation = case conversation.conversationType of
   CTAnomaly -> Just $ UUIDId conversation.conversationId.unUUIDId
-  _ -> Nothing
+  (CTTrace; CTLogExplorer; CTDashboard; CTSlackThread; CTDiscordThread; CTWeb; CTPullRequest) -> Nothing
 
 
 setConversationTitle :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Eff es ()

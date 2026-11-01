@@ -75,7 +75,7 @@ phase = \case Collecting -> Reproducing; Reproduced{} -> Fixing; Checking{} -> V
 
 
 verifiedRevision :: Progress -> Maybe Revision
-verifiedRevision = \case Checked _ candidate _ _ -> Just candidate.revision; _ -> Nothing
+verifiedRevision = \case Checked _ candidate _ _ -> Just candidate.revision; (Collecting; Reproduced{}; Checking{}) -> Nothing
 
 
 -- The SQL boundary carries a history; traversal replaces it with admitted progress.
@@ -110,14 +110,14 @@ advance setup progress (Observe check) = do
   case check.status of
     Agent.Passed -> unless (check.exitCode == Just 0) $ Left InvalidCheck
     Agent.Failed -> unless (maybe False (\code -> code > 0 && code `notElem` [126, 127]) check.exitCode && check.logBytes > 0) $ Left InvalidCheck
-    _ -> pass
+    (Agent.Blocked; Agent.Invalidated; Agent.TimedOut; Agent.OutputLimit; Agent.Cancelled; Agent.CleanupFailed) -> pass
   case progress of
     Collecting -> do
       expect Agent.Base setup.base
       when (check.status == Agent.Failed) $ case check.regression of
         Just Agent.InjectedTest{} -> pass
         Just Agent.RetainedTest{} -> pass
-        _ -> Left TestArtifactRequired
+        (Nothing; Just Agent.ScriptCheck{}) -> Left TestArtifactRequired
       pure $ if check.status == Agent.Failed then Reproduced (Reproduction check) else Collecting
     Checking repro@(Reproduction frozen) candidate verification -> do
       unless (check.scriptSha256 == frozen.scriptSha256 && fmap (.sha256) check.regression == fmap (.sha256) frozen.regression) $ Left WrongTest
@@ -130,7 +130,7 @@ advance setup progress (Observe check) = do
           pure case check.status of
             Agent.Failed -> Checking repro candidate $ AwaitingCandidate $ Reproduction check
             Agent.Passed -> Collecting
-            _ -> Checking repro candidate AwaitingBase
+            (Agent.Blocked; Agent.Invalidated; Agent.TimedOut; Agent.OutputLimit; Agent.Cancelled; Agent.CleanupFailed) -> Checking repro candidate AwaitingBase
         Agent.Head -> do
           expect Agent.Head candidate.revision
           case verification of
@@ -139,12 +139,12 @@ advance setup progress (Observe check) = do
               unless (check.checkId == baseCheck.checkId && check.attemptId == baseCheck.attemptId) $ Left WrongComparison
               when (check.status == Agent.Passed) $ case check.regression of
                 Just Agent.RetainedTest{} -> pass
-                _ -> Left TestArtifactRequired
+                (Nothing; Just Agent.ScriptCheck{}; Just Agent.InjectedTest{}) -> Left TestArtifactRequired
               pure case check.status of
                 Agent.Passed -> Checked repro candidate baseline check
                 Agent.Failed -> Reproduced repro
-                _ -> Checking repro candidate AwaitingBase
-    _ -> Left UnexpectedCheck
+                (Agent.Blocked; Agent.Invalidated; Agent.TimedOut; Agent.OutputLimit; Agent.Cancelled; Agent.CleanupFailed) -> Checking repro candidate AwaitingBase
+    (Reproduced{}; Checked{}) -> Left UnexpectedCheck
   where
     digest text = T.length text == 64 && T.all isHexDigit text
     expect side revision = do
@@ -195,7 +195,7 @@ data StepScope = ProjectScope | JobScope (UUIDId "fix_lease")
 recordStepWith :: DB es => StepScope -> ProjectId -> FixId -> Int64 -> StepId -> Step -> Eff es (Either Failure (Run Progress))
 recordStepWith scope pid fid expected sid step = do
   let owner = case scope of ProjectScope -> Nothing; JobScope token -> Just token
-      execution = case step of Observe check -> Just check.id.toText; _ -> Nothing
+      execution = case step of Observe check -> Just check.id.toText; (RestartReproduction; ProposeCandidate{}) -> Nothing
   previous <-
     Hasql.interp @[(FixId, Step)]
       [HI.sql|SELECT s.run_id, s.step FROM projects.issue_fix_steps s
@@ -430,13 +430,13 @@ validateResult run result = case run.progress of
       && not (T.null $ T.strip result.summary)
       && T.length result.summary
       <= 180
-  _ -> False
+  (Collecting; Reproduced{}; Checking{}) -> False
 
 
 artifactRequest :: Text -> Run Progress -> Agent.FixResult -> Maybe Agent.ArtifactRequest
 artifactRequest repository run result = case run.progress of
   Checked _ _ (Reproduction baseline) candidate | validateResult run result -> Just $ Agent.ArtifactRequest repository result baseline candidate
-  _ -> Nothing
+  (Collecting; Reproduced{}; Checking{}; Checked{}) -> Nothing
 
 
 getCheckpoint :: DB es => Lease -> Eff es (Maybe Checkpoint)

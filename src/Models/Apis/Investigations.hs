@@ -430,7 +430,7 @@ loadAnswer turn = do
   maybe (loadCheckpoint turn) (pure . Just) canonical >>= \case
     Just SavedCheckpoint{checkpoint = AnswerReady answer} -> pure $ Just answer
     Just SavedCheckpoint{checkpoint = LegacyUncertain answer _} -> pure $ Just answer
-    _ ->
+    (Nothing; Just SavedCheckpoint{checkpoint = ModelPending{}}; Just SavedCheckpoint{checkpoint = ToolsPending{}}; Just SavedCheckpoint{checkpoint = NativePending{}}; Just SavedCheckpoint{checkpoint = NativeReady}) ->
       Hasql.interpOneJson
         [HI.sql|SELECT answer FROM apis.slack_turn_answers
       WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
@@ -980,7 +980,7 @@ adoptSlackCheckpoint lease turn policy = do
                    in LegacyUncertain (AgenticChatResult result.formatted $ step.toolCalls <> map (uncurry mkToolCallInfo) completed <> [mkToolCallInfo call result]) original.checkpoint
             case capability of
               Catalog.ReadOnly{} -> pure original.checkpoint
-              _ -> do
+              (Catalog.ConversationWrite; Catalog.ProjectMemoryWrite; Catalog.ProjectWrite; Catalog.ExternalPublication; Catalog.Administration{}) -> do
                 prior <-
                   lift
                     $ Hasql.queryTx @[OperationEntry policy]
@@ -1089,8 +1089,8 @@ commitProgress cursor scope checkpoint event
               _ -> Left CheckpointConflict
         for_ (rightToMaybe updated) $ \_ -> for_ scope $ \key -> for_ event $ \activity -> do
           Hasql.executeTx $ recordEventSql key activity
-          case (cursor, activity) of
-            (Just turnCursor, FollowupsAccepted _ followups) -> for_ followups $ \followup -> do
+          case activity of
+            FollowupsAccepted _ followups | Just turnCursor <- cursor -> for_ followups $ \followup -> do
               let (project, conversation, _, _, _) = checkpointIdentity turnCursor.target
               Hasql.executeTx
                 [HI.sql|WITH accepted AS (
@@ -1107,7 +1107,7 @@ commitProgress cursor scope checkpoint event
                   SELECT #{project}, #{conversation}, 'user', #{followup.text}, #{followup.messageTs}, clock_timestamp()
                   WHERE EXISTS (SELECT 1 FROM accepted)
                   ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING|]
-            _ -> pass
+            (InvestigationStarted{}; ModelStarted{}; ModelReturned{}; ToolStarted{}; ToolReturned{}; InvestigationHistoryRead{}; FollowupsAccepted{}; InvestigationAwaitingReview{}; InvestigationFinished; InvestigationFailed; InvestigationInterrupted) -> pass
         pure updated
       either throwIO pure result
 
@@ -1423,11 +1423,11 @@ audienceVisible project viewer = \case
   PersonalAudience owner -> case viewer of
     MemberViewer member | owner == member -> isJust <$> ProjectMembers.getUserPermission project member
     DirectMessageViewer member team user channel | owner == member -> Integrations.slackDirectMessageOwner project member team user channel
-    _ -> pure False
+    (ProjectViewer; MemberViewer{}; ChannelViewer{}; DirectMessageViewer{}) -> pure False
   SlackChannelAudience channel -> case viewer of
     MemberViewer member -> Integrations.slackChannelMember project member channel
     ChannelViewer member destination | channel == destination -> Integrations.slackChannelMember project member channel
-    _ -> pure False
+    (ProjectViewer; ChannelViewer{}; DirectMessageViewer{}) -> pure False
 
 
 -- | Project evidence adds no restriction; distinct private audiences cannot mix.

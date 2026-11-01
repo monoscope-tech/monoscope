@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidateCause, CandidatePatch, mkCandidatePatch, CapturedCandidate, candidateMatchesPatch, candidateStep, candidateIdentity, candidateRevision, FixSummary, candidateResult, captureCandidate, CandidateSnapshot, candidateSnapshot, restoreCandidate, verifyReproduction, verifyComparison, retainAdmission, VerifiedArtifacts, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, writePrivateArtifact, sha256) where
 
 import Data.Aeson qualified as AE
@@ -115,7 +117,7 @@ withVerifiedArtifacts store request action = do
     verified <- Timeout.timeout (180 * 1000000) do
       let result = request.result
           metadata = case AE.toJSON result of AE.Object fields -> AE.Object $ foldr KM.delete fields ["checkId", "regressionSha256", "summary"]; value -> value
-      unless (not (T.null $ T.strip result.summary) && T.length result.summary <= 600 && result.checkId == request.candidate.checkId && (case request.candidate.regression of Just (RetainedTest value) -> value == result.regressionSha256; _ -> False)) $ fail "Invalid retained fix result"
+      unless (not (T.null $ T.strip result.summary) && T.length result.summary <= 600 && result.checkId == request.candidate.checkId && (case request.candidate.regression of Just (RetainedTest value) -> value == result.regressionSha256; (Nothing; Just ScriptCheck{}; Just InjectedTest{}) -> False)) $ fail "Invalid retained fix result"
       captured <- either fail pure $ AET.parseEither AE.parseJSON metadata
       (checkout, evidence) <- verifyEvidence store request.repository captured request.baseline request.candidate directory
       pure $ VerifiedArtifacts checkout request evidence
@@ -179,11 +181,11 @@ verifiedLog directory report (row, receipt) = do
 
 
 regressionPlacement :: Maybe Regression -> Maybe Placement
-regressionPlacement = \case Just InjectedTest{} -> Just Injected; Just RetainedTest{} -> Just Retained; _ -> Nothing
+regressionPlacement = \case Just InjectedTest{} -> Just Injected; Just RetainedTest{} -> Just Retained; (Nothing; Just ScriptCheck{}) -> Nothing
 
 
 regressionHash :: Maybe Regression -> Maybe Text
-regressionHash = \case Just (InjectedTest value) -> Just value; Just (RetainedTest value) -> Just value; _ -> Nothing
+regressionHash = \case Just (InjectedTest value) -> Just value; Just (RetainedTest value) -> Just value; (Nothing; Just ScriptCheck{}) -> Nothing
 
 
 requireEvidence :: Bool -> IO ()
@@ -363,7 +365,8 @@ candidateResult (CapturedCandidate candidate) receipt summary = case receipt.reg
   Just (RetainedTest fingerprint)
     | receipt.side == Head && receipt.status == Passed && receipt.revision == revisionText candidate.head ->
         Right $ FixResult candidate.projectId candidate.runId candidate.issueId candidate.attemptId candidate.candidateId candidate.base candidate.head candidate.patchSha256 candidate.bundleSha256 candidate.rootCause receipt.checkId fingerprint summary.text
-  _ -> Left "Candidate has no passing retained regression"
+    | otherwise -> Left "Candidate has no passing retained regression"
+  (Nothing; Just ScriptCheck{}; Just InjectedTest{}) -> Left "Candidate has no passing retained regression"
 
 
 captureCandidate :: FilePath -> FixRequest -> FilePath -> CandidatePatch -> IO (Either Text CapturedCandidate)

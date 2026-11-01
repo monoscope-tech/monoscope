@@ -62,12 +62,12 @@ snapshot messageTs history = do
   guard $ not $ null tasks
   pure $ Snapshot title tasks latest.observedAt history.limitReached $ case latest.event of
     Investigations.InvestigationAwaitingReview identifier expiresAt -> Just (PendingNotice identifier expiresAt)
-    _ -> Nothing
+    (Investigations.InvestigationStarted{}; Investigations.ModelStarted{}; Investigations.ModelReturned{}; Investigations.ToolStarted{}; Investigations.ToolReturned{}; Investigations.InvestigationHistoryRead{}; Investigations.FollowupsAccepted{}; Investigations.InvestigationFinished; Investigations.InvestigationFailed; Investigations.InvestigationInterrupted) -> Nothing
   where
     update prior entry =
       let tasks = case entry.event of
             Investigations.ToolReturned _ tool _ -> map (\(taskKey@(_, _, kind), task) -> (taskKey, if kind == toolKind tool && task.status == Pending then task{status = Complete} else task)) prior
-            _ -> prior
+            (Investigations.InvestigationStarted{}; Investigations.ModelStarted{}; Investigations.ModelReturned{}; Investigations.ToolStarted{}; Investigations.InvestigationHistoryRead{}; Investigations.FollowupsAccepted{}; Investigations.InvestigationAwaitingReview{}; Investigations.InvestigationFinished; Investigations.InvestigationFailed; Investigations.InvestigationInterrupted) -> prior
           key iteration kind = (entry.runId, iteration, kind)
           upsertTask taskKey title status =
             if any ((== taskKey) . fst) tasks

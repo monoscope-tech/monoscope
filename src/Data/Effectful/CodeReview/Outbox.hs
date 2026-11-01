@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, checksPath, privateDirectory, withOutbox, replay, acknowledge, retain, deliver, deliverPhase) where
 
 import Control.Monad (foldM)
@@ -73,7 +75,7 @@ replay outbox record = do
   receipts <- traverse (readReceipt outbox) files
   runExceptT $ traverse_ (\receipt -> ExceptT $ acknowledge outbox receipt record) $ sortOn (\receipt -> (rank receipt, receiptId receipt)) receipts
   where
-    rank = \case Call _ -> 0 :: Int; Phase _ -> 2; _ -> 1
+    rank = \case Call _ -> 0 :: Int; Phase _ -> 2; (Usage{}; Allocation{}; Check{}) -> 1
 
 
 -- Every producer journals before delivery; the database must accept before unlink/ACK.
@@ -121,12 +123,14 @@ readReceipt outbox filename = do
 
 
 permitted :: Scope -> Receipt -> Bool
-permitted scope receipt = case (scope, receipt) of
-  (IssueFix _, _) -> True
-  (_, Phase _) -> False
-  (Advisory _, _) -> True
-  (_, Check _) -> False
-  _ -> True
+permitted scope receipt = case scope of
+  IssueFix{} -> True
+  Advisory{} -> case receipt of
+    Phase{} -> False
+    (Call{}; Usage{}; Allocation{}; Check{}) -> True
+  (Admission{}; PeerReview{}) -> case receipt of
+    (Phase{}; Check{}) -> False
+    (Call{}; Usage{}; Allocation{}) -> True
 
 
 receiptId :: Receipt -> Text

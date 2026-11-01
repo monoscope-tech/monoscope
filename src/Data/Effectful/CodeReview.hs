@@ -408,7 +408,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
               let sessionDirectory = (.directory) <$> retention
                   resumed = retention >>= (.saved)
                   paused = (\case AnalysisSuspended saved -> saved; FixSuspended saved _ -> saved) <$> resumed
-                  savedFix = case resumed of Just (FixSuspended _ saved) -> Just saved; _ -> Nothing
+                  savedFix = case resumed of Just (FixSuspended _ saved) -> Just saved; (Nothing; Just AnalysisSuspended{}) -> Nothing
                   persist progress = for_ retention \retained -> do
                     retained.persist progress
                     pruneNativeSnapshots retained.directory $ case progress of Waiting saved -> Just saved.id; FixWaiting saved _ -> Just saved.id; Finished{} -> Nothing
@@ -450,7 +450,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                         let saved = SavedGuest identifier disk (Native.sha256 transcript) remaining submissions
                         persist $ case workflowState of
                           Just (FixReady current) -> FixWaiting saved $ SavedFix current.id $ Native.candidateSnapshot <$> current.progress
-                          _ -> Waiting saved
+                          (Nothing; Just AdmissionReady; Just SourceReady) -> Waiting saved
                     pause :: Int -> Int -> Maybe GuestSession -> IO value -> IO value
                     pause remaining submissions workflowState action =
                       action `catch` \(failure :: SomeException) -> case asPause failure of
@@ -521,13 +521,13 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             when result.isError $ reject $ "Native regression did not produce usable evidence.\n" <> decodeUtf8 (AE.encode result.report)
                             pure result
                           describe message result = AE.object ["message" AE..= (message :: Text), "report" AE..= result.report]
-                          fingerprint = \case Just (InjectedTest value) -> Just value; Just (RetainedTest value) -> Just value; _ -> Nothing
+                          fingerprint = \case Just (InjectedTest value) -> Just value; Just (RetainedTest value) -> Just value; (Nothing; Just ScriptCheck{}) -> Nothing
                           invoke invocation = do
                             let parsed :: (AE.Value -> AET.Parser value) -> Flow value
                                 parsed parser = either (reject . toText) pure $ AET.parseEither parser invocation.arguments
                             case invocation.name of
                               Policy.ReproduceIssue -> do
-                                progress >>= \case NeedsReproduction -> pass; _ -> reject "A regression is already frozen for this run"
+                                progress >>= \case NeedsReproduction -> pass; (Reproduced{}; Captured{}; Checked{}) -> reject "A regression is already frozen for this run"
                                 ReproductionInput script failureMessage patch <- parsed AE.parseJSON
                                 testPatch <- case patch of
                                   InlinePatch text -> pure text
@@ -552,7 +552,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                 io $ copy (checks </> toString receipt.checkId.toText </> "test.patch") "/run/monoscope-admitted-test.patch"
                                 case receipt.regression of
                                   Just RetainedTest{} -> pass
-                                  _ -> root $ "/usr/bin/git" :| ["-c", "core.hooksPath=/dev/null", "apply", "--recount", "--index", "/run/monoscope-admitted-test.patch"]
+                                  (Nothing; Just ScriptCheck{}; Just InjectedTest{}) -> root $ "/usr/bin/git" :| ["-c", "core.hooksPath=/dev/null", "apply", "--recount", "--index", "/run/monoscope-admitted-test.patch"]
                                 root $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
                                 advance $ Reproduced $ Reproduction artifact receipt
                                 pure $ describe "Regression reproduced and frozen. Source editing is now available." result
@@ -577,7 +577,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                   progress >>= \case
                                     Captured artifact captured -> pure (artifact, captured)
                                     Checked artifact captured _ _ -> pure (artifact, captured)
-                                    _ -> reject "Capture a candidate after reproduction first"
+                                    (NeedsReproduction; Reproduced{}) -> reject "Capture a candidate after reproduction first"
                                 advance $ Captured artifact captured
                                 assertWorkspace captured
                                 result <- comparison artifact.artifact $ (Base, checkout.base) :| [(Head, Native.candidateRevision captured)]
@@ -590,12 +590,12 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                   _ -> reject $ "Candidate verification did not establish a failing base and passing retained test.\n" <> decodeUtf8 (AE.encode result.report)
                                 advance $ Checked artifact captured baseline receipt
                                 pure $ describe "Frozen regression fails on base and passes on the candidate with its test retained." result
-                              _ -> reject "This tool is not a fix workflow operation"
+                              (Policy.RunRegression; Policy.QueryTelemetry; Policy.SubmitFix; Policy.SubmitAdmission; Policy.SubmitFixReview; Policy.RecallKnowledge; Policy.RememberKnowledge; Policy.ListProjectMemory; Policy.ReadProjectMemory; Policy.WriteProjectMemory; Policy.SubmitReview) -> reject "This tool is not a fix workflow operation"
                           finish summary = do
                             (captured, receipt) <-
                               progress >>= \case
                                 Checked _ captured _ receipt -> pure (captured, receipt)
-                                _ -> reject "Capture and verify a source fix before submission"
+                                (NeedsReproduction; Reproduced{}; Captured{}) -> reject "Capture and verify a source fix before submission"
                             assertWorkspace captured
                             either reject pure $ Native.candidateResult captured receipt summary
                        in FixActions invoke finish
@@ -613,14 +613,17 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                       case message of
                         Left _ -> pure $ Left "Review agent returned an invalid protocol message"
                         Right (Left receipt) -> do
-                          let phase = case receipt of Outbox.Phase _ -> True; _ -> False
-                              invalidates = case receipt of Outbox.Check _ -> True; Outbox.Phase _ -> True; _ -> False
+                          let phase = case receipt of Outbox.Phase _ -> True; (Outbox.Call{}; Outbox.Usage{}; Outbox.Allocation{}; Outbox.Check{}) -> False
+                              invalidates = case receipt of Outbox.Check _ -> True; Outbox.Phase _ -> True; (Outbox.Call{}; Outbox.Usage{}; Outbox.Allocation{}) -> False
                           if phase && remaining <= 0
                             then pure $ Left "Review agent exceeded its query budget"
                             else do
                               prepared <- case (task, receipt, guestSession) of
                                 (SourceTask{}, Outbox.Call{}, Nothing) -> fmap (const $ Just SourceReady) <$> runExceptT protectWorkspace
-                                _ -> pure $ Right guestSession
+                                (SourceTask{}, Outbox.Call{}, Just _) -> pure $ Right guestSession
+                                ((SourceTask{}, Outbox.Usage{}, _); (SourceTask{}, Outbox.Allocation{}, _); (SourceTask{}, Outbox.Check{}, _); (SourceTask{}, Outbox.Phase{}, _)) -> pure $ Right guestSession
+                                ((PatchTask{}, _, _); (SourcePatchTask{}, _, _)) -> pure $ Right guestSession
+                                ((AdvisoryTask{}, _, _); (FixTask{}, _, _); (AdmissionTask{}, _, _); (PeerTask{}, _, _)) -> pure $ Right guestSession
                               case prepared of
                                 Left failure -> writeMessage (Left failure :: Either Text ()) $> Left failure
                                 Right ready -> do
@@ -662,7 +665,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                               pure $ saved $> Just (FixReady $ FixSession identifier session.baseline NeedsReproduction)
                                           SourceTask{} -> pure $ Right $ Just SourceReady
                                           AdmissionTask{} -> pure $ Right $ Just AdmissionReady
-                                          _ -> pure $ Right Nothing
+                                          (PatchTask{}; SourcePatchTask{}) -> pure $ Right Nothing
+                                          (AdvisoryTask{}; PeerTask{}) -> pure $ Right Nothing
                                         either (pure . Left) (deliver checkout{Checkout.cache = Just session.cache, Checkout.guest = Just session.skills, Checkout.envelope = envelope}) initialized
                               case host of
                                 Nothing -> deliver checkout guestSession
@@ -682,7 +686,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                               response <- case (task, journal) of
                                 (AdvisoryTask _ request, Just outbox) -> runComparison request outbox verifierSession invocation
                                 (SourceTask request, Just outbox) -> runComparison request outbox verifierSession invocation
-                                _ -> pure $ Left "Regression requires an authorized source review"
+                                ((AdvisoryTask{}, Nothing); (SourceTask{}, Nothing)) -> pure $ Left "Regression requires an authorized source review"
+                                ((PatchTask{}, _); (SourcePatchTask{}, _)) -> pure $ Left "Regression requires an authorized source review"
+                                ((FixTask{}, _); (AdmissionTask{}, _); (PeerTask{}, _)) -> pure $ Left "Regression requires an authorized source review"
                               writeMessage response
                               receive supplied guestSession remaining submissions Nothing
                           | invocation.name `elem` [Policy.ReproduceIssue, Policy.ProposeFix, Policy.VerifyFix] && validTool invocation -> case (task, supplied, journal, guestSession) of
@@ -695,7 +701,11 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                   Left (Fatal failure) -> writeMessage (Left failure :: Either Text AE.Value) $> Left failure
                                   Left (ToolRejected failure) -> continue (Left failure)
                                   Right response -> continue (Right response)
-                              _ -> pure $ Left "Fix tools require an initialized issue-fix session"
+                              ((FixTask{}, _, _, Nothing); (FixTask{}, _, _, Just AdmissionReady); (FixTask{}, _, _, Just SourceReady)) -> pure $ Left "Fix tools require an initialized issue-fix session"
+                              (FixTask{}, Nothing, _, Just FixReady{}) -> pure $ Left "Fix tools require an initialized issue-fix session"
+                              (FixTask{}, Just _, Nothing, Just FixReady{}) -> pure $ Left "Fix tools require an initialized issue-fix session"
+                              ((PatchTask{}, _, _, _); (SourcePatchTask{}, _, _, _)) -> pure $ Left "Fix tools require an initialized issue-fix session"
+                              ((SourceTask{}, _, _, _); (AdvisoryTask{}, _, _, _); (AdmissionTask{}, _, _, _); (PeerTask{}, _, _, _)) -> pure $ Left "Fix tools require an initialized issue-fix session"
                           | remaining > 0 -> do
                               let parsed :: (AE.Value -> AET.Parser value) -> (value -> IO (Either Text AE.Value)) -> IO (Either Text AE.Value)
                                   parsed parser = whenRight (Left "Tool arguments do not match the host contract") (AET.parseEither parser invocation.arguments)
@@ -708,7 +718,7 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                     Policy.ListProjectMemory -> parsed Memory.parsePageQuery $ callbacks.knowledge . ProjectMemory . maybe Memory.List Memory.Search
                                     Policy.ReadProjectMemory -> property "pageId" $ callbacks.knowledge . ProjectMemory . Memory.Read
                                     Policy.WriteProjectMemory -> parsed AE.parseJSON $ callbacks.knowledge . ProjectMemory . Memory.Write
-                                    _ -> pure $ Left "This tool requires a native workflow handler"
+                                    (Policy.RunRegression; Policy.SubmitFix; Policy.ReproduceIssue; Policy.ProposeFix; Policy.VerifyFix; Policy.SubmitAdmission; Policy.SubmitFixReview; Policy.SubmitReview) -> pure $ Left "This tool requires a native workflow handler"
                               response <- pause remaining submissions guestSession $ if validTool invocation then request else pure $ Left "Tool is unavailable or its arguments violate the host contract"
                               writeMessage response
                               receive supplied guestSession (remaining - 1) submissions Nothing
@@ -727,7 +737,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                                 (FixTask _ request, Right rationale)
                                   | not (T.null $ T.strip rationale) -> for_ journal (\outbox -> Native.retainAdmission (Outbox.checksPath outbox) request artifact rationale) $> admitted
                                   | otherwise -> pure $ Left "Host admission requires a recorded rationale"
-                                _ -> pure admitted
+                                (FixTask{}, Left _) -> pure admitted
+                                ((PatchTask{}, _); (SourcePatchTask{}, _)) -> pure admitted
+                                ((SourceTask{}, _); (AdvisoryTask{}, _); (AdmissionTask{}, _); (PeerTask{}, _)) -> pure admitted
                               writeMessage saved
                               receive supplied guestSession (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
@@ -773,7 +785,8 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             checked <- validate raw
                             writeMessage $ void checked
                             receive supplied guestSession remaining (submissions - 1) $ either (const Nothing) (Just . Accepted (AE.String raw) (AE.String raw)) checked
-                          _ -> pure $ Left "Text submission requires a prepared patch comparison and remaining budget"
+                          (DraftText{}, _) -> pure $ Left "Text submission requires a prepared patch comparison and remaining budget"
+                          (StructuredDraft{}, _) -> pure $ Left "Text submission requires a prepared patch comparison and remaining budget"
                         Right (Right (Suspend ())) -> case (sessionDirectory, accepted) of
                           (Nothing, Nothing) -> writeMessage (Left "Session retention is not configured" :: Either Text ()) $> Left "Session retention is not configured"
                           _ -> do

@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Data.Effectful.GitPublication.Native (publish) where
 
 import Conduit (runConduit, (.|))
@@ -185,11 +187,11 @@ publish store executable token artifacts explanation context authorize = do
                   urls <- observed remote
                   if Map.member asset urls
                     then do
-                      let next = case progress of Uploading n pending | pending == asset -> Draft n; _ -> progress
+                      let next = case progress of Uploading n pending | pending == asset -> Draft n; (Prepared; Draft{}; Uploading{}; Finished{}) -> progress
                       save next
                       pure (remote, next)
                     else do
-                      case progress of Finished _ -> throwE StateChanged; Uploading _ _ -> throwE UploadUncertain; _ -> pass
+                      case progress of Finished _ -> throwE StateChanged; Uploading _ _ -> throwE UploadUncertain; (Prepared; Draft{}) -> pass
                       ensure PullRequestChanged $ remote.state == Open && remote.draft && normalized (fromMaybe "" remote.body) == normalized (body urls Nothing)
                       guardRemote $ if asset == Video then AttachVideo else AttachDiagram
                       save $ Uploading remote.number asset
@@ -202,7 +204,7 @@ publish store executable token artifacts explanation context authorize = do
               )
               (pr, journal.state)
               [Video, Diagram]
-          case progress of Finished _ -> permit Complete >> access; _ | final.state == Closed -> permit Complete >> access; _ -> guardRemote Complete
+          case progress of Finished _ -> permit Complete >> access; (Prepared; Draft{}; Uploading{}) | final.state == Closed -> permit Complete >> access; (Prepared; Draft{}; Uploading{}) -> guardRemote Complete
           urls <- observed final
           ensure UploadUncertain $ Map.size urls == 2
           ensure PullRequestChanged $ final.state == Open || final.merged
