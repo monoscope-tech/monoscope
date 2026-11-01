@@ -305,13 +305,13 @@ slackInteractionsHWithTools projectTools interaction = do
           AI.requireAgentAccess access principal.projectId
           triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView (SlackDashboardContext principal.projectId interaction.user_id interaction.channel_id Nothing) (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
           traceResp $ textResp "modal opened"
-        "/monoscope" | T.strip interaction.text == "search connect" -> do
+        _ | T.strip interaction.text == "search connect" -> do
           let consentUrl = T.dropWhileEnd (== '/') authCtx.env.hostUrl <> "/p/" <> principal.projectId.toText <> "/slack/evidence/" <> toUriStr interaction.user_id
-          traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("<" <> consentUrl <> "|Connect your own Slack search access>. Use `/monoscope search disconnect` to remove it. This connection belongs to your account.")]
-        "/monoscope" | T.strip interaction.text == "search disconnect" -> do
+          traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("<" <> consentUrl <> "|Connect your own Slack search access>. Use `" <> interaction.command <> " search disconnect` to remove it. This connection belongs to your account.")]
+        _ | T.strip interaction.text == "search disconnect" -> do
           Integrations.revokeSlackEvidence principal.projectId principal.userId
           traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("Your Slack search access is disconnected. The project's Slack app remains connected." :: Text)]
-        "/monoscope" | T.strip interaction.text `elem` ["incidents on", "incidents off"] -> do
+        _ | T.strip interaction.text `elem` ["incidents on", "incidents off"] -> do
           permission <- ProjectMembers.getUserPermission principal.projectId principal.userId
           unless (permission >= Just ProjectMembers.PEdit) $ throwError err403
           AI.requireAgentAccess access principal.projectId
