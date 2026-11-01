@@ -2,6 +2,7 @@ module Pages.ErrorPatternsSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Effectful.Notify (Notification (..), SlackData (..))
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, addUTCTime, zonedTimeToUTC)
 import Data.Vector qualified as V
@@ -70,10 +71,10 @@ spec = around withTestResources $ describe "Error patterns" do
       `shouldBe` [("Cannot read properties of null", True), (undefinedMsg, False), ("user is not defined", False)]
     dbQuery @_ @(Text, Int) tr [sql| SELECT e.error_type, sum(h.event_count)::int FROM apis.error_hourly_stats h JOIN apis.error_patterns e ON e.id = h.error_id WHERE h.project_id = ? AND e.error_type IN ('TypeError', 'ConnectionRefusedError', 'ConnectionError') AND e.message NOT LIKE '%null%' GROUP BY 1 ORDER BY 1 |] (Only testPid)
       `shouldReturn` [("ConnectionError", 2), ("ConnectionRefusedError", 1), ("TypeError", 2)]
-    runTestBg frozenTime tr (ErrorPatterns.getErrorPatternByHash testPid (EF.computeErrorFingerprint testPid.toText (Just "test-service") (Just "POST /api/data") EF.RNodejs "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" dbStack)) >>= (`shouldSatisfy` isJust)
+    bg tr (ErrorPatterns.getErrorPatternByHash testPid (EF.computeErrorFingerprint testPid.toText (Just "test-service") (Just "POST /api/data") EF.RNodejs "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" dbStack)) >>= (`shouldSatisfy` isJust)
     io <- dbQuery @_ @(Text, Maybe ErrorPatterns.ErrorPatternId) tr [sql| SELECT hash, canonical_id FROM apis.error_patterns WHERE project_id = ? AND error_type = 'IOException' |] (Only testPid)
     (length io, length (filter (isNothing . snd) io)) `shouldBe` (4, 1)
-    length . catMaybes <$> forM io (\(h, _) -> runTestBg frozenTime tr (Issues.selectIssueByHash testPid h Issues.AnyIssue)) `shouldReturn` 1
+    length . catMaybes <$> forM io (\(h, _) -> bg tr (Issues.selectIssueByHash testPid h Issues.AnyIssue)) `shouldReturn` 1
 
     -- The snapshot carries release, handled, environment, client, geo and only safe attachments.
     ctx <- patternOf tr "ContextError"
@@ -81,7 +82,7 @@ spec = around withTestResources $ describe "Error patterns" do
     (e.release, e.environment, e.handled, e.mechanism) `shouldBe` (Just "26.3.1", Just "production", Just False, Just ErrorPatterns.CMExceptionEvent)
     (e.browser, e.os, e.device, e.userAgent) `shouldBe` (Just "Chrome", Just "Windows", Just "Desktop", Just ua)
     (e.geoCountry, e.geoCity, e.threadName, e.attachments) `shouldBe` (Just "US", Just "Santa Clara", Just "main", Just ["https://cdn.example.com/shot.png"])
-    void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternAnalysis ctx.id "The cart line has no price" "data"
+    void $ bg tr $ ErrorPatterns.updateErrorPatternAnalysis ctx.id "The cart line has no price" "data"
     contextEvent "26.3.2" (-14)
     extract tr
     ((.lastRelease) &&& fmap zonedTimeToUTC . (.lastReleaseSince)) <$> patternOf tr "ContextError" `shouldReturn` (Just "26.3.2", Just (at (-14)))
@@ -102,17 +103,16 @@ spec = around withTestResources $ describe "Error patterns" do
 
     -- Repeat upserts must not rewrite toastable fields (157 GB of TOAST bloat in prod); a regression refreshes them.
     let mutated = (def :: ErrorPatterns.ATError){ErrorPatterns.when = frozenTime, ErrorPatterns.errorType = typeErr.errorType, ErrorPatterns.message = "MUTATED", ErrorPatterns.stackTrace = typeErr.stacktrace, ErrorPatterns.hash = typeErr.hash, ErrorPatterns.parentHash = Just "mutated-parent", ErrorPatterns.isFramework = not typeErr.isFramework}
-        upsert = void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns testPid (V.singleton mutated) frozenTime
-    upsert
+        upsertAt err t = void $ bg tr $ ErrorPatterns.batchUpsertErrorPatterns testPid (V.singleton err) t
+    upsertAt mutated frozenTime
     ((.message) &&& (.parentHash)) <$> byId tr typeErr.id `shouldReturn` (typeErr.message, typeErr.parentHash)
-    void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState typeErr.id ESResolved frozenTime
-    upsert
+    void $ bg tr $ ErrorPatterns.updateErrorPatternState typeErr.id ESResolved frozenTime
+    upsertAt mutated frozenTime
     ((.message) &&& (.state)) <$> byId tr typeErr.id `shouldReturn` ("MUTATED", ESRegressed)
 
     -- Trace-less records stored trace id '' and sent the detail page on a 40-60s scan for trace ''.
     let traceless = (mkErr "EmptyTraceError" Nothing "empty-trace-hash" "boom"){ErrorPatterns.traceId = Just ""}
-        upsertAt err t = void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns testPid (V.singleton err) t
-        refs = runTestBg frozenTime tr (ErrorPatterns.selectErrorTraceRefs testPid "empty-trace-hash") >>= maybe (fail "no refs") pure
+        refs = bg tr (ErrorPatterns.selectErrorTraceRefs testPid "empty-trace-hash") >>= maybe (fail "no refs") pure
         refPairs r = ((r.firstTraceId, r.firstTraceAt), (r.recentTraceId, r.recentTraceAt))
     upsertAt traceless frozenTime
     ((.firstTraceId) &&& (.recentTraceId)) <$> byHash tr "empty-trace-hash" `shouldReturn` (Nothing, Nothing)
@@ -124,7 +124,7 @@ spec = around withTestResources $ describe "Error patterns" do
     refPairs <$> refs `shouldReturn` ((Just "abc123", Just frozenTime), (Just "def456", Just (at 60)))
 
     -- The hourly job schedules baselines and spike detection for projects with fresh telemetry.
-    runTestBg frozenTime tr $ BackgroundJobs.runHourlyJob frozenTime 0
+    bg tr $ BackgroundJobs.runHourlyJob frozenTime 0
     let errorJob = \case BackgroundJobs.ErrorBaselineCalculation p -> [("baseline" :: Text, p)]; BackgroundJobs.ErrorSpikeDetection p -> [("spike", p)]; _ -> []
     sort . filter ((== testPid) . snd) . concatMap (errorJob . snd) . V.toList <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` [("baseline", testPid), ("spike", testPid)]
     void $ runBackgroundJobsWhere frozenTime tr.trATCtx (not . null . errorJob)
@@ -172,7 +172,7 @@ spec = around withTestResources $ describe "Error patterns" do
 
     -- Silence one minute short of the threshold decays counts but never infers resolution;
     -- each window then sheds the one below it (5m -= 1m, 1h -= 5m, 24h -= 1h).
-    let tick = runTestBg frozenTime tr (ErrorPatterns.updateOccurrenceCountsBatch (V.singleton testPid) frozenTime) >> current
+    let tick = bg tr (ErrorPatterns.updateOccurrenceCountsBatch (V.singleton testPid) frozenTime) >> current
         counts p = (p.state, p.occurrences_1m, p.occurrences_5m, p.occurrences_1h, p.occurrences_24h, p.quietMinutes)
     dbExec tr [sql| UPDATE apis.error_patterns SET quiet_minutes = resolution_threshold_minutes - 1, state = 'ongoing', occurrences_1m = 0 WHERE id = ? |] (Only p0.id)
     ((.state) &&& (.occurrences_1m)) <$> tick `shouldReturn` (ESOngoing, 0)
@@ -181,11 +181,11 @@ spec = around withTestResources $ describe "Error patterns" do
 
   it "spikes: robust baselines escalate once, wake archived issues, de-escalate, skip ignored and re-escalate after regression" \tr -> do
     let uid = (Servant.getResponse tr.trSessAndHeader).user.id
-        hourly t xs = void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats testPid t (V.fromList xs)
+        hourly t xs = void $ bg tr $ ErrorPatterns.upsertErrorPatternHourlyStats testPid t (V.fromList xs)
         detect t = runTestBg t tr $ BackgroundJobs.detectErrorSpikes testPid
-        rate p = runTestBg frozenTime tr (ErrorPatterns.getErrorPatternsWithCurrentRates testPid frozenTime) >>= maybe (fail "no rate") pure . find ((== p.id) . (.errorId))
+        rate p = bg tr (ErrorPatterns.getErrorPatternsWithCurrentRates testPid frozenTime) >>= maybe (fail "no rate") pure . find ((== p.id) . (.errorId))
         stateOf p = (.state) <$> byId tr p.id
-        openIssue p = runTestBg frozenTime tr (Issues.selectIssueByHash testPid p.hash (Issues.OpenOfType Issues.RuntimeException))
+        openIssue p = bg tr (Issues.selectIssueByHash testPid p.hash (Issues.OpenOfType Issues.RuntimeException))
         spikeOver r k = ceiling (fromMaybe 0 r.baselineMean + 3 * fromMaybe 0 r.baselineStddev + k) :: Int
     [a, b, c, d] <- seed tr "SpikeError" Nothing [("spike-" <> x, "spike " <> x) | x <- ["a", "b", "c", "d"]]
     -- b's last ten hours are 5000/h outliers.
@@ -193,7 +193,7 @@ spec = around withTestResources $ describe "Error patterns" do
       hourly (at (fromIntegral h * 3600))
         $ [(a.hash, 600 + (h `mod` 7) * 10, 10), (b.hash, if h <= -11 then 100 + (h `mod` 10) * 10 else 5000, 5)]
         <> [(p.hash, 500 + (h `mod` 5) * 10, 10) | p <- [c, d]]
-    runTestBg frozenTime tr $ BackgroundJobs.calculateErrorBaselines testPid
+    bg tr $ BackgroundJobs.calculateErrorBaselines testPid
     pa <- byId tr a.id
     (pa.baselineState, isJust pa.baselineErrorRateStddev, pa.baselineSamples >= 24) `shouldBe` (BSEstablished, True, True)
     (.baselineErrorRateMean) <$> byId tr b.id >>= (`shouldSatisfy` maybe False (\m -> m > 80 && m < 250))
@@ -212,7 +212,7 @@ spec = around withTestResources $ describe "Error patterns" do
     -- One hour: a re-spikes under an archive-until-escalating; c has a flat baseline (stddev 0)
     -- and must still clear the absolute floor; d spikes alongside; b is ignored.
     iid <- maybe (fail "no issue for a") (pure . (.id)) =<< openIssue a
-    void $ runTestBg frozenTime tr $ Issues.setArchiveState testPid [iid] (Just (frozenTime, Issues.ArchiveUntilEscalating))
+    void $ bg tr $ Issues.setArchiveState testPid [iid] (Just (frozenTime, Issues.ArchiveUntilEscalating))
     dbExec tr [sql| UPDATE apis.error_patterns SET baseline_error_rate_stddev = 0, baseline_error_rate_mean = 100 WHERE id = ? |] (Only c.id)
     dbExec tr [sql| UPDATE apis.error_patterns SET is_ignored = true WHERE id = ? |] (Only b.id)
     rd <- rate d
@@ -256,20 +256,20 @@ spec = around withTestResources $ describe "Error patterns" do
     let typeEmb = [0.9, 0.3, 0.1] :: [Float]
         embed ty emb = dbExec tr [sql| UPDATE apis.error_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE project_id = ? AND error_type = ? |] (PGArray emb, testPid, ty :: Text)
         canonicalOf i = (.canonicalId) <$> byId tr i
-        canonicalIds = map fst <$> runTestBg frozenTime tr (PatternMerge.getCanonicalPatterns @ErrorPatterns.ErrorPatternId testPid)
+        canonicals = bg tr (PatternMerge.getCanonicalPatterns @ErrorPatterns.ErrorPatternId testPid)
     embed "TypeError" typeEmb
     embed "ConnectionRefusedError" [0.1, 0.8, 0.4]
     [canonId, childId] <- map fromOnly <$> dbQuery tr [sql| SELECT id FROM apis.error_patterns WHERE project_id = ? AND error_type = 'TypeError' ORDER BY created_at, id |] (Only testPid)
-    fmap snd . find ((== canonId) . fst) <$> runTestBg frozenTime tr (PatternMerge.getCanonicalPatterns @ErrorPatterns.ErrorPatternId testPid) `shouldReturn` Just (VU.fromList typeEmb)
-    void $ runTestBg frozenTime tr $ PatternMerge.assignPatternsToCanonical [(childId, canonId)]
+    lookup canonId <$> canonicals `shouldReturn` Just (VU.fromList typeEmb)
+    void $ bg tr $ PatternMerge.assignPatternsToCanonical [(childId, canonId)]
     canonicalOf childId `shouldReturn` Just canonId
     dbOne tr [sql| SELECT count(*)::int FROM apis.error_patterns WHERE project_id = ? AND error_type = 'ConnectionRefusedError' AND canonical_id IS NULL |] (Only testPid) `shouldReturn` (1 :: Int)
     -- An unmerge restores the pattern and fences it off from re-embedding and canonical candidacy.
     listed <- length <$> patterns tr testPid
-    void $ runTestBg frozenTime tr $ PatternMerge.unmergePattern testPid childId
+    void $ bg tr $ PatternMerge.unmergePattern testPid childId
     length <$> patterns tr testPid `shouldReturn` listed + 1
-    unembedded <- map fst <$> runTestBg frozenTime tr (PatternMerge.getUnembeddedPatterns @ErrorPatterns.ErrorPatternId testPid)
-    (childId `elem` unembedded,) . (childId `elem`) <$> canonicalIds `shouldReturn` (False, False)
+    unembedded <- map fst <$> bg tr (PatternMerge.getUnembeddedPatterns @ErrorPatterns.ErrorPatternId testPid)
+    (childId `elem` unembedded,) . (childId `elem`) . map fst <$> canonicals `shouldReturn` (False, False)
 
     -- Bulk merge folds the newer error into the oldest and archives its issue. One extraction pass can stamp
     -- both rows with the same created_at, so "oldest" must come from first events (seed-dependent failure, 2026-09-26).
@@ -283,24 +283,24 @@ spec = around withTestResources $ describe "Error patterns" do
 
     -- A pattern merged after its issue exists is silent on every sweep path (canonical_id once gated only one).
     [canon, dupe] <- seed tr "MergeSilenceError" (Just "silence-shape") [("silence-canon", "canonical form"), ("silence-dupe", "duplicate form")]
-    void $ runTestBg frozenTime tr $ forM_ [canon, dupe] (Issues.insertIssue <=< Issues.createNewErrorIssue testPid)
+    void $ bg tr $ forM_ [canon, dupe] (Issues.insertIssue <=< Issues.createNewErrorIssue testPid)
     dbExec tr [sql| UPDATE apis.error_patterns SET last_notified_at = NULL, subscribed = TRUE, state = 'new' WHERE id IN (?, ?) |] (canon.id, dupe.id)
-    void $ runTestBg frozenTime tr $ PatternMerge.setCanonicalId dupe.id canon.id
+    void $ bg tr $ PatternMerge.setCanonicalId dupe.id canon.id
     fst <$> runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx (BackgroundJobs.notifyErrorSubscriptions testPid (V.singleton dupe.hash)) `shouldReturn` []
-    rates <- map (.hash) <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatternsWithCurrentRates testPid frozenTime)
+    rates <- map (.hash) <$> bg tr (ErrorPatterns.getErrorPatternsWithCurrentRates testPid frozenTime)
     ("silence-dupe" `elem` rates, "silence-canon" `elem` rates) `shouldBe` (False, True)
 
     -- Reverting an applied group unassigns its members and fences them: a merge the model disowned is not re-litigated.
     [rCanon, rDupe] <- seed tr "RevertError" (Just "revert-shape") [("revert-canon", "canonical form"), ("revert-dupe", "duplicate form")]
-    void $ runTestBg frozenTime tr $ PatternMerge.setCanonicalId rDupe.id rCanon.id
-    void $ runTestBg frozenTime tr $ PatternMerge.revertErrorGroupApply testPid "revert-shape" (V.singleton rCanon.id)
+    void $ bg tr $ PatternMerge.setCanonicalId rDupe.id rCanon.id
+    void $ bg tr $ PatternMerge.revertErrorGroupApply testPid "revert-shape" (V.singleton rCanon.id)
     ((.canonicalId) &&& (.mergeOverride)) <$> byId tr rDupe.id `shouldReturn` (Nothing, True)
-    void $ runTestBg frozenTime tr $ PatternMerge.setCanonicalId rDupe.id rCanon.id
+    void $ bg tr $ PatternMerge.setCanonicalId rDupe.id rCanon.id
     canonicalOf rDupe.id `shouldReturn` Nothing
 
     -- The review cursor restarts at the end: a shape that gains members later must be re-examined.
-    let cursor = runTestBg frozenTime tr $ PatternMerge.getReviewCursor testPid
-        setCursor = void . runTestBg frozenTime tr . PatternMerge.setReviewCursor testPid
+    let cursor = bg tr $ PatternMerge.getReviewCursor testPid
+        setCursor = void . bg tr . PatternMerge.setReviewCursor testPid
     cursor `shouldReturn` ""
     (setCursor "shape-042" >> cursor) `shouldReturn` "shape-042"
     (setCursor "" >> cursor) `shouldReturn` ""
@@ -316,16 +316,15 @@ spec = around withTestResources $ describe "Error patterns" do
             VALUES (?, ?, 'mh', 2, 'param', 2, TRUE, NOW(), ARRAY[?]::uuid[]) |]
       (testPid, shapeKey, pCanon.id)
     shapeOf "90770E7BA9FD" `shouldBe` shapeKey
-    runTestBg frozenTime tr (PatternMerge.canonicalForAppliedShape testPid shapeKey Nothing) `shouldReturn` Just pCanon.id
-    runTestBg frozenTime tr $ BackgroundJobs.processProjectErrors testPid (V.singleton (mkErr "PreMergeError" (Just shapeKey) "premerge-next" (msgFor "90770E7BA9FD"))) frozenTime
+    bg tr (PatternMerge.canonicalForAppliedShape testPid shapeKey Nothing) `shouldReturn` Just pCanon.id
+    bg tr $ BackgroundJobs.processProjectErrors testPid (V.singleton (mkErr "PreMergeError" (Just shapeKey) "premerge-next" (msgFor "90770E7BA9FD"))) frozenTime
     (canonicalOf . (.id) =<< byHash tr "premerge-next") `shouldReturn` Just pCanon.id
-    runTestBg frozenTime tr (Issues.selectIssueByHash testPid "premerge-next" Issues.AnyIssue) >>= (`shouldSatisfy` isNothing)
+    bg tr (Issues.selectIssueByHash testPid "premerge-next" Issues.AnyIssue) >>= (`shouldSatisfy` isNothing)
 
   it "notifications: Slack and Discord alerts thread their reminders, and a regression alerts again" \tr -> do
-    dbExec tr [sql| INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token) VALUES (?, 'T_TEST', 'C_TEST', 'TestTeam', 'xoxb-test') ON CONFLICT (project_id) DO UPDATE SET channel_id = 'C_TEST', bot_token = 'xoxb-test' |] (Only testPid)
+    seedSlackChannel tr
     dbExec tr [sql| INSERT INTO apis.discord (project_id, guild_id) VALUES (?, 'G_TEST') ON CONFLICT (project_id) DO UPDATE SET guild_id = 'G_TEST' |] (Only testPid)
-    dbExec tr [sql| UPDATE projects.teams SET slack_channels = ARRAY['C_TEST']::text[], discord_channels = ARRAY['DC_TEST']::text[], disabled_channels = '{}' WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL |] (Only testPid)
-    dbExec tr [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |] (Only testPid)
+    dbExec tr [sql| UPDATE projects.teams SET discord_channels = ARRAY['DC_TEST']::text[] WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL |] (Only testPid)
     apiKey <- createTestAPIKey tr testPid "notify-key"
     let emit dt = ingestTraceWithException tr apiKey "POST /api/notify" "HardenNotifyError" "notify threading probe" "HardenNotifyError: boom\n    at Handler.run (/app/src/handler.js:7:3)" (at dt) >> extract tr
     emit 400
@@ -360,13 +359,14 @@ spec = around withTestResources $ describe "Error patterns" do
     roots `shouldReturn` roots1
     discordId `shouldReturn` discord1
 
-    void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState pat.id ESResolved frozenTime
+    void $ bg tr $ ErrorPatterns.updateErrorPatternState pat.id ESResolved frozenTime
     emit 500
     (.state) <$> byId tr pat.id `shouldReturn` ESRegressed
     dbExec tr [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE id = ? |] (Only pat.id)
-    fst <$> runTestBackgroundWithNotifications (at 10800) tr.trLogger tr.trATCtx (BackgroundJobs.notifyErrorSubscriptions testPid (V.singleton pat.hash)) >>= (`shouldSatisfy` not . null)
+    notifyAt (at 10800) >>= (`shouldSatisfy` not . null)
   where
     at = (`addUTCTime` frozenTime)
+    bg tr = runTestBg frozenTime tr
     -- LLM-backed jobs read cached responses keyed by their inputs; only the grouping lifecycle runs them.
     quiet = \case
       BackgroundJobs.PatternEmbeddingAndMerge{} -> False
@@ -374,15 +374,15 @@ spec = around withTestResources $ describe "Error patterns" do
       BackgroundJobs.ErrorGroupReview{} -> False
       _ -> True
     extract tr = drainExtractionWorker tr >> void (runBackgroundJobsWhere frozenTime tr.trATCtx quiet)
-    patterns tr pid = runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 200 0
+    patterns tr pid = bg tr $ ErrorPatterns.getErrorPatterns pid Nothing 200 0
     patternOf tr ty = patterns tr testPid >>= maybe (fail $ "no " <> toString ty) pure . find ((== ty) . (.errorType))
-    byId tr i = runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById i) >>= maybe (fail "pattern vanished") pure
-    byHash tr h = runTestBg frozenTime tr (ErrorPatterns.getErrorPatternByHash testPid h) >>= maybe (fail $ "no pattern " <> toString h) pure
-    issueOf tr h = runTestBg frozenTime tr (Issues.selectIssueByHash testPid h Issues.AnyIssue) >>= maybe (fail "no issue") pure
-    issueById tr i = runTestBg frozenTime tr (Issues.selectIssueById testPid i) >>= maybe (fail "issue vanished") pure
+    byId tr i = bg tr (ErrorPatterns.getErrorPatternById i) >>= maybe (fail "pattern vanished") pure
+    byHash tr h = bg tr (ErrorPatterns.getErrorPatternByHash testPid h) >>= maybe (fail $ "no pattern " <> toString h) pure
+    issueOf tr h = bg tr (Issues.selectIssueByHash testPid h Issues.AnyIssue) >>= maybe (fail "no issue") pure
+    issueById tr i = bg tr (Issues.selectIssueById testPid i) >>= maybe (fail "issue vanished") pure
     mkErr ty shape h m = (def :: ErrorPatterns.ATError){ErrorPatterns.projectId = Just testPid, ErrorPatterns.when = frozenTime, ErrorPatterns.errorType = ty, ErrorPatterns.rootErrorType = ty, ErrorPatterns.message = m, ErrorPatterns.rootErrorMessage = m, ErrorPatterns.stackTrace = "", ErrorPatterns.hash = h, ErrorPatterns.shapeHash = shape}
     seed tr ty shape hms = do
-      void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns testPid (V.fromList [mkErr ty shape h m | (h, m) <- hms]) frozenTime
+      void $ bg tr $ ErrorPatterns.batchUpsertErrorPatterns testPid (V.fromList [mkErr ty shape h m | (h, m) <- hms]) frozenTime
       forM hms (byHash tr . fst)
     detail tr pid iid = (\(PageCtx _ x) -> x) <$> call tr (Pages.Issues.issueDetailGetH pid iid Nothing Nothing Nothing Nothing Nothing)
     found = \case
