@@ -2,6 +2,86 @@ import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { sql } from './helpers';
 
+test('inspector failures explain recovery and release loading feedback without losing drafts', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID();
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Inspector recovery');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
+       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, title) VALUES ('${pid}', '${conversation}', 'web', 'Loading review');
+       INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content) VALUES ('${pid}', '${conversation}', 'assistant', 'Ready to inspect the retained evidence.');
+       INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content) VALUES
+         ('${pid}', '${conversation}', 'first', 'First evidence', 'First retained evidence.'),
+         ('${pid}', '${conversation}', 'second', 'Second evidence', 'Second retained evidence.');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }, { name: 'isSidebarClosed', value: 'true', url: baseURL! }]);
+    const path = `/p/${pid}/ai/${conversation}`;
+    const details = (url: URL) => url.pathname === path && url.searchParams.get('doc') === 'second';
+    for (const [width, theme] of [[1280, 'light'], [320, 'dark']] as const) for (const failure of ['server', 'network']) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(path);
+      await page.evaluate(value => document.body.dataset.theme = value, theme);
+      const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
+      await composer.fill('Keep this draft while details recover.');
+      const navigation = page.getByRole('navigation', { name: 'Artifacts', exact: true });
+      const source = navigation.getByRole('link', { name: 'Second evidence', exact: true });
+      const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
+      if (width === 1280) {
+        await navigation.getByRole('link', { name: 'First evidence', exact: true }).press('Enter');
+        await expect(inspector.getByText('First retained evidence.', { exact: true })).toBeVisible();
+      }
+      await page.route(details, route => failure === 'server'
+        ? route.fulfill({ status: 503, contentType: 'text/html', body: 'Temporarily unavailable' })
+        : route.abort('failed'));
+      await source.press('Enter');
+      const alert = page.getByRole('alert').filter({ hasText: 'Could not load the details. Try again.' });
+      await expect.soft(alert, `${failure} failure provides recovery feedback at ${width}px`).toBeVisible({ timeout: 1000 });
+      await expect.soft(source).not.toHaveAttribute('aria-busy', 'true', { timeout: 1000 });
+      await expect.soft(page.locator('#htmx-progress')).toHaveCSS('opacity', '0', { timeout: 1000 });
+      if (width === 1280) await expect(inspector.getByText('First retained evidence.', { exact: true })).toBeVisible();
+      else await expect(composer).toBeVisible();
+      await expect(composer).toHaveValue('Keep this draft while details recover.');
+      await expect(alert).toHaveCSS('opacity', '1');
+      await page.screenshot({ path: testInfo.outputPath(`inspector-${failure}-${theme}-${width}.png`) });
+      if (await alert.count()) await alert.getByRole('button', { name: 'Dismiss notification', exact: true }).click();
+      await page.unroute(details);
+      let release!: () => void, started!: () => void;
+      const pending = new Promise<void>(resolve => release = resolve), requested = new Promise<void>(resolve => started = resolve);
+      await page.route(details, async route => { started(); await pending; await route.continue(); });
+      try {
+        await source.press('Enter');
+        await requested;
+        await expect.soft(source).toHaveAttribute('aria-busy', 'true');
+        await expect.soft(page.locator('#htmx-progress')).toHaveCSS('opacity', '1');
+        if (width === 1280) {
+          await page.getByRole('button', { name: 'Actions for Loading review', exact: true }).press('Enter');
+          const dismissed = page.waitForEvent('dialog').then(dialog => dialog.dismiss());
+          await page.getByRole('button', { name: 'Delete chat', exact: true }).click();
+          await dismissed;
+          await expect.soft(page.locator('#htmx-progress'), 'Cancelling a confirmation keeps the other request loading').toHaveCSS('opacity', '1');
+        }
+        await expect(composer).toHaveValue('Keep this draft while details recover.');
+        await page.screenshot({ path: testInfo.outputPath(`inspector-retry-${failure}-${theme}-${width}.png`) });
+      } finally {
+        release();
+      }
+      await expect(inspector.getByText('Second retained evidence.', { exact: true })).toBeVisible();
+      await expect.soft(page.locator('#htmx-progress')).toHaveCSS('opacity', '0', { timeout: 1000 });
+      await inspector.focus();
+      await page.keyboard.press('Escape');
+      await expect(inspector).toBeHidden();
+      await expect.soft(source).not.toHaveAttribute('aria-busy', 'true');
+      await expect.soft(page.locator('#htmx-progress')).toHaveCSS('opacity', '0', { timeout: 1000 });
+      await expect(composer).toBeFocused();
+      await expect(composer).toHaveValue('Keep this draft while details recover.');
+      await expect(page).toHaveURL(path);
+      await page.unroute(details);
+    }
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
 test('artifact contents navigate inside the inspector when the conversation has the same heading', async ({ page, baseURL }, testInfo) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID();
   const content = `## Evidence\n\n[Skip to findings](#findings) [Read source](https://example.test/source#findings) [Other page](/manual#findings)\n\n${'Measured checkout evidence.\n\n'.repeat(90)}## Findings\n\nArtifact findings.`;

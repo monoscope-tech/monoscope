@@ -583,7 +583,14 @@ threadPageGetH pid convId docM runM hxTarget = do
         threadHref = foldMap (threadUrl projectId) activeConversationIdM
         docHref doc = threadHref <> "?doc=" <> toText doc.key
         (openBody, openToc) = maybe (mempty, []) (renderMarkdownTocWithPrefix $ "ai-document-" <> convId.toText <> "-") $ openDoc >>= (.content)
-        inspectorAttrs href = [hxGet_ href, hxTarget_ "#ai-inspector", hxSelect_ "#ai-inspector", hxSwap_ "outerHTML"]
+        inspectorAttrs href =
+          [ hxGet_ href
+          , hxTarget_ "#ai-inspector"
+          , hxSelect_ "#ai-inspector"
+          , hxSwap_ "outerHTML"
+          , [__|on htmx:response:error or htmx:error
+                  send errorToast(value: ['Could not load the details. Try again.']) to <body/>|]
+          ]
         artifactLinkAttrs href = let url = threadHref <> href in href_ url : inspectorAttrs url
         navLink_ href = a_ ([href_ href, class_ "flex max-w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-textWeak hover:bg-fillHover hover:text-textStrong"] <> inspectorAttrs href)
 

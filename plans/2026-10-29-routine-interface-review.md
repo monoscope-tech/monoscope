@@ -211,3 +211,55 @@ The temporary live-server adapter is removed; both new browser regressions remai
 This review does not establish whole-branch signoff or live Slack acceptance.
 
 Verdict for this scoped revision: Approve.
+
+
+## Inspector request recovery (1 November)
+
+The permanent browser regression first reproduced missing request-failure feedback and
+loading indicators that remained active after a dropped connection. The fix retains
+the existing inspector, error toast, and progress bar.
+
+| Severity | Location | Before | After |
+| --- | --- | --- | --- |
+| MEDIUM | `src/Pages/AIThreads.hs`, `inspectorAttrs` | Failed detail requests provided no recovery message | A colocated hyperscript listener sends the existing error toast |
+| MEDIUM | `web-components/src/page-chrome.ts`, request lifecycle | Failed fetches skipped cleanup; detached sources missed body listeners | Document-level finalization clears busy state and loading feedback |
+| MEDIUM | `web-components/src/page-chrome.ts`, progress tracking | Cancelling a confirmation could decrement another pending request | A set tracks the actual request contexts and removes only issued requests |
+
+| Domain | Evidence | Result |
+| --- | --- | --- |
+| Accessibility | Alert role, dismiss button, source busy state, keyboard retry, Escape and restored composer focus | Covered by the browser regression; VoiceOver remains unverified |
+| Layout | 1280px light and 320px dark request failures and pending retries | Conversation and existing artifact remain available during failures |
+| Writing | “Could not load the details. Try again.” | Gives the next action without exposing implementation details |
+| Typography | Existing toast and conversation text | No typography change |
+| Colors | Existing semantic toast/progress tokens in both themes | No new palette or hard-coded colors |
+| UI | Server 503, dropped connection, delayed retry, cancelled confirmation, draft retention | Four failure/retry scenarios supplement the six existing browser cases |
+
+The first complete run passed all seven browser cases in 30.4 seconds against an
+isolated live application and database. The saved log is
+`scripts/local/inspector-requests-green.log`; the failing-first log is
+`scripts/local/inspector-requests-red.log`. This is fixture-backed application acceptance,
+not live Slack acceptance. A follow-up capture checks full toast opacity before taking
+the screenshot, so its appearance is not judged midway through the 180ms entrance.
+That final run passes all seven cases in 23.1 seconds; its log is
+`scripts/local/inspector-requests-final-green.log`. Final desktop and mobile captures
+are saved under `scripts/local/inspector-request-review/`. The temporary live-server
+adapter is removed; the permanent browser regression remains.
+
+The Haskell change adds no domain state, type weakening, IO, suppression, or new effect.
+Distill and evasion review found no material issue in this scoped patch. Locality review
+keeps failure feedback on the initiating links. The existing shared JavaScript lifecycle
+manager retains request identity across concurrent requests, cancelled confirmations,
+failed fetches, and detached source elements. Native CSS indicators alone do not preserve
+that shared lifecycle contract. No second loading subsystem or global error handler was added.
+
+| Candidate | Decision |
+| --- | --- |
+| Add a new inspector error modal or retry state | Rejected: the existing toast and original link provide recovery |
+| Replace request tracking with a simple counter | Rejected: cancelled confirmations finalize without issuing a request |
+| Change the catalog's existing 15px text after the detector advisory | Outside this fix; no suppression added |
+| Change `SFMono-Regular` in the existing multiline code tooltip | Retain the technical monospace fallback; unrelated to request lifecycle; no suppression added |
+
+The detector reports only the unchanged catalog type-size advisory. Pinned Fourmolu
+and HLint passed the changed Haskell markup. The Vite watcher rebuilt the frontend.
+Physical-device and assistive-technology acceptance, final whole-branch reviews, and
+release signoff remain open.
