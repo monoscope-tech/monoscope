@@ -39,7 +39,6 @@ import Pkg.TestUtils
 import Servant (NoContent (..))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx, ApiPrincipal (..), effToServantHandlerTestHTTP)
-import Test.Hspec
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
 import Web.Auth (resolveApiKeyProject)

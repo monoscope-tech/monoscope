@@ -31,7 +31,6 @@ import Network.HTTP.Types.Status (statusCode)
 import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
 import System.Process qualified as Proc
-import Test.Hspec
 import UnliftIO.Exception (tryAny)
 
 

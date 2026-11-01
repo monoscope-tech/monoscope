@@ -46,7 +46,6 @@ import Servant.API (ResponseHeader (..), getResponse, lookupResponseHeader)
 import Servant.Server qualified as ServantS
 import System.Config qualified
 import System.IO.Error (userError)
-import Test.Hspec
 import UnliftIO.Exception (bracket, throwIO)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC

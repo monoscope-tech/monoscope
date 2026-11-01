@@ -2,7 +2,6 @@ module Pages.MonitorsSpec (spec) where
 
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors
-import Test.Hspec
 
 import Data.Text qualified as T
 import Data.UUID qualified as UUID

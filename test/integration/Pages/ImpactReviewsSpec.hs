@@ -94,7 +94,6 @@ import System.Posix.Files qualified as Posix
 import System.Posix.Signals qualified as Signal
 import System.Process.Typed (createPipe, getPid, getStdin, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, setWorkingDir, stopProcess, waitExitCode, withProcessTerm)
 import System.Types (ATBackgroundCtx, ATBaseCtx)
-import Test.Hspec
 import UnliftIO.Async (cancel, concurrently, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (bracket_, finally, throwIO, tryAny)

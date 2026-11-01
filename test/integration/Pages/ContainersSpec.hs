@@ -22,7 +22,6 @@ import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
 import Servant.API (parseUrlPiece)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders)
-import Test.Hspec
 import Utils (toUriStr)
 
 

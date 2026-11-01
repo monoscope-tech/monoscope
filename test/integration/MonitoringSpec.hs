@@ -38,7 +38,7 @@ import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude.Unsafe qualified as Unsafe
 import System.Environment qualified as Env
-import Test.Hspec
+import Test.Hspec (anyIOException)
 
 
 spec :: Spec

@@ -32,7 +32,6 @@ import Pkg.TestUtils
 import Servant qualified
 import System.Environment (setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
-import Test.Hspec
 import UnliftIO.Exception (finally)
 
 

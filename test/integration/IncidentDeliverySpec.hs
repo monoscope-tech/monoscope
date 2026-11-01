@@ -40,7 +40,6 @@ import Pkg.TestUtils
 import Servant qualified
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
-import Test.Hspec
 import UnliftIO.Async (concurrently)
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.Routes qualified as Routes

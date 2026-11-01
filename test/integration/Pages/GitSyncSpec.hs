@@ -9,7 +9,6 @@ import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
-import Data.Default (Default (..))
 import Data.Effectful.Wreq qualified as W
 import Data.Map.Strict qualified as M
 import Data.Maybe (fromJust)
@@ -35,10 +34,9 @@ import Pages.GitSync qualified as GitSyncPage
 import Pkg.DeriveUtils (DB)
 import Pkg.Git qualified as Git
 import Pkg.TestUtils
-import Relude hiding (head)
 import Servant (ResponseHeader (..), ServerError (..), getResponse, lookupResponseHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec
+import Test.Hspec (afterAll_, beforeAll_, pending)
 import UnliftIO.Exception (bracket, try)
 import "cryptonite" Crypto.Hash.Algorithms (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC

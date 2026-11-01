@@ -60,7 +60,7 @@ import System.Config qualified as Config
 import System.IO.Error (userError)
 import System.Timeout (timeout)
 import System.Types (addRespHeaders)
-import Test.Hspec
+import Test.Hspec (anyIOException)
 import Text.Slugify (slugify)
 import UnliftIO.Async (mapConcurrently_, wait, withAsync)
 import Utils qualified

@@ -24,7 +24,6 @@ import Servant.Server qualified as Servant
 import Servant.Server.Experimental.Auth (unAuthHandler)
 import System.Config (AuthContext (hasqlPool))
 import System.Config qualified as Config
-import Test.Hspec
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie, parseSetCookie, setCookieName, setCookieValue)
 import Web.I18n qualified as I18n

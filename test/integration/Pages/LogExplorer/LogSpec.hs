@@ -40,7 +40,6 @@ import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.QueryParam.Record (RecordParam)
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec
 import Utils qualified
 import Web.Routes qualified as Routes
 import "base64" Data.Base64.Types qualified as B64T

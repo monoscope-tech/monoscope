@@ -23,7 +23,6 @@ import Pkg.TestUtils
 import Servant (ServerError (..), getResponse)
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Types (RespHeaders)
-import Test.Hspec
 
 
 -- A representative /metrics body: a counter family (two series), a gauge, and a

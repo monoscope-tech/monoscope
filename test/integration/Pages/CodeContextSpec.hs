@@ -61,7 +61,6 @@ import System.Environment (getEnvironment)
 import System.Process.Typed (proc, readProcessStdout_, setEnv)
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx)
-import Test.Hspec
 import UnliftIO.Async (cancel, concurrently, wait, waitCatch, withAsync)
 import UnliftIO.Exception (bracket, throwIO, try)
 import Web.Routes qualified as Routes

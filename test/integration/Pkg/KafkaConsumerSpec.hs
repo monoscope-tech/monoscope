@@ -17,7 +17,6 @@ import Pkg.TestUtils
 import System.Config qualified as Config
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx, runBackground)
-import Test.Hspec
 import UnliftIO.Async (Async, race_, wait, withAsync)
 import UnliftIO.Concurrent (forkIO, threadDelay)
 
