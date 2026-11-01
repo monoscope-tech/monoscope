@@ -148,6 +148,34 @@ All six reviewed module hashes match the compiled Linux snapshot.
 The receipt is `scripts/local/native-retention-followup-source.json`.
 These focused checks do not replace whole-branch or live publication acceptance.
 
+### Incident delivery and API follow-up
+
+The complete Incidents module review follows event identity, thread identity, queued analysis, send leases, and history reconciliation.
+Caller reads cover the incident worker, Slack delivery worker, report-authority evaluator, history reconciler, and MCP API adapter.
+Two hs-distill, hs-evasion-review, and hs-lob-review passes find no additional material issue within this scope.
+No runtime source changes are made in this follow-up.
+
+Recorded incident events bind their project, source, issue, time, and destinations before analysis starts.
+Each analysis uses the shared event routine, conversation, run, authority evaluator, and completion path.
+Report delivery checks current routine authority again. Ordinary incident notifications remain separate from optional AI analysis.
+An expired send lease becomes uncertain instead of permitting another blind send.
+History reconciliation checks the publishing app, thread, root, and immutable delivery identity.
+Late non-root history results require the current search lease.
+Malformed stored timestamps roll back the claim rather than returning unchecked coordinates.
+
+The current watcher passes all 118 incident-delivery and API examples in 31.0630 seconds.
+They include paused and revoked report authority, forged context, interrupted delivery, replay, and real API/MCP route calls.
+All 279 recorded Haskell and manifest inputs remain unchanged through the completed run.
+An earlier five-case partial run was interrupted by a concurrent Integrations module save and is not counted as completed acceptance.
+The source receipt is `scripts/local/incident-api-boundary-watch-source.json`.
+The inspected function list and hashes are in `scripts/local/incident-delivery-boundary-review.json`.
+
+The CI runner self-test also passes, including all 23 release tests and the capability/fingerprint assertions.
+Its small local Docker fixture checks cache seeding; it does not build the production application image.
+The command explicitly selects the local OrbStack context and builder.
+The receipt is `scripts/local/unified-agent-ci-selftest-source.json`.
+Final local signoff, application-image validation, and publication remain open.
+
 The source record is `scripts/local/agent-cross-module-review-source.json`.
 No runtime source changed during this review, so no additional test run is claimed.
 The preceding chart checkpoint passes 489 bot cases and 2,083 doctest examples.
