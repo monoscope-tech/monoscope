@@ -594,3 +594,33 @@ The full-branch reviews and release checks remain separate requirements.
 ### Verdict
 
 Approve
+
+
+## Review artifact refresh for inline evidence and charts
+
+The existing review Page now shows the native fix inspector beside its conversation.
+The caption identifies fixture media and separates layout from playback and storage delivery.
+The fix walkthrough opens retained evidence in the current conversation.
+The Slack walkthrough explains chart images and the link to interactive widgets.
+Live chart display remains an explicit acceptance item.
+
+All twelve walkthroughs and 102 steps remain present.
+The update preserves 113 source entries, updates the native acceptance excerpt,
+and adds one chart-renderer excerpt, for 115 source entries.
+Both changed excerpts exactly match their cited Git revision and starting line.
+The existing historical comparisons remain present.
+
+Chromium checks all 102 steps at 320, 390, 768 and 1280 pixels.
+Keyboard activation retains focus, source panels match their step, and no page overflows.
+No JavaScript errors occur; both embedded mobile captures still decode at 320 by 844 pixels.
+The hosted Page remains at its original address and title.
+At sequence 62, its 236,711-byte visualization source exactly matches the local HTML.
+Chrome decodes the existing image and the new native inspector image at their original dimensions.
+Hosted interaction inside the visualization remains unverified.
+
+The refresh changes presentation and source excerpts only.
+It adds no application behavior, permission, route, or deployment.
+The scoped design pass preserves the existing typography, spacing, colors, keyboard controls and reduced-motion behavior.
+The second pass found no further material issue in this refresh.
+Evidence is `scripts/local/agent-artifact-inline-charts-refresh.json` and
+`scripts/local/unified-artifact-refresh-checks.json`.
