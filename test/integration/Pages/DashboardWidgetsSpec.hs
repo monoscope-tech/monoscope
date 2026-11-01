@@ -50,7 +50,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.TestClock (setTestTime)
-import Pkg.TestUtils
+import Pkg.TestUtils hiding (sql)
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
@@ -655,9 +655,9 @@ spec = sequential $ aroundAll withTestResources do
       copySqlBlock `shouldNotSatisfy` T.isInfixOf "widgetData.sql or widgetData.query"
 
     it "translates a KQL query into real SQL, not an echo of the input" \tr -> do
-      sql <- call tr $ Dashboards.widgetSqlTextGetH testPid (Just "status_code == \"ERROR\"") Nothing Nothing Nothing Nothing
-      T.toUpper sql `shouldSatisfy` T.isInfixOf "SELECT"
-      sql `shouldNotBe` "status_code == \"ERROR\""
+      sqlText <- call tr $ Dashboards.widgetSqlTextGetH testPid (Just "status_code == \"ERROR\"") Nothing Nothing Nothing Nothing
+      T.toUpper sqlText `shouldSatisfy` T.isInfixOf "SELECT"
+      sqlText `shouldNotBe` "status_code == \"ERROR\""
 
     it "copies SQL scoped to the authenticated environment and service" \tr -> do
       scopedSession <- checkoutSession tr
