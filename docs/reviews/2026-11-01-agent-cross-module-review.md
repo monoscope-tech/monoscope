@@ -28,6 +28,15 @@ The interface passes applied emil-design-eng and the accessibility, layout, writ
 No installed `/simplify` command was found. The final simplification pass was manual.
 The completed consolidation passes the affected checks and final local release gate.
 
+The sampled [PR review](https://github.com/monoscope-tech/monoscope/pull/619#issuecomment-6565176540) requests splitting the work. The user explicitly requested one integrated PR, so the architecture artifact remains the way to review its separate boundaries. Keep the dependency lockfile for reproducibility, the requested HTML artifact, and the runtime skill subset with its upstream revision, checksums and MIT licence. Ten vendored files match the recorded checksums. The separate product contract, migration runbook and operations reference have distinct purposes; overlapping review diaries were already removed.
+
+Three catch-all matches in run authorization now name every supported claim or source constructor. A new variant therefore requires a compiler-checked decision about its run context and native access. Relative test paths already enter through the opaque `TestFiles` decoder; repository URLs and absolute local repository paths have a different contract. A second relative-path wrapper would add no boundary guarantee. The verifier's local references retain partial measurements for exception reporting; resource acquisition remains inside the existing lock, temporary-directory and sandbox scopes.
+The authorization refinement compiles and passes 25 focused examples in 9.4124 seconds, including revoked permissions, retained role ceilings, stale worker leases and native job completion. Two scoped Haskell review rounds and the manual simplification pass find no further material change.
+
+The shared host Git builder strips inherited credentials and configuration, disables hooks and filesystem monitors, and restricts protocols. Its integration test exercises local, anonymous GitHub and authenticated GitHub access. Test-patch generation also disables external diff and text conversion; baseline preparation creates a fresh repository instead of copying customer Git configuration. Slack access and refresh tokens use the shared authenticated encryption envelope. These checks support the specific boundaries; they do not establish a general sandbox escape proof.
+
+The migration concern requires an explicit exception: production had applied 21 originals. The guarded transition preserves those records and adds a baseline record; it does not pretend they were unapplied. The schema comparisons and retained-data rollback test below cover fresh and observed production-shaped upgrades. Release changes remain in this integrated PR and retain their dedicated selftests and local image verification.
+
 ## Fixes retained by regression tests
 
 | Area | Defect reproduced before the fix | Resulting behavior |

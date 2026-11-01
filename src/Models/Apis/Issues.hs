@@ -1748,7 +1748,7 @@ runContextFor pid claim =
         InteractiveClaim user conversation identifier -> (identifier, [HI.sql| AND source->>'tag' = 'InteractiveRun' AND requested_by = #{user} AND conversation_id = #{conversation}|])
         BackgroundClaim user conversation identifier at -> (identifier, [HI.sql| AND source->>'tag' <> 'InteractiveRun' AND started_at = #{at} AND requested_by = #{user} AND conversation_id = #{conversation}|])
         EventClaim event identifier at -> (identifier, [HI.sql| AND source = #{TriggeredRun event} AND started_at = #{at}|])
-      wrap = case claim of FixClaim _ _ owner -> (`FixContext` owner); _ -> RunContext
+      wrap = case claim of FixClaim _ _ owner -> (`FixContext` owner); (ConversationClaim{}; InteractiveClaim{}; BackgroundClaim{}; EventClaim{}) -> RunContext
    in fmap wrap
         <$> Hasql.interpOne
           ( [HI.sql|SELECT id, root_run_id, project_id, conversation_id, requested_by, started_at, source, policy, permission_ceiling, input, instructions, command_origin
@@ -1829,7 +1829,7 @@ runContextScopeSql context =
     AND run.permission_ceiling = #{context.permissionCeiling} AND run.command_origin IS NOT DISTINCT FROM #{context.origin}|]
     <> case context of
       FixContext _ owner -> [HI.sql| AND EXISTS (SELECT 1 FROM projects.issue_fix_jobs job WHERE job.agent_run_id = run.id AND job.lease_owner = #{owner})|]
-      RunContext row -> case row.source of FixRun{} -> [HI.sql| AND FALSE|]; _ -> mempty
+      RunContext row -> case row.source of FixRun{} -> [HI.sql| AND FALSE|]; (ScheduledRun; TriggeredRun{}; InteractiveRun{}; ConversationRun{}) -> mempty
 
 
 runContextAccessSql :: RunContext -> HI.Sql
@@ -1840,7 +1840,7 @@ runContextAccessSql context = case context.source of
   where
     nativeAccess = case context.source of
       FixRun{} -> nativeFixAccessSql [HI.sql| AND job.lease_until > now() AND job.result IS NULL|]
-      _ -> [HI.sql|TRUE|]
+      (ScheduledRun; TriggeredRun{}; InteractiveRun{}; ConversationRun{}) -> [HI.sql|TRUE|]
     conversationAccess grant =
       [HI.sql|SELECT CASE WHEN conversation.conversation_id IS NULL THEN #{Stopped}
           WHEN NOT (^{nativeAccess}) THEN #{Unavailable}
