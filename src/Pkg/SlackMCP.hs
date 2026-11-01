@@ -171,32 +171,31 @@ decodeReply identifier operation response = Except.liftEither $ do
             Nothing -> Right <$> (fields AE..: "result" >>= parseResult operation)
       )
       value
-
-
-parseResult :: Request a -> AE.Value -> AE.Parser a
-parseResult operation = case operation of
-  Initialize _ -> AE.withObject "MCP initialization" \value -> do
-    version <- value AE..: "protocolVersion"
-    server <- value AE..: "serverInfo"
-    _ <- server AE..: "name" :: AE.Parser Text
-    _ <- server AE..: "version" :: AE.Parser Text
-    capabilities <- value AE..: "capabilities"
-    _ <- capabilities AE..: "tools" :: AE.Parser AE.Object
-    unless (version == protocol) $ fail "Unsupported MCP version"
-  ListTools _ -> AE.parseJSON
-  ReadTool _ _ -> AE.withObject "MCP read result" \value -> do
-    blocks <- value AE..: "content"
-    content <-
-      traverse
-        ( AE.withObject "MCP text evidence" \block -> do
-            kind <- block AE..: "type"
-            unless (kind == ("text" :: Text)) $ fail "Unsupported evidence content"
-            block AE..: "text"
-        )
-        blocks
-    structuredContent <- value AE..:? "structuredContent"
-    failed <- value AE..:? "isError" AE..!= False
-    pure ReadResult{content, structuredContent, outcome = if failed then ReadRejected else ReadSucceeded}
+  where
+    parseResult :: Request a -> AE.Value -> AE.Parser a
+    parseResult requestValue = case requestValue of
+      Initialize _ -> AE.withObject "MCP initialization" \value -> do
+        version <- value AE..: "protocolVersion"
+        server <- value AE..: "serverInfo"
+        _ <- server AE..: "name" :: AE.Parser Text
+        _ <- server AE..: "version" :: AE.Parser Text
+        capabilities <- value AE..: "capabilities"
+        _ <- capabilities AE..: "tools" :: AE.Parser AE.Object
+        unless (version == protocol) $ fail "Unsupported MCP version"
+      ListTools _ -> AE.parseJSON
+      ReadTool _ _ -> AE.withObject "MCP read result" \value -> do
+        blocks <- value AE..: "content"
+        content <-
+          traverse
+            ( AE.withObject "MCP text evidence" \block -> do
+                kind <- block AE..: "type"
+                unless (kind == ("text" :: Text)) $ fail "Unsupported evidence content"
+                block AE..: "text"
+            )
+            blocks
+        structuredContent <- value AE..:? "structuredContent"
+        failed <- value AE..:? "isError" AE..!= False
+        pure ReadResult{content, structuredContent, outcome = if failed then ReadRejected else ReadSucceeded}
 
 
 options :: Session -> HTTP.Options
