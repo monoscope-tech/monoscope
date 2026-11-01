@@ -255,6 +255,27 @@ The existing routine selection passes 67 examples with zero failures in 19.2874 
 All five recorded runtime/test inputs remain unchanged through that run.
 The source receipt is `scripts/local/routine-control-boundary-review.json`.
 
+### Route dispatch and job continuation follow-up
+
+The wiring review follows the complete new job-admission module, agent dispatch,
+conversation and incident execution, routine completion, retry exhaustion, and review wakeups.
+The route review follows the changed endpoint declarations, full server dispatch,
+API/MCP adapters, actor attribution, and authenticated conversation/media wiring.
+Review decisions and their queue wakeup share one transaction.
+The worker rechecks the stored request after taking its conversation lease.
+Exhausted queued requests retain a visible terminal run rather than staying Running.
+
+The first distillation pass removes three unused context arguments from the route constructor.
+The existing effects still supply handler context; the OTLP closures retain their explicit inputs.
+All five call sites use the smaller constructor. No route or wire format changes.
+The repeated distillation, evasion, and locality passes find no further material issue here.
+The WAI unlift remains at its existing application adapter, without a new domain IO escape.
+
+Both watchers compile. All 164 selected API, repository, queued-conversation, and slash-command
+cases pass in 42.9408 seconds; all 279 recorded inputs remain unchanged through that run.
+Pinned formatting, runtime HLint, and whitespace checks pass.
+The source receipt is `scripts/local/route-job-boundary-review-source.json`.
+
 The source record is `scripts/local/agent-cross-module-review-source.json`.
 No runtime source changed during this review, so no additional test run is claimed.
 The preceding chart checkpoint passes 489 bot cases and 2,083 doctest examples.

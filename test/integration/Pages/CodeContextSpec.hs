@@ -228,7 +228,7 @@ spec = do
             app =
               genericServeTWithContext
                 (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
+                (Routes.server (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             base pid = "/p/" <> pid.toText <> "/memories"
             authorization = ("Authorization", "Bearer " <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId)
@@ -405,7 +405,7 @@ spec = do
         let app =
               genericServeTWithContext
                 (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
+                (Routes.server (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             token = UUID.toString (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId
         Warp.testWithApplication (pure app) \port -> do

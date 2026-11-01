@@ -4663,7 +4663,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             app mode =
               genericServeTWithContext
                 (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider . withMedia mode)
-                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
+                (Routes.server (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             path = "/p/" <> testPid.toText <> "/issue-fixes/" <> fid.toText
             authorization = ("Authorization", "Bearer " <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId)

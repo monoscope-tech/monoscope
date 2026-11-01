@@ -50,7 +50,6 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Types qualified as H
 import Network.Wai (Request)
 import Network.Wai qualified as Wai
-import OpenTelemetry.Trace (TracerProvider)
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (NavigationResponse, PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
@@ -633,8 +632,8 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   deriving stock (Generic)
 
 
-server :: Logger -> AuthContext -> TracerProvider -> OtlpHttpHandler -> OtlpHttpHandler -> Routes (AsServerT ATBaseCtx)
-server logger env tp otlpTraces otlpLogs =
+server :: OtlpHttpHandler -> OtlpHttpHandler -> Routes (AsServerT ATBaseCtx)
+server otlpTraces otlpLogs =
   let projectTools = Just mcpProjectTools
    in Routes
         { public = Servant.serveDirectoryWebApp "./static/public"
