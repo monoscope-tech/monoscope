@@ -395,6 +395,8 @@ When you doctest a smart constructor or refined type, **doctest the invariant, n
 
 Test helpers in `Pkg.TestUtils`: `withTestResources` (pool, caches, auth), `toServantResponse` (for handler responses), `runQueryEffect` (for DB effects), `ingestLog`/`ingestTrace`/`ingestMetric` (OTLP ingestion).
 
+`Pkg.TestUtils` is also the test prelude: it re-exports Relude, the Hspec vocabulary, `sql`, `Only`, `def` and `UUIDId`, so specs import it instead of those. Fixture SQL goes through `dbExec`/`dbQuery`/`dbOne` (on the test clock), handler payloads through `call`, presentation through `goldenHtml`/`goldenText` (`UPDATE_GOLDEN=true` rewrites).
+
 - <http://localhost:8080/p/00000000-0000-0000-0000-000000000000/> project is a demo project which can be accessed with no auth.
 
 ## Architecture

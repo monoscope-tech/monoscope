@@ -72,6 +72,7 @@ module Pkg.TestUtils (
   countIssues,
   resetSchemaLearning,
   goldenHtml,
+  goldenText,
   processMessagesAndBackgroundJobs,
   createTestSpans,
   -- OTLP/Telemetry helpers
@@ -1365,11 +1366,20 @@ resetSchemaLearning tr pids = do
 -- | Snapshot @tests/golden/html/<name>.html@, one tag per line, so the diff is reviewable.
 -- UUIDs, trace ids and issue numbers are scrubbed to keep it stable. Issue numbers gap
 -- because the seq-num trigger (migration 0051) consumes one per upsert attempt, a known
--- product bug this scrub does not fix. @UPDATE_GOLDEN=true@ (re)writes it; a missing file fails.
+-- product bug this scrub does not fix.
 goldenHtml :: Lucid.ToHtml a => FilePath -> a -> Expectation
-goldenHtml name html = do
-  let path = "./tests/golden/html/" <> name <> ".html"
-      actual = T.replace "><" ">\n<" (renderT html) *=~/ [ed|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}///<uuid>|] *=~/ [ed|[0-9a-f]{32,}///<hex>|] *=~/ [ed|>#[0-9]+///>#<n>|]
+goldenHtml name html =
+  goldenText ("html/" <> name <> ".html")
+    $ T.replace "><" ">\n<" (renderT html)
+    *=~/ [ed|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}///<uuid>|]
+    *=~/ [ed|[0-9a-f]{32,}///<hex>|]
+    *=~/ [ed|>#[0-9]+///>#<n>|]
+
+
+-- | Compare against @tests/golden/<path>@; @UPDATE_GOLDEN=true@ (re)writes it, a missing file fails.
+goldenText :: FilePath -> Text -> Expectation
+goldenText name actual = do
+  let path = "./tests/golden/" <> name
   update <- (== Just "true") <$> lookupEnv "UPDATE_GOLDEN"
   exists <- doesFileExist path
   if
