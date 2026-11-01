@@ -1414,7 +1414,7 @@ spec = around withTestResources do
         Just retained <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackMessageRequest receipt user) Issues.StartRun deleted "Retained incident evidence"
         runTestBg frozenTime tr $ Issues.deleteConversation testPid deleted
         runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM apis.slack_identities WHERE team_id = 'T_LEGACY_SCOPE'|]
-        migration <- readFileBS "static/migrations/0274_legacy_slack_evidence_audience.sql"
+        migration <- readFileBS "static/migrations/0262_legacy_slack_evidence.sql"
         replicateM_ 2 $ withResource tr.trPool $ \conn -> void $ PGS.execute_ conn $ Query migration
         for_ cases $ \(suffix, _, _, audience, expected) -> do
           let conversation = UUIDId $ UUID.fromWords 0 0 44 suffix

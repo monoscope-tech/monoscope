@@ -4179,14 +4179,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     base <- either (fail . show) pure $ Fixes.mkRevision revision
     for_ jobs $ \(identifier, _) -> runQueryEffect tr (Fixes.createRun testPid identifier issue mapping.id base (uid 4)) `shouldReturn` Just identifier
     -- This database belongs to this example. Reconstruct its pre-upgrade job
-    -- shape, then run the actual append-only migration over populated records.
+    -- shape, then run the actual consolidated linkage migration over populated records.
     withResource tr.trPool $ \conn -> do
       void $ execute conn "DROP TRIGGER fix_agent_link ON projects.issue_fix_jobs; DROP FUNCTION projects.guard_fix_agent_link(); DROP TRIGGER retain_fix_run_grant ON apis.ai_routine_runs; DROP FUNCTION apis.retain_fix_run_grant(); DROP INDEX apis.ai_routine_runs_native_fix; ALTER TABLE apis.ai_routine_runs DROP CONSTRAINT native_fix_run_grant; ALTER TABLE projects.issue_fix_jobs DROP COLUMN agent_run_id" ()
       for_ jobs $ \(identifier, failure) -> do
         inserted <- execute conn "INSERT INTO projects.issue_fix_jobs (run_id, requested_by, created_at, failure, finished_at) SELECT run_id, user_id, ?, ?, ? FROM projects.issue_fix_run_access WHERE run_id = ? AND user_id = ?" (addUTCTime (-60) frozenTime, failure, frozenTime <$ failure, identifier, user)
         inserted `shouldBe` 1
       void $ execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
-      migration <- readFileBS "static/migrations/0280_native_fix_runs.sql"
+      migration <- readFileBS "static/migrations/0263_native_agent_runs.sql"
       void $ execute conn (Query migration) ()
     runs <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
     length runs `shouldBe` 2

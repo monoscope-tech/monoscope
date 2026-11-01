@@ -110,7 +110,7 @@ Slack documents migration from `assistant_view` to `agent_view` as irreversible.
 This repository change does not apply that migration. Live manifest validation, plan availability, and workspace acceptance
 remain rollout gates. See [the manifest reference](https://docs.slack.dev/reference/app-manifest/).
 
-The [1 November live configuration audit](../reviews/2026-11-01-slack-live-configuration.md)
+The [1 November live configuration audit](../reviews/2026-11-01-agent-cross-module-review.md)
 records the existing app's configuration gaps and the remaining acceptance sequence.
 It does not apply the template or establish live branch acceptance.
 

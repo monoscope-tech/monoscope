@@ -2,7 +2,7 @@
 
 Monoscope runs Pi on the host and repository tools inside a local Gondolin microVM. Model APIs may be hosted; checkouts, sandboxes, evidence and orchestration run on our infrastructure.
 
-The pinned libraries are `@earendil-works/pi-coding-agent` 1.4.0 and `@earendil-works/gondolin` 0.14.0. This directory still contains workflow policy being moved to Haskell. The [ownership plan](../docs/plans/2026-09-30-pr-impact-review.md#haskell-ownership-revised-implementation-direction) records the target and remaining work.
+The pinned libraries are `@earendil-works/pi-coding-agent` 1.4.0 and `@earendil-works/gondolin` 0.14.0. The [native design](../docs/native-agent.md) describes Haskell ownership and the adapter boundary.
 
 ## Setup
 
@@ -17,9 +17,9 @@ npm run build:guest
 
 Built guests initialize loopback names in `/etc/hosts`, so offline tools can resolve `localhost`. Rebuild guest assets to apply this to existing images; checkpoint identity includes the guest build ID.
 
-Build the native CLI with `make cli-build`. Set `IMPACT_REVIEW_NATIVE_CLI` if `monoscope` is not on PATH. The optional Monoscope compiler image and prepared-cache/S3 operations are documented in the [operations reference](../docs/plans/2026-10-22-agent-worker-operations.md#reuse-a-prepared-project-workspace).
+Build the native CLI with `make cli-build`. Set `IMPACT_REVIEW_NATIVE_CLI` if `monoscope` is not on PATH. The optional Monoscope compiler image and prepared-cache/S3 operations are documented in the [operations reference](../docs/agent-operations.md).
 
-The optional Linux `impact-worker` image packages the native CLI and SDK runtime. See [the operator setup](../docs/plans/2026-10-22-agent-worker-operations.md#optional-linux-agent-image) for KVM, guest images and persistent storage.
+The optional Linux `impact-worker` image packages the native CLI and SDK runtime. See [the operator setup](../docs/agent-operations.md) for KVM, guest images and persistent storage.
 
 ## Runtime boundary
 
@@ -49,4 +49,4 @@ The suite uses real local VMs and a deterministic loopback provider. Guest/profi
 
 The Haskell comparison runner is `monoscope-server evaluate-impact [MODE] CASE.json RESULT.json`. Select `bounded-patch` or `checkout-harness` to run one mode; omit the selector to run both. Run it from the matching Monoscope source checkout, with `IMPACT_REVIEW_AGENT`, `IMPACT_REVIEW_USAGE_DIR`, `IMPACT_REVIEW_CACHE_DIR` and the guest/model configuration above. It uses the production CodeReview interpreter for the selected modes. Results use `native-impact-evaluation/v1`, record source/skill hashes and durable call/usage receipts, and reject an existing output file. The private rubric stays outside model input. Provider failures remain failed comparisons with unknown costs where usage is missing.
 
-The command belongs to the server binary because it reuses server validation and effects; the public `monoscope` CLI stays DB-free. The native source-review comparison is `monoscope-server evaluate-source CASE.json RESULT.json`; insert `bounded-patch` or `checkout-harness` before the paths to run one mode. Its case has `projectId`, local `repository`, `base`, `head`, `provider`, `model`, and `pullRequest: {repo, pr_number, title, body}`. It returns a private `native-source-evaluation/v1` report with the original source-finding fields and measured receipts. This replaces the unpublished `reviewbench.mjs`/`RB_*` launcher; it is not the official ReviewBench submission envelope. Source mode has no telemetry or wiki tools and protects its checkout before inference. Production impact findings retain their existing evidence requirements. Historical evaluation records are in [the plan](../docs/plans/2026-09-30-pr-impact-review.md) and [workflow record](../docs/plans/2026-10-20-issue-fix-workflow.md).
+The command belongs to the server binary because it reuses server validation and effects; the public `monoscope` CLI stays DB-free. The native source-review comparison is `monoscope-server evaluate-source CASE.json RESULT.json`; insert `bounded-patch` or `checkout-harness` before the paths to run one mode. Its case has `projectId`, local `repository`, `base`, `head`, `provider`, `model`, and `pullRequest: {repo, pr_number, title, body}`. It returns a private `native-source-evaluation/v1` report with the original source-finding fields and measured receipts. This replaces the unpublished `reviewbench.mjs`/`RB_*` launcher; it is not the official ReviewBench submission envelope. Source mode has no telemetry or wiki tools and protects its checkout before inference. Production impact findings retain their existing evidence requirements. Historical comparison records remain in Git history; the [native design](../docs/native-agent.md) describes current behavior.

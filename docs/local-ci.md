@@ -173,7 +173,7 @@ Project and home folders are not mounted. Rosetta shares only its runtime.
 The SDK's inner guest uses two CPUs and 1024 MiB.
 Check the KVM API, actual QEMU accelerator, and open device descriptor;
 an existing device path alone does not prove that a guest uses KVM.
-The [workspace review](reviews/2026-11-01-workspace-interpreter.md) records the current acceptance scope.
+The [workspace review](reviews/2026-11-01-agent-cross-module-review.md) records the current acceptance scope.
 Keep test binaries, assets, and receipts in the guest user's home; a VM reboot clears `/tmp`.
 
 Application fix-job checks also require FFmpeg, Graphviz, and an absolute `HOST_URL`,
