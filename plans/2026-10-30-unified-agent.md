@@ -1,6 +1,6 @@
 # Unified Monoscope agent
 
-Status: final verification in progress, 1 November 2026. This plan controls the complete branch scope; the checklist below does not replace the product contract.
+Status: implementation consolidated and locally verified, 1 November 2026. Manual acceptance remains open. This plan controls the complete branch scope; the checklist below does not replace the product contract.
 
 Consolidate Slack, web, scheduled, and event work around one capability catalog, authority evaluator, executor, operation ledger, conversation, and artifact experience. Newly enabled background routines act autonomously within their member's current authority. Optional selected review must not become a mandatory permission loop.
 
@@ -16,8 +16,8 @@ The shared executor, capability catalog, authority evaluator, operation ledger, 
 Slack requests, native review/fix work, schedules, enrichment and incident analysis reuse those boundaries.
 The consolidated review records current native, browser and real Monoscope Slack acceptance.
 
-The user requested migration and file consolidation before publication.
-Complete that cleanup, affected verification, repeated reviews and final Mac-only image/signoff before pushing PR 619.
+Migration and file consolidation, affected verification, repeated reviews and Mac-only image/signoff pass.
+Use canonical PR 619 for review. Existing feature databases require the documented baseline-adoption step before the new version starts.
 Physical-device, VoiceOver, physical Mac power-loss and hosted iframe interaction remain unverified.
 No merge or production deployment is authorized.
 
@@ -26,7 +26,8 @@ No merge or production deployment is authorized.
 The [consolidated review](../docs/reviews/2026-11-01-agent-cross-module-review.md) records current evidence and its limits.
 Earlier iteration logs remain in Git history and ignored local receipts.
 Migration/documentation consolidation and production-shaped upgrade verification are complete.
-Final image/signoff and PR publication must follow that work.
+All eleven local release checks and the AMD64 image pass at runtime snapshot `d5fa93873`.
+The review records exact counts, native acceptance scopes and the remaining manual checks.
 
 ## Product contract
 
@@ -258,7 +259,7 @@ Broader evidence requires a demonstrated audience rule, including Slack Connect 
 The user's private DM with Monoscope can use their opted-in personal scope.
 Do not reuse private evidence in another audience's conversation or shared artifact.
 Keep Slack write tools excluded from the remote MCP catalog. Publish through Monoscope's audited delivery path.
-Slack's [official search reference](https://github.com/slackapi/slack-skills-plugin/blob/main/skills/slack-search/SKILL.md) confirms `slack_search_public`, `slack_search_public_and_private`, `slack_read_channel`, and `slack_read_thread`. The QA diagnostic user grant now initializes Slack MCP and captures live schemas for those four tools plus an intentionally excluded channel-search tool. A controlled private-thread read succeeds. The fixed application OAuth, encrypted store, canonical thread read, retained channel audience, and replay now also pass. Canonical source-link handling now supplies the provider permalink and the published citation opens the correct workspace and source thread. Slack Connect and the remaining audience boundaries still require acceptance; a fresh live request on the current runtime, including the credential-failure follow-up, now also passes.
+Slack's [official search reference](https://github.com/slackapi/slack-skills-plugin/blob/main/skills/slack-search/SKILL.md) confirms `slack_search_public`, `slack_search_public_and_private`, `slack_read_channel`, and `slack_read_thread`. The QA diagnostic user grant now initializes Slack MCP and captures live schemas for those four tools plus an intentionally excluded channel-search tool. A controlled private-thread read succeeds. The fixed application OAuth, encrypted store, canonical thread read, retained channel audience, and replay now also pass. Canonical source-link handling now supplies the provider permalink and the published citation opens the correct workspace and source thread. Slack Connect, personal retention and private/public channel audiences now pass controlled live acceptance. The 64-case destination matrix supplies broader confinement coverage. A fresh live request on the current runtime, including the credential-failure follow-up, also passes.
 
 ## Implementation sequence
 

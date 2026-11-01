@@ -26,7 +26,7 @@ The final input audit accounts for later cleanup, Slack recovery and master test
 Material findings were fixed and reviewed again. No material finding remained at that recorded source snapshot.
 The interface passes applied emil-design-eng and the accessibility, layout, writing, typography, color and UI checks.
 No installed `/simplify` command was found. The final simplification pass was manual.
-Documentation and migration consolidation requires fresh affected checks before publication.
+The completed consolidation passes the affected checks and final local release gate.
 
 ## Fixes retained by regression tests
 
@@ -48,9 +48,9 @@ Documentation and migration consolidation requires fresh affected checks before 
 No fix adds a parallel executor, weaker effect row, warning suppression, or authorization bypass.
 The final Weeder pass also removed two lookup helpers orphaned by this branch's table-renderer replacement.
 
-## Verification before consolidation
+## Local release verification
 
-These results apply to their recorded source inputs. They do not constitute signoff for subsequent migration changes.
+All eleven configured checks pass for runtime snapshot `d5fa93873`, after migration consolidation and master PR #763. Native and KVM acceptance retain their recorded source scopes; this cleanup changes no agent runtime module.
 
 | Check | Observed result | Scope and limits |
 | --- | --- | --- |
@@ -62,12 +62,12 @@ These results apply to their recorded source inputs. They do not constitute sign
 | Browser suite | 172 pass, one skip. | Application browser tests; physical devices and screen readers remain unverified. |
 | UI tests | 1,041 tests across 62 files pass. | Canonical local gate. |
 | CLI | Build, package, signature, runtime version and portable linkage checks pass. | Preserves the CLI/shared package boundary. |
-| Other canonical checks | HLint, frontend, build, unit tests and Weeder pass. | All eleven configured checks have matching attestations before consolidation. |
+| Unit tests | 315 examples, zero failures. | The parser's 22 SQL cases share one pinned golden corpus. |
+| Other canonical checks | HLint, frontend, build and Weeder pass. | All eleven configured checks have matching attestations. |
 | Review artifact | 104 steps pass at 320, 390, 768 and 1280 pixels, without overflow or browser errors. | 111 implementation excerpts match current source; six historical examples remain labeled. |
 
-The final production image and literal final `ci-signoff` have not completed.
-Builds were stopped when the user requested migration and documentation cleanup.
-No branch update, merge or production deployment is claimed.
+The literal local `ci-signoff` passes. The AMD64 image for `d5fa93873` is `sha256:56a726b6cc32ea05f87031c5b66be20f6c0a595a13d1265dd59fb343f71297e6`, built on this Mac through the local OrbStack builder. The integration lane also runs the PostgreSQL baseline-adoption regression; changes to its helper invalidate that check's fingerprint.
+Canonical PR 619 is the review destination. Merge, production baseline adoption and deployment remain separate actions.
 
 ## Slack acceptance
 
@@ -152,4 +152,4 @@ The fresh, original and production-shaped schemas have identical dumps after exc
 
 Production inspection finds 21 original feature migrations with matching checksums and zero rows in the nine native feature tables.
 No production change is performed. The [transition procedure](../agent-migrations.md) preserves applied history and adopts complete groups before deployment.
-Final image/signoff and PR publication follow this consolidation and its affected checks.
+Final local checks and the immutable image pass. The new Haskell template matches all 253 current migration checksums; full schema, ownership and privileges match the pre-consolidation template. An explicit rollback test also preserves the retained native-recovery fixture across eight tables while adopting the current checksums. Production remains unchanged.
