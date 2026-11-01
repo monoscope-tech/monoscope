@@ -658,12 +658,12 @@ bodyWrapper bcfg child = do
               , autofocus_
               , placeholder_ "Describe what you want Monoscope to investigate…"
               , Aria.label_ "Instructions"
-              , class_ "no-focus-ring min-h-24 w-full resize-none bg-transparent py-3 text-sm leading-5 text-textStrong outline-none placeholder:text-textDisabled"
+              , class_ "no-focus-ring min-h-24 w-full resize-none bg-transparent py-3 text-base leading-6 text-textStrong outline-none placeholder:text-textWeak sm:text-sm sm:leading-5"
               ]
               ""
           div_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"] do
             label_ [Lucid.for_ "ai-routine-interval", class_ "text-xs font-medium text-textStrong"] "Run every"
-            select_ [id_ "ai-routine-interval", name_ "intervalMinutes", disabled_ "disabled", term "hx-live:disabled" "!q('#ai-composer-routine').checked", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-xs text-textStrong"] do
+            select_ [id_ "ai-routine-interval", name_ "intervalMinutes", disabled_ "disabled", term "hx-live:disabled" "!q('#ai-composer-routine').checked", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-base text-textStrong sm:text-xs"] do
               option_ [value_ "60", class_ "bg-bgRaised text-textStrong"] "Hour"
               option_ [value_ "1440", selected_ "selected", class_ "bg-bgRaised text-textStrong"] "Day"
               option_ [value_ "10080", class_ "bg-bgRaised text-textStrong"] "Week"

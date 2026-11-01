@@ -113,3 +113,51 @@ project scope and authorization remain fixed by the route.
 All 34 Agentic examples, formatting, and focused HLint pass after this correction.
 The final review retains the small typed URI parameter and declarative navigation;
 it adds no client state framework or new authorization capability.
+
+## Mobile controls and input hints (1 November)
+
+Full review scope for this revision: routine creation, schedule editing, execution policy,
+reviewer selection, routine instructions, and the conversation composer. The stack remains
+Lucid, native form controls, HTMX, Tailwind, DaisyUI, and the existing theme tokens.
+This scoped revision does not establish final whole-branch interface signoff.
+
+| Domain | Evidence inspected | Result |
+| --- | --- | --- |
+| Accessibility | Accessible names for all seven controls; existing Escape, focus-return, and access-revocation browser flows | Checked paths pass. Physical iOS and VoiceOver remain unverified. |
+| Layout | Creation and editing at 320px and 390px, both themes; desktop at 1280px | No horizontal overflow. The short composer hint fits its row. |
+| Writing | New-routine instructions and the composer hint | The composer now says “Ask or delegate a task…” without clipping. |
+| Typography | 28 mobile font measurements and seven desktop size assertions | Mobile controls use at least 16px. Desktop sizes remain 12px or 14px as before. |
+| Colors | Eight rendered placeholder foreground/background pairs, composited through their ancestor backgrounds | All pass the review's 4.5:1 target. Existing theme tokens supply the colors. |
+| UI | Native controls, existing surfaces, conversation drafts, run panels, retained artifacts, and action history | All four browser cases pass. No product JavaScript or motion was added. |
+
+| Severity | Domain | Location | Before | After | Why |
+| --- | --- | --- | --- | --- | --- |
+| MEDIUM | Typography | `src/Pages/AIThreads.hs`, `src/Pages/BodyWrapper.hs` | Seven active controls rendered at 12–14px on narrow screens | Use 16px on narrow screens and retain the original desktop sizes | The rendered regression exposed small mobile input text. |
+| MEDIUM | Writing | Conversation composer | The long hint wrapped beyond its single visible row | Use “Ask or delegate a task…” | The complete hint now fits at both checked narrow widths. |
+| MEDIUM | Colors | New-routine and conversation input hints | Rendered contrast ranged from 3.05:1 to 4.21:1 | Use `textWeak` for active hints | Disabled styling made active guidance too faint. No palette value changed. |
+
+| Location | Considered change | Rejected because |
+| --- | --- | --- |
+| Desktop controls | Increase every control to 16px | The existing compact density remains useful. The regression pins the original 12px and 14px sizes. |
+| Composer | Add JavaScript sizing to accommodate the long hint | A concise hint fits the existing native control and needs no extra behavior. |
+
+The permanent browser regression first failed on the measured mobile sizes, the clipped
+composer hint, and all eight placeholder contrast pairs. The final run passes all four
+cases in `e2e/tests/routines.spec.ts` in 18.7 seconds. It uses the actual application
+through `withLiveServer` and an isolated integration database. Existing cases also verify
+draft preservation, inline run/artifact navigation, policy saves, and role restrictions.
+
+The broader run exposed a stale fixture for migration `0276`: execution policies now use
+JSON. The fixture now supplies a JSON string and decodes stored policy values before its
+assertion. No migration or application policy behavior changed for this correction.
+
+`make post-css` passes. The repository-pinned Fourmolu accepts both changed UI modules,
+and HLint reports no hints in them. The watchers compile the current source.
+Before/after captures and logs are under ignored `scripts/local/routine-mobile-control-review/`.
+The temporary browser harness is removed after verification; the permanent regression remains.
+
+Repeated `hs-distill`, `hs-evasion-review`, `hs-lob-review`, and interface passes leave no
+further material finding in this revision. Styling stays inline in the templates and uses
+CSS responsive utilities. Final release checks and controlled Slack acceptance remain open.
+
+Verdict for this scoped revision: Approve.

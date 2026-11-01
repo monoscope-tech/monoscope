@@ -451,7 +451,7 @@ threadPageGetH pid convId docM runM hxTarget = do
         form_ [class_ "space-y-3", hxPost_ $ threadUrl pid conversationId <> "/routine", hxSwap_ "none"] do
           label_ [class_ "block text-xs font-medium text-textStrong"] "Run every"
           div_ [class_ "flex items-center gap-2"] do
-            input_ [type_ "number", name_ "intervalMinutes", min_ "5", max_ "10080", value_ $ maybe "1440" (show . Issues.routineIntervalMinutes . snd) routineState, class_ "input input-sm min-w-0 grow", Aria.label_ "Routine interval in minutes"]
+            input_ [type_ "number", name_ "intervalMinutes", min_ "5", max_ "10080", value_ $ maybe "1440" (show . Issues.routineIntervalMinutes . snd) routineState, class_ "input input-sm min-w-0 grow text-base sm:text-xs", Aria.label_ "Routine interval in minutes"]
             span_ [class_ "text-xs text-textWeak"] "minutes"
           p_ [class_ "text-xs text-textWeak"] "New routines act automatically within your current role. Existing routine policies stay unchanged."
           button_ [type_ "submit", class_ "btn btn-sm btn-primary w-full active:scale-[0.96] transition-transform"] "Save routine"
@@ -471,7 +471,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 if canEdit
                   then form_ [hxPost_ $ threadHref <> "/routine/policy", hxSwap_ "none", class_ "group/policy space-y-2 rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
                     label_ [Lucid.for_ "routine-policy", class_ "block text-sm font-medium text-textStrong"] "Execution policy"
-                    select_ [id_ "routine-policy", name_ "policy", class_ "select select-sm w-full"] do
+                    select_ [id_ "routine-policy", name_ "policy", class_ "select select-sm w-full text-base sm:text-xs"] do
                       option_ ([value_ "observe"] <> [selected_ "selected" | policy == Issues.Observe]) "Observe"
                       option_ ([value_ "autonomous"] <> [selected_ "selected" | policy == Issues.Autonomous]) "Autonomous"
                       option_ ([value_ "review"] <> [selected_ "selected" | isJust selection]) "Review selected actions"
@@ -482,7 +482,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                         toHtml $ reviewClassLabel actionClass
                       label_ [class_ "block space-y-1 text-sm text-textStrong"] do
                         span_ "Required reviewer"
-                        select_ [name_ "reviewApprover", class_ "select select-sm w-full"]
+                        select_ [name_ "reviewApprover", class_ "select select-sm w-full text-base sm:text-xs"]
                           $ for_ @[] [Catalog.ReviewEditors, Catalog.ReviewAdministrators] \approver ->
                             option_ ([value_ $ toText $ encodeEnumSC @"Review" approver] <> [selected_ "selected" | approver == maybe Catalog.ReviewEditors (.approver) selection]) $ toHtml $ reviewerLabel approver
                       p_ [class_ "text-xs text-textWeak"] "Only checked action classes require review. Unchecked actions stay automatic. Choose at least one class."
@@ -501,7 +501,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                   then do
                     form_ [hxPost_ $ threadHref <> "/routine/instructions", hxSwap_ "none", class_ "space-y-3"] do
                       label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
-                      textarea_ [id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-sm"] $ toHtml $ fromMaybe "" instructions
+                      textarea_ [id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-base sm:text-sm"] $ toHtml $ fromMaybe "" instructions
                       button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
                   else p_ [class_ "whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "" instructions
               when (null runs && isNothing routineM) $ p_ [class_ "text-sm text-textWeak"] "No runs yet. An active routine starts when the next matching event arrives."
@@ -534,9 +534,9 @@ threadPageGetH pid convId docM runM hxTarget = do
                 , maxlength_ "4000"
                 , required_ "required"
                 , autofocus_
-                , placeholder_ "Ask about your telemetry or delegate a task…"
+                , placeholder_ "Ask or delegate a task…"
                 , Aria.label_ "Message Monoscope AI"
-                , class_ "min-h-9 max-h-40 grow resize-none bg-transparent border-0 px-2 py-2 text-sm leading-5 focus:outline-none"
+                , class_ "min-h-9 max-h-40 grow resize-none bg-transparent border-0 px-2 py-2 text-base leading-6 placeholder:text-textWeak sm:text-sm sm:leading-5 focus:outline-none"
                 , [__|on keydown[key=='Enter' and not shiftKey]
                       halt the event then call my form.requestSubmit()
                     end|]

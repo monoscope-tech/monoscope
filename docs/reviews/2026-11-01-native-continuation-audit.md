@@ -49,7 +49,7 @@ Its 47 setup failures do not establish native behavior.
 OrbStack and the existing `monoscope` PostgreSQL container are now running.
 The local MinIO service is also running through `make tmux-minio-local`.
 The same test watcher completed `--match "Pages.ImpactReviews"` through `.test-args`.
-All 47 examples passed in 307.1925 seconds, with no pending cases.
+The preceding 47 examples passed in 307.1925 seconds, with no pending cases.
 The source includes the candidate parser change committed as `d881b701b`.
 An interrupted run passed ten cases before the authorization simplification triggered a reload.
 Those ten cases do not establish completion of the full suite.
@@ -70,7 +70,9 @@ Scoped HLint reports no hints, and the repository-pinned formatter accepts the t
 Repeated `hs-distill`, `hs-evasion-review`, and `hs-lob-review` passes found no further material issue in the new case.
 It reuses the existing SDK fixture, background worker, effect interpreters, SQL helpers, and artifact reader.
 Only test observation uses local IORefs. No runtime seam, warning suppression, alternate executor, or client behavior was added.
-The complete 48-case suite remains a separate final verification step.
+The expanded suite also passes: 48 examples, zero failures, no pending cases, in 338.0501 seconds.
+That run includes the new application-job acceptance case from `1bf5f2573`.
+The saved log is `scripts/local/native-shared-continuation-48-green.log` (ignored local evidence, not a release attestation).
 
 The production-configured server compiles but cannot authenticate to its configured database.
 Compilation does not establish live application acceptance.

@@ -2,6 +2,89 @@ import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { sql } from './helpers';
 
+test('routine text controls stay legible on mobile without enlarging desktop controls', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID();
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Mobile routine controls');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/p/${pid}/ai`);
+    await page.getByRole('button', { name: 'New chat', exact: true }).last().click();
+    const modal = page.locator('#ai-composer-modal');
+    await modal.getByText('Routine', { exact: true }).click();
+    const placeholderMetrics = (element: HTMLElement | SVGElement) => {
+      const style = getComputedStyle(element), placeholder = getComputedStyle(element, '::placeholder');
+      const context = document.createElement('canvas').getContext('2d')!;
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const fits = context.measureText(element.getAttribute('placeholder') ?? '').width <= element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const backgrounds = [];
+      for (let node: Element | null = element; node; node = node.parentElement) backgrounds.unshift(getComputedStyle(node).backgroundColor);
+      context.fillStyle = 'white'; context.fillRect(0, 0, 1, 1);
+      for (const color of backgrounds) { context.fillStyle = color; context.fillRect(0, 0, 1, 1); }
+      const luminance = (pixels: Uint8ClampedArray) => Array.from(pixels).slice(0, 3).map(value => { value /= 255; return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4; }).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+      const background = luminance(context.getImageData(0, 0, 1, 1).data);
+      context.fillStyle = placeholder.color; context.globalAlpha = parseFloat(placeholder.opacity); context.fillRect(0, 0, 1, 1);
+      const foreground = luminance(context.getImageData(0, 0, 1, 1).data);
+      return { fits, contrast: (Math.max(background, foreground) + 0.05) / (Math.min(background, foreground) + 0.05) };
+    };
+    const measurements: { control: string; theme: string; width: number; size: number }[] = [];
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate(value => document.body.dataset.theme = value, theme);
+        for (const name of ['Instructions', 'Run every']) {
+          const control = modal.getByLabel(name, { exact: true });
+          await expect(control).toBeVisible();
+          measurements.push({ control: `New routine: ${name}`, theme, width, size: await control.evaluate(element => parseFloat(getComputedStyle(element).fontSize)) });
+          if (name === 'Instructions') expect.soft((await control.evaluate(placeholderMetrics)).contrast, `New routine hint in ${theme} at ${width}px`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    for (const [name, size] of [['Instructions', 14], ['Run every', 12]] as const) expect(await modal.getByLabel(name, { exact: true }).evaluate(element => parseFloat(getComputedStyle(element).fontSize)), name).toBe(size);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await modal.getByRole('textbox', { name: 'Instructions', exact: true }).fill('Compare checkout latency each day.');
+    await modal.getByRole('button', { name: 'Start routine', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/p/${pid}/ai/[0-9a-f-]+$`));
+    await page.getByRole('combobox', { name: 'Execution policy', exact: true }).selectOption('review');
+    await page.getByText('Routine instructions', { exact: true }).click();
+    await page.locator('details').filter({ has: page.locator('input[name="intervalMinutes"]') }).locator('summary').click();
+    const controls = [
+      ['Message Monoscope AI', page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true }), 14],
+      ['Instructions', page.getByRole('textbox', { name: 'Instructions', exact: true }), 14],
+      ['Execution policy', page.getByRole('combobox', { name: 'Execution policy', exact: true }), 12],
+      ['Required reviewer', page.getByRole('combobox', { name: 'Required reviewer', exact: true }), 12],
+      ['Routine interval in minutes', page.getByRole('spinbutton', { name: 'Routine interval in minutes', exact: true }), 12],
+    ] as const;
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate(value => document.body.dataset.theme = value, theme);
+        for (const [name, control] of controls) {
+          await expect(control).toBeVisible();
+          measurements.push({ control: name, theme, width, size: await control.evaluate(element => parseFloat(getComputedStyle(element).fontSize)) });
+          if (name === 'Message Monoscope AI') {
+            const metrics = await control.evaluate(placeholderMetrics);
+            expect.soft(metrics.fits, `The empty composer prompt fits its single row at ${width}px`).toBe(true);
+            expect.soft(metrics.contrast, `Composer hint in ${theme} at ${width}px`).toBeGreaterThanOrEqual(4.5);
+          }
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`routine-controls-${theme}-${width}.png`), fullPage: true });
+      }
+    }
+    await testInfo.attach('mobile-font-sizes', { body: JSON.stringify(measurements, null, 2), contentType: 'application/json' });
+    for (const measurement of measurements) expect.soft(measurement.size, `${measurement.control} in ${measurement.theme} at ${measurement.width}px`).toBeGreaterThanOrEqual(16);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    for (const [name, control, size] of controls) expect(await control.evaluate(element => parseFloat(getComputedStyle(element).fontSize)), name).toBe(size);
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
 test('routine detail panels preserve conversation drafts, run history, and artifacts', async ({ page, baseURL }, testInfo) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), run = randomUUID(), repository = randomUUID(), archivedConversation = randomUUID(), archivedRun = randomUUID();
   const email = `${uid.replaceAll('-', '').repeat(2)}@example.test`;
@@ -164,7 +247,7 @@ test('action history and policy controls preserve drafts and check current roles
          VALUES ('${pid}', '${conversation}', 'assistant', 'The action outcome is uncertain.');
        INSERT INTO apis.ai_routine_runs (id, root_run_id, project_id, conversation_id, scheduled_at, started_at, finished_at, status, source, requested_by, input, policy)
          VALUES ('${run}', '${run}', '${pid}', '${conversation}', now(), now(), now(), 'succeeded',
-           '{"tag":"InteractiveRun","contents":{"tag":"WebMessage"}}', '${uid}', 'Create a dashboard', 'autonomous');
+           '{"tag":"InteractiveRun","contents":{"tag":"WebMessage"}}', '${uid}', 'Create a dashboard', '"autonomous"');
        INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
          VALUES ('${operation}', '${pid}', '${run}', '${uid}', 1,
            '{"call":{"id":"create","type":"function","function":{"name":"create_dashboard","arguments":{"body":{"title":"Browser action proposal"}}}},"policy":{"capability":{"tag":"ProjectWrite"},"execution":"autonomous","permission":"admin"}}',
@@ -184,7 +267,7 @@ test('action history and policy controls preserve drafts and check current roles
       ]);
       await expect(composer).toHaveValue('Keep this follow-up draft.');
       await expect(page).toHaveURL(`/p/${pid}/ai/${conversation}`);
-      expect(sql(`SELECT policy FROM apis.ai_routines WHERE project_id = '${pid}' AND conversation_id = '${conversation}'`).toString().trim()).toBe(value);
+      expect(JSON.parse(sql(`SELECT policy FROM apis.ai_routines WHERE project_id = '${pid}' AND conversation_id = '${conversation}'`).toString().trim())).toBe(value);
     }
     await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().click();
     const history = page.getByRole('region', { name: 'Action history', exact: true });
