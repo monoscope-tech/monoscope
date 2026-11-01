@@ -218,7 +218,7 @@ data ReviewResponse = ReviewSaved ReviewReceipt | ReviewAlreadyDecided ReviewRec
   deriving stock (Eq, Show)
 
 
-data OperationConflict = OperationScopeMismatch | OperationStepMoved | OperationProposalChanged | OperationOutcomeChanged | OperationResponseInvalid
+data OperationConflict = OperationScopeMismatch | OperationStepMoved | OperationProposalChanged | OperationOutcomeChanged | OperationResponseInvalid | OperationAuthorityWithdrawn
   deriving stock (Show)
   deriving anyclass (Exception)
 
@@ -750,7 +750,7 @@ beginOperationTx now lease cursor proposal review = runExceptT do
 
 -- | The mutation and its retained outcome commit together. A failed transaction
 -- leaves no claimed operation, so a later worker can safely execute it.
-atomicOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es, Time.Time :> es) => RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Tx.Transaction ToolResult -> Eff es OperationResult
+atomicOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es, Time.Time :> es) => RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Tx.Transaction (Either OperationConflict ToolResult) -> Eff es OperationResult
 atomicOperation lease cursor proposal review action = do
   now <- Time.currentTime
   result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
@@ -761,9 +761,10 @@ atomicOperation lease cursor proposal review action = do
         Right (AwaitOperationReview identifier request) -> pure $ Right $ WaitingResult identifier request
         Right (RetainedOperation retained) -> pure $ Right $ RecordedResult retained
         Right (ReconcileOperation claim original run) -> pure $ Right $ UncertainResult claim original run
-        Right (ExecuteOperation claim) -> do
-          response <- action
-          (RecordedResult response <$) <$> completeOperationTx claim response
+        Right (ExecuteOperation claim) ->
+          action >>= \case
+            Left conflict -> pure $ Left conflict
+            Right response -> (RecordedResult response <$) <$> completeOperationTx claim response
     when (isLeft outcome) Tx.condemn
     pure outcome
   either throwIO pure result

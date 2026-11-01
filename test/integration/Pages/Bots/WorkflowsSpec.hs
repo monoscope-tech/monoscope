@@ -914,7 +914,7 @@ spec = around withTestResources do
                 proposal = Investigations.OperationProposal (Operation.ModelCall call) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Observe PM.PView
             void $ runQueryEffect tr $ Investigations.atomicOperation lease (Investigations.CheckpointCursor (Investigations.SlackCheckpoint turn) 0) proposal Nothing do
               result <- Issues.saveArtifactTx testPid conversation artifactKey Nothing "Finding" Issues.ArtifactAppend
-              pure $ Investigations.ToolResult (either show (const "Finding saved.") result) (AE.toJSON . (.key) <$> rightToMaybe result)
+              pure $ Right $ Investigations.ToolResult (either show (const "Finding saved.") result) (AE.toJSON . (.key) <$> rightToMaybe result)
           (_, outcome) <- runTestBgRecordingHTTP frozenTime tr $ withSlackReplyResponses (pure "{\"ok\":true,\"ts\":\"1735689610.000001\",\"members\":[\"U0123ABCDEF\"]}") $ provider $ tryAny $ SlackPage.processSlackEventWithTools (Just Routes.mcpProjectTools) receipt
           outcome `shouldSatisfy` isRight
           Just execution <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.SlackMessage receipt

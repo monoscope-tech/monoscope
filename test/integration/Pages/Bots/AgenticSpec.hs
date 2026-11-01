@@ -28,7 +28,7 @@ import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (Eff, IOE, (:>))
 import Effectful qualified as Eff
 import Effectful.Concurrent.Async (concurrently, concurrently_)
-import Effectful.Dispatch.Dynamic (interpose)
+import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Error.Static (catchError)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
@@ -767,7 +767,7 @@ spec = around withTestResources do
           let cursor = Investigations.CheckpointCursor target saved.revision
               executeWith requirement = runQueryEffect tr $ Investigations.atomicOperation lease cursor proposal requirement do
                 result <- Issues.saveArtifactTx testPid conversation artifactKey Nothing "Finding" Issues.ArtifactAppend
-                pure $ Investigations.ToolResult (either show (const "Finding saved.") result) Nothing
+                pure $ Right $ Investigations.ToolResult (either show (const "Finding saved.") result) Nothing
               execute = executeWith $ Just review
               artifacts = runQueryEffect tr $ Issues.listArtifacts testPid conversation $ Just artifactKey
           when (scenario == ExpiredProposal) $ advanceTestTime tr 60
@@ -826,6 +826,38 @@ spec = around withTestResources do
           map (.content) retained `shouldBe` [Just "Finding" | scenario `elem` [ApproveReview, ConcurrentDecisions]]
           entries <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid context.id
           length entries `shouldBe` 1
+
+      for_ (["role", "policy", "review", "audience", "permission"] :: [Text]) $ \restriction ->
+        it ("agentOperation_authorityChangedBeforeAtomicWikiClaimDoesNotWrite: " <> toString restriction) \tr -> do
+          let conversation = UUIDId $ UUID.fromWords 0 0 0 198
+              page = UUIDId UUID.nil :: Memory.PageId
+              user = (getResponse tr.trSessAndHeader).user.id
+              arguments = fromList [("pageId", AE.toJSON page), ("version", AE.toJSON (0 :: Int)), ("document", AE.object ["title" AE..= ("Retained authority" :: Text), "body" AE..= ("Must not write after role loss" :: Text)])]
+          mode <- scheduledInvocation tr conversation Issues.Autonomous
+          let config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess AI.ProjectMember user, AI.conversationId = Just conversation, AI.invocationMode = mode}
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [message.content | message <- toList history, message.role == LLM.Tool] of
+                  [] -> LLM.Message LLM.Assistant "" LLM.defaultMessageData{LLM.toolCalls = Just [LLM.ToolCall "write" "function" $ LLM.ToolFunction "write_project_memory" arguments]}
+                  _ -> LLM.Message LLM.Assistant "Finished." LLM.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "No title request"
+                ELLM.EmbedDocuments{} -> pure $ Left "No embedding request"
+              revokeBeforeClaim = interpose @Time.Time \_ -> \case
+                Time.CurrentTime -> do
+                  pending <- Hasql.interpScalar @Bool [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.slack_turn_checkpoints WHERE project_id = #{testPid} AND conversation_id = #{conversation} AND checkpoint->>'tag' = 'ToolsPending')|]
+                  when pending $ case restriction of
+                    "role" -> Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+                    "policy" -> Issues.setRoutinePolicy user testPid conversation Issues.Observe
+                    "review" -> Issues.setRoutinePolicy user testPid conversation $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.KnowledgeChanges) Catalog.ReviewEditors
+                    "audience" -> void $ Investigations.retainEvidenceAudience testPid conversation $ Investigations.PersonalAudience user
+                    _ -> Investigations.retainEvidencePermission testPid [conversation] ProjectMembers.PAdmin
+                  pure frozenTime
+                request -> send @Time.Time $ coerce request
+          runTestBg frozenTime tr (revokeBeforeClaim $ provider $ AI.runAgenticChatWithHistory config "Remember the finding" "model" "key")
+            `shouldThrow` (isJust . fromException @AI.AgentStopped)
+          runQueryEffect tr (Memory.pageHistory testPid page) >>= (`shouldSatisfy` null)
+          case mode of
+            AI.DurableRun context -> runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid context.id) >>= (`shouldSatisfy` null)
+            AI.InteractiveReadOnly -> expectationFailure "Expected a durable scheduled request"
 
       for_ ["save_artifact", "write_project_memory"] \tool ->
         it ("agentOperation_atomicMutationRollsBackWithItsOutcome: " <> toString tool) \tr -> do

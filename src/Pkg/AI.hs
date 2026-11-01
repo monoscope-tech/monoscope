@@ -905,7 +905,7 @@ runSlackEvidence config tool operation proposed = do
         own <- lift $ Integrations.slackDirectMessageOwner config.projectId subject.userId subject.teamId subject.slackUserId channelId
         unless own $ Except.throwError SlackAudienceUnavailable
         pure (Investigations.PersonalAudience subject.userId, proposed)
-      (_, Just channelId) | operation `elem` [SlackMCP.ReadChannel, SlackMCP.ReadThread] -> do
+      (_, Just channelId) | operation `elem` ([SlackMCP.ReadChannel, SlackMCP.ReadThread] :: [SlackMCP.SlackRead]) -> do
         channel <- Except.liftEither $ first (const SlackAudienceUnavailable) $ Integrations.slackChannel subject.teamId channelId
         member <- lift $ Integrations.slackChannelMember config.projectId subject.userId channel
         unless member $ Except.throwError SlackAudienceUnavailable
@@ -1429,7 +1429,11 @@ recordedOperation context cursor call snapshot reauthorize execution = do
   perform requirement execution
   where
     perform requirement = \case
-      AtomicOperation action -> Investigations.atomicOperation lease cursor proposal requirement action
+      AtomicOperation action ->
+        Investigations.atomicOperation lease cursor proposal requirement (atomic action)
+          `Exception.catch` \case
+            Investigations.OperationAuthorityWithdrawn -> throwIO AgentStopped
+            conflict -> throwIO conflict
       EffectfulOperation action -> recorded requirement action
       ReconcilableOperation action reconcile ->
         recordedOperation context cursor call snapshot reauthorize action >>= \case
@@ -1443,6 +1447,25 @@ recordedOperation context cursor call snapshot reauthorize execution = do
                 if Operation.sameOperation original call
                   then pure $ Investigations.RecordedResult result
                   else recordedOperation context cursor call current reauthorize execution
+    -- Recheck after locking the run: authority can change after the earlier snapshot.
+    atomic action = do
+      current <- Issues.runContextAuthorityTx context
+      shared <-
+        if Catalog.requiresAutonomy snapshot.capability
+          then
+            HI.getOneColumn
+              <$> Hasql.oneTx @(HI.OneColumn Bool)
+                [HI.sql|SELECT apis.evidence_permission_rank(COALESCE(apis.conversation_evidence_permission(#{context.projectId}, #{context.conversationId}), #{ProjectMembers.PAdmin}))
+              <= apis.evidence_permission_rank(#{Catalog.disclosurePermission snapshot.capability})
+              AND apis.conversation_evidence_audience(#{context.projectId}, #{context.conversationId}) = #{HI.AsJsonb Investigations.ProjectAudience}|]
+          else pure True
+      case current of
+        Just authority
+          | isRight (Issues.authorizeCapability authority snapshot.capability)
+          , not (Catalog.requiresAutonomy snapshot.capability) || authority.policy == snapshot.execution
+          , shared ->
+              Right <$> action
+        _ -> pure $ Left Investigations.OperationAuthorityWithdrawn
     lease = Investigations.RunLease (Investigations.RunTurn context.projectId context.conversationId context.requestedBy context.id) context.startedAt
     proposal = Investigations.OperationProposal call snapshot
     recorded requirement action =

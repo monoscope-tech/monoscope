@@ -87,3 +87,39 @@ The current source does not establish that evidence.
 The local image builder uses the `orbstack` endpoint and a Unix socket on this Mac.
 Final image generation must explicitly select `DOCKER_CONTEXT=orbstack` and `MONOSCOPE_BUILDER=monoscope-local-amd64`.
 No image build or final signoff started during this review.
+
+
+## Atomic project-write authority
+
+A deterministic regression changed authority between the cached check and the atomic claim.
+Before the fix, wiki revisions still committed in all five cases: role loss, Observe policy,
+a new review requirement, private audience, and a higher evidence requirement.
+
+The transaction now reads current run authority after the ledger locks the run.
+Project writes also require the current review policy and a compatible evidence scope.
+A rejected check returns a typed `OperationAuthorityWithdrawn` result.
+The transaction rolls back the claim and mutation together.
+The caller uses the existing `AgentStopped` path so the worker can cancel the request.
+Ordinary conversation evidence remains automatic under its existing capability.
+
+The regression requires that stop result, no wiki revision, and no retained operation claim.
+All 19 operation examples pass in 6.2257 seconds, including both atomic rollback cases and uncertain external outcomes.
+The failing-first log is `scripts/local/atomic-wiki-authority-five-red.log`.
+The final focused log is `scripts/local/atomic-wiki-authority-operations-19-green.log`.
+These runs use the actual shared executor and database with the existing model and clock interpreters.
+
+The guard reuses the existing authority query inside the transaction.
+The original reader and transaction reader share one typed result decoder.
+The ledger carries guard failure explicitly instead of treating it as a saved tool response.
+No warning suppression, raw IO seam, client handler, or migration was added.
+Pinned Fourmolu passes the changed authority source and regression module.
+HLint reports no hints in `Issues.hs` and `AI.hs`.
+All 61 selected-review examples pass in 17.0456 seconds.
+The native application-job recovery case passes in 21.5561 seconds.
+The PR checkout harness passes in 6.5214 seconds, including atomic wiki receipts and publication recovery.
+Their logs are `scripts/local/atomic-wiki-authority-reviews-61-green.log`,
+`scripts/local/atomic-wiki-authority-native-fix-green.log`, and
+`scripts/local/atomic-wiki-authority-native-review-green.log`.
+The scoped follow-up review finds no suppression, weaker contract, or duplicate executor.
+No client behavior changed. Whole-branch reviews and final release checks remain open.
+This scoped result does not establish whole-branch signoff or live Slack acceptance.

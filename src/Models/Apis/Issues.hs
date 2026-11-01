@@ -163,6 +163,7 @@ module Models.Apis.Issues (
   CapabilityDenial (..),
   authorizeCapability,
   runContextAuthority,
+  runContextAuthorityTx,
   retireFixRunTx,
   slackTurnForRun,
   InteractiveOrigin (..),
@@ -1792,11 +1793,13 @@ authorizeCapability authority capability
 
 readRunAuthority :: DB es => HI.Sql -> Eff es (Maybe RunAuthority)
 readRunAuthority query = (accessAuthority =<<) <$> Hasql.interpOne query
-  where
-    accessAuthority = \case
-      (Allowed policy, permission) -> Just RunAuthority{policy, permission}
-      (Unavailable, _) -> Nothing
-      (Stopped, _) -> Nothing
+
+
+accessAuthority :: (RunAccess, ProjectMembers.Permissions) -> Maybe RunAuthority
+accessAuthority = \case
+  (Allowed policy, permission) -> Just RunAuthority{policy, permission}
+  (Unavailable, _) -> Nothing
+  (Stopped, _) -> Nothing
 
 
 runContextPolicy :: DB es => RunContext -> Eff es (Maybe ExecutionPolicy)
@@ -1805,6 +1808,10 @@ runContextPolicy context = fmap (.policy) <$> runContextAuthority context
 
 runContextAuthority :: DB es => RunContext -> Eff es (Maybe RunAuthority)
 runContextAuthority context = readRunAuthority $ runContextAccessSql context
+
+
+runContextAuthorityTx :: RunContext -> Tx.Transaction (Maybe RunAuthority)
+runContextAuthorityTx context = (accessAuthority =<<) <$> Hasql.queryTx (runContextAccessSql context)
 
 
 slackTurnForRun :: DB es => RunContext -> Eff es (Maybe Investigations.Turn)
