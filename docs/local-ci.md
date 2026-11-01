@@ -176,6 +176,12 @@ an existing device path alone does not prove that a guest uses KVM.
 The [workspace review](reviews/2026-11-01-workspace-interpreter.md) records the current acceptance scope.
 Keep test binaries, assets, and receipts in the guest user's home; a VM reboot clears `/tmp`.
 
+Application fix-job checks also require FFmpeg, Graphviz, and an absolute `HOST_URL`,
+as supplied by `scripts/ci/ci.sh`. Without them, media preparation or publication packages fail.
+For an isolated VM, install `ffmpeg` and `graphviz` and set `HOST_URL=http://localhost:8080/`.
+Use `USE_EXTERNAL_DB=true` with the local test database and an empty `.env`;
+do not copy production credentials into the VM.
+
 If a required watcher restart leaves an orphaned GHC process, inspect its parent,
 working directory, listeners, and children before cleanup. Stop only a confirmed
 detached process from that checkout. Preserve active watchers and other worktrees.

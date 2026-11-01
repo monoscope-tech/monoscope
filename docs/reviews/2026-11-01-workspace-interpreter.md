@@ -88,10 +88,33 @@ The frozen comparison fails on base and passes on the repaired head.
 A weakened candidate test is blocked.
 All five observed CLI guest processes use KVM and an open /dev/kvm descriptor, with two CPUs and 1024 MiB.
 The result and build logs are scripts/local/linux-kvm-cli-acceptance.json and linux-kvm-cli-build.log.
-This verifies the Linux SDK and shared CLI interpreter; full Linux application-job acceptance remains separate.
+This verifies the Linux SDK and shared CLI interpreter.
 Application image generation remains on the explicitly selected local OrbStack builder.
+
+## Linux application checkpoint
+
+The isolated Linux application snapshot compiles locally in OrbStack through the supported doctest target.
+All **2,098 doctest examples pass**, with zero errors or failures.
+The first harness disabled GHC environment files, preventing doctest package discovery.
+Restoring the project default fixes that harness failure.
+
+The resulting ARM64 integration binary runs inside the local Linux VM against local test services.
+Seven PR-review recovery cases and two application fix-job cases pass:
+**9 examples, 0 failures, 110.2487 seconds**.
+These exercise application jobs, retained sessions, authority, receipts, and completion through the real SDK and guest.
+The model provider and publication interpreter are controlled test implementations; this is not live GitHub publication acceptance.
+The observer records 26 QEMU processes using KVM, CPU host, two CPUs, 1024 MiB, and an open KVM descriptor.
+The transferred binary hash matches the local build receipt.
+
+The first application run passes all seven review cases but fails both fix cases.
+The VM lacks FFmpeg, Graphviz, and HOST_URL, which CI already supplies.
+Installing those tools and setting the absolute origin produces the passing rerun above.
+Both failed logs remain available; no runtime or test assertion changes make the rerun pass.
+The acceptance receipt is scripts/local/linux-kvm-application-acceptance.json.
+Its source comparison finds only concurrent Slack Utils and WorkflowsSpec changes after the snapshot.
+Native application and interpreter inputs still match; this result does not validate those later Slack edits.
 
 ## Remaining work
 
-Finish Linux application-job and remaining host-loss acceptance, remaining live scenarios,
+Finish remaining host-loss acceptance and live scenarios,
 the complete branch review loop, final simplification, local release gates, and the PR update.

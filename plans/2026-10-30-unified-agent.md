@@ -20,12 +20,12 @@ All twenty selected incoming PR heads remain included. A fresh inventory found 2
 | Requested conversations | Web, issue chat, slash commands, Slack events, schedules, enrichment, and incidents queue existing jobs and use shared execution/completion. Origins, request IDs, titles, and replies survive retry. | Private-channel mention and autonomous wiki write verified with the isolated QA app; complete the remaining cross-entry-point regressions. |
 | Shared memory | Wiki read/search/write use versioned ProjectMemory, the common capability policy, transactional edit recipe, and operation ledger. Native attempts retain their actual IDs and revisions link to the shared writing run. | Final cross-entry-point and author-attribution regression run. |
 | Optional selected review | Web and signed Slack controls use the same decision state and continuation queue. Decisions, expiry, revocation, pause, deletion, and terminal cleanup preserve the original request. | Final whole-branch continuation acceptance. |
-| Native review and fix integration | PR analysis, fixes, admission, and independent review share retained SDK/VM sessions and artifact validation. Actual whole-application/SDK/VM loss proves both fail-closed uncheckpointed retention and successful paired-checkpoint continuation on the original run and attempts. | Physical-host loss, Linux application/CLI acceptance, and final regressions remain open. The separate Linux/KVM SDK backend check passes. |
+| Native review and fix integration | PR analysis, fixes, admission, and independent review share retained SDK/VM sessions and artifact validation. Actual whole-application/SDK/VM loss proves both fail-closed uncheckpointed retention and successful paired-checkpoint continuation on the original run and attempts. | Linux/KVM SDK, CLI, and nine selected application cases pass. Physical-host loss and final regressions remain open. |
 | Slack streaming | Persisted start/append/stop state and task-ID reconciliation reuse the existing progress publication and refresh job. Five focused recovery cases and all 486 bot examples pass. Streams close before the provider deadline or journal rollover, then use the existing snapshot refresh. | Complete live interruption, rate limits, native Stop-button interaction, and artifact-link acceptance, plus whole-branch review and final release gates. A real private-channel request completed one stream/final reply; a separate locally signed stop cancelled its active run without a late answer. |
 | Proactive work | Channel opt-in, incident analysis, measured recovery/resolution reports, and authorized remediation reuse event routines, the common worker, and incident outbox. Analysis defaults to Observe. | Controlled synthetic alert/gap/recovery, delivery replay, and paused-channel acceptance now pass through the real worker/model and Slack. Complete telemetry-fed and native opt-in acceptance plus final authority regressions. |
 | Slack evidence | Requester-bound OAuth, authenticated encryption, refresh/revocation, remote MCP reads, typed audiences, and retained provenance use shared systems. Provider writes stay excluded. | Real requester consent, encrypted grant storage, canonical discovery/thread read, retained channel audience, and replay pass. The canonical provider citation now opens the correct source thread from the published Slack reply. The current runtime, including the credential-failure follow-up, also passes a fresh live request and signed replay. Complete Slack Connect and remaining private/public audience acceptance. |
 | Integrated experience | Conversations, run inspectors, review controls, and artifacts share the existing page. Ten Chromium cases cover loading, empty, failure, keyboard, light/dark and narrow-width states, including measured 200% text. Native fix media and package controls now appear inside the run inspector; eight visual states, written artifact navigation, and missing explanations pass. | Hosted visualization interaction, physical-device and VoiceOver acceptance remain unverified. The new native inspector case uses fixture media; playback, S3 delivery, and package-download acceptance remain separate. |
-| Publication | Work stays on the PR branch; existing local verification checkpoints are recorded below. | Repeated whole-branch reviews, final simplification, Linux/KVM, local CI/image signoff, and canonical PR 619 update. Repeat doctests if their inputs change. |
+| Publication | Work stays on the PR branch; existing local verification checkpoints are recorded below. | Repeated whole-branch reviews, final simplification, local CI/image signoff, and canonical PR 619 update. Repeat doctests if their inputs change. |
 
 Streaming, Slack evidence, and proactive work remain part of this full plan even though their rollout boundaries are separate. A narrower autonomous-launch boundary does not establish completion of the plan.
 
@@ -640,7 +640,16 @@ Its actual KVM preparation and frozen comparison pass, while a weakened candidat
 Five observed CLI guest processes use KVM with two CPUs and 1024 MiB.
 The fresh remote inventory still includes all twenty selected heads and adapted #661; current master is already an ancestor.
 See the [workspace interpreter review](../docs/reviews/2026-11-01-workspace-interpreter.md) for scope and receipts.
-Full Linux application jobs, remaining host-loss and live acceptance, whole-branch review, final gates, and publication remain open.
+Full Linux application jobs, remaining host-loss and live acceptance, whole-branch review, final gates, and publication remain open at that checkpoint.
+
+The selected Linux application cases now pass: seven PR-review recovery cases and two fix-job cases,
+9 examples with zero failures in 110.2487 seconds. All 2,098 Linux doctest examples also pass.
+The observer confirms 26 guest processes use real KVM, with two CPUs and 1024 MiB each.
+The first run exposes missing VM media tools and HOST_URL; applying the existing CI prerequisites fixes the harness.
+Application and interpreter inputs match the snapshot; later concurrent Slack edits need their own checks.
+This closes the selected Linux application gap, not full-suite, live GitHub, or physical-host power-loss acceptance.
+See the [workspace review](../docs/reviews/2026-11-01-workspace-interpreter.md) for evidence and limits.
+Remaining live scenarios, host-loss limits, whole-branch review, final gates, and publication remain open.
 
 ## External references
 
