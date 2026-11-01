@@ -27,6 +27,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
+import Pages.CodeContext qualified as CodeContext
 import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), IconBadgeSize (..), emptyState_, iconBadge_, localTimeFmt_, tonePill_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
@@ -317,7 +318,10 @@ threadPageGetH pid convId docM runM hxTarget = do
     requestedBy <- maybe (pure Nothing) Projects.userById evidence.requestedBy
     runArtifacts <- Issues.listRunArtifacts pid run.id
     operations <- Investigations.listOperations @AI.OperationPolicy pid run.id
-    pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts viewerPermission operations
+    fixEvidence <- case run.source of
+      Issues.FixRun identifier | run.status == Issues.RunSucceeded && viewerPermission >= ProjectMembers.PAdmin -> Just <$> CodeContext.issueFixEvidenceH pid identifier
+      _ -> pure Nothing
+    pure $ runView_ (isNothing conversationM) run evidence requestedBy runArtifacts viewerPermission operations fixEvidence
   let activeId = (.conversationId) <$> conversationM
       messages = bool [] selectedMessages (isJust conversationM)
       docs = bool [] artifacts (isJust conversationM)
@@ -341,8 +345,8 @@ threadPageGetH pid convId docM runM hxTarget = do
     runStatusId :: Issues.RoutineRun -> Text
     runStatusId run = "routine-run-status-" <> run.id.toText
 
-    runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Html ()
-    runView_ retained run evidence requestedBy artifacts viewerPermission operations =
+    runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Maybe (Html ()) -> Html ()
+    runView_ retained run evidence requestedBy artifacts viewerPermission operations fixEvidence =
       section_
         ([id_ "routine-run", class_ "space-y-5"] <> [attribute | run.status == Issues.RunRunning, attribute <- [hxGet_ $ runUrl pid run.id <> "?conversation=" <> convId.toText, hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxTarget_ "this", hxSwap_ "outerMorph", term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]])
         do
@@ -365,9 +369,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 let name = T.strip $ user.firstName <> " " <> user.lastName
                 span_ [class_ "min-w-0 break-words"] $ toHtml $ "Requested by " <> if T.null name then CI.original user.email else name
               time_ [datetime_ $ show run.startedAt] $ toHtml $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" run.startedAt
-          when (run.status == Issues.RunSucceeded && viewerPermission >= ProjectMembers.PAdmin) $ case run.source of
-            Issues.FixRun fixId -> a_ [href_ $ "/p/" <> pid.toText <> "/issue-fixes/" <> fixId.toText, class_ "btn btn-sm btn-ghost"] "Review verified fix"
-            _ -> pass
+          sequence_ fixEvidence
           whenJust run.error $ p_ [class_ $ "rounded-lg border border-strokeWeak p-4 text-sm break-words " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; _ -> "text-textWeak"), role_ "status"] . toHtml
           whenJust evidence.input $ \input -> section_ [Aria.label_ "Run request"] do
             h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Request"

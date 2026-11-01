@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixMediaH, issueFixPackageH) where
+module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
@@ -94,32 +94,46 @@ issueFixGetH pid fid = do
   (_, _, bw) <- mkPageCtx pid
   totals <- Usage.usageTotals Usage.Fixes pid
   void $ issueFixForViewer pid fid session
-  let base = "/p/" <> pid.toText <> "/issue-fixes/" <> fid.toText <> "/media/"
   pure $ addHeader @"Cache-Control" ("private, no-store" :: Text) $ bodyWrapper bw{pageTitle = "Issue fix"} $ div_ [class_ "h-full overflow-y-auto"] $ section_ [class_ "mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-8"] do
     a_ [href_ ("/p/" <> pid.toText <> "/repositories?tab=fixes"), class_ "text-sm text-textBrand hover:underline"] "All issue fixes"
-    header_ [class_ "space-y-2"] do
-      h1_ [class_ "text-xl font-semibold text-textStrong break-words"] $ toHtml result.summary
-      p_ [class_ "text-sm text-textWeak"] do
-        toHtml @Text "Verified candidate "
-        code_ $ toHtml $ T.take 12 $ IssueFixes.revisionText result.head
-      p_ [class_ "text-sm text-textWeak"] $ toHtml @Text $ "Inferred cause: " <> result.rootCause
-    video_ [term "controls" "", term "preload" "metadata", term "playsinline" "", term "aria-label" "Bug reproduction and verified fix", term "poster" (base <> "before"), width_ (show explanation.width), height_ (show explanation.height), class_ "aspect-video h-auto w-full rounded-lg border border-strokeWeak"] do
-      source_ [src_ (base <> "video"), type_ "video/mp4"]
-      track_ [src_ (base <> "captions"), term "kind" "captions", term "srclang" "en", label_ "English captions", term "default" ""]
-      p_ $ a_ [href_ (base <> "video"), term "download" "explanation.mp4"] "Download the explanation video"
-    p_ [class_ "text-sm text-textWeak"] "The video uses retained verification evidence. The cause is an agent inference."
-    figure_ [class_ "space-y-2"] do
-      img_ [src_ (base <> "diagram"), alt_ "Diagram of the reproduced failure, inferred cause, change, and passing regression", class_ "w-full rounded-lg border border-strokeWeak"]
-      figcaption_ [class_ "text-sm text-textWeak"] $ a_ [href_ (base <> "captions"), class_ "text-textBrand hover:underline"] "Read the video captions"
-    section_ [class_ "space-y-2"] do
-      h2_ [class_ "text-base font-semibold text-textStrong"] "Pull request package"
-      p_ [class_ "text-sm text-textWeak"] "A short description, video, diagram, captions, and verification metadata. Prepared for review; not published."
-      a_ [href_ ("/p/" <> pid.toText <> "/issue-fixes/" <> fid.toText <> "/publication.tar"), term "download" "publication.tar", class_ "btn btn-sm btn-outline"] "Download PR package"
+    issueFixEvidence_ pid fid result explanation
     section_ [class_ "space-y-2 text-sm text-textWeak"] do
       h2_ [class_ "font-medium text-textStrong"] "Recorded usage"
       for_ (find ((== Just fid) . (.runId)) totals) \total -> do
         p_ $ toHtml $ usageText total.usage
         p_ $ toHtml $ resourceText total.resources
+
+
+issueFixEvidenceH :: Projects.ProjectId -> IssueFixes.FixId -> ATAuthCtx (Html ())
+issueFixEvidenceH pid fid = do
+  session <- Projects.getSession
+  when (session.persistentSession.id == demoGuestSessionId) $ throwError err404
+  media <- IssueFixes.mediaForUser pid fid session.user.id
+  pure $ maybe (p_ [role_ "status", class_ "text-sm text-textWeak"] "No explanation is available for this fix.") (uncurry $ issueFixEvidence_ pid fid) media
+
+
+issueFixEvidence_ :: Projects.ProjectId -> IssueFixes.FixId -> Agent.FixResult -> Agent.Explanation -> Html ()
+issueFixEvidence_ pid fid result explanation =
+  let base = "/p/" <> pid.toText <> "/issue-fixes/" <> fid.toText <> "/media/"
+   in section_ [Aria.label_ "Verified fix evidence", class_ "space-y-6"] do
+        header_ [class_ "space-y-2"] do
+          h2_ [class_ "text-xl font-semibold text-textStrong break-words"] $ toHtml result.summary
+          p_ [class_ "text-sm text-textWeak"] do
+            toHtml @Text "Verified candidate "
+            code_ $ toHtml $ T.take 12 $ IssueFixes.revisionText result.head
+          p_ [class_ "text-sm text-textWeak"] $ toHtml @Text $ "Inferred cause: " <> result.rootCause
+        video_ [term "controls" "", term "preload" "metadata", term "playsinline" "", term "aria-label" "Bug reproduction and verified fix", term "poster" (base <> "before"), width_ (show explanation.width), height_ (show explanation.height), class_ "aspect-video h-auto w-full rounded-lg border border-strokeWeak"] do
+          source_ [src_ (base <> "video"), type_ "video/mp4"]
+          track_ [src_ (base <> "captions"), term "kind" "captions", term "srclang" "en", label_ "English captions", term "default" ""]
+          p_ $ a_ [href_ (base <> "video"), term "download" "explanation.mp4"] "Download the explanation video"
+        p_ [class_ "text-sm text-textWeak"] "The video uses retained verification evidence. The cause is an agent inference."
+        figure_ [class_ "space-y-2"] do
+          img_ [src_ (base <> "diagram"), alt_ "Diagram of the reproduced failure, inferred cause, change, and passing regression", class_ "w-full rounded-lg border border-strokeWeak"]
+          figcaption_ [class_ "text-sm text-textWeak"] $ a_ [href_ (base <> "captions"), class_ "text-textBrand hover:underline"] "Read the video captions"
+        section_ [class_ "space-y-2"] do
+          h3_ [class_ "text-base font-semibold text-textStrong"] "Pull request package"
+          p_ [class_ "text-sm text-textWeak"] "A short description, video, diagram, captions, and verification metadata. Prepared for review; not published."
+          a_ [href_ ("/p/" <> pid.toText <> "/issue-fixes/" <> fid.toText <> "/publication.tar"), term "download" "publication.tar", class_ "btn btn-sm btn-outline"] "Download PR package"
 
 
 issueFixPackageH :: Projects.ProjectId -> IssueFixes.FixId -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATAuthCtx Wai.ResponseReceived

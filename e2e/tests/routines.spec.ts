@@ -2,6 +2,87 @@ import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { sql } from './helpers';
 
+test('verified fix evidence stays in the conversation run inspector', async ({ page, baseURL }, testInfo) => {
+  const [uid, sid, pid, conversation, run, fix, issue, credential, mapping, attempt, candidate, check, image] = Array.from({ length: 13 }, () => randomUUID());
+  const result = { projectId: pid, runId: fix, issueId: issue, attemptId: attempt, candidateId: candidate, base: 'a'.repeat(40), head: 'b'.repeat(40), patchSha256: 'a'.repeat(64), bundleSha256: 'b'.repeat(64), rootCause: 'The runtime dropped the original retry token.', checkId: check, regressionSha256: 'c'.repeat(64), summary: 'Preserve retry tokens' };
+  const explanation = { version: 1, source: 'a'.repeat(64), rendererSha256: 'b'.repeat(64), projectId: pid, runId: fix, issueId: issue, candidateId: candidate, head: result.head, checkId: check, regressionSha256: result.regressionSha256, durationMs: 36000, width: 1280, height: 720, renderMs: 1, mediaBytes: 7, videoBytes: 1, resourceCostStatus: 'unpriced', tools: { ffmpeg: 'fixture', graphviz: 'fixture' }, files: Object.fromEntries(['explanation.mp4', 'diagram.svg', 'captions.vtt', 'before.png', 'cause.png', 'change.png', 'after.png'].map(name => [name, 'a'.repeat(64)])) };
+  const setup = { mappingId: mapping, credentialId: credential, installationId: 42, service: 'checkout', owner: 'fixture', repo: 'checkout', base: result.base, imageBuildId: image };
+  // These retained rows exercise the real read handlers. Native verification and
+  // media transport have separate coverage; this case owns inspector behavior.
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Native fix inspector');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
+       INSERT INTO projects.git_credentials (id, project_id, account, installation_id) VALUES ('${credential}', '${pid}', 'fixture', 42);
+       INSERT INTO projects.code_mappings (id, project_id, credential_id, owner, repo, service) VALUES ('${mapping}', '${pid}', '${credential}', 'fixture', 'checkout', 'checkout');
+       INSERT INTO apis.issues (id, project_id, issue_type, service, target_hash, title) VALUES ('${issue}', '${pid}', 'runtime_exception', 'checkout', 'native-inspector', 'Retain retry tokens');
+       INSERT INTO projects.issue_fix_runs (id, project_id, issue_id, setup, billing_provider) VALUES ('${fix}', '${pid}', '${issue}', '${JSON.stringify(setup)}', 'stripe');
+       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, title) VALUES ('${pid}', '${conversation}', 'web', 'Fix checkout retries');
+       INSERT INTO apis.ai_routine_runs (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, finished_at, status, permission_ceiling)
+       VALUES ('${run}', '${run}', '${pid}', '${conversation}', '${uid}', 'Fix checkout retries', '"autonomous"', '{"tag":"FixRun","contents":"${fix}"}', now(), now(), now(), 'succeeded', 'admin');
+       INSERT INTO projects.issue_fix_jobs (run_id, requested_by, agent_run_id, result, investigation, explanation, media_retained_at, finished_at)
+       VALUES ('${fix}', '${uid}', '${run}', '${JSON.stringify(result)}', '{}', '${JSON.stringify(explanation)}', now(), now());
+       INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content) VALUES ('${pid}', '${conversation}', 'latest-result', 'Verified issue fix', 'Preserve retry tokens. Retained verification evidence is available in run details.');
+       INSERT INTO apis.ai_routine_run_artifacts (run_id, key, title, content) VALUES ('${run}', 'latest-result', 'Verified issue fix', 'Preserve retry tokens. Retained verification evidence is available in run details.');
+       INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content) VALUES ('${pid}', '${conversation}', 'assistant', 'Preserve retry tokens. Retained verification evidence is available in run details.');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }, { name: 'isSidebarClosed', value: 'true', url: baseURL! }]);
+    expect((await page.request.get(`/p/${pid}/issue-fixes/${fix}`)).status()).toBe(200);
+    await page.route('**/issue-fixes/*/media/*', route => {
+      const asset = new URL(route.request().url()).pathname.split('/').pop();
+      return asset === 'video' ? route.fulfill({ status: 204 })
+        : asset === 'captions' ? route.fulfill({ contentType: 'text/vtt', body: 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nRetained evidence\n' })
+        : route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720"><rect width="1280" height="720" fill="#172338"/><text x="80" y="360" fill="#f8fafc" font-size="48">Retained verification fixture</text></svg>' });
+    });
+    const path = `/p/${pid}/ai/${conversation}`;
+    for (const width of [320, 1280]) for (const theme of ['light', 'dark']) for (const zoom of [100, 200]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(path);
+      await page.evaluate(({ theme, zoom }) => { document.body.dataset.theme = theme; document.documentElement.style.fontSize = `${zoom}%`; }, { theme, zoom });
+      const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
+      await composer.fill('Keep this draft while I review the verified fix.');
+      await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().press('Enter');
+      const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
+      await expect(inspector).toBeVisible();
+      await expect(inspector).toBeFocused();
+      await expect(inspector.locator('video[aria-label="Bug reproduction and verified fix"]')).toBeVisible();
+      await inspector.locator('video').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`native-fix-evidence-${theme}-${width}-${zoom}.png`) });
+      await expect(inspector.getByRole('heading', { name: result.summary, exact: true })).toBeVisible();
+      await expect(inspector.locator('video track')).toHaveAttribute('kind', 'captions');
+      await inspector.getByRole('img', { name: 'Diagram of the reproduced failure, inferred cause, change, and passing regression', exact: true }).evaluate(element => (element as HTMLImageElement).decode());
+      const download = inspector.getByRole('link', { name: 'Download PR package', exact: true });
+      await expect(download).toHaveAttribute('href', `/p/${pid}/issue-fixes/${fix}/publication.tar`);
+      await expect(download).toHaveAttribute('download', 'publication.tar');
+      await download.scrollIntoViewIfNeeded();
+      const bounds = await download.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      expect(await inspector.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`native-fix-inspector-${theme}-${width}-${zoom}.png`) });
+      expect(new URL(page.url()).pathname).toBe(path);
+      await inspector.focus();
+      await page.keyboard.press('Escape');
+      await expect(inspector).toBeHidden();
+      await expect(composer).toBeFocused();
+      await expect(composer).toHaveValue('Keep this draft while I review the verified fix.');
+    }
+    await page.getByRole('navigation', { name: 'Artifacts', exact: true }).getByRole('link', { name: 'Verified issue fix', exact: true }).press('Enter');
+    await expect(page.locator('#ai-document')).toContainText('Preserve retry tokens.');
+    expect(new URL(page.url()).pathname).toBe(path);
+    sql(`UPDATE projects.issue_fix_jobs SET media_retained_at = NULL WHERE run_id = '${fix}';`);
+    await page.goto(path);
+    await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().press('Enter');
+    const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
+    await expect(inspector.getByText('No explanation is available for this fix.', { exact: true })).toBeVisible();
+    await expect(inspector.locator('video')).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('native-fix-unavailable.png') });
+  } finally {
+    sql(`DELETE FROM projects.issue_fix_jobs WHERE run_id = '${fix}'; DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
 test('conversation detail controls remain reachable when text size is doubled', async ({ page, baseURL }, testInfo) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID(), run = randomUUID();
   sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');

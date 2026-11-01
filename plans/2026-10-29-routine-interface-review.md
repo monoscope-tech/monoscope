@@ -521,3 +521,71 @@ layout or behavior changed during this visual review.
 ### Verdict
 
 Approve
+
+## Native fix evidence inside the conversation — 1 November 2026
+
+### Scope and coverage
+
+Full review of the native fix run inspector, written artifact navigation,
+and the missing-explanation state. The implementation reuses Lucid, HTMX,
+the existing inspector, and application theme tokens.
+
+| Domain | Evidence inspected | Result |
+| --- | --- | --- |
+| Accessibility | Keyboard opening, inspector focus, Escape, restored composer focus, named video, captions, diagram alternative text, and heading hierarchy | Clear |
+| Layout | Eight combinations of 320/1280 pixels, light/dark appearance, and 100/200% root text size; package bounds and inspector overflow | Clear |
+| Writing | Verified candidate, inferred cause, unpublished package, and missing-explanation message | Clear |
+| Typography | Existing type tokens, complete wrapped package label, and the permanent measured text-enlargement regression | Clear |
+| Colors | Existing application surfaces, borders, text, links, and both themes | Clear |
+| UI | Run and written artifact opening, draft preservation, close behavior, and shared native HTML media controls | Clear |
+
+### Findings
+
+| # | Severity | Domain | Location | Before | After | Why |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | MEDIUM | Layout | `src/Pages/AIThreads.hs:321` | The verified-fix action leaves the conversation for another page | The existing run inspector includes the protected video, diagram, and package link | Evidence review must preserve the conversation and draft |
+| 2 | MEDIUM | UI | `src/Pages/CodeContext.hs:107` | Missing retained media prevents the inline run details from loading | A status message explains the missing explanation while the run details remain available | Historical results must remain reviewable without an explanation |
+
+Both findings are resolved. The two browser failures are saved as
+`scripts/local/native-fix-inline-red.log` and
+`scripts/local/native-fix-inline-missing-media-red.log`.
+
+### Considered but rejected
+
+| Location | Candidate | Rejected because |
+| --- | --- | --- |
+| `src/Pages/AIThreads.hs` | Copy the native media markup into the inspector | One pure view now serves both entry points, preserving the same URLs, captions, and content |
+| `src/Pages/AIThreads.hs` | Add another JavaScript modal or navigation state | The existing HTMX inspector already preserves focus, drafts, and conversation identity |
+| `src/Pages/CodeContext.hs` | Autoplay the explanation when the inspector opens | Explicit playback preserves the user's reading position and control |
+
+### Verification
+
+The permanent Playwright case uses the actual authenticated handlers and database
+authorization view. Retained result rows and media responses are browser fixtures.
+This case does not establish native verification, playback, S3 delivery, or package download.
+
+All ten cases in `e2e/tests/routines.spec.ts` pass in 25.6 seconds through
+the temporary `withLiveServer` adapter and Chromium. The new case covers all
+eight visual combinations, written artifact navigation, retained drafts,
+keyboard closing, and missing explanations. Seventeen captures, the complete
+browser log, and source hashes are under `scripts/local/native-fix-inline*`.
+Desktop light and enlarged mobile dark captures received visual inspection.
+
+The temporary adapter is removed, and its original Haskell source is restored.
+The real native publication and project-eligibility lifecycle then passes
+in 19.7781 seconds. This confirms the existing standalone handler and access checks
+after the shared-view extraction. The pinned formatter accepts both runtime files.
+HLint reports no hints in those files.
+
+The scoped `hs-distill` loop reuses the existing evidence view instead of copying it.
+The evasion pass retains current membership checks and the demo-session denial.
+The locality pass adds no client behavior or separate navigation state.
+The repeated scoped pass finds no further material change.
+
+Physical devices, screen readers, media transport failures, playback, S3 delivery,
+and package download remain **Not verified by this browser pass**.
+The full-branch reviews and release checks remain separate requirements.
+
+### Verdict
+
+Approve
