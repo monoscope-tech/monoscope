@@ -14,9 +14,44 @@ Evidence uses one typed audience and one evaluator across web navigation, thread
 
 Requester-bound OAuth, encryption, rotating-token refresh, and revocation share the existing credential path. Fetched Slack history receives its scope before model use; a data-only upgrade classifies older evidence from stored receipts and retained authorship. Ambiguous provenance remains restricted, including after conversation deletion. The cancellation heartbeat uses local authority checks rather than polling Slack.
 
-Current review boundary: web, issue, slash-command, scheduled, Slack-event, enrichment, incident, and retained PR-publication decisions resume their existing jobs. Native PR analysis now pairs its SDK transcript, live guest disk, original inputs, queried evidence, notes, and remaining budgets. The real-SDK/VM cases pass for approval, rejection, and expiry. All 42 native integration cases and 19 SDK worker tests pass on code checkpoint `d84b4a6bb`. The shared-panel change is committed as `ec35f5fd9`; its twelve focused cases and browser checks pass, with 450 bot cases passing before the final heading-only correction.
+Current review boundary: web, issue, slash-command, scheduled, Slack-event, enrichment, incident, and retained PR-publication decisions resume their existing jobs. Native PR analysis now pairs its SDK transcript, live guest disk, original inputs, queried evidence, notes, and remaining budgets. The real-SDK/VM cases pass for approval, rejection, and expiry. The current native-fix consolidation passes all 43 native integration and 450 bot cases. The unchanged SDK worker tests previously passed all 19 cases. The shared-panel change is committed as `ec35f5fd9`; its twelve focused cases and browser checks pass.
 
-Remaining work is explicit: native fix/admission/peer writes still need the shared ledger; streaming needs implementation and acceptance; Slack app eligibility, Slack Connect, and the silent private mention need live verification. The existing visual review now includes source `d84b4a6bb`, paired native recovery, and the shared decision panel. Whole-branch review, doctests, Linux/KVM coverage, local release signoff, and the canonical PR update remain open. Autonomous remains the default; these changes add no mandatory permission prompts.
+Native fix, admission, and peer wiki writes now use the shared ledger, as described below. Remaining work is explicit: broader native fix session recovery needs acceptance; streaming needs implementation and acceptance; Slack app eligibility, Slack Connect, and the silent private mention need live verification. The existing visual review now includes source `d84b4a6bb`, paired native recovery, and the shared decision panel. Whole-branch review, doctests, Linux/KVM coverage, local release signoff, and the canonical PR update remain open. Autonomous remains the default; these changes add no mandatory permission prompts.
+
+## Native fixes use the shared run and wiki ledger
+
+A queued native fix now owns one shared run and dedicated conversation. Duplicate admission retains that run. The existing fix lease constructs an opaque `RunContext`; the ordinary conversation worker cannot borrow it. A replaced lease loses authority even if it still holds an old context. Fix, admission, and independent-review attempts keep their actual attempt IDs, while their wiki revisions link to the shared writing run. All four writes use the same native-operation ledger and transactional wiki recipe as other agent work. Repeated identical calls return their retained response instead of creating another revision.
+
+Current native eligibility remains administrator-only. Account deactivation, role loss, lost setup/credentials, or withdrawal of the shared grant prevents execution. Observed revocation closes the original request through the common finalizer; restoring access cannot revive it. Expired leases remain recoverable without cancelling a still-authorized request. Specialized fix artifacts keep their existing administrator-only handlers. Shared completion stores a generic report and links administrators to those artifacts from the existing run inspector; it does not copy private native output into the shared report.
+
+Native artifact bookkeeping and common completion commit in one transaction. Failure on either side rolls back both, including the shared result artifact. No new worker, scheduler, page, permission store, or Haskell module is introduced. One grouped migration, `0280_native_fix_runs.sql`, links existing jobs to shared runs and preserves their original requester and known administrator ceiling. Its real populated backfill is covered by an isolated database test. This migration has now run locally and must remain unchanged.
+
+The original regression expected a shared run after duplicate admission and found none. The two focused integration cases pass, including the actual application worker, main/admission/peer wiki receipts, foreign-attempt rejection, replaced leases, immutable linkage, account and role revocation, sticky cancellation, migration backfill, and injected failures at both completion boundaries. The final source passes all 43 native integration examples, including the real SDK/VM cases. All 450 bot integration examples also pass against the same source. Formatting and diff checks pass. A fresh inventory still has 28 open PRs; all twenty selected incoming heads and published #619 remain ancestors of this branch, with no head changes since the preceding inventory.
+
+Scoped `hs-distill`, `hs-evasion-review`, and `hs-lob-review` were repeated after the direct-lambda simplification. The shared wiki recipe has two production callers; the native access predicate is reused by execution and retirement. No new warning suppression, raw-IO implementation seam, weakened identifier, separate lifecycle, or client-side state machine was added. HLint reports four pre-existing hints on unchanged expressions.
+
+The UI review applies `emil-design-eng`, `better-interface`, and the six owning interface skills to the completed native-fix run inspector. Scope: actual handler output, existing Lucid/Tailwind components, administrator and viewer states, light/dark themes, widths 390 and 1280. Chrome uses captured handler HTML and project assets through fixture HTTP transport. This is not live authenticated deployment or physical-device acceptance.
+
+| Domain | Evidence and result |
+| --- | --- |
+| Accessibility | Native disclosure opens with Enter; the administrator link receives keyboard focus with a visible outline. Existing status text conveys completion. |
+| Layout | Eight role/theme/width combinations have no horizontal overflow. The shared inspector and action history remain one integrated surface. |
+| Writing | Code fix, Fix workflow, and Review verified fix identify the source, verification requirements, and next action. Viewer completion explains who can inspect private artifacts. |
+| Typography | Existing readable text sizes and wrapping are retained; code proposals stay collapsed until requested. |
+| Colors | Existing semantic tokens work in both inspected themes. Light-theme mobile and dark-theme desktop focus and status were inspected visually; no new palette or contrast claim is introduced. |
+| UI | One ordinary link opens the existing artifact view. Completed run panels stop polling; no motion or JavaScript is added. |
+
+| Priority | Location | Before | After |
+| --- | --- | --- | --- |
+| Medium | `src/Pages/AIThreads.hs`, shared run inspector | Native fixes had no source label, workflow explanation, or integrated artifact link. | The common inspector identifies code fixes and gives current administrators the existing verified-fix link. Handler assertions reject that link for viewers. |
+
+| Rejected candidate | Reason |
+| --- | --- |
+| A separate fix-run history page | Duplicates the existing inspector and navigation. |
+| Raw fix output in the shared report | Specialized artifacts already have administrator-only access; the generic report is sufficient. |
+| Custom disclosure, navigation, or animation | Native HTML provides the complete interaction without another implementation. |
+
+Verdict: approve within this inspected completed-run flow. Browser checks report no errors; loading/failure behavior of other surfaces retains its previous evidence. Broader native fix SDK/VM interruption recovery, streaming, controlled live Slack acceptance, whole-branch reviews, and final release gates remain open.
 
 ## Queued web and issue conversations
 
@@ -449,7 +484,7 @@ These records have different lifetimes and must not become interchangeable store
 
 Add wiki read, search, and write capabilities over `ProjectMemory`.
 Use its existing revision checks, path types, limits, and agent author identity.
-Bind wiki attribution to the existing agent attempt, not a cast routine-run ID.
+Retain the actual agent attempt in each native operation and link wiki authorship to its shared writing run. Never cast between attempt and run IDs.
 Autonomous writes follow the same policy as other project changes.
 Optional review uses the same operation record and controls.
 Do not add a separate exception that lets routines append to arbitrary pages.

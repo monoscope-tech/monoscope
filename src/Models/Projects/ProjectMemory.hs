@@ -1,4 +1,4 @@
-module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), PageFilter (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), Edit (..), Request (..), parsePageQuery, discoverPages, Summary (..), summarize, pageLimit, latestPages, pageHistory, writePage, writePageTx) where
+module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), PageFilter (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), Edit (..), Request (..), parsePageQuery, discoverPages, Summary (..), summarize, pageLimit, latestPages, pageHistory, writePage, writePageTx, writeRunPageTx) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
@@ -223,6 +223,10 @@ writePage :: DB es => UUIDId "project" -> PageId -> Word32 -> Maybe PagePath -> 
 writePage pid page expected requested document author =
   Hasql.transaction TxS.ReadCommitted TxS.Write (writePageTx pid page expected requested document author)
     `catch` \err -> if Hasql.isUniqueViolation err then pure $ Left PathTaken else throwIO err
+
+
+writeRunPageTx :: UUIDId "project" -> UUIDId "ai_routine_run" -> Edit -> Tx.Transaction (Either WriteError Page)
+writeRunPageTx project run edit = writePageTx project edit.pageId edit.version Nothing edit.document (Run run)
 
 
 writePageTx :: UUIDId "project" -> PageId -> Word32 -> Maybe PagePath -> Document -> Author -> Tx.Transaction (Either WriteError Page)

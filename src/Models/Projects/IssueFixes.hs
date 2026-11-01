@@ -1,4 +1,6 @@
-module Models.Projects.IssueFixes (FixId, StepId, Revision, mkRevision, revisionText, Setup (..), Candidate (..), Step (..), Phase (..), Progress, phase, verifiedRevision, Run (..), Failure (..), createRun, getRun, recordStep, queueJob, Lease, Checkpoint, checkpointContents, getCheckpoint, saveReviewedJob, claimJob, currentJob, releaseJob, failJob, finishJob, completedResult, completedExplanation, CompletedFix, completedFixContents, publicationForUser, mediaForUser, latestMediaForUser, validateResult, artifactRequest, recordJobStep) where
+{-# LANGUAGE OrPatterns #-}
+
+module Models.Projects.IssueFixes (FixId, StepId, Revision, mkRevision, revisionText, Setup (..), Candidate (..), Step (..), Phase (..), Progress, phase, verifiedRevision, Run (..), Failure (..), createRun, getRun, recordStep, queueJob, Lease, Checkpoint, checkpointContents, getCheckpoint, saveReviewedJob, claimJob, agentRunContext, currentJob, releaseJob, failJob, finishJob, completedResult, completedExplanation, CompletedFix, completedFixContents, publicationForUser, mediaForUser, latestMediaForUser, validateResult, artifactRequest, recordJobStep) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
@@ -11,11 +13,17 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Effectful (Eff)
+import Effectful (Eff, (:>))
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.Issues (IssueId)
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.CodeContext (CodeMappingId)
 import Models.Projects.GitSync (GitHubCredentialId)
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (ProjectId)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId)
@@ -230,18 +238,35 @@ recordStepWith scope pid fid expected sid step = do
 
 
 queueJob :: DB es => ProjectId -> Projects.UserId -> FixId -> Eff es Bool
-queueJob pid uid fid = do
-  let payload = Aeson $ AE.toJSON $ Jobs.FixIssue pid fid
-  fromMaybe False
-    <$> Hasql.interpOne
-      [HI.sql| WITH inserted AS (
-      INSERT INTO projects.issue_fix_jobs (run_id, requested_by)
-      SELECT run_id, user_id FROM projects.issue_fix_run_access WHERE run_id = #{fid} AND project_id = #{pid} AND user_id = #{uid}
-      ON CONFLICT DO NOTHING RETURNING run_id
-    ), queued AS (
-      INSERT INTO background_jobs (run_at, status, payload) SELECT now(), 'queued', #{payload} FROM inserted RETURNING id
-    ) SELECT EXISTS (SELECT 1 FROM projects.issue_fix_jobs j JOIN projects.issue_fix_run_access a ON a.run_id = j.run_id AND a.user_id = j.requested_by
-      WHERE j.run_id = #{fid} AND a.project_id = #{pid} AND j.requested_by = #{uid}) OR EXISTS (SELECT 1 FROM inserted) |]
+queueJob pid uid fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  HI.OneColumn subjectM <-
+    Hasql.oneTx @(HI.OneColumn (Maybe Text))
+      [HI.sql|SELECT (SELECT issue.title FROM projects.issue_fix_runs fix
+      JOIN projects.issue_fix_run_access allowed ON allowed.run_id = fix.id
+      JOIN apis.issues issue ON issue.id = fix.issue_id AND issue.project_id = fix.project_id
+      WHERE fix.id = #{fid} AND allowed.project_id = #{pid} AND allowed.user_id = #{uid} FOR UPDATE OF fix)|]
+  case subjectM of
+    Nothing -> pure False
+    Just subject -> do
+      HI.OneColumn previous <-
+        Hasql.oneTx @(HI.OneColumn (Maybe Projects.UserId))
+          [HI.sql|SELECT (SELECT requested_by FROM projects.issue_fix_jobs WHERE run_id = #{fid})|]
+      case previous of
+        Just owner -> pure $ owner == uid
+        Nothing -> do
+          (identifier, conversation) <- Hasql.oneTx @(UUIDId "ai_routine_run", UUIDId "conversation") [HI.sql|SELECT gen_random_uuid(), gen_random_uuid()|]
+          let title = T.take 100 $ "Fix: " <> subject
+              input = "Fix reported issue: " <> subject
+          Hasql.executeTx
+            [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, title, context)
+            VALUES (#{pid}, #{conversation}, #{Issues.CTWeb}, #{title}, '{}'::jsonb)|]
+          Hasql.executeTx
+            [HI.sql|INSERT INTO apis.ai_routine_runs
+            (id, root_run_id, project_id, conversation_id, requested_by, input, policy, source, scheduled_at, started_at, status, permission_ceiling)
+            VALUES (#{identifier}, #{identifier}, #{pid}, #{conversation}, #{uid}, #{input}, #{Issues.Autonomous}, #{Issues.FixRun fid}, now(), now(), 'running', #{ProjectMembers.PAdmin})|]
+          Hasql.executeTx [HI.sql|INSERT INTO projects.issue_fix_jobs (run_id, requested_by, agent_run_id) VALUES (#{fid}, #{uid}, #{identifier})|]
+          Hasql.executeTx [HI.sql|INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{Aeson $ AE.toJSON $ Jobs.FixIssue pid fid})|]
+          pure True
 
 
 -- Only a successful claim constructs authority to mutate this job.
@@ -251,19 +276,46 @@ data Lease = Lease ProjectId FixId (UUIDId "fix_lease")
 
 
 claimJob :: DB es => ProjectId -> FixId -> Eff es (Maybe Lease)
-claimJob pid fid =
-  Hasql.interpOne
-    [HI.sql| UPDATE projects.issue_fix_jobs j SET lease_owner = gen_random_uuid(), lease_until = now() + interval '10 minutes', failure = NULL, finished_at = NULL
-    FROM projects.issue_fix_run_access a WHERE j.run_id = #{fid} AND a.run_id = j.run_id AND a.project_id = #{pid} AND a.user_id = j.requested_by
-      AND j.result IS NULL AND (j.lease_until IS NULL OR j.lease_until < now()) RETURNING a.project_id, j.run_id, j.lease_owner |]
+claimJob pid fid = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  Issues.retireFixRunTx pid fid
+  leased <-
+    Hasql.queryTx @[Lease]
+      [HI.sql|UPDATE projects.issue_fix_jobs job SET lease_owner = gen_random_uuid(), lease_until = now() + interval '10 minutes', failure = NULL, finished_at = NULL
+      FROM projects.issue_fix_run_access allowed, apis.ai_routine_runs run
+      WHERE job.run_id = #{fid} AND allowed.run_id = job.run_id AND allowed.project_id = #{pid} AND allowed.user_id = job.requested_by
+        AND run.id = job.agent_run_id AND run.status IN ('running', 'failed', 'timed_out') AND run.policy_limit = #{Issues.Autonomous}
+        AND EXISTS (SELECT 1 FROM apis.ai_conversations conversation WHERE conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id)
+        AND job.result IS NULL AND (job.lease_until IS NULL OR job.lease_until < now())
+      RETURNING allowed.project_id, job.run_id, job.lease_owner|]
+  for_ leased $ \(Lease _ _ owner) ->
+    Hasql.executeTx
+      [HI.sql|UPDATE apis.ai_routine_runs run SET status = 'running', started_at = clock_timestamp(), finished_at = NULL, error = NULL
+      FROM projects.issue_fix_jobs job WHERE job.agent_run_id = run.id AND job.run_id = #{fid} AND job.lease_owner = #{owner}|]
+  pure $ listToMaybe leased
 
 
-currentJob :: DB es => Lease -> Eff es Bool
-currentJob (Lease pid fid owner) =
-  fromMaybe False
-    <$> Hasql.interpOne
-      [HI.sql| SELECT EXISTS (SELECT 1 FROM projects.issue_fix_jobs j JOIN projects.issue_fix_run_access a ON a.run_id = j.run_id AND a.user_id = j.requested_by
-    WHERE j.run_id = #{fid} AND a.project_id = #{pid} AND j.lease_owner = #{owner} AND j.lease_until > now() AND j.result IS NULL) |]
+agentRunContext :: DB es => Lease -> Eff es (Maybe Issues.RunContext)
+agentRunContext (Lease pid fid owner) = do
+  identifier <- Hasql.interpOne @(UUIDId "ai_routine_run") [HI.sql|SELECT agent_run_id FROM projects.issue_fix_jobs WHERE run_id = #{fid} AND lease_owner = #{owner}|]
+  maybe (pure Nothing) (\run -> Issues.runContextFor pid $ Issues.FixClaim fid run owner) identifier
+
+
+currentJob :: (DB es, Time :> es) => Lease -> Eff es Bool
+currentJob lease@(Lease _ fid owner) = do
+  active <-
+    fromMaybe False
+      <$> Hasql.interpOne @Bool
+        [HI.sql|SELECT EXISTS (SELECT 1 FROM projects.issue_fix_jobs
+    WHERE run_id = #{fid} AND lease_owner = #{owner} AND lease_until > now() AND result IS NULL)|]
+  if not active
+    then pure False
+    else
+      agentRunContext lease >>= \case
+        Nothing -> pure False
+        Just context ->
+          Issues.runContextAuthority context >>= \case
+            Just _ -> pure True
+            Nothing -> Issues.completeRun context (Issues.CancelledResult Nothing) $> False
 
 
 releaseJob :: DB es => Lease -> Eff es ()
@@ -272,10 +324,15 @@ releaseJob (Lease _ fid owner) =
     [HI.sql| UPDATE projects.issue_fix_jobs SET lease_owner = NULL, lease_until = NULL WHERE run_id = #{fid} AND lease_owner = #{owner} |]
 
 
-failJob :: DB es => Lease -> Text -> Eff es ()
-failJob (Lease _ fid owner) message =
-  Hasql.interpExecute_
-    [HI.sql| UPDATE projects.issue_fix_jobs SET failure = #{message}, finished_at = now() WHERE run_id = #{fid} AND lease_owner = #{owner} AND result IS NULL |]
+failJob :: (DB es, Time :> es) => Lease -> Text -> Eff es ()
+failJob lease@(Lease _ fid owner) message = do
+  now <- Time.currentTime
+  context <- agentRunContext lease
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    Hasql.executeTx
+      [HI.sql|UPDATE projects.issue_fix_jobs SET failure = #{message}, finished_at = now()
+      WHERE run_id = #{fid} AND lease_owner = #{owner} AND result IS NULL|]
+    for_ context $ \run -> void $ Issues.completeRunTx now Nothing run $ Issues.FailedResult $ Issues.RunFailure message Issues.RunOnly
 
 
 completedResult :: DB es => ProjectId -> FixId -> Eff es (Maybe Agent.FixResult)
@@ -406,17 +463,19 @@ saveReviewedJob lease@(Lease pid fid owner) verified snapshot = do
     _ -> pure Nothing
 
 
-finishJob :: DB es => Lease -> RetainedFix -> Checkpoint -> Eff es Bool
-finishJob (Lease pid fid owner) verified (Checkpoint expected snapshot) = do
+finishJob :: (DB es, Time :> es) => Lease -> RetainedFix -> Checkpoint -> Eff es Bool
+finishJob lease@(Lease pid fid owner) verified (Checkpoint expected snapshot) = do
   let result = explainedFixResult $ retainedFix verified
       explanation = fixExplanation $ retainedFix verified
   loaded <- getRun pid fid
-  case loaded of
-    Right (Just run)
-      | validateResult run result && result == expected ->
-          fromMaybe False
-            <$> Hasql.interpOne
-              [HI.sql| WITH pinned AS (
+  context <- agentRunContext lease
+  now <- Time.currentTime
+  case (loaded, context) of
+    (Right (Just run), Just authority)
+      | validateResult run result && result == expected -> do
+          let persist =
+                Hasql.oneTx @Bool
+                  [HI.sql| WITH pinned AS (
         SELECT j.run_id FROM projects.issue_fix_jobs j JOIN projects.issue_fix_runs r ON r.id = j.run_id
         JOIN projects.issue_fix_run_access a ON a.run_id = j.run_id AND a.user_id = j.requested_by
         WHERE j.run_id = #{fid} AND a.project_id = #{pid} AND r.version = #{run.version}
@@ -435,4 +494,15 @@ finishJob (Lease pid fid owner) verified (Checkpoint expected snapshot) = do
         FROM finished f JOIN projects.issue_fix_runs r ON r.id = f.run_id,
           LATERAL jsonb_array_elements(#{Aeson snapshot.knowledge}::jsonb) note
       ) SELECT EXISTS (SELECT 1 FROM finished) |]
+          Hasql.transaction TxS.ReadCommitted TxS.Write do
+            completed <-
+              Issues.completeRunTx now Nothing authority
+                $ Issues.CompletedResult Issues.ResultSucceeded Issues.RetainAnswer
+                $ Issues.reportAnswer "The verified fix is retained. Administrators can review its artifacts." Nothing
+            case completed of
+              Issues.RunCompleted Issues.CompletedSucceeded _ -> do
+                saved <- persist
+                unless saved Tx.condemn
+                pure saved
+              (Issues.CompletionRejected; Issues.RunCompleted{}) -> pure False
     _ -> pure False

@@ -1110,6 +1110,7 @@ runAgenticChatWithHistory suppliedConfig requestedInput model apiKey = do
       let retained = (,context.instructions) <$> maybe (throwIO AgentStopped) pure context.input
        in case context.source of
             Issues.ScheduledRun -> pure (requestedInput, context.instructions)
+            Issues.FixRun{} -> throwIO AgentStopped
             Issues.TriggeredRun{} -> retained
             (Issues.InteractiveRun{}; Issues.ConversationRun{}) -> retained
     InteractiveReadOnly -> pure (requestedInput, Nothing)
@@ -1403,6 +1404,11 @@ executeNativeOperation context proposed perform =
             [HI.sql|SELECT TRUE FROM projects.pr_review_attempts
           WHERE id = #{write.attemptId} AND project_id = #{context.projectId} AND run_id = #{review}|]
         unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
+      (Issues.FixRun fixId, Operation.WriteWiki write) -> do
+        permitted <-
+          Hasql.interpOne @(HI.OneColumn Bool)
+            [HI.sql|SELECT TRUE FROM projects.pr_review_attempts WHERE id = #{write.attemptId} AND project_id = #{context.projectId} AND fix_run_id = #{fixId}|]
+        unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
       (Issues.TriggeredRun (Issues.PullRequestReview review), Operation.PublishPullRequestComment comment) -> do
         permitted <-
           Hasql.interpOne @(HI.OneColumn Bool)
@@ -1633,7 +1639,7 @@ executeToolAt cursor config tc = do
       Nothing -> pure $ toolError "read_project_memory" "invalid or missing 'pageId'" arguments
       Just pageId -> maybe "Wiki page not found in the authorized project." encodeText . viaNonEmpty head <$> Memory.pageHistory config.projectId pageId
     writeMemory arguments = case (invocationContext config.invocationMode, parseMaybe (AE.parseJSON @Memory.Edit) $ AE.toJSON arguments) of
-      (Just context, Just edit) -> either memoryError encodeText <$> Memory.writePageTx config.projectId edit.pageId edit.version Nothing edit.document (Memory.Run context.id)
+      (Just context, Just edit) -> either memoryError encodeText <$> Memory.writeRunPageTx config.projectId context.id edit
       _ -> pure "Wiki writes require a durable run, pageId, version and bounded document."
     memoryError = \case
       Memory.StaleRevision -> "Wiki page changed; read the current revision before retrying."

@@ -32,6 +32,7 @@ import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 import Effectful.Timeout qualified as Timeout
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (selectLogTable)
@@ -364,11 +365,11 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                               else AI.executeNativeOperation context (Operation.WriteWiki $ Operation.WikiWrite attemptId edit) \case
                                 Operation.WriteWiki write ->
                                   AI.ReconcilableOperation
-                                    (AI.AtomicOperation $ memoryResponse <$> Memory.writePageTx run.projectId write.edit.pageId write.edit.version Nothing write.edit.document (Memory.Run context.id))
+                                    (AI.AtomicOperation $ writeWiki context write)
                                     (\original -> reconcileComment run conn original <* unlessM (not . null <$> authorizedServices run mappings) (throwError $ ReviewFailure "Project memory authorization is no longer available"))
                                 (Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
                           (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Search{}; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}) ->
-                            requestKnowledge run.projectId attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
+                            requestKnowledge context attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
                   )
                   ( \call -> do
                       requireActive run execution
@@ -637,15 +638,16 @@ requestEvidence pid currentServices windowStart windowEnd request = do
       expr -> expr
 
 
-requestMemory :: DB es => Projects.ProjectId -> UUIDId "agent_attempt" -> Eff es Bool -> Agent.KnowledgeRequest -> Eff es (Either Text AE.Value)
-requestMemory pid attempt authorized = \case
-  Agent.ProjectMemory request -> projectMemory pid attempt authorized request
+requestMemory :: (DB es, HTTP.HTTP :> es, IOE :> es, Time.Time :> es) => Issues.RunContext -> UUIDId "agent_attempt" -> Eff es Bool -> Agent.KnowledgeRequest -> Eff es (Either Text AE.Value)
+requestMemory context attempt authorized = \case
+  Agent.ProjectMemory request -> projectMemory context attempt authorized request
   Agent.Recall _ -> pure $ Left "This agent role can use project memory tools"
   Agent.Remember _ -> pure $ Left "This agent role can use project memory tools"
 
 
-projectMemory :: DB es => Projects.ProjectId -> UUIDId "agent_attempt" -> Eff es Bool -> Memory.Request -> Eff es (Either Text AE.Value)
-projectMemory pid attempt authorized request = do
+projectMemory :: (DB es, HTTP.HTTP :> es, IOE :> es, Time.Time :> es) => Issues.RunContext -> UUIDId "agent_attempt" -> Eff es Bool -> Memory.Request -> Eff es (Either Text AE.Value)
+projectMemory context attempt authorized request = do
+  let pid = context.projectId
   permitted <- authorized
   if not permitted
     then pure $ Left "Project memory authorization is no longer available"
@@ -657,26 +659,30 @@ projectMemory pid attempt authorized request = do
         case viaNonEmpty head history of
           Nothing -> pure $ Left "Wiki page not found"
           Just current -> visible $ AE.toJSON current
-      Memory.Write edit -> memoryResponse <$> Memory.writePage pid edit.pageId edit.version Nothing edit.document (Memory.Agent attempt)
+      Memory.Write edit -> AI.executeNativeOperation context (Operation.WriteWiki $ Operation.WikiWrite attempt edit) \case
+        Operation.WriteWiki write -> AI.AtomicOperation $ writeWiki context write
+        (Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
   where
-    listing query = Memory.discoverPages pid query >>= visible . AE.toJSON . map Memory.summarize
+    listing query = Memory.discoverPages context.projectId query >>= visible . AE.toJSON . map Memory.summarize
     visible value = do
       permitted <- authorized
       pure $ if permitted then Right value else Left "Project memory authorization is no longer available"
 
 
-memoryResponse :: Either Memory.WriteError Memory.Page -> Either Text AE.Value
-memoryResponse = \case
-  Left Memory.StaleRevision -> Left "Wiki page changed; read the latest revision before editing again"
-  Left Memory.PathTaken -> Left "Wiki path is already in use; choose another page ID for a new page"
-  Right page -> Right $ AE.toJSON page
+writeWiki :: Issues.RunContext -> Operation.WikiWrite -> Tx.Transaction (Either Text AE.Value)
+writeWiki context write = response <$> Memory.writeRunPageTx context.projectId context.id write.edit
+  where
+    response = \case
+      Left Memory.StaleRevision -> Left "Wiki page changed; read the latest revision before editing again"
+      Left Memory.PathTaken -> Left "Wiki path is already in use; choose another page ID for a new page"
+      Right page -> Right $ AE.toJSON page
 
 
-requestKnowledge :: (DB es, State.State ReviewMemory :> es) => Projects.ProjectId -> UUIDId "agent_attempt" -> Git.RepoRef -> Eff es [Text] -> [Evidence] -> Agent.KnowledgeRequest -> Eff es (Either Text AE.Value)
-requestKnowledge pid attempt ref currentServices initial = \case
-  Agent.ProjectMemory request -> projectMemory pid attempt (not . null <$> currentServices) request
+requestKnowledge :: (DB es, HTTP.HTTP :> es, IOE :> es, State.State ReviewMemory :> es, Time.Time :> es) => Issues.RunContext -> UUIDId "agent_attempt" -> Git.RepoRef -> Eff es [Text] -> [Evidence] -> Agent.KnowledgeRequest -> Eff es (Either Text AE.Value)
+requestKnowledge context attempt ref currentServices initial = \case
+  Agent.ProjectMemory request -> projectMemory context attempt (not . null <$> currentServices) request
   Agent.Recall service -> forService service do
-    entries <- Reviews.priorRepositoryKnowledge pid ref service
+    entries <- Reviews.priorRepositoryKnowledge context.projectId ref service
     permitted <- elem service <$> currentServices
     pure $ if permitted then Right $ AE.toJSON entries else Left "Service or review authorization is no longer available"
   Agent.Remember note -> forService note.service do
@@ -748,6 +754,7 @@ fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob)
     produce :: Fixes.Lease -> Fixes.Run Fixes.Progress -> ReviewCtx (Agent.ReviewedFix, KnowledgeSnapshot)
     produce lease run = do
       ctx <- ask @AuthContext
+      context <- maybe (throwError $ ReviewFailure "Fix run is no longer available") pure =<< Fixes.agentRunContext lease
       store <- require $ artifactStore ctx.config
       let cfg = ctx.config
           setup = run.setup
@@ -792,7 +799,7 @@ fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob)
               then pure $ Left "Fix authorization is no longer available"
               else do
                 admissionAttempt <- maybe (throwError $ ReviewFailure "Admission attempt could not be persisted") pure =<< Usage.startAttempt pid target cfg.impactReviewProvider cfg.openaiModel
-                decision <- Agent.admitRegression (Agent.AdmissionRequest (Agent.FixRequest request{Agent.attemptId = admissionAttempt, Agent.prompt = "Review only the proposed regression’s relevance to this untrusted issue context, under the admission policy.\n" <> issueContext} run.issueId setup.imageBuildId) artifact) (requestMemory pid admissionAttempt (Fixes.currentJob lease)) recordCall recordUsage recordAllocation
+                decision <- Agent.admitRegression (Agent.AdmissionRequest (Agent.FixRequest request{Agent.attemptId = admissionAttempt, Agent.prompt = "Review only the proposed regression’s relevance to this untrusted issue context, under the admission policy.\n" <> issueContext} run.issueId setup.imageBuildId) artifact) (requestMemory context admissionAttempt (Fixes.currentJob lease)) recordCall recordUsage recordAllocation
                 allowed <- Fixes.currentJob lease
                 pure $ if not allowed then Left "Fix authorization is no longer available" else decision >>= \case Agent.Admitted rationale -> Right rationale; Agent.Rejected rationale -> Left rationale
           phase delivery = do
@@ -821,7 +828,7 @@ fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob)
                     =<< Agent.reviewVerifiedFix
                       (Agent.FixReviewRequest (Agent.FixRequest request{Agent.attemptId = reviewAttempt, Agent.prompt = issueContext} run.issueId setup.imageBuildId) artifacts)
                       verified
-                      (requestMemory pid reviewAttempt (Fixes.currentJob lease))
+                      (requestMemory context reviewAttempt (Fixes.currentJob lease))
                       recordCall
                       recordUsage
                       recordAllocation
@@ -839,7 +846,7 @@ fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob)
           $ Agent.fixRepository
             (Agent.FixRequest request run.issueId setup.imageBuildId)
             (requestEvidence pid currentServices from until)
-            (requestKnowledge pid attempt ref currentServices [])
+            (requestKnowledge context attempt ref currentServices [])
             admission
             recordCall
             recordUsage

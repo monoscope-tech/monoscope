@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Pages.ImpactReviewsSpec (spec) where
 
 import BackgroundJobs qualified
@@ -41,6 +43,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (..), execute, query)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpose, localSeqUnlift, localSeqUnliftIO)
 import Effectful.Error.Static (catchError)
@@ -3955,7 +3958,41 @@ spec = around withTestResources $ describe "Production impact reviews" do
     checks <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM projects.pr_review_checks WHERE fix_run_id = ?" (Only fid) :: IO [Only Int64]
     checks `shouldBe` [Only 0]
 
-  it "runs an authorized issue-fix application job through admission, evidence, phases and accounting" \tr -> do
+  it "nativeFix_migrationRetainsOriginalAdminGrantsWithoutRestoringRevokedAccess" \tr -> do
+    setup tr
+    [mapping] <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
+    let uid n = UUIDId $ UUID.fromWords 96 0 0 n
+        issue = uid 1
+        user = (getResponse tr.trSessAndHeader :: Projects.Session).user.id
+        jobs = [(uid 2, Nothing), (uid 3, Just "Interrupted before upgrade")] :: [(Fixes.FixId, Maybe Text)]
+    void $ withResource tr.trPool $ \conn -> execute conn "INSERT INTO apis.issues (id, project_id, issue_type, service, target_hash, title) VALUES (?, ?, 'runtime_exception', 'test-service', 'legacy-fix-grants', 'Retain retry tokens')" (issue, testPid)
+    base <- either (fail . show) pure $ Fixes.mkRevision revision
+    for_ jobs $ \(identifier, _) -> runQueryEffect tr (Fixes.createRun testPid identifier issue mapping.id base (uid 4)) `shouldReturn` Just identifier
+    -- This database belongs to this example. Reconstruct its pre-upgrade job
+    -- shape, then run the actual append-only migration over populated records.
+    withResource tr.trPool $ \conn -> do
+      void $ execute conn "DROP TRIGGER fix_agent_link ON projects.issue_fix_jobs; DROP FUNCTION projects.guard_fix_agent_link(); DROP TRIGGER retain_fix_run_grant ON apis.ai_routine_runs; DROP FUNCTION apis.retain_fix_run_grant(); DROP INDEX apis.ai_routine_runs_native_fix; ALTER TABLE apis.ai_routine_runs DROP CONSTRAINT native_fix_run_grant; ALTER TABLE projects.issue_fix_jobs DROP COLUMN agent_run_id" ()
+      for_ jobs $ \(identifier, failure) -> do
+        inserted <- execute conn "INSERT INTO projects.issue_fix_jobs (run_id, requested_by, created_at, failure, finished_at) SELECT run_id, user_id, ?, ?, ? FROM projects.issue_fix_run_access WHERE run_id = ? AND user_id = ?" (addUTCTime (-60) frozenTime, failure, frozenTime <$ failure, identifier, user)
+        inserted `shouldBe` 1
+      void $ execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
+      migration <- readFileBS "static/migrations/0280_native_fix_runs.sql"
+      void $ execute conn (Query migration) ()
+    runs <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+    length runs `shouldBe` 2
+    for_ jobs $ \(identifier, failure) -> do
+      linked <- maybe (fail "Migrated shared run missing") pure $ find ((== Issues.FixRun identifier) . (.source)) runs
+      linked.status `shouldBe` maybe Issues.RunRunning (const Issues.RunFailed) failure
+      Just evidence <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid linked.id
+      (evidence.requestedBy, evidence.permissionCeiling) `shouldBe` (Just user, ProjectMembers.PAdmin)
+      runQueryEffect tr (isJust <$> Fixes.claimJob testPid identifier) `shouldReturn` False
+      void $ withResource tr.trPool $ \conn -> execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PAdmin, testPid, user)
+      runQueryEffect tr (isJust <$> Fixes.claimJob testPid identifier) `shouldReturn` False
+      Just stopped <- runQueryEffect tr $ Issues.getRoutineRun testPid linked.id
+      stopped.status `shouldBe` Issues.RunCancelled
+      void $ withResource tr.trPool $ \conn -> execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
+
+  it "nativeFix_applicationJobSharesRunAuthorityReceiptsAndCompletion" \tr -> do
     setup tr
     [mapping] <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
     let uid n = UUIDId $ UUID.fromWords 95 0 0 n
@@ -3968,6 +4005,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Fixes.createRun testPid fid issue mapping.id base image) `shouldReturn` Just fid
     runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` True
     runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` True
+    [shared] <- runQueryEffect tr $ Issues.listRoutineRuns testPid 12
+    shared.source `shouldBe` Issues.FixRun fid
+    runQueryEffect tr (Issues.runContextFor testPid $ Issues.ConversationClaim shared.id) `shouldReturn` Nothing
     queued <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'FixIssue'" () :: IO [Only (Aeson AE.Value)]
     queued `shouldBe` [Only $ Aeson $ AE.toJSON $ Jobs.FixIssue testPid fid]
     unleased <- runQueryEffect tr $ Fixes.recordStep testPid fid 0 (uid 6) Fixes.RestartReproduction
@@ -3975,23 +4015,32 @@ spec = around withTestResources $ describe "Production impact reviews" do
     lease <- maybe (fail "Fix lease missing") pure =<< runQueryEffect tr (Fixes.claimJob testPid fid)
     runQueryEffect tr (isJust <$> Fixes.claimJob testPid fid) `shouldReturn` False
     runQueryEffect tr (Fixes.currentJob lease) `shouldReturn` True
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE users.users SET active = false WHERE id = ?" (Only user)
-    runQueryEffect tr (Fixes.currentJob lease) `shouldReturn` False
-    runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` False
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE users.users SET active = true WHERE id = ?" (Only user)
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PView, testPid, user)
-    runQueryEffect tr (Fixes.currentJob lease) `shouldReturn` False
-    runQueryEffect tr (Fixes.queueJob testPid user fid) `shouldReturn` False
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PAdmin, testPid, user)
+    Just originalContext <- runQueryEffect tr $ Fixes.agentRunContext lease
+    let foreignFix = uid 990
+    runQueryEffect tr (Fixes.createRun testPid foreignFix issue mapping.id base image) `shouldReturn` Just foreignFix
+    foreignAttempt <- maybe (fail "Foreign attempt missing") pure =<< runQueryEffect tr (Usage.startAttempt testPid (Usage.Fix foreignFix) "fixture" "fixture")
+    deniedTitle <- either (fail . toString) pure $ Memory.mkMemoryText "Fenced wiki write"
+    deniedBody <- either (fail . toString) pure $ Memory.mkMemoryText "This unowned write must not be retained."
+    let deniedEdit = Memory.Edit (uid 991) 0 $ Memory.Document deniedTitle deniedBody
+        write authorization = runTestBgNoReset tr $ AI.executeNativeOperation authorization (Operation.WriteWiki $ Operation.WikiWrite foreignAttempt deniedEdit) \case
+          Operation.WriteWiki proposal -> AI.AtomicOperation $ bimap show AE.toJSON <$> Memory.writeRunPageTx testPid authorization.id proposal.edit
+          (Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+    write originalContext `shouldThrow` (\case Investigations.OperationScopeMismatch -> True; _ -> False)
+    runQueryEffect tr (Memory.pageHistory testPid deniedEdit.pageId) >>= (`shouldSatisfy` null)
+    (withResource tr.trPool $ \conn -> execute conn "UPDATE projects.issue_fix_jobs SET agent_run_id = ? WHERE run_id = ?" (uid 992 :: UUIDId "ai_routine_run", fid))
+      `shouldThrow` (\err -> "Fix run link is immutable" `T.isInfixOf` toText (displayException (err :: SomeException)))
     void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.issue_fix_jobs SET lease_until = now() - interval '1 second' WHERE run_id = ?" (Only fid)
     replacement <- maybe (fail "Expired lease not reclaimed") pure =<< runQueryEffect tr (Fixes.claimJob testPid fid)
     runQueryEffect tr $ Fixes.releaseJob lease
     runQueryEffect tr (Fixes.currentJob replacement) `shouldReturn` True
+    runQueryEffect tr (Issues.runContextAuthority originalContext) `shouldReturn` Nothing
+    write originalContext `shouldThrow` (const True :: AI.AgentStopped -> Bool)
     stale <- runQueryEffect tr $ Fixes.recordJobStep lease 0 (uid 4) Fixes.RestartReproduction
     stale `shouldSatisfy` isLeft
     runQueryEffect tr $ Fixes.releaseJob replacement
     apiKey <- createTestAPIKey tr testPid "Fix job telemetry"
     ingestLog tr apiKey "fix-job-event" (addUTCTime (-60) frozenTime)
+    revokedReplies <- newIORef []
     pem <- readFileBS "test/fixtures/github-app-test.pem"
     let cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem, impactReviewUsageDir = Just "fixture-usage", impactReviewCacheDir = Just "fixture-cache", impactReviewProvider = "fixture", openaiModel = "gpt-5.6-luna#high", impactReviewArtifactBucket = Just "fixture-bucket", s3Endpoint = "http://storage.invalid"}
         memoryRoundTrip attempt respond = do
@@ -4005,16 +4054,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
           send (Memory.Read page) `shouldReturn` created
           listed <- send Memory.List
           listed `shouldSatisfy` isRight
-          conflicted <- send $ Memory.Write edit
-          conflicted `shouldSatisfy` isLeft
+          send (Memory.Write edit) `shouldReturn` created
           isLeft <$> send (Memory.Read $ uid 997) `shouldReturn` True
-          let permission value = void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (value, testPid, user)
-          permission ProjectMembers.PView
-          ( do
-              isLeft <$> send (Memory.Read page) `shouldReturn` True
-              isLeft <$> send (Memory.Write edit{Memory.version = 1}) `shouldReturn` True
-            )
-            `finally` permission ProjectMembers.PAdmin
         fakeAgent :: Text -> ATBackgroundCtx a -> ATBackgroundCtx a
         fakeAgent mode =
           interpose @Artifacts.AgentArtifacts
@@ -4029,23 +4070,45 @@ spec = around withTestResources $ describe "Production impact reviews" do
                   Agent.ReadReviewContext{} -> pure $ Right Nothing
                   Agent.FixRepository request queryTelemetry knowledge admit calls usage allocations checks phase validate -> localSeqUnliftIO env \unlift -> liftIO $ withSystemTempDirectory "job-fix-agent" \directory -> do
                     let diagnostic = directory </> "failure.txt"
-                    when (mode == "--app-job") $ memoryRoundTrip request.request.attemptId (unlift . knowledge)
-                    result <-
-                      runEff
-                        $ Agent.runCodeReviewReal Nothing (Right Nothing) (Just "test/fixtures/issue-fix-agent.mjs") [diagnostic, toString image.toText, toString mode]
-                        $ Agent.fixRepository
-                          request
-                          (liftIO . unlift . queryTelemetry)
-                          (liftIO . unlift . knowledge)
-                          (liftIO . unlift . admit)
-                          (liftIO . unlift . calls)
-                          (liftIO . unlift . usage)
-                          (liftIO . unlift . allocations)
-                          (liftIO . unlift . checks)
-                          (liftIO . unlift . phase)
-                          (liftIO . unlift . validate)
-                    detail <- tryAny $ readFileBS diagnostic
-                    pure $ first (<> either (const "") (("\n" <>) . decodeUtf8) detail) result
+                    if mode `elem` ["--app-job-revoke-account", "--app-job-revoke-role"]
+                      then do
+                        heading <- either (fail . toString) pure $ Memory.mkMemoryText "Revocation context"
+                        contents <- either (fail . toString) pure $ Memory.mkMemoryText "Keep the original authorized revision only."
+                        let page = case request.request.attemptId of UUIDId value -> UUIDId value
+                            edit = Memory.Edit page 0 $ Memory.Document heading contents
+                            send = unlift . knowledge . Agent.ProjectMemory
+                            access enabled = withResource tr.trPool $ \conn ->
+                              void
+                                $ if mode == "--app-job-revoke-account"
+                                  then execute conn "UPDATE users.users SET active = ? WHERE id = ?" (enabled, user)
+                                  else execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (if enabled then ProjectMembers.PAdmin else ProjectMembers.PView, testPid, user)
+                        created <- send $ Memory.Write edit
+                        (readBack, changed, resubmitted) <- bracket_ (access False) (access True) do
+                          readBack <- send $ Memory.Read page
+                          changed <- send $ Memory.Write edit{Memory.version = 1}
+                          resubmitted <- runQueryEffect tr $ Fixes.queueJob testPid user request.request.runId
+                          pure (readBack, changed, resubmitted)
+                        restored <- send $ Memory.Read page
+                        modifyIORef' revokedReplies (<> [(isRight created, isLeft readBack, isLeft changed, not resubmitted, isLeft restored)])
+                        pure $ Left "The original fix grant was revoked"
+                      else do
+                        when (mode == "--app-job") $ memoryRoundTrip request.request.attemptId (unlift . knowledge)
+                        result <-
+                          runEff
+                            $ Agent.runCodeReviewReal Nothing (Right Nothing) (Just "test/fixtures/issue-fix-agent.mjs") [diagnostic, toString image.toText, toString mode]
+                            $ Agent.fixRepository
+                              request
+                              (liftIO . unlift . queryTelemetry)
+                              (liftIO . unlift . knowledge)
+                              (liftIO . unlift . admit)
+                              (liftIO . unlift . calls)
+                              (liftIO . unlift . usage)
+                              (liftIO . unlift . allocations)
+                              (liftIO . unlift . checks)
+                              (liftIO . unlift . phase)
+                              (liftIO . unlift . validate)
+                        detail <- tryAny $ readFileBS diagnostic
+                        pure $ first (<> either (const "") (("\n" <>) . decodeUtf8) detail) result
                   Agent.AdmitRegression request knowledge calls usage allocations -> localSeqUnliftIO env \unlift -> liftIO do
                     when (mode == "--app-job") $ memoryRoundTrip request.fix.request.attemptId (unlift . knowledge)
                     runEff
@@ -4075,7 +4138,22 @@ spec = around withTestResources $ describe "Production impact reviews" do
     completed.runId `shouldBe` fid
     memories <- runQueryEffect tr $ Memory.latestPages testPid
     length memories `shouldBe` 4
-    map (.author) memories `shouldSatisfy` all (\case Memory.Agent _ -> True; Memory.Member _ -> False; Memory.Conversation _ -> False; Memory.Run _ -> False)
+    map (.author) memories `shouldBe` replicate 4 (Memory.Run shared.id)
+    Just finishedRun <- runQueryEffect tr $ Issues.getRoutineRun testPid shared.id
+    finishedRun.status `shouldBe` Issues.RunSucceeded
+    let renderRun = do
+          (_, page) <- testServant tr $ AIThreads.routineRunGetH testPid shared.id Nothing
+          pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
+        permission role = void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (role, testPid, user)
+    adminPage <- renderRun
+    for_ ["Code fix", "Fix workflow", "Review verified fix"] $ \label -> adminPage `shouldSatisfy` T.isInfixOf label
+    permission ProjectMembers.PView
+    viewerPage <- renderRun `finally` permission ProjectMembers.PAdmin
+    viewerPage `shouldSatisfy` T.isInfixOf "The verified fix is retained. Administrators can review its artifacts."
+    viewerPage `shouldNotSatisfy` T.isInfixOf "Review verified fix"
+    viewerPage `shouldNotSatisfy` T.isInfixOf ("/issue-fixes/" <> fid.toText)
+    operations <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid shared.id
+    length operations `shouldBe` 4
     map (.version) memories `shouldBe` [1, 1, 1, 1]
     [Only persisted] <- withResource tr.trPool (\conn -> query conn "SELECT coalesce(to_jsonb(j)->'explanation', 'null'::jsonb) <> 'null'::jsonb FROM projects.issue_fix_jobs j WHERE run_id = ?" (Only fid)) :: IO [Only Bool]
     persisted `shouldBe` True
@@ -4132,6 +4210,16 @@ spec = around withTestResources $ describe "Production impact reviews" do
     unfinished <- runQueryEffect tr $ Usage.usageTotals Usage.Fixes testPid
     fmap (.resources.explanations) (find ((== Just failedId) . (.runId)) unfinished) `shouldBe` Just 0
     runQueryEffect tr (Reviews.priorRepositoryKnowledge testPid (Git.RepoRef "impact-org" "checkout" revision) "test-service") >>= (\notes -> length notes `shouldBe` 1)
+    for_ ["native", "run"] $ \boundary -> do
+      let ddl statement = withResource tr.trPool $ \conn -> void $ execute conn statement ()
+          add = if boundary == ("native" :: Text) then "ALTER TABLE projects.issue_fix_jobs ADD CONSTRAINT reject_fix_commit CHECK (result IS NULL) NOT VALID" else "ALTER TABLE apis.ai_routine_runs ADD CONSTRAINT reject_fix_commit CHECK (status <> 'succeeded') NOT VALID"
+          remove = if boundary == "native" then "ALTER TABLE projects.issue_fix_jobs DROP CONSTRAINT reject_fix_commit" else "ALTER TABLE apis.ai_routine_runs DROP CONSTRAINT reject_fix_commit"
+      bracket_ (ddl add) (ddl remove) $ tryAny (run failedId "--app-job-completion-denied") >>= (`shouldSatisfy` isLeft)
+      runQueryEffect tr (Fixes.completedResult testPid failedId) >>= (`shouldSatisfy` isNothing)
+      [Only identifier] <- withResource tr.trPool $ \conn -> query conn "SELECT agent_run_id FROM projects.issue_fix_jobs WHERE run_id = ?" (Only failedId)
+      Just failedRun <- runQueryEffect tr $ Issues.getRoutineRun testPid identifier
+      failedRun.status `shouldBe` Issues.RunFailed
+      runQueryEffect tr (Issues.listRunArtifacts testPid identifier) >>= (\artifacts -> map (toText . (.key)) artifacts `shouldNotContain` ["latest-result"])
     tryAny (run failedId "--app-job-retention-denied") >>= (`shouldSatisfy` isLeft)
     runQueryEffect tr (Fixes.completedResult testPid failedId) >>= (`shouldSatisfy` isNothing)
     runQueryEffect tr (Reviews.priorRepositoryKnowledge testPid (Git.RepoRef "impact-org" "checkout" revision) "test-service") >>= (\notes -> length notes `shouldBe` 1)
@@ -4156,6 +4244,17 @@ spec = around withTestResources $ describe "Production impact reviews" do
       [Only checkpointed] <- withResource tr.trPool (\conn -> query conn "SELECT verified_result IS NOT NULL OR review_attempt_id IS NOT NULL FROM projects.issue_fix_jobs WHERE run_id = ?" (Only reviewId)) :: IO [Only Bool]
       checkpointed `shouldBe` False
       runQueryEffect tr (Reviews.priorRepositoryKnowledge testPid (Git.RepoRef "impact-org" "checkout" revision) "test-service") >>= (\notes -> length notes `shouldBe` 2)
+    for_ ([(uid 30, "--app-job-revoke-account"), (uid 31, "--app-job-revoke-role")] :: [(Fixes.FixId, Text)]) $ \(revokedId, mode) -> do
+      runQueryEffect tr (Fixes.createRun testPid revokedId issue mapping.id base image) `shouldReturn` Just revokedId
+      runQueryEffect tr (Fixes.queueJob testPid user revokedId) `shouldReturn` True
+      tryAny (run revokedId mode) >>= (`shouldSatisfy` isLeft)
+      [Only identifier] <- withResource tr.trPool $ \conn -> query conn "SELECT agent_run_id FROM projects.issue_fix_jobs WHERE run_id = ?" (Only revokedId)
+      Just cancelled <- runQueryEffect tr $ Issues.getRoutineRun testPid identifier
+      cancelled.status `shouldBe` Issues.RunCancelled
+      Just grantEvidence <- runQueryEffect tr $ Issues.getRoutineRunEvidence testPid identifier
+      grantEvidence.requestedBy `shouldBe` Just user
+      runQueryEffect tr (isJust <$> Fixes.claimJob testPid revokedId) `shouldReturn` False
+    readIORef revokedReplies `shouldReturn` replicate 2 (True, True, True, True, True)
     requireMinio tr pendingWith $ withSystemTempDirectory "retained-fix-media" \mediaRoot -> do
       current <- runQueryEffect tr (Fixes.getRun testPid fid) >>= either (fail . show) (maybe (fail "Completed run missing") pure)
       artifacts <- maybe (fail "Verified comparison missing") pure $ Fixes.artifactRequest "https://github.com/impact-org/checkout.git" current completed

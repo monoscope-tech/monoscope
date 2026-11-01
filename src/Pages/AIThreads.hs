@@ -352,6 +352,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               span_ [role_ "status"] $ uncurry tonePill_ $ runStatus run.status
               span_ $ toHtml $ case run.source of
                 (Issues.InteractiveRun _; Issues.ConversationRun _) -> "Web request"
+                Issues.FixRun{} -> "Code fix"
                 Issues.ScheduledRun -> "Scheduled"
                 Issues.TriggeredRun (Issues.SlackMessage _) -> "Slack request"
                 Issues.TriggeredRun (Issues.SlackCommand _) -> "Slack command"
@@ -364,13 +365,16 @@ threadPageGetH pid convId docM runM hxTarget = do
                 let name = T.strip $ user.firstName <> " " <> user.lastName
                 span_ [class_ "min-w-0 break-words"] $ toHtml $ "Requested by " <> if T.null name then CI.original user.email else name
               time_ [datetime_ $ show run.startedAt] $ toHtml $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" run.startedAt
+          when (run.status == Issues.RunSucceeded && viewerPermission >= ProjectMembers.PAdmin) $ case run.source of
+            Issues.FixRun fixId -> a_ [href_ $ "/p/" <> pid.toText <> "/issue-fixes/" <> fixId.toText, class_ "btn btn-sm btn-ghost"] "Review verified fix"
+            _ -> pass
           whenJust run.error $ p_ [class_ $ "rounded-lg border border-strokeWeak p-4 text-sm break-words " <> (case run.status of Issues.RunFailed -> "text-textError"; Issues.RunTimedOut -> "text-textWarning"; _ -> "text-textWeak"), role_ "status"] . toHtml
           whenJust evidence.input $ \input -> section_ [Aria.label_ "Run request"] do
             h2_ [class_ "mb-2 text-sm font-semibold text-textStrong"] "Request"
             p_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml input
           details_ [class_ "rounded-lg border border-strokeWeak p-4", term "hx-morph-skip" ""] do
-            summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Instructions used for this run"
-            p_ [class_ "mt-3 whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe "This run predates instruction snapshots." evidence.instructions
+            summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ case run.source of Issues.FixRun{} -> "Fix workflow"; _ -> "Instructions used for this run"
+            p_ [class_ "mt-3 whitespace-pre-wrap break-words text-sm text-textWeak"] $ toHtml $ fromMaybe (case run.source of Issues.FixRun{} -> "The fix must reproduce the issue, pass the retained regression, and pass independent review."; _ -> "This run predates instruction snapshots.") evidence.instructions
             whenJust evidence.templateVersion $ \version -> p_ [class_ "mt-2 text-xs text-textWeak"] $ toHtml $ "Template version " <> show @Text version
           unless (null operations) $ section_ [Aria.label_ "Action history", class_ "space-y-3"] do
             div_ [class_ "flex items-center justify-between gap-3"] do

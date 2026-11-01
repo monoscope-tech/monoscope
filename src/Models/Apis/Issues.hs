@@ -163,6 +163,7 @@ module Models.Apis.Issues (
   CapabilityDenial (..),
   authorizeCapability,
   runContextAuthority,
+  retireFixRunTx,
   slackTurnForRun,
   InteractiveOrigin (..),
   startInteractiveRun,
@@ -1643,7 +1644,7 @@ data InteractiveOrigin = WebMessage | WebConversation | WebRoutine RoutineInterv
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data RoutineRunSource = ScheduledRun | TriggeredRun RoutineEventSource | InteractiveRun InteractiveOrigin | ConversationRun InteractiveOrigin
+data RoutineRunSource = ScheduledRun | TriggeredRun RoutineEventSource | InteractiveRun InteractiveOrigin | ConversationRun InteractiveOrigin | FixRun (UUIDId "issue_fix")
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb RoutineRunSource
@@ -1701,18 +1702,19 @@ reviewApprover policy capability = case policy of
 
 
 data RunClaim
-  = ConversationClaim (UUIDId "ai_routine_run")
+  = FixClaim (UUIDId "issue_fix") (UUIDId "ai_routine_run") (UUIDId "fix_lease")
+  | ConversationClaim (UUIDId "ai_routine_run")
   | InteractiveClaim Projects.UserId (UUIDId "conversation") (UUIDId "ai_routine_run")
   | BackgroundClaim Projects.UserId (UUIDId "conversation") (UUIDId "ai_routine_run") UTCTime
   | EventClaim RoutineEventSource (UUIDId "ai_routine_run") UTCTime
 
 
-newtype RunContext = RunContext RunContextRow
-  deriving newtype (Eq, Show)
+data RunContext = RunContext RunContextRow | FixContext RunContextRow (UUIDId "fix_lease")
+  deriving stock (Eq, Show)
 
 
 instance Fields.HasField' field RunContextRow value => HasField field RunContext value where
-  getField (RunContext row) = view (Fields.field' @field) row
+  getField context = view (Fields.field' @field) $ case context of RunContext row -> row; FixContext row _ -> row
 
 
 data RunContextRow = RunContextRow
@@ -1736,11 +1738,17 @@ data RunContextRow = RunContextRow
 runContextFor :: DB es => Projects.ProjectId -> RunClaim -> Eff es (Maybe RunContext)
 runContextFor pid claim =
   let (run, scope) = case claim of
+        FixClaim fixId identifier owner ->
+          ( identifier
+          , [HI.sql| AND source = #{FixRun fixId} AND EXISTS (
+          SELECT 1 FROM projects.issue_fix_jobs job WHERE job.run_id = #{fixId} AND job.agent_run_id = ai_routine_runs.id AND job.lease_owner = #{owner})|]
+          )
         ConversationClaim identifier -> (identifier, [HI.sql| AND (source->>'tag' = 'ConversationRun' OR (source->>'tag' = 'TriggeredRun' AND source #>> '{contents,tag}' = 'SlackCommand')) AND status = 'running'|])
         InteractiveClaim user conversation identifier -> (identifier, [HI.sql| AND source->>'tag' = 'InteractiveRun' AND requested_by = #{user} AND conversation_id = #{conversation}|])
         BackgroundClaim user conversation identifier at -> (identifier, [HI.sql| AND source->>'tag' <> 'InteractiveRun' AND started_at = #{at} AND requested_by = #{user} AND conversation_id = #{conversation}|])
         EventClaim event identifier at -> (identifier, [HI.sql| AND source = #{TriggeredRun event} AND started_at = #{at}|])
-   in fmap RunContext
+      wrap = case claim of FixClaim _ _ owner -> (`FixContext` owner); _ -> RunContext
+   in fmap wrap
         <$> Hasql.interpOne
           ( [HI.sql|SELECT id, root_run_id, project_id, conversation_id, requested_by, started_at, source, policy, permission_ceiling, input, instructions, command_origin
       FROM apis.ai_routine_runs WHERE id = #{run} AND project_id = #{pid} AND requested_by IS NOT NULL|]
@@ -1804,7 +1812,7 @@ slackTurnForRun context = case context.source of
   TriggeredRun (SlackMessage receipt) ->
     fmap (Investigations.Turn context.projectId context.conversationId context.requestedBy . HI.getOneColumn)
       <$> Hasql.interpOne @(HI.OneColumn Text) [HI.sql|SELECT payload #>> '{event,ts}' FROM apis.slack_events WHERE id = #{receipt} AND payload #>> '{event,ts}' IS NOT NULL|]
-  (ScheduledRun; InteractiveRun{}; ConversationRun{}; TriggeredRun (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}; IncidentEvent{})) -> pure Nothing
+  (ScheduledRun; InteractiveRun{}; ConversationRun{}; FixRun{}; TriggeredRun (SlackCommand{}; PullRequestReview{}; IssueEnrichment{}; IncidentEvent{})) -> pure Nothing
 
 
 runContextScopeSql :: RunContext -> HI.Sql
@@ -1812,16 +1820,23 @@ runContextScopeSql context =
   [HI.sql| AND run.requested_by = #{context.requestedBy} AND run.conversation_id = #{context.conversationId}
     AND run.started_at = #{context.startedAt} AND run.source = #{context.source} AND run.policy = #{context.policy}
     AND run.permission_ceiling = #{context.permissionCeiling} AND run.command_origin IS NOT DISTINCT FROM #{context.origin}|]
+    <> case context of
+      FixContext _ owner -> [HI.sql| AND EXISTS (SELECT 1 FROM projects.issue_fix_jobs job WHERE job.agent_run_id = run.id AND job.lease_owner = #{owner})|]
+      RunContext row -> case row.source of FixRun{} -> [HI.sql| AND FALSE|]; _ -> mempty
 
 
 runContextAccessSql :: RunContext -> HI.Sql
 runContextAccessSql context = case context.source of
   InteractiveRun{} -> conversationAccess SessionConversation
-  ConversationRun{} -> conversationAccess MemberConversation
+  (ConversationRun{}; FixRun{}) -> conversationAccess MemberConversation
   (ScheduledRun; TriggeredRun{}) -> routineRunAccessSql context.projectId context.id (runContextScopeSql context)
   where
+    nativeAccess = case context.source of
+      FixRun{} -> nativeFixAccessSql [HI.sql| AND job.lease_until > now() AND job.result IS NULL|]
+      _ -> [HI.sql|TRUE|]
     conversationAccess grant =
       [HI.sql|SELECT CASE WHEN conversation.conversation_id IS NULL THEN #{Stopped}
+          WHEN NOT (^{nativeAccess}) THEN #{Unavailable}
           WHEN #{grant == SessionConversation} AND actor.permission IS NULL AND run.project_id = #{Projects.demoProjectId} AND run.evidence_permission = #{ProjectMembers.PView} THEN #{Allowed Observe}
           WHEN actor.permission IS NULL OR apis.evidence_permission_rank(authority.permission) < apis.evidence_permission_rank(COALESCE(run.evidence_permission, #{ProjectMembers.PAdmin})) THEN #{Unavailable}
           ELSE jsonb_build_object('tag', 'Allowed', 'contents', run.policy_limit) END, authority.permission
@@ -1833,6 +1848,17 @@ runContextAccessSql context = case context.source of
         CROSS JOIN LATERAL (SELECT apis.least_permission(actor.permission, run.permission_ceiling) AS permission) authority
         WHERE run.id = #{context.id} AND run.project_id = #{context.projectId} AND run.status IN ('running', 'succeeded')|]
         <> runContextScopeSql context
+
+
+nativeFixAccessSql :: HI.Sql -> HI.Sql
+nativeFixAccessSql lease =
+  [HI.sql|run.policy_limit = #{Autonomous} AND EXISTS (
+    SELECT 1 FROM projects.issue_fix_jobs job JOIN projects.issue_fix_run_access allowed ON allowed.run_id = job.run_id AND allowed.user_id = job.requested_by
+    JOIN apis.ai_conversations conversation ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
+    WHERE job.agent_run_id = run.id AND allowed.project_id = run.project_id AND job.requested_by = run.requested_by
+      AND run.source = jsonb_build_object('tag', 'FixRun', 'contents', job.run_id)|]
+    <> lease
+    <> [HI.sql|)|]
 
 
 newtype CommandOrigin = CommandOrigin CommandOriginRow
@@ -2660,7 +2686,7 @@ completeRunTx now mutation context proposed = do
               <> runContextScopeSql context
               <> [HI.sql| FOR UPDATE OF routine|]
           )
-    (InteractiveRun{}; ConversationRun{}; TriggeredRun{}) -> pure Nothing
+    (InteractiveRun{}; ConversationRun{}; FixRun{}; TriggeredRun{}) -> pure Nothing
   states <-
     Hasql.queryTx @[HI.OneColumn RoutineRunStatus]
       ( [HI.sql|SELECT run.status FROM apis.ai_routine_runs run WHERE run.id = #{runId} AND run.project_id = #{pid}|]
@@ -2699,6 +2725,7 @@ completeRunTx now mutation context proposed = do
             Nothing -> (Nothing, Nothing)
           title = case context.source of
             (InteractiveRun{}; ConversationRun{}) -> Nothing
+            FixRun{} -> Just "Verified issue fix"
             ScheduledRun -> Just "Routine result"
             TriggeredRun event -> Just $ case event of
               SlackMessage{} -> "Slack investigation"
@@ -2965,6 +2992,7 @@ data RunFinalization
   = FinishRun RunContext RunTermination (Maybe AE.Value) (Maybe AE.Value) (Maybe Text)
   | RetireUnownedWork RoutineRetirement
   | RetireAbandonedRuns
+  | RetireFixRun Projects.ProjectId (UUIDId "issue_fix")
   | StopRuns RunStop
 
 
@@ -2998,7 +3026,7 @@ finishRunRowsTx finalization =
         let requestEnded = case status of
               (CompletedSucceeded; CompletedNoFindings; CompletedCancelled) -> True
               (CompletedFailed; CompletedTimedOut) -> case context.source of
-                TriggeredRun{} -> False
+                (TriggeredRun{}; FixRun{}) -> False
                 (ScheduledRun; InteractiveRun{}; ConversationRun{}) -> True
          in [HI.sql|WITH finished AS (
           UPDATE apis.ai_routine_runs
@@ -3014,14 +3042,8 @@ finishRunRowsTx finalization =
           <> runStopScopeSql scope
           <> [HI.sql| RETURNING run.id, run.project_id, run.conversation_id, run.root_run_id, TRUE AS request_ended
         )|]
-      RetireAbandonedRuns ->
-        [HI.sql|WITH finished AS (
-          UPDATE apis.ai_routine_runs SET status = #{RunCancelled}, finished_at = clock_timestamp(),
-            error = 'Run authorizing member or installation is no longer available.'
-          WHERE status = #{RunRunning} AND (requested_by IS NULL OR
-            (routine_id IS NULL AND source->>'tag' IN ('ScheduledRun', 'TriggeredRun')))
-          RETURNING id, project_id, conversation_id, root_run_id, TRUE AS request_ended
-        )|]
+      RetireAbandonedRuns -> retire mempty
+      RetireFixRun project identifier -> retire [HI.sql| AND run.project_id = #{project} AND run.source = #{FixRun identifier}|]
       RetireUnownedWork scope ->
         [HI.sql|WITH retired_routines AS (
           UPDATE apis.ai_routines routine SET active = FALSE, next_run_at = NULL, running_since = NULL,
@@ -3038,6 +3060,18 @@ finishRunRowsTx finalization =
             AND (retired.requested_by IS NULL OR run.requested_by IS NULL)
           RETURNING run.id, run.project_id, run.conversation_id, run.root_run_id, TRUE AS request_ended
         )|]
+    retire scope =
+      [HI.sql|WITH finished AS (
+        UPDATE apis.ai_routine_runs run SET status = #{RunCancelled}, finished_at = clock_timestamp(),
+          error = 'Run authorizing member or installation is no longer available.'
+        WHERE ((run.status = #{RunRunning} AND (run.requested_by IS NULL OR
+          (run.routine_id IS NULL AND run.source->>'tag' IN ('ScheduledRun', 'TriggeredRun'))))
+          OR (run.status IN ('running', 'failed', 'timed_out') AND run.source->>'tag' = 'FixRun' AND NOT (|]
+        <> nativeFixAccessSql mempty
+        <> [HI.sql|)))|]
+        <> scope
+        <> [HI.sql| RETURNING run.id, run.project_id, run.conversation_id, run.root_run_id, TRUE AS request_ended
+      )|]
     retirementScope = \case
       UnownedInstallations -> [HI.sql|routine.requested_by IS NULL|]
       ReauthorizingRoutine pid conversation ->
@@ -3053,6 +3087,10 @@ prepareRoutineGrantTx pid conversation = do
   timing <- (decodeRoutineTiming =<<) <$> Hasql.queryTx @(Maybe RoutineTimingRow) (routineTimingSql [HI.sql|project_id = #{pid} AND conversation_id = #{conversation} FOR UPDATE|])
   finishRunRowsTx $ RetireUnownedWork $ ReauthorizingRoutine pid conversation
   pure timing
+
+
+retireFixRunTx :: Projects.ProjectId -> UUIDId "issue_fix" -> Tx.Transaction ()
+retireFixRunTx project identifier = finishRunRowsTx $ RetireFixRun project identifier
 
 
 data RunStop = StopRoutine Projects.ProjectId (UUIDId "conversation") | StopSlackSession Text Text

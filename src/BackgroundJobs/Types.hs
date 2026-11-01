@@ -240,7 +240,7 @@ queueReviewTx project wake identifier = do
           Issues.TriggeredRun (Issues.PullRequestReview review) -> Just $ ReviewPullRequest review
           Issues.TriggeredRun (Issues.IssueEnrichment issue) -> Just $ EnhanceIssuesWithLLM project (V.singleton issue)
           Issues.TriggeredRun (Issues.IncidentEvent event root) -> Just $ InvestigateIncident project event root
-          (Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> Nothing
+          (Issues.FixRun{}; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> Nothing
     for_ continuation $ queueJobTx timing
 
 
