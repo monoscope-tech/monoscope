@@ -424,3 +424,34 @@ separate acceptance. This verdict covers the browser paths described above.
 ### Verdict
 
 Approve
+
+## Streaming review artifact and hosted readback (1 November)
+
+The existing review Page now contains twelve walkthroughs with 102 steps and
+114 source panels. All 113 previous source panels retain their contents. The
+additional panel shows the durable Slack streaming implementation at commit
+`bf9fb3a44`. Each excerpt matches its cited Git revision after removing the
+common indentation used by the excerpt renderer.
+
+The checkpoint panel records nine conversation browser cases, 461 bot examples,
+and 2,068 doctests. These are scoped checkpoints, not final release signoff.
+The remaining-work panel retains the open live Slack and host-loss acceptance.
+Two actual mobile application captures show the artifact inspector in light and
+dark themes. A native desktop image precedes the interactive walkthrough.
+
+All 102 steps pass at 320, 390, 768, and 1280 pixels, with keyboard selection,
+matching expanded source text, no horizontal overflow, and no browser errors.
+Both embedded mobile images decode at their original 320-by-844 resolution.
+Results are in `scripts/local/unified-artifact-refresh-checks.json`.
+
+The Page title is unchanged. The introduction and dated checkpoint now describe
+the integrated experience. A fresh Page read confirms all six blocks at sequence
+57. Reading the uploaded HTML reference returns 232,534 bytes and SHA-256
+`f4070d6ed1db2b6d433e14eabbb3806ae0b2e9c8e1c3676beeadc1014959c8ef`,
+matching the local file. Chrome opens the actual hosted Page with the expected
+text, visualization embed, and decoded 1280-pixel desktop image. Interaction
+inside the hosted visualization remains unverified; the complete interaction
+checks above ran against the identical local HTML in Chromium.
+
+This refresh changes the review artifact and evidence only. It does not establish
+product release signoff, screen-reader acceptance, or physical-device acceptance.
