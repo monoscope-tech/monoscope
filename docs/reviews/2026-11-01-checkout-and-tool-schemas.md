@@ -69,3 +69,35 @@ Neither attempt proves physical Mac power-loss or storage-hardware recovery.
 The retained receipts are `scripts/local/linux-hostloss-v2-acceptance.json`, `linux-hostloss-v2-fixed-kvm-observations.json`, and `linux-hostloss-recovery-fix-source.json`.
 The failing and successful application logs remain separate.
 All compilation and execution occur on this Mac. No production host or GitHub runner builds an image.
+
+## Fresh crash with the corrected binary
+
+A separate experiment repeats the complete crash and recovery cycle with the corrected binary present before shutdown.
+The original experiment and database remain intact.
+Before the crash, the fresh run retains two attempts, one regression check, one wiki revision, and one completed operation.
+The application then resumes active work before the local VZ driver is killed.
+
+After restart, a different boot ID and the same executable hash establish a fresh host with an unchanged application binary.
+All durable checkpoint files retain their hashes.
+One unreferenced staging transcript changes beside an unchanged Finished manifest.
+The trusted Git origin remains readable, while the mirror HEAD is again empty and Git rejects that cache.
+The harness does not repair the cache or flush native checkpoints.
+
+The original lease expires at 17:31:25.659533 UTC.
+The independent observer records takeover at 17:31:26.759830 UTC, with no earlier replacement attempt.
+The application repairs the cache and completes the original shared run.
+Both original attempts and the original regression remain; the final totals are three attempts and three checks.
+The single wiki revision and operation remain unchanged, and completed replay adds no inference.
+All four observed recovery guests use KVM, two CPUs, and 1024 MiB.
+The application case passes in 565.6467 seconds, including the natural lease wait.
+
+All 22 recorded native runtime inputs and 28 worker files match their source snapshots.
+The guest worker files also match those 28 hashes.
+The same executable hash is recorded before shutdown, after restart, and after completion.
+The local supported build passes all 2,098 doctest examples.
+No application, Node worker, or QEMU process remains after completion; the test VM is then stopped.
+
+The receipts are `scripts/local/linux-hostloss-v3-acceptance.json` and `linux-hostloss-v3-harness.json`.
+Separate cache probes record the empty HEAD after restart and the repaired 23-byte HEAD after application recovery.
+This proves abrupt Linux virtual-host recovery with the unchanged binary and a surviving external local test database.
+The controlled-provider and physical-Mac limits above still apply.

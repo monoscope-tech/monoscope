@@ -176,6 +176,18 @@ The command explicitly selects the local OrbStack context and builder.
 The receipt is `scripts/local/unified-agent-ci-selftest-source.json`.
 Final local signoff, application-image validation, and publication remain open.
 
+### Shared wiki persistence follow-up
+
+The complete ProjectMemory review follows its bounded text, relative paths, optimistic versions, project scope, and author tags.
+Caller reads cover the member form, interactive agent operation, native review callback, and native fix callback.
+The shared native write helper serves both native call sites and retains run attribution.
+The common transaction guard checks current authority, evidence permission, and project audience before a wiki mutation.
+Member forms parse bounded values and use the authenticated member as author.
+The opaque path and bounded-text types expose no Generic constructor bypass.
+Their JSON and database decoders use the same refinements.
+Two scoped skill passes find no further material issue, and no runtime source changes are made.
+The source receipt is `scripts/local/project-memory-boundary-review.json`; no additional test result is claimed for this source review.
+
 The source record is `scripts/local/agent-cross-module-review-source.json`.
 No runtime source changed during this review, so no additional test run is claimed.
 The preceding chart checkpoint passes 489 bot cases and 2,083 doctest examples.
