@@ -263,3 +263,39 @@ The detector reports only the unchanged catalog type-size advisory. Pinned Fourm
 and HLint passed the changed Haskell markup. The Vite watcher rebuilt the frontend.
 Physical-device and assistive-technology acceptance, final whole-branch reviews, and
 release signoff remain open.
+
+
+## Selected review in the conversation (1 November)
+
+A permanent browser case exercises the actual review handler from the run inspector.
+It covers administrator approval at 1280px in light mode and decline at 320px in dark mode.
+Each case first downgrades the reviewer to editor, submits the retained form, and expects
+HTTP 403 with the original pending decision intact. After role restoration, the visible
+button saves the chosen decision and original reviewer, then disappears. Escape returns
+to the retained composer draft and conversation URL.
+
+| Domain | Checked behavior |
+| --- | --- |
+| Accessibility | Named action buttons, keyboard Escape, composer focus restoration |
+| Layout | Existing inspector at 1280px and 320px; wrapped requester identity |
+| Writing | Awaiting review, Approved, Declined, and Decision saved states |
+| Typography | Existing heading, badge, metadata, and action text; no new styling |
+| Colors | Existing light and dark themes; no new tokens |
+| UI | Real handler decisions, stale reviewer rejection, retained draft and URL |
+
+This closes a browser coverage gap; it adds no product code. The first fixture used
+PostgreSQL timestamp formatting, which correctly failed the immutable-review guard when
+the application normalized its JSON. The corrected fixture uses the application's canonical
+timestamp representation and retains the guard unchanged. Its administrator role ceiling
+matches the proposed write. The case does not run the resumed model or execute the action;
+those continuation semantics remain covered by the separate integration suite.
+
+The scoped distill, evasion, and locality passes found no material issue: this is a real
+HTTP/browser flow rather than a mirrored implementation assertion, and it uses existing
+fixtures and application handlers. No lower-tier product behavior or new abstraction is added.
+Whole-branch reviews, live Slack behavior, and physical assistive-device acceptance remain open.
+
+All eight permanent browser cases pass in 22.9 seconds on the final fixture.
+The successful log is `scripts/local/selected-review-browser-green.log`; the two
+inspected captures and source hashes are under `scripts/local/selected-review-browser/`.
+The temporary live-server adapter is removed. No product change was needed.

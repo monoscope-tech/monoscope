@@ -482,6 +482,67 @@ test('action history and policy controls preserve drafts and check current roles
   }
 });
 
+test('selected review decisions stay in the conversation and respect current reviewer roles', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID();
+  const policy = JSON.stringify({ review_selected: { classes: ['project_changes'], approver: 'ReviewAdministrators' } });
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Selected review');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
+       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, title)
+         VALUES ('${pid}', '${conversation}', 'web', 'Review this action');
+       INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content)
+         VALUES ('${pid}', '${conversation}', 'assistant', 'The selected action is waiting for review.');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    for (const [width, theme, decision] of [[1280, 'light', 'approved'], [320, 'dark', 'rejected']] as const) {
+      const run = randomUUID(), operation = randomUUID();
+      sql(`INSERT INTO apis.ai_routine_runs (id, root_run_id, project_id, conversation_id, scheduled_at, started_at, status, source, requested_by, input, policy, permission_ceiling)
+           VALUES ('${run}', '${run}', '${pid}', '${conversation}', now(), now(), 'running',
+             '{"tag":"InteractiveRun","contents":{"tag":"WebMessage"}}', '${uid}', 'Review the dashboard action', '${policy}', 'admin');
+           INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome, review)
+           VALUES ('${operation}', '${pid}', '${run}', '${uid}', 1,
+             '{"call":{"id":"create","type":"function","function":{"name":"create_dashboard","arguments":{"body":{"title":"Reviewed dashboard"}}}},"policy":{"capability":{"tag":"ProjectWrite"},"execution":${policy},"permission":"admin"}}',
+             '{"tag":"OperationUnstarted"}', '{"tag":"ReviewPending","contents":{"expiresAt":"2099-01-01T00:00:00Z","approver":"ReviewAdministrators"}}');`);
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`/p/${pid}/ai/${conversation}`);
+      await page.evaluate(value => document.body.dataset.theme = value, theme);
+      const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
+      await composer.fill('Keep my review follow-up.');
+      await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').first().click();
+      const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
+      const action = inspector.locator(`#operation-${operation}`);
+      await expect(action.getByText('Awaiting review', { exact: true })).toBeVisible();
+      await expect(action.getByRole('button', { name: 'Approve action', exact: true })).toBeVisible();
+      sql(`UPDATE projects.project_members SET permission = 'edit' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
+      const rejected = await page.request.post(`/p/${pid}/ai/operations/${operation}/review`, { form: { decision } });
+      expect(rejected.status()).toBe(403);
+      expect(JSON.parse(sql(`SELECT review FROM apis.ai_agent_operations WHERE id = '${operation}'`).toString().trim()).tag).toBe('ReviewPending');
+      sql(`UPDATE projects.project_members SET permission = 'admin' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
+      await Promise.all([
+        page.waitForResponse(response => response.url().endsWith(`/operations/${operation}/review`) && response.request().method() === 'POST'),
+        action.getByRole('button', { name: decision === 'approved' ? 'Approve action' : 'Decline action', exact: true }).click(),
+      ]);
+      await expect(action.getByText(decision === 'approved' ? 'Approved' : 'Declined', { exact: true })).toBeVisible();
+      await expect(action.getByRole('button')).toHaveCount(0);
+      const review = JSON.parse(sql(`SELECT review FROM apis.ai_agent_operations WHERE id = '${operation}'`).toString().trim());
+      expect(review.tag).toBe('ReviewResolved');
+      expect(review.contents[1].decision).toBe(decision === 'approved' ? 'ReviewApproved' : 'ReviewRejected');
+      expect(review.contents[1].decidedBy).toBe(uid);
+      await expect(page.locator('#toastsParent .toast-animate').filter({ hasText: 'Decision saved.' })).toHaveCSS('opacity', '1');
+      await page.screenshot({ path: testInfo.outputPath(`selected-review-${decision}-${width}.png`) });
+      await inspector.focus();
+      await page.keyboard.press('Escape');
+      await expect(composer).toBeFocused();
+      await expect(composer).toHaveValue('Keep my review follow-up.');
+      await expect(page).toHaveURL(`/p/${pid}/ai/${conversation}`);
+      sql(`UPDATE apis.ai_routine_runs SET status = 'cancelled', finished_at = now() WHERE id = '${run}';`);
+    }
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
 test('restricted conversation evidence is not served after a role downgrade', async ({ page, baseURL }) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID(), run = randomUUID();
   const secret = 'restricted-evidence-browser-canary';
