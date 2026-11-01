@@ -83,6 +83,7 @@ module Utils (
   drawerRowAttrs_,
   renderMarkdown,
   renderMarkdownToc,
+  renderMarkdownTocWithPrefix,
   jsonToMap,
   fieldContextMenuItems_,
   fieldMenuActions,
@@ -145,6 +146,7 @@ import Text.MMark qualified as MMark
 import Text.MMark.Extension qualified as MExt
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
+import Text.URI qualified as URI
 import Web.FormUrlEncoded (Form (..), FromForm (..), defaultFormOptions, genericFromForm)
 import Web.Internal.FormUrlEncoded (GFromForm)
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -1626,14 +1628,38 @@ renderMarkdown = fst . renderMarkdownToc
 
 -- | Rendered markdown plus its @##@ headings as (anchor id, text); MMark already gives each heading that id.
 renderMarkdownToc :: Text -> (Html (), [(Text, Text)])
-renderMarkdownToc md = case MMark.parse "" md of
+renderMarkdownToc = renderMarkdownTocWithPrefix ""
+
+
+renderMarkdownTocWithPrefix :: Text -> Text -> (Html (), [(Text, Text)])
+renderMarkdownTocWithPrefix prefix md = case MMark.parse "" md of
   Left _ -> (toHtml md, [])
-  Right doc ->
-    ( toHtmlRaw $ MMark.render doc
-    , reverse $ MMark.runScanner doc $ MExt.scanner [] \acc -> \case
-        MExt.Heading2 inlines -> (MExt.headerId inlines, MExt.asPlainText inlines) : acc
-        _ -> acc
-    )
+  Right parsed ->
+    let doc = if T.null prefix then parsed else MMark.useExtension scoped parsed
+     in ( toHtmlRaw $ MMark.render doc
+        , reverse $ MMark.runScanner doc $ MExt.scanner [] \acc -> \case
+            MExt.Heading2 inlines -> (prefix <> MExt.headerId inlines, MExt.asPlainText inlines) : acc
+            _ -> acc
+        )
+  where
+    scoped =
+      MExt.blockRender
+        ( \render -> \case
+            MExt.Heading1 content -> heading h1_ content
+            MExt.Heading2 content -> heading h2_ content
+            MExt.Heading3 content -> heading h3_ content
+            MExt.Heading4 content -> heading h4_ content
+            MExt.Heading5 content -> heading h5_ content
+            MExt.Heading6 content -> heading h6_ content
+            block -> render block
+        )
+        <> MExt.inlineRender
+          ( \render -> \case
+              MExt.Link label URI.URI{URI.uriScheme = Nothing, URI.uriAuthority = Left False, URI.uriPath = Nothing, URI.uriQuery = [], URI.uriFragment = Just fragment} title ->
+                a_ ([href_ $ "#" <> prefix <> URI.unRText fragment] <> foldMap (pure . title_) title) $ foldMap render label
+              inline -> render inline
+          )
+    heading element (inlines, body) = element [id_ $ prefix <> MExt.headerId (MExt.getOis inlines), tabindex_ "-1"] body >> toHtmlRaw ("\n" :: Text)
 
 
 jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)

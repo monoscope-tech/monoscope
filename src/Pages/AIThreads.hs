@@ -37,7 +37,7 @@ import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, renderMarkdownToc)
+import Utils (faSprite_, renderMarkdownTocWithPrefix)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.MCP qualified as MCP
@@ -431,7 +431,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               then p_ [class_ "text-sm text-textWeak"] $ if run.status == Issues.RunRunning then "Artifacts will appear when this run finishes." else "This run did not produce an artifact."
               else for_ artifacts \artifact -> article_ [class_ "border-t border-strokeWeak pt-4"] do
                 h3_ [class_ "font-medium text-textStrong break-words"] $ toHtml artifact.title
-                div_ [class_ "prose prose-sm mt-4 max-w-none break-words overflow-x-auto"] $ fst $ renderMarkdownToc $ fromMaybe "" artifact.content
+                div_ [class_ "prose prose-sm mt-4 max-w-none break-words overflow-x-auto"] $ fst $ renderMarkdownTocWithPrefix ("ai-run-" <> run.id.toText <> "-" <> toText artifact.key <> "-") $ fromMaybe "" artifact.content
           for_ ([("Findings", evidence.findings), ("Tool results", evidence.actions)] :: [(Text, Maybe AE.Value)]) \(title, value) -> whenJust value \body ->
             details_ [class_ "rounded-lg border border-strokeWeak p-4"] do
               summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ toHtml @Text title
@@ -582,7 +582,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           Catalog.ReviewAdministrators -> "Administrators"
         threadHref = foldMap (threadUrl projectId) activeConversationIdM
         docHref doc = threadHref <> "?doc=" <> toText doc.key
-        (openBody, openToc) = maybe (mempty, []) renderMarkdownToc $ openDoc >>= (.content)
+        (openBody, openToc) = maybe (mempty, []) (renderMarkdownTocWithPrefix $ "ai-document-" <> convId.toText <> "-") $ openDoc >>= (.content)
         inspectorAttrs href = [hxGet_ href, hxTarget_ "#ai-inspector", hxSelect_ "#ai-inspector", hxSwap_ "outerHTML"]
         artifactLinkAttrs href = let url = threadHref <> href in href_ url : inspectorAttrs url
         navLink_ href = a_ ([href_ href, class_ "flex max-w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-textWeak hover:bg-fillHover hover:text-textStrong"] <> inspectorAttrs href)

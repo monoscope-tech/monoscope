@@ -2,6 +2,109 @@ import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { sql } from './helpers';
 
+test('artifact contents navigate inside the inspector when the conversation has the same heading', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), conversation = randomUUID();
+  const content = `## Evidence\n\n[Skip to findings](#findings) [Read source](https://example.test/source#findings) [Other page](/manual#findings)\n\n${'Measured checkout evidence.\n\n'.repeat(90)}## Findings\n\nArtifact findings.`;
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Artifact navigation');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
+       INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES ('${pid}', '${conversation}', 'web');
+       INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content) VALUES ('${pid}', '${conversation}', 'assistant', '## Findings\n\nConversation findings.');
+       INSERT INTO apis.ai_artifacts (project_id, conversation_id, key, title, content) VALUES ('${pid}', '${conversation}', 'checkout', 'Checkout evidence', '${content}');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    for (const width of [1280, 320]) for (const theme of ['light', 'dark']) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`/p/${pid}/ai/${conversation}`);
+      await page.evaluate(value => document.body.dataset.theme = value, theme);
+      const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
+      await composer.fill('Keep this draft while I read the evidence.');
+      await page.getByRole('navigation', { name: 'Artifacts', exact: true }).getByRole('link', { name: 'Checkout evidence', exact: true }).focus();
+      await page.keyboard.press('Enter');
+      const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
+      await expect(inspector).toBeVisible();
+      await inspector.getByText('On this page', { exact: true }).focus();
+      await page.keyboard.press('Enter');
+      const heading = inspector.getByRole('heading', { name: 'Findings', exact: true });
+      const anchor = await heading.getAttribute('id');
+      await expect(inspector.getByRole('link', { name: 'Read source', exact: true })).toHaveAttribute('href', 'https://example.test/source#findings');
+      await expect(inspector.getByRole('link', { name: 'Other page', exact: true })).toHaveAttribute('href', '/manual#findings');
+      for (const name of ['Findings', 'Skip to findings']) {
+        const link = inspector.getByRole('link', { name, exact: true });
+        await expect(link).toHaveAttribute('href', `#${anchor}`);
+        await link.focus();
+        await page.keyboard.press('Enter');
+        await expect.poll(async () => {
+          const target = await heading.boundingBox(), panel = await inspector.boundingBox();
+          return target !== null && panel !== null && target.y >= panel.y && target.y + target.height <= panel.y + panel.height;
+        }, { message: `The artifact heading scrolls into the inspector in ${theme} at ${width}px through ${name}` }).toBe(true);
+        await expect(heading).toBeFocused();
+      }
+      await expect(page.locator(`[id="${anchor}"]`)).toHaveCount(1);
+      expect(new URL(page.url()).pathname).toBe(`/p/${pid}/ai/${conversation}`);
+      await page.screenshot({ path: testInfo.outputPath(`artifact-contents-${theme}-${width}.png`) });
+      await page.keyboard.press('Escape');
+      await expect(inspector).toBeHidden();
+      await expect(composer).toBeFocused();
+      await expect(composer).toHaveValue('Keep this draft while I read the evidence.');
+    }
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
+test('failed and cancelled runs preserve the conversation and explain missing artifacts', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID();
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Run failure states');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    await page.goto(`/p/${pid}/ai/routines`);
+    await page.getByRole('button', { name: 'Add Slack investigation', exact: true }).click();
+    const [routine, conversation] = sql(`SELECT id, conversation_id FROM apis.ai_routines WHERE project_id = '${pid}';`).toString().trim().split('|');
+    const states = [
+      ['failed', 'Failed', 'The provider did not return a response. Retry this request.'],
+      ['timed_out', 'Timed out', 'The investigation exceeded its time budget. Retry this request.'],
+      ['cancelled', 'Cancelled', 'The investigation stopped before a result was saved.'],
+    ] as const;
+    const rootRun = randomUUID();
+    for (const [attempt, [status, , error]] of states.entries()) {
+      const run = attempt === 0 ? rootRun : randomUUID();
+      sql(`INSERT INTO apis.ai_routine_runs (id, root_run_id, routine_id, project_id, conversation_id, scheduled_at, started_at, finished_at, status, source, requested_by, input, instructions, error, attempt)
+           SELECT '${run}', '${rootRun}', id, project_id, conversation_id, now(), now(), now(), '${status}',
+             '{"tag":"TriggeredRun","contents":{"tag":"SlackCommand","contents":"${conversation}"}}', '${uid}', 'Investigate checkout', instructions, '${error}', ${attempt + 1}
+           FROM apis.ai_routines WHERE id = '${routine}';`);
+    }
+    for (const width of [1280, 320]) for (const theme of ['light', 'dark']) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`/p/${pid}/ai/${conversation}`);
+      await page.evaluate(value => document.body.dataset.theme = value, theme);
+      const composer = page.getByRole('textbox', { name: 'Message Monoscope AI', exact: true });
+      await composer.fill('Keep my follow-up after an interrupted run.');
+      for (const [status, label, error] of states) {
+        await page.getByRole('region', { name: 'Routine runs', exact: true }).getByRole('link').filter({ has: page.getByText(label, { exact: true }) }).focus();
+        await page.keyboard.press('Enter');
+        const inspector = page.getByRole('complementary', { name: 'Conversation details', exact: true });
+        await expect(inspector.getByText(error, { exact: true })).toBeVisible();
+        await expect(inspector.getByText('This run did not produce an artifact.', { exact: true })).toBeVisible();
+        await expect(page.locator('#routine-run')).not.toHaveAttribute('hx-trigger');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`run-${status}-${theme}-${width}.png`) });
+        await page.keyboard.press('Escape');
+        await expect(inspector).toBeHidden();
+        await expect(composer).toBeFocused();
+        await expect(composer).toHaveValue('Keep my follow-up after an interrupted run.');
+        await expect(page).toHaveURL(`/p/${pid}/ai/${conversation}`);
+      }
+    }
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
 test('routine text controls stay legible on mobile without enlarging desktop controls', async ({ page, baseURL }, testInfo) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID();
   sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.test');

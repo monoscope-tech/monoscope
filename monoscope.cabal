@@ -688,6 +688,7 @@ library
     , mime-mail
     , minio-hs
     , mmark
+    , modern-uri
     , monad-time-effectful
     , monoscope-cli
     , monoscope-shared
@@ -1434,6 +1435,7 @@ test-suite test-dev
     , mime-mail
     , minio-hs
     , mmark
+    , modern-uri
     , monad-time-effectful
     , monoscope-cli
     , monoscope-shared

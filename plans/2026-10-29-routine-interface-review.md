@@ -161,3 +161,53 @@ further material finding in this revision. Styling stays inline in the templates
 CSS responsive utilities. Final release checks and controlled Slack acceptance remain open.
 
 Verdict for this scoped revision: Approve.
+
+## Artifact navigation and terminal states (1 November)
+
+Full review of artifact navigation and terminal run inspectors in the existing conversation.
+The stack remains Lucid, MMark, native HTML, HTMX, and the existing Monoscope theme.
+
+| Domain | Evidence inspected | Result |
+| --- | --- | --- |
+| Accessibility | Keyboard contents links, local links, heading focus, Escape, and restored composer focus | Two findings fixed |
+| Layout | Desktop and 320px artifact and terminal-state captures | Clear within this scope; no horizontal overflow |
+| Writing | Failed, timed-out, and cancelled run messages; missing-artifact explanation | Clear; the existing interface displays the recorded reason |
+| Typography | Artifact headings, visible focus markers, and wrapped terminal messages | Clear within the inspected captures |
+| Colors | Light/dark captures and existing semantic tokens | Clear for the changed markup; no palette change |
+| UI | Native fragment navigation, inspector closure, and draft retention | Clear after both fixes |
+
+| Severity | Location | Before | After | Why |
+| --- | --- | --- | --- | --- |
+| MEDIUM | `src/Pages/AIThreads.hs:434`, `src/Pages/AIThreads.hs:585` | Artifact and conversation headings shared fragment IDs | Scope artifact headings and local links by conversation or run and artifact key | Contents links must scroll to the artifact's heading |
+| MEDIUM | `src/Utils.hs:1662` | A fragment jump left keyboard focus outside the inspector | Give scoped headings `tabindex="-1"` | Native navigation retains focus inside the inspector, so Escape closes it and restores the draft |
+
+The first browser run reproduced the incorrect scroll target before the fix.
+The next run exposed the focus problem after anchor isolation.
+The final run passes all six permanent cases in 23.6 seconds against an isolated live server and integration database.
+It checks contents and local links at 1280px and 320px in both themes.
+External links and links to other pages retain their destinations.
+Twelve terminal-state combinations cover three outcomes across both widths and themes.
+The other cases retain lifecycle, mobile-control, action-history, and role-revocation coverage.
+
+`renderMarkdownTocWithPrefix` reuses MMark's extension API and its existing heading identifiers.
+The legacy renderer uses an empty prefix and retains its original rendering path.
+The direct `modern-uri` dependency exposes MMark's existing URI type; no new runtime package enters the dependency tree.
+No product JavaScript, scroll state, or global keyboard listener was added.
+
+| Candidate | Decision |
+| --- | --- |
+| Add a client scroll handler | Rejected: scoped IDs and native fragment navigation solve the problem |
+| Suppress the heading focus marker | Rejected: keyboard readers need a visible reading position |
+| Change the catalog's 15px text after the detector advisory | Rejected: the unchanged catalog text is outside this navigation fix |
+
+The detector reports no blocking finding and one advisory about the existing catalog type size.
+Pinned Fourmolu and HLint pass for `Utils.hs` and `AIThreads.hs`.
+Repeated distill, evasion, and locality reviews leave no further material finding in this patch.
+VoiceOver, physical-device testing, and throttled loading states remain unverified.
+
+Saved evidence is under ignored `scripts/local/artifact-contents-review/`, with sixteen captures.
+Logs are `scripts/local/artifact-contents-red.log`, `scripts/local/artifact-contents-focus-red.log`, and `scripts/local/artifact-contents-green.log`.
+The temporary live-server adapter is removed; both new browser regressions remain in `e2e/tests/routines.spec.ts`.
+This review does not establish whole-branch signoff or live Slack acceptance.
+
+Verdict for this scoped revision: Approve.
