@@ -123,3 +123,39 @@ Their logs are `scripts/local/atomic-wiki-authority-reviews-61-green.log`,
 The scoped follow-up review finds no suppression, weaker contract, or duplicate executor.
 No client behavior changed. Whole-branch reviews and final release checks remain open.
 This scoped result does not establish whole-branch signoff or live Slack acceptance.
+
+## Slack identity at the atomic write boundary
+
+A further failing-first regression unlinks the Slack requester after the durable tool checkpoint and before the atomic claim.
+Before the fix, the wiki revision committed despite that unlink.
+The test uses real event admission, the shared agent loop, the database, and controlled model and clock effects.
+It does not use a live Slack callback.
+
+The operation path now retains its `AgentAccess` through retries and reconciliation.
+Atomic model actions check that access inside the mutation transaction.
+Slack access requires the same linked member, project, installed workspace, and minimum role.
+The effect and transaction resolvers share one SQL query.
+Native callers retain their existing member access; their admitted sources remain constrained by the native scope check.
+
+The regression failed in 0.3008 seconds and passes in 0.3374 seconds after the fix.
+All 20 operation cases pass in 6.3377 seconds, including the earlier five authority changes.
+The existing assertion that rejected claims leave no operation receipt remains in place.
+Logs are `scripts/local/atomic-slack-unlink-{red,green}.log` and
+`scripts/local/atomic-slack-identity-operations-20-green.log`.
+HLint reports no hints in the two changed runtime modules.
+All 56 cases selected by `agentReview_` pass in 16.4971 seconds.
+The real native application recovery case passes in 22.5406 seconds.
+Their logs are `scripts/local/atomic-slack-identity-reviews-56-green.log` and
+`scripts/local/atomic-slack-identity-native-fix-green.log`.
+The PR checkout/wiki recovery case passes in 5.0798 seconds.
+Its log is `scripts/local/atomic-slack-identity-native-review-green.log`.
+The runtime fix and regression are committed as `cf2a56c6c`.
+The broader bot suite passes all 460 examples in 173.5638 seconds.
+The saved log is `scripts/local/atomic-slack-identity-bots-460-green.log`.
+The input hashes in `scripts/local/atomic-slack-identity-bots-run-source.json` still match after the run.
+This run includes the current streaming prototype and the scoped artifact-heading assertion.
+
+Scoped `hs-distill` and `hs-evasion-review` passes retain the shared query and explicit access constructors.
+There is no duplicate authority SQL, widened effect row, warning suppression, or new executor.
+`hs-lob-review` finds no client behavior in this change.
+Whole-branch review, live streaming acceptance, and final release checks remain open.

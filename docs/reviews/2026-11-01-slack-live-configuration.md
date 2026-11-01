@@ -99,3 +99,44 @@ Real calls to `chat.startStream`, `chat.appendStream`, and `chat.stopStream` suc
 A separate Python worker reserved task ID `f92ab818-e8dc-494e-a86d-f74e5e0acf8a`, sent `chat.startStream`, then exited with code 42 before reading its response body. Its durable record held no timestamp. A fresh process recovered exactly one open stream by matching that task ID, app, bot, and thread in live history. It then reserved a different append task ID and ran another worker that exited before reading the append response. A fresh process found that completed append task once, did not retry the append, and stopped the same stream. Final history contains one completed stream with the matching publication metadata. The local receipt is `scripts/local/slack-stream-interruption.json`; the normal start/append/stop probe is `scripts/local/slack-stream-probe.json`.
 
 This proves provider-level correlation for task chunks under lost response bodies. It does not implement application streaming, prove arbitrary markdown append deduplication, or verify delayed/absent history, pagination, rate limits, user cancellation, and timeout. The application must persist each uncertain operation before sending it, retain inconclusive outcomes, and reuse the existing publication authority. Task IDs provide evidence to inspect; a missing history result does not authorize a duplicate start. These QA probe messages are separate from the earlier single agent final reply.
+
+
+## Application streaming review
+
+The idle-deadline regression first failed because an unchanged progress snapshot skipped the stream deadline check.
+The progress loop now polls active and uncertain streams without new activity.
+The isolated regression passes in 4.5194 seconds.
+The four application recovery cases pass together in 15.6021 seconds.
+They cover uncertain start, append, and stop recovery plus the idle deadline.
+These cases use the actual application and database with controlled Slack responses.
+They do not establish live acceptance of the application streaming path.
+
+Type review found that two private types exposed `Generic` instances.
+Generic decoding constructed an invalid `SlackTimestamp` and an empty-title `StreamFrame` despite their smart constructors.
+Two failing-first doctests reproduce those bypasses.
+The private types now omit `Generic`.
+An explicit frame encoder preserves the existing `title` and `tasks` fields.
+The fixed JSON fixtures, rejection cases, and round trips pass.
+All 1,040 examples in the focused doctest dependency graph pass.
+
+The focused runner uses the repository doctest arguments with `Models.Apis.Investigations` as its target.
+It selects the current Cabal plan's Relude unit to avoid duplicate installed units.
+It does not rebuild the libraries or change project build flags.
+The runner is `scripts/local/FocusedDoctests.hs`.
+Logs are `scripts/local/slack-stream-refined-types-{red,green}.log`,
+`scripts/local/slack-stream-idle-{red,green}.log`, and
+`scripts/local/slack-stream-refined-recovery-four-green.log`.
+HLint reports no hints across the four changed streaming runtime modules.
+Source hashes are in `scripts/local/slack-stream-refined-source.json`.
+These files are ignored local evidence, not release attestations.
+The broader bot suite passes all 459 examples in 162.2230 seconds.
+Its complete log is `scripts/local/slack-stream-bots-459-green.log`.
+The accompanying `scripts/local/slack-stream-bots-459-source.json` records the tested source hashes.
+This checkpoint includes the scoped artifact-heading assertion and predates the subsequent atomic Slack-identity regression.
+Full streaming signoff remains open.
+
+After the atomic Slack-identity fix, all 460 bot examples pass in 173.5638 seconds.
+The log is `scripts/local/atomic-slack-identity-bots-460-green.log`.
+The input hashes in `scripts/local/atomic-slack-identity-bots-run-source.json` match after the run.
+This checkpoint also includes the narrower start-rejection helper, which cannot delete an append or stop reservation.
+It remains fixture-backed application acceptance; the QA app has not yet exercised this application streaming path live.
