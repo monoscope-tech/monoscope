@@ -9,6 +9,8 @@
 module Pkg.AI (
   -- * Response Types
   LLMResponse (..),
+  ModelQuery,
+  modelQueryText,
   ToolCallInfo (..),
   AgenticChatResult (..),
 
@@ -154,7 +156,7 @@ import Web.MCP qualified as MCP
 -- | Unified LLM response type for all AI interactions
 data LLMResponse = LLMResponse
   { explanation :: Maybe Text -- Markdown analysis/commentary
-  , query :: Maybe Text -- Primary KQL query
+  , query :: Maybe ModelQuery -- Primary KQL query
   , visualization :: Maybe Text -- Chart type
   , widgets :: [Widget.ModelWidget] -- Model-supplied visualization configs
   , timeRange :: Maybe TimePicker -- Time range (relative or absolute)
@@ -162,6 +164,26 @@ data LLMResponse = LLMResponse
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LLMResponse
+
+
+-- | A model's primary query must parse as KQL. Its JSON representation stays a string.
+--
+-- >>> let wire = "\"summarize count()\"" :: LByteString
+-- >>> (AE.encode <$> AE.eitherDecode @ModelQuery wire) == Right wire
+-- True
+-- >>> isLeft $ AE.eitherDecode @ModelQuery "\"get_schema was called once; no telemetry query was executed.\""
+-- True
+newtype ModelQuery = ModelQuery Text
+  deriving stock (Show)
+  deriving newtype (AE.ToJSON)
+
+
+instance AE.FromJSON ModelQuery where
+  parseJSON = AE.withText "KQL query" \query -> ModelQuery query <$ either (fail . toString) pure (parseQueryToAST query)
+
+
+modelQueryText :: ModelQuery -> Text
+modelQueryText (ModelQuery query) = query
 
 
 getNormalTupleResponse :: Text -> Either Text (Text, Maybe Text)
@@ -196,7 +218,7 @@ parseLLMResponse response =
         valM <&> \val ->
           LLMResponse
             { explanation = val ^? key "explanation" . _String
-            , query = val ^? key "query" . _String
+            , query = val ^? key "query" >>= parseMaybe AE.parseJSON
             , visualization = val ^? key "visualization" . _String
             , widgets = mapMaybe (parseMaybe AE.parseJSON) (val ^.. key "widgets" . values)
             , timeRange = val ^? key "time_range" >>= parseMaybe AE.parseJSON
@@ -231,7 +253,7 @@ agenticResponseHasFindings answer =
 responseWidgets :: LLMResponse -> [Widget.Widget]
 responseWidgets response = case response.widgets of
   [] -> maybeToList do
-    query <- response.query
+    query <- modelQueryText <$> response.query
     let wType = fromMaybe Widget.WTTable $ response.visualization >>= parseMaybe AE.parseJSON . AE.String
     pure (def :: Widget.Widget){Widget.wType = wType, Widget.query = Just query}
   widgets -> map Widget.modelWidget widgets
@@ -733,7 +755,9 @@ defaultAgenticConfig pid =
 
 
 -- $setup
--- >>> :set -XOverloadedStrings -XOverloadedRecordDot
+-- >>> :set -XOverloadedStrings -XOverloadedRecordDot -XTypeApplications
+-- >>> import Relude
+-- >>> import Data.Aeson qualified as AE
 -- >>> import Data.UUID qualified as UUID
 -- >>> import Models.Projects.Projects qualified as Projects
 -- >>> import Pkg.DeriveUtils (UUIDId (..))
