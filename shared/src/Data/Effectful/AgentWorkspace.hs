@@ -1624,6 +1624,8 @@ withSandboxRelease bridge released action = do
       closed <- Exception.try @SomeException $ restore $ Timeout.timeout (2 * 1000000) do
         whenM (readIORef pending) $ void receive
         rpc $ Close ()
+        hClose $ getStdin process
+        void $ waitExitCode process
       let release = case closed of Right (Just ()) -> Released; _ -> ReleaseFailed
       released release
       case result of

@@ -236,6 +236,7 @@ withAllocationBridge mode action = withSystemTempDirectory "allocation-regressio
            : tag === 'GetIdentity' ? mode === 'malformed' ? 'malformed-id' : '00000000-0000-4000-8000-000000000002'
            : tag === 'Execute' ? { exitCode: 0, stdout: '1000\\n' } : [];
          console.log(JSON.stringify(tag === 'Close' && ['reject', 'pending'].includes(mode) ? { Left: 'cleanup refused' } : { Right: result }));
+         if (tag === 'Close' && mode === 'drain') { await new Promise(resolve => setTimeout(resolve, 250)); appendFileSync(events, 'Drained\\n'); }
          if (tag === 'Close') break;
        }
        """
@@ -279,7 +280,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       readIORef receipts >>= (`shouldSatisfy` null)
       readFileBS (directory </> "operations.log") >>= (`shouldContain` ["Close"]) . lines . decodeUtf8 @Text
 
-    for_ @[] [("ok", "released"), ("reject", "release_failed"), ("timeout", "release_failed"), ("pending", "release_failed")] \(mode, expected) ->
+    for_ @[] [("ok", "released"), ("drain", "released"), ("reject", "release_failed"), ("timeout", "release_failed"), ("pending", "release_failed")] \(mode, expected) ->
       it ("records confirmed VM cleanup after cancellation: " <> toString mode) \_tr -> withAllocationBridge mode \host directory -> do
         base <- either (fail . show) pure $ Workspace.mkRevision revision
         ready <- MVar.newEmptyMVar
@@ -296,7 +297,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
         saved <- readIORef receipts
         length saved `shouldBe` 1
         for_ saved \receipt -> either fail pure (AET.parseEither (AE.withObject "Allocation" (AE..: "outcome")) $ AE.toJSON receipt) `shouldReturn` (expected :: Text)
-        readFileBS (directory </> "operations.log") >>= (`shouldContain` ["Close"]) . lines . decodeUtf8 @Text
+        operations <- lines . decodeUtf8 @Text <$> readFileBS (directory </> "operations.log")
+        operations `shouldContain` ["Close"]
+        when (mode == "drain") $ operations `shouldContain` ["Drained"]
 
   it "hostGit_ignoresInheritedCredentialsAndCommands" \_ -> withSystemTempDirectory "isolated-host-git" \directory -> do
     path <- filter ((== "PATH") . fst) <$> getEnvironment

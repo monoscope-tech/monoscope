@@ -19,7 +19,7 @@ import Pkg.DeriveUtils (AesonText (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils
+import Pkg.TestUtils (frozenTime, resetSchemaLearning, runHasqlEffect, testPid, withTestResources)
 import ProcessMessage qualified
 
 
