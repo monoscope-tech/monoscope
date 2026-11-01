@@ -411,7 +411,7 @@ run_body() { # <check>
 # resource-pool lifecycle (see test/integration/Main.hs). Keep shards * ~9 conns
 # under the server's max_connections.
 run_integration() {
-  local shards bin i green shard_rc=0
+  local shards bin i shard_rc=0
   local -a shard_pids=()
   shards=${CI_SHARDS:-4}
   # Without a reachable TimeFusion the URL must go, or every example dies dialling
@@ -447,15 +447,20 @@ run_integration() {
     shard_pids+=("$!")
   done
   for i in "${shard_pids[@]}"; do wait "$i" || shard_rc=1; done
+  check_integration_shards "$shards" "$shard_rc"
+}
+
+check_integration_shards() {
+  local shards=$1 shard_rc=$2 i green f rc
   echo "=== per-shard (wall-clock | result) — wide spreads ⇒ rebalance ==="
   for i in $(seq 0 $((shards - 1))); do
     printf "shard %s: %-6s | %s\n" "$i" "$(sed -n 's/.*\[shard-time\] //p' "build-shard-$i.log" | tail -1)" \
       "$(grep -hE 'examples?, [0-9]+ failures?' "build-shard-$i.log" | tail -1)"
   done
   green=$(grep -lE "examples?, 0 failures" build-shard-*.log | wc -l | tr -d ' ')
-  # green==N already means every shard printed a clean summary; don't also grep for
-  # "error:" — the app logs error: lines at LOG_LEVEL=warn on passing runs.
-  if [ "$shard_rc" -ne 0 ] || [ "$green" -ne "$shards" ] || grep -qE "[1-9][0-9]* failures?|Interrupted" build-shard-*.log; then
+  # Require a clean summary and successful process exits. Test names and
+  # application diagnostics are not verdicts.
+  if [ "$shard_rc" -ne 0 ] || [ "$green" -ne "$shards" ]; then
     echo "SHARDED RUN FAILED ($green/$shards green):"
     for f in build-shard-*.log; do
       rc=$(sed -n 's/^\[shard-exit\] //p' "$f" | tail -1)
@@ -1004,7 +1009,7 @@ assert() { # <desc> <expected> <actual>
 cmd_selftest() {
   SELFTEST_RC=0
   node --test scripts/ci/release-test.mjs || SELFTEST_RC=1
-  local body_rc=0 BG_DIR
+  local body_rc=0 BG_DIR shard_case
   CI_UNIT_BIN=false "$0" body unit-tests >/dev/null 2>&1 || body_rc=$?
   assert "body stops at first failure" 1 "$body_rc"
   assert "built unit binary runs without Cabal" ok "$(CI_UNIT_BIN=$(command -v true) "$0" body unit-tests && echo ok)"
@@ -1016,6 +1021,22 @@ cmd_selftest() {
   collect_background failing || body_rc=$?
   assert "background failure propagates" 1 "$body_rc"
   assert "background diagnostics retained" yes "$([ -f "$BG_DIR/failing.log" ] && echo yes || echo no)"
+  rm -rf "$BG_DIR"
+  BG_DIR=$(mktemp -d -t ci-selftest-shards.XXXXXX)
+  printf 'checkout_RebuildsInterruptedCache [passed]\n1 example, 0 failures\n[shard-exit] 0\n' > "$BG_DIR/build-shard-0.log"
+  body_rc=0
+  (cd "$BG_DIR"; check_integration_shards 1 0 >/dev/null) || body_rc=$?
+  assert "passing Interrupted test name cannot fail shard gate" 0 "$body_rc"
+  for shard_case in failure interrupted shutdown; do
+    case "$shard_case" in
+      failure) printf '1 example, 1 failure\n[shard-exit] 1\n' ;;
+      interrupted) printf 'Interrupted.\n[shard-exit] 130\n' ;;
+      shutdown) printf '1 example, 0 failures\n[shard-exit] 139\n' ;;
+    esac > "$BG_DIR/build-shard-0.log"
+    body_rc=0
+    (cd "$BG_DIR"; check_integration_shards 1 1 >/dev/null) || body_rc=$?
+    assert "shard $shard_case still fails" 1 "$body_rc"
+  done
   rm -rf "$BG_DIR"
   BG_DIR=$(mktemp -d -t ci-selftest-browser.XXXXXX)
   printf '#!/bin/sh\necho install >> "%s/calls"\n' "$BG_DIR" > "$BG_DIR/npm"
