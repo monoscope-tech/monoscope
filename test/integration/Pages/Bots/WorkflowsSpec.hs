@@ -114,7 +114,7 @@ data SlackEvidenceCase = EvidenceRead | DisconnectDuringRead | WrongDMPeer | Sch
   deriving stock (Bounded, Enum, Eq, Show)
 
 
-data SlackChannelReadCase = CurrentChannel | CurrentThread | ThreadLocatorRejected | ExtraTargetArgument | ChannelMemberRemoved | PersonalGrantMissing | BroaderChannelSearch | ThreadCitationRejected | ThreadCitationWrongTarget | ThreadCitationWrongQuery | ThreadCitationUntrustedHost | ThreadCitationRateLimited | ThreadCitationRevoked
+data SlackChannelReadCase = CurrentChannel | CurrentThread | ThreadLocatorRejected | ExtraTargetArgument | ChannelMemberRemoved | PersonalGrantMissing | BroaderChannelSearch | ThreadCitationRejected | ThreadCitationWrongTarget | ThreadCitationWrongQuery | ThreadCitationUntrustedHost | ThreadCitationRateLimited | ThreadCitationRevoked | ThreadCitationCredentialRejected | ThreadCitationHTTPUnauthorized | ThreadCitationServerFailure
   deriving stock (Bounded, Enum, Eq, Show)
 
 
@@ -1112,7 +1112,7 @@ spec = around withTestResources do
               user = (getResponse tr.trSessAndHeader).user.id
               conversation = Issues.slackScopedConversationId testPid "T_MCP_CHANNEL" channel "1735689600.000001"
               access = if command then AI.SlackCommandAccess (fromRightShow $ Issues.commandOrigin "T_MCP_CHANNEL" channel "U0123ABCDEF") user else AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_MCP_CHANNEL" "U0123ABCDEF" user channel "1735689600.000001" "1735689600.000001"
-              threadRead = scenario `elem` [CurrentThread, ThreadLocatorRejected, ThreadCitationRejected, ThreadCitationWrongTarget, ThreadCitationWrongQuery, ThreadCitationUntrustedHost, ThreadCitationRateLimited, ThreadCitationRevoked]
+              threadRead = scenario `elem` [CurrentThread, ThreadLocatorRejected, ThreadCitationRejected, ThreadCitationWrongTarget, ThreadCitationWrongQuery, ThreadCitationUntrustedHost, ThreadCitationRateLimited, ThreadCitationRevoked, ThreadCitationCredentialRejected, ThreadCitationHTTPUnauthorized, ThreadCitationServerFailure]
               operation
                 | scenario == BroaderChannelSearch = "slack_search_public"
                 | threadRead = "slack_read_thread"
@@ -1156,6 +1156,7 @@ spec = around withTestResources do
                   when (scenario == ThreadCitationRevoked) $ runQueryEffect tr $ Slack.revokeSlackEvidence testPid user
                   when (scenario == ThreadCitationRateLimited) $ throwIO $ RateLimit.SlackRateLimited $ addUTCTime 60 frozenTime
                   pure $ Just $ AE.encode $ case scenario of
+                    ThreadCitationCredentialRejected -> AE.object ["ok" AE..= False, "error" AE..= ("invalid_auth" :: Text)]
                     ThreadCitationRejected -> AE.object ["ok" AE..= False, "error" AE..= ("message_not_found" :: Text)]
                     _ ->
                       AE.object
@@ -1167,11 +1168,16 @@ spec = around withTestResources do
                             _ -> source
                         ]
                 _ -> pure Nothing
-          (requests, answer) <- runTestBgRecordingHTTP frozenTime tr $ membership $ transport $ provider $ AI.runAgenticChatWithHistory config "Read Slack context" "model" "key"
-          let expected = scenario == CurrentChannel || threadRead && scenario `notElem` [ThreadLocatorRejected, ThreadCitationRevoked]
+              statusFault = interpose @HTTP.HTTP \_ request -> case request of
+                HTTP.GetWith options url@"https://slack.com/api/chat.getPermalink" | scenario `elem` [ThreadCitationHTTPUnauthorized, ThreadCitationServerFailure] -> do
+                  response <- send $ HTTP.GetWith options url
+                  pure $ response & Wreq.responseStatus .~ if scenario == ThreadCitationHTTPUnauthorized then status401 else status503
+                _ -> send @HTTP.HTTP $ coerce request
+          (requests, answer) <- runTestBgRecordingHTTP frozenTime tr $ membership $ statusFault $ transport $ provider $ AI.runAgenticChatWithHistory config "Read Slack context" "model" "key"
+          let expected = scenario == CurrentChannel || threadRead && scenario `notElem` [ThreadLocatorRejected, ThreadCitationRevoked, ThreadCitationCredentialRejected, ThreadCitationHTTPUnauthorized]
               calls = [request | (_, bytes) <- requests, Just request <- [AE.decode @AE.Value bytes], request ^? key "method" . _String == Just "tools/call"]
           fmap (.response) answer `shouldBe` Right (if expected then "Channel evidence read." else "Slack read unavailable.")
-          length calls `shouldBe` if expected || scenario == ThreadCitationRevoked then 1 else 0
+          length calls `shouldBe` if expected || scenario `elem` [ThreadCitationRevoked, ThreadCitationCredentialRejected, ThreadCitationHTTPUnauthorized] then 1 else 0
           length (filter ((== "https://slack.com/api/chat.getPermalink") . fst) requests) `shouldBe` if threadRead && scenario /= ThreadLocatorRejected then 1 else 0
           when expected do
             let evidence = either (const Nothing) (\result -> find ((== operation) . (.name)) result.toolCalls >>= (.rawData)) answer

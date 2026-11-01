@@ -123,7 +123,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
 import Network.HTTP.Client (HttpException)
-import Network.HTTP.Types (statusIsSuccessful)
+import Network.HTTP.Types (statusCode, statusIsSuccessful)
 import Network.HTTP.Types.URI (parseQuery)
 import Network.URI qualified as URI
 import Network.Wreq qualified as Wreq
@@ -939,7 +939,7 @@ runSlackEvidence config tool operation proposed = do
     unlessM (lift $ currentSlackGrant settings subject grant) $ Except.throwError $ SlackCredentialFailure Integrations.SlackNotConnected
     source <- case (operation, result.outcome) of
       (SlackMCP.ReadThread, SlackMCP.ReadSucceeded) -> do
-        link <- lift $ threadPermalink grant arguments
+        link <- threadPermalink grant arguments
         unlessM (lift $ currentSlackGrant settings subject grant) $ Except.throwError $ SlackCredentialFailure Integrations.SlackNotConnected
         pure link
       _ -> pure Nothing
@@ -958,24 +958,31 @@ runSlackEvidence config tool operation proposed = do
       timestamp <- getTextArg "message_ts" arguments >>= Incidents.slackTimestamp
       pure (channel, timestamp)
       where
-        fetch channel timestamp = Exception.handle (\(SlackRateLimit.SlackRateLimited _) -> pure Nothing) do
-          let options = W.defaults & W.header "Authorization" .~ [encodeUtf8 $ "Bearer " <> grant.accessToken] & Wreq.param "channel" .~ [channel.channelId] & Wreq.param "message_ts" .~ [Incidents.slackTimestampText timestamp] & Wreq.redirects .~ 0
-          received <- Exception.try @HttpException $ SlackRateLimit.withRateLimits grant.teamId $ W.getWith options "https://slack.com/api/chat.getPermalink"
-          pure do
-            response <- rightToMaybe received
-            guard $ statusIsSuccessful $ response ^. Wreq.responseStatus
-            body <- AE.decode @AE.Value $ response ^. W.responseBody
-            guard $ body ^? key "ok" . _Bool == Just True
-            url <- body ^? key "permalink" . _String
-            guard $ T.length url <= 2048
-            uri <- URI.parseURI $ toString url
-            authority <- URI.uriAuthority uri
-            guard $ URI.uriScheme uri == "https:" && null (URI.uriUserInfo authority) && null (URI.uriPort authority) && ".slack.com" `T.isSuffixOf` toText (URI.uriRegName authority)
-            guard $ toText (URI.uriPath uri) == "/archives/" <> channel.channelId <> "/p" <> T.filter (/= '.') (Incidents.slackTimestampText timestamp)
-            let query = parseQuery $ encodeUtf8 $ toText $ URI.uriQuery uri
-            guard $ all (== Just (encodeUtf8 channel.channelId)) [value | ("cid", value) <- query]
-            guard $ all (== Just (encodeUtf8 $ Incidents.slackTimestampText timestamp)) [value | ("thread_ts", value) <- query]
-            pure $ SlackPermalink url
+        fetch channel timestamp =
+          Except.mapExceptT
+            ( Exception.handle (\(SlackRateLimit.SlackRateLimited _) -> pure $ Right Nothing)
+                . Exception.handle (\(failure :: SlackRateLimit.SlackHttpFailure) -> pure $ if statusCode (SlackRateLimit.slackHttpStatus failure) == 401 then Left (SlackProviderFailure SlackMCP.CredentialsRejected) else Right Nothing)
+                . Exception.handle (\(_ :: HttpException) -> pure $ Right Nothing)
+            )
+            do
+              let options = W.defaults & W.header "Authorization" .~ [encodeUtf8 $ "Bearer " <> grant.accessToken] & Wreq.param "channel" .~ [channel.channelId] & Wreq.param "message_ts" .~ [Incidents.slackTimestampText timestamp] & Wreq.redirects .~ 0
+              response <- lift $ SlackRateLimit.withRateLimits grant.teamId $ W.getWith options "https://slack.com/api/chat.getPermalink"
+              let payload = AE.decode @AE.Value $ response ^. W.responseBody
+              when (maybe False (`elem` (["invalid_auth", "token_revoked", "account_inactive", "not_authed"] :: [Text])) (payload >>= (^? key "error" . _String))) $ Except.throwError $ SlackProviderFailure SlackMCP.CredentialsRejected
+              pure do
+                guard $ statusIsSuccessful $ response ^. Wreq.responseStatus
+                body <- payload
+                guard $ body ^? key "ok" . _Bool == Just True
+                url <- body ^? key "permalink" . _String
+                guard $ T.length url <= 2048
+                uri <- URI.parseURI $ toString url
+                authority <- URI.uriAuthority uri
+                guard $ URI.uriScheme uri == "https:" && null (URI.uriUserInfo authority) && null (URI.uriPort authority) && ".slack.com" `T.isSuffixOf` toText (URI.uriRegName authority)
+                guard $ toText (URI.uriPath uri) == "/archives/" <> channel.channelId <> "/p" <> T.filter (/= '.') (Incidents.slackTimestampText timestamp)
+                let query = parseQuery $ encodeUtf8 $ toText $ URI.uriQuery uri
+                guard $ all (== Just (encodeUtf8 channel.channelId)) [value | ("cid", value) <- query]
+                guard $ all (== Just (encodeUtf8 $ Incidents.slackTimestampText timestamp)) [value | ("thread_ts", value) <- query]
+                pure $ SlackPermalink url
 
 
 slackEvidenceMessage :: SlackEvidenceFailure -> Text

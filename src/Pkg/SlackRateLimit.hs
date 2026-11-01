@@ -1,4 +1,4 @@
-module Pkg.SlackRateLimit (SlackRateLimited (..), withRateLimits) where
+module Pkg.SlackRateLimit (SlackRateLimited (..), SlackHttpFailure, slackHttpStatus, withRateLimits) where
 
 import Control.Exception (ErrorCall (..))
 import Control.Lens ((?~), (^.))
@@ -10,7 +10,7 @@ import Effectful (Eff, type (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Exception (throwIO)
 import Hasql.Interpolate qualified as HI
-import Network.HTTP.Types (statusCode, statusIsSuccessful)
+import Network.HTTP.Types (Status, statusCode, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Relude
 import System.Types (DB)
@@ -19,6 +19,15 @@ import System.Types (DB)
 newtype SlackRateLimited = SlackRateLimited UTCTime
   deriving stock (Show)
   deriving anyclass (Exception)
+
+
+newtype SlackHttpFailure = SlackHttpFailure Status
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
+slackHttpStatus :: SlackHttpFailure -> Status
+slackHttpStatus (SlackHttpFailure status) = status
 
 
 -- | Cooldowns are shared by workers and survive process restarts. Non-Slack
@@ -54,5 +63,5 @@ limited workspace options url request = case if url == "https://mcp.slack.com/mc
         for_ saved $ \(HI.OneColumn retryAt) -> throwIO $ SlackRateLimited retryAt
         throwIO $ ErrorCall "Saving the Slack rate-limit deadline returned no row"
       else do
-        unless (url == "https://mcp.slack.com/mcp" || statusIsSuccessful (response ^. Wreq.responseStatus)) $ throwIO $ ErrorCall "Slack returned an unsuccessful HTTP status"
+        unless (url == "https://mcp.slack.com/mcp" || statusIsSuccessful (response ^. Wreq.responseStatus)) $ throwIO $ SlackHttpFailure $ response ^. Wreq.responseStatus
         pure response
