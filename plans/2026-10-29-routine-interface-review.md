@@ -335,3 +335,23 @@ All eight permanent cases pass in 22.6 seconds. The failing and final logs are
 `scripts/local/review-decision-feedback-green.log`. The inspected mobile error capture,
 desktop capture, decision captures, and source hashes are in
 `scripts/local/review-decision-feedback/`. The temporary browser adapter is removed.
+
+
+## Hosted review artifact refresh (1 November)
+
+The existing review Page now shows the 50-case native checkpoint, eight conversation
+browser cases, and 39 Slack-evidence cases. Its remaining-work list distinguishes
+verified worker/bridge loss from whole-machine and Linux/KVM acceptance. The artifact
+retains the same twelve walkthroughs, alternatives, and source excerpts. One CSS rule
+removes paragraph margins from the verification counts so each row aligns.
+
+All 101 walkthrough steps pass at 320, 390, 768, and 1280 pixels. Keyboard step selection
+retains focus. Expanded sources introduce no horizontal overflow or browser errors.
+The walkthrough script and all source panels remain byte-identical to the prior artifact.
+The saved result is `scripts/local/unified-artifact-refresh-checks.json`.
+
+The existing Page embed was replaced and read back at sequence 55. Its title and both
+surrounding prose blocks remain unchanged. The uploaded HTML matches the local file:
+185,066 bytes, SHA-256 `d25874281e71bfe3081308ed82e3230876271bedbfe454dd62aa01bb9f776c34`.
+Local Chromium checked the same HTML. The hosted viewer and screen-reader interaction
+remain unverified. This update does not change product code or establish release signoff.
