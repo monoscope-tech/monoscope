@@ -21,7 +21,7 @@ All twenty selected incoming PR heads remain included. A fresh inventory found 2
 | Shared memory | Wiki read/search/write use versioned ProjectMemory, the common capability policy, transactional edit recipe, and operation ledger. Native attempts retain their actual IDs and revisions link to the shared writing run. | Final cross-entry-point and author-attribution regression run. |
 | Optional selected review | Web and signed Slack controls use the same decision state and continuation queue. Decisions, expiry, revocation, pause, deletion, and terminal cleanup preserve the original request. | Final whole-branch continuation acceptance. |
 | Native review and fix integration | PR analysis, fixes, admission, and independent review share retained SDK/VM sessions and artifact validation. Native fixes also share run admission, authority, wiki receipts, and atomic completion. | Complete arbitrary host-loss coverage and Linux/KVM acceptance described below. |
-| Slack streaming | Persisted start/append/stop state and task-ID reconciliation reuse the existing progress publication and refresh job. Five focused recovery cases and the 461-example bot suite pass. Streams close before the provider deadline or journal rollover, then use the existing snapshot refresh. | Complete live interruption, rate limits, native Stop-button interaction, and artifact-link acceptance, plus whole-branch review and final release gates. A real private-channel request completed one stream/final reply; a separate locally signed stop cancelled its active run without a late answer. |
+| Slack streaming | Persisted start/append/stop state and task-ID reconciliation reuse the existing progress publication and refresh job. Five focused recovery cases and all 486 bot examples pass. Streams close before the provider deadline or journal rollover, then use the existing snapshot refresh. | Complete live interruption, rate limits, native Stop-button interaction, and artifact-link acceptance, plus whole-branch review and final release gates. A real private-channel request completed one stream/final reply; a separate locally signed stop cancelled its active run without a late answer. |
 | Proactive work | Channel opt-in, incident analysis, measured recovery/resolution reports, and authorized remediation reuse event routines, the common worker, and incident outbox. Analysis defaults to Observe. | Controlled synthetic alert/gap/recovery, delivery replay, and paused-channel acceptance now pass through the real worker/model and Slack. Complete telemetry-fed and native opt-in acceptance plus final authority regressions. |
 | Slack evidence | Requester-bound OAuth, authenticated encryption, refresh/revocation, remote MCP reads, typed audiences, and retained provenance use shared systems. Provider writes stay excluded. | Real requester consent, encrypted grant storage, canonical discovery/thread read, retained channel audience, and replay pass. The canonical provider citation now opens the correct source thread from the published Slack reply. The current runtime, including the credential-failure follow-up, also passes a fresh live request and signed replay. Complete Slack Connect and remaining private/public audience acceptance. |
 | Integrated experience | Conversations, run inspectors, review controls, and artifacts share the existing page. Nine Chromium cases cover loading, empty, failure, keyboard, light/dark and narrow-width states, including measured 200% text in both detail views. The completed native-fix page also passes eight viewport/theme/text states with generated fixture media. | Hosted visualization interaction, physical-device and VoiceOver acceptance remain unverified. The native browser pass does not establish S3 delivery or package-download acceptance. |
@@ -30,6 +30,8 @@ All twenty selected incoming PR heads remain included. A fresh inventory found 2
 Streaming, Slack evidence, and proactive work remain part of this full plan even though their rollout boundaries are separate. A narrower autonomous-launch boundary does not establish completion of the plan.
 
 ## Latest verified checkpoint
+
+- Shared operation admission and routing: `4b9b16924` closes the claim-time authority race using the existing transactional evaluator; `ada067673` keeps compound instructions out of the saved-report shortcut. The unchanged real QA request now invokes `send_to_slack`, completes one Autonomous/NoReview operation, posts once, and retains the exact Slack acknowledgement under the linked actor and run. It requires no personal search grant. Signed replay leaves one run, eight journal entries, one requested final publication, and one operation unchanged. The progress stream is closed; authenticated conversation access returns 200 and anonymous access redirects. The final combined bot/GitSync run passes all 491 examples in 179.6252 seconds with unchanged recorded inputs, and all 2,076 doctests pass. Live evidence is `scripts/local/slack-admission-live-acceptance.json`; the committed QA snapshot is `ada067673`. This is scoped acceptance, not final release signoff.
 
 - Repository credential input: an empty new-connection token first reproduced an uncaught `EmptySecret` exception. New connections now use the existing `mkGitConn` boundary and its normal form error. Edits can still retain the saved token. The extended handler lifecycle requires visible error feedback, no saved connection or queued work for blank tokens, and successful creation and editing. All five settings cases and the full bot suite pass together: 491 examples in 179.6252 seconds. Logs and unchanged source hashes use `scripts/local/git-sync-missing-token-*`. Scoped distillation reuses the existing constructor and copy; the repeated evasion and locality passes find no further material issue in this fix.
 
@@ -491,8 +493,22 @@ substring rejection, compound instructions, and a polite weekly-report request.
 All three queued-command cases pass in the native checkpoint above. Runtime
 HLint and formatting pass; scoped distillation, evasion, and locality review find
 no further material issue. No new parser module, dependency, configuration, or
-execution path is added. The final broad bot/doctest run and unchanged live
-request retry remain underway.
+execution path is added. The final broad watcher passes 491 examples (486 bot
+and five GitSync cases) in 179.6252 seconds, with unchanged recorded inputs.
+All 2,076 doctests pass. Evidence is
+`scripts/local/slack-report-routing-bots-gitsync-491-green.log`,
+`scripts/local/slack-report-routing-source.json`, and
+`/tmp/slack-report-routing-doctests.log`.
+
+The unchanged native Slack request then passes on committed QA snapshot
+`ada067673`: one real `send_to_slack` call, one completed operation with NoReview,
+one exact message, and no personal search grant. The retained receipt matches
+the real Slack timestamp, actor, and run. Replay adds no work. The progress
+stream closes and one final reply links the retained conversation. The private
+receipt is `scripts/local/slack-admission-live-acceptance.json`; hashes are in
+`scripts/local/slack-report-routing-live-source.json`. The negative admission
+cases remain effect-backed application tests; arbitrary host loss, Slack
+Connect, and final release verification remain open.
 
 The current review continues against `origin/master`; the whole-branch review
 remains open. The completed source-reading slice covers `Pkg.AgentCatalog`,
