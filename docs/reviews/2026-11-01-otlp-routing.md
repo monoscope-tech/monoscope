@@ -15,7 +15,7 @@ The existing header tests counted broad shared-project datasets, so unrelated fi
 - Header-only logs and traces: before the fix, expected two records and found one. Afterward, both persist.
 - Resource-only sibling isolation: before the fix, expected two credentialed records and found three. Afterward, the two uncredentialed siblings are excluded. Distinct log content and span identity prevent deduplication from concealing misrouting.
 - Two-project precedence: a resource key and header key belong to different projects. Exactly one log appears in the resource project; the header project has neither records nor a query error.
-- All six focused authorization cases pass in 0.3604 seconds. The later broader run includes a concurrently edited API schema regression; that unrelated failure is not an ingestion-suite signoff.
+- All six focused authorization cases pass in 0.3604 seconds. The broader selected run subsequently passes all 76 cases in 37.6161 seconds, including all Opentelemetry cases and two concurrent catalog/checkout regressions. Recorded routing source hashes are unchanged. This is not whole-branch CI signoff.
 - Actual loopback HTTP export against the updated QA application stores all three submitted logs with no resource credentials. Its PG-only fixture uses real protobuf decoding, authentication, conversion, and insertion. It does not establish TimeFusion acceptance.
 
 Private, ignored receipts: `scripts/local/otlp-header-only-red.log`, `otlp-sibling-routing-red.log`, `otlp-routing-six-green.log`, `slack-telemetry-header-only-probe.json`, and `slack-telemetry-header-only-green-probe.json`.

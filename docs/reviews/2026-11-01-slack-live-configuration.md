@@ -370,3 +370,29 @@ The existing personal-control and channel-routine lifecycles now cover both name
 Native `/monoscope-qa incidents on` creates one Observe routine for private channel `C0CERB6P8QY` under its linked member. A repeated native activation retains the same conversation `33f67fac-9931-598f-9bd3-fdc14bef6086` and one routine. Native `incidents off` pauses it. Slack visibly confirms both actions privately; the retained control conversation returns authenticated HTTP 200. Project totals stay at four runs, zero operations, and nine publications, with no queued job. The QA routine remains paused. This proves native opt-in/pause and configured-name routing, not telemetry-fed proactive analysis or fresh personal OAuth consent.
 
 The owner-only receipt is `scripts/local/slack-native-controls-acceptance.json`; the enabled confirmations are in `slack-native-controls-on.json`. `slack-native-controls-live-source.json` pins the actual canonical runtime bytes and records the private harness boundary. One watcher restart loads the committed shared-library update; ordinary focus changes keep using `.test-args`. The public signed callback is checked before native submission. A full private dump and ready record are retained as `slack-live-qa-after-native-controls.*`; restoration of that new dump has not been verified. No shared-app configuration, scope, personal search grant, deployment, or PR publication changes.
+
+
+## Real telemetry-fed proactive lifecycle
+
+The persistent isolated QA service now accepts a real header-only OTLP protobuf export, stores its three log records, and queries them through the production monitor checker. This acceptance uses PostgreSQL-only telemetry; it does not prove TimeFusion storage.
+
+The first preparation probe exposed two fixture mistakes after the routing fix: no notification team existed, and a zero recovery threshold could never be crossed by a nonnegative count. The fixture now has one Everyone team whose only enabled destination is private QA channel `C0CERB6P8QY`. Email, Discord, phone, and PagerDuty are disabled. The monitor alerts above its configured threshold and recovers when the count falls below 1. The preparation episode recovered from an actual zero measurement before the accepted lifecycle began. No measurements or evaluation timestamps were inserted or backdated.
+
+Accepted episode `d46be323-dea6-4e3c-8c85-1330e3d63780` follows fresh actual ingestion:
+
+1. Three synthetic ERROR logs arrive through `/v1/logs` with only `x-api-key`. No resource credentials or direct row seeding supply these records.
+2. On its normal one-minute evaluation cadence, the two-minute monitor window measures 3. Slack receives one incident root.
+3. Shared Observe run `621894bf-1d5f-4cd2-aebc-0d5c20a38403` queries real evidence, identifies the QA-only synthetic scope, saves a conversation document through the common operation ledger, and posts one analysis in that thread.
+4. After the records age out naturally, the same monitor measures zero and records recovery. It updates the same root and adds the normal recovery reply.
+5. Shared Observe run `87203b15-4308-4e13-94a6-d5ddd308bd56` completes the closing analysis in the same conversation and thread.
+6. Slack readback confirms both analysis messages. Both authenticated run pages return HTTP 200. Repeated delivery and evaluator sweeps leave retained state unchanged.
+
+There are five delivered outbox operations: root, initial analysis, recovery reply, root update, and closing analysis. One successful `ConversationWrite` operation retains the initial investigation document; no project mutation occurs. This operation is part of the shared ledger, not a separate artifact writer.
+
+The native `/monoscope-qa incidents off` control then pauses the channel and displays its private confirmation. A fresh actual telemetry alert and its later measured recovery both send regular Slack notifications without an analysis reply. The run count stays at six and the operation count stays at one. Repeated delivery sweeps leave state unchanged; the channel remains paused.
+
+The production app remains unchanged. The loopback-only control invokes the real monitor checker and delivery sweep; it does not fabricate incident events or readings. The existing synthetic data-gap acceptance remains separate from this live telemetry proof.
+
+Private receipts are `scripts/local/slack-telemetry-proactive-source.json`, `slack-telemetry-proactive-acceptance.json`, `slack-telemetry-acceptance-probe.json`, and `slack-telemetry-optout-probe.json`. The [OTLP routing review](2026-11-01-otlp-routing.md) records the failed-first fix required to enable this test.
+
+The persistent QA database is backed up after the completed lifecycle, with the channel paused. `scripts/local/slack-live-qa-after-telemetry.dump` and its ready-state copy are owner-only; restoring this new dump has not been tested. The existing review Page is updated in place at sequence 73, including the real thread link and revised visual readiness notes. Saved readback preserves all earlier blocks; hosted interaction remains unverified.
