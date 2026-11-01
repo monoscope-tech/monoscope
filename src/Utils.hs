@@ -18,8 +18,6 @@ module Utils (
   loadingIndicatorWith_,
   htmxIndicator_,
   htmxOverlayIndicator_,
-  lookupVecIntByKey,
-  lookupVecBoolByKey,
   lookupValueText,
   formatUTC,
   isoT,
@@ -610,14 +608,6 @@ lookupVecTextByKey = lookupVecBy
 -- that walks the trace tree wants this rather than the raw text.
 lookupVecNonEmptyText :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe Text
 lookupVecNonEmptyText v m k = nonEmptyT (lookupVecBy v m k)
-
-
-lookupVecBoolByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Bool
-lookupVecBoolByKey v m k = fromMaybe False (lookupVecBy v m k)
-
-
-lookupVecIntByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Int
-lookupVecIntByKey v m k = fromMaybe 0 (lookupVecBy v m k)
 
 
 lookupValueText :: AE.Value -> Text -> Maybe Text
