@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Data.Effectful.AgentWorkspace.Guest (Host (..), Workspace (..), Lease (..), Setup (Explore, ReviewEvidence, LockForReproduction), Start (..), Suspended, admissionSetup, Exec (..), Operation (..), Session (..), CacheReport, withGuest, runSession) where
+module Data.Effectful.AgentWorkspace.Guest (Host (..), Workspace (..), Lease (..), Setup (Explore, ReviewEvidence, LockForReproduction), Start (..), Suspended, admissionSetup, CommandTimeout, Exec (..), Operation (..), Session (..), CacheReport, withGuest, runSession) where
 
 import Conduit (await, leftover, runConduit, (.|))
 import Control.Exception (AsyncException (UserInterrupt))
@@ -65,7 +65,28 @@ admissionSetup :: TestArtifact -> Either Text Setup
 admissionSetup artifact = InspectAdmission <$> AgentWorkspace.mkTestArtifact artifact.script artifact.testPatch artifact.failureMessage
 
 
-data Exec = Exec {command :: Text, cwd :: Text, timeout :: Maybe Double}
+-- | Positive command seconds, rounded up to the guest supervisor's Word32 range.
+--
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Relude
+-- >>> let roundTrip wire = (AE.encode <$> AE.eitherDecode @CommandTimeout wire) == Right wire
+-- >>> map roundTrip ["1", "4294967295"]
+-- [True,True]
+-- >>> (AE.encode <$> AE.eitherDecode @CommandTimeout "0.01") == Right "1"
+-- True
+-- >>> map (isLeft . AE.eitherDecode @CommandTimeout) ["0", "-1", "4294967296", "1e1000", "\"1\""]
+-- [True,True,True,True,True]
+newtype CommandTimeout = CommandTimeout Word32
+  deriving newtype (AE.ToJSON)
+
+
+instance AE.FromJSON CommandTimeout where
+  parseJSON = AE.withScientific "CommandTimeout" $ \seconds -> do
+    unless (seconds > 0 && seconds <= fromIntegral (maxBound :: Word32)) $ fail "Command timeout must be positive and at most 4294967295 seconds"
+    pure $ CommandTimeout $ ceiling seconds
+
+
+data Exec = Exec {command :: Text, cwd :: Text, timeout :: Maybe CommandTimeout}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -148,10 +169,10 @@ withGuest host expected checkout revision start lease attempt allocate retain ac
               Nothing -> do
                 (path, exit, truncated) <- logged (agentCommand ["/bin/bash", "-lc", exec.command]) exec.cwd (64 * 1048576)
                 pure (path, exit, truncated, False)
-              Just seconds -> do
+              Just (CommandTimeout seconds) -> do
                 metadata <- ("/run/monoscope-deadline-" <>) . UUID.toText <$> UUID4.nextRandom
                 -- Only the supervisor writes this file. Child stderr joins stdout before the model command runs.
-                let supervisor = "/bin/sh" :| (["-c", "umask 077; metadata=$1; shift; \"$@\" 2>\"$metadata\"; status=$?; /bin/cat -- \"$metadata\" >&2; exit \"$status\"", "monoscope-deadline", metadata, "/usr/bin/env", "LC_ALL=C", "/usr/bin/timeout", "--verbose", "--kill-after=5", show (ceiling seconds :: Word32)] <> toList (agentCommand ["/bin/sh", "-c", "exec /bin/bash -lc \"$1\" 2>&1", "monoscope-command", exec.command]))
+                let supervisor = "/bin/sh" :| (["-c", "umask 077; metadata=$1; shift; \"$@\" 2>\"$metadata\"; status=$?; /bin/cat -- \"$metadata\" >&2; exit \"$status\"", "monoscope-deadline", metadata, "/usr/bin/env", "LC_ALL=C", "/usr/bin/timeout", "--verbose", "--kill-after=5", show seconds] <> toList (agentCommand ["/bin/sh", "-c", "exec /bin/bash -lc \"$1\" 2>&1", "monoscope-command", exec.command]))
                 (path, exit, truncated) <- logged supervisor exec.cwd (64 * 1048576)
                 observed <- execute "/" $ "/usr/bin/test" :| ["-s", metadata]
                 void $ run "/" $ "/bin/rm" :| ["-f", "--", metadata]

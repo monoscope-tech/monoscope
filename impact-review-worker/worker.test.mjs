@@ -8,7 +8,8 @@ import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { jsonLines } from './jsonl.mjs';
-import { parseSubmission, runPi } from './pi-host.mjs';
+import { hostTools, parseSubmission, runPi } from './pi-host.mjs';
+import { runToolCall } from '@earendil-works/pi-agent-core';
 import { ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent';
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai';
 
@@ -25,6 +26,25 @@ test('research submissions obey the supplied host schema, including changed limi
   parameters.properties.findings.maxItems = 0;
   assert.throws(() => parseSubmission(checkout, 'submit_findings', valid));
   assert.throws(() => parseSubmission(checkout, 'submit_review', valid), /Host policy does not define submit_review/);
+});
+
+test('native bash timeouts reject invalid bounds before the guest and keep the next call usable', async () => {
+  const requests = [];
+  const tools = hostTools({ policy: { builtins: [] } }, '/unused', async operation => {
+    requests.push(operation);
+    return { Right: { exitCode: 0, timedOut: false, truncated: false, log: '/run/command.log', output: Buffer.from('ok').toString('base64') } };
+  });
+  const invoke = async timeout => {
+    const call = { type: 'toolCall', id: 'timeout-boundary', name: 'bash', arguments: { command: 'printf ok', ...(timeout === undefined ? {} : { timeout }) } };
+    return runToolCall(call, { tools, assistantMessage: { role: 'assistant', content: [call] }, context: { systemPrompt: '', messages: [], tools } });
+  };
+  for (const timeout of [-1, 0, 2 ** 32, NaN, Infinity]) {
+    const outcome = await invoke(timeout);
+    assert.equal(outcome.isError, true, String(timeout));
+    assert.deepEqual(requests, []);
+  }
+  for (const timeout of [undefined, 0.01, 1, 2 ** 32 - 1]) assert.equal((await invoke(timeout)).isError, false, String(timeout));
+  assert.deepEqual(requests.map(operation => operation.contents.timeout), [null, 0.01, 1, 2 ** 32 - 1]);
 });
 
 test('oversized JSONL records are rejected regardless of newline or chunk boundaries', async () => {

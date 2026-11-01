@@ -601,6 +601,14 @@ All 103 steps across twelve flows pass at four widths; all 115 prior source entr
 Hosted source readback matches the 237,838-byte local artifact. Whole-branch reviews and final release gates remain open.
 See [retained widgets](../docs/reviews/2026-11-01-retained-widgets.md) for the scoped review and exact evidence.
 
+The guest command review closes an unchecked timeout conversion.
+The SDK schema rejects invalid bounds without a guest operation; native decoding uses an opaque positive Word32 timeout.
+All 20 worker tests, the native SDK exploration case, and all 2,095 doctest examples pass.
+The fresh make cli-build binary also passes Mac packaging, signing, portable linkage, version and help.
+The shared-package change required one reload per root watcher; ordinary test refocusing still uses .test-args.
+See [guest timeout bounds](../docs/reviews/2026-11-01-guest-command-timeouts.md) for failing-first proof and limits.
+Whole-branch review, remaining live acceptance, Linux/KVM, arbitrary host loss, final local signoff, and publication remain open.
+
 ## External references
 
 - [Slack MCP overview](https://docs.slack.dev/ai/slack-mcp-server/): eligibility and user authorization requirements.

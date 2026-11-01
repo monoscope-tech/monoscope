@@ -63,6 +63,7 @@ export function bashTool(exec, publish) {
   const definition = createBashToolDefinition(cwd, { operations: { exec }, exposeSessionEnvironment: false });
   return {
     ...definition,
+    parameters: { ...definition.parameters, properties: { ...definition.parameters.properties, timeout: { ...definition.parameters.properties.timeout, exclusiveMinimum: 0, maximum: 0xffffffff } } },
     async execute(...args) {
       const result = await definition.execute(...args);
       const path = result.details?.fullOutputPath;
