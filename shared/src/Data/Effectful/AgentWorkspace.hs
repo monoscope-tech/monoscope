@@ -36,13 +36,14 @@ import System.Environment (getEnvironment)
 import System.FileLock (SharedExclusive (..), withFileLock, withTryFileLock)
 import System.FilePath (isAbsolute, takeDirectory, (</>))
 import System.IO (hClose, withBinaryFile)
-import System.IO.Error (isDoesNotExistError, tryIOError, userError)
+import System.IO.Error (catchIOError, isDoesNotExistError, tryIOError, userError)
 import System.IO.Temp (createTempDirectory, withSystemTempDirectory, withTempDirectory, withTempFile)
 import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Process (getParentProcessID)
+import System.Posix.Signals qualified as Signal
 import System.Posix.Unistd (fileSynchronise)
-import System.Process.Typed (ExitCode (..), byteStringInput, createPipe, getStdin, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, waitExitCode, withProcessTerm)
+import System.Process.Typed (ExitCode (..), byteStringInput, createPipe, getPid, getStdin, getStdout, nullStream, proc, readProcessStdout_, setCreateGroup, setEnv, setStderr, setStdin, setStdout, startProcess, stopProcess, waitExitCode, withProcessTerm)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (myThreadId, threadDelay)
 import UnliftIO.Exception (bracket, bracketOnError, catchAny, evaluate, onException, throwIO, throwTo, tryAny)
@@ -1602,32 +1603,35 @@ withSandbox bridge = withSandboxRelease bridge (const pass)
 withSandboxRelease :: FilePath -> (AllocationOutcome -> IO ()) -> (RPC -> IO a) -> IO a
 withSandboxRelease bridge released action = do
   environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "XDG_CACHE_HOME"] || "GONDOLIN_" `isPrefixOf` key) <$> getEnvironment
-  withProcessTerm (setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc bridge []) \process -> Exception.mask \restore -> do
-    pending <- newIORef False
-    let receive = Exception.mask \restoreRead -> do
-          bytes <- restoreRead $ B8.hGetLine $ getStdout process
-          writeIORef pending False
-          ensure $ BS.length bytes <= 1048576
-          pure bytes
-        rpc :: forall value. AE.FromJSON value => Command value -> IO value
-        rpc command = Exception.mask \restoreCall -> do
-          writeIORef pending True
-          LBS.hPut (getStdin process) (AE.encode command <> "\n")
-          hFlush $ getStdin process
-          bytes <- restoreCall receive
-          either (const invalid) (either (const invalid) pure) $ AE.eitherDecodeStrict @(Either Text value) bytes
-    result <- Exception.try @SomeException $ restore $ action rpc
-    closed <- Exception.try @SomeException $ restore $ Timeout.timeout (2 * 1000000) do
-      whenM (readIORef pending) $ void receive
-      rpc $ Close ()
-    let release = case closed of Right (Just ()) -> Released; _ -> ReleaseFailed
-    released release
-    case result of
-      Left failure -> Exception.throwIO failure
-      Right value -> case closed of
-        Right (Just ()) -> pure value
-        Left failure | isJust (Exception.fromException failure :: Maybe Exception.SomeAsyncException) -> Exception.throwIO failure
-        _ -> throwIO SandboxCleanupFailed
+  bracket
+    (bracketOnError (startProcess $ setCreateGroup True $ setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc bridge []) stopProcess \process -> (process,) <$> (getPid process >>= maybe invalid pure))
+    (\(process, owner) -> stopProcess process `Exception.finally` (Signal.signalProcessGroup Signal.sigKILL owner `catchIOError` \failure -> unless (isDoesNotExistError failure) $ throwIO failure))
+    \(process, _) -> Exception.mask \restore -> do
+      pending <- newIORef False
+      let receive = Exception.mask \restoreRead -> do
+            bytes <- restoreRead $ B8.hGetLine $ getStdout process
+            writeIORef pending False
+            ensure $ BS.length bytes <= 1048576
+            pure bytes
+          rpc :: forall value. AE.FromJSON value => Command value -> IO value
+          rpc command = Exception.mask \restoreCall -> do
+            writeIORef pending True
+            LBS.hPut (getStdin process) (AE.encode command <> "\n")
+            hFlush $ getStdin process
+            bytes <- restoreCall receive
+            either (const invalid) (either (const invalid) pure) $ AE.eitherDecodeStrict @(Either Text value) bytes
+      result <- Exception.try @SomeException $ restore $ action rpc
+      closed <- Exception.try @SomeException $ restore $ Timeout.timeout (2 * 1000000) do
+        whenM (readIORef pending) $ void receive
+        rpc $ Close ()
+      let release = case closed of Right (Just ()) -> Released; _ -> ReleaseFailed
+      released release
+      case result of
+        Left failure -> Exception.throwIO failure
+        Right value -> case closed of
+          Right (Just ()) -> pure value
+          Left failure | isJust (Exception.fromException failure :: Maybe Exception.SomeAsyncException) -> Exception.throwIO failure
+          _ -> throwIO SandboxCleanupFailed
 
 
 publish :: AE.ToJSON value => FilePath -> value -> IO ()

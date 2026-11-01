@@ -157,7 +157,7 @@ sandboxSessions = do
   either fail pure $ AE.eitherDecode output
 
 
-data NativeRecovery = ReviewWake Investigations.ReviewDecision | ExpiryWake | ProviderWake | FinalProviderWake | WorkerWake
+data NativeRecovery = ReviewWake Investigations.ReviewDecision | ExpiryWake | ProviderWake | FinalProviderWake | WorkerWake | RuntimeWake
   deriving stock (Eq, Show)
 
 
@@ -249,9 +249,9 @@ sdkAgent store arguments action = do
       models = fromMaybe "" $ viaNonEmpty head arguments
       image = fromMaybe "" $ viaNonEmpty head $ drop 3 arguments
       diagnostic = fromMaybe "/dev/null" $ viaNonEmpty head $ drop 4 arguments
-      skills = maybe [] (: []) $ option "--skill"
+      skills = maybeToList $ option "--skill"
       worker = "impact-review-worker/pi-host.mjs"
-      host = if null image then Right Nothing else fmap (Just . (\configured -> configured{Guest.bridge = "test/fixtures/native-sandbox.sh"})) $ Agent.workerHost skills (option "--prepare") (option "--dependencies") (toText image) worker
+      host = if null image then Right Nothing else Just . (\configured -> configured{Guest.bridge = fromMaybe "test/fixtures/native-sandbox.sh" $ option "--bridge"}) <$> Agent.workerHost skills (option "--prepare") (option "--dependencies") (toText image) worker
   Agent.runCodeReviewWith (Just store) host (Just $ \environment -> setEnv ([("IMPACT_REVIEW_MODELS", models), ("IMPACT_REVIEW_USAGE_DIR", store.usageDir), ("IMPACT_REVIEW_CACHE_DIR", store.cacheDir), ("IMPACT_REVIEW_FIXTURE_SECRET", "host-only-fixture")] <> [("TMPDIR", temporary) | Just temporary <- [option "--temp"]] <> [("IMPACT_REVIEW_NATIVE_CLI", cli) | Just cli <- [option "--cli"]] <> filter (\(key, _) -> key `elem` ["PATH", "HOME", "TMPDIR", "IMPACT_REVIEW_OUTBOX_DIR", "IMPACT_REVIEW_SESSION_FILE"] && not (key == "TMPDIR" && isJust (option "--temp"))) environment) $ proc "sh" ["-c", "exec node impact-review-worker/pi-host.mjs 2>>\"$1\"", "sdk-worker", diagnostic]) action
 
 
@@ -2855,11 +2855,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Review run.id) legacy) `shouldReturn` True
     runQueryEffect tr (Usage.recordUsage testPid (Usage.Review run.id) legacy{Agent.id = uid 997}) `shouldReturn` False
 
-  for_ [ReviewWake Investigations.ReviewApproved, ReviewWake Investigations.ReviewRejected, ExpiryWake, ProviderWake, FinalProviderWake, WorkerWake] $ \recovery ->
+  for_ [ReviewWake Investigations.ReviewApproved, ReviewWake Investigations.ReviewRejected, ExpiryWake, ProviderWake, FinalProviderWake, WorkerWake, RuntimeWake] $ \recovery ->
     it ("nativeReview_resumesOriginalEvidenceAndNotesAfterInterruption: " <> show recovery) \tr -> withSystemTempDirectory "native-review-context" \temporary -> do
       directory <- canonicalizePath temporary
       image <- nativeTestImage
       let repository = directory </> "repository"
+          bridge = directory </> "sandbox.sh"
+          abrupt = recovery `elem` [WorkerWake, RuntimeWake]
+          extraCall = recovery `elem` [ProviderWake, WorkerWake, RuntimeWake]
           store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
           pageId = UUIDId $ UUID.fromWords 62 0x4000 0x80000000 1
           git args = T.strip . decodeUtf8 @Text <$> readProcessStdout_ (setWorkingDir repository $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] <> args)
@@ -2872,6 +2875,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
             , SdkText "Review submitted."
             ]
       traverse_ (createDirectoryIfMissing True) [repository, store.usageDir, store.cacheDir]
+      when (recovery == RuntimeWake) do
+        writeFileBS bridge "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$0.pid\"\nexec test/fixtures/native-sandbox.sh\n"
+        Posix.setFileMode bridge 0o700
       void $ git ["init", "--quiet"]
       void $ git ["config", "user.name", "Context fixture"]
       void $ git ["config", "user.email", "fixture@example.invalid"]
@@ -2889,13 +2895,18 @@ spec = around withTestResources $ describe "Production impact reviews" do
       Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventPullRequest
       let policy = case recovery of
             (ProviderWake; FinalProviderWake) -> Issues.Autonomous
-            (ReviewWake{}; ExpiryWake; WorkerWake) -> Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.KnowledgeChanges) Catalog.ReviewEditors
+            (ReviewWake{}; ExpiryWake; WorkerWake; RuntimeWake) -> Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.KnowledgeChanges) Catalog.ReviewEditors
       runQueryEffect tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId policy
       apiKey <- createTestAPIKey tr testPid "Native context evidence"
       ingestLog tr apiKey "native-context-observation" $ addUTCTime (-60) frozenTime
       pem <- readFileBS "test/fixtures/github-app-test.pem"
       publications <- newIORef (0 :: Int)
-      interrupt <- newIORef (recovery `elem` [ProviderWake, FinalProviderWake, WorkerWake])
+      interrupt <- newIORef (recovery `elem` [ProviderWake, FinalProviderWake, WorkerWake, RuntimeWake])
+      runners <- newIORef ([] :: [Int32])
+      let runnerGone pid = do
+            alive <- isRight <$> tryAny (Signal.signalProcess Signal.nullSignal $ fromIntegral pid)
+            when alive $ threadDelay 10000 >> runnerGone pid
+          cleanup = readIORef runners >>= traverse_ (void . tryAny . Signal.signalProcess Signal.sigKILL . fromIntegral)
       let cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem, impactReviewUsageDir = Just store.usageDir, impactReviewCacheDir = Just store.cacheDir, impactReviewProvider = "context-fixture", openaiModel = "fixture"}
           pr = AE.object ["head" AE..= AE.object ["sha" AE..= headRevision], "base" AE..= AE.object ["sha" AE..= base], "state" AE..= ("open" :: Text), "draft" AE..= False, "changed_files" AE..= (1 :: Int), "updated_at" AE..= ("2025-01-01T00:00:00Z" :: Text)]
           transport :: ATBackgroundCtx a -> ATBackgroundCtx a
@@ -2912,7 +2923,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           next results = pure $ fromMaybe (SdkText "Unexpected repeated inference") $ viaNonEmpty head $ drop (length results) plan
       let provider _ replies = do
             interruptNow <- readIORef interrupt
-            if interruptNow && recovery == WorkerWake && length replies == 3
+            if interruptNow && abrupt && length replies == 3
               then do
                 events <- mapMaybe (AE.decodeStrict @AE.Value) . BSC.lines <$> readFileBS (directory </> "worker.log")
                 let pids = flip mapMaybe events $ AET.parseMaybe $ AE.withObject "Completed native mutation" \fields -> do
@@ -2925,15 +2936,26 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 map (.version) <$> runQueryEffect tr (Memory.pageHistory testPid pageId) `shouldReturn` [1]
                 readIORef publications `shouldReturn` 0
                 writeIORef interrupt False
+                when (recovery == RuntimeWake) do
+                  owner <- either fail pure . AE.eitherDecodeStrict @Int32 =<< readFileBS (bridge <> ".pid")
+                  owner `shouldSatisfy` (> 1)
+                  owned <- filter (\session -> session.pid == fromIntegral owner && session.alive) <$> sandboxSessions
+                  length owned `shouldBe` 1
+                  children <- words . decodeUtf8 @Text <$> readProcessStdout_ (proc "pgrep" ["-P", show owner])
+                  runner <- case traverse (readMaybe . toString) children of Just [child] | child > 1 -> pure (child :: Int32); _ -> fail "Expected the owned VM runner"
+                  command <- decodeUtf8 @Text <$> readProcessStdout_ (proc "ps" ["-p", show runner, "-o", "comm="])
+                  command `shouldSatisfy` (\name -> any (`T.isInfixOf` name) ["gondolin-krun-runner", "qemu-system"])
+                  writeIORef runners [runner]
+                  Signal.signalProcess Signal.sigKILL $ fromIntegral owner
                 Signal.signalProcess Signal.sigKILL $ fromIntegral pid
-                pure $ SdkUnavailable "SDK worker killed after the wiki write committed"
+                pure $ SdkUnavailable "Native runtime interrupted after the wiki write committed"
               else
                 if interruptNow && recovery `elem` [ProviderWake, FinalProviderWake] && length replies == (if recovery == FinalProviderWake then 4 else 2)
                   then writeIORef interrupt False $> SdkUnavailable "Provider interrupted after original evidence and notes"
                   else (`SdkResponse` SdkTokens 7 0) <$> next replies
-      withSdkProvider directory "context-fixture" provider \models observed -> do
+      flip finally cleanup $ withSdkProvider directory "context-fixture" provider \models observed -> do
         let backend :: ATBackgroundCtx a -> ATBackgroundCtx a
-            backend = impose (sdkAgent store [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"]) \env -> \case
+            backend = impose (sdkAgent store $ [models, store.usageDir, store.cacheDir, image, directory </> "worker.log"] <> [arg | recovery == RuntimeWake, arg <- ["--bridge", bridge]]) \env -> \case
               Agent.ReviewRepository selected request respond knowledge calls usage allocations checks validate ->
                 passthrough env $ Agent.ReviewRepository selected request{Agent.repository = toText repository} respond knowledge calls usage allocations checks validate
               operation -> passthrough env operation
@@ -2941,17 +2963,19 @@ spec = around withTestResources $ describe "Production impact reviews" do
         initial <- tryAny $ worker frozenTime
         isLeft initial `shouldBe` (recovery == ProviderWake)
         Just waiting <- runQueryEffect tr $ Issues.getEventRun testPid $ Issues.PullRequestReview review.id
-        waiting.status `shouldBe` (case recovery of ProviderWake -> Issues.RunFailed; FinalProviderWake -> Issues.RunSucceeded; (ReviewWake{}; ExpiryWake; WorkerWake) -> Issues.RunRunning)
+        waiting.status `shouldBe` (case recovery of ProviderWake -> Issues.RunFailed; FinalProviderWake -> Issues.RunSucceeded; (ReviewWake{}; ExpiryWake; WorkerWake; RuntimeWake) -> Issues.RunRunning)
         operations <- runQueryEffect tr $ Investigations.listOperations @AI.OperationPolicy testPid waiting.id
-        length operations `shouldBe` (case recovery of ProviderWake -> 0; FinalProviderWake -> 2; (ReviewWake{}; ExpiryWake; WorkerWake) -> 1)
+        length operations `shouldBe` (case recovery of ProviderWake -> 0; FinalProviderWake -> 2; (ReviewWake{}; ExpiryWake; WorkerWake; RuntimeWake) -> 1)
         length <$> observed `shouldReturn` (if recovery == FinalProviderWake then 5 else 3)
         readIORef publications `shouldReturn` (if recovery == FinalProviderWake then 1 else 0)
-        let vote = case recovery of ReviewWake decision -> Just decision; WorkerWake -> Just Investigations.ReviewApproved; (ExpiryWake; ProviderWake; FinalProviderWake) -> Nothing
+        let vote = case recovery of ReviewWake decision -> Just decision; (WorkerWake; RuntimeWake) -> Just Investigations.ReviewApproved; (ExpiryWake; ProviderWake; FinalProviderWake) -> Nothing
         for_ vote $ \decision -> for_ operations $ \operation ->
           void $ testServant tr $ AIThreads.operationReviewPostH testPid operation.id $ AIThreads.OperationReviewForm decision
         let resumedAt = addUTCTime (if recovery == ExpiryWake then 24 * 60 * 60 + 1 else 60) frozenTime
         continued <- tryAny $ worker resumedAt
-        if recovery == WorkerWake
+        readIORef runners >>= traverse_ (\runner -> Timeout.timeout (2 * 1000000) (runnerGone runner) `shouldReturn` Just ())
+        writeIORef runners []
+        if abrupt
           then continued `shouldSatisfy` isLeft
           else whenLeft_ continued \err -> do
             diagnostic <- readFileBS $ directory </> "worker.log"
@@ -2963,20 +2987,21 @@ spec = around withTestResources $ describe "Production impact reviews" do
         Just finalContext <- runQueryEffect tr $ Issues.runContextFor testPid $ Issues.EventClaim (Issues.PullRequestReview review.id) completed.id completed.startedAt
         finalContext.rootId `shouldBe` initialContext.rootId
         case recovery of
-          (ProviderWake; WorkerWake) -> completed.id `shouldNotBe` waiting.id
+          (ProviderWake; WorkerWake; RuntimeWake) -> completed.id `shouldNotBe` waiting.id
           (ReviewWake{}; ExpiryWake; FinalProviderWake) -> completed.id `shouldBe` waiting.id
         Just retained <- runQueryEffect tr $ Reviews.getRun review.id
         result <- maybe (fail "Review result missing") (either fail pure . AET.parseEither AE.parseJSON) retained.result :: IO Impact.ReviewResult
         result.windowEnd `shouldBe` frozenTime
         map (.key) (filter (("query-" `T.isPrefixOf`) . (.key)) result.evidence) `shouldBe` ["query-1"]
         fmap (map (.summary)) result.knowledge `shouldBe` Just ["Recheck the recorded retry observation."]
-        length <$> observed `shouldReturn` (if recovery `elem` [ProviderWake, WorkerWake] then 6 else 5)
+        length <$> observed `shouldReturn` (if extraCall then 6 else 5)
         totals <- runQueryEffect tr $ Usage.usageTotals Usage.Reviews testPid
-        fmap (\entry -> (entry.usage.calls, entry.usage.unreportedCalls, entry.usage.failedCalls)) (find ((== Just review.id) . (.runId)) totals) `shouldBe` Just (if recovery `elem` [ProviderWake, WorkerWake] then 6 else 5, if recovery == WorkerWake then 1 else 0, if recovery `elem` [ProviderWake, FinalProviderWake] then 1 else 0)
+        fmap (\entry -> (entry.usage.calls, entry.usage.unreportedCalls, entry.usage.failedCalls)) (find ((== Just review.id) . (.runId)) totals) `shouldBe` Just (if extraCall then 6 else 5, if abrupt then 1 else 0, if recovery `elem` [ProviderWake, FinalProviderWake] then 1 else 0)
+        fmap (.resources.cleanupFailures) (find ((== Just review.id) . (.runId)) totals) `shouldBe` Just (if recovery == RuntimeWake then 1 else 0)
         readIORef publications `shouldReturn` 1
         pages <- runQueryEffect tr $ Memory.pageHistory testPid pageId
-        let writes = case recovery of ReviewWake Investigations.ReviewApproved -> True; (ProviderWake; FinalProviderWake; WorkerWake) -> True; (ReviewWake Investigations.ReviewRejected; ExpiryWake) -> False
-            writingRun = if recovery == WorkerWake then waiting.id else completed.id
+        let writes = case recovery of ReviewWake Investigations.ReviewApproved -> True; (ProviderWake; FinalProviderWake; WorkerWake; RuntimeWake) -> True; (ReviewWake Investigations.ReviewRejected; ExpiryWake) -> False
+            writingRun = if abrupt then waiting.id else completed.id
         map (\page -> (page.version, AE.toJSON page.author)) pages `shouldBe` [(1, AE.toJSON $ Memory.Run writingRun) | writes]
 
   for_ ([(ReviewSuspension, 0, 1), (ProviderFailure, 1, 0), (FinalProviderFailure, 0, 1)] :: [(NativeInterruption, Int, Int)]) $ \(interruption, extraCalls, initialCallbacks) ->
