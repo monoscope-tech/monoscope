@@ -291,7 +291,7 @@ async function main() {
     const attemptId = z.uuid().parse(request.attemptId);
     root = await mkdtemp(join(tmpdir(), 'monoscope-review-agent-'));
     const modelRuntime = await ModelRuntime.create({ authPath: join(root, 'auth.json'), modelsPath: process.env.IMPACT_REVIEW_MODELS ?? null, refreshOnCreate: false });
-    if (process.env.IMPACT_REVIEW_SESSION_FILE) sessionManager = SessionManager.open(process.env.IMPACT_REVIEW_SESSION_FILE, dirname(process.env.IMPACT_REVIEW_SESSION_FILE), cwd);
+    sessionManager = process.env.IMPACT_REVIEW_SESSION_FILE ? SessionManager.open(process.env.IMPACT_REVIEW_SESSION_FILE, dirname(process.env.IMPACT_REVIEW_SESSION_FILE), cwd) : SessionManager.inMemory(cwd);
     let result;
     if (isPatch) {
       const call = { id: randomUUID(), attemptId, provider: request.provider, model: request.model };
@@ -332,7 +332,7 @@ async function main() {
     process.stdout.write(JSON.stringify({ tag: 'Result', contents: result }) + '\n');
   } catch {
     await pending;
-    if (!signal.aborted && process.env.IMPACT_REVIEW_SESSION_FILE && sessionManager && branchBeforeFailure(sessionManager) && pendingTools(sessionManager.buildSessionContext().messages).pending.length === 0) {
+    if (!signal.aborted && sessionManager && branchBeforeFailure(sessionManager) && pendingTools(sessionManager.buildSessionContext().messages).pending.length === 0) {
       await exchange('Suspend', []).catch(() => {});
     }
     process.stderr.write(signal.aborted ? 'Impact review cancelled or timed out\n' : 'Impact review did not produce a validated result\n');

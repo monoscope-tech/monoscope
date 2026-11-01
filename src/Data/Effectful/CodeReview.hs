@@ -705,9 +705,9 @@ runCodeReviewWith artifactStore hostConfig executable = interpret \env -> \case
                             writeMessage $ void checked
                             receive supplied guestSession remaining (submissions - 1) $ either (const Nothing) (Just . (AE.String raw,)) checked
                           _ -> pure $ Left "Text submission requires a prepared patch comparison and remaining budget"
-                        Right (Right (Suspend ())) -> case sessionDirectory of
-                          Nothing -> writeMessage (Left "Session retention is not configured" :: Either Text ()) $> Left "Session retention is not configured"
-                          Just _ -> do
+                        Right (Right (Suspend ())) -> case (sessionDirectory, accepted) of
+                          (Nothing, Nothing) -> writeMessage (Left "Session retention is not configured" :: Either Text ()) $> Left "Session retention is not configured"
+                          _ -> do
                             suspend remaining submissions (fst <$> accepted)
                             writeMessage (Right () :: Either Text ())
                             pure $ maybe (Left "Review session interrupted; retry its retained request") (Right . snd) accepted

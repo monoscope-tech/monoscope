@@ -426,7 +426,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           )
           `finally` cleanup
 
-  it "admits frozen regressions through the real SDK with native checkout and durable metering" \_tr -> withSystemTempDirectory "native-sdk-admission" \temporary -> do
+  it "nativeSubmission_admissionSurvivesFinalProviderFailure" \_tr -> withSystemTempDirectory "native-sdk-admission" \temporary -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
     directory <- canonicalizePath temporary
@@ -462,7 +462,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
             0 -> SdkTool "bash" (AE.object ["command" AE..= ("set -eu; id -u; test ! -w /run/monoscope-admission.patch; test ! -w /run/monoscope-admission.json; git diff --cached --no-ext-diff --no-textconv; cat runtime.sh /run/monoscope-admission.json; printf forbidden > runtime.sh" :: Text)])
             1 -> SdkTool "submit_admission" (AE.object ["tag" AE..= decision, "contents" AE..= ("The regression calls the actual retry_token runtime and checks the issue's caller token." :: Text)])
             _ -> SdkText "Fixture finished."
-    withSdkModel directory "admission-fixture" next \models requests -> do
+        provider _ results =
+          if length results == 2
+            then pure $ SdkUnavailable "Provider failed after checked admission submission"
+            else (`SdkResponse` SdkTokens 7 0) <$> next results
+    withSdkProvider directory "admission-fixture" provider \models requests -> do
       let request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = toText repository, base, head = base, gitToken = "", prompt = "Issue: retry_token must preserve the original retry token.", provider = "admission-fixture", model = "fixture", thinkingLevel = Agent.Off}
           admission :: Agent.AdmissionRequest
           admission = Agent.AdmissionRequest (Agent.FixRequest request (uid 3) imageId) (Agent.TestArtifact "bash regression.sh" testPatch "retry token lost")
@@ -498,7 +502,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
         actual <- subtract priorCalls . length <$> requests
         length starts `shouldBe` actual
         length responses `shouldBe` actual
-        responses `shouldSatisfy` all (\receipt -> receipt.attemptId == request.attemptId && maybe False (> 0) receipt.costNanousd && receipt.callId `elem` map (Just . (.id)) starts)
+        length (filter (not . (.succeeded)) responses) `shouldBe` 1
+        responses `shouldSatisfy` all (\receipt -> receipt.attemptId == request.attemptId && (not receipt.succeeded || maybe False (> 0) receipt.costNanousd) && receipt.callId `elem` map (Just . (.id)) starts)
         length allocated `shouldBe` 1
         for_ allocated \receipt -> do
           Agent.allocationAttempt receipt `shouldBe` request.attemptId
@@ -548,7 +553,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         isLeft invalid `shouldBe` True
       length <$> requests `shouldReturn` beforeInvalid
 
-  it "fixes through the real SDK with frozen reproduction, native verification and independent review" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-fix" \temporary -> do
+  it "nativeSubmission_fixKeepsVerifiedResultAfterFinalProviderFailure" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-fix" \temporary -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
     directory <- canonicalizePath temporary
@@ -561,6 +566,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         diagnostic = directory </> "worker.log"
         uid n = UUIDId $ UUID.fromWords 55 0x4000 0x80000000 n
         field key = AE.withObject "SDK fix evidence" (AE..: key)
+        names = AE.withObject "Model tools" (AE..: "tools") >=> traverse (AE.withObject "Model tool" (AE..: "function") >=> AE.withObject "Tool function" (AE..: "name"))
         parse parser = either fail pure . AET.parseEither parser
         git args = decodeUtf8 @Text <$> readProcessStdout_ (setWorkingDir repository $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] <> args)
         testSource = "set -eu\n. ./runtime.sh\nif [ \"$(retry_token original)\" != original ]; then echo 'retry token was lost' >&2; exit 1; fi\necho regression-passed\n" :: ByteString
@@ -635,12 +641,22 @@ spec = around withTestResources $ describe "Production impact reviews" do
     usage <- newIORef ([] :: [Agent.ModelUsage])
     allocations <- newIORef ([] :: [Agent.AllocationReceipt])
     validationFailure <- newIORef Nothing
+    failProvider <- newIORef True
     let record ref receipt = modifyIORef' ref (<> [receipt])
         next results = do
           writeIORef replies results
           choices <- readIORef plan
           pure $ fromMaybe (SdkText "Fix attempt finished.") $ viaNonEmpty head $ drop (length results) choices
-    withSdkModel directory "fix-fixture" next \models requests -> do
+        provider body results = do
+          peer <- elem ("submit_fix_review" :: Text) <$> parse names body
+          reply <- next results
+          failNow <- readIORef failProvider
+          if (peer && length results == 2) || (failNow && length results == length steps)
+            then do
+              unless peer $ writeIORef failProvider False
+              pure $ SdkUnavailable "Provider failed after checked native submission"
+            else pure $ SdkResponse reply $ SdkTokens 7 0
+    withSdkProvider directory "fix-fixture" provider \models requests -> do
       let run action = runEff $ sdkAgent store [models, store.usageDir, store.cacheDir, image, diagnostic, "--prepare", scriptFile, "--cli", cli] action
           knowledge = const $ pure $ Left "Unexpected knowledge request"
           capture ref receipt = liftIO $ record ref receipt
@@ -741,7 +757,6 @@ spec = around withTestResources $ describe "Production impact reviews" do
       Native.candidateMatchesPatch captured (uid 99) (decodeUtf8 patch) `shouldBe` False
       decodeUtf8 @Text (AE.encode results) `shouldNotSatisfy` T.isInfixOf "/file-tools/"
       contexts <- requests
-      let names = AE.withObject "Model tools" (AE..: "tools") >=> traverse (AE.withObject "Model tool" (AE..: "function") >=> AE.withObject "Tool function" (AE..: "name"))
       toolsets <- traverse (parse names) contexts :: IO [[Text]]
       let peers = filter (elem "submit_fix_review") toolsets
       length peers `shouldBe` 9
@@ -753,7 +768,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
       let callAttempts = Map.fromList [(receipt.id, receipt.attemptId) | receipt <- recordedCalls]
       length recordedCalls `shouldBe` length contexts
       length recordedUsage `shouldBe` length contexts
-      recordedUsage `shouldSatisfy` all (\receipt -> (receipt.callId >>= (`Map.lookup` callAttempts)) == Just receipt.attemptId && receipt.succeeded && maybe False (> 0) receipt.costNanousd)
+      length (filter (not . (.succeeded)) recordedUsage) `shouldBe` 4
+      recordedUsage `shouldSatisfy` all (\receipt -> (receipt.callId >>= (`Map.lookup` callAttempts)) == Just receipt.attemptId && (not receipt.succeeded || maybe False (> 0) receipt.costNanousd))
       recordedAllocations <- readIORef allocations
       length recordedAllocations `shouldBe` 4
       map Agent.allocationAttempt recordedAllocations `shouldMatchList` [request.attemptId, uid 4, uid 5, uid 6]
