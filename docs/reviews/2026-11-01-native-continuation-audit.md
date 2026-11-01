@@ -195,3 +195,13 @@ and one existing lifecycle regression. No alternate permission store, raw IO
 runtime seam, warning suppression, client behavior, or weaker capability was
 introduced. Pinned Fourmolu and `git diff --check` pass. The full native suite,
 whole-branch reviews, and release gates remain open.
+
+The subsequent full native group passes together with all 32 Slack destination
+and citation cases: 82 examples, zero failures in 370.1305 seconds. This includes
+all 50 native cases and the permanent project-eligibility regression after the
+temporary browser adapter was removed. The recorded native, model, test, and
+migration inputs match their pre-run hashes. The saved log is
+`scripts/local/native-project-eligibility-full-82-green.log`; hashes are in
+`scripts/local/native-project-eligibility-full-source.json`. This closes the
+native regression run at that source checkpoint. Whole-branch review, Linux/KVM,
+and final release signoff remain separate requirements.
