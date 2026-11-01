@@ -351,3 +351,10 @@ The existing sixteen-scenario evidence-read lifecycle now covers both public C a
 All 64 controlled integration cases pass in 22.0914 seconds under seed 13421578. All four recorded source inputs remain unchanged. Two scoped hs-distill, hs-evasion-review and hs-lob-review passes find no further material issue: one lifecycle matrix owns the cases, typed audience retention remains before provider reads, and no client behavior or effect escape is added. Pinned formatting passes. The private receipt and log are `scripts/local/slack-destination-confinement-review.json` and `scripts/local/slack-destination-confinement-64-green.log`.
 
 These tests interpret the provider boundary; they do not establish live public-channel acceptance. The earlier broad stream-test failure and final release gates remain open.
+
+
+### Final source simplification after the rebase
+
+The prior convergence covers 71 runtime inputs. A current hash comparison identifies six changed inputs: the integrated issue views, model, routes and test-clock helpers, plus Slack stream recovery. Those deltas are reviewed again together with the incoming stable anomaly ordering, giving 72 recorded runtime inputs. Two final scoped passes find no additional material distillation, evasion, or client-locality issue. The stream assertion uses the existing JSON traversal instead of a nested vector conversion. Typed issue views retain their required request identity; provider recovery retains the original stream, exact-state update, current authority checks, and acknowledged frame.
+
+No installed simplify skill or command was found in the searched user and repository locations. A manual final simplification pass was performed; this record does not claim that `/simplify` ran. The current-source receipt is `scripts/local/unified-agent-final-review-convergence.json`. The broader watcher run and committed-tree release gates remain outstanding. Earlier browser and native-runtime reports keep their original scope and limits.
