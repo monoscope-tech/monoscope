@@ -589,6 +589,40 @@ The repeated scoped pass finds no further material change.
 
 Physical devices, screen readers, media transport failures, playback, S3 delivery,
 and package download remain **Not verified by this browser pass**.
+
+### Generated media and protected download acceptance
+
+A later isolated Linux acceptance runs the real native SDK fix workflow and explanation renderer.
+The model and GitHub token exchange use controlled responses; media retention uses real local MinIO.
+The application case passes: **1 example, 0 failures, 148.2960 seconds**, including the browser hold.
+Eleven observed guest processes use real KVM. No product source changes are needed.
+
+Chrome plays the generated 36-second, 1280-by-720 video inside the conversation inspector.
+It starts paused, has no autoplay, advances during playback, and loads four English caption cues.
+The generated diagram decodes through its protected application route.
+Desktop light at 1280 pixels and mobile dark at 320 pixels have no inspector overflow.
+Closing the inspector preserves the conversation URL and composer draft.
+There are no browser page errors in the final run.
+
+Clicking Download PR package saves a 307,200-byte publication.tar.
+It contains the description, evidence, publishing instructions, and all seven media assets.
+Each media digest matches evidence.json.
+An authenticated video range request returns 206 with the requested 1,024 bytes and private, no-store.
+Anonymous video and package requests both return 404.
+
+The first private HTTP harness uses the standard unavailable artifact interpreter.
+After replacing that test seam with real storage reads, playback succeeds.
+The next layout attempts expose missing static middleware and versioned-path handling in that harness.
+The final browser harness supplies unchanged snapshot assets, including their versioned paths.
+It does not intercept application or media responses. This is not production static-middleware acceptance.
+All snapshot static-file hashes and seven current native/application source hashes match the recorded inputs.
+The supported Linux build also passes all 2,098 doctest examples.
+
+Receipts are scripts/local/linux-native-media-harness.json and scripts/local/native-real-media-browser/acceptance.json.
+The temporary HTTP server and its local SSH forward are stopped after acceptance.
+The review Page adds the generated-media capture at sequence 70 and preserves every prior image and visualization reference.
+Chrome confirms that the new native Page image loads at 1280 by 900 pixels.
+Physical devices, screen readers, hosted walkthrough interaction, and live GitHub publication remain separate work.
 The full-branch reviews and release checks remain separate requirements.
 
 ### Verdict
