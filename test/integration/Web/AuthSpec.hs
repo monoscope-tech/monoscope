@@ -221,7 +221,7 @@ spec = aroundAll withTestResources do
       code <- T.take 8 . UUID.toText <$> UUIDV4.nextRandom
       let bound = runQueryEffect tr (Hasql.interp [HI.sql| SELECT session_id IS NOT NULL FROM users.device_auth_codes WHERE user_code = #{code} |])
       runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| INSERT INTO users.device_auth_codes (id, device_code, user_code, expires_at) VALUES (gen_random_uuid(), gen_random_uuid()::text, #{code}, now() + interval '5 minutes') |]
-      (_, prompt) <- testServant tr $ Auth.deviceApproveH False (Just code)
+      prompt <- call tr $ Auth.deviceApproveH False (Just code)
       renderT prompt `shouldSatisfy` T.isInfixOf "method=\"POST\""
       bound `shouldReturn` V.singleton False
       _ <- testServant tr $ Auth.deviceApproveH True (Just code)

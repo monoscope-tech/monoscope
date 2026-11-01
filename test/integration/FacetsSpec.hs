@@ -24,11 +24,6 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Models.Apis.SchemaCatalog qualified as SC
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -38,37 +33,16 @@ import Pkg.Parser.Expr qualified as PE
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils (renderT, TestResources (..), frozenTime, toBaseServantResponse, runHasqlEffect, withTestResources)
+import Pkg.TestUtils (TestResources (..), frozenTime, renderT, resetSchemaLearning, runHasqlEffect, testPid, toBaseServantResponse, withTestResources)
 import ProcessMessage qualified
 import Relude
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
 import Web.ApiHandlers qualified as ApiH
 
 
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
-
-
 -- | Project IDs derived from a small int, used for the bulk-refresh test.
 mkPid :: Int -> Projects.ProjectId
 mkPid n = UUIDId (UUID.fromWords 0 0 0 (fromIntegral n))
-
-
-clearAll :: TestResources -> [Projects.ProjectId] -> IO ()
-clearAll tr pids = withPool tr.trPool $ do
-  let arr = PGArray pids
-      exec q ps = void (DBT.execute q ps)
-  -- FK targets: every test pid needs a row in projects.projects, otherwise
-  -- anomaly + summary inserts fail with FK violations. One round-trip each.
-  exec
-    [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-          SELECT id, 'facets-test', 'Free', true, NULL, false, false
-          FROM unnest(?::uuid[]) AS id
-          ON CONFLICT (id) DO NOTHING |]
-    (Only arr)
-  exec [sql| DELETE FROM apis.schema_catalog WHERE project_id = ANY(?::uuid[]) |] (Only arr)
-  exec [sql| DELETE FROM apis.schema_summary WHERE project_id = ANY(?::uuid[]) |] (Only arr)
-  exec [sql| DELETE FROM apis.anomalies WHERE project_id = ANY(?::uuid[]) |] (Only arr)
 
 
 -- Template cleanup is intentionally omitted here: deleting orphan
@@ -193,9 +167,9 @@ spec = around withTestResources
   $ do
     describe "Layer B — handler-shape contract" $ do
       it "getFacetSummary surfaces dotted keys with section prefixes" $ \tr -> do
-        clearAll tr [pid]
-        seedSummary tr pid
-        sumM <- runHasqlEffect tr $ SC.getFacetSummary Nothing pid "otel_logs_and_spans" frozenTime frozenTime
+        resetSchemaLearning tr [testPid]
+        seedSummary tr testPid
+        sumM <- runHasqlEffect tr $ SC.getFacetSummary Nothing testPid "otel_logs_and_spans" frozenTime frozenTime
         case sumM of
           Nothing -> fail "expected a summary, got Nothing"
           Just s -> do
@@ -211,7 +185,7 @@ spec = around withTestResources
 
       it "returns Nothing for an unknown project" $ \tr -> do
         let unknown = mkPid 9999
-        clearAll tr [unknown]
+        resetSchemaLearning tr [unknown]
         sumM <- runHasqlEffect tr (SC.getFacetSummary Nothing unknown "otel_logs_and_spans" frozenTime frozenTime)
         sumM `shouldSatisfy` isNothing
 
@@ -221,11 +195,11 @@ spec = around withTestResources
       -- under-walking bugs like #401's HTTP branch dropping the generic
       -- attribute + resource walks.
       it "every Facet.path the sidebar advertises is populated after a real HTTP span flush" $ \tr -> do
-        clearAll tr [pid]
+        resetSchemaLearning tr [testPid]
         ref <- newIORef Hot.emptySchemaShardState
-        Hot.observeSpans ref Hot.defaultPolicy pid (V.fromList [richObs pid "GET", richObs pid "POST"])
+        Hot.observeSpans ref Hot.defaultPolicy testPid (V.fromList [richObs testPid "GET", richObs testPid "POST"])
         _ <- runHasqlEffect tr (Worker.flushDirty ref)
-        sumM <- runHasqlEffect tr $ SC.getFacetSummary Nothing pid "otel_logs_and_spans" frozenTime frozenTime
+        sumM <- runHasqlEffect tr $ SC.getFacetSummary Nothing testPid "otel_logs_and_spans" frozenTime frozenTime
         case sumM of
           Nothing -> fail "expected a summary after flushDirty"
           Just s -> do
@@ -252,11 +226,11 @@ spec = around withTestResources
               Nothing -> fail "missing resource.service.name after flush"
 
       it "log-style spans expose severity + level facets through the top-level walk" $ \tr -> do
-        clearAll tr [pid]
+        resetSchemaLearning tr [testPid]
         ref <- newIORef Hot.emptySchemaShardState
-        Hot.observeSpans ref Hot.defaultPolicy pid (V.singleton (richObsWithTopLevel pid "POST"))
+        Hot.observeSpans ref Hot.defaultPolicy testPid (V.singleton (richObsWithTopLevel testPid "POST"))
         _ <- runHasqlEffect tr (Worker.flushDirty ref)
-        sumM <- runHasqlEffect tr $ SC.getFacetSummary Nothing pid "otel_logs_and_spans" frozenTime frozenTime
+        sumM <- runHasqlEffect tr $ SC.getFacetSummary Nothing testPid "otel_logs_and_spans" frozenTime frozenTime
         case sumM of
           Nothing -> fail "expected a summary"
           Just s -> do
@@ -270,14 +244,14 @@ spec = around withTestResources
 
       -- Page shells read only the facets they render; the multi-MB full doc made every page slow.
       it "a path-narrowed read returns exactly the full read's entries for those paths" $ \tr -> do
-        clearAll tr [pid]
+        resetSchemaLearning tr [testPid]
         ref <- newIORef Hot.emptySchemaShardState
-        Hot.observeSpans ref Hot.defaultPolicy pid (V.fromList [richObs pid "GET", richObsWithTopLevel pid "POST"])
+        Hot.observeSpans ref Hot.defaultPolicy testPid (V.fromList [richObs testPid "GET", richObsWithTopLevel testPid "POST"])
         _ <- runHasqlEffect tr (Worker.flushDirty ref)
         let paths = ["attributes.http.request.method", "resource.service.name", "level", "severity.severity_text", "attributes.not.seen"]
             facetMap = maybe HM.empty (\s -> let Catalog.FacetData m = s.facetJson in m)
-        full <- facetMap <$> runHasqlEffect tr (SC.getFacetSummary Nothing pid "otel_logs_and_spans" frozenTime frozenTime)
-        narrowed <- facetMap <$> runHasqlEffect tr (SC.getFacetSummary (Just paths) pid "otel_logs_and_spans" frozenTime frozenTime)
+        full <- facetMap <$> runHasqlEffect tr (SC.getFacetSummary Nothing testPid "otel_logs_and_spans" frozenTime frozenTime)
+        narrowed <- facetMap <$> runHasqlEffect tr (SC.getFacetSummary (Just paths) testPid "otel_logs_and_spans" frozenTime frozenTime)
         HM.size full `shouldSatisfy` (> HM.size narrowed)
         forM_ paths \p -> HM.lookup p narrowed `shouldBe` HM.lookup p full
         HM.keys narrowed `shouldNotContain` ["attributes.db.operation.name"]
@@ -285,7 +259,7 @@ spec = around withTestResources
     describe "Layer C — bulk refresh" $ do
       it "K projects, K dirty keys: one flushDirty pass refreshes all summaries" $ \tr -> do
         let projs = [mkPid i | i <- [1 .. 5]]
-        clearAll tr projs
+        resetSchemaLearning tr projs
         ref <- newIORef Hot.emptySchemaShardState
         forM_ projs \p -> Hot.observeSpans ref Hot.defaultPolicy p (V.singleton (richObs p "GET"))
         r <- runHasqlEffect tr (Worker.flushDirty ref)
@@ -302,7 +276,7 @@ spec = around withTestResources
         let freshP = mkPid 11
             otherPs = [mkPid 12, mkPid 13]
             projs = freshP : otherPs
-        clearAll tr projs
+        resetSchemaLearning tr projs
         -- Seed freshP with a recognisable doc + recent generated_at (upsertSummary stamps now()).
         seedSummary tr freshP
         ref <- newIORef Hot.emptySchemaShardState
@@ -317,14 +291,14 @@ spec = around withTestResources
 
     describe "Layer A — handler wire shape" $ do
       it "apiFacets_emptyCachedSummary_returnsLiveServiceFacet" $ \tr -> do
-        clearAll tr [pid]
-        body <- toBaseServantResponse tr $ ApiH.apiFacets pid Nothing Nothing Nothing (Just "resource.service.name")
+        resetSchemaLearning tr [testPid]
+        body <- toBaseServantResponse tr $ ApiH.apiFacets testPid Nothing Nothing Nothing (Just "resource.service.name")
         body `shouldBe` AE.object ["resource.service.name" AE..= ([] :: [AE.Value]), "source" AE..= ("fallback" :: Text)]
 
       it "GET /api/v1/facets returns dotted keys only (no triple-underscore)" $ \tr -> do
-        clearAll tr [pid]
-        seedSummary tr pid
-        body <- toBaseServantResponse tr $ ApiH.apiFacets pid Nothing Nothing Nothing Nothing
+        resetSchemaLearning tr [testPid]
+        seedSummary tr testPid
+        body <- toBaseServantResponse tr $ ApiH.apiFacets testPid Nothing Nothing Nothing Nothing
         case body of
           AE.Object o -> do
             let keys = AEK.toText <$> AEKM.keys o
@@ -344,7 +318,7 @@ spec = around withTestResources
             summary =
               Catalog.FacetSummary
                 { id = UUID.nil
-                , projectId = pid.toText
+                , projectId = testPid.toText
                 , tableName = "otel_logs_and_spans"
                 , facetJson = Catalog.FacetData m
                 }
@@ -386,7 +360,7 @@ spec = around withTestResources
             summary =
               Catalog.FacetSummary
                 { id = UUID.nil
-                , projectId = pid.toText
+                , projectId = testPid.toText
                 , tableName = "otel_logs_and_spans"
                 , facetJson = Catalog.FacetData $ HM.singleton "resource.service.name" values
                 }

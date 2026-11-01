@@ -57,8 +57,7 @@ spec = around withTestResources do
       apiLive <- toBaseServantResponse tr $ Share.shareLinkGetH apiShare.id
       renderT apiLive `shouldSatisfy` T.isInfixOf "shared-checkout"
 
-      void $ withResource tr.trPool \conn ->
-        PGS.execute conn [sql|UPDATE apis.share_events SET created_at = ? WHERE id = ?|] (frozenTime, shareId)
+      dbExec tr [sql|UPDATE apis.share_events SET created_at = ? WHERE id = ?|] (frozenTime, shareId)
       advanceDays tr 3
       expired <- toBaseServantResponse tr $ Share.shareLinkGetH shareId
       let expiredHtml = renderT expired

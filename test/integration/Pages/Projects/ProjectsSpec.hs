@@ -5,17 +5,15 @@ import Control.Lens ((.~))
 import Data.Default (def)
 import Data.Generics.Labels ()
 import Data.Generics.Product.Fields (field)
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Error.Static (catchError)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pages.CommandPalette qualified as CommandPalette
 import Pages.BodyWrapper
+import Pages.CommandPalette qualified as CommandPalette
 import Pages.Projects
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ListProjects
@@ -33,7 +31,7 @@ spec = around withTestResources do
   describe "Project settings permissions" do
     it "projectSettingsViewer_cannotChangeDetailsNotificationsOrDeleteProject" \tr -> do
       let uid = (getResponse tr.trSessAndHeader).user.id
-          setPermission permission = void $ withResource tr.trPool \conn -> PG.execute conn [sql|UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?|] (permission :: Text, testPid, uid)
+          setPermission permission = dbExec tr [sql|UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?|] (permission :: Text, testPid, uid)
       bracket_ (setPermission "view") (setPermission "admin") do
         statuses <- forM
           [ void $ CreateProject.createProjectPostH testPid def{title = "Forbidden", timeZone = "UTC"}
@@ -47,7 +45,7 @@ spec = around withTestResources do
 
     it "projectEditor_cannotDeleteProject" \tr -> do
       let uid = (getResponse tr.trSessAndHeader).user.id
-          setPermission permission = void $ withResource tr.trPool \conn -> PG.execute conn [sql|UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?|] (permission :: Text, testPid, uid)
+          setPermission permission = dbExec tr [sql|UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?|] (permission :: Text, testPid, uid)
       bracket_ (setPermission "edit") (setPermission "admin") do
         status <- runAuthHandler tr $ catchError @ServerError (CreateProject.deleteProjectGetH testPid $> 200) (\_ err -> pure err.errHTTPCode)
         status `shouldBe` 403
@@ -67,8 +65,8 @@ spec = around withTestResources do
               , endpointAlerts = Nothing
               , errorAlerts = Nothing
               }
-      (_, pg) <-
-        testServant tr $ CreateProject.createProjectPostH testPid createPForm
+      pg <-
+        call tr $ CreateProject.createProjectPostH testPid createPForm
       -- Demo project update should be blocked, but form returns submitted values
       (pg.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI"
       (pg.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description"
@@ -85,7 +83,7 @@ spec = around withTestResources do
       -- The session's cached non-demo project (testPid is the demo, which never deletes).
       let pid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
           setRole :: Text -> IO ()
-          setRole r = withResource tr.trPool \conn -> void $ PG.execute conn [sql|UPDATE projects.project_members SET permission = ?::projects.project_permissions WHERE project_id = ?|] (r, pid)
+          setRole r = dbExec tr [sql|UPDATE projects.project_members SET permission = ?::projects.project_permissions WHERE project_id = ?|] (r, pid)
       setRole "view"
       -- An explicit membership role binds sudo users too; sudo only stands in for a missing membership.
       res <- forM [False, True] \sudo -> try @ErrorCall $ runAuthHandler tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ sudo} (CreateProject.deleteProjectGetH pid) >>= evaluate
@@ -97,12 +95,12 @@ spec = around withTestResources do
       victim <- createTestProject tr "victim"
       assertNonMemberDenied tr victim $ CommandPalette.commandPaletteItemsH victim
       assertNonMemberDenied tr victim $ CommandPalette.commandPaletteRecentPostH victim (CommandPalette.RecentForm "planted" "/evil" "page")
-      (_, items) <- testServant tr $ CommandPalette.commandPaletteItemsH victim
+      items <- call tr $ CommandPalette.commandPaletteItemsH victim
       renderT items `shouldSatisfy` (not . T.isInfixOf "/evil")
 
     it "Non empty project list" \tr -> do
-      (_, pg) <-
-        testServant tr ListProjects.listProjectsGetH
+      pg <-
+        call tr ListProjects.listProjectsGetH
       let (projects, _demoProject, _showDemoProject) = pg.unwrap.content
       -- User is member of both demo project and test project (added in testSessionHeader)
       length projects `shouldBe` 2
@@ -125,14 +123,14 @@ spec = around withTestResources do
               , endpointAlerts = Nothing
               , errorAlerts = Nothing
               }
-      (_, updateResp) <-
-        testServant tr $ CreateProject.createProjectPostH testPid createPForm
+      updateResp <-
+        call tr $ CreateProject.createProjectPostH testPid createPForm
       (updateResp.unwrapCreateProjectResp <&> (.form.title)) `shouldBe` Just @Text "Test Project CI2"
       (updateResp.unwrapCreateProjectResp <&> (.form.description)) `shouldBe` Just "Test Description2"
 
       -- Section 2: Verify the update persists in the project list
-      (_, listResp) <-
-        testServant tr ListProjects.listProjectsGetH
+      listResp <-
+        call tr ListProjects.listProjectsGetH
       let (projects, _demoProject, _showDemoProject) = listResp.unwrap.content
 
       -- Find the updated project by ID instead of relying on index

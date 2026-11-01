@@ -48,7 +48,7 @@ spec = sequential $ aroundAll withTestResources do
       members <- postMembers . snd =<< testServant tr (ManageMembers.manageMembersPostH testPid Nothing (form [ProjectMembers.PAdmin, ProjectMembers.PView]))
       invitee <- maybe (fail "Invitee missing") pure $ V.find ((== "permission-guard@example.com") . (.email)) members
       forM_ ["view", "edit"] \permission -> bracket_ (setPermission permission) (setPermission "admin") do
-        (_, page) <- testServant tr $ ManageMembers.manageMembersGetH testPid
+        page <- call tr $ ManageMembers.manageMembersGetH testPid
         let html = renderT page
             controls = filter (`T.isInfixOf` html) ["id=\"new-member-email\"", "id=\"saveMembersBtn\"", "aria-label=\"Remove member\""]
         statuses <- forM
@@ -80,9 +80,9 @@ spec = sequential $ aroundAll withTestResources do
       map (.id) (V.toList session.projects.getProjects) `shouldNotContain` [testPid]
       let appCtx = tr.trATCtx
           inviteeResources = tr{trATCtx = appCtx{Config.env = appCtx.env{Config.showDemoProject = True}}, trSessAndHeader = tr.trSessAndHeader <&> \s -> s{Projects.user = session.user.getUser, Projects.persistentSession = session}}
-      (_, restrictedPage) <- testServant inviteeResources ManageMembers.listProjectsGetH
+      restrictedPage <- call inviteeResources ManageMembers.listProjectsGetH
       renderT restrictedPage `shouldSatisfy` T.isInfixOf "Only the project owner can access it. Ask the owner to upgrade to enable team access."
-      (_, withoutDemo) <- testServant inviteeResources{trATCtx = appCtx} ManageMembers.listProjectsGetH
+      withoutDemo <- call inviteeResources{trATCtx = appCtx} ManageMembers.listProjectsGetH
       withoutDemo.restrictedProjectTitles `shouldBe` restrictedPage.restrictedProjectTitles
       void $ withPool tr.trPool $ PGT.execute [sql|INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token) VALUES (?, 'T_FREE', 'C_FREE', 'Free project', 'test-token') ON CONFLICT (project_id) DO UPDATE SET team_id = 'T_FREE'|] (Only testPid)
       slackProjects <- runQueryEffect tr $ Integrations.slackLinkProjects "T_FREE" invitee.userId
@@ -96,11 +96,11 @@ spec = sequential $ aroundAll withTestResources do
       runQueryEffect tr (ProjectMembers.getUserPermission testPid invitee.userId) >>= (`shouldBe` Just ProjectMembers.PView)
       upgradedUsers <- runQueryEffect tr $ Projects.usersByProjectId testPid
       map (.email) upgradedUsers `shouldContain` ["free-invitee@example.com"]
-      (_, upgradedPage) <- testServant inviteeResources ManageMembers.listProjectsGetH
+      upgradedPage <- call inviteeResources ManageMembers.listProjectsGetH
       renderT upgradedPage `shouldNotSatisfy` T.isInfixOf "Only the project owner can access it."
 
     it "invite form posts to the project members endpoint" \tr -> do
-      (_, page) <- testServant tr $ ManageMembers.manageMembersGetH testPid
+      page <- call tr $ ManageMembers.manageMembersGetH testPid
       renderT page `shouldSatisfy` T.isInfixOf ("hx-post=\"/p/" <> testPid.toText <> "/manage_members\"")
 
     it "creates, updates, gets, deletes, and re-adds a member" \tr -> do

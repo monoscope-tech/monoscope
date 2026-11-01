@@ -13,28 +13,21 @@ import Data.Aeson.Lens (key, _Array, _Object, _String)
 import Data.HashSet qualified as HS
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Models.Projects.Projects qualified as Projects
 import Pages.Endpoints qualified as ApiCatalog
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.OpenApi qualified as OpenApi
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils (renderT, TestResources (..), frozenTime, runHasqlEffect, testServant, withTestResources)
+import Pkg.TestUtils (call, TestResources (..), frozenTime, renderT, runHasqlEffect, testPid, testServant, withTestResources)
 import Relude
 import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldMatchList, shouldSatisfy)
 import Utils (toXXHash)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
 
 
 host :: Text
@@ -49,7 +42,7 @@ seededPath = "/v1/stores/:store_id/orders"
 
 
 seededHash :: Text
-seededHash = toXXHash (pid.toText <> host <> "POST" <> seededPath)
+seededHash = toXXHash (testPid.toText <> host <> "POST" <> seededPath)
 
 
 observation :: UTCTime -> Hot.ObservationInput
@@ -89,19 +82,19 @@ observation ts =
 -- 'SchemaLearningSpec' uses.
 seed :: TestResources -> IO ()
 seed tr = do
-  void $ withPool tr.trPool $ DBT.execute [sql| DELETE FROM apis.schema_catalog WHERE project_id = ? |] (Only pid)
+  void $ withPool tr.trPool $ DBT.execute [sql| DELETE FROM apis.schema_catalog WHERE project_id = ? |] (Only testPid)
   ref <- newIORef Hot.emptySchemaShardState
-  Hot.observeSpans ref Hot.defaultPolicy pid (V.replicate 201 (observation frozenTime))
+  Hot.observeSpans ref Hot.defaultPolicy testPid (V.replicate 201 (observation frozenTime))
   void $ runHasqlEffect tr (Worker.flushDirty ref)
 
 
 fetchSpec :: TestResources -> Maybe Text -> IO AE.Value
-fetchSpec tr endpointM = snd <$> testServant tr (ApiCatalog.apiSpecJsonH pid (Just host) (Just "Incoming") endpointM)
+fetchSpec tr endpointM = snd <$> testServant tr (ApiCatalog.apiSpecJsonH testPid (Just host) (Just "Incoming") endpointM)
 
 
 -- | No host = the whole project, which is what the API Docs nav entry opens.
 fetchProjectSpec :: TestResources -> IO AE.Value
-fetchProjectSpec tr = snd <$> testServant tr (ApiCatalog.apiSpecJsonH pid Nothing (Just "Incoming") Nothing)
+fetchProjectSpec tr = snd <$> testServant tr (ApiCatalog.apiSpecJsonH testPid Nothing (Just "Incoming") Nothing)
 
 
 spec :: Spec
@@ -172,7 +165,7 @@ spec = sequential $ aroundAll withTestResources $ describe "API catalog – lear
     unknown <- fetchSpec tr (Just "deadbeef")
     fmap length (unknown ^? key "paths" . _Object) `shouldBe` Just 0
 
-    (_, yamlText) <- testServant tr (ApiCatalog.apiSpecYamlH pid (Just host) (Just "Incoming") (Just seededHash))
+    yamlText <- call tr (ApiCatalog.apiSpecYamlH testPid (Just host) (Just "Incoming") (Just seededHash))
     either (const AE.Null) id (Yaml.decodeEither' @AE.Value (encodeUtf8 yamlText)) `shouldBe` scoped
 
   it "documents the whole project when no host is given, with servers drawn from the traffic" \tr -> do
@@ -184,7 +177,7 @@ spec = sequential $ aroundAll withTestResources $ describe "API catalog – lear
 
   it "renders the docs page with a Swagger UI mount pointed at the spec route" \tr -> do
     seed tr
-    (_, page) <- testServant tr (ApiCatalog.apiDocsH pid (Just host) (Just "Incoming") (Just seededHash))
+    page <- call tr (ApiCatalog.apiDocsH testPid (Just host) (Just "Incoming") (Just seededHash))
     let html = renderT page
     forM_
       [ "id=\"swagger-ui\""

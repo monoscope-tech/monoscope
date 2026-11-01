@@ -29,46 +29,36 @@ import System.Mem (performGC)
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy, shouldThrow)
 
 
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
-
-
 -- | Insert pre-aggregated hourly stats for a pattern to build baselines quickly
 insertHourlyStat :: TestResources -> Text -> Text -> UTCTime -> Int64 -> IO ()
 insertHourlyStat tr sourceField patternHash hourBucket count =
-  void $ runTestBg frozenTime tr $ LogPatterns.upsertHourlyStat pid sourceField patternHash hourBucket count
+  void $ runTestBg frozenTime tr $ LogPatterns.upsertHourlyStat testPid sourceField patternHash hourBucket count
 
 
 -- | Count log patterns in the database for the test project
 countPatterns :: TestResources -> IO Int
 countPatterns tr = withResource tr.trPool \conn -> do
-  [PGS.Only n] <- PGS.query conn [sql| SELECT COUNT(*)::INT FROM apis.log_patterns WHERE project_id = ? |] (PGS.Only pid)
+  [PGS.Only n] <- PGS.query conn [sql| SELECT COUNT(*)::INT FROM apis.log_patterns WHERE project_id = ? |] (PGS.Only testPid)
   pure n
 
 
 -- | Build a test UpsertPattern with sensible defaults
 mkPattern :: Text -> Text -> Text -> Maybe Text -> Int64 -> LogPatterns.UpsertPattern
 mkPattern hash pat srcField lvl cnt = LogPatterns.UpsertPattern
-  { projectId = pid, logPattern = pat, hash, sourceField = srcField
+  { projectId = testPid, logPattern = pat, hash, sourceField = srcField
   , serviceName = Just "test-svc", logLevel = lvl
   , traceId = Nothing, sampleMessage = Just pat, eventCount = cnt
   , isError = lvl == Just "ERROR" }
 
 mkPatternWithSample :: Text -> Text -> Text -> Maybe Text -> Int64 -> Text -> LogPatterns.UpsertPattern
 mkPatternWithSample hash pat srcField lvl cnt sample = LogPatterns.UpsertPattern
-  { projectId = pid, logPattern = pat, hash, sourceField = srcField
+  { projectId = testPid, logPattern = pat, hash, sourceField = srcField
   , serviceName = Just "test-svc", logLevel = lvl
   , traceId = Nothing, sampleMessage = Just sample, eventCount = cnt
   , isError = lvl == Just "ERROR" }
 
 
 -- | Count issues of a given type
-countIssues :: TestResources -> Issues.IssueType -> IO Int
-countIssues tr issueType = withResource tr.trPool \conn -> do
-  [PGS.Only n] <- PGS.query conn
-    [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE project_id = ? AND issue_type = ? |]
-    (pid, issueType)
-  pure n
 
 
 spec :: Spec
@@ -79,7 +69,7 @@ spec = sequential $ aroundAll withTestResources do
   describe "Log Pattern Pipeline" do
 
     it "1. Extract patterns from ingested logs" \tr -> do
-      apiKey <- createTestAPIKey tr pid "logpat-test-key"
+      apiKey <- createTestAPIKey tr testPid "logpat-test-key"
       let msgs = [ "User login succeeded for user_id=123 from ip=10.0.0.1"
                  , "User login succeeded for user_id=456 from ip=10.0.0.2"
                  , "User login succeeded for user_id=789 from ip=10.0.0.3"
@@ -101,7 +91,7 @@ spec = sequential $ aroundAll withTestResources do
       -- Verify at least one pattern has hourly stats
       statsCount <- withResource tr.trPool \conn -> do
         [PGS.Only n] <- PGS.query conn
-          [sql| SELECT COUNT(*)::INT FROM apis.log_pattern_hourly_stats WHERE project_id = ? |] (PGS.Only pid)
+          [sql| SELECT COUNT(*)::INT FROM apis.log_pattern_hourly_stats WHERE project_id = ? |] (PGS.Only testPid)
         pure (n :: Int)
       statsCount `shouldSatisfy` (> 0)
 
@@ -110,7 +100,7 @@ spec = sequential $ aroundAll withTestResources do
       let patHash = "test-baseline-hash-001"
           sourceField = "summary"
       void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
-        { projectId = pid, logPattern = "Test <*> pattern for baseline", hash = patHash
+        { projectId = testPid, logPattern = "Test <*> pattern for baseline", hash = patHash
         , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
         , traceId = Nothing, sampleMessage = Just "Test pattern baseline", eventCount = 100
         , isError = False
@@ -123,10 +113,10 @@ spec = sequential $ aroundAll withTestResources do
         insertHourlyStat tr sourceField patHash (addUTCTime (fromIntegral h * 3600) frozenTime) 600
 
       -- Run baseline calculation
-      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
+      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines testPid
 
       -- Verify the pattern got established baseline
-      patternM <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid sourceField patHash
+      patternM <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid sourceField patHash
       case patternM of
         Just p -> do
           p.baselineState `shouldBe` BSEstablished
@@ -135,7 +125,7 @@ spec = sequential $ aroundAll withTestResources do
         Nothing -> error "Pattern not found after baseline calculation"
 
     it "3. getLogPatternsByIds returns correct patterns (exercises PGArray fix)" \tr -> do
-      allPatterns <- runTestBg frozenTime tr $ LogPatterns.getLogPatterns pid 100 0
+      allPatterns <- runTestBg frozenTime tr $ LogPatterns.getLogPatterns testPid 100 0
       allPatterns `shouldSatisfy` (not . null)
       let ids = V.fromList $ map (.id) $ take 3 allPatterns
       fetched <- runTestBg frozenTime tr $ LogPatterns.getLogPatternsByIds ids
@@ -143,14 +133,13 @@ spec = sequential $ aroundAll withTestResources do
 
     it "4. Detect spike and create rate-change issue" \tr -> do
       -- Find an established pattern
-      established <- withResource tr.trPool \conn ->
-        PGS.query conn
+      established <- dbQuery tr
           [sql| SELECT pattern_hash, source_field, baseline_volume_hourly_mean, baseline_volume_hourly_mad
                 FROM apis.log_patterns
                 WHERE project_id = ? AND baseline_state = 'established'
                   AND baseline_volume_hourly_mean IS NOT NULL AND baseline_volume_hourly_mad > 0
                 LIMIT 1 |]
-          (PGS.Only pid) :: IO [(Text, Text, Double, Double)]
+          (PGS.Only testPid) :: IO [(Text, Text, Double, Double)]
 
       -- Spike detection uses the current hour + projected rate.
       -- frozenTime is exactly :00, so minutesIntoHour = max 15 0 = 15, scaleFactor = 4.0
@@ -163,8 +152,8 @@ spec = sequential $ aroundAll withTestResources do
 
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
           -- Detection is two-pass: first run pends, second run fires
-          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
-          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
+          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes testPid frozenTime tr.trATCtx
+          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes testPid frozenTime tr.trATCtx
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
           issuesAfter `shouldSatisfy` (> issuesBefore)
 
@@ -173,7 +162,7 @@ spec = sequential $ aroundAll withTestResources do
           let patHash = "test-spike-hash-002"
               srcField = "summary"
           void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
-            { projectId = pid, logPattern = "Spike test <*> pattern", hash = patHash
+            { projectId = testPid, logPattern = "Spike test <*> pattern", hash = patHash
             , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "WARN"
             , traceId = Nothing, sampleMessage = Just "Spike test", eventCount = 50
             , isError = False
@@ -182,13 +171,13 @@ spec = sequential $ aroundAll withTestResources do
           forM_ ([-48 .. -1] :: [Int]) \h ->
             insertHourlyStat tr srcField patHash (addUTCTime (fromIntegral h * 3600) frozenTime)
               (600 + fromIntegral (h `mod` 5))
-          runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
+          runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines testPid
           -- Spike in current hour; projected = 200 * 4 = 800 >> baseline ~600
           insertHourlyStat tr srcField patHash frozenTime 200
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
           -- Detection is two-pass: first run pends, second run fires
-          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
-          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
+          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes testPid frozenTime tr.trATCtx
+          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes testPid frozenTime tr.trATCtx
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
           issuesAfter `shouldSatisfy` (> issuesBefore)
 
@@ -200,14 +189,14 @@ spec = sequential $ aroundAll withTestResources do
       let patHash = "test-spike-at-45"
           srcField = "summary"
       void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
-        { projectId = pid, logPattern = "Spike at :45 test <*>", hash = patHash
+        { projectId = testPid, logPattern = "Spike at :45 test <*>", hash = patHash
         , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "WARN"
         , traceId = Nothing, sampleMessage = Just "Spike at 45 test", eventCount = 100
         , isError = False
         }
       forM_ ([-48 .. -1] :: [Int]) \h ->
         insertHourlyStat tr srcField patHash (addUTCTime (fromIntegral h * 3600) frozenTime) 600
-      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
+      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines testPid
 
       -- At :45, projected = rawCount * (60/45) ≈ rawCount * 1.33
       -- Need projected > mean + 3*mad + 50, so rawCount > (mean + 3*mad + 50) / 1.33
@@ -217,8 +206,8 @@ spec = sequential $ aroundAll withTestResources do
 
       issuesBefore <- countIssues tr Issues.LogPatternRateChange
       -- Detection is two-pass: first run pends, second run fires
-      runTestBg timeAt45 tr $ BackgroundJobs.detectLogPatternSpikes pid timeAt45 tr.trATCtx
-      runTestBg timeAt45 tr $ BackgroundJobs.detectLogPatternSpikes pid timeAt45 tr.trATCtx
+      runTestBg timeAt45 tr $ BackgroundJobs.detectLogPatternSpikes testPid timeAt45 tr.trATCtx
+      runTestBg timeAt45 tr $ BackgroundJobs.detectLogPatternSpikes testPid timeAt45 tr.trATCtx
       issuesAfter <- countIssues tr Issues.LogPatternRateChange
       issuesAfter `shouldSatisfy` (> issuesBefore)
 
@@ -230,7 +219,7 @@ spec = sequential $ aroundAll withTestResources do
       let srcField = "summary"
           mkGatedPattern h lvl = do
             void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
-              { projectId = pid, logPattern = "Gate test " <> h <> " <*>", hash = h
+              { projectId = testPid, logPattern = "Gate test " <> h <> " <*>", hash = h
               , sourceField = srcField, serviceName = Just "test-svc", logLevel = lvl
               , traceId = Nothing, sampleMessage = Just "Gate test", eventCount = 100
               , isError = lvl == Just "ERROR"
@@ -244,19 +233,19 @@ spec = sequential $ aroundAll withTestResources do
       mkGatedPattern "gate-null" Nothing
       mkGatedPattern "gate-error" (Just "ERROR")
 
-      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
+      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines testPid
 
       forM_ ["gate-info-lc", "gate-debug", "gate-null", "gate-error"] \h ->
         insertHourlyStat tr srcField h frozenTime spikeCount
 
       -- Detector runs twice: persistence gate requires two consecutive windows.
-      runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
+      runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes testPid frozenTime tr.trATCtx
       let secondRun = addUTCTime 900 frozenTime -- 15 min later, still within TTL
       insertHourlyStat tr srcField "gate-info-lc" secondRun spikeCount
       insertHourlyStat tr srcField "gate-debug" secondRun spikeCount
       insertHourlyStat tr srcField "gate-null" secondRun spikeCount
       insertHourlyStat tr srcField "gate-error" secondRun spikeCount
-      runTestBg secondRun tr $ BackgroundJobs.detectLogPatternSpikes pid secondRun tr.trATCtx
+      runTestBg secondRun tr $ BackgroundJobs.detectLogPatternSpikes testPid secondRun tr.trATCtx
 
       -- Only the ERROR pattern should have produced a rate-change issue.
       forM_ (["gate-info-lc", "gate-debug", "gate-null"] :: [Text]) \h -> do
@@ -265,7 +254,7 @@ spec = sequential $ aroundAll withTestResources do
             [sql| SELECT COUNT(*)::INT FROM apis.issues
                   WHERE project_id = ? AND issue_type = 'log_pattern_rate_change'
                     AND target_hash = ? |]
-            (pid, h) :: IO [PGS.Only Int]
+            (testPid, h) :: IO [PGS.Only Int]
           pure n
         cnt `shouldBe` 0
 
@@ -274,7 +263,7 @@ spec = sequential $ aroundAll withTestResources do
           [sql| SELECT COUNT(*)::INT FROM apis.issues
                 WHERE project_id = ? AND issue_type = 'log_pattern_rate_change'
                   AND target_hash = 'gate-error' |]
-          (PGS.Only pid) :: IO [PGS.Only Int]
+          (PGS.Only testPid) :: IO [PGS.Only Int]
         pure n
       errorCnt `shouldSatisfy` (>= 1)
 
@@ -285,11 +274,11 @@ spec = sequential $ aroundAll withTestResources do
       void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern $ mkPattern canonHash "Canonical drain <*>" srcField (Just "INFO") 10
       void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern $ mkPattern memberHash "Member drain <*>" srcField (Just "INFO") 10
       -- Look up their IDs and merge member into canonical
-      Just canon <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField canonHash
-      Just member <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField memberHash
+      Just canon <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid srcField canonHash
+      Just member <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid srcField memberHash
       void $ runTestBg frozenTime tr $ PatternMerge.assignPatternsToCanonical [(member.id, canon.id)]
       -- getLogPatternTexts should return the canonical but not the member
-      (texts, _) <- runTestBg frozenTime tr $ LogPatterns.getLogPatternTexts pid srcField Nothing
+      (texts, _) <- runTestBg frozenTime tr $ LogPatterns.getLogPatternTexts testPid srcField Nothing
       texts `shouldSatisfy` elem "Canonical drain <*>"
       texts `shouldSatisfy` (not . elem "Member drain <*>")
 
@@ -302,16 +291,16 @@ spec = sequential $ aroundAll withTestResources do
       -- Establish baseline on canonical
       forM_ ([-48 .. -1] :: [Int]) \h ->
         insertHourlyStat tr srcField canonHash (addUTCTime (fromIntegral h * 3600) frozenTime) 600
-      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
+      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines testPid
       -- Merge member into canonical
-      Just canon <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField canonHash
-      Just member <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField memberHash
+      Just canon <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid srcField canonHash
+      Just member <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid srcField memberHash
       void $ runTestBg frozenTime tr $ PatternMerge.assignPatternsToCanonical [(member.id, canon.id)]
       -- Insert hourly stats for both canonical and member in current hour
       insertHourlyStat tr srcField canonHash frozenTime 100
       insertHourlyStat tr srcField memberHash frozenTime 70
       -- Query and verify
-      rates <- runTestBg frozenTime tr $ LogPatterns.getPatternsWithCurrentRates pid frozenTime
+      rates <- runTestBg frozenTime tr $ LogPatterns.getPatternsWithCurrentRates testPid frozenTime
       let canonRate = find (\r -> r.patternHash == canonHash) rates
           memberRate = find (\r -> r.patternHash == memberHash) rates
       -- Member should be excluded from results
@@ -325,7 +314,7 @@ spec = sequential $ aroundAll withTestResources do
       let patHashes = ["new-pat-001", "new-pat-002"] :: [Text]
       forM_ patHashes \h -> do
         void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
-          { projectId = pid, logPattern = "New pattern " <> h <> " <*>", hash = h
+          { projectId = testPid, logPattern = "New pattern " <> h <> " <*>", hash = h
           , sourceField = "summary", serviceName = Just "test-svc", logLevel = Just "WARN"
           , traceId = Nothing, sampleMessage = Just ("Sample " <> h), eventCount = 10
           , isError = False
@@ -335,7 +324,7 @@ spec = sequential $ aroundAll withTestResources do
       -- Also insert a url_path pattern — should be acknowledged but NO issue created
       let urlPathHash = "url-path-pat-001"
       void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
-        { projectId = pid, logPattern = "/api/users/<*>", hash = urlPathHash
+        { projectId = testPid, logPattern = "/api/users/<*>", hash = urlPathHash
         , sourceField = "url_path", serviceName = Just "test-svc", logLevel = Nothing
         , traceId = Nothing, sampleMessage = Just "/api/users/123", eventCount = 50
         , isError = False
@@ -344,24 +333,23 @@ spec = sequential $ aroundAll withTestResources do
 
       -- TODO: Remove this workaround once we can control DB now() in tests (frozen clock for DB).
       -- created_at uses DB now() (wall-clock) not frozenTime, so we backdate manually.
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| UPDATE apis.log_patterns SET created_at = ?::timestamptz - INTERVAL '15 minutes'
                 WHERE project_id = ? AND pattern_hash = ANY(?) |]
-          (frozenTime, pid, V.fromList $ patHashes <> [urlPathHash])
+          (frozenTime, testPid, V.fromList $ patHashes <> [urlPathHash])
       issuesBefore <- countIssues tr Issues.LogPattern
-      runTestBg frozenTime tr $ BackgroundJobs.processNewLogPatterns pid tr.trATCtx
+      runTestBg frozenTime tr $ BackgroundJobs.processNewLogPatterns testPid tr.trATCtx
       issuesAfter <- countIssues tr Issues.LogPattern
       -- Only summary patterns create issues, not url_path
       issuesAfter `shouldSatisfy` (>= issuesBefore + length patHashes)
 
       -- Verify ALL patterns (including url_path) were auto-acknowledged
       forM_ patHashes \h -> do
-        patM <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "summary" h
+        patM <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid "summary" h
         case patM of
           Just p -> p.state `shouldBe` LPSAcknowledged
           Nothing -> error $ "Pattern " <> h <> " not found after processNewLogPatterns"
-      urlPathPat <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "url_path" urlPathHash
+      urlPathPat <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid "url_path" urlPathHash
       case urlPathPat of
         Just p -> p.state `shouldBe` LPSAcknowledged
         Nothing -> error "url_path pattern not found after processNewLogPatterns"
@@ -372,7 +360,7 @@ spec = sequential $ aroundAll withTestResources do
           sourceField = "summary"
       forM_ ackHashes \h ->
         void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
-          { projectId = pid, logPattern = "Ack test " <> h <> " <*>", hash = h
+          { projectId = testPid, logPattern = "Ack test " <> h <> " <*>", hash = h
           , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
           , traceId = Nothing, sampleMessage = Just ("Ack sample " <> h), eventCount = 5
           , isError = False
@@ -380,12 +368,12 @@ spec = sequential $ aroundAll withTestResources do
 
       let fieldHashPairs = V.fromList $ map (sourceField,) ackHashes
           sess = Servant.getResponse tr.trSessAndHeader
-      updated <- runTestBg frozenTime tr $ LogPatterns.acknowledgeLogPatterns pid (Just sess.user.id) fieldHashPairs
+      updated <- runTestBg frozenTime tr $ LogPatterns.acknowledgeLogPatterns testPid (Just sess.user.id) fieldHashPairs
       updated `shouldBe` fromIntegral (V.length fieldHashPairs)
 
       -- Verify state change
       forM_ ackHashes \h -> do
-        patM <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid sourceField h
+        patM <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid sourceField h
         case patM of
           Just p -> p.state `shouldBe` LPSAcknowledged
           Nothing -> error $ "Pattern " <> h <> " not found after acknowledge"
@@ -394,32 +382,31 @@ spec = sequential $ aroundAll withTestResources do
       let staleHash = "stale-prune-001"
           sourceField = "summary"
       void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
-        { projectId = pid, logPattern = "Stale pattern <*>", hash = staleHash
+        { projectId = testPid, logPattern = "Stale pattern <*>", hash = staleHash
         , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
         , traceId = Nothing, sampleMessage = Just "Stale test", eventCount = 5
         , isError = False
         }
       -- Acknowledge it so it's eligible for pruning
-      void $ runTestBg frozenTime tr $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton (sourceField, staleHash))
+      void $ runTestBg frozenTime tr $ LogPatterns.acknowledgeLogPatterns testPid Nothing (V.singleton (sourceField, staleHash))
       -- Backdate last_seen_at to 60 days ago (exceeds stalePatternDays=30)
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| UPDATE apis.log_patterns SET last_seen_at = ?::timestamptz - INTERVAL '60 days'
                 WHERE project_id = ? AND pattern_hash = ? |]
-          (frozenTime, pid, staleHash)
+          (frozenTime, testPid, staleHash)
 
       -- Also insert an old hourly stat (exceeds baselineWindowHours + 24 = 72h)
       insertHourlyStat tr sourceField staleHash (addUTCTime (-100 * 3600) frozenTime) 100
 
       beforeCount <- countPatterns tr
-      pruned <- runTestBg frozenTime tr $ LogPatterns.pruneStalePatterns pid frozenTime 30
+      pruned <- runTestBg frozenTime tr $ LogPatterns.pruneStalePatterns testPid frozenTime 30
       pruned `shouldSatisfy` (>= 1)
 
       afterCount <- countPatterns tr
       afterCount `shouldSatisfy` (< beforeCount)
 
       -- Verify stale hourly stats are also prunable
-      statsPruned <- runTestBg frozenTime tr $ LogPatterns.pruneOldHourlyStats pid frozenTime 72
+      statsPruned <- runTestBg frozenTime tr $ LogPatterns.pruneOldHourlyStats testPid frozenTime 72
       statsPruned `shouldSatisfy` (>= 1)
 
     it "7a. pruneStaleLogPatterns auto-archives open log_pattern issues older than 14 days" \tr -> do
@@ -445,7 +432,7 @@ spec = sequential $ aroundAll withTestResources do
                         1, 1, '{}'::jsonb,
                         ?::timestamptz - (INTERVAL '1 day' * ?),
                         ?::timestamptz - (INTERVAL '1 day' * ?)) |]
-          (iid, pid, ty, tgt, tgt, title, frozenTime, daysOld, frozenTime, daysOld)
+          (iid, testPid, ty, tgt, tgt, title, frozenTime, daysOld, frozenTime, daysOld)
 
       -- Sanity: all three rows are open pre-prune.
       openBefore <- withResource tr.trPool \conn -> do
@@ -453,18 +440,18 @@ spec = sequential $ aroundAll withTestResources do
           [sql| SELECT target_hash FROM apis.issues
                 WHERE project_id = ? AND archived_at IS NULL
                   AND target_hash = ANY(?) |]
-          (pid, V.fromList ["autoarchive-stale-pat", "autoarchive-fresh-pat", "autoarchive-stale-rc" :: Text])
+          (testPid, V.fromList ["autoarchive-stale-pat", "autoarchive-fresh-pat", "autoarchive-stale-rc" :: Text])
         pure $ V.fromList (map (PGS.fromOnly :: PGS.Only Text -> Text) rs)
       V.length openBefore `shouldBe` 3
 
-      runTestBg frozenTime tr $ BackgroundJobs.pruneStaleLogPatterns pid
+      runTestBg frozenTime tr $ BackgroundJobs.pruneStaleLogPatterns testPid
 
       archivedAfter <- withResource tr.trPool \conn -> do
         rs <- PGS.query conn
           [sql| SELECT target_hash FROM apis.issues
                 WHERE project_id = ? AND archived_at IS NOT NULL
                   AND target_hash = ANY(?) |]
-          (pid, V.fromList ["autoarchive-stale-pat", "autoarchive-fresh-pat", "autoarchive-stale-rc" :: Text])
+          (testPid, V.fromList ["autoarchive-stale-pat", "autoarchive-fresh-pat", "autoarchive-stale-rc" :: Text])
         pure $ V.fromList (map (PGS.fromOnly :: PGS.Only Text -> Text) rs)
       V.toList archivedAfter `shouldSatisfy` elem "autoarchive-stale-pat"
       V.toList archivedAfter `shouldSatisfy` elem "autoarchive-stale-rc"
@@ -511,47 +498,41 @@ spec = sequential $ aroundAll withTestResources do
 
       -- Mark all pre-existing patterns as merge_override so getUnembeddedLogPatterns only returns our 4
       let testHashes = ["emb-merge-a1", "emb-merge-a2", "emb-nomerge-c1", "emb-nomerge-c2"] :: [Text]
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| UPDATE apis.log_patterns SET merge_override = TRUE
                 WHERE project_id = ? AND pattern_hash != ALL(?) AND embedding IS NULL |]
-          (pid, PGArray testHashes)
+          (testPid, PGArray testHashes)
 
       -- First run: embed ALL unembedded patterns (now only our 4)
-      runTestBg frozenTime tr $ BackgroundJobs.patternEmbeddingAndMerge pid
+      runTestBg frozenTime tr $ BackgroundJobs.patternEmbeddingAndMerge testPid
       -- A1 is now a centroid. Clear A2's embedding so it gets re-embedded on next run.
-      Just a2Before <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "summary" "emb-merge-a2"
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      Just a2Before <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid "summary" "emb-merge-a2"
+      dbExec tr
           [sql| UPDATE apis.log_patterns SET embedding = NULL, embedding_at = NULL WHERE id = ? |]
           (PGS.Only a2Before.id)
 
       -- Second run: A2 re-embedded → compared against centroid A1 → cosine sim high → merged
-      runTestBg frozenTime tr $ BackgroundJobs.patternEmbeddingAndMerge pid
+      runTestBg frozenTime tr $ BackgroundJobs.patternEmbeddingAndMerge testPid
 
       -- Verify embeddings set on both
-      Just a1 <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "summary" "emb-merge-a1"
-      Just a2 <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "summary" "emb-merge-a2"
-      embSet <- withResource tr.trPool \conn ->
-        PGS.query conn
+      Just a1 <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid "summary" "emb-merge-a1"
+      Just a2 <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid "summary" "emb-merge-a2"
+      embSet <- dbQuery tr
           [sql| SELECT id, embedding IS NOT NULL FROM apis.log_patterns WHERE id = ANY(?) |]
           (PGS.Only $ V.fromList [a1.id, a2.id]) :: IO [(LogPatterns.LogPatternId, Bool)]
       all snd embSet `shouldBe` True
       -- A2 should be merged into A1 (canonical_id set)
-      canonA2 <- withResource tr.trPool \conn ->
-        PGS.query conn [sql| SELECT canonical_id FROM apis.log_patterns WHERE id = ? |] (PGS.Only a2.id) :: IO [PGS.Only (Maybe LogPatterns.LogPatternId)]
+      canonA2 <- dbQuery tr [sql| SELECT canonical_id FROM apis.log_patterns WHERE id = ? |] (PGS.Only a2.id) :: IO [PGS.Only (Maybe LogPatterns.LogPatternId)]
       (PGS.fromOnly =<< listToMaybe canonA2) `shouldBe` Just a1.id
       -- Verify group membership
-      members <- runTestBg frozenTime tr $ PatternMerge.getPatternGroupMembers pid a1.id
+      members <- runTestBg frozenTime tr $ PatternMerge.getPatternGroupMembers testPid a1.id
       map (.id) members `shouldSatisfy` elem a2.id
 
       -- Group C should remain separate — logCanMerge blocks this pair before similarity check
-      Just c1 <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "summary" "emb-nomerge-c1"
-      Just c2 <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "summary" "emb-nomerge-c2"
-      canonC1 <- withResource tr.trPool \conn ->
-        PGS.query conn [sql| SELECT canonical_id FROM apis.log_patterns WHERE id = ? |] (PGS.Only c1.id) :: IO [PGS.Only (Maybe LogPatterns.LogPatternId)]
-      canonC2 <- withResource tr.trPool \conn ->
-        PGS.query conn [sql| SELECT canonical_id FROM apis.log_patterns WHERE id = ? |] (PGS.Only c2.id) :: IO [PGS.Only (Maybe LogPatterns.LogPatternId)]
+      Just c1 <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid "summary" "emb-nomerge-c1"
+      Just c2 <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid "summary" "emb-nomerge-c2"
+      canonC1 <- dbQuery tr [sql| SELECT canonical_id FROM apis.log_patterns WHERE id = ? |] (PGS.Only c1.id) :: IO [PGS.Only (Maybe LogPatterns.LogPatternId)]
+      canonC2 <- dbQuery tr [sql| SELECT canonical_id FROM apis.log_patterns WHERE id = ? |] (PGS.Only c2.id) :: IO [PGS.Only (Maybe LogPatterns.LogPatternId)]
       (PGS.fromOnly =<< listToMaybe canonC1) `shouldSatisfy` (/= Just c2.id)
       (PGS.fromOnly =<< listToMaybe canonC2) `shouldSatisfy` (/= Just c1.id)
 
@@ -569,12 +550,11 @@ spec = sequential $ aroundAll withTestResources do
             "summary" (Just "INFO") 10
             "payment 49.99 processed for order A001"
       forM_ [patX, patY] \p -> void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern p
-      Just lpX <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "summary" "verify-block-x"
-      Just lpY <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "summary" "verify-block-y"
+      Just lpX <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid "summary" "verify-block-x"
+      Just lpY <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash testPid "summary" "verify-block-y"
       -- Pre-set identical embedding on patX (centroid) only
       let emb = [1.0, 0.0, 0.0] :: [Float]
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| UPDATE apis.log_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE id = ? |]
           (PGArray emb, lpX.id)
       -- patY has no embedding → getUnembeddedLogPatterns picks it up
@@ -585,8 +565,7 @@ spec = sequential $ aroundAll withTestResources do
       PM.verifyMergeDecision "user <*> logged in from <*>" "user alice logged in from 10.0.0.1" `shouldBe` True
       PM.verifyMergeDecision "payment <*> processed for order <*>" "payment 49.99 processed for order A001" `shouldBe` True
       -- Also verify the pipeline doesn't merge them (pre-embed both so neither is "new")
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| UPDATE apis.log_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE id = ? |]
           (PGArray emb, lpY.id)
       -- Manually test: if we were to auto-merge (Y→X), verification should reject
@@ -596,29 +575,28 @@ spec = sequential $ aroundAll withTestResources do
 
     it "11. Unmerge override clears canonical_id and prevents re-embedding" \tr -> do
       -- Find a merged log pattern from test 9
-      merged <- withResource tr.trPool \conn ->
-        PGS.query conn
+      merged <- dbQuery tr
           [sql| SELECT id, canonical_id FROM apis.log_patterns
                 WHERE project_id = ? AND canonical_id IS NOT NULL LIMIT 1 |]
-          (PGS.Only pid) :: IO [(LogPatterns.LogPatternId, LogPatterns.LogPatternId)]
+          (PGS.Only testPid) :: IO [(LogPatterns.LogPatternId, LogPatterns.LogPatternId)]
       case merged of
         ((mergedId, _canonId) : _) -> do
-          patternsBefore <- runTestBg frozenTime tr $ LogPatterns.getLogPatterns pid 100 0
+          patternsBefore <- runTestBg frozenTime tr $ LogPatterns.getLogPatterns testPid 100 0
           -- Regression (unmergeLogPattern_otherProject_isNoop): unmerge was keyed on id alone,
           -- so any project could detach another project's pattern.
           otherPid <- UUIDId <$> UUID.nextRandom
           runTestBg frozenTime tr (PatternMerge.unmergePattern otherPid mergedId) >>= (`shouldBe` 0)
           -- Unmerge
-          void $ runTestBg frozenTime tr $ PatternMerge.unmergePattern pid mergedId
+          void $ runTestBg frozenTime tr $ PatternMerge.unmergePattern testPid mergedId
           -- Pattern reappears in getLogPatterns (canonical_id = NULL)
-          patternsAfter <- runTestBg frozenTime tr $ LogPatterns.getLogPatterns pid 100 0
+          patternsAfter <- runTestBg frozenTime tr $ LogPatterns.getLogPatterns testPid 100 0
           length patternsAfter `shouldBe` (length patternsBefore + 1)
           -- Verify merge_override = TRUE prevents re-embedding
-          unembedded <- runTestBg frozenTime tr $ PatternMerge.getUnembeddedPatterns @LogPatterns.LogPatternId pid
+          unembedded <- runTestBg frozenTime tr $ PatternMerge.getUnembeddedPatterns @LogPatterns.LogPatternId testPid
           let unembeddedIds = map fst unembedded
           mergedId `shouldSatisfy` (`notElem` unembeddedIds)
           -- Verify merge_override = TRUE excludes from canonical candidates
-          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalPatterns @LogPatterns.LogPatternId pid
+          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalPatterns @LogPatterns.LogPatternId testPid
           let canonicalIds = map fst canonicals
           mergedId `shouldSatisfy` (`notElem` canonicalIds)
         [] -> expectationFailure "no merged log patterns found (test 9 may have failed)"
@@ -629,29 +607,28 @@ spec = sequential $ aroundAll withTestResources do
     -- #{now} binding) is intact for the canonical converted function.
     it "12. acknowledgeLogPatterns honours TestClock (PR #329)" \tr -> do
       let mkP h = LogPatterns.UpsertPattern
-            { projectId = pid, logPattern = "ack-clock " <> h, hash = h
+            { projectId = testPid, logPattern = "ack-clock " <> h, hash = h
             , sourceField = "summary", serviceName = Just "test-svc"
             , logLevel = Just "INFO", traceId = Nothing
             , sampleMessage = Just ("ack-clock " <> h), eventCount = 1
             , isError = False }
-          readAckAt h = withResource tr.trPool \conn ->
-            PGS.query conn
+          readAckAt h = dbQuery tr
               [sql| SELECT acknowledged_at FROM apis.log_patterns
                     WHERE project_id = ? AND source_field = 'summary' AND pattern_hash = ? |]
-              (pid, h) :: IO [PGS.Only (Maybe UTCTime)]
+              (testPid, h) :: IO [PGS.Only (Maybe UTCTime)]
       void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern (mkP "ack-clock-1")
       void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern (mkP "ack-clock-2")
 
       -- runHasqlEffect doesn't reset the clock; clock is still at frozenTime
       -- from the last runTestBg setup call.
       void $ runHasqlEffect tr
-        $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton ("summary", "ack-clock-1"))
+        $ LogPatterns.acknowledgeLogPatterns testPid Nothing (V.singleton ("summary", "ack-clock-1"))
       ack1 <- readAckAt "ack-clock-1"
       ack1 `shouldBe` [PGS.Only (Just frozenTime)]
 
       advanceHours tr 25
       void $ runHasqlEffect tr
-        $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton ("summary", "ack-clock-2"))
+        $ LogPatterns.acknowledgeLogPatterns testPid Nothing (V.singleton ("summary", "ack-clock-2"))
       ack2 <- readAckAt "ack-clock-2"
       ack2 `shouldBe` [PGS.Only (Just (addUTCTime (25 * 3600) frozenTime))]
 
@@ -662,21 +639,19 @@ spec = sequential $ aroundAll withTestResources do
       iid <- (UUIDId :: UUID.UUID -> Issues.IssueId) <$> UUID.nextRandom
       let uid = (Servant.getResponse tr.trSessAndHeader).user.id
       let targetHash = "issue-cooldown-tgt-001" :: Text
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| INSERT INTO apis.issues
                   (id, project_id, issue_type, target_hash, endpoint_hash, title,
                    severity, critical, affected_requests, affected_clients,
                    issue_data, created_at, updated_at)
                 VALUES (?, ?, 'log_pattern_rate_change', ?, ?, 't', 'warning',
                         false, 1, 1, '{}'::jsonb, ?, ?) |]
-          (iid, pid, targetHash, targetHash, frozenTime, frozenTime)
+          (iid, testPid, targetHash, targetHash, frozenTime, frozenTime)
 
-      let ackFor w = runTestBg frozenTime tr $ void $ Issues.setAckState pid [iid] $ Just Issues.AckSet{at = frozenTime, by = Just uid, window = w}
-          silenced = runHasqlEffect tr $ Issues.isSilenced pid targetHash Issues.LogPatternRateChange =<< Time.currentTime
+      let ackFor w = runTestBg frozenTime tr $ void $ Issues.setAckState testPid [iid] $ Just Issues.AckSet{at = frozenTime, by = Just uid, window = w}
+          silenced = runHasqlEffect tr $ Issues.isSilenced testPid targetHash Issues.LogPatternRateChange =<< Time.currentTime
       ackFor (Issues.AckFor $ 24 * 60)
-      ackUntil1 <- withResource tr.trPool \conn ->
-        PGS.query conn [sql| SELECT acknowledged_until FROM apis.issues WHERE id = ? |] (PGS.Only iid) :: IO [PGS.Only (Maybe UTCTime)]
+      ackUntil1 <- dbQuery tr [sql| SELECT acknowledged_until FROM apis.issues WHERE id = ? |] (PGS.Only iid) :: IO [PGS.Only (Maybe UTCTime)]
       ackUntil1 `shouldBe` [PGS.Only (Just (addUTCTime (24 * 3600) frozenTime))]
 
       -- 12h in: still silenced relative to the test clock
@@ -700,13 +675,12 @@ spec = sequential $ aroundAll withTestResources do
           hB = "prune-stale-b" :: Text
           mkAcked h = do
             void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern $ mkPattern h ("Prune " <> h <> " <*>") srcField (Just "INFO") 5
-            void $ runTestBg frozenTime tr $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton (srcField, h))
+            void $ runTestBg frozenTime tr $ LogPatterns.acknowledgeLogPatterns testPid Nothing (V.singleton (srcField, h))
             -- Anchor last_seen_at at frozenTime so the test clock controls staleness.
-            withResource tr.trPool \conn ->
-              void $ PGS.execute conn
+            dbExec tr
                 [sql| UPDATE apis.log_patterns SET last_seen_at = ?
                       WHERE project_id = ? AND source_field = ? AND pattern_hash = ? |]
-                (frozenTime, pid, srcField, h)
+                (frozenTime, testPid, srcField, h)
       mkAcked hA
       mkAcked hB
 
@@ -714,32 +688,30 @@ spec = sequential $ aroundAll withTestResources do
             [PGS.Only n] <- PGS.query conn
               [sql| SELECT COUNT(*)::INT FROM apis.log_patterns
                     WHERE project_id = ? AND pattern_hash = ANY(?) |]
-              (pid, V.fromList [hA, hB]) :: IO [PGS.Only Int]
+              (testPid, V.fromList [hA, hB]) :: IO [PGS.Only Int]
             pure n
 
       advanceDays tr 29
-      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns pid
+      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns testPid
       remaining1 <- countPair
       remaining1 `shouldBe` 2
 
       -- Refresh hA's last_seen to "now" (still within window once we advance again)
       let nowAfter29 = addUTCTime (29 * 86400) frozenTime
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| UPDATE apis.log_patterns SET last_seen_at = ?
                 WHERE project_id = ? AND source_field = ? AND pattern_hash = ? |]
-          (nowAfter29, pid, srcField, hA)
+          (nowAfter29, testPid, srcField, hA)
 
       advanceDays tr 2
-      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns pid
+      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns testPid
       remaining2 <- countPair
       remaining2 `shouldBe` 1
       -- Confirm the touched one survived
-      survived <- withResource tr.trPool \conn ->
-        PGS.query conn
+      survived <- dbQuery tr
           [sql| SELECT pattern_hash FROM apis.log_patterns
                 WHERE project_id = ? AND pattern_hash = ANY(?) |]
-          (pid, V.fromList [hA, hB]) :: IO [PGS.Only Text]
+          (testPid, V.fromList [hA, hB]) :: IO [PGS.Only Text]
       map PGS.fromOnly survived `shouldBe` [hA]
 
     -- autoAcknowledgeStaleNewPatterns acks LPSNew patterns past 7d since creation.
@@ -749,20 +721,19 @@ spec = sequential $ aroundAll withTestResources do
           h = "autoack-stale-new-001" :: Text
       void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern $ mkPattern h "Auto-ack new <*>" srcField (Just "INFO") 3
       -- Anchor created_at at frozenTime so test clock controls staleness.
-      withResource tr.trPool \conn ->
-        void $ PGS.execute conn
+      dbExec tr
           [sql| UPDATE apis.log_patterns SET created_at = ?, state = 'new', acknowledged_at = NULL
                 WHERE project_id = ? AND source_field = ? AND pattern_hash = ? |]
-          (frozenTime, pid, srcField, h)
+          (frozenTime, testPid, srcField, h)
 
       advanceDays tr 6
-      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns pid
-      Just p1 <- runHasqlEffect tr $ LogPatterns.getLogPatternByHash pid srcField h
+      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns testPid
+      Just p1 <- runHasqlEffect tr $ LogPatterns.getLogPatternByHash testPid srcField h
       p1.state `shouldBe` LPSNew
 
       advanceDays tr 2
-      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns pid
-      Just p2 <- runHasqlEffect tr $ LogPatterns.getLogPatternByHash pid srcField h
+      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns testPid
+      Just p2 <- runHasqlEffect tr $ LogPatterns.getLogPatternByHash testPid srcField h
       p2.state `shouldBe` LPSAcknowledged
       fmap zonedTimeToUTC p2.acknowledgedAt `shouldBe` Just (addUTCTime (8 * 86400) frozenTime)
 
@@ -771,7 +742,7 @@ spec = sequential $ aroundAll withTestResources do
       let lp =
             LogPatterns.LogPatternWithRate
               { patternId = LogPatterns.LogPatternId 0
-              , projectId = pid
+              , projectId = testPid
               , logPattern = "timeout calling <SVC>"
               , patternHash = "hr-suffix-title-001"
               , sourceField = "body"
@@ -787,21 +758,20 @@ spec = sequential $ aroundAll withTestResources do
               , isError = True
               }
           sr = Issues.SpikeResult{currentRate = 5, mean = 2, mad = 1, zScore = 9, direction = LogPatterns.Spike}
-      issue <- runTestBg frozenTime tr $ Issues.createLogPatternRateChangeIssue pid lp sr
+      issue <- runTestBg frozenTime tr $ Issues.createLogPatternRateChangeIssue testPid lp sr
       issue.title `shouldSatisfy` T.isInfixOf "(5/hr vs 2/hr)"
       issue.title `shouldSatisfy` (not . T.isInfixOf "/hr/hr")
 
     it "getCanonicalLogPatterns_boxedFloats_doesNotRetainBoxedEmbeddings" \tr -> do
-      ids <- withResource tr.trPool \conn ->
-        PGS.query conn
+      ids <- dbQuery tr
           [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, embedding)
                 SELECT ?, 'embedding memory ' || n, 'embedding-memory-' || n,
                        array_fill(0.1::real, ARRAY[1536])
                 FROM generate_series(1, 1500) AS n RETURNING id |]
-          (PGS.Only pid)
+          (PGS.Only testPid)
       performGC
       before <- gcdetails_live_bytes . gc <$> getRTSStats
-      canonicals <- runTestBg frozenTime tr (PatternMerge.getCanonicalPatterns @LogPatterns.LogPatternId pid)
+      canonicals <- runTestBg frozenTime tr (PatternMerge.getCanonicalPatterns @LogPatterns.LogPatternId testPid)
       _ <- evaluateWHNF $ sum $ map (VU.sum . snd) canonicals
       performGC
       after <- gcdetails_live_bytes . gc <$> getRTSStats
@@ -814,12 +784,12 @@ spec = sequential $ aroundAll withTestResources do
     it "getCanonicalLogPatterns_rejectsMultidimensionalAndNullEmbeddings" \tr ->
       forM_ ([("{{0.1,0.2},{0.3,0.4}}", "Expected one-dimensional embedding"), ("{NULL}", "Unexpected NULL")] :: [(Text, Text)]) \(embedding, message) ->
         CE.bracket
-          (withResource tr.trPool \conn -> PGS.execute conn
+          (dbExec tr
             [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, embedding)
                   VALUES (?, 'invalid embedding', 'invalid-embedding', ?::float4[]) |]
-            (pid, embedding))
-          (\_ -> withResource tr.trPool \conn -> PGS.execute conn
+            (testPid, embedding))
+          (\_ -> dbExec tr
             [sql| DELETE FROM apis.log_patterns WHERE project_id = ? AND pattern_hash = 'invalid-embedding' |]
-            (PGS.Only pid))
-          (\_ -> runTestBg frozenTime tr (PatternMerge.getCanonicalPatterns @LogPatterns.LogPatternId pid)
+            (PGS.Only testPid))
+          (\_ -> runTestBg frozenTime tr (PatternMerge.getCanonicalPatterns @LogPatterns.LogPatternId testPid)
             `shouldThrow` \(e :: SomeException) -> message `T.isInfixOf` show e)

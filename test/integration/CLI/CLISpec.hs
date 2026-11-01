@@ -115,8 +115,8 @@ spec = around withTestResources do
       ingestLog tr key "test log entry" frozenTime
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
-      (_, pg) <-
-        testServant tr $
+      pg <-
+        call tr $
           Log.logExplorerDataH testPid def{Log.from = Just $ timeAt (-3600), Log.to = Just $ timeAt 3600}
       checkJsonValue (AE.toJSON pg) $ \obj ->
         shouldHaveKeys obj ["cols", "logsData", "count", "serviceColors", "hasMore"]

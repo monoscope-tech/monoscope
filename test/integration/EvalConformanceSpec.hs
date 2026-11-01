@@ -22,24 +22,18 @@ module EvalConformanceSpec (spec) where
 import Data.Aeson qualified as AE
 import Data.Map.Strict qualified as Map
 import Data.Text.Display (display)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
+import Pkg.DeriveUtils (AesonText (..))
 import Pkg.Parser.Eval (evalExpr, filterExpr, resolveIn)
 import Pkg.Parser.Stats (parseQueryToAST)
-import Pkg.TestUtils (TestResources (..), frozenTime, withTestResources)
+import Pkg.TestUtils (TestResources (..), frozenTime, testPid, withTestResources)
 import Relude
 import Test.Hspec (Spec, around, describe, it, shouldBe)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
 
 
 rowId :: Text
@@ -51,7 +45,7 @@ record :: Telemetry.OtelLogsAndSpans
 record =
   Telemetry.OtelLogsAndSpans
     { id = rowId
-    , project_id = pid.toText
+    , project_id = testPid.toText
     , timestamp = frozenTime
     , observed_timestamp = Nothing
     , context = Nothing
@@ -112,7 +106,7 @@ seedRow tr = withPool tr.trPool $ do
         VALUES (?, ?, ?, ?, ?, '{}', 0, ?, ?, ?, NULL, ?, ?, 'checkout', 'GET', 503)
       |]
       ( rowId
-      , pid.toText
+      , testPid.toText
       , frozenTime
       , frozenTime
       , frozenTime

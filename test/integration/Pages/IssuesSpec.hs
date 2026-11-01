@@ -392,12 +392,9 @@ spec = around withTestResources $ describe "Issues" do
       act >>= \case
         IssuesPage.IssueFound v -> pure v
         IssuesPage.IssueNotFound _ -> fail "issue not found"
-    listPage = \case
-      Table.TablePage (PageCtx bw t) -> pure (bw, t)
-      _ -> fail "expected a full issue-list page"
-    rowsOf = fmap ((.rows) . snd) . listPage
+    rowsOf = fmap (\(PageCtx _ t) -> t.rows) . tablePage
     -- The category and saved-view menus live in the shell's nav tabs, beside the table.
-    listHtml = fmap (\(bw, t) -> sequence_ bw.navTabs >> toHtml t) . listPage
+    listHtml = fmap (\(PageCtx bw t) -> sequence_ bw.navTabs >> toHtml t) . tablePage
     list tr tab sortM perPage period services types = call tr $ IssuesPage.issueListGetH testPid (Just tab) sortM Nothing Nothing perPage Nothing period services types
     listRows tr tab types = V.toList <$> (rowsOf =<< list tr tab Nothing (Just "100") Nothing [] types)
     stamped tr col iid = dbOne @_ @Bool tr ("SELECT " <> col <> " IS NOT NULL FROM apis.issues WHERE id=?") (Only iid)

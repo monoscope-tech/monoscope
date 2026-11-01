@@ -27,17 +27,13 @@ import System.Mem (performGC)
 import Test.Hspec (Spec, around, describe, expectationFailure, it, pendingWith, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
 
 
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
-
-
 -- | The `merged` flag decides whether the cron will ever look at a session
 -- again, so it is worth asserting on directly rather than inferring from counts.
 mergedFlag :: TestResources -> UUID.UUID -> IO Bool
 mergedFlag tr sid = do
   rows :: V.Vector (Only Bool) <-
     withPool tr.trPool
-      $ DBT.query [sql| SELECT merged FROM projects.replay_sessions WHERE session_id = ? AND project_id = ? |] (sid, pid)
+      $ DBT.query [sql| SELECT merged FROM projects.replay_sessions WHERE session_id = ? AND project_id = ? |] (sid, testPid)
   pure $ maybe False fromOnly (rows V.!? 0)
 
 
@@ -47,7 +43,7 @@ clearReplaySessions tr =
     $ withPool tr.trPool
     $ DBT.execute
       [sql| DELETE FROM projects.replay_sessions WHERE project_id = ? |]
-      (Only pid)
+      (Only testPid)
 
 
 -- | Bytes allocated on the current thread while forcing the action's result to
@@ -113,17 +109,17 @@ spec = around withTestResources do
         sid = UUID.fromWords 0 0 0 42
         prefix = "rrweb/" <> UUID.toText UUID.nil <> "/2026-05-08/" <> UUID.toText sid <> "/"
     it "groups keys under one rrweb root, then project, ISO date, and session" $ \_ ->
-      replayObjectPrefix pid at sid `shouldBe` prefix
+      replayObjectPrefix testPid at sid `shouldBe` prefix
     -- Both legacy shapes must land on the new root: the flat session-scoped keys
     -- and the interim <project>/rrweb/… ones that predate the root segment.
     it "maps legacy keys without changing their filename" $ \_ -> do
-      migratedReplayKey pid at sid (UUID.toText sid <> "/shard-000001-10.json.gz")
+      migratedReplayKey testPid at sid (UUID.toText sid <> "/shard-000001-10.json.gz")
         `shouldBe` prefix <> "shard-000001-10.json.gz"
-      migratedReplayKey pid at sid (UUID.toText UUID.nil <> "/rrweb/2026-05-07/" <> UUID.toText sid <> "/shard-000001-10.json.gz")
+      migratedReplayKey testPid at sid (UUID.toText UUID.nil <> "/rrweb/2026-05-07/" <> UUID.toText sid <> "/shard-000001-10.json.gz")
         `shouldBe` prefix <> "shard-000001-10.json.gz"
     it "is idempotent for already structured keys" $ \_ -> do
       let key = prefix <> "20260508T000000.json"
-      migratedReplayKey pid at sid key `shouldBe` key
+      migratedReplayKey testPid at sid key `shouldBe` key
 
   describe "concatRawJsonArrays" do
     it "handles single non-empty array" $ \_ ->
@@ -136,7 +132,7 @@ spec = around withTestResources do
 
   describe "sessionFileKeys" do
     it "returns empty list for unknown session" $ \tr -> do
-      keys <- runQueryEffect tr $ sessionFileKeys pid UUID.nil
+      keys <- runQueryEffect tr $ sessionFileKeys testPid UUID.nil
       keys `shouldBe` []
 
     it "returns tracked file keys after insert" $ \tr -> do
@@ -152,8 +148,8 @@ spec = around withTestResources do
           VALUES (?, ?, now(), 1, ARRAY[?]::text[])
           ON CONFLICT (session_id) DO NOTHING
         |]
-          (sid, pid, key1)
-      keys <- runQueryEffect tr $ sessionFileKeys pid sid
+          (sid, testPid, key1)
+      keys <- runQueryEffect tr $ sessionFileKeys testPid sid
       keys `shouldBe` [key1]
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
       runQueryEffect tr (sessionFileKeys otherPid sid) `shouldReturn` []
@@ -175,14 +171,14 @@ spec = around withTestResources do
               VALUES (?, ?, now(), 1, ?)
               ON CONFLICT (session_id) DO UPDATE SET merge_started_at = EXCLUDED.merge_started_at
             |]
-              (sid, pid, startedAt :: Maybe UTCTime)
+              (sid, testPid, startedAt :: Maybe UTCTime)
 
     it "claims an unheld session and then refuses a concurrent claim" $ \tr -> do
       clearReplaySessions tr
       let sid = UUID.fromWords 0 0 0 200
       seed tr sid Nothing
-      first' <- runQueryEffect tr $ claimMergeLease pid sid
-      second' <- runQueryEffect tr $ claimMergeLease pid sid
+      first' <- runQueryEffect tr $ claimMergeLease testPid sid
+      second' <- runQueryEffect tr $ claimMergeLease testPid sid
       (first', second') `shouldBe` (True, False)
       clearReplaySessions tr
 
@@ -191,7 +187,7 @@ spec = around withTestResources do
       let sid = UUID.fromWords 0 0 0 201
       stale <- addUTCTime (negate 3600) <$> getCurrentTime
       seed tr sid (Just stale)
-      claimed <- runQueryEffect tr $ claimMergeLease pid sid
+      claimed <- runQueryEffect tr $ claimMergeLease testPid sid
       claimed `shouldBe` True
       clearReplaySessions tr
 
@@ -199,9 +195,9 @@ spec = around withTestResources do
       clearReplaySessions tr
       let sid = UUID.fromWords 0 0 0 202
       seed tr sid Nothing
-      _ <- runQueryEffect tr $ claimMergeLease pid sid
-      runQueryEffect tr $ releaseMergeLease pid sid
-      reclaimed <- runQueryEffect tr $ claimMergeLease pid sid
+      _ <- runQueryEffect tr $ claimMergeLease testPid sid
+      runQueryEffect tr $ releaseMergeLease testPid sid
+      reclaimed <- runQueryEffect tr $ claimMergeLease testPid sid
       reclaimed `shouldBe` True
       clearReplaySessions tr
 
@@ -218,7 +214,7 @@ spec = around withTestResources do
           VALUES (?, ?, now() - interval '2 hours', 0, FALSE)
           ON CONFLICT (session_id) DO NOTHING
         |]
-          (sid, pid)
+          (sid, testPid)
       rows :: V.Vector (UUID.UUID, Int) <-
         withPool tr.trPool
           $ DBT.query
@@ -229,7 +225,7 @@ spec = around withTestResources do
             AND last_event_at < now() - interval '30 minutes'
             AND project_id = ?
         |]
-            (Only pid)
+            (Only testPid)
       rows `shouldSatisfy` (not . V.null)
       clearReplaySessions tr
 
@@ -245,7 +241,7 @@ spec = around withTestResources do
           VALUES (?, ?, now(), 0, FALSE)
           ON CONFLICT (session_id) DO NOTHING
         |]
-          (sid, pid)
+          (sid, testPid)
       rows :: V.Vector (Only UUID.UUID) <-
         withPool tr.trPool
           $ DBT.query
@@ -255,7 +251,7 @@ spec = around withTestResources do
             AND last_event_at < now() - interval '30 minutes'
             AND project_id = ?
         |]
-            (Only pid)
+            (Only testPid)
       rows `shouldBe` V.empty
       clearReplaySessions tr
 
@@ -424,13 +420,13 @@ spec = around withTestResources do
             $ withPool tr.trPool
             $ DBT.execute
               [sql| DELETE FROM projects.replay_sessions WHERE session_id = ? AND project_id = ? |]
-              (sid, pid)
+              (sid, testPid)
         -- Pull events from the player's-API surface: same code-path as
         -- `replaySessionGetH`, sans the cookie-session machinery (which
         -- would force every test to set up a logged-in user just to read
         -- a row it knows it just wrote).
         fetchEventsFor tr sid = do
-          projM <- runQueryEffect tr $ Projects.projectById pid
+          projM <- runQueryEffect tr $ Projects.projectById testPid
           case projM of
             Nothing -> expectationFailure "test project not found" >> pure V.empty
             Just p -> do
@@ -450,8 +446,8 @@ spec = around withTestResources do
         case acked of
           Right (ids, _poison) -> ids `shouldBe` ["ack-1"]
           Left _ -> expectationFailure "processReplayEvents returned Left WriteFailure"
-        storedKeys <- runQueryEffect tr $ sessionFileKeys pid sid
-        storedKeys `shouldSatisfy` (\ks -> not (null ks) && all ((replayObjectPrefix pid frozen sid) `T.isPrefixOf`) ks)
+        storedKeys <- runQueryEffect tr $ sessionFileKeys testPid sid
+        storedKeys `shouldSatisfy` (\ks -> not (null ks) && all ((replayObjectPrefix testPid frozen sid) `T.isPrefixOf`) ks)
         events <- fetchEventsFor tr sid
         -- Ingested array must come back byte-equivalent (rrweb relies on
         -- exact event objects + timestamp ordering).
@@ -517,19 +513,19 @@ spec = around withTestResources do
           void
             $ runTestBg (UTCTime (fromGregorian 2026 5 8) (fromIntegral i)) tr
             $ processReplayEvents [("m" <> show i, mkBody sid (AE.toJSON ([ev (i * 10)] :: [AE.Value])))] HM.empty
-        (length <$> runQueryEffect tr (sessionFileKeys pid sid)) `shouldReturn` 26
+        (length <$> runQueryEffect tr (sessionFileKeys testPid sid)) `shouldReturn` 26
         -- The cron only picks up sessions idle for 30 min, measured against the
         -- clock it is handed — so it has to run LATER than the writes, not at
         -- the same frozen instant, or it selects nothing and proves nothing.
         let afterIdle = addUTCTime 3600 frozen
         void $ runTestBg afterIdle tr compressAndMergeReplaySessions
         -- A pass consumes at most maxFilesPerMerge, leaving one behind …
-        (length <$> runQueryEffect tr (sessionFileKeys pid sid)) `shouldReturn` 1
+        (length <$> runQueryEffect tr (sessionFileKeys testPid sid)) `shouldReturn` 1
         -- … so the session must stay selectable, or the cron never returns for it.
         mergedFlag tr sid `shouldReturn` False
         -- And a second pass finishes the job and only then marks it merged.
         void $ runTestBg afterIdle tr compressAndMergeReplaySessions
-        (length <$> runQueryEffect tr (sessionFileKeys pid sid)) `shouldReturn` 0
+        (length <$> runQueryEffect tr (sessionFileKeys testPid sid)) `shouldReturn` 0
         mergedFlag tr sid `shouldReturn` True
         clearSessionRow tr sid
 
@@ -537,7 +533,7 @@ spec = around withTestResources do
       requireMinio tr pendingWith $ do
         let sid = UUID.fromWords 0 0 0 300
         clearSessionRow tr sid -- shard keys live in the DB row, so clearing it isolates reruns
-        projM <- runQueryEffect tr $ Projects.projectById pid
+        projM <- runQueryEffect tr $ Projects.projectById testPid
         project <- maybe (expectationFailure "test project not found" >> error "unreachable") pure projM
         -- 7 MiB padding per batch so the 12 MiB shard byte-budget seals >1 shard.
         let pad = decodeUtf8 (BS.replicate (7 * 1024 * 1024) 0x78)
@@ -547,9 +543,9 @@ spec = around withTestResources do
         forM_ (zip [1 :: Int ..] times) $ \(i, t) ->
           void $ runTestBg (UTCTime (fromGregorian 2026 5 8) (fromIntegral i)) tr $ processReplayEvents [("k" <> show i, mkBody sid (batchAt t))] HM.empty
         -- Seal the tracked files into shards.
-        void $ runTestBg frozen tr $ mergeReplaySession pid sid
+        void $ runTestBg frozen tr $ mergeReplaySession testPid sid
         -- The merge consumed the individual file_keys.
-        keysAfter <- runQueryEffect tr $ sessionFileKeys pid sid
+        keysAfter <- runQueryEffect tr $ sessionFileKeys testPid sid
         keysAfter `shouldBe` []
         -- Manifest: at least two gzip shard segments (byte budget split the batches),
         -- keyed under <sid>/shard-, with non-decreasing first-event timestamps.

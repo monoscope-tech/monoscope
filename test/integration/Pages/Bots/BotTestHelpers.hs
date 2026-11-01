@@ -70,7 +70,6 @@ import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Effectful.Wreq qualified as HTTP
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
@@ -126,14 +125,12 @@ setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ do
 setupLinkedSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
 setupLinkedSlackData tr pid teamId = do
   setupSlackData tr pid teamId
-  withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET scopes = ARRAY['assistant:write', 'chat:write'] WHERE project_id = ?|] (PGS.Only pid)
-  withResource tr.trPool \conn ->
-    void
-      $ PGS.execute
-        conn
-        [sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id)
+  dbExec tr [sql|UPDATE apis.slack SET scopes = ARRAY['assistant:write', 'chat:write'] WHERE project_id = ?|] (PGS.Only pid)
+  dbExec
+    tr
+    [sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id)
       VALUES (?, 'U0123ABCDEF', ?, ?)|]
-        (teamId, (getResponse tr.trSessAndHeader).user.id, pid)
+    (teamId, (getResponse tr.trSessAndHeader).user.id, pid)
 
 
 -- | Override selected HTTP responses while retaining request recording.
@@ -177,16 +174,16 @@ withSlackReplyResponses fixture =
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupDiscordData tr pid guildId = void
-  $ withResource tr.trPool \conn ->
-    PGS.execute conn [sql|INSERT INTO apis.discord (project_id, guild_id) VALUES (?,?) ON CONFLICT (project_id) DO UPDATE SET guild_id = EXCLUDED.guild_id|] (pid, guildId)
+setupDiscordData tr pid guildId =
+  void
+    $ dbExec tr [sql|INSERT INTO apis.discord (project_id, guild_id) VALUES (?,?) ON CONFLICT (project_id) DO UPDATE SET guild_id = EXCLUDED.guild_id|] (pid, guildId)
 
 
 setupWhatsappNumber :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupWhatsappNumber tr pid phoneNumber = void
-  $ withResource tr.trPool \conn ->
-    PGS.execute
-      conn
+setupWhatsappNumber tr pid phoneNumber =
+  void
+    $ dbExec
+      tr
       [sql|UPDATE projects.teams SET phone_numbers = ARRAY[?]
            WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL|]
       (phoneNumber, pid)
@@ -399,8 +396,7 @@ receiveSlackEvent tr payload = do
       signature = "v0=" <> decodeUtf8 (Base16.encode $ BA.convert (HMAC.hmac secret ("v0:" <> encodeUtf8 timestamp <> ":" <> body) :: HMAC.HMAC SHA256))
       cfg = tr.trATCtx.env{Config.slackSigningSecret = decodeUtf8 secret}
   void $ toBaseServantResponse tr{trATCtx = tr.trATCtx{Config.env = cfg}} $ SlackEvents.slackEventsPostH body (Just timestamp) (Just signature)
-  [PGS.Only receipt] <- withResource tr.trPool \conn ->
-    PGS.query conn [sql|SELECT id FROM apis.slack_events WHERE team_id = (?::jsonb)->>'team_id' AND event_id = (?::jsonb)->>'event_id'|] (Aeson payload, Aeson payload)
+  [PGS.Only receipt] <- dbQuery tr [sql|SELECT id FROM apis.slack_events WHERE team_id = (?::jsonb)->>'team_id' AND event_id = (?::jsonb)->>'event_id'|] (Aeson payload, Aeson payload)
   pure receipt
 
 

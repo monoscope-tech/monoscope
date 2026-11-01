@@ -31,15 +31,11 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.LogExplorer.LiveTail qualified as LiveTailPage
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.LiveTail qualified as LT
-import Pkg.TestUtils (TestResources (..), assertNonMemberDenied, createTestAPIKey, createTestProject, frozenTime, ingestLog, runHasqlEffect, testServant, withTestResources)
+import Pkg.TestUtils (call, TestResources (..), assertNonMemberDenied, createTestAPIKey, createTestProject, frozenTime, ingestLog, runHasqlEffect, testPid, withTestResources)
 import Relude
 import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (hasqlPool, liveTail))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
-
-
-pid :: Projects.ProjectId
-pid = UUIDId UUID.nil
 
 
 -- | A second project and two users, for the cross-tenant checks.
@@ -75,7 +71,7 @@ spec = do
       let sub = mkSub 1 "checkout" Nothing "level == \"error\""
       (conn, rt) <- fixture [sub]
       _ <-
-        LT.publishMatches rt pid
+        LT.publishMatches rt testPid
           $ V.fromList
             [ logRecord "checkout" "prod" "error" "boom" -- matches
             , logRecord "checkout" "prod" "info" "fine" -- wrong level
@@ -89,7 +85,7 @@ spec = do
     it "matches every log for the selected service when no filter is given" do
       let sub = mkSub 2 "checkout" Nothing ""
       (conn, rt) <- fixture [sub]
-      _ <- LT.publishMatches rt pid $ V.fromList [logRecord "checkout" "prod" "info" "a", logRecord "billing" "prod" "info" "b"]
+      _ <- LT.publishMatches rt testPid $ V.fromList [logRecord "checkout" "prod" "info" "a", logRecord "billing" "prod" "info" "b"]
       (rows, _) <- LT.takeBatch conn
       map logBody rows `shouldBe` ["a"]
 
@@ -104,7 +100,7 @@ spec = do
       conns <- traverse (\s -> LT.newConn 100 >>= \c -> c <$ LT.attachConn hub s.id c) [allServices, spans, both]
       rt <- runtimeWith hub [allServices, spans, both]
       _ <-
-        LT.publishMatches rt pid
+        LT.publishMatches rt testPid
           $ V.fromList [logRecord "checkout" "prod" "info" "a", logRecord "billing" "prod" "info" "b", spanRecord "checkout" "prod" "error"]
       counts <- traverse (fmap (length . fst) . LT.takeBatch) conns
       counts `shouldBe` [2, 1, 3]
@@ -115,7 +111,7 @@ spec = do
       let sub = mkSub 3 "checkout" (Just "prod") "level == \"error\" or level != \"error\""
       (conn, rt) <- fixture [sub]
       _ <-
-        LT.publishMatches rt pid
+        LT.publishMatches rt testPid
           $ V.fromList
             [ logRecord "checkout" "prod" "error" "prod row"
             , logRecord "checkout" "staging" "error" "staging row"
@@ -134,7 +130,7 @@ spec = do
       _ <- LT.attachConn hub a.id connA
       _ <- LT.attachConn hub b.id connB
       rt <- runtimeWith hub [a, b]
-      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "error" "boom"])
+      _ <- LT.publishMatches rt testPid (V.fromList [logRecord "checkout" "prod" "error" "boom"])
       (rowsA, _) <- LT.takeBatch connA
       (rowsB, _) <- LT.takeBatch connB
       map logBody rowsA `shouldBe` ["boom"]
@@ -143,7 +139,7 @@ spec = do
     it "costs nothing for a project nobody is tailing" do
       hub <- LT.newHub
       rt <- runtimeWith hub []
-      stats <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "error" "boom"])
+      stats <- LT.publishMatches rt testPid (V.fromList [logRecord "checkout" "prod" "error" "boom"])
       -- Not merely "no rows delivered" — the batch is never walked at all, which is the
       -- property that makes this safe to call from the ingestion hot path.
       getSum stats.evaluated `shouldBe` 0
@@ -151,7 +147,7 @@ spec = do
     it "truncates an unbounded body and says that it did" do
       let sub = mkSub 6 "checkout" Nothing ""
       (conn, rt) <- fixture [sub]
-      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" (toText (replicate (LT.maxRowFieldChars + 500) 'x'))])
+      _ <- LT.publishMatches rt testPid (V.fromList [logRecord "checkout" "prod" "info" (toText (replicate (LT.maxRowFieldChars + 500) 'x'))])
       (rows, _) <- LT.takeBatch conn
       map (\case LT.LogRow f -> f.truncated; _ -> False) rows `shouldBe` [True]
       map (T.length . logBody) rows `shouldBe` [LT.maxRowFieldChars]
@@ -176,7 +172,7 @@ spec = do
       let column = "attributes___http___request___method"
           sub = mkSubScoped 7 (LT.LogTail (Just "checkout") LT.SKLogs) [column] Nothing ""
       (conn, rt) <- fixture [sub]
-      _ <- LT.publishMatches rt pid (V.fromList [httpLogRecord "checkout" "prod" "GET"])
+      _ <- LT.publishMatches rt testPid (V.fromList [httpLogRecord "checkout" "prod" "GET"])
       (rows, _) <- LT.takeBatch conn
       case rows of
         [LT.LogRow f] -> Map.lookup column f.fields `shouldBe` Just (AE.String "GET")
@@ -186,7 +182,7 @@ spec = do
       let summary = V.fromList ["request_type;badge-neutral⇒incoming", "span_name;text-textStrong⇒handler"]
           sub = mkSubScoped 8 (LT.LogTail (Just "checkout") LT.SKSpans) ["summary"] Nothing ""
       (conn, rt) <- fixture [sub]
-      _ <- LT.publishMatches rt pid (V.singleton (spanRecord "checkout" "prod" "error"){Telemetry.summary = summary})
+      _ <- LT.publishMatches rt testPid (V.singleton (spanRecord "checkout" "prod" "error"){Telemetry.summary = summary})
       (rows, _) <- LT.takeBatch conn
       case rows of
         [LT.LogRow f] -> Map.lookup "summary" f.fields `shouldBe` Just (AE.toJSON summary)
@@ -204,8 +200,8 @@ spec = do
             _ -> False
       (eventsConn, eventsRt) <- fixture [events]
       (tabConn, tabRt) <- fixture [tab]
-      _ <- LT.publishMatches eventsRt pid (V.singleton rec')
-      _ <- LT.publishMatches tabRt pid (V.singleton rec')
+      _ <- LT.publishMatches eventsRt testPid (V.singleton rec')
+      _ <- LT.publishMatches tabRt testPid (V.singleton rec')
       (eventsRows, _) <- LT.takeBatch eventsConn
       (tabRows, _) <- LT.takeBatch tabConn
       map (\case LT.TableRow m -> maybe False capped (Map.lookup "summary" m); _ -> False) eventsRows `shouldBe` [True]
@@ -215,13 +211,13 @@ spec = do
       let sub = mkSubScoped 29 (LT.AllSignals Nothing) ["id"] Nothing "\"deadlock\""
           errSpan = (spanRecord "checkout" "prod" "error"){Telemetry.status_message = Just "Deadlock found when trying to get lock"}
       (conn, rt) <- fixture [sub]
-      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "error" "ER_LOCK_DEADLOCK", errSpan, logRecord "checkout" "prod" "info" "order saved"])
+      _ <- LT.publishMatches rt testPid (V.fromList [logRecord "checkout" "prod" "error" "ER_LOCK_DEADLOCK", errSpan, logRecord "checkout" "prod" "info" "order saved"])
       (rows, _) <- LT.takeBatch conn
       length rows `shouldBe` 2
       -- Datadog-style: a sequence tolerates punctuation; adjacent words AND together.
       forM_ @[] [("\"lock wait\"" :: Text, 1 :: Int), ("\"order\" \"saved\"", 1), ("\"deadlock\" \"saved\"", 0)] \(q, n) -> do
         (c, r) <- fixture [mkSubScoped 30 (LT.AllSignals Nothing) ["id"] Nothing q]
-        _ <- LT.publishMatches r pid (V.fromList [logRecord "checkout" "prod" "error" "Lock-wait timeout", logRecord "checkout" "prod" "info" "order saved"])
+        _ <- LT.publishMatches r testPid (V.fromList [logRecord "checkout" "prod" "error" "Lock-wait timeout", logRecord "checkout" "prod" "info" "order saved"])
         got <- atomically (lengthTBQueue c.queue)
         (q, fromIntegral got) `shouldBe` (q, n)
 
@@ -237,7 +233,7 @@ spec = do
       _ <- LT.attachConn hub events.id eventsConn
       _ <- LT.attachConn hub liveTail.id logsConn
       rt <- runtimeWith hub [events, liveTail]
-      _ <- LT.publishMatches rt pid (V.fromList [spanRecord "checkout" "prod" "error"])
+      _ <- LT.publishMatches rt testPid (V.fromList [spanRecord "checkout" "prod" "error"])
       (eventsRows, _) <- LT.takeBatch eventsConn
       length eventsRows `shouldBe` 1
       -- The logs-only queue never received it, so it is still empty.
@@ -247,7 +243,7 @@ spec = do
       let sub = mkSubScoped 22 (LT.AllSignals Nothing) ["service"] Nothing ""
       (conn, rt) <- fixture [sub]
       _ <-
-        LT.publishMatches rt pid
+        LT.publishMatches rt testPid
           $ V.fromList [logRecord "checkout" "prod" "info" "a", logRecord "billing" "prod" "info" "b"]
       (rows, _) <- LT.takeBatch conn
       length rows `shouldBe` 2
@@ -256,7 +252,7 @@ spec = do
       let sub = mkSubScoped 25 (LT.AllSignals (Just "checkout")) ["service"] Nothing ""
       (conn, rt) <- fixture [sub]
       _ <-
-        LT.publishMatches rt pid
+        LT.publishMatches rt testPid
           $ V.fromList [logRecord "checkout" "prod" "info" "a", logRecord "billing" "prod" "info" "b"]
       (rows, _) <- LT.takeBatch conn
       length rows `shouldBe` 1
@@ -267,7 +263,7 @@ spec = do
       let cols = ["timestamp", "kind", "resource___service___name", "attributes___http___request___method"]
           sub = mkSubScoped 23 (LT.AllSignals Nothing) cols Nothing ""
       (conn, rt) <- fixture [sub]
-      _ <- LT.publishMatches rt pid (V.fromList [httpLogRecord "checkout" "prod" "GET"])
+      _ <- LT.publishMatches rt testPid (V.fromList [httpLogRecord "checkout" "prod" "GET"])
       (rows, _) <- LT.takeBatch conn
       case rows of
         [LT.TableRow m] -> do
@@ -281,7 +277,7 @@ spec = do
       -- the client render an empty cell until the durable read supplies the real value.
       let sub = mkSubScoped 24 (LT.AllSignals Nothing) ["kind", "count_"] Nothing ""
       (conn, rt) <- fixture [sub]
-      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" "a"])
+      _ <- LT.publishMatches rt testPid (V.fromList [logRecord "checkout" "prod" "info" "a"])
       (rows, _) <- LT.takeBatch conn
       case rows of
         [LT.TableRow m] -> Map.member "count_" m `shouldBe` False
@@ -301,7 +297,7 @@ spec = do
       _ <- LT.refreshSubCache cache frozenTime [sub]
       buf <- LT.newRelayBuffer
       let rt = LT.Runtime{transport = LT.PostgresRelay, cache, hub, relayBuffer = buf, emit = \_ -> Safe.throwString "broker is down"}
-      stats <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" "a", logRecord "checkout" "prod" "info" "b"])
+      stats <- LT.publishMatches rt testPid (V.fromList [logRecord "checkout" "prod" "info" "a", logRecord "checkout" "prod" "info" "b"])
       getSum stats.matched `shouldBe` 2
       getSum stats.publishFailed `shouldBe` 2
 
@@ -311,7 +307,7 @@ spec = do
       let cols = ["attributes___k" <> show n | n <- [0 :: Int .. 127]]
           sub = mkSubScoped 61 (LT.AllSignals Nothing) cols Nothing ""
       (conn, rt) <- fixture [sub]
-      stats <- LT.publishMatches rt pid (V.fromList [wideRecord "checkout" "prod"])
+      stats <- LT.publishMatches rt testPid (V.fromList [wideRecord "checkout" "prod"])
       getSum stats.matched `shouldBe` 1
       getSum stats.oversized `shouldBe` 1
       -- Dropped before the transport, so this is not a publish failure and the queue is empty.
@@ -326,7 +322,7 @@ spec = do
       hub <- LT.newHub
       rt <- runtimeWith hub subs
       -- Records match nothing, so this measures evaluation alone rather than delivery.
-      stats <- LT.publishMatches rt pid (V.fromList (replicate (affordable + 5) (logRecord "untailed" "prod" "info" "x")))
+      stats <- LT.publishMatches rt testPid (V.fromList (replicate (affordable + 5) (logRecord "untailed" "prod" "info" "x")))
       getSum stats.evaluated `shouldBe` affordable
       getSum stats.skipped `shouldBe` 5
 
@@ -354,12 +350,12 @@ spec = do
       firstConn <- LT.newConn 100
       detach <- LT.attachConn hub sub.id firstConn
       rt <- runtimeWith hub [sub]
-      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" "while connected"])
+      _ <- LT.publishMatches rt testPid (V.fromList [logRecord "checkout" "prod" "info" "while connected"])
       detach
-      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" "during the gap"])
+      _ <- LT.publishMatches rt testPid (V.fromList [logRecord "checkout" "prod" "info" "during the gap"])
       secondConn <- LT.newConn 100
       _ <- LT.attachConn hub sub.id secondConn
-      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" "after reconnect"])
+      _ <- LT.publishMatches rt testPid (V.fromList [logRecord "checkout" "prod" "info" "after reconnect"])
       (rows, _) <- LT.takeBatch secondConn
       map logBody rows `shouldBe` ["after reconnect"]
 
@@ -439,12 +435,12 @@ spec = do
       future <- addUTCTime 300 <$> getCurrentTime
       sid <-
         runHasqlEffect tr
-          $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 9 9 future
+          $ LT.insertSubscription testPid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 9 9 future
       theId <- maybe (fail "insert produced no id") pure sid
-      found <- runHasqlEffect tr $ LT.activeSubscriptionFor pid ownerId theId
+      found <- runHasqlEffect tr $ LT.activeSubscriptionFor testPid ownerId theId
       fmap (.id) found `shouldBe` Just theId
       -- Wrong user, right project.
-      otherUser <- runHasqlEffect tr $ LT.activeSubscriptionFor pid intruderId theId
+      otherUser <- runHasqlEffect tr $ LT.activeSubscriptionFor testPid intruderId theId
       otherUser `shouldSatisfy` isNothing
       -- Right user, wrong project.
       otherProject <- runHasqlEffect tr $ LT.activeSubscriptionFor otherPid ownerId theId
@@ -455,7 +451,7 @@ spec = do
     -- uncommitted row — see the note on 'insertSubscription'; the cap is "about N".)
     it "refuses the insert once a cap is reached, in the same statement that writes" \tr -> do
       future <- addUTCTime 300 <$> getCurrentTime
-      let register = runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 2 9 future
+      let register = runHasqlEffect tr $ LT.insertSubscription testPid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 2 9 future
       results <- replicateM 3 register
       -- Third one refused, and refused by the write itself rather than by a prior count.
       map isJust results `shouldBe` [True, True, False]
@@ -508,7 +504,7 @@ spec = do
       conn <- LT.newConn 10
       _ <- LT.attachConn tr.trATCtx.liveTail.hub sub.id conn
       _ <- LT.refreshSubCache tr.trATCtx.liveTail.cache frozenTime [sub]
-      key <- createTestAPIKey tr pid "live-tail-direct-ingest"
+      key <- createTestAPIKey tr testPid "live-tail-direct-ingest"
       ingestLog tr key "a log that arrived without a queue" frozenTime
       -- Bounded wait, not 'takeBatch': with the hook missing this must fail, not hang forever
       -- on a queue nothing will ever write to.
@@ -517,7 +513,7 @@ spec = do
       case delivered of
         Just ([LT.LogRow row], _) -> do
           recordId <- maybe (fail "live row id was not a UUID") pure (UUID.fromText row.id)
-          (_, stored) <- testServant tr $ LiveTailPage.liveTailRecordH pid recordId row.timestamp
+          stored <- call tr $ LiveTailPage.liveTailRecordH testPid recordId row.timestamp
           stored.id `shouldBe` row.id
           AE.toJSON stored `shouldSatisfy` \case AE.Object obj -> length obj > 10; _ -> False
         _ -> fail "expected one streamed log row"
@@ -536,9 +532,9 @@ spec = do
       -- "you have too many live tails open" reached the user as a 500. Nothing covered the
       -- failure path of a failure path until the concurrent-cap test below tripped over it.
       future <- addUTCTime 300 <$> getCurrentTime
-      _ <- runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 99 99 future
-      perUser <- runHasqlEffect tr $ LT.countActiveForUser pid ownerId
-      perProject <- runHasqlEffect tr $ LT.countActiveForProject pid
+      _ <- runHasqlEffect tr $ LT.insertSubscription testPid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 99 99 future
+      perUser <- runHasqlEffect tr $ LT.countActiveForUser testPid ownerId
+      perProject <- runHasqlEffect tr $ LT.countActiveForProject testPid
       perUser `shouldSatisfy` (>= 1)
       perProject `shouldSatisfy` (>= perUser)
 
@@ -554,10 +550,10 @@ spec = do
       -- 'insertSubscription'), and these caps bound one user's browser tabs. The cap that
       -- protects the fleet is 'maxCached', a LIMIT on the ingest side that cannot be raced.
       future <- addUTCTime 300 <$> getCurrentTime
-      _ <- runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 99 99 future
+      _ <- runHasqlEffect tr $ LT.insertSubscription testPid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 99 99 future
       -- Whatever this user already has, committed, is the cap — so the cap is met exactly.
-      atCap <- runHasqlEffect tr $ LT.countActiveForUser pid ownerId
-      let register = runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) atCap 99 future
+      atCap <- runHasqlEffect tr $ LT.countActiveForUser testPid ownerId
+      let register = runHasqlEffect tr $ LT.insertSubscription testPid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) atCap 99 future
       results <- Ki.scoped \scope -> replicateM 8 (Ki.fork scope register) >>= atomically . traverse Ki.await
       filter isJust results `shouldBe` []
 
@@ -568,13 +564,13 @@ spec = do
       -- for the full lease — this is what makes that ~2s instead of ~45s.
       future <- addUTCTime 300 <$> getCurrentTime
       sid <-
-        runHasqlEffect tr (LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 9 9 future)
+        runHasqlEffect tr (LT.insertSubscription testPid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 9 9 future)
           >>= maybe (fail "insert produced no id") pure
-      LT.deleteSubscriptionIO tr.trATCtx.hasqlPool pid ownerId sid
-      gone <- runHasqlEffect tr $ LT.activeSubscriptionFor pid ownerId sid
+      LT.deleteSubscriptionIO tr.trATCtx.hasqlPool testPid ownerId sid
+      gone <- runHasqlEffect tr $ LT.activeSubscriptionFor testPid ownerId sid
       gone `shouldSatisfy` isNothing
       -- Idempotent: teardown and the browser's own DELETE race by design.
-      LT.deleteSubscriptionIO tr.trATCtx.hasqlPool pid ownerId sid
+      LT.deleteSubscriptionIO tr.trATCtx.hasqlPool testPid ownerId sid
 
     it "stops matching once the lease lapses, with no explicit delete" \tr -> do
       -- Expiry, not DELETE, is what deactivates a subscription: every failure that matters
@@ -582,7 +578,7 @@ spec = do
       past <- addUTCTime (-60) <$> getCurrentTime
       expired <-
         runHasqlEffect tr
-          $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 9 9 past
+          $ LT.insertSubscription testPid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 9 9 past
       expired `shouldSatisfy` isJust
       active <- runHasqlEffect tr $ LT.activeSubscriptions 100
       map (.id) active `shouldSatisfy` notElem (fromMaybe (UUIDId UUID.nil) expired)
@@ -595,7 +591,7 @@ spec = do
       conn <- LT.newConn LT.queueCapacity
       _ <- LT.attachConn hub sub.id conn
       rt <- runtimeWith hub [sub]
-      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" (show i) | i <- [1 .. 250 :: Int]])
+      _ <- LT.publishMatches rt testPid (V.fromList [logRecord "checkout" "prod" "info" (show i) | i <- [1 .. 250 :: Int]])
       frames <- takeFrames 4 (LiveTailPage.streamFrom sub conn pass)
       let logFrames = filter ("event: log" `T.isPrefixOf`) frames
       length logFrames `shouldBe` 3
@@ -608,7 +604,7 @@ spec = do
       conn <- LT.newConn 2 -- deliberately tiny
       _ <- LT.attachConn hub sub.id conn
       rt <- runtimeWith hub [sub]
-      _ <- LT.publishMatches rt pid $ V.fromList [logRecord "checkout" "prod" "info" (show n) | n <- [1 :: Int .. 5]]
+      _ <- LT.publishMatches rt testPid $ V.fromList [logRecord "checkout" "prod" "info" (show n) | n <- [1 :: Int .. 5]]
       (rows, dropped) <- LT.takeBatch conn
       -- What survives is the *newest*: a live view showing the oldest rows of a burst while
       -- discarding what is happening now would be worse than showing fewer rows.
@@ -679,7 +675,7 @@ mkSubScoped :: Word32 -> LT.Scope -> [Text] -> Maybe Text -> Text -> LT.Subscrip
 mkSubScoped n scope columns environment query =
   LT.Subscription
     { id = UUIDId (UUID.fromWords 0 0 0 n)
-    , projectId = pid
+    , projectId = testPid
     , userId = Projects.UserId UUID.nil
     , scope
     , environment
@@ -723,7 +719,7 @@ baseRecord :: Text -> Text -> Telemetry.OtelLogsAndSpans
 baseRecord service env =
   Telemetry.OtelLogsAndSpans
     { id = UUID.toText UUID.nil
-    , project_id = pid.toText
+    , project_id = testPid.toText
     , timestamp = frozenTime
     , parent_id = Nothing
     , observed_timestamp = Nothing

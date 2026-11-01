@@ -10,7 +10,7 @@ module BackgroundJobs.ReportUsageSpec (spec) where
 -- thing and re-submit chunks that already succeeded.
 
 import BackgroundJobs qualified
-import Control.Lens (_1, (%~), (.~), (^.))
+import Control.Lens ((%~), (.~), (^.), _1)
 import Data.Cache qualified as Cache
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
@@ -21,15 +21,15 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
-import Pkg.Sampling qualified as Sampling
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Pkg.Sampling qualified as Sampling
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualified as TSF
-import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
+import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude
 import System.Config qualified as Config
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldNotSatisfy, shouldReturn, shouldSatisfy, shouldThrow)
@@ -41,14 +41,13 @@ import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, should
 -- provider means no chunks are ever cut — which is what silently emptied the row-level
 -- assertions here the first time round.
 setBilling :: TestResources -> Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> UTCTime -> IO ()
-setBilling tr pid plan subItem subId lastReported = withResource tr.trPool \conn ->
-  void
-    $ PGS.execute
-      conn
-      [sql| UPDATE projects.projects
+setBilling tr pid plan subItem subId lastReported =
+  dbExec
+    tr
+    [sql| UPDATE projects.projects
                SET payment_plan = ?, first_sub_item_id = ?, sub_id = ?, billing_day = ?, usage_last_reported = ?
              WHERE id = ? |]
-      (plan, subItem, subId, billingAnchor, lastReported, pid)
+    (plan, subItem, subId, billingAnchor, lastReported, pid)
 
 
 stripeSub :: Maybe Text
@@ -56,8 +55,7 @@ stripeSub = Just "sub_test_reportusage"
 
 
 setActive :: TestResources -> Projects.ProjectId -> Bool -> IO ()
-setActive tr pid isActive = withResource tr.trPool \conn ->
-  void $ PGS.execute conn [sql| UPDATE projects.projects SET active = ? WHERE id = ? |] (isActive, pid)
+setActive tr pid isActive = dbExec tr [sql| UPDATE projects.projects SET active = ? WHERE id = ? |] (isActive, pid)
 
 
 -- | (active, is-deleted) — the pair migration 0181 constrains.
@@ -68,9 +66,9 @@ projectFlags tr pid = withResource tr.trPool \conn -> do
 
 
 submissions :: TestResources -> Projects.ProjectId -> IO [(UTCTime, UTCTime, Int, Text)]
-submissions tr pid = withResource tr.trPool \conn ->
-  PGS.query
-    conn
+submissions tr pid =
+  dbQuery
+    tr
     [sql| SELECT window_start, window_end, quantity::INT, status
             FROM projects.usage_report_submissions WHERE project_id = ? ORDER BY created_at |]
     (PGS.Only pid)
@@ -79,9 +77,9 @@ submissions tr pid = withResource tr.trPool \conn ->
 -- | (meter_kind, quantity, status) per chunk — the meter dimension is what the
 -- three-meter pricing turns on, so most assertions below are about it.
 meteredSubmissions :: TestResources -> Projects.ProjectId -> IO [(Text, Int, Text)]
-meteredSubmissions tr pid = withResource tr.trPool \conn ->
-  PGS.query
-    conn
+meteredSubmissions tr pid =
+  dbQuery
+    tr
     [sql| SELECT meter_kind, quantity::INT, status
             FROM projects.usage_report_submissions WHERE project_id = ? ORDER BY meter_kind, created_at |]
     (PGS.Only pid)
@@ -89,18 +87,18 @@ meteredSubmissions tr pid = withResource tr.trPool \conn ->
 
 -- | (total_requests, total_metrics, total_replays) recorded for the window.
 dailyUsage :: TestResources -> Projects.ProjectId -> IO [(Int, Int, Int)]
-dailyUsage tr pid = withResource tr.trPool \conn ->
-  PGS.query
-    conn
+dailyUsage tr pid =
+  dbQuery
+    tr
     [sql| SELECT total_requests::INT, total_metrics::INT, total_replays::INT
             FROM apis.daily_usage WHERE project_id = ? ORDER BY window_end |]
     (PGS.Only pid)
 
 
 dailyAIUsage :: TestResources -> Projects.ProjectId -> IO [(Int, Int, Int)]
-dailyAIUsage tr pid = withResource tr.trPool \conn ->
-  PGS.query
-    conn
+dailyAIUsage tr pid =
+  dbQuery
+    tr
     [sql| SELECT total_ai_input_tokens::INT, total_ai_output_tokens::INT, total_ai_cost_microusd::INT
             FROM apis.daily_usage WHERE project_id = ? ORDER BY window_end |]
     (PGS.Only pid)
@@ -109,8 +107,7 @@ dailyAIUsage tr pid = withResource tr.trPool \conn ->
 -- | Stripe meter events are addressed by customer + meter event name, so a
 -- project without a customer id is unaddressable however many meters are on.
 setStripeCustomer :: TestResources -> Projects.ProjectId -> Maybe Text -> IO ()
-setStripeCustomer tr pid cust = withResource tr.trPool \conn ->
-  void $ PGS.execute conn [sql| UPDATE projects.projects SET customer_id = ? WHERE id = ? |] (cust, pid)
+setStripeCustomer tr pid cust = dbExec tr [sql| UPDATE projects.projects SET customer_id = ? WHERE id = ? |] (cust, pid)
 
 
 -- | Turn meters on for one run. Dormancy is config, so this is the whole switch.
@@ -176,8 +173,7 @@ cappedExpecting tr0 pid seenAhead = do
   let tr = tr0{trATCtx = tr0.trATCtx{Config.config = tr0.trATCtx.config{Config.enableFreetier = True}}}
   setBilling tr pid "Free" Nothing Nothing frozenTime
   key <- createTestAPIKey tr pid "free-tier-sampling-key"
-  withResource tr.trPool \conn ->
-    void $ PGS.execute conn [sql| INSERT INTO projects.ingest_sampling (project_id, hour, is_error, seen) VALUES (?, date_trunc('hour', ?::timestamptz, 'UTC') - interval '1 day', false, ?) |] (pid, frozenTime, seenAhead)
+  dbExec tr [sql| INSERT INTO projects.ingest_sampling (project_id, hour, is_error, seen) VALUES (?, date_trunc('hour', ?::timestamptz, 'UTC') - interval '1 day', false, ?) |] (pid, frozenTime, seenAhead)
   pure (tr, key)
 
 
@@ -545,13 +541,11 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       ingestLog tr key "under the cap" frozenTime
       logCount tr pid `shouldReturn` 1
 
-      withResource tr.trPool \conn ->
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, window_start, window_end)
+      dbExec
+        tr
+        [sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, window_start, window_end)
                   VALUES (?, ?, 0, now() - interval '1 minute', now()) |]
-            (pid, Sampling.hardCap Projects.freeTierDailyMaxEvents)
+        (pid, Sampling.hardCap Projects.freeTierDailyMaxEvents)
       Cache.purge tr.trATCtx.projectCache
       ingestLog tr key "over the cap" frozenTime
       logCount tr pid `shouldReturn` 1
@@ -584,11 +578,10 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       runTestBg frozenTime tr $ OtlpServer.processLogsRequest Nothing (createOtelLogAtTime key [show i | i <- [1 .. 400 :: Int]] frozenTime)
       kept <- logCount tr pid
       kept `shouldSatisfy` \k -> k > 160 && k < 240
-      withResource tr.trPool \conn -> do
-        PGS.query conn [sql| SELECT SUM(seen)::INT, SUM(kept)::INT FROM projects.ingest_sampling WHERE project_id = ? AND hour >= date_trunc('day', ?::timestamptz, 'UTC') |] (pid, frozenTime)
-          >>= (`shouldBe` [(400 :: Int, kept)])
-        PGS.query conn [sql| SELECT DISTINCT (attributes->'monoscope'->>'sample_weight')::float8 FROM otel_logs_and_spans WHERE project_id = ?::text |] (PGS.Only pid)
-          >>= (`shouldBe` [PGS.Only (2 :: Double)])
+      dbQuery tr [sql| SELECT SUM(seen)::INT, SUM(kept)::INT FROM projects.ingest_sampling WHERE project_id = ? AND hour >= date_trunc('day', ?::timestamptz, 'UTC') |] (pid, frozenTime)
+        >>= (`shouldBe` [(400 :: Int, kept)])
+      dbQuery tr [sql| SELECT DISTINCT (attributes->'monoscope'->>'sample_weight')::float8 FROM otel_logs_and_spans WHERE project_id = ?::text |] (PGS.Only pid)
+        >>= (`shouldBe` [PGS.Only (2 :: Double)])
 
     -- Errors draw on their own reserve while ordinary traffic is thinned, and a trace with an
     -- error in it is kept whole, not just its error span.
@@ -598,7 +591,7 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
           spanAt t s err = mkSpanRequest (hex 32 t) (hex 16 (t * 10 + s)) Nothing "op" [] ((defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR) <$ guard err) [] (mkResource key []) frozenTime
           spans = [spanAt t s (s == 1) | t <- [1 .. 20 :: Int], s <- [1 .. 3]] <> [spanAt t 1 False | t <- [101 .. 300]]
       runTestBg frozenTime tr $ OtlpServer.processTraceRequest Nothing (defMessage & TSF.resourceSpans .~ concatMap (^. TSF.resourceSpans) spans)
-      perTrace :: [(Text, Int)] <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT context___trace_id, COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ?::text GROUP BY 1 |] (PGS.Only pid)
+      perTrace :: [(Text, Int)] <- dbQuery tr [sql| SELECT context___trace_id, COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ?::text GROUP BY 1 |] (PGS.Only pid)
       let (errorTraces, okTraces) = L.partition ((`elem` map (hex 32) [1 .. 20 :: Int]) . fst) perTrace
       map snd errorTraces `shouldBe` replicate 20 3
       length okTraces `shouldSatisfy` \k -> k > 5 && k < 45
@@ -608,7 +601,7 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       (tr, key) <- cappedExpecting tr0 pid 16000
       let points = [createGaugeMetricAtTime key [] [] ("m" <> show i) 1 t | i <- [1 .. 200 :: Int], t <- [frozenTime, addUTCTime 60 frozenTime]]
       runTestBg frozenTime tr $ OtlpServer.processMetricsRequest Nothing (defMessage & MSF.resourceMetrics .~ concatMap (^. MSF.resourceMetrics) points)
-      perSeries :: [(Text, Int)] <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT metric_name, COUNT(*)::INT FROM otel_metrics WHERE project_id = ? GROUP BY 1 |] (PGS.Only pid)
+      perSeries :: [(Text, Int)] <- dbQuery tr [sql| SELECT metric_name, COUNT(*)::INT FROM otel_metrics WHERE project_id = ? GROUP BY 1 |] (PGS.Only pid)
       L.nub (map snd perSeries) `shouldBe` [2]
       length perSeries `shouldSatisfy` \k -> k > 60 && k < 140
 

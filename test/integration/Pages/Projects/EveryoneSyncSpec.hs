@@ -18,8 +18,7 @@ import Test.Hspec
 
 
 newUser :: Projects.UserId -> Text -> TestResources -> IO ()
-newUser uid email tr = withResource tr.trPool \conn ->
-  void $ PGS.execute conn
+newUser uid email tr = dbExec tr
     [sql| INSERT INTO users.users (id, first_name, last_name, email)
           VALUES (?, 'T', 'U', ?)
           ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email |]
@@ -70,7 +69,7 @@ spec = sequential $ aroundAll withTestResources $ describe "@everyone notify_ema
   it "resolveTeamEmails returns only notify_emails (no implicit member expansion)" \tr -> do
     -- After the previous test, alice is a member AND in notify_emails. Wipe notify_emails
     -- directly and prove resolveTeamEmails no longer returns alice.
-    withResource tr.trPool \conn -> void $ PGS.execute conn
+    dbExec tr
       [sql| UPDATE projects.teams SET notify_emails = '{}' WHERE project_id = ? AND is_everyone = TRUE |]
       (PGS.Only testPid)
     Just t <- runTestBg frozenTime tr $ PM.getEveryoneTeam testPid
