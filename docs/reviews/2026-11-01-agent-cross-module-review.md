@@ -33,7 +33,7 @@ The sampled [PR review](https://github.com/monoscope-tech/monoscope/pull/619#iss
 Three catch-all matches in run authorization now name every supported claim or source constructor. A new variant therefore requires a compiler-checked decision about its run context and native access. Relative test paths already enter through the opaque `TestFiles` decoder; repository URLs and absolute local repository paths have a different contract. A second relative-path wrapper would add no boundary guarantee. The verifier's local references retain partial measurements for exception reporting; resource acquisition remains inside the existing lock, temporary-directory and sandbox scopes.
 The authorization refinement compiles and passes 25 focused examples in 9.4124 seconds, including revoked permissions, retained role ceilings, stale worker leases and native job completion. Two scoped Haskell review rounds and the manual simplification pass find no further material change.
 
-Follow-up passes extend explicit constructor coverage to native workflow progress, tool dispatch, receipt replay, fix verification, publication recovery, retained checkpoints, evidence audiences, Slack access and inspector states. The issue prompt reuses the existing typed conversation subject. Nested review controls preserve the running/unstarted/pending condition without listing a Cartesian product. The native/authority pass completes 74 examples; the final access, delivery, inspector and issue-page pass completes 532 examples with no failures. Compilation, scoped HLint, formatting and the manifest pass. All eight final files retain the same string-literal multisets, including interface text and theme tokens. Two further review rounds find no material change. Remaining wildcard arms handle open wire values, foreign containers, timeout/error results and unsupported boundary combinations. Final release verification and artifact refresh must use this later runtime snapshot.
+Follow-up passes extend explicit constructor coverage to native workflow progress, tool dispatch, receipt replay, fix verification, publication recovery, retained checkpoints, evidence audiences, Slack access and inspector states. The issue prompt reuses the existing typed conversation subject. Nested review controls preserve the running/unstarted/pending condition without listing a Cartesian product. The native/authority pass completes 74 examples; the final access, delivery, inspector and issue-page pass completes 532 examples with no failures. Compilation, scoped HLint, formatting and the manifest pass. All eight final files retain the same string-literal multisets, including interface text and theme tokens. Two further review rounds find no material change. Remaining wildcard arms handle open wire values, foreign containers, timeout/error results and unsupported boundary combinations. The later release gate passes at `1b8ea825e`; the artifact contains the corresponding explicit-state excerpts.
 
 The shared host Git builder strips inherited credentials and configuration, disables hooks and filesystem monitors, and restricts protocols. Its integration test exercises local, anonymous GitHub and authenticated GitHub access. Test-patch generation also disables external diff and text conversion; baseline preparation creates a fresh repository instead of copying customer Git configuration. Slack access and refresh tokens use the shared authenticated encryption envelope. These checks support the specific boundaries; they do not establish a general sandbox escape proof.
 
@@ -61,14 +61,14 @@ The final Weeder pass also removed two lookup helpers orphaned by this branch's 
 
 ## Local release verification
 
-All eleven configured checks pass for runtime snapshot `d5fa93873`, after migration consolidation and master PR #763. Native and KVM acceptance retain their recorded source scopes; this cleanup changes no agent runtime module.
+All eleven configured checks pass for runtime snapshot `1b8ea825e`, including the explicit-state refinements, migration consolidation and master PR #763. Native and KVM acceptance retain their recorded source scopes. The later master #764 merge changes test infrastructure and fixtures; its final release gate remains pending.
 
 | Check | Observed result | Scope and limits |
 | --- | --- | --- |
 | Canonical integration | 1,695 examples, zero failures, 25 pending VM cases; twelve successful shards. | Real-service attestation published. Pending VM cases have separate native evidence. |
 | Native recovery group | 28 cases, zero failures; 590 recorded inputs unchanged. | Includes the early-suspension EOF-drain regression and missing-manifest guards. |
 | Fresh Linux/KVM | 16 application cases, zero failures; 26 actual KVM guests observed. | Controlled model, GitHub and media interpreters. |
-| Current-binary virtual-host loss | One case passes in 494.0081 seconds, including natural lease expiry. | Same binary before and after abrupt local Linux VM loss. Original run and attempts survive; completed replay adds no inference. |
+| Recorded virtual-host loss | One case passes in 494.0081 seconds, including natural lease expiry. | Same binary before and after abrupt local Linux VM loss. Original run and attempts survive; completed replay adds no inference. |
 | Complete doctests | 2,105 examples, zero errors or failures. | Actual supported target; later canonical gate also passes. |
 | Browser suite | 172 pass, one skip. | Application browser tests; physical devices and screen readers remain unverified. |
 | UI tests | 1,041 tests across 62 files pass. | Canonical local gate. |
@@ -78,8 +78,8 @@ All eleven configured checks pass for runtime snapshot `d5fa93873`, after migrat
 | Other canonical checks | HLint, frontend, build and Weeder pass. | All eleven configured checks have matching attestations. |
 | Review artifact | 104 steps pass at 320, 390, 768 and 1280 pixels, without overflow or browser errors. | 111 implementation excerpts match current source; six historical examples remain labeled. |
 
-The literal local `ci-signoff` passes. The AMD64 image for `d5fa93873` is `sha256:56a726b6cc32ea05f87031c5b66be20f6c0a595a13d1265dd59fb343f71297e6`, built on this Mac through the local OrbStack builder. The integration lane also runs the PostgreSQL baseline-adoption regression; changes to its helper invalidate that check's fingerprint.
-Canonical PR 619 is the review destination. Merge, production baseline adoption and deployment remain separate actions.
+The literal local `ci-signoff` passes. The AMD64 image for `1b8ea825e` is `sha256:ec2deab560aff852b936eda8499c0d8ac86af3265a9a7db0483173780ad57ec5`, built on this Mac through the local OrbStack builder. The integration lane also runs the PostgreSQL baseline-adoption regression; changes to its helper invalidate that check's fingerprint.
+Canonical PR 619 is the review destination. Production baseline adoption added the single ledger record described below. Merge and deployment remain unauthorized.
 
 ## Slack acceptance
 
@@ -124,6 +124,7 @@ Virtual-host loss is not physical Mac power loss. Live GitHub publication is not
 The final actual rebase onto master `d842c8dc3` preserves all twenty selected PR heads and the published branch head.
 Its tree exactly matches an independent merge: only the incoming golden-test helper, parser table, golden fixture and repository guidance change from the verified branch.
 Canonical TestUtils/prelude imports retain the original regression bodies and stronger assertions.
+A subsequent non-rewriting merge of master `d16b57f00` preserves published ancestry and adopts its five independent error-pattern lifecycles. The grouping lifecycle retains the activated enrichment routine, deterministic LLM interpreter, successful shared runs and saved analysis assertions. Its new snapshot retains the existing request identity and form-local HTMX behavior. The five lifecycles and seven notification cases pass twice: 12 examples, zero failures.
 Master migration names and contents remain unchanged.
 The user's later request explicitly permits consolidation of this branch's unreleased migration files.
 Production inspection and any necessary transition must precede production migration changes.
