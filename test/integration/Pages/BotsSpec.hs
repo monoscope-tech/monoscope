@@ -1741,7 +1741,7 @@ spec = around withTestResources do
       (T.isInfixOf "name=\"allowActions\"" composer, T.count "name=\"requestId\"" composer) `shouldBe` (True, 2)
       -- Agent-only operations share discovery, schema and policy, even for a reader.
       readerRun <- interactiveInvocation tr testPid (conversation 8) "Retain this investigation evidence." Issues.Observe
-      setRole tr PM.PView
+      setRole tr testPid PM.PView
       run (tooled $ durable tr (conversation 8) readerRun){AI.conversationType = Just Issues.CTWeb} "Retain this investigation evidence." [fn "search_project_tools" [("query", "read_artifact")], fn "get_project_tool_schema" [("name", "read_artifact")], fn "save_artifact" [("key", "catalog-review"), ("title", "Catalog review"), ("content", "Catalog evidence.")], fn "read_artifact" [("key", "catalog-review")]] >>= (`shouldSatisfy` isRight)
       readIORef seen >>= \case
         [search, schema, _, document] -> do
@@ -1765,7 +1765,7 @@ spec = around withTestResources do
       dbQuery tr [sql|SELECT created_by FROM projects.dashboards WHERE project_id = ? AND title = 'Agent attribution regression'|] (Only testPid) `shouldReturn` [Only $ uid tr]
       writes <- interactiveInvocation tr testPid (conversation 2) "Create a monitor" Issues.Autonomous
       sends <- interactiveInvocation tr testPid (conversation 3) "Send this to Slack" Issues.Autonomous
-      setRole tr PM.PView
+      setRole tr testPid PM.PView
       monitorRan <- newIORef False
       let monitorOnly = AI.ProjectTools{AI.catalog = Map.singleton "create_monitor" $ MCP.Tool "create_monitor" "Create a monitor" (AE.object []) (Just MCP.ProjectWrite) (MCP.ViaComposite \_ _ -> pure AE.Null), AI.invoke = \_ _ _ _ -> liftIO (writeIORef monitorRan True) $> AE.Null}
           slackAccess config = config{AI.access = AI.SlackAccess "T_AUTHORITY" "U0123ABCDEF" (uid tr)}
@@ -1773,20 +1773,20 @@ spec = around withTestResources do
       runTestBg frozenTime tr (echo (fn "create_monitor" []) $ chat (durable tr (conversation 2) writes){AI.projectTools = Just monitorOnly} "Create a monitor") >>= (`shouldSatisfy` answered (T.isInfixOf "project role"))
       readIORef monitorRan `shouldReturn` False
       sendAs sends >>= (`shouldSatisfy` \(requests, a) -> null requests && answered (T.isInfixOf "edit permission") a)
-      setRole tr PM.PEdit
+      setRole tr testPid PM.PEdit
       resumed <- interactiveInvocation tr testPid (conversation 3) "Send this to Slack" Issues.Autonomous
       sendAs resumed >>= (`shouldSatisfy` \(requests, a) -> map fst requests == ["https://slack.com/api/chat.postMessage"] && answered (T.isInfixOf "Slack message sent") a)
       -- Administrative operations need the role, the policy, and an audience that may see the result.
       for_ (zip [10 ..] [("get_api_key", PM.PView, Issues.Autonomous, Left "project role"), ("get_api_key", PM.PAdmin, Issues.Autonomous, Left "destination"), ("create_api_key", PM.PAdmin, Issues.Autonomous, Left "destination"), ("delete_dashboard", PM.PView, Issues.Autonomous, Left "project role"), ("delete_dashboard", PM.PAdmin, Issues.Observe, Left "execution policy"), ("delete_dashboard", PM.PAdmin, Issues.Autonomous, Right ())]) \(n, (operation, role, policy, expected :: Either Text ())) -> do
-        setRole tr PM.PAdmin
+        setRole tr testPid PM.PAdmin
         mode <- interactiveInvocation tr testPid (conversation n) "Apply the requested operation" policy
-        setRole tr role
+        setRole tr testPid role
         dispatched <- newIORef False
         outcome <- runTestBg frozenTime tr $ echo (fn operation []) $ chat (slackAccess $ durable tr (conversation n) mode){AI.projectTools = Just Routes.mcpProjectTools{AI.invoke = \_ _ _ _ -> liftIO (writeIORef dispatched True) $> AE.Null}} "Apply the requested operation"
         readIORef dispatched `shouldReturn` isRight expected
         outcome `shouldSatisfy` answered (\response -> either (`T.isInfixOf` response) (const True) expected)
         runQueryEffect tr (Investigations.conversationEvidencePermission testPid (conversation n)) `shouldReturn` PM.PView
-      setRole tr PM.PAdmin
+      setRole tr testPid PM.PAdmin
       -- A sudo session reads a project it is not a member of only while sudo.
       sudoProject <- createTestProject tr "Sudo project"
       let readProject project = runTestBg frozenTime tr $ echo (fn "get_project" []) $ chat (agentConfig project){AI.access = AI.MemberAccess AI.WebSession (uid tr)} "Read the project"
@@ -1846,7 +1846,7 @@ spec = around withTestResources do
       for_ (zip [20 ..] [(PM.PAdmin, PM.PEdit), (PM.PEdit, PM.PAdmin), (PM.PAdmin, PM.PAdmin)]) \(n, (actorRole, ownerRole)) -> do
         owner <- addMember tr ownerRole ("authority-owner-" <> show n <> "@example.test")
         runQueryEffect tr $ Issues.setRoutinePolicy owner testPid routine.conversationId Issues.Autonomous
-        setRole tr actorRole
+        setRole tr testPid actorRole
         openConversation tr (conversation n)
         context <- eventRun (conversation n) Issues.StartRun "Inspect project credentials"
         calls <- newIORef ([] :: [Text])
@@ -1860,9 +1860,9 @@ spec = around withTestResources do
           readIORef calls `shouldReturn` []
       -- An upgrade after a request starts applies only to a fresh request, never to its recoveries.
       for_ (zip [30 ..] ["interactive", "scheduled", "event"]) \(n, origin) -> do
-        setRole tr PM.PEdit
+        setRole tr testPid PM.PEdit
         initial <- started origin (conversation n) "Retain the original role"
-        setRole tr PM.PAdmin
+        setRole tr testPid PM.PAdmin
         dbExec tr [sql|UPDATE apis.ai_routine_runs SET permission_ceiling = 'admin' WHERE id = ?|] (Only initial.id) `shouldThrow` \err -> PGS.sqlState err == "23514"
         calls <- newIORef ([] :: [Text])
         let denied context = do
@@ -1963,7 +1963,7 @@ spec = around withTestResources do
         result <- runTestBg frozenTime tr $ model $ tryAny $ chat config "Remember this"
         (scenario, isLeft result) `shouldBe` (scenario, scenario `elem` ["inactive", "service", "foreign-conversation"])
         runQueryEffect tr (Memory.pageHistory project $ UUIDId UUID.nil) >>= (`shouldSatisfy` null)
-        setRole tr PM.PAdmin
+        setRole tr testPid PM.PAdmin
 
     it "wiki: a routine's write follows its current policy, conversation and owner role" \tr -> do
       for_ (zip [30 ..] ["active", "paused", "wrong-conversation", "revoked", "observe", "owner-downgraded" :: Text]) \(n, scenario) -> do
@@ -1982,7 +1982,7 @@ spec = around withTestResources do
                 case scenario of
                   "paused" -> Issues.pauseRoutine testPid conv
                   "revoked" -> Issues.setRoutinePolicy (uid tr) testPid conv Issues.Observe
-                  "owner-downgraded" -> liftIO $ setRole tr PM.PView
+                  "owner-downgraded" -> liftIO $ setRole tr testPid PM.PView
                   _ -> pass
                 pure $ invoking [writePage page "Routine observation" "Dated context from this routine."]
               _ -> pure $ said "Finished."
@@ -2031,7 +2031,7 @@ spec = around withTestResources do
         saved.status `shouldBe` Issues.RunSucceeded
         renderT <$> call tr (AIThreads.routineRunGetH testPid request Nothing) >>= (`shouldContainAll` ["Action history", "Role limit: admin", if boundary == "uncertain" then "Outcome uncertain" else "Response saved", "hx-target=\"#routine-run\"", "Proposal and outcome"])
         dbExec tr [sql|UPDATE users.users SET is_sudo = FALSE WHERE id = ?|] (Only $ uid tr)
-        setRole tr PM.PView
+        setRole tr testPid PM.PView
         viewer <- renderT <$> call tr (AIThreads.routineRunGetH testPid request Nothing)
         (T.isInfixOf (if administrative then "Action details require admin permission." else "Action details require edit permission.") viewer, T.isInfixOf "Proposal and outcome" viewer) `shouldBe` (True, False)
         when administrative do
@@ -2040,7 +2040,7 @@ spec = around withTestResources do
           length <$> operations request `shouldReturn` 1
           runQueryEffect tr (Investigations.conversationEvidencePermission testPid saved.conversationId) `shouldReturn` PM.PAdmin
         dbExec tr [sql|UPDATE users.users SET is_sudo = TRUE WHERE id = ?|] (Only $ uid tr)
-        setRole tr PM.PAdmin
+        setRole tr testPid PM.PAdmin
       -- A Slack post whose checkpoint or outcome write fails is not posted again.
       for_ (zip [10 ..] [("checkpoint", "apis.slack_turn_checkpoints", toolsCompleted), ("outcome", "apis.ai_agent_operations", "outcome->>'tag' <> 'OperationReturned'" :: Text)]) \(n, (boundary :: Text, table, check)) -> do
         posts <- newIORef (0 :: Int)
@@ -2120,7 +2120,7 @@ spec = around withTestResources do
       runQueryEffect tr (Investigations.conversationEvidencePermission testPid (conversation 40)) `shouldReturn` PM.PAdmin
       fmap (.response) <$> createKey `shouldReturn` Right created.response
       dbOne tr [sql|SELECT count(*)::int FROM projects.project_api_keys WHERE project_id = ? AND title = 'Retained private administrator key'|] (Only testPid) `shouldReturn` (1 :: Int)
-      setRole tr PM.PView
+      setRole tr testPid PM.PView
       createKey `shouldThrow` \AI.AgentAccessDenied -> True
       readIORef keyCalls `shouldReturn` 1
 
@@ -2163,7 +2163,7 @@ spec = around withTestResources do
         runQueryEffect tr (Memory.pageHistory testPid page) >>= (`shouldSatisfy` null)
         (restriction, either (isJust . fromException @AI.AgentStopped) (const False) outcome) `shouldBe` (restriction, True)
         contextOf mode >>= \context -> runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy testPid context.id) >>= (`shouldSatisfy` null)
-        setRole tr PM.PAdmin
+        setRole tr testPid PM.PAdmin
         when unlinked $ dbExec tr [sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id) VALUES ('T_ATOMIC_AUTHORITY', 'U0123ABCDEF', ?, ?)|] (uid tr, testPid)
 
     it "Slack autonomy: a legacy checkpoint keeps its grant and result; a fresh signed request writes once under its requester's role" \tr -> do
@@ -2359,9 +2359,9 @@ spec = around withTestResources do
         let decide = Investigations.decideOperationReview testPid (uid tr) identifier $ if scenario == DeclineReview then Investigations.ReviewRejected else Investigations.ReviewApproved
         case scenario of
           ExpireBeforeReview -> advanceTestTime tr 60
-          RevokeReviewer -> setRole tr PM.PView
+          RevokeReviewer -> setRole tr testPid PM.PView
           PrivateReview -> runQueryEffect tr (Investigations.retainEvidenceAudience testPid conv $ Investigations.PersonalAudience $ UUIDId $ UUID.fromWords 0 0 0 99998) `shouldReturn` True
-          _ | scenario `elem` [AdministratorRequired, RaisedApproverRequirement] -> setRole tr PM.PEdit
+          _ | scenario `elem` [AdministratorRequired, RaisedApproverRequirement] -> setRole tr testPid PM.PEdit
           _ -> pass
         decision <-
           if scenario /= ConcurrentDecisions
@@ -2379,8 +2379,8 @@ spec = around withTestResources do
           _ -> expectationFailure "Expected one immutable review decision"
         case scenario of
           ExpireAfterReview -> advanceTestTime tr 60
-          RevokeApprovedReviewer -> setRole tr PM.PView
-          RaisedApproverRequirement -> setRole tr PM.PAdmin
+          RevokeApprovedReviewer -> setRole tr testPid PM.PView
+          RaisedApproverRequirement -> setRole tr testPid PM.PAdmin
           _ -> pass
         outcomes <- replicateM 2 $ if scenario == RaisedApproverRequirement then executeWith (Just review{Investigations.approver = Investigations.ReviewAdministrators}) else execute
         for_ outcomes \case
@@ -2396,7 +2396,7 @@ spec = around withTestResources do
           Investigations.UncertainResult{} -> expectationFailure "An unstarted action cannot have an uncertain effect"
         map (.content) <$> artifacts `shouldReturn` [Just "Finding" | scenario `elem` [ApproveReview, ConcurrentDecisions]]
         length <$> operationsOf tr context.id `shouldReturn` 1
-        setRole tr PM.PAdmin
+        setRole tr testPid PM.PAdmin
 
     it "run completion closes a request's unstarted actions, retaining only a recoverable event attempt's" \tr -> do
       enrichment <- installEnrichment tr reviewChanges
@@ -2497,10 +2497,10 @@ spec = around withTestResources do
         AE.toJSON entry.outcome ^? key "tag" . _String `shouldBe` Just "OperationUnstarted"
         renderT <$> call tr (AIThreads.routineRunGetH testPid waiting.id Nothing) >>= (`shouldContainAll` ["Approve action", "Decline action", "/ai/operations/" <> entry.id.toText <> "/review"])
         when (scenario == ApproveReview) do
-          setRole tr PM.PView
+          setRole tr testPid PM.PView
           runAuthHandler tr (statusOf $ AIThreads.operationReviewPostH testPid entry.id $ AIThreads.OperationReviewForm Investigations.ReviewApproved) `shouldReturn` 403
           renderT <$> call tr (AIThreads.routineRunGetH testPid waiting.id Nothing) >>= (`shouldSatisfy` not . T.isInfixOf "Approve action")
-          setRole tr PM.PAdmin
+          setRole tr testPid PM.PAdmin
         runQueryEffect tr (Issues.claimRoutine slot.id slot.scheduledAt) >>= (`shouldSatisfy` isNothing)
         runTestBgNoReset tr (Issues.recoverDueRoutines 100) >>= (`shouldNotContain` [slot.id]) . map (.id)
         when (scenario == ApproveReview) do
@@ -3193,12 +3193,12 @@ spec = around withTestResources do
         snd <$> runAsBaseRecordingHTTP tr (withHTTPResponses (\_ _ -> pure $ Just $ AE.encode $ AE.object ["ok" .= True, "channel" .= AE.object ["is_im" .= direct, "user" .= peer, "id" .= channel]]) $ AI.canReadEvidence dm testPid dmConversation) `shouldReturn` expected
       -- Unrecognized legacy evidence stays restricted to administrators.
       for_ ([(7, AE.toJSON ([AI.ToolCallInfo "retired-sensitive-operation" mempty "Historical result" Nothing] :: [AI.ToolCallInfo])), (8, AE.object ["unrecognized_schema" .= True])] :: [(Word32, AE.Value)]) \(n, metadata) -> do
-        setRole tr PM.PAdmin
+        setRole tr testPid PM.PAdmin
         runTestBg frozenTime tr do
           startConversation (conversation n) Issues.CTWeb
           Issues.insertChatMessage testPid (conversation n) Issues.ChatAssistant "Unclassified historical evidence" Nothing (Just metadata)
         resetLegacyEvidenceScope tr testPid (conversation n)
-        setRole tr PM.PView
+        setRole tr testPid PM.PView
         status (conversation n) `shouldReturn` 403
         runQueryEffect tr (Investigations.conversationEvidencePermission testPid (conversation n)) `shouldReturn` PM.PAdmin
       -- The public demo does not restore personal access once membership is revoked.
@@ -3229,13 +3229,13 @@ spec = around withTestResources do
       renderT <$> call tr (AIThreads.routineRunGetH testPid native.id Nothing) >>= (`shouldContainAll` ["Administrative evidence in the routine instructions."])
       resetLegacyEvidenceScope tr testPid (conv 6)
       runQueryEffect tr (Investigations.conversationEvidencePermission testPid (conv 6)) `shouldReturn` PM.PAdmin
-      setRole tr PM.PEdit
+      setRole tr testPid PM.PEdit
       status (AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")) `shouldReturn` 403
       length . filter ((== Just "issue-enrichment") . (.templateKey)) <$> runQueryEffect tr (Issues.listConversations testPid) `shouldReturn` 1
       runTestBg frozenTime tr $ Issues.deleteConversation testPid enrichment.conversationId
       resetLegacyEvidenceScope tr testPid (conv 6)
       runQueryEffect tr (Investigations.conversationEvidencePermission testPid (conv 6)) `shouldReturn` PM.PAdmin
-      setRole tr PM.PAdmin
+      setRole tr testPid PM.PAdmin
       -- A title request that sees a role change still rechecks access before answering.
       titleRun <- interactiveInvocation tr testPid (conv 9) "Inspect project credentials" Issues.Observe
       let downgradeOnTitle = interpose @ELLM.LLM \_ -> \case
@@ -3244,7 +3244,7 @@ spec = around withTestResources do
       tryAny (runTestBg frozenTime tr $ agent (\h _ -> pure $ nextStep (toolResults h) [fn "list_api_keys" []] "Private credential findings") $ downgradeOnTitle do
         answer <- chat (webConfig (conv 9) titleRun) "Inspect project credentials" >>= either (liftIO . fail . toString) pure
         AI.completeAgenticResponse (webConfig (conv 9) titleRun) "Inspect project credentials" "model" "key" answer) >>= (`shouldSatisfy` denied)
-      setRole tr PM.PAdmin
+      setRole tr testPid PM.PAdmin
       -- A role change during inference cancels the request without publishing or touching another conversation.
       inflight <- interactiveInvocation tr testPid (conv 3) "Inspect restricted evidence" Issues.Observe
       let downgradeOnAnswer = agent \h _ -> case toolResults h of
@@ -3259,7 +3259,7 @@ spec = around withTestResources do
       ordinary <- interactiveInvocation tr testPid (conv 4) "Ordinary reader request" Issues.Observe
       runTestBg frozenTime tr (AI.executeToolCall (webConfig (conv 4) ordinary) $ toolCall "list_api_keys" []) >>= (`shouldSatisfy` T.isInfixOf "required admin permission" . (.formatted))
       runQueryEffect tr (Investigations.conversationEvidencePermission testPid (conv 4)) `shouldReturn` PM.PView
-      setRole tr PM.PAdmin
+      setRole tr testPid PM.PAdmin
       -- A public demo visitor's request keeps its read-only session authority.
       visitor <- runTestBg frozenTime tr do
         actor <- Projects.createUser "Public" "Visitor" "" "public-agent-visitor@example.test"
@@ -3292,7 +3292,7 @@ spec = around withTestResources do
         renderT <$> call tr (AIThreads.threadGetH testPid (conv n) Nothing Nothing) >>= (`shouldContainAll` [secret])
         for_ ["send_to_slack", "write_project_memory"] \name -> runTestBg frozenTime tr (AI.executeToolCall config $ toolCall name []) >>= (`shouldSatisfy` T.isInfixOf "restricted evidence" . (.formatted))
         when legacy $ resetLegacyEvidenceScope tr testPid (conv n)
-        setRole tr PM.PView
+        setRole tr testPid PM.PView
         status (AIThreads.threadGetH testPid (conv n) Nothing Nothing) `shouldReturn` 403
         for_ [AIThreads.threadsGetH testPid, AIThreads.routinesGetH testPid] \handler -> renderT <$> call tr handler >>= (`shouldSatisfy` not . T.isInfixOf "Credential inventory")
         tryAny (runTestBg frozenTime tr $ model $ chat config "Read the saved private answer") >>= (`shouldSatisfy` denied)
@@ -3421,13 +3421,13 @@ spec = around withTestResources do
         runQueryEffect tr (Issues.routineRunActive testPid readerRun.id) `shouldReturn` False
         tryAny (runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess AI.ProjectMember slackEventRoutine.requestedBy) testPid) >>= (`shouldSatisfy` isLeft)
         setActiveRow True
-      setRole tr PM.PView
+      setRole tr testPid PM.PView
       readerRoutines <- renderT <$> call tr (AIThreads.routinesGetH testPid)
       readerThread <- renderT <$> call tr (AIThreads.threadGetH testPid slackRoutine.conversationId Nothing Nothing)
       (T.isInfixOf "1 routine" readerRoutines, T.isInfixOf "Add routine" readerRoutines, T.isInfixOf "Routine instructions" readerThread, T.isInfixOf "Save instructions" readerThread) `shouldBe` (True, False, True, False)
       traverse status [AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review"), AIThreads.routineInstructionsPostH testPid slackRoutine.conversationId (AIThreads.RoutineInstructionsForm "Overwrite"), AIThreads.routineResumePostH testPid slackRoutine.conversationId] `shouldReturn` [403, 403, 403]
       runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= (`shouldSatisfy` isNothing)
-      setRole tr PM.PAdmin
+      setRole tr testPid PM.PAdmin
       -- A destination neither grants nor revokes a run's writes; a revoked editor cannot change settings.
       Just slot1 <- runTestBg frozenTime tr $ startConversation (conversation 1) Issues.CTWeb >> Issues.upsertRoutine (uid tr) testPid (conversation 1) (fromRightShow $ Issues.mkRoutineInterval 15)
       first1 <- runQueryEffect tr (Issues.claimRoutine slot1.id slot1.scheduledAt) >>= maybe (fail "Expected a claimed run") pure
@@ -3477,11 +3477,11 @@ spec = around withTestResources do
           Hasql.interpExecute_ [HI.sql|UPDATE apis.ai_routines SET schedule_weekday = #{weekday}, schedule_hour = #{hour}, schedule_minute = #{minute} WHERE project_id = #{testPid} AND conversation_id = #{conversation 4}|]
           Issues.resumeRoutine (uid tr) testPid (conversation 4)) >>= (`shouldBe` Just expected) . fmap (.scheduledAt)
       -- A view role cannot change a routine's destination or policy, and its run loses its policy.
-      setRole tr PM.PView
+      setRole tr testPid PM.PView
       traverse (\d -> runAuthHandler tr (statusOf $ AIThreads.routineDestinationPostH testPid (conversation 1) $ AIThreads.RoutineDestinationForm d)) [Issues.DestinationConversation, Issues.DestinationSlack] `shouldReturn` [403, 403]
       runAuthHandler tr (statusOf $ AIThreads.routinePolicyPostH testPid (conversation 2) $ AIThreads.RoutinePolicyForm Issues.Observe) `shouldReturn` 403
       policyFor first1.runId (conversation 1) `shouldReturn` Nothing
-      setRole tr PM.PAdmin
+      setRole tr testPid PM.PAdmin
       -- A Free plan denies the reader and stops its run.
       runQueryEffect tr (Issues.routineRunActive testPid readerRun.id) `shouldReturn` True
       tryAny (runTestBg frozenTime tr $ AI.requireAgentAccess (AI.MemberAccess AI.ProjectMember readerMember) testPid) >>= (`shouldSatisfy` isRight)
@@ -3742,7 +3742,7 @@ spec = around withTestResources do
         dbExec tr [sql|UPDATE apis.ai_routines SET active = FALSE, requested_by = NULL WHERE id IN (?, ?)|] (slot.id, otherSlot.id)
         unless unowned $ dbExec tr [sql|UPDATE apis.ai_routines SET requested_by = ?, authority_version = authority_version + 1 WHERE id = ?|] (uid tr, slot.id)
         dbExec tr [sql|DELETE FROM users.users WHERE id = ?|] (Only previousOwner)
-        setRole tr PM.PEdit
+        setRole tr testPid PM.PEdit
         briefing <- maybe (fail "Missing routine template") pure $ find ((== "daily-operations-briefing") . (.key)) Issues.routineTemplates
         let activate = runTestBg slot.scheduledAt tr case activation of
               "resume" -> Issues.resumeRoutine (uid tr) testPid (conversation 1)
@@ -3933,9 +3933,9 @@ spec = around withTestResources do
         Just routine <- runQueryEffect tr $ Issues.getEventRoutine testPid Issues.EventIssueEnrichment
         let conv = UUIDId issue.unUUIDId
         void $ runQueryEffect tr $ Issues.getOrCreateConversation testPid conv Issues.CTAnomaly (AE.object [])
-        when (restriction == "original-role-limit") $ setRole tr PM.PView
+        when (restriction == "original-role-limit") $ setRole tr testPid PM.PView
         Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.IssueEnrichmentRequest issue) Issues.StartRun conv "Retain the native request"
-        setRole tr PM.PAdmin
+        setRole tr testPid PM.PAdmin
         context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.IssueEnrichment issue) execution.id execution.startedAt
         case restriction of
           "policy-withdrawn" -> setPolicy Issues.Observe
@@ -4095,7 +4095,7 @@ spec = around withTestResources do
         botToken `shouldReturn` Just "x-bot-token"
       -- Consent rechecks the identity; a disconnect during the exchange wins; a replaced workspace voids pending consent.
       consent 30 "U_SOMEONE_ELSE" `shouldReturn` False
-      setRole tr PM.PView
+      setRole tr testPid PM.PView
       consent 31 "U0123ABCDEF" `shouldReturn` True
       runQueryEffect tr (Slack.createSlackInstall (stateOf 32) (uid tr) testPid False) `shouldReturn` False
       isJust <$> runQueryEffect tr (Slack.consumeSlackAuthorization (stateOf 31) $ UUIDId UUID.nil) `shouldReturn` False
@@ -4476,7 +4476,7 @@ spec = around withTestResources do
         rows `shouldReturn` [("CPROACTIVE", Issues.Autonomous, True), ("CSECOND", Issues.Observe, True)]
         dbQuery tr [sql|SELECT r.instructions, c.title FROM apis.ai_routines r JOIN apis.ai_conversations c USING (project_id, conversation_id) WHERE r.project_id = ? AND r.conversation_id = ?|] (testPid, conv) `shouldReturn` [("Retain my instructions" :: Text, "My incident channel" :: Text)]
         traverse (\invalid -> status command{SlackPage.channel_id = invalid}) (["DPRIVATE", "C_BAD"] :: [Text]) `shouldReturn` [400, 400]
-        setRole tr PM.PView
+        setRole tr testPid PM.PView
         traverse (\text -> status command{SlackPage.text = text}) (["incidents on", "incidents off"] :: [Text]) `shouldReturn` [403, 403]
         rows `shouldReturn` [("CPROACTIVE", Issues.Autonomous, True), ("CSECOND", Issues.Observe, True)]
         (^? key "response_type" . _String) <$> toBaseServantResponse tr (slackInteractionsH command{SlackPage.user_id = "U_UNLINKED"}) `shouldReturn` Just "ephemeral"
@@ -5191,10 +5191,6 @@ writePage page title body = fn "write_project_memory" [("pageId", AE.toJSON page
 
 json :: Text -> Maybe AE.Value
 json = AE.decodeStrict . encodeUtf8
-
-
-setRole :: TestResources -> PM.Permissions -> IO ()
-setRole tr permission = dbExec tr [sql|UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?|] (permission, testPid, uid tr)
 
 
 addMember :: TestResources -> PM.Permissions -> Text -> IO Projects.UserId

@@ -823,10 +823,8 @@ test-suite integration-tests
       MinioManagerSpec
       MonitoringSpec
       Opentelemetry.IngestionSpec
-      Pages.ApiSpec
       Pages.BotsSpec
       Pages.CodeContextSpec
-      Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
       Pages.ErrorPatternsSpec
       Pages.GitSyncSpec
@@ -835,9 +833,6 @@ test-suite integration-tests
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
-      Pages.Projects.EveryoneSyncSpec
-      Pages.Projects.IntegrationsSpec
-      Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pkg.EmbeddingFairnessSpec
       ReplaySpec
@@ -846,7 +841,6 @@ test-suite integration-tests
       System.MigrationRunnerSpec
       Web.ApiV1Spec
       Web.AuthSpec
-      Web.ClientMetadataSpec
   hs-source-dirs:
       test/integration
   default-extensions:
@@ -1127,10 +1121,8 @@ test-suite test-dev
       MinioManagerSpec
       MonitoringSpec
       Opentelemetry.IngestionSpec
-      Pages.ApiSpec
       Pages.BotsSpec
       Pages.CodeContextSpec
-      Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
       Pages.ErrorPatternsSpec
       Pages.GitSyncSpec
@@ -1139,9 +1131,6 @@ test-suite test-dev
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
-      Pages.Projects.EveryoneSyncSpec
-      Pages.Projects.IntegrationsSpec
-      Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pkg.EmbeddingFairnessSpec
       ReplaySpec
@@ -1150,7 +1139,6 @@ test-suite test-dev
       System.MigrationRunnerSpec
       Web.ApiV1Spec
       Web.AuthSpec
-      Web.ClientMetadataSpec
       Proto.Opentelemetry.Proto.Common.V1.Common
       Proto.Opentelemetry.Proto.Common.V1.Common_Fields
       Proto.Opentelemetry.Proto.Resource.V1.Resource
