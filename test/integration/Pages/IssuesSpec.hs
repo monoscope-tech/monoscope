@@ -127,8 +127,8 @@ spec = around withTestResources $ describe "Issues" do
       (Trace.TraceDetailsUnavailable retry _ _ Trace.TraceTimedOut, Trace.TraceDetailsUnavailable _ _ _ Trace.TraceEmpty) -> retry `shouldSatisfy` T.isInfixOf ("/traces/" <> spanTrace)
       _ -> expectationFailure "expected timed-out and empty trace states"
 
-    -- A query alert carries its own query and monitor; its id is stored as a `show` blob.
-    let storedQueryId = Monitors.queryAlertKey $ Monitors.QueryMonitorId DataUUID.nil
+    -- A query alert carries its own query and monitor, keyed by the bare monitor id.
+    let storedQueryId = (Monitors.QueryMonitorId DataUUID.nil).toText
     alert <-
       seedIssue tr (issueSeed Issues.QueryAlert "alert-hash"){title = "checkout throughput dropped", service = Just "Monitoring", payload = [aesonQQ|{ "query_id": #{storedQueryId}, "query_name": "checkout throughput", "query_expression": "resource.service.name == \"checkout\" | summarize count(*) by bin_auto(timestamp)", "threshold_value": 5, "actual_value": 0, "threshold_type": "below", "triggered_at": #{frozenTime} }|]}
 

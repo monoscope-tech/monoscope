@@ -2024,10 +2024,14 @@ selectDueErrorNotifications pid mHashes now =
                         AND s.hour_bucket >= date_trunc('hour', #{now}::timestamptz) - INTERVAL '1 hour'
                         AND s.event_count > 0
                     )
+                    -- Reminders decay with age and stop at 30 days; regressions and
+                    -- escalations above still alert, and subscribers keep their cadence.
+                    AND #{now}::timestamptz - e.created_at < INTERVAL '30 days'
                     AND #{now}::timestamptz - e.last_notified_at >= CASE
                           WHEN #{now}::timestamptz - e.created_at < INTERVAL '1 hour'  THEN INTERVAL '1 hour'
                           WHEN #{now}::timestamptz - e.created_at < INTERVAL '6 hours' THEN INTERVAL '6 hours'
-                          ELSE INTERVAL '24 hours'
+                          WHEN #{now}::timestamptz - e.created_at < INTERVAL '7 days' THEN INTERVAL '24 hours'
+                          ELSE INTERVAL '7 days'
                         END)
               )
             ORDER BY e.id
@@ -3190,7 +3194,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
           chartFrom = addUTCTime (negate $ fromIntegral (chartMins * 60)) observedAt
           destinations = slackDestinations installation targetTeams
       chartUrlM <- if isRecovery then pure Nothing else monitorTrendChartUrl appCtx monitor.projectId monitor chartFrom observedAt value
-      issue <- if isRecovery then pure Nothing else Just <$> Issues.createQueryAlertIssue monitor.projectId (Monitors.queryAlertKey monitor.id) monitor.alertConfig.title monitor.logQuery threshold value thresholdDir
+      issue <- if isRecovery then pure Nothing else Just <$> Issues.createQueryAlertIssue monitor.projectId monitor.id.toText monitor.alertConfig.title monitor.logQuery threshold value thresholdDir
       committed <- Hasql.transaction TxS.ReadCommitted TxS.Write do
         accepted <- commitStatus
         if not accepted
@@ -3198,6 +3202,14 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
           else do
             previous <- Incidents.latestEpisodeTx monitor.projectId source
             let active = mfilter ((== Incidents.EpisodeActive) . (.phase)) previous
+                onset = maybe observedAt (.startedAt) active
+            -- An episode opening within an hour of the previous one closing is a flap: its
+            -- alert, reminders and recovery continue the Slack thread but fan out nowhere else.
+            flapping <-
+              Hasql.oneTx @Bool
+                [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.incident_episodes
+                  WHERE project_id = #{monitor.projectId} AND source_kind = 'monitor' AND source_id = #{monitor.id}
+                    AND phase <> 'active' AND closed_at > #{onset}::timestamptz - INTERVAL '1 hour')|]
             -- One long-lived issue per monitor, written on a transition only:
             -- the write bumps occurrence_count, so every tick would inflate it.
             persistedId <-
@@ -3217,20 +3229,20 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
             result <- Incidents.recordIncidentEventTx update
             let conflict = Tx.condemn $> Left result
             case result of
-              Incidents.Recorded{} -> pure $ Right $ Just alertUrl
-              Incidents.AlreadyRecorded{} -> pure $ Right $ Just alertUrl
+              Incidents.Recorded{} -> pure $ Right $ Just (alertUrl, flapping)
+              Incidents.AlreadyRecorded{} -> pure $ Right $ Just (alertUrl, flapping)
               -- A recovery with no open episode has nothing left to close; any
               -- other change arriving without one is out of order.
-              Incidents.NoOpenEpisode | isRecovery -> pure $ Right $ Just alertUrl
+              Incidents.NoOpenEpisode | isRecovery -> pure $ Right $ Just (alertUrl, False)
               Incidents.NoOpenEpisode -> conflict
               Incidents.Rejected _ -> conflict
       case committed of
         Left result -> throwIO $ IncidentCommitError result
         Right Nothing -> pure False
-        Right (Just alertUrl) -> do
+        Right (Just (alertUrl, flapping)) -> do
           let alert = if isRecovery then MonitorsRecoveryAlert monitor.alertConfig.title alertUrl else MonitorsAlert monitor.alertConfig.title alertUrl chartUrlM
               (subj, html) = if isRecovery then ET.monitorRecoveryEmail p.title monitor.alertConfig.title alertUrl else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value threshold (display thresholdDir) chartUrlM
-          when (delivery == Incidents.PublishIncident) $ for_ targetTeams \team -> dispatchTeamNotifications team alert monitor.projectId p.title alertUrl subj (ET.renderEmail subj html)
+          when (delivery == Incidents.PublishIncident && not flapping) $ for_ targetTeams \team -> dispatchTeamNotifications team alert monitor.projectId p.title alertUrl subj (ET.renderEmail subj html)
           tryStep "slack-incident-delivery" runSlackIncidentDeliveries
           pure True
 

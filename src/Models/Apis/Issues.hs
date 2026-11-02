@@ -970,7 +970,7 @@ selectIssues pid projection f = do
                     AND an.target_hash IN (SELECT jsonb_array_elements_text(^{col}issue_data->'anomaly_hashes'))),
                  ^{col}created_at)
                END, ^{col}updated_at) |]
-      orderBy pfx | f.order == Just "-last_seen" = lastSeenAt pfx <> [HI.sql| DESC, ^{rawSql pfx}id DESC|]
+      orderBy pfx | f.order == Just "-last_seen" = lastSeenAt pfx <> [HI.sql| DESC, ^{rawSql pfx}created_at DESC, ^{rawSql pfx}seq_num DESC, ^{rawSql pfx}id DESC|]
       orderBy pfx = rawSql case T.uncons =<< f.order of
         Just (s, c) | s == '-' || s == '+', c `elem` ["created_at", "updated_at", "title"] -> pfx <> c <> bool " ASC" " DESC" (s == '-')
         -- Output aliases of the IssueL projection; only that query (prefix "i.") has them.

@@ -316,7 +316,9 @@ slackInvestigationContext pid teamId channelId threadTs =
     LEFT JOIN monitors.query_monitors monitor ON episode.source_kind = 'monitor'
       AND monitor.id = episode.source_id AND monitor.project_id = episode.project_id
     WHERE episode.project_id = #{pid} AND root.team_id = #{teamId}
-      AND root.channel_id = #{channelId} AND root.message_ts = #{threadTs}|]
+      AND root.channel_id = #{channelId} AND root.message_ts = #{threadTs}
+    -- Episodes of one source share a thread; the thread speaks for the latest.
+    ORDER BY episode.started_at DESC LIMIT 1|]
 
 
 data RelatedIncidentMatch
@@ -621,19 +623,30 @@ recordIncidentEventTx update = do
                     let destinations = case update.delivery of
                           RefreshIncident -> existingDestinations
                           PublishIncident -> existingDestinations <> [destination | nextPhase == EpisodeActive, destination <- update.destinations]
+                    -- A source keeps one Slack thread per channel across episodes: a new
+                    -- episode inherits the previous root's timestamp and replies into it,
+                    -- so a flapping monitor reads as one conversation, not a channel flood.
+                    -- A thread's first alert or reminder of a UTC day also goes to the channel.
+                    let announces = update.change `elem` [IncidentAlert, IncidentReminder]
                     forM_ (ordNub destinations) \destination -> do
                       rootId <-
                         oneTx @SlackRootId
                           [HI.sql|INSERT INTO apis.slack_incident_roots
-                            (episode_id, team_id, channel_id, first_event_id)
-                            VALUES (#{eid}, #{destination.teamId}, #{destination.channelId}, #{eventId})
+                            (episode_id, team_id, channel_id, first_event_id, message_ts)
+                            VALUES (#{eid}, #{destination.teamId}, #{destination.channelId}, #{eventId},
+                              (SELECT previous.message_ts FROM apis.slack_incident_roots previous
+                                JOIN apis.incident_episodes episode ON episode.id = previous.episode_id
+                                WHERE episode.project_id = #{pid} AND episode.source_kind = #{sourceKind} AND episode.source_id = #{sourceId}
+                                  AND episode.id <> #{eid} AND previous.team_id = #{destination.teamId}
+                                  AND previous.channel_id = #{destination.channelId} AND previous.message_ts IS NOT NULL
+                                ORDER BY episode.started_at DESC LIMIT 1))
                             ON CONFLICT (episode_id, team_id, channel_id) DO UPDATE SET channel_id = EXCLUDED.channel_id
                             RETURNING id|]
                       executeTx
                         [HI.sql|INSERT INTO apis.slack_incident_deliveries
                             (root_id, episode_id, event_id, operation, available_at)
                             SELECT #{rootId}, #{eid}, #{eventId}, 'post_root', #{at}
-                            FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id = #{eventId}
+                            FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id = #{eventId} AND message_ts IS NULL
                             ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
                       let operations :: [Text]
                           operations = case update.delivery of
@@ -642,10 +655,17 @@ recordIncidentEventTx update = do
                       forM_ operations \operation ->
                         executeTx
                           [HI.sql|INSERT INTO apis.slack_incident_deliveries
-                              (root_id, episode_id, event_id, operation, available_at)
-                              SELECT #{rootId}, #{eid}, #{eventId}, #{operation}, #{at}
-                              FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id <> #{eventId}
-                                AND NOT (threadless AND #{operation} = 'update_root')
+                              (root_id, episode_id, event_id, operation, available_at, reply_broadcast)
+                              SELECT #{rootId}, #{eid}, #{eventId}, #{operation}, #{at},
+                                #{announces} AND #{operation} = 'post_reply' AND r.message_ts IS NOT NULL AND NOT EXISTS (
+                                  SELECT 1 FROM apis.slack_incident_deliveries posted
+                                  JOIN apis.slack_incident_roots thread ON thread.id = posted.root_id
+                                  JOIN apis.incident_events event ON event.id = posted.event_id
+                                  WHERE thread.team_id = r.team_id AND thread.channel_id = r.channel_id AND thread.message_ts = r.message_ts
+                                    AND posted.operation IN ('post_root', 'post_reply') AND event.id <> #{eventId}
+                                    AND (event.observed_at AT TIME ZONE 'UTC')::date = (#{at}::timestamptz AT TIME ZONE 'UTC')::date)
+                              FROM apis.slack_incident_roots r WHERE r.id = #{rootId} AND (r.first_event_id <> #{eventId} OR r.message_ts IS NOT NULL)
+                                AND NOT (r.threadless AND #{operation} = 'update_root')
                               ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
                     pure $ Recorded current eventId
 
@@ -771,7 +791,11 @@ claimSlackDeliveriesTx now = do
       FROM candidates c WHERE d.id = c.id RETURNING d.*
     ) SELECT d.id, d.root_id, d.episode_id, e.project_id, r.team_id, r.channel_id, |]
     <> deliveryOperation
-    <> [HI.sql|, CASE WHEN d.operation = 'post_analysis' THEN d.agent_payload WHEN d.operation = 'post_reply' THEN e.reply_payload ELSE e.root_payload END,
+    -- An inherited root's first event replies with the full root message.
+    <> [HI.sql|, CASE WHEN d.operation = 'post_analysis' THEN d.agent_payload
+          WHEN d.operation = 'post_reply' THEN (CASE WHEN d.event_id = r.first_event_id THEN e.root_payload ELSE e.reply_payload END)
+            || CASE WHEN d.reply_broadcast THEN '{"reply_broadcast": true}'::jsonb ELSE '{}'::jsonb END
+          ELSE e.root_payload END,
         initial.root_payload,
         d.lease_token, d.attempts
       FROM claimed d JOIN apis.incident_events e ON e.id = d.event_id

@@ -234,6 +234,8 @@ spec = describe "Monitoring" do
       mapM_ (linksTo widgetUrl) recovered
       -- Project-level channel toggles gate delivery.
       void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "discord", "pagerduty"] [] ["alerts@example.com"] [] Nothing
+      -- Past the flap window, so the re-alert fans out like a fresh one.
+      advanceMinutes tr 60
       putWidget savedWidget{Widget.alertThreshold = Just 1, Widget.unit = Just "events"}
       check `shouldReturn` ["discord:C_MONITOR", "email:alerts@example.com", "pagerduty:widget-monitor-test:PDTrigger"]
       void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "slack", "discord", "phone", "pagerduty"] ["+15550001111"] ["alerts@example.com"] [] Nothing
@@ -247,7 +249,8 @@ spec = describe "Monitoring" do
       copyWidgetId <- maybe (fail "the copied widget has no id") pure copyWidget.id
       copyMonitor <- runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just copyDashboardId) copyWidgetId) >>= maybe (fail "the copied widget has no monitor") pure
       (copyMonitor.notificationCount, copyMonitor.currentValue, copyMonitor.alertConfig.title) `shouldBe` (0, 0, "Checkout errors · Widget Monitor Copy")
-      copyNotifs <- fst <$> captureNotifs tr (evaluateQueryMonitorValue copyMonitor (addUTCTime 3600 frozenTime) 1)
+      copyAt <- addUTCTime 60 <$> getTestTime tr.trTestClock
+      copyNotifs <- fst <$> captureNotifs tr (evaluateQueryMonitorValue copyMonitor copyAt 1)
       deliverySummary copyNotifs `shouldBe` ["discord:C_MONITOR", "email:alerts@example.com", "pagerduty:widget-monitor-test:PDTrigger", "whatsapp:+15550001111"]
       mapM_ (linksTo $ "/p/" <> testPid.toText <> "/dashboards/" <> copyDashboardId.toText <> "?expand=" <> copyWidgetId) copyNotifs
       void $ testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid copyDashboardId Nothing Map.empty
@@ -290,7 +293,7 @@ spec = describe "Monitoring" do
       -- Each transition rewrites the one open issue (even a legacy threshold-bearing title) and links it.
       insertPipelineMonitor tr hyst 100 (Just 80) (Just 60)
       let assertIssue threshold value notifications = do
-            rows <- dbQuery @_ @(Issues.IssueId, Text, Aeson Issues.QueryAlertData) tr [sql| SELECT id, title, issue_data FROM apis.issues WHERE project_id = ? AND target_hash = ? AND issue_type = 'query_alert' AND acknowledged_at IS NULL AND archived_at IS NULL |] (testPid, Monitors.queryAlertKey hyst)
+            rows <- dbQuery @_ @(Issues.IssueId, Text, Aeson Issues.QueryAlertData) tr [sql| SELECT id, title, issue_data FROM apis.issues WHERE project_id = ? AND target_hash = ? AND issue_type = 'query_alert' AND acknowledged_at IS NULL AND archived_at IS NULL |] (testPid, hyst.toText)
             [(title, d.thresholdValue, d.actualValue) | (_, title, Aeson d) <- rows] `shouldBe` [("Pipeline Test Monitor", threshold, value)]
             let emails = [email.htmlBody | EmailNotification email <- notifications]
             emails `shouldSatisfy` (not . null)
@@ -298,7 +301,7 @@ spec = describe "Monitoring" do
           statusAfter dt v = evalMonitorValueAt (addUTCTime dt t0) tr hyst v >> (.currentStatus) <$> fetchMonitor tr hyst
       evalMonitorValueWithNotifs t0 tr hyst 90 >>= assertIssue 80 90
       (.currentStatus) <$> fetchMonitor tr hyst `shouldReturn` Monitors.MSWarning
-      dbExec tr [sql|UPDATE apis.issues SET title = 'Pipeline Test Monitor threshold above 80' WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey hyst)
+      dbExec tr [sql|UPDATE apis.issues SET title = 'Pipeline Test Monitor threshold above 80' WHERE project_id = ? AND target_hash = ?|] (testPid, hyst.toText)
       evalMonitorValueWithNotifs (addUTCTime 120 t0) tr hyst 110 >>= assertIssue 100 110
       (.currentStatus) <$> fetchMonitor tr hyst `shouldReturn` Monitors.MSAlerting
       statusAfter 240 70 `shouldReturn` Monitors.MSAlerting
@@ -437,7 +440,10 @@ spec = describe "Monitoring" do
       emailsTo <$> evalMonitorValueWithNotifs t0 tr free 150 `shouldReturn` [ownerEmail]
       void $ evalMonitorValueWithNotifs (addUTCTime 60 t0) tr free 50
       dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
-      emailsTo <$> evalMonitorValueWithNotifs (addUTCTime 120 t0) tr free 150 >>= (`shouldMatchList` [ownerEmail, "nonowner@example.com"])
+      -- Re-alerting within the hour of a recovery is a flap: neither it nor its recovery emails anyone.
+      evalMonitorValueWithNotifs (addUTCTime 120 t0) tr free 150 `shouldReturn` []
+      evalMonitorValueWithNotifs (addUTCTime 180 t0) tr free 50 `shouldReturn` []
+      emailsTo <$> evalMonitorValueWithNotifs (addUTCTime 3800 t0) tr free 150 >>= (`shouldMatchList` [ownerEmail, "nonowner@example.com"])
 
       -- The email embeds a bounded snapshot of actual readings with a gap, not a rewritten scalar query.
       let earlier = addUTCTime (-300) t0
@@ -594,7 +600,7 @@ spec = describe "Monitoring" do
         dbExec tr [sql|UPDATE apis.error_patterns SET canonical_id = NULL WHERE id = ?|] (Only err.id)
         I.Recorded recurring _ <- record initial{I.issueId = Just nextIssue.id, I.observedAt = againAt, I.rootPayload = payload nextIssue.id}
         recurring.id `shouldNotBe` episode.id
-        void $ captureNotifs tr runSlackIncidentDeliveries
+        void $ captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
         dbExec tr [sql|DELETE FROM apis.issues WHERE id = ?|] (Only nextIssue.id)
         resolve
         fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid recurring.id) `shouldReturn` Just I.EpisodeResolved
@@ -740,8 +746,18 @@ spec = describe "Monitoring" do
         sort [(cid, ts) | (cid, ts, _) <- edits] `shouldBe` sort [(sd.channelId, AE.String <$> sd.threadTs) | sd <- recovered, isJust sd.threadTs]
         for_ edits \(_, _, sd) -> slackText sd `shouldContainAll` ["RECOVERED", "Initial value: 50.0", "widgetZ=", "/issues/"]
         dbQuery tr [sql|SELECT phase FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, mid) `shouldReturn` [Only ("recovered" :: Text)]
+        -- Re-alerting continues each channel's thread instead of posting a new root;
+        -- the first message of a new day in that thread is also sent to the channel.
+        let replies ns = [(sd.channelId, AE.String <$> sd.threadTs, sd.payload ^? key "reply_broadcast") | sd <- ns, isJust sd.threadTs]
+            roots ns = [sd | sd <- ns, isNothing sd.threadTs, AE.Object obj <- [sd.payload], not (KM.member "ts" obj)]
         advanceMinutes tr 1
-        map (.threadTs) <$> evaluate 84 `shouldReturn` [Nothing, Nothing]
+        continued <- evaluate 84
+        (sort (replies continued), roots continued) `shouldBe` (sort [(cid, ts, Nothing) | (cid, ts, _) <- edits], [])
+        advanceMinutes tr 1
+        void $ evaluate 18
+        advanceMinutes tr (24 * 60)
+        nextDay <- evaluate 84
+        (sort (replies nextDay), roots nextDay) `shouldBe` (sort [(cid, ts, Just (AE.Bool True)) | (cid, ts, _) <- edits], [])
 
       it "records recovery while muted and refreshes the root when delivery resumes" \tr -> do
         mid <- monitorOf <$> setupWithIssue tr
@@ -756,13 +772,13 @@ spec = describe "Monitoring" do
         resumed <- slack . fst <$> captureNotifs tr runSlackIncidentDeliveries
         [t | AE.Object obj <- map (.payload) resumed, KM.member "ts" obj, Just (AE.String t) <- [KM.lookup "text" obj]] `shouldSatisfy` \case [t] -> "RECOVERED" `T.isInfixOf` t; _ -> False
         advanceMinutes tr 1
-        length . filter (isNothing . (.threadTs)) . slack <$> evaluateMonitor tr mid 84 `shouldReturn` 1
+        length . filter (isJust . (.threadTs)) . slack <$> evaluateMonitor tr mid 84 `shouldReturn` 1
 
       -- `setup` stops short of the issue row: the rollback asserts the issue is created inside the outbox transaction.
       it "an issue-less episode is refused, an outbox failure rolls back the evaluation, and one long-lived issue counts firings, not ticks" \tr -> do
         update <- setup tr
         let mid = monitorOf update
-            issueRows = dbQuery @_ @(Issues.IssueId, Maybe UTCTime, Maybe UTCTime, Int64) tr [sql|SELECT id, acknowledged_until, archived_at, affected_requests FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
+            issueRows = dbQuery @_ @(Issues.IssueId, Maybe UTCTime, Maybe UTCTime, Int64) tr [sql|SELECT id, acknowledged_until, archived_at, affected_requests FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, mid.toText)
             fireAgain = advanceMinutes tr 1 >> void (evaluateMonitor tr mid 18) >> advanceMinutes tr 1 >> void (evaluateMonitor tr mid 84)
         setupSlackData tr testPid "T1"
         dbExec tr [sql|UPDATE projects.teams SET disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (Only testPid)
@@ -1551,7 +1567,7 @@ setupWithIssue :: TestResources -> IO I.IncidentUpdate
 setupWithIssue tr = do
   update <- setup tr
   issue <- runTestBgNoReset tr do
-    created <- Issues.createQueryAlertIssue testPid (Monitors.queryAlertKey $ monitorOf update) "Measured threshold exceeded" "" 60 84 Issues.Above
+    created <- Issues.createQueryAlertIssue testPid (monitorOf update).toText "Measured threshold exceeded" "" 60 84 Issues.Above
     created <$ Issues.insertIssue created
   pure (update{I.issueId = Just issue.id} :: I.IncidentUpdate)
 

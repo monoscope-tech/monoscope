@@ -20,7 +20,6 @@ module Models.Apis.Monitors (
   QueryMonitorId,
   pattern QueryMonitorId,
   unQueryMonitorId,
-  queryAlertKey,
   MonitorStatus (..),
   MeasurementFailure (..),
   getAlertsByTeam,
@@ -75,16 +74,6 @@ pattern QueryMonitorId{unQueryMonitorId} = UUIDId unQueryMonitorId
 
 
 {-# COMPLETE QueryMonitorId #-}
-
-
--- | A query alert's issue identity (@target_hash@ and @query_id@): the derived @show@ of
--- the dedicated newtype 'QueryMonitorId' used to be, frozen because every stored row
--- dedups on it.
---
--- >>> queryAlertKey (QueryMonitorId UUID.nil)
--- "QueryMonitorId {unQueryMonitorId = 00000000-0000-0000-0000-000000000000}"
-queryAlertKey :: QueryMonitorId -> Text
-queryAlertKey mid = "QueryMonitorId {unQueryMonitorId = " <> mid.toText <> "}"
 
 
 data MeasurementFailure = NoMeasurements | NonFiniteMeasurements | EvaluationFailed
