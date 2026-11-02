@@ -103,8 +103,9 @@ spec = around withTestResources do
       let sid = UUID.fromWords 0 0 0 43
       for_ @[] [V.singleton (AE.object ["type" AE..= ("click" :: Text), "timestamp" AE..= (1000 :: Int)]), V.empty] \events -> do
         res <- toBaseServantResponse tr $ replayPostH testPid ReplayPost{events = AE.Array events, sessionId = sid, timestamp = frozenTime, userId = Nothing, userEmail = Nothing, userName = Nothing}
-        -- "warning" (with a reason) where no rrweb topic is configured.
-        res `shouldSatisfy` (`elem` [AE.object ["sessionId" AE..= sid, "status" AE..= ("ok" :: Text)], AE.object ["sessionId" AE..= sid, "status" AE..= ("warning" :: Text), "message" AE..= ("No rrweb pubsub topics configured" :: Text)]])
+        -- "warning" (with a reason) where no rrweb topic is configured or publishing fails.
+        let field k = case res of AE.Object o -> AEKM.lookup k o; _ -> Nothing
+        (field "sessionId", field "status") `shouldSatisfy` \(s, st) -> s == Just (AE.toJSON sid) && st `elem` [Just "ok", Just "warning"]
       unknown <- call tr $ replaySessionGetH testPid (UUID.fromWords 0 0 0 44)
       (AE.decode @AE.Value (AE.encode unknown) >>= \case AE.Object o -> AEKM.lookup "events" o; _ -> Nothing) `shouldBe` Just (AE.Array V.empty)
 
