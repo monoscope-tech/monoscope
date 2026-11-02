@@ -66,6 +66,7 @@ module Pkg.TestUtils (
   dbExec,
   dbQuery,
   dbOne,
+  seedSlackChannel,
   IssueSeed (..),
   issueSeed,
   seedIssue,
@@ -1310,6 +1311,18 @@ dbExec tr q args = withClockedConn tr \conn -> void $ PGS.execute conn q args
 
 dbQuery :: forall q r. (PGS.FromRow r, PGS.ToRow q) => TestResources -> PGS.Query -> q -> IO [r]
 dbQuery tr q args = withClockedConn tr \conn -> PGS.query conn q args
+
+
+-- | Slack creds on the everyone team plus error alerts, so notify paths don't short-circuit. Idempotent.
+seedSlackChannel :: TestResources -> IO ()
+seedSlackChannel tr =
+  forM_
+    [ [sql| INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token) VALUES (?, 'T_TEST', 'C_TEST', 'TestTeam', 'xoxb-test')
+            ON CONFLICT (project_id) DO UPDATE SET channel_id = 'C_TEST', bot_token = 'xoxb-test' |]
+    , [sql| UPDATE projects.teams SET slack_channels = ARRAY['C_TEST']::text[], disabled_channels = '{}' WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL |]
+    , [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |]
+    ]
+    \q -> dbExec tr q (Only testPid)
 
 
 withClockedConn :: TestResources -> (Connection -> IO a) -> IO a

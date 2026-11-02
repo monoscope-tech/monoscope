@@ -1,7 +1,6 @@
 module BackgroundJobs.NotificationsSpec (spec) where
 
 import BackgroundJobs qualified
-import Data.Pool (withResource)
 import Data.Time (UTCTime, addUTCTime)
 import Database.PostgreSQL.Simple qualified as PGS
 import Effectful.Time qualified as Time
@@ -13,24 +12,6 @@ import Pages.Projects qualified as ProjectPages
 import Pkg.EmailTemplates qualified as ET
 import Pkg.TestUtils
 import Servant qualified
-
-
--- Seed slack creds + enable error alerts so notify paths don't short-circuit.
--- Idempotent — callable from every test.
-seedSlackChannel :: TestResources -> IO ()
-seedSlackChannel tr = withResource tr.trPool \conn -> do
-  void $ PGS.execute conn
-    [sql| INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token)
-          VALUES (?, 'T_TEST', 'C_TEST', 'TestTeam', 'xoxb-test')
-          ON CONFLICT (project_id) DO UPDATE SET channel_id = 'C_TEST', bot_token = 'xoxb-test' |]
-    (PGS.Only testPid)
-  void $ PGS.execute conn
-    [sql| UPDATE projects.teams SET slack_channels = ARRAY['C_TEST']::text[], disabled_channels = '{}'
-          WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL |]
-    (PGS.Only testPid)
-  void $ PGS.execute conn
-    [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |]
-    (PGS.Only testPid)
 
 
 spec :: Spec
