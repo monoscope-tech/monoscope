@@ -4913,14 +4913,16 @@ spec = around withTestResources do
 
   it "Discord: signed interactions answer ping, /here, deferred /monoscope in channels and threads, and /dashboard" \tr -> do
     setupDiscordData tr testPid "1234567890123456789"
-    let handler payload = let (body, sig, ts) = signDiscordPayload (toStrict $ AE.encode payload) "1706745600" in discordInteractionsH Nothing body (Just sig) (Just ts)
+    let handler payload = let (body, sig, ts) = signDiscordPayload (toStrict $ AE.encode payload) "1735689600" in discordInteractionsH Nothing body (Just sig) (Just ts)
         interact = toBaseServantResponse tr . handler
         command name query channel = [aesonQQ|{"type": 2, "id": "1234567890123456789", "token": "aW50ZXJhY3Rpb246MTIzNDU2Nzg5MDEyMzQ1Njc4OTpBYkNkRWZHaElqS2xNbk9wUXJTdFV2V3h5WkFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo", "data": {"name": #{name :: Text}, "options": [{"name": "question", "value": #{query :: Text}}]}, "channel_id": "1234567890123456789", "guild_id": "1234567890123456789", "channel": #{channel}}|]
         thread = [aesonQQ|{"id": "thread_123", "name": "test-thread", "guild_id": "1234567890123456789", "type": 11, "parent_id": "1234567890123456789", "owner_id": "1234567890123456789", "thread_metadata": null}|]
         ping = [aesonQQ|{"type": 1, "id": "123", "token": "tok"}|]
-        (pingBody, _, pingTs) = signDiscordPayload (toStrict $ AE.encode ping) "1706745600"
+        (pingBody, _, pingTs) = signDiscordPayload (toStrict $ AE.encode ping) "1735689600"
+        (staleBody, staleSig, staleTs) = signDiscordPayload (toStrict $ AE.encode ping) "1735689299"
     interact ping `shouldReturn` AE.object ["type" .= (1 :: Int)]
-    toBaseServantResponse tr (statusOf $ discordInteractionsH Nothing pingBody (Just $ BS.replicate 128 0x30) (Just pingTs)) `shouldReturn` 401
+    -- discordInteraction_staleTimestamp_rejected: a validly signed request replayed past Slack's 300s window.
+    traverse (toBaseServantResponse tr . statusOf) [discordInteractionsH Nothing pingBody (Just $ BS.replicate 128 0x30) (Just pingTs), discordInteractionsH Nothing staleBody (Just staleSig) (Just staleTs)] `shouldReturn` [401, 401]
     interact (command "here" "" AE.Null) >>= goldenJson "discord/here_response.json"
     interact (command "monoscope" "show errors" AE.Null) `shouldReturn` AE.object []
     histories <- newIORef ([] :: [[(Chat.Role, Text)]])

@@ -24,7 +24,6 @@ import Data.Effectful.Wreq (
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (dupe)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -38,7 +37,6 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 import Control.Exception (ErrorCall (..))
 import Control.Monad.Extra (whileM)
-import Data.Char (isDigit)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, raise, type (:>))
@@ -65,7 +63,7 @@ import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, pageTitle, sessM)
 import Pages.Bots.SlackProgress qualified as Progress
-import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, installedResponse, runBotQueryWithTools, slackResponse, withBotThread)
+import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, freshWebhookTimestamp, getLoadingMessage, installedResponse, runBotQueryWithTools, slackResponse, withBotThread)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
@@ -876,9 +874,7 @@ verifySlackSignature :: Text -> UTCTime -> Maybe Text -> Maybe Text -> ByteStrin
 verifySlackSignature secret now timestamp signature body = fromMaybe False do
   guard $ not $ T.null secret
   ts <- timestamp
-  guard $ not (T.null ts) && T.all isDigit ts
-  seconds <- readMaybe @Integer $ toString ts
-  guard $ abs (utcTimeToPOSIXSeconds now - fromInteger seconds) <= 300
+  guard $ freshWebhookTimestamp now ts
   digest <- signature >>= T.stripPrefix "v0=" >>= rightToMaybe . B16.decode . encodeUtf8
   let signed = "v0:" <> encodeUtf8 ts <> ":" <> body
       expected = BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) signed :: HMAC.HMAC SHA256) :: ByteString
