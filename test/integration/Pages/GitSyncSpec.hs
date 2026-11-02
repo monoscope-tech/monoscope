@@ -5,23 +5,17 @@ import Control.Lens ((.~), (^.), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
 import Data.Base64.Types (extractBase64)
-import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.Effectful.Wreq qualified as W
-import Data.Map.Strict qualified as M
-import Data.Maybe (fromJust)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (getCurrentTime)
 import Data.UUID qualified as UUID
-import Data.UUID.Quasi (uuid)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (execute)
-import Effectful (Eff, runEff)
-import Effectful.Error.Static (catchError)
+import Effectful (runEff)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
@@ -30,23 +24,10 @@ import Network.Wreq qualified as Wreq
 import OddJobs.Job (createJob)
 import Pages.GitSync (GitSyncForm (..))
 import Pages.GitSync qualified as GitSyncPage
-import Pkg.DeriveUtils (DB)
 import Pkg.Git qualified as Git
 import Pkg.TestUtils
-import Servant (ResponseHeader (..), ServerError (..), getResponse, lookupResponseHeader)
-import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec (afterAll_, beforeAll_, pending)
-import UnliftIO.Exception (bracket, try)
-import "cryptonite" Crypto.Hash.Algorithms (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
-
-
-isGitSyncPush, isGitSyncFromRepo :: (a, BackgroundJobs.BgJobs) -> Bool
-isGitSyncPush (_, BackgroundJobs.GitSyncPushDashboard{}) = True
-isGitSyncPush _ = False
-isGitSyncFromRepo (_, BackgroundJobs.GitSyncFromRepo{}) = True
-isGitSyncFromRepo (_, BackgroundJobs.GitSyncRepository{}) = True
-isGitSyncFromRepo _ = False
+import UnliftIO.Exception (try)
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -136,11 +117,6 @@ ghDeleteFile cfg path sha = do
   pure $ bimap (toText . show @_ @HttpException) (const ()) result
 
 
--- | Check if file exists
-ghFileExists :: GitHubTestConfig -> Text -> IO Bool
-ghFileExists cfg path = isRight <$> ghGetFile cfg path
-
-
 -- | List files in a directory
 ghListFiles :: GitHubTestConfig -> Text -> IO [Text]
 ghListFiles cfg dir = do
@@ -170,56 +146,17 @@ ghCleanupDashboards cfg = do
 
 setupSync :: TestResources -> GitHubTestConfig -> Maybe Text -> IO ()
 setupSync tr cfg prefixM = do
-  let form = GitSyncForm
-        { host = Just Git.GitHub
-        , apiBase = Nothing
-        , owner = cfg.owner
-        , repo = cfg.repo
-        , branch = cfg.branch
-        , accessToken = cfg.pat
-        , webhookSecret = Nothing
-        , pathPrefix = prefixM
-        }
-  void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid form
-
-
--- | Connect a sync row on a given host, so a webhook test has a row to resolve against.
-setupSyncOn :: TestResources -> Git.GitHost -> Text -> Text -> Maybe Text -> IO ()
-setupSyncOn tr host owner repo secret = do
-  -- One sync row per project, so each host under test replaces the last.
-  void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
+  withResource tr.trPool \conn -> do
+    void $ execute conn [sql|DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'|] ()
+    void $ execute conn [sql|DELETE FROM projects.dashboards WHERE project_id = ?|] (Only testPid)
+    void $ execute conn [sql|DELETE FROM projects.git_sync WHERE project_id = ?|] (Only testPid)
   void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid
-    GitSyncForm
-      { host = Just host
-      , apiBase = if host == Git.Gitea then Just "https://git.example.com" else Nothing
-      , owner = owner
-      , repo = repo
-      , branch = "main"
-      , accessToken = "tok"
-      , webhookSecret = secret
-      , pathPrefix = Nothing
-      }
+    GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = cfg.owner, repo = cfg.repo, branch = cfg.branch, accessToken = cfg.pat, webhookSecret = Nothing, pathPrefix = prefixM}
 
 
--- | HMAC-SHA256 hex of a body, the digest three of the four hosts send.
-hmacHexOf :: Text -> ByteString -> Text
-hmacHexOf secret body = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256)
-
-
-clearJobs :: TestResources -> IO ()
-clearJobs tr = liftIO $ withResource tr.trPool \conn -> do
-  void $ execute conn [sql|DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'|] ()
-
-
-clearAllTestData :: TestResources -> IO ()
-clearAllTestData tr = liftIO $ withResource tr.trPool \conn -> do
-  void $ execute conn [sql|DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'|] ()
-  void $ execute conn [sql|DELETE FROM projects.dashboards WHERE project_id = ?|] (Only testPid)
-  void $ execute conn [sql|DELETE FROM projects.github_sync WHERE project_id = ?|] (Only testPid)
-
-
-createDash :: TestResources -> Text -> [Text] -> IO Dashboards.DashboardId
-createDash tr title tags = do
+-- | A dashboard assigned to the connected repository, optionally first given a new file's path.
+createDash :: TestResources -> Text -> [Text] -> Maybe Text -> IO Dashboards.DashboardId
+createDash tr title tags newPath = do
   now <- getCurrentTime
   dashId <- UUIDId <$> UUID.nextRandom
   let dash = (Dashboards.mkDashboardVM dashId testPid now Projects.systemUserId)
@@ -227,29 +164,33 @@ createDash tr title tags = do
         , Dashboards.tags = V.fromList tags
         , Dashboards.title = title
         }
-  dashId <$ runTestBg frozenTime tr (Dashboards.insert dash)
+  _ <- runTestBg frozenTime tr (Dashboards.insert dash)
+  for_ newPath \path -> gitInfo tr dashId path ""
+  [sync] <- runQueryEffect tr $ GitSync.getGitSyncs testPid
+  runQueryEffect tr (GitSync.assignDashboardRepository testPid dashId sync.id) `shouldReturn` Right ()
+  pure dashId
 
 
-runSyncJobs :: TestResources -> IO ()
-runSyncJobs tr = do
+-- | Queue @job@ (a push of a dashboard, or any sync job) and run every sync job.
+syncNow :: TestResources -> Either Dashboards.DashboardId BackgroundJobs.BgJobs -> IO ()
+syncNow tr job = do
+  withResource tr.trPool \conn -> void $ execute conn [sql|DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'|] ()
+  either (void . toBaseServantResponse tr . atAuthToBase tr.trSessAndHeader . GitSyncPage.queueGitSyncPush testPid) (\j -> withResource tr.trPool \conn -> void $ createJob conn "background_jobs" j) job
   withResource tr.trPool $ setBjRunAtInThePast frozenTime
-  void $ runBackgroundJobsWhere frozenTime tr.trATCtx isGitSyncJob
-  where
-    isGitSyncJob BackgroundJobs.GitSyncPushDashboard{} = True
-    isGitSyncJob BackgroundJobs.GitSyncFromRepo{} = True
-    isGitSyncJob BackgroundJobs.GitSyncRepository{} = True
-    isGitSyncJob BackgroundJobs.GitSyncPushAllDashboards{} = True
-    isGitSyncJob _ = False
+  void $ runBackgroundJobsWhere frozenTime tr.trATCtx \case
+    BackgroundJobs.GitSyncPushDashboard{} -> True
+    BackgroundJobs.GitSyncFromRepo{} -> True
+    BackgroundJobs.GitSyncRepository{} -> True
+    BackgroundJobs.GitSyncPushAllDashboards{} -> True
+    _ -> False
 
 
-onlySync :: DB es => Projects.ProjectId -> Eff es (Maybe GitSync.GitHubSync)
-onlySync pid = GitSync.getGitSyncs pid <&> \case [sync] -> Just sync; _ -> Nothing
+gitInfo :: TestResources -> Dashboards.DashboardId -> Text -> Text -> IO ()
+gitInfo tr did path sha = void $ runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo did path sha
 
 
-assignDash :: TestResources -> Dashboards.DashboardId -> IO ()
-assignDash tr did = do
-  Just sync <- runQueryEffect tr $ onlySync testPid
-  runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
+dashboardsAt :: TestResources -> Text -> IO [Dashboards.DashboardVM]
+dashboardsAt tr path = filter (\d -> d.filePath == T.stripPrefix "dashboards/" path) <$> runTestBg frozenTime tr (Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle)
 
 
 uniquePath :: Text -> IO Text
@@ -262,330 +203,13 @@ uniquePath base = do
 -- SPEC
 -- ═══════════════════════════════════════════════════════════════════════════
 
+-- | Opt-in checks against real git hosts; everything that runs without one is in "Pages.CodeContextSpec".
 spec :: Spec
--- Uses aroundAll + beforeAll (shared resource across examples), so it can't use the
--- per-test isolation the rest of the suite relies on for parallelism. Run sequentially.
+-- aroundAll shares one resource across examples, so this spec runs sequentially.
 spec = sequential do
   liveSmokeSpec
-  -- Layer 1: Unit/Integration tests (no external deps)
-  aroundAll withTestResources do
-    describe "GitHub Sync Settings" do
-      it "installationAttempt_isSessionBoundSingleUseAndExpires" \tr -> do
-        let session = (getResponse tr.trSessAndHeader).persistentSession.id
-            attempt = GitSync.InstallationAttempt testPid GitSync.InstallCode (GitSync.AuthorizeApp 42)
-        nonce <- runTestBg frozenTime tr $ GitSync.createInstallationAttempt session attempt
-        stranger <- Projects.PersistentSessionId <$> UUID.nextRandom
-        runQueryEffect tr (GitSync.consumeInstallationAttempt stranger nonce) `shouldReturn` Nothing
-        runQueryEffect tr (GitSync.consumeInstallationAttempt session nonce) `shouldReturn` Just attempt
-        runQueryEffect tr (GitSync.consumeInstallationAttempt session nonce) `shouldReturn` Nothing
-        expired <- runTestBg frozenTime tr $ GitSync.createInstallationAttempt session attempt
-        runTestBg (addUTCTime 901 frozenTime) tr (GitSync.consumeInstallationAttempt session expired) `shouldReturn` Nothing
-        void $ runTestBg (addUTCTime 901 frozenTime) tr $ GitSync.createInstallationAttempt session attempt
-        retained <- dbQuery tr "SELECT EXISTS (SELECT 1 FROM projects.github_installation_attempts WHERE id = ?)" (Only expired)
-        retained `shouldBe` [Only False]
-
-      it "installationAuthorization_requiresTheGitHubAccountOwner" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            authorize installations memberships =
-              runTestBgRecordingHTTP frozenTime tr
-                $ withHTTPResponses (\_ endpoint -> pure $ Just $ if endpoint == "https://github.com/login/oauth/access_token" then "{\"access_token\":\"fixture-user-token\"}" else if endpoint == "https://api.github.com/user" then "{\"login\":\"team\"}" else if "https://api.github.com/user/memberships/orgs?" `T.isPrefixOf` toText endpoint then memberships else installations)
-                $ GitSync.authorizeGitHubInstallation encKey testPid "123" "fixture-client" "fixture-secret" "fixture-code" "http://localhost:8081/github/callback" 42
-        (_, denied) <- authorize "{\"installations\":[{\"id\":43,\"account\":{\"login\":\"foreign\"}}]}" "[]"
-        denied `shouldBe` Left GitSync.InstallationOwnershipRequired
-        runQueryEffect tr (GitSync.getGitHubCredentials testPid) >>= (`shouldSatisfy` null)
-        (_, collaborator) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"foreign\",\"type\":\"User\"}}]}" "[]"
-        collaborator `shouldBe` Left GitSync.InstallationOwnershipRequired
-        let organization = "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"Organization\"}}]}"
-        for_ ([("member", "active", False), ("admin", "pending", False), ("admin", "active", True)] :: [(Text, Text, Bool)]) \(role, membershipState, allowed) -> do
-          let memberships = AE.encode ([AE.object ["state" AE..= membershipState, "role" AE..= role, "organization" AE..= AE.object ["login" AE..= ("team" :: Text)]]] :: [AE.Value])
-          (_, result) <- authorize organization memberships
-          result `shouldBe` if allowed then Right () else Left GitSync.InstallationOwnershipRequired
-        (requests, verified) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}" "[]"
-        verified `shouldBe` Right ()
-        map fst requests `shouldBe` ["https://github.com/login/oauth/access_token", "https://api.github.com/user/installations?per_page=100&page=1", "https://api.github.com/user"]
-        let firstPage = AE.encode $ replicate 100 $ AE.object ["state" AE..= ("active" :: Text), "role" AE..= ("member" :: Text)]
-            ownerPage = "[{\"state\":\"active\",\"role\":\"admin\",\"organization\":{\"login\":\"Team\"}}]"
-            provider _ endpoint = pure $ Just $ if endpoint == "https://github.com/login/oauth/access_token" then "{\"access_token\":\"fixture-user-token\"}" else if "user/installations?" `T.isInfixOf` toText endpoint then "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"Team\",\"type\":\"Organization\"}}]}" else if "page=2" `T.isSuffixOf` toText endpoint then ownerPage else firstPage
-        (paged, owner) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses provider $ GitSync.authorizeGitHubInstallation encKey testPid "123" "fixture-client" "fixture-secret" "fixture-code" "https://monoscope.test/github/callback" 42
-        owner `shouldBe` Right ()
-        map fst paged `shouldSatisfy` elem "https://api.github.com/user/memberships/orgs?per_page=100&page=2"
-        [account] <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
-        (account.account, account.installationId, account.accessToken) `shouldBe` ("team", Just 42, Nothing)
-        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
-
-      it "installationSelection_rejectsAnInstallationWithoutAProjectGrant" \tr -> do
-        let isolated = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppPrivateKey = ""}}}
-        status <- runAuthHandler isolated $ catchError @ServerError (GitSyncPage.githubAppSelectRepoH testPid (GitSyncPage.RepoSelectForm ["foreign/private"] "main" Nothing 424242) $> 200) (\_ err -> pure err.errHTTPCode)
-        status `shouldBe` 403
-        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
-      it "tokenConnection_rejectsMissingTokenAndQueuesOnlyFirstImport" \tr -> do
-        let form owner repo branch token prefix = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
-        clearJobs tr
-        for_ ["", " "] \token -> do
-          (headers, _) <- testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing)
-          case lookupResponseHeader @"HX-Trigger" headers of
-            Header value -> value `shouldSatisfy` T.isInfixOf "Enter an access token."
-            _ -> expectationFailure "Missing token error was not shown"
-          runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
-          getPendingBackgroundJobs tr.trATCtx >>= (`shouldSatisfy` V.null)
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
-        sync <- maybe (fail "Git connection was not created") pure =<< runTestBg frozenTime tr (onlySync testPid)
-        (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)
-        let imports = getPendingBackgroundJobs tr.trATCtx <&> V.filter isGitSyncFromRepo
-        imports >>= \jobs -> [(pid, sid) | (_, BackgroundJobs.GitSyncRepository pid sid) <- V.toList jobs] `shouldBe` [(testPid, sync.id)]
-
-        -- The update path used to write every field of this form except the folder, so an edit
-        -- to "Folder in repo" vanished on save while the page redrew as if it had stuck. An
-        -- empty token box still means "keep the stored credential".
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "updated" "updated-repo" "dev" "" (Just "monoscope"))
-        updated <- maybe (fail "Git connection disappeared after update") pure =<< runTestBg frozenTime tr (onlySync testPid)
-        (updated.owner, updated.repo, updated.branch, updated.pathPrefix) `shouldBe` ("updated", "updated-repo", "dev", "monoscope")
-        updated.accessToken `shouldBe` sync.accessToken
-        V.length <$> imports `shouldReturn` 1
-
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
-        runTestBg frozenTime tr (onlySync testPid) >>= (`shouldSatisfy` isNothing)
-
-      -- None of these checked membership: any signed-in user could connect, replace or
-      -- disconnect another project's config repository, or bind a GitHub installation to it.
-      it "gitSync_nonMember_cannotMutate" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            form = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = "attacker", repo = "evil", branch = "main", accessToken = "ghp_x", webhookSecret = Nothing, pathPrefix = Nothing}
-        victim <- createTestProject tr "victim"
-        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey victim Git.GitHub Nothing "acme" "config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
-        let syncOf = map (\s -> (s.owner, s.repo, s.installationId)) <$> runTestBg frozenTime tr (GitSync.getGitSyncs victim)
-        seeded <- syncOf
-        assertNonMemberDenied tr victim $ GitSyncPage.gitSyncSettingsPostH victim form
-        assertNonMemberDenied tr victim $ GitSyncPage.gitSyncSettingsDeleteH victim
-        assertNonMemberDenied tr victim $ GitSyncPage.githubAppSelectRepoH victim (GitSyncPage.RepoSelectForm ["attacker/evil"] "main" Nothing 42)
-        assertNonMemberDenied tr victim $ GitSyncPage.githubAppInstallH victim Nothing
-        -- @state@ is now a session-bound nonce, so a project id in it is no grant at all.
-        _ <- testServant tr $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just victim.toText) Nothing
-        syncOf `shouldReturn` seeded
-
-    describe "Sync Plan Building" do
-      it "creates for new files" \_ -> do
-        let entries = [GitSync.TreeEntry "dashboards/new.yaml" True (Just "sha1") (Just 100), GitSync.TreeEntry "dashboards/other.yaml" True (Just "sha2") (Just 100)]
-            plan = GitSync.buildSyncPlan "dashboards/" entries M.empty
-        length [() | GitSync.SyncCreate{} <- plan] `shouldBe` 2
-
-      it "updates for changed SHAs" \_ -> do
-        let did = UUIDId [uuid|11111111-1111-1111-1111-111111111111|]
-            entries = [GitSync.TreeEntry "dashboards/x.yaml" True (Just "newsha") (Just 100)]
-            plan = GitSync.buildSyncPlan "dashboards/" entries (one ("x.yaml", (did, Just "oldsha")))
-        length [() | GitSync.SyncUpdate{} <- plan] `shouldBe` 1
-
-      it "deletes for removed files" \_ -> do
-        let did = UUIDId [uuid|22222222-2222-2222-2222-222222222222|]
-            plan = GitSync.buildSyncPlan "dashboards/" [] (one ("gone.yaml", (did, Just "sha")))
-        length [() | GitSync.SyncDelete{} <- plan] `shouldBe` 1
-
-      it "ignores non-dashboard files" \_ -> do
-        let entries = [GitSync.TreeEntry "src/main.hs" True (Just "s1") Nothing, GitSync.TreeEntry "dashboards/ok.yaml" True (Just "s2") Nothing]
-            plan = GitSync.buildSyncPlan "dashboards/" entries M.empty
-        length plan `shouldBe` 1
-
-      it "supports .yml extension" \_ -> do
-        let entries = [GitSync.TreeEntry "dashboards/test.yml" True (Just "sha") Nothing]
-            plan = GitSync.buildSyncPlan "dashboards/" entries M.empty
-        length plan `shouldBe` 1
-
-      it "respects path prefix" \_ -> do
-        let entries = [GitSync.TreeEntry "app/dashboards/x.yaml" True (Just "sha") Nothing, GitSync.TreeEntry "dashboards/y.yaml" True (Just "sha2") Nothing]
-            plan = GitSync.buildSyncPlan "app/dashboards/" entries M.empty
-        length plan `shouldBe` 1
-        case plan of { [GitSync.SyncCreate p _] -> p `shouldBe` "app/dashboards/x.yaml"; _ -> fail "wrong" }
-
-    describe "YAML Conversion" do
-      it "parses valid YAML" \_ -> do
-        let yaml = "title: Test\ntags:\n  - prod\nwidgets: []\n"
-        case GitSync.yamlToDashboard yaml of
-          Left e -> fail $ toString e
-          Right s -> (s.title, s.tags) `shouldBe` (Just "Test", Just ["prod"])
-
-      it "serializes dashboard to YAML" \_ -> do
-        let schema = (def :: Dashboards.Dashboard){Dashboards.title = Just "My Dash", Dashboards.tags = Just (["a", "b"] :: [Text])}
-        case GitSync.yamlToDashboard (GitSync.dashboardToYaml schema) of
-          Left e -> fail $ toString e
-          Right s -> s.title `shouldBe` Just "My Dash"
-
-      it "handles missing optional fields" \_ -> do
-        let yaml = "title: Minimal\nwidgets: []\n"
-        case GitSync.yamlToDashboard yaml of
-          Left e -> fail $ toString e
-          Right s -> s.title `shouldBe` Just "Minimal"
-
-    -- titleToFilePath's kebab-casing is covered by its own doctests (src/Models/Projects/GitSync.hs).
-    describe "Path Helpers" do
-      it "getDashboardsPath without prefix" \_ -> do
-        let sync = def{GitSync.pathPrefix = ""}
-        GitSync.getDashboardsPath sync `shouldBe` "dashboards/"
-
-      it "getDashboardsPath with prefix" \_ -> do
-        let sync = def{GitSync.pathPrefix = "myapp"}
-        GitSync.getDashboardsPath sync `shouldBe` "myapp/dashboards/"
-
-    describe "Dashboard Git Info" do
-      it "updates filePath and fileSha" \tr -> do
-        dashId <- createDash tr "Git Info Test" []
-        _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId "dashboards/test.yaml" "abc123"
-        dashM <- runTestBg frozenTime tr $ Dashboards.getDashboardByProjectId testPid dashId
-        (fromJust dashM).filePath `shouldBe` Just "dashboards/test.yaml"
-        (fromJust dashM).fileSha `shouldBe` Just "abc123"
-
-      it "gets git state for repository" \tr ->
-        bracket
-          (runQueryEffect tr (GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "acme" "dashboards" "main" (GitSync.AppInstallation 42) Nothing "") >>= maybe (fail "Expected repository connection") pure)
-          (\sync -> void $ runQueryEffect tr $ GitSync.deleteGitHubSync sync.id)
-          \sync -> do
-            d1 <- createDash tr "State A" []
-            d2 <- createDash tr "State B" []
-            for_ [d1, d2] \did -> runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
-            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo d1 "a.yaml" "sha-a"
-            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo d2 "b.yaml" "sha-b"
-            gitState <- runTestBg frozenTime tr $ GitSync.getRepositoryDashboardState testPid sync.id
-            M.lookup "a.yaml" gitState `shouldBe` Just (d1, Just "sha-a")
-            M.lookup "b.yaml" gitState `shouldBe` Just (d2, Just "sha-b")
-
-    describe "Job Queuing" do
-      it "queuesPushOnlyAfterDashboardRepositoryIsChosen" \tr -> do
-        setupSync tr GitHubTestConfig{pat = "fake", owner = "o", repo = "r", branch = "main"} Nothing
-        clearJobs tr
-        dashId <- createDash tr "Explicit repository" []
-        _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
-        V.length . V.filter isGitSyncPush <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` 0
-        Just sync <- runQueryEffect tr $ onlySync testPid
-        runQueryEffect tr (GitSync.assignDashboardRepository testPid dashId sync.id) `shouldReturn` Right ()
-        _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
-        jobs <- getPendingBackgroundJobs tr.trATCtx
-        V.length (V.filter isGitSyncPush jobs) `shouldBe` 1
-
-      it "skips push when sync disabled" \tr -> do
-        setupSync tr GitHubTestConfig{pat = "fake", owner = "o", repo = "r", branch = "main"} Nothing
-        Just sync <- runQueryEffect tr $ onlySync testPid
-        dashId <- createDash tr "Paused repository" []
-        runQueryEffect tr (GitSync.assignDashboardRepository testPid dashId sync.id) `shouldReturn` Right ()
-        void $ testServant tr $ GitSyncPage.gitSyncRepositoryPauseH testPid sync.id
-        clearJobs tr
-        _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
-        jobs <- getPendingBackgroundJobs tr.trATCtx
-        V.length (V.filter isGitSyncPush jobs) `shouldBe` 0
-
-    describe "Webhook Handler" do
-      -- One body, signed the way each host signs it. The point of these is not the JSON — it
-      -- is that a delivery only queues work when its signature checks out against the secret
-      -- stored on the row, and that the host in the route has to match the row's host.
-      let pushBody owner repo = toStrict $ AE.encode $ AE.object ["push" AE..= AE.object ["changes" AE..= ([AE.object ["new" AE..= AE.object ["name" AE..= ("main" :: Text)]]] :: [AE.Value])], "ref" AE..= ("refs/heads/main" :: Text), "repository" AE..= AE.object ["full_name" AE..= (owner <> "/" <> repo :: Text)]]
-          req _host ev sig body = Git.WebhookReq{event = Just ev, signature = sig, gitlabToken = Nothing, gitlabWebhookId = Nothing, gitlabTimestamp = Nothing, body = body}
-
-      it "queues sync only when the signature verifies" \tr -> do
-        setupSyncOn tr Git.GitHub "webhook-owner" "webhook-repo" (Just "s3cret")
-        clearJobs tr
-        let body = pushBody "webhook-owner" "webhook-repo"
-            signed = "sha256=" <> hmacHexOf "s3cret" body
-
-        -- Forged: right shape, wrong secret. Must not enqueue anything.
-        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just "sha256=deadbeef") body)
-        forged <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
-        forged `shouldBe` 0
-
-        -- Missing entirely: a row that holds a secret asked to be checked.
-        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" Nothing body)
-        unsigned <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
-        unsigned `shouldBe` 0
-
-        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just signed) body)
-        verified <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
-        verified `shouldSatisfy` (>= 1)
-
-      -- Why the announcement is recorded at all: the sync job decides "nothing changed" by
-      -- comparing what it already has against the head the host reports at fetch time. When
-      -- the host answers with a view older than the push it just announced, that comparison
-      -- says "unchanged" and the job completes having done nothing — and nothing re-queues, so
-      -- the push is never applied, only swept up by whatever push comes next. Measured on the
-      -- demo project: 3 of 5 pushes applied, the two misses still unapplied seven minutes on.
-      -- Keeping what the webhook said is what lets the job tell those two cases apart.
-      it "records the head a push announced, so a stale fetch cannot look like no change" \tr -> do
-        setupSyncOn tr Git.GitHub "webhook-owner" "webhook-repo" (Just "s3cret")
-        let body =
-              toStrict
-                $ AE.encode
-                $ AE.object
-                  [ "ref" AE..= ("refs/heads/main" :: Text)
-                  , "repository" AE..= AE.object ["full_name" AE..= ("webhook-owner/webhook-repo" :: Text)]
-                  , "after" AE..= ("f00dcafe" :: Text)
-                  ]
-        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
-        announced <- fmap (>>= (.announcedRevision)) $ runQueryEffect tr $ onlySync testPid
-        announced `shouldBe` Just "f00dcafe"
-
-      -- The announcement has to outlive a pull that did not reach it, or the retry it exists
-      -- to license is cleared by the very fetch that failed to satisfy it.
-      it "keeps an announcement until the revision it names is actually fetched" \tr -> do
-        setupSyncOn tr Git.GitHub "ann-owner" "ann-repo" (Just "s3cret")
-        Just sync <- runQueryEffect tr $ onlySync testPid
-        _ <- runQueryEffect tr $ GitSync.setAnnouncedRevision sync.id "newhead"
-
-        -- A pull that landed on an older head: the announcement must survive it.
-        _ <- runQueryEffect tr $ GitSync.recordImportSuccess sync.id "oldhead"
-        stillPending <- fmap (>>= (.announcedRevision)) $ runQueryEffect tr $ onlySync testPid
-        stillPending `shouldBe` Just "newhead"
-
-        -- The pull that finally reaches it retires it.
-        _ <- runQueryEffect tr $ GitSync.recordImportSuccess sync.id "newhead"
-        settled <- runQueryEffect tr $ onlySync testPid
-        (settled >>= (.announcedRevision)) `shouldBe` Nothing
-        (settled >>= (.lastRevision)) `shouldBe` Just "newhead"
-
-      it "verifies each host in its own dialect" \tr -> do
-        forM_ [(Git.Gitea, "push" :: Text), (Git.Bitbucket, "repo:push")] \(host, ev) -> do
-          setupSyncOn tr host "acme" "config" (Just "s3cret")
-          clearJobs tr
-          let body = pushBody "acme" "config"
-              -- Gitea sends the bare hex digest; Bitbucket prefixes it like GitHub does.
-              sig = (if host == Git.Bitbucket then "sha256=" else "") <> hmacHexOf "s3cret" body
-          _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH host (req host ev (Just sig) body)
-          n <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
-          n `shouldSatisfy` (>= 1)
-
-      it "importsOnlyTheTargetBranchAndIgnoresTheAutomatedPRBranch" \tr -> do
-        setupSyncOn tr Git.GitHub "branch-filter-owner" "config" (Just "s3cret")
-        clearJobs tr
-        for_ (["monoscope-dashboards", "feature/user-pr"] :: [Text]) \branch -> do
-          let body = toStrict $ AE.encode $ AE.object ["repository" AE..= AE.object ["full_name" AE..= ("branch-filter-owner/config" :: Text)], "ref" AE..= ("refs/heads/" <> branch)]
-          void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
-        V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` 0
-        let body = pushBody "branch-filter-owner" "config"
-        void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
-        V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` 1
-
-      it "does not cross hosts on a repository-name collision" \tr -> do
-        -- The same owner/repo on two hosts is two different projects' repositories; a push to
-        -- one must not sync the row belonging to the other.
-        setupSyncOn tr Git.GitLab "acme" "config" (Just "gl-secret")
-        clearJobs tr
-        let body = pushBody "acme" "config"
-        -- Delivered on the Gitea route, signed with Gitea's scheme, but only a GitLab row
-        -- exists: nothing should match.
-        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.Gitea (req Git.Gitea "push" (Just $ hmacHexOf "gl-secret" body) body)
-        n <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
-        n `shouldBe` 0
-
-      it "ignores non-push events and untracked repos" \tr -> do
-        setupSyncOn tr Git.GitHub "webhook-owner" "webhook-repo" (Just "s3cret")
-        clearJobs tr
-        let body = pushBody "webhook-owner" "webhook-repo"
-        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "ping" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
-        let other = pushBody "unknown" "repo"
-        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" other) other)
-        n <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
-        n `shouldBe` 0
-
-  -- Layer 2: E2E tests with real GitHub API.
-  -- The credential is probed first: an expired or revoked PAT is an environment
-  -- problem, and reporting it as ten failing examples trains readers to ignore a
-  -- permanently-red suite. Absent config and unusable config both skip, with the
-  -- message saying which.
+  -- The credential is probed first: an expired or revoked PAT is an environment problem, and
+  -- reporting it as failing examples trains readers to ignore a permanently-red suite.
   configM <- runIO (loadTestConfig >>= traverse (\c -> (c,) <$> ghCredentialUsable c))
   case configM of
     Nothing -> describe "GitHub Sync E2E" $
@@ -596,193 +220,77 @@ spec = sequential do
 
     Just (cfg, True) -> aroundAll withTestResources $ beforeAll_ (ghCleanupDashboards cfg) $ afterAll_ (ghCleanupDashboards cfg) $ do
       describe "GitHub Sync E2E (Real API)" $ do
-        describe "Push: Local → GitHub" $ do
-          it "creates file in GitHub when dashboard pushed" \tr -> do
-            clearAllTestData tr
-            setupSync tr cfg Nothing
-            path <- uniquePath "push-create"
-            dashId <- createDash tr "Push Create Test" ["e2e"]
-            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path, empty sha = new file
-            assignDash tr dashId
-            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
-            runSyncJobs tr
-            exists <- ghFileExists cfg path
-            exists `shouldBe` True
-            (content, _) <- fromRightShow <$> ghGetFile cfg path
-            BS.isInfixOf "Push Create Test" content `shouldBe` True
+        it "pushes creates, updates, records the sha, honours the prefix and leaves a conflicting file alone" \tr -> do
+          setupSync tr cfg Nothing
+          created <- uniquePath "push-create"
+          syncNow tr . Left =<< createDash tr "Push Create Test" ["e2e"] (Just created)
+          (content, _) <- fromRightShow <$> ghGetFile cfg created
+          BS.isInfixOf "Push Create Test" content `shouldBe` True
 
-          it "updates file in GitHub when dashboard changed" \tr -> do
-            clearAllTestData tr
-            setupSync tr cfg Nothing
-            path <- uniquePath "push-update"
-            -- Create initial file
-            _ <- ghPutFile cfg path "title: Original\n" Nothing
-            (_, sha1) <- fromRightShow <$> ghGetFile cfg path
-            -- Create dashboard with that path
-            dashId <- createDash tr "Updated Title" ["updated"]
-            assignDash tr dashId
-            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path sha1
-            clearJobs tr
-            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
-            runSyncJobs tr
-            (content, _) <- fromRightShow <$> ghGetFile cfg path
-            BS.isInfixOf "Updated Title" content `shouldBe` True
+          updated <- uniquePath "push-update"
+          _ <- ghPutFile cfg updated "title: Original\n" Nothing
+          (_, sha1) <- fromRightShow <$> ghGetFile cfg updated
+          updatedDash <- createDash tr "Updated Title" ["updated"] Nothing
+          gitInfo tr updatedDash updated sha1
+          syncNow tr (Left updatedDash)
+          (updatedContent, _) <- fromRightShow <$> ghGetFile cfg updated
+          BS.isInfixOf "Updated Title" updatedContent `shouldBe` True
 
-          it "stores filePath and fileSha after push" \tr -> do
-            clearAllTestData tr
-            setupSync tr cfg Nothing
-            dashId <- createDash tr "SHA Test" []
-            assignDash tr dashId
-            let expectedPath = "sha-test.yaml"
-            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
-            runSyncJobs tr
-            dashM <- runTestBg frozenTime tr $ Dashboards.getDashboardByProjectId testPid dashId
-            let dash = fromJust dashM
-            dash.filePath `shouldBe` Just expectedPath
-            dash.fileSha `shouldSatisfy` isJust
+          recorded <- createDash tr "SHA Test" [] Nothing
+          syncNow tr (Left recorded)
+          Just dash <- runTestBg frozenTime tr $ Dashboards.getDashboardByProjectId testPid recorded
+          dash.filePath `shouldBe` Just "sha-test.yaml"
+          dash.fileSha `shouldSatisfy` isJust
 
-        describe "Pull: GitHub → Local" $ do
-          it "creates dashboard from GitHub YAML" \tr -> do
-            clearAllTestData tr
-            setupSync tr cfg Nothing
-            path <- uniquePath "pull-create"
-            let yaml = "title: Created In GitHub\ntags:\n  - github\n  - pull\nwidgets: []\n"
-            _ <- ghPutFile cfg path (encodeUtf8 yaml) Nothing
-            -- Trigger pull by simulating webhook
-            liftIO $ withResource tr.trPool \conn ->
-              void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
-            runSyncJobs tr
-            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
-            case filter (\d -> d.title == "Created In GitHub") dashes of
-              (d:_) -> d.filePath `shouldBe` T.stripPrefix "dashboards/" path
-              [] -> fail "Expected dashboard not found"
+          -- A stale sha must not overwrite the file.
+          conflicting <- uniquePath "sha-conflict"
+          _ <- ghPutFile cfg conflicting "title: Original\n" Nothing
+          conflictDash <- createDash tr "Conflict Test" [] Nothing
+          gitInfo tr conflictDash conflicting "wrong-sha-12345"
+          syncNow tr (Left conflictDash)
+          (conflictContent, _) <- fromRightShow <$> ghGetFile cfg conflicting
+          BS.isInfixOf "Original" conflictContent `shouldBe` True
 
-          it "updates local dashboard when GitHub file changes" \tr -> do
-            clearAllTestData tr
-            setupSync tr cfg Nothing
-            path <- uniquePath "pull-update"
-            let yaml1 = "title: V1 Title\ntags: []\nwidgets: []\n"
-            _ <- ghPutFile cfg path (encodeUtf8 yaml1) Nothing
-            -- Initial pull
-            clearJobs tr
-            liftIO $ withResource tr.trPool \conn ->
-              void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
-            runSyncJobs tr
-            -- Update in GitHub
-            (_, sha1) <- fromRightShow <$> ghGetFile cfg path
-            let yaml2 = "title: V2 Updated\ntags: []\nwidgets: []\n"
-            _ <- ghPutFile cfg path (encodeUtf8 yaml2) (Just sha1)
-            -- Pull again
-            clearJobs tr
-            liftIO $ withResource tr.trPool \conn ->
-              void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
-            runSyncJobs tr
-            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
-            any (\d -> d.title == "V2 Updated") dashes `shouldBe` True
+          setupSync tr cfg (Just "test-prefix")
+          syncNow tr . Left =<< createDash tr "Prefixed Push" [] Nothing
+          (_, prefixedSha) <- fromRightShow <$> ghGetFile cfg "test-prefix/dashboards/prefixed-push.yaml"
+          void $ ghDeleteFile cfg "test-prefix/dashboards/prefixed-push.yaml" prefixedSha
 
-          it "deletes local dashboard when GitHub file removed" \tr -> do
-            clearAllTestData tr
-            setupSync tr cfg Nothing
-            path <- uniquePath "pull-delete"
-            let yaml = "title: Will Be Deleted\nwidgets: []\n"
-            _ <- ghPutFile cfg path (encodeUtf8 yaml) Nothing
-            -- Initial pull
-            clearJobs tr
-            liftIO $ withResource tr.trPool \conn ->
-              void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
-            runSyncJobs tr
-            dashesBefore <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
-            let beforeCount = length $ filter (\d -> d.filePath == T.stripPrefix "dashboards/" path) dashesBefore
-            beforeCount `shouldBe` 1
-            -- Delete from GitHub
-            (_, sha) <- fromRightShow <$> ghGetFile cfg path
-            _ <- ghDeleteFile cfg path sha
-            -- Pull again
-            clearJobs tr
-            liftIO $ withResource tr.trPool \conn ->
-              void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
-            runSyncJobs tr
-            dashesAfter <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
-            let afterCount = length $ filter (\d -> d.filePath == T.stripPrefix "dashboards/" path) dashesAfter
-            afterCount `shouldBe` 0
+        it "pulls creates, updates and deletes local dashboards from GitHub" \tr -> do
+          setupSync tr cfg Nothing
+          let pull = syncNow tr $ Right $ BackgroundJobs.GitSyncFromRepo testPid
+          path <- uniquePath "pull"
+          _ <- ghPutFile cfg path "title: Created In GitHub\ntags:\n  - github\nwidgets: []\n" Nothing
+          pull
+          map (.title) <$> dashboardsAt tr path `shouldReturn` ["Created In GitHub"]
+          (_, sha1) <- fromRightShow <$> ghGetFile cfg path
+          _ <- ghPutFile cfg path "title: V2 Updated\ntags: []\nwidgets: []\n" (Just sha1)
+          pull
+          map (.title) <$> dashboardsAt tr path `shouldReturn` ["V2 Updated"]
+          (_, sha2) <- fromRightShow <$> ghGetFile cfg path
+          _ <- ghDeleteFile cfg path sha2
+          pull
+          map (.title) <$> dashboardsAt tr path `shouldReturn` []
 
-        describe "Full Sync Cycles" $ do
-          it "round-trips: local → push → modify in GitHub → pull" \tr -> do
-            clearAllTestData tr
-            setupSync tr cfg Nothing
-            path <- uniquePath "roundtrip"
-            -- Create and push
-            dashId <- createDash tr "Round Trip Original" ["local"]
-            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path for push
-            assignDash tr dashId
-            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
-            runSyncJobs tr
-            -- Verify in GitHub
-            (content1, sha1) <- fromRightShow <$> ghGetFile cfg path
-            BS.isInfixOf "Round Trip Original" content1 `shouldBe` True
-            -- Modify in GitHub
-            let modified = "title: Round Trip Modified\ntags:\n  - local\n  - github-added\nwidgets: []\n"
-            _ <- ghPutFile cfg path (encodeUtf8 modified) (Just sha1)
-            -- Pull
-            clearJobs tr
-            liftIO $ withResource tr.trPool \conn ->
-              void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
-            runSyncJobs tr
-            -- Verify local updated - use filePath matching since dashboard is updated in place
-            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
-            case filter (\d -> d.filePath == T.stripPrefix "dashboards/" path) dashes of
-              (dash:_) -> do
-                dash.title `shouldBe` "Round Trip Modified"
-                V.toList dash.tags `shouldContain` ["github-added"]
-              [] -> fail $ "Dashboard not found with path: " <> toString path
+        it "round-trips local → push → GitHub edit → pull, and bulk-pushes only assigned dashboards" \tr -> do
+          setupSync tr cfg Nothing
+          path <- uniquePath "roundtrip"
+          syncNow tr . Left =<< createDash tr "Round Trip Original" ["local"] (Just path)
+          (content1, sha1) <- fromRightShow <$> ghGetFile cfg path
+          BS.isInfixOf "Round Trip Original" content1 `shouldBe` True
+          _ <- ghPutFile cfg path "title: Round Trip Modified\ntags:\n  - local\n  - github-added\nwidgets: []\n" (Just sha1)
+          syncNow tr $ Right $ BackgroundJobs.GitSyncFromRepo testPid
+          [roundTripped] <- dashboardsAt tr path
+          roundTripped.title `shouldBe` "Round Trip Modified"
+          V.toList roundTripped.tags `shouldContain` ["github-added"]
 
-          it "pushes only dashboards assigned to the connected repository" \tr -> do
-            clearAllTestData tr
-            setupSync tr cfg Nothing
-            for_ (["Bulk A", "Bulk B", "Bulk C"] :: [Text]) $ \title -> createDash tr title [] >>= assignDash tr
-            _ <- createDash tr "Stays Local" []
-            liftIO $ withResource tr.trPool \conn ->
-              void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushAllDashboards testPid
-            runSyncJobs tr
-            -- Verify all in GitHub
-            files <- ghListFiles cfg "dashboards"
-            any ("bulk-a" `T.isInfixOf`) files `shouldBe` True
-            any ("bulk-b" `T.isInfixOf`) files `shouldBe` True
-            any ("bulk-c" `T.isInfixOf`) files `shouldBe` True
-            any ("stays-local" `T.isInfixOf`) files `shouldBe` False
-
-        describe "Path Prefix" $ do
-          it "uses prefix when pushing" \tr -> do
-            clearAllTestData tr
-            setupSync tr cfg (Just "test-prefix")
-            dashId <- createDash tr "Prefixed Push" []
-            assignDash tr dashId
-            let path = "test-prefix/dashboards/prefixed-push.yaml"
-            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
-            runSyncJobs tr
-            exists <- ghFileExists cfg path
-            exists `shouldBe` True
-            -- Cleanup
-            (_, sha) <- fromRightShow <$> ghGetFile cfg path
-            void $ ghDeleteFile cfg path sha
-
-        describe "Error Handling" $ do
-          it "handles SHA mismatch gracefully" \tr -> do
-            clearAllTestData tr
-            setupSync tr cfg Nothing
-            path <- uniquePath "sha-conflict"
-            -- Create file
-            _ <- ghPutFile cfg path "title: Original\n" Nothing
-            -- Create dashboard with wrong SHA
-            dashId <- createDash tr "Conflict Test" []
-            assignDash tr dashId
-            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path "wrong-sha-12345"
-            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
-            -- Should not crash, just log error
-            runSyncJobs tr
-            -- Original file unchanged
-            (content, _) <- fromRightShow <$> ghGetFile cfg path
-            BS.isInfixOf "Original" content `shouldBe` True
+          for_ (["Bulk A", "Bulk B", "Bulk C"] :: [Text]) \title -> createDash tr title [] Nothing
+          now <- getCurrentTime
+          localId <- UUIDId <$> UUID.nextRandom
+          _ <- runTestBg frozenTime tr $ Dashboards.insert (Dashboards.mkDashboardVM localId testPid now Projects.systemUserId){Dashboards.title = "Stays Local"}
+          syncNow tr $ Right $ BackgroundJobs.GitSyncPushAllDashboards testPid
+          files <- ghListFiles cfg "dashboards"
+          map (\slug -> any (slug `T.isInfixOf`) files) ["bulk-a", "bulk-b", "bulk-c", "stays-local"] `shouldBe` [True, True, True, False]
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -835,25 +343,14 @@ liveSmokeSpec = do
       describe "Live git host smoke test"
         $ it "SKIPPED - set GIT_SMOKE_HOST, GIT_SMOKE_TOKEN, GIT_SMOKE_OWNER, GIT_SMOKE_REPO to enable" pending
     Just cfg -> describe ("Live git host smoke test (" <> toString (Git.hostLabel cfg.conn.host) <> ")") do
-      it "lists repositories" do
-        r <- runEff $ W.runHTTPWreq $ Git.listTokenRepos cfg.conn
-        r `shouldSatisfy` isRight
-
-      it "reports a default branch" do
-        b <- runEff $ W.runHTTPWreq $ Git.defaultBranchOf cfg.conn cfg.repoRef
-        b `shouldSatisfy` not . T.null
-
-      it "round-trips a write, a listing and a read at the sha it reported" do
+      it "lists repositories, reports a default branch, and round-trips a write at the sha it reported" do
+        runEff (W.runHTTPWreq $ Git.listTokenRepos cfg.conn) >>= (`shouldSatisfy` isRight)
+        runEff (W.runHTTPWreq $ Git.defaultBranchOf cfg.conn cfg.repoRef) >>= (`shouldSatisfy` not . T.null)
         let path = "monoscope-smoke/probe.yaml"
             body = "title: monoscope smoke probe\n"
         (sha, _rev) <- runEff (W.runHTTPWreq $ Git.pushFile cfg.conn cfg.repoRef path body Nothing "monoscope smoke test") >>= either (fail . toString) pure
-
         -- The sha we recorded must be the one a fresh listing reports, or `buildSyncPlan`
         -- will see a phantom change on the very next pull.
         (_, entries) <- runEff (W.runHTTPWreq $ Git.fetchTree cfg.conn cfg.repoRef "monoscope-smoke/") >>= either (fail . toString) pure
-        find ((== path) . (.path)) entries `shouldSatisfy` \case
-          Just e -> e.sha == Just sha
-          Nothing -> False
-
-        readBack <- runEff (W.runHTTPWreq $ Git.fetchFile cfg.conn cfg.repoRef path) >>= either (fail . toString) pure
-        readBack `shouldBe` body
+        ((.sha) <$> find ((== path) . (.path)) entries) `shouldBe` Just (Just sha)
+        runEff (W.runHTTPWreq $ Git.fetchFile cfg.conn cfg.repoRef path) >>= either (fail . toString) pure >>= (`shouldBe` body)
