@@ -1,10 +1,9 @@
 -- | Infrastructure and telemetry pages end to end: OTLP container/host metrics → the
 -- inventory, hosts, images, Kubernetes and host-map views and their drilldowns; spans →
 -- service-map rollups and the trace view; the metrics catalogue, exemplars and KQL series;
--- Prometheus scrape targets, uptime checks and cron monitors.
+-- and Prometheus scrape targets.
 module Pages.InfrastructureSpec (spec) where
 
-import BackgroundJobs qualified
 import Control.Exception (evaluate)
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -25,8 +24,6 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful.Error.Static (catchError)
 import Hasql.Interpolate qualified as HI
-import Models.Apis.Issues qualified as Issues
-import Models.Apis.Monitors qualified as MonitorsM
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
@@ -41,7 +38,6 @@ import Pages.Containers qualified as Containers
 import Pages.Infrastructure (ImageRow (..), InfraIntegration (..), KubeRow (..), KubeStatus (..))
 import Pages.Infrastructure qualified as Infrastructure
 import Pages.LogExplorer.LogItem qualified as LogItem
-import Pages.Monitors qualified as Monitors
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings (PrometheusForm (..))
 import Pages.Settings qualified as Settings
@@ -61,7 +57,6 @@ import Servant (ServerError (..), getResponse)
 import Servant.API (ResponseHeader (..), lookupResponseHeader, parseUrlPiece)
 import System.Config (AuthContext (..))
 import System.Config qualified as Config
-import System.Types (RespHeaders)
 import Text.Read (read)
 import Utils (formatUTC)
 
@@ -127,7 +122,7 @@ spec = do
       html `shouldContainAll` ["checkout", redpanda, "kube-system", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "Common Filters", "Last 5 mins", "Not ready", "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range."]
       (T.count "data-component=\"facet-section\" open>" html, map (`T.isInfixOf` html) ["group/summary", "Usage over time", "min-height:", "data-widget="]) `shouldBe` (6, [False, False, False, False])
       (map (`T.isInfixOf` customizeOnly) [">Export</button>", "Reset columns", "[data-forced]:not(:checked)) [data-column-key=\"Pod\"]{display:none}"], map (`T.isInfixOf` exportOnly) ["Customize", "containers.csv"]) `shouldBe` ([False, True, True], [False, True])
-      ordNub (lookup "since" <$> linkParams "/infrastructure/containers/detail" html) `shouldBe` [Just "5M"]
+      sinceOf "/infrastructure/containers/detail" html `shouldBe` [Just "5M"]
       -- "Not ready" wrapped across the badge border; the export icon is the correctly framed symbol.
       goldenParts "infrastructure-containers"
         . ordNub
@@ -184,7 +179,7 @@ spec = do
         $ tagsWith ["data-table-group=", "name=\"group\"", "data-column-key=\"CPU\"", "data-refresh-interval-menu", "ms-auto flex shrink-0", "grid w-full grid-cols-[minmax(0,1fr)_auto]", "data-nav-tab-strip", "data-header-actions"] hostsHtml
         <> tagsWith ["data-tippy-content=\"" <> clusterUid, "badge-error"] (renderT kubernetes)
         <> tagsWith ["bg-fillNeutral-strong\" style=\"clip-path", "name=\"fill\"", "data-component=\"facet-rail\""] (renderT hostMap)
-      [ordNub (lookup "since" <$> linkParams path h) | (path, h) <- [("/infrastructure/hosts/detail", hostsHtml), ("/infrastructure/images/detail", renderT images), ("/infrastructure/kubernetes/detail", renderT kubernetes)]] `shouldBe` replicate 3 [Just "5M"]
+      [sinceOf path h | (path, h) <- [("/infrastructure/hosts/detail", hostsHtml), ("/infrastructure/images/detail", renderT images), ("/infrastructure/kubernetes/detail", renderT kubernetes)]] `shouldBe` replicate 3 [Just "5M"]
       (T.isInfixOf ">Apply</button>" (renderT hostMap), map isJust [Icons.lookupIcon "solid" "download", Icons.lookupIcon "regular" "cube"]) `shouldBe` (False, [True, True])
 
       hostDetail <- shellHtml tr $ Infrastructure.hostDetailGetH pid (Just "vps-bare-01") Nothing Nothing Nothing
@@ -319,7 +314,7 @@ spec = do
         chartPlotsOnly tr pid "container-detail-cpu" expected detail
       ambiguous <- shellHtml tr $ Containers.containerDetailGetH pid (Just "duplicate-api") (Just "shared-pod") Nothing Nothing Nothing Nothing Nothing Nothing (Just "4H")
       ambiguous `shouldContainAll` ["Several containers match this link."]
-      (window' "/infrastructure/containers" ambiguous, T.isInfixOf "data-widget=" ambiguous) `shouldBe` (["4H"], False)
+      (sinceOf "/infrastructure/containers" ambiguous, T.isInfixOf "data-widget=" ambiguous) `shouldBe` ([Just "4H"], False)
 
     it "rate / increase / last are counter-aware per series; rateif / lastif divide filtered series, on Postgres and TimeFusion" \tr -> do
       -- Points every 30s from base-10m to base+10m: two cumulative series of one counter at 100/s
@@ -600,30 +595,26 @@ spec = do
       shellHtml tr (Trace.dataPointCountsGetH dp (Just "") (Just "") (Just "")) `shouldReturn` counts
       ((\(_, c, _, u) -> (c, u)) <$> (datapointsOf =<< overview dp "datapoints" (Just "") Nothing Nothing Nothing)) `shouldReturn` (countUrl, pageUrl)
 
-      let seeded title metrics = do
-            pid <- createTestProject tr title
-            for_ metrics \(name, svc, labels) -> seedMeta tr pid name svc labels Nothing
-            pure pid
       -- A metric reported by many sources lists three and defers the rest to its details.
-      overflow <- seeded "source-overflow" [("source.overflow", "source-" <> show @Text i, []) | i <- [1 .. 4 :: Int]]
+      overflow <- metaProject tr "source-overflow" [("source.overflow", "source-" <> show @Text i, [], Nothing) | i <- [1 .. 4 :: Int]]
       overflowHtml <- renderT <$> overview overflow "datapoints" Nothing Nothing Nothing Nothing
       overflowHtml `shouldContainAll` ["source-1", "source-2", "source-3", "View 1 more source in details", Trace.metricDetailUrl overflow "source.overflow" "all" Nothing]
       overflowHtml `shouldNotSatisfy` T.isInfixOf "source-4"
 
-      paged <- seeded "datapoint-pages" [("page.metric." <> show @Text n, "gateway", []) | n <- [1 .. 30 :: Int]]
+      paged <- metaProject tr "datapoint-pages" [("page.metric." <> show @Text n, "gateway", [], Nothing) | n <- [1 .. 30 :: Int]]
       firstHtml <- renderT <$> overview paged "datapoints" Nothing Nothing Nothing Nothing
       (T.isInfixOf "page.metric.30" firstHtml, [lookup "cursor" ps | ps <- linkParams "/metrics" firstHtml, isNothing (lookup "expand" ps), isJust (lookup "cursor" ps)]) `shouldBe` (False, [Just "1"])
       (renderT <$> overview paged "datapoints" Nothing (Just 1) Nothing Nothing) >>= (`shouldContainAll` ["page.metric.30"])
 
       -- Related metrics wait until their tab is opened.
-      related <- seeded "related-metrics" [("process.cpu.usage", "gateway", ["state"]), ("process.cpu.time", "gateway", ["state"])]
+      related <- metaProject tr "related-metrics" [("process.cpu.usage", "gateway", ["state"], Nothing), ("process.cpu.time", "gateway", ["state"], Nothing)]
       detail <- shellHtml tr $ Trace.metricDetailsGetH related "process.cpu.usage" Nothing Nothing Nothing Nothing Nothing
       (T.isInfixOf "metric-related-content" detail, T.isInfixOf "process.cpu.time" detail) `shouldBe` (True, False)
       (shellHtml tr (Trace.metricRelatedGetH related "process.cpu.usage" Nothing)) >>= (`shouldContainAll` ["process.cpu.time"])
 
       -- The service filter inlined every service (2.3k <option>s, ~117KB on the demo project);
       -- it is now searched and capped server-side.
-      services <- seeded "metric-services" $ ("svc.metric", "billing-api", []) : [("svc.metric", "checkout-" <> show @Text i, []) | i <- [1 .. 80 :: Int]]
+      services <- metaProject tr "metric-services" $ ("svc.metric", "billing-api", [], Nothing) : [("svc.metric", "checkout-" <> show @Text i, [], Nothing) | i <- [1 .. 80 :: Int]]
       [allSvcs, matched] <- runTestBg frozenTime tr $ traverse (\q -> Telemetry.getMetricServiceNames services q 50) ([Nothing, Just "billing"] :: [Maybe Text])
       (length allSvcs, matched) `shouldBe` (50, ["billing-api"])
       (shellHtml tr (Trace.metricServicesGetH services (Just "billing") Nothing)) >>= (`shouldContainAll` ["billing-api", "All Services"])
@@ -634,27 +625,23 @@ spec = do
     -- The /metrics list query was rewritten to de-duplicate then aggregate (640ms of ~850ms), and the
     -- overview reads one page of active metrics instead of the whole catalogue.
     it "metric catalogue: one row per metric with merged labels, paged active metrics with an inactive tail, literal search, default chart dimensions" \tr -> do
-      let seeded title metrics = do
-            pid <- createTestProject tr title
-            for_ metrics \(name, svc, labels, seen) -> seedMeta tr pid name svc labels seen
-            pure pid
-          cutoff = addUTCTime (-(7 * 24 * 3600)) frozenTime
+      let cutoff = addUTCTime (-(7 * 24 * 3600)) frozenTime
           names = map (.metricName) . V.toList
 
       -- Both filters are spliced into separate CTEs, so each must apply.
-      list <- seeded "chart-list" [("http.server.duration", "gateway", ["http.method", "http.status"], Nothing), ("http.server.duration", "checkout", ["http.status", "http.route"], Nothing), ("process.cpu.time", "gateway", ["state"], Nothing)]
+      list <- metaProject tr "chart-list" [("http.server.duration", "gateway", ["http.method", "http.status"], Nothing), ("http.server.duration", "checkout", ["http.status", "http.route"], Nothing), ("process.cpu.time", "gateway", ["state"], Nothing)]
       (map (map (\r -> (r.metricName, V.toList r.metricLabels))) <$> runTestBg frozenTime tr (traverse (uncurry (Telemetry.getMetricChartListData list)) [(Nothing, Nothing), (Nothing, Just "process."), (Just "checkout", Nothing)]))
         `shouldReturn` [[("http.server.duration", ["http.method", "http.route", "http.status"]), ("process.cpu.time", ["state"])], [("process.cpu.time", ["state"])], [("http.server.duration", ["http.route", "http.status"])]]
 
       let fresh = Just $ addUTCTime (-3600) frozenTime
           stale = Just $ addUTCTime (-(30 * 24 * 3600)) frozenTime
-      catalogue <- seeded "catalogue" $ [(n, "gateway", [], fresh) | n <- ["a.one", "a.two", "a.three", "a.four", "a.five"]] <> [(n, "gateway", [], stale) | n <- ["z.old.one", "z.old.two"]]
+      catalogue <- metaProject tr "catalogue" $ [(n, "gateway", [], fresh) | n <- ["a.one", "a.two", "a.three", "a.four", "a.five"]] <> [(n, "gateway", [], stale) | n <- ["z.old.one", "z.old.two"]]
       -- Page 2 continues the ordering with the same total, but must not drag the inactive tail along.
       pages <- runTestBg frozenTime tr $ sequence [Telemetry.getMetricCatalogPage catalogue Nothing Nothing Nothing cutoff 2 0 Telemetry.ActivePageWithInactive, Telemetry.getMetricCatalogPage catalogue Nothing Nothing Nothing cutoff 2 2 Telemetry.ActivePage]
       [(names p.active, p.activeTotal, names p.inactive) | p <- pages] `shouldBe` [(["a.five", "a.four"], 5, ["z.old.one", "z.old.two"]), (["a.one", "a.three"], 5, [])]
 
       -- Search runs before pagination and treats LIKE metacharacters literally.
-      search <- seeded "catalogue-search" [("a.unrelated", "billing", [], Nothing), ("runtime.one", "checkout", ["attributes.region"], Nothing), ("runtime.two", "checkout", ["attributes.zone"], Nothing), ("runtime.two", "billing", ["attributes.other"], Nothing), ("literal%_&+", "checkout", [], Nothing)]
+      search <- metaProject tr "catalogue-search" [("a.unrelated", "billing", [], Nothing), ("runtime.one", "checkout", ["attributes.region"], Nothing), ("runtime.two", "checkout", ["attributes.zone"], Nothing), ("runtime.two", "billing", ["attributes.other"], Nothing), ("literal%_&+", "checkout", [], Nothing)]
       matches <- runTestBg frozenTime tr $ traverse (\off -> Telemetry.getMetricCatalogPage search (Just "checkout") Nothing (Just "RUNTIME") cutoff 1 off Telemetry.ActivePage) [0, 1]
       [(names p.active, p.activeTotal, map (V.toList . (.metricLabels)) (V.toList p.active)) | p <- matches] `shouldBe` [(["runtime.one"], 2, [["attributes.region"]]), (["runtime.two"], 2, [["attributes.zone"]])]
       (names . (.active) <$> runTestBg frozenTime tr (Telemetry.getMetricCatalogPage search Nothing Nothing (Just "%_&+") cutoff 12 0 Telemetry.ActivePage)) `shouldReturn` ["literal%_&+"]
@@ -698,12 +685,13 @@ spec = do
       ingestMetricWithExemplar tr apiKey
       let isoAt offset = toText $ iso8601Show $ addUTCTime offset frozenTime
           exemplarsIn p name from = call tr $ Trace.metricExemplarsGetH p name (Just $ isoAt from) (Just $ isoAt 3600) Nothing
-          points (Trace.MetricExemplarsGet _ _ xs) = [(x.point.traceId, x.point.spanId, x.point.value) | x <- xs]
+          -- Read off the JSON the chart overlay consumes, so its diamonds and these rows agree.
+          points x = [(o Map.!? "trace_id", o Map.!? "span_id", o Map.!? "value") | o <- fromMaybe [] (AE.decode @[Map.Map Text AE.Value] (AE.encode x))]
           firstRow = maybe (fail "ingested row missing") pure . viaNonEmpty head
       -- metric -> trace: rows deep-link into the trace overlay with the timestamp (without one,
       -- traceH widens to a 3-day scan); the chart overlay reads the same handler as JSON.
       exemplars <- exemplarsIn pid exemplarMetric (-3600)
-      points exemplars `shouldBe` [(exemplarTrace, exemplarSpan, 42.5)]
+      points exemplars `shouldBe` [(Just (AE.String exemplarTrace), Just (AE.String exemplarSpan), Just (AE.Number 42.5))]
       ordNub (lookup "showTrace" <$> linkParams "/log_explorer" (renderT exemplars)) `shouldBe` [Just (exemplarTrace <> "/?timestamp=2025-01-01T00:00:00Z")]
       -- An exemplar whose own timestamp is outside the window is dropped though its row is inside
       -- (cumulative histograms re-export weeks-old exemplars past retention).
@@ -784,62 +772,6 @@ spec = do
       viewerHtml <- shellHtml tr $ Settings.prometheusGetH viewer
       (T.isInfixOf "Saved target" viewerHtml, filter (`T.isInfixOf` viewerHtml) ["Add target", "Edit Prometheus target", "hx-patch", "hx-delete", "saved-secret"]) `shouldBe` (True, [])
 
-    it "uptime checks and cron monitors: failures open downtime/missed/failed issues, recovery resolves them" \tr -> do
-      -- A rejected submission swaps nothing so the form keeps what was typed; an accepted one
-      -- re-renders the form blank above the list (htmx 4 needs the explicit :inherited targets).
-      (rejectedH, rejected) <- testServant tr $ Monitors.uptimeCheckPostH testPid (Monitors.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200))
-      (reswapOf rejectedH, T.isInfixOf "10.0.0.1" (renderT rejected)) `shouldBe` (Just "none", False)
-      (addedH, added) <- testServant tr $ Monitors.uptimeCheckPostH testPid (Monitors.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200))
-      reswapOf addedH `shouldBe` Nothing
-      renderT added `shouldContainAll` ["https://shop.example.com/health"]
-      cronAdded <- call tr $ Monitors.cronMonitorPostH testPid (Monitors.CronForm "nightly-billing" "Nightly billing" 3600 300)
-      goldenParts "uptime-cron-forms" . ordNub $ tagsWith ["value name=\"url\"", "hx-target:inherited=\"this\""] (renderT added) <> tagsWith ["value name=\"slug\"", "hx-target:inherited=\"this\""] (renderT cronAdded)
-
-      -- One failure is a blip; two open a downtime issue; a success resolves it.
-      shop <- maybe (fail "uptime check missing") pure . listToMaybe . V.toList =<< runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKUptime)
-      let probe res = runTestBg frozenTime tr $ BackgroundJobs.applyUptimeResult shop frozenTime 120 res
-          downtime = runQueryEffect tr (Issues.selectIssueByHash testPid (Issues.uptimeTargetHash shop.id.toText) Issues.AnyIssue)
-      probe (Right 503)
-      (isNothing <$> downtime) `shouldReturn` True
-      probe (Left "connection refused")
-      opened <- downtime >>= maybe (fail "no downtime issue after two failures") pure
-      (opened.title, isNothing opened.archivedAt) `shouldBe` ("Downtime detected for https://shop.example.com/health", True)
-      probe (Right 200)
-      resolved <- downtime >>= maybe (fail "issue vanished") pure
-      isJust resolved.archivedAt `shouldBe` True
-      runTestBg frozenTime tr (Issues.selectLatestStateEvent resolved.id) `shouldReturn` Just Issues.IEResolved
-      -- Through the worker, a refused connection is recorded as a failure.
-      void $ runQueryEffect tr $ PromCfg.insertConfig testPid PromCfg.CKUptime "refused" "http://127.0.0.1:1/health" 60 Nothing (AE.object []) (Just 200)
-      refused <- maybe (fail "refused check missing") pure . find ((== "refused") . (.name)) . V.toList =<< runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKUptime)
-      runTestBg frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.PrometheusScrapeOne refused.id)
-      Just probed <- runQueryEffect tr (PromCfg.getConfig refused.id)
-      (probed.consecutiveFailures, fmap ("request failed" `T.isPrefixOf`) probed.lastStatus) `shouldBe` (1, Just True)
-
-      -- Cron: a duplicate slug is refused; a check-in keeps it healthy, a missed window and an error
-      -- run open issues, a later check-in resolves. Check-ins go through ingestion (TimeFusion on
-      -- CI), so each evaluation retries until the check-in it depends on is visible.
-      (dupH, _) <- testServant tr $ Monitors.cronMonitorPostH testPid (Monitors.CronForm "nightly-billing" "Again" 3600 300)
-      reswapOf dupH `shouldBe` Just "none"
-      [m] <- runQueryEffect tr (MonitorsM.cronMonitorsByProject testPid)
-      apiKey <- createTestAPIKey tr testPid "cron-key"
-      let at dt = addUTCTime dt frozenTime
-          checkin status dt = ingestSessionEvent tr apiKey "cron.checkin" [("monitor.slug", "nightly-billing"), ("monitor.status", status)] False (at dt)
-          evaluateAt dt = do
-            fresh <- runQueryEffect tr (MonitorsM.cronMonitorsByProject testPid) >>= maybe (fail "monitor gone") pure . listToMaybe
-            runTestBg (at dt) tr $ BackgroundJobs.evaluateCronMonitor (at dt) fresh
-          issue sc = runQueryEffect tr (Issues.selectIssueByHash testPid (Issues.cronTargetHash (UUID.toText m.id)) sc)
-          evaluateUntil dt sc ok = eventually (evaluateAt dt >> issue sc) ok
-      checkin "ok" 0
-      void $ eventually (evaluateAt 60 >> (.lastCheckinAt) <<$>> runQueryEffect tr (MonitorsM.cronMonitorsByProject testPid)) (== [Just (at 0)])
-      (isNothing <$> issue Issues.AnyIssue) `shouldReturn` True
-      missed <- evaluateUntil (3600 + 300 + 120) Issues.AnyIssue isJust >>= maybe (fail "no missed issue") pure
-      (missed.title, isNothing missed.archivedAt) `shouldBe` ("Cron missed: Nightly billing", True)
-      checkin "ok" 4200
-      (fmap (isJust . (.archivedAt)) <$> evaluateUntil 4260 Issues.AnyIssue (any (isJust . (.archivedAt)))) `shouldReturn` Just True
-      checkin "error" 8000
-      failed <- evaluateUntil 8060 (Issues.OpenOfType Issues.Cron) isJust >>= maybe (fail "no failed issue") pure
-      failed.title `shouldBe` "Cron failed: Nightly billing"
-
     -- Unlike every other metrics handler, the card and breakdown never called sessionAndProject.
     it "non-members cannot read container details, metric cards or breakdowns" \tr -> do
       victim <- createTestProject tr "victim"
@@ -851,7 +783,7 @@ spec = do
   where
     redpanda = "srv-captain--redpanda-0.1.tt13bkp5"
     swarm = "srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c"
-    window' path html = ordNub $ mapMaybe (lookup "since") (linkParams path html)
+    sinceOf path html = ordNub $ lookup "since" <$> linkParams path html
     -- The drawer's first log link, counted through the chart pipeline.
     logLinkCount tr pid source html = do
       params : _ <- pure $ linkParams "/log_explorer" html
@@ -923,10 +855,6 @@ rowsByName :: V.Vector ContainerRow -> [(Text, ContainerRow)]
 rowsByName = map (\r -> (r.containerName, r)) . V.toList
 
 
-hexId :: IO Text
-hexId = T.replace "-" "" . UUID.toText <$> nextRandom
-
-
 -- | (entry) -> gateway -client-> checkout -client-> postgres "orders" [inferred db]
 --                                         -producer-> "orders.v1"     [inferred queue]
 ingestCheckoutTrace :: TestResources -> Text -> UTCTime -> IO ()
@@ -986,6 +914,13 @@ seedMeta tr pid name svc labels seen =
     (pid, name, svc, PGArray labels, seen)
 
 
+metaProject :: TestResources -> Text -> [(Text, Text, [Text], Maybe UTCTime)] -> IO Projects.ProjectId
+metaProject tr title metrics = do
+  pid <- createTestProject tr title
+  for_ metrics \(name, svc, labels, seen) -> seedMeta tr pid name svc labels seen
+  pure pid
+
+
 -- | Ingestion hex-decodes span/trace ids and hex-encodes exemplar ids, so both sides store these literals.
 exemplarTrace, exemplarSpan, exemplarMetric :: Text
 exemplarTrace = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
@@ -1012,10 +947,4 @@ promBody =
   "# HELP http_requests_total Total requests\n# TYPE http_requests_total counter\n\
   \http_requests_total{method=\"get\",code=\"200\"} 42\nhttp_requests_total{method=\"post\",code=\"500\"} 7\n\
   \# TYPE temperature_celsius gauge\ntemperature_celsius 21.5\nbroken_metric +Inf\n"
-
-
-reswapOf :: RespHeaders a -> Maybe Text
-reswapOf h = case lookupResponseHeader @"HX-Reswap" h of
-  Header v -> Just v
-  _ -> Nothing
 

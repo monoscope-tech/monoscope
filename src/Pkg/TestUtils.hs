@@ -63,6 +63,8 @@ module Pkg.TestUtils (
   drainExtractionWorker,
   deferredBody,
   shellHtml,
+  reswapOf,
+  hexId,
   renderT,
   call,
   tablePage,
@@ -1321,6 +1323,17 @@ deferredBody = \case
 -- | A handler's response rendered to HTML.
 shellHtml :: Lucid.ToHtml a => TestResources -> ATAuthCtx (RespHeaders a) -> IO Text
 shellHtml tr render = renderT . snd <$> testServant tr render
+
+
+reswapOf :: RespHeaders a -> Maybe Text
+reswapOf h = case Servant.lookupResponseHeader @"HX-Reswap" h of
+  Servant.Header v -> Just v
+  _ -> Nothing
+
+
+-- | A random 32-hex-char trace/span id.
+hexId :: IO Text
+hexId = T.replace "-" "" . UUID.toText <$> nextRandom
 
 
 renderT :: Lucid.ToHtml a => a -> Text
