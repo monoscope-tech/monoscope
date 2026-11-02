@@ -1,9 +1,6 @@
 'use strict';
-import { getSeriesColor, invalidateLogLevelColors } from './colorMapping';
-import { ChartQueryError, readChartResponse } from './chart-stream';
+import { getSeriesColor, invalidateLogLevelColors, isDarkTheme } from './colorMapping';
 import { shouldReloadForStaleChunk } from './stale-chunk-reload';
-import { beginChartFetch } from './chart-fetch-seq';
-import { chartLayoutForSize, isNearChartViewport } from './chart-initialization';
 import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statScalar, formatStatValue, type StatAggregates } from './stat-value';
 import { echartsUrls } from './assets';
 import { copyParams } from './time-range-utils';
@@ -11,6 +8,83 @@ import debounce from 'lodash/debounce';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 const params = () => ({ ...Object.fromEntries(new URLSearchParams(location.search)) });
+
+// Per-chart request sequencer. A chart can have several /chart_data fetches in
+// flight at once (5s refresh + intersection observer + time-range change), and
+// they can resolve out of order. beginChartFetch bumps the chart's sequence and
+// returns an isStale() predicate that becomes true once a *newer* fetch starts,
+// so a slow/failed response can be discarded instead of clobbering a newer
+// success — otherwise the error overlay reappears over freshly rendered bars.
+// Keyed by chartId and never evicted; fine because chart IDs are stable for the
+// page's lifetime (a fixed dashboard layout), not generated per render.
+const chartFetchSeq: Record<string, number> = {};
+
+export const beginChartFetch = (chartId: string): (() => boolean) => {
+  const seq = (chartFetchSeq[chartId] = (chartFetchSeq[chartId] || 0) + 1);
+  return () => chartFetchSeq[chartId] !== seq;
+};
+
+const CHART_PREFETCH_PX = 150;
+
+type VerticalRect = Pick<DOMRect, 'top' | 'bottom'>;
+
+export const isNearChartViewport = ({ top, bottom }: VerticalRect, viewportHeight: number) =>
+  top < viewportHeight + CHART_PREFETCH_PX && bottom > -CHART_PREFETCH_PX;
+
+// Fixed ECharts insets consume too much of a short, wide widget.
+export const chartLayoutForSize = (options: any, width: number, height: number): any => {
+  if (!height || height > 240 || width < height * 4) return options;
+  const bottomLegend = options.legend?.show && options.legend.bottom !== undefined;
+  return {
+    ...options,
+    grid: {
+      ...options.grid,
+      top: options.legend?.show && options.legend.top !== undefined ? options.grid.top : Math.min(options.grid.top, 4),
+      bottom: Math.min(options.grid.bottom, bottomLegend ? 8 : 4),
+    },
+    legend: bottomLegend ? { ...options.legend, bottom: 0, padding: [0, 4, 0, 4] } : options.legend,
+    xAxis: { ...options.xAxis, axisLabel: { ...options.xAxis.axisLabel, margin: 4 } },
+  };
+};
+
+/** A query failure already sanitized by the chart endpoint. */
+export class ChartQueryError extends Error {}
+
+/** A stream always ends with complete or error; EOF alone is not success. */
+export async function readChartResponse<T>(response: Response, partial: (data: T) => void): Promise<T> {
+  if (!response.headers?.get('content-type')?.includes('application/x-ndjson')) return response.json();
+  if (!response.body) throw new Error('Chart response has no body');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      pending += decoder.decode(value, { stream: !done });
+      const lines = pending.split('\n');
+      pending = lines.pop()!;
+      if (done && pending.trim()) lines.push(pending);
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const frame = JSON.parse(line);
+        if (frame.type === 'error') throw new ChartQueryError(typeof frame.error === 'string' ? frame.error : 'Chart query failed');
+        if ((frame.type === 'partial' || frame.type === 'complete') && frame.data && typeof frame.data === 'object') {
+          if (frame.type === 'complete') {
+            return frame.data;
+          }
+          partial(frame.data);
+        } else throw new Error('Invalid chart stream frame');
+      }
+      if (done) throw new Error('Chart response ended before completion');
+      // Bound malformed responses that never delimit a frame.
+      if (pending.length > 32 * 1024 * 1024) throw new Error('Chart stream frame is too large');
+    }
+  } finally {
+    // Releases the server query on errors and after the terminal frame.
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
 
 // --- ECharts loads only once a chart enters the viewport ---
 let echartsLoad: Promise<void> | undefined;
@@ -150,7 +224,7 @@ const sharedThemeObserver = new MutationObserver((mutations) => {
   if (!themeChanged || themeChangeScheduled) return;
   themeChangeScheduled = true;
   requestAnimationFrame(() => {
-    const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+    const isDarkMode = isDarkTheme();
     const computedStyle = getComputedStyle(document.body);
     const styles = {
       textColor: computedStyle.getPropertyValue('--color-textWeak').trim(),
@@ -370,7 +444,7 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
     seriesOpt.lineStyle = { color: paletteColor, opacity: inventorySeriesOpacity, width: inventorySeriesOpacity === 1 ? 2.25 : 1.5, type: inventoryLineType };
     if (i === 0) seriesOpt.areaStyle = { color: gradientColor(0.24) };
     // For line charts in dark mode, override the symbol to avoid white centers
-    if (document.body.getAttribute('data-theme') === 'dark') {
+    if (isDarkTheme()) {
       seriesOpt.symbol = 'circle'; // Use filled circle instead of empty circle
       seriesOpt.symbolSize = 4;
     }
@@ -1028,7 +1102,7 @@ export const chartWidget = (widgetData: WidGetData) => {
   chartDisposers.get(chartId)?.();
   existingChart?.dispose();
 
-  const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+  const isDarkMode = isDarkTheme();
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
   const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';

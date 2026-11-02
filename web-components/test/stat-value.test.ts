@@ -1,5 +1,7 @@
 import { describe, test, expect } from 'vitest';
-import { statScalar, formatStatValue, formatNumber, formatBytes } from '../src/stat-value';
+import { statScalar, formatStatValue, formatNumber, formatBytes, formatDuration } from '../src/stat-value';
+import { formatDuration as waterfallDuration } from '../src/charts';
+import { fmtNs } from '../src/log-list';
 
 // Regression for the golden-signals overview bug: the big number was a blind
 // sum of every per-bin value (mislabeled "120k req/min", "1.5m" p99), instead
@@ -106,3 +108,20 @@ describe('formatBytes', () => {
     expect(formatStatValue(1073741824, '')).toBe('1.1B');
   });
 });
+
+// Pinned to the outputs of the three duration formatters before they shared scaleDuration.
+test.each([
+  [0, '0.0 ns', '0ns', '0ns'], [0.4, '0.4 ns', '0ns', '0ns'], [999, '999.0 ns', '999ns', '999ns'],
+  [1000, '1.0 µs', '1µs', '1.0μs'], [1500, '1.5 µs', '2µs', '1.5μs'], [9999, '10.0 µs', '10µs', '10.0μs'],
+  [12345, '12 µs', '12µs', '12.3μs'], [999999, '1000 µs', '1000µs', '1000.0μs'], [1.5e6, '1.5 ms', '2ms', '1.5ms'],
+  [2.5e7, '25 ms', '25ms', '25.0ms'], [1.5e9, '1.5 s', '1.50s', '1.5s'], [12.6e9, '13 s', '12.60s', '12.6s'],
+  [61e9, '1 m', '61.00s', '1.0m'], [3.7e12, '1 h', '3700.00s', '1.0h'],
+])('duration %d ns: waterfall %s, fmtNs %s, stat %s', (ns, waterfall, short, stat) => {
+  expect(waterfallDuration(ns).join(' ')).toBe(waterfall);
+  expect(fmtNs(ns)).toBe(short);
+  expect(formatDuration(ns)).toBe(stat);
+});
+
+// formatNumber replaced log-list's formatLargeCount; identical below a billion, which now reads as B.
+test.each([[0, '0'], [999, '999'], [1000, '1.0K'], [1550, '1.6K'], [999999, '1000.0K'], [1_550_000, '1.6M'], [123456789, '123.5M'], [1.5e9, '1.5B']])(
+  'formatNumber(%d) = %s', (n, out) => expect(formatNumber(n)).toBe(out));

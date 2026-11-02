@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { beginChartFetch } from '../src/chart-fetch-seq';
+import { beginChartFetch } from '../src/widgets';
 
 // Regression: dashboard widgets showed the "Query execution failed" overlay on
 // top of freshly rendered bars. A failed /chart_data response arriving AFTER a

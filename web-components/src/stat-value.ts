@@ -57,11 +57,17 @@ const DURATION_STEPS: [number, string][] = [
   [1_000, 'μs'],
 ];
 
+/** A nanosecond duration in its largest unit that is at least 1, as [value, unit]. */
+export const scaleDuration = (ns: number): [number, string] => {
+  const step = DURATION_STEPS.find(([t]) => ns >= t);
+  return step ? [ns / step[0], step[1]] : [ns, 'ns'];
+};
+
 /** Format a nanosecond duration into a human-readable unit (matches Utils.hs). */
 export const formatDuration = (ns: number): string => {
   if (ns == null || Number.isNaN(ns)) return 'N/A'; // guard first, mirroring formatNumber, so NaN never renders as "NaNns"
-  const step = DURATION_STEPS.find(([t]) => ns >= t);
-  return step ? `${(ns / step[0]).toFixed(1)}${step[1]}` : `${ns.toFixed(0)}ns`;
+  const [v, unit] = scaleDuration(ns);
+  return `${v.toFixed(unit === 'ns' ? 0 : 1)}${unit}`;
 };
 
 // Units that format as a duration. NB: 'm' here is minutes, not meters.

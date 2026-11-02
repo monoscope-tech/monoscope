@@ -9,7 +9,7 @@ vi.mock('../src/query-editor/query-editor', () => {
   (document.getElementById('filterElement') as any).toggleSubQuery = spy;
   return {};
 });
-vi.mock('../src/query-editor/query-editor-config', () => ({ initializeDefaultSchema: () => {} }));
+vi.mock('../src/query-editor/schema-manager', () => ({ initializeDefaultSchema: () => {} }));
 vi.mock('../src/query-editor/query-builder', () => ({}));
 
 const mountEditor = () => {

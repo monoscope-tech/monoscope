@@ -6,6 +6,7 @@ import { minBy, maxBy } from 'lodash';
 import { ColIdxMap, EventLine } from './types/types';
 import { AnsiUp } from 'ansi-up';
 import { faSprite_ as faSprite } from './assets';
+import { formatNumber } from './stat-value';
 // Configuration objects
 export const COLUMN_WIDTHS = {
   status: 'w-[12ch] shrink-0',
@@ -267,7 +268,7 @@ export const evictOldest = <K, V>(cache: Map<K, V>, max: number, batch = 1): voi
   }
 };
 
-export const generateId = (): string => Math.random().toString(36).substring(2, 15);
+export { generateId } from './log-worker-functions';
 
 // Drop rows whose id was already seen, keeping first occurrence (preserves order
 // and any expand state on the kept row). Cursor/recent pagination uses inclusive
@@ -451,12 +452,6 @@ export const middleTruncatePath = (path: string, maxTailLen: number = 28): [stri
   return [path.slice(0, Math.max(0, path.length - maxTailLen)), path.slice(-maxTailLen)];
 };
 
-export const formatLargeCount = (n: number): string => {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-  return String(n);
-};
-
 const PLACEHOLDER_RE = /(\{[a-z0-9_]+\}|<\*>)/g;
 
 export const highlightPlaceholders = (text: string): TemplateResult => {
@@ -475,7 +470,7 @@ export const renderSparkline = (buckets: number[]): TemplateResult => {
   const peak = Math.max(...buckets, 1);
   const n = buckets.length;
   const h = 40, barZone = 32, topPad = h - barZone;
-  const peakLabel = formatLargeCount(peak);
+  const peakLabel = formatNumber(peak);
   const labelW = peakLabel.length * 7 + 4;
   const gap = 2, barW = Math.max(2, Math.floor(120 / n) - gap);
   const barsEnd = n * (barW + gap);

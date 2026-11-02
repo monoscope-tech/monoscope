@@ -10,6 +10,7 @@ import { LiveStream, tableRowToArray, traceEntriesFor } from './live-stream';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
 import { applySpanExpansion, groupSpans } from './log-worker-functions';
+import { formatNumber, scaleDuration } from './stat-value';
 import { spriteUrl } from './assets';
 import clsx from 'clsx';
 import {
@@ -34,7 +35,6 @@ import {
   createCachedIconRenderer,
   WEAK_TEXT_STYLES,
   RIGHT_PREFIX_REGEX,
-  formatLargeCount,
   highlightPlaceholders,
   generateId,
   evictOldest,
@@ -1203,13 +1203,13 @@ export class LogList extends LitElement {
     if (!countEl) return;
     let countText: string, suffixText: string;
     if (this.mode === 'patterns') {
-      countText = `${formatLargeCount(this.totalPatterns)} patterns`;
-      suffixText = ` found (based on ${formatLargeCount(this.totalCount)} logs)`;
+      countText = `${formatNumber(this.totalPatterns)} patterns`;
+      suffixText = ` found (based on ${formatNumber(this.totalCount)} logs)`;
     } else if (this.mode === 'sessions') {
-      countText = `${formatLargeCount(this.totalSessions)} sessions`;
+      countText = `${formatNumber(this.totalSessions)} sessions`;
       suffixText = '';
     } else {
-      countText = formatLargeCount(this.hasChartCount ? this.totalCount : this.loadedCount);
+      countText = formatNumber(this.hasChartCount ? this.totalCount : this.loadedCount);
       suffixText = !this.hasChartCount && this.hasMore ? '+ rows' : ' rows';
     }
     countEl.textContent = countText;
@@ -3175,7 +3175,7 @@ export class LogList extends LitElement {
           class="flex items-center gap-1.5 w-full min-w-0"
           title="${pct.toFixed(1)}% of total${mergedCount > 0 ? ` (${mergedCount} merged)` : ''}"
         >
-          <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatLargeCount(count)}</span>
+          <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatNumber(count)}</span>
           ${mergedCount > 0
             ? html`<span class="text-2xs tabular-nums text-textWeak shrink-0" title="${mergedCount} similar patterns merged"
                 >+${mergedCount}</span
@@ -4585,14 +4585,11 @@ function rowMarker(
 }
 
 /** Human-readable nanoseconds, matching the duration badge's vocabulary. */
-export const fmtNs = (ns: number): string =>
-  ns >= 1e9
-    ? `${(ns / 1e9).toFixed(2)}s`
-    : ns >= 1e6
-      ? `${Math.round(ns / 1e6)}ms`
-      : ns >= 1e3
-        ? `${Math.round(ns / 1e3)}\u00b5s`
-        : `${Math.round(ns)}ns`;
+export const fmtNs = (ns: number): string => {
+  if (ns >= 1e9) return `${(ns / 1e9).toFixed(2)}s`;
+  const [v, unit] = scaleDuration(ns);
+  return `${Math.round(v)}${unit === 'μs' ? '\u00b5s' : unit}`;
+};
 
 /**
  * What the bar is saying, in words — for the tooltip and for the screen reader, neither of

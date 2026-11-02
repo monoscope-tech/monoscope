@@ -62,7 +62,7 @@ let queryEditorLoad: Promise<unknown> | null = null;
 const loadQueryEditor = () =>
   (queryEditorLoad ??= (async () => {
     await import('./query-editor/query-editor');
-    const { initializeDefaultSchema } = await import('./query-editor/query-editor-config');
+    const { initializeDefaultSchema } = await import('./query-editor/schema-manager');
     initializeDefaultSchema();
     await import('./query-editor/query-builder');
   })());

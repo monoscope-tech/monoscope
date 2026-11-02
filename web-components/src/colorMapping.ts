@@ -20,7 +20,8 @@ const DARK_THEME_COLORS = [
   '#73c0de', '#ee6666'
 ];
 
-const currentTheme = (): 'light' | 'dark' => typeof document !== 'undefined' && document.body?.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+export const isDarkTheme = (): boolean => typeof document !== 'undefined' && document.body?.getAttribute('data-theme') === 'dark';
+const currentTheme = (): 'light' | 'dark' => (isDarkTheme() ? 'dark' : 'light');
 export const getSeriesPalette = (theme: 'light' | 'dark' = currentTheme()) =>
   theme === 'dark' ? DARK_THEME_COLORS : LIGHT_THEME_COLORS;
 const themeColors = () => getSeriesPalette();
@@ -99,7 +100,7 @@ function hashString(str: string): number {
 // Get color for HTTP status codes
 export function getStatusCodeColor(code: number | string): string {
   const grouped = typeof code === 'string' && /^[2-5]xx$/i.test(code) ? Number(code[0]) * 100 : Number(code);
-  const dark = currentTheme() === 'dark';
+  const dark = isDarkTheme();
   if (grouped >= 200 && grouped < 300) return dark ? '#34d399' : '#059669';
   if (grouped >= 300 && grouped < 400) return dark ? '#38bdf8' : '#0284c7';
   if (grouped >= 400 && grouped < 500) return dark ? '#fbbf24' : '#d97706';
@@ -110,7 +111,7 @@ export function getStatusCodeColor(code: number | string): string {
 // Get color for percentiles
 export function getPercentileColor(percentile: string): string {
   const normalized = percentile.toLowerCase().trim();
-  const dark = currentTheme() === 'dark';
+  const dark = isDarkTheme();
   const colors: Record<string, string> = dark
     ? { p50: '#4ade80', median: '#4ade80', p75: '#34d399', q1: '#34d399', p90: '#fbbf24', p95: '#fb923c', q3: '#fb923c', p99: '#f87171', p100: '#fb7185', max: '#fb7185', min: '#4ade80' }
     : { p50: '#16a34a', median: '#16a34a', p75: '#059669', q1: '#059669', p90: '#bd7d00', p95: '#ea580c', q3: '#ea580c', p99: '#ef4444', p100: '#f43f5e', max: '#f43f5e', min: '#16a34a' };
@@ -253,7 +254,7 @@ export function getContrastTextColor(hexColor: string): string {
 
 // Convert Tailwind class to hex color
 export function tailwindToHex(tailwindClass: string): string {
-  const palette = currentTheme() === 'dark' ? DARK_TAILWIND_TO_HEX : TAILWIND_TO_HEX;
+  const palette = isDarkTheme() ? DARK_TAILWIND_TO_HEX : TAILWIND_TO_HEX;
   return palette[tailwindClass] || themeColors()[0];
 }
 
