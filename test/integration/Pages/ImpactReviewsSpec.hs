@@ -4384,6 +4384,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr $ Fixes.releaseJob replacement
     apiKey <- createTestAPIKey tr testPid "Fix job telemetry"
     ingestLog tr apiKey "fix-job-event" (addUTCTime (-60) frozenTime)
+    savedFixContexts <- newIORef Map.empty
+    lostSessionCalls <- newIORef (0 :: Int)
     revokedReplies <- newIORef []
     pem <- readFileBS "test/fixtures/github-app-test.pem"
     let cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem, impactReviewUsageDir = Just "fixture-usage", impactReviewCacheDir = Just "fixture-cache", impactReviewProvider = "fixture", openaiModel = "gpt-5.6-luna#high", impactReviewArtifactBucket = Just "fixture-bucket", s3Endpoint = "http://storage.invalid"}
@@ -4411,8 +4413,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
             . interpose @LLM.LLM (\_ _ -> liftIO $ fail "Legacy LLM used by source-fix job")
             . interpose @Agent.CodeReview
               ( \env -> \case
+                  Agent.ReadSessionContext (Agent.FixSubject fixId) _ -> Right . Map.lookup fixId <$> liftIO (readIORef savedFixContexts)
                   Agent.ReadSessionContext{} -> pure $ Right Nothing
-                  Agent.FixRepository _scope request queryTelemetry knowledge admit calls usage allocations checks phase validate -> localSeqUnliftIO env \unlift -> liftIO $ withSystemTempDirectory "job-fix-agent" \directory -> do
+                  Agent.FixRepository scope request queryTelemetry knowledge admit calls usage allocations checks phase validate -> localSeqUnliftIO env \unlift -> liftIO $ withSystemTempDirectory "job-fix-agent" \directory -> do
+                    for_ (case scope of Agent.Isolated -> Nothing; Agent.Retained _ capture -> Just capture) $ \capture -> unlift capture >>= \context -> modifyIORef' savedFixContexts (Map.insert request.request.runId context)
+                    when (mode == "--app-job-lost-session") $ modifyIORef' lostSessionCalls (+ 1)
                     let diagnostic = directory </> "failure.txt"
                     if mode `elem` ["--app-job-revoke-account", "--app-job-revoke-role"]
                       then do
@@ -4476,6 +4481,20 @@ spec = around withTestResources $ describe "Production impact reviews" do
     initialCosts <- runQueryEffect tr $ Usage.usageTotals Usage.Fixes testPid
     maybe 0 (.usage.calls) (find ((== Just fid) . (.runId)) initialCosts) `shouldBe` 0
     runQueryEffect tr (isJust <$> Fixes.publicationForUser testPid fid user) `shouldReturn` False
+    -- A lost session store must not turn recorded inference into a fresh attempt.
+    let lostId = uid 993
+    runQueryEffect tr (Fixes.createRun testPid lostId issue mapping.id base image) `shouldReturn` Just lostId
+    runQueryEffect tr (Fixes.queueJob testPid user lostId) `shouldReturn` True
+    lostAttempt <- maybe (fail "Lost-session attempt missing") pure =<< runQueryEffect tr (Usage.startAttempt testPid (Usage.Fix lostId) "fixture" "fixture")
+    runQueryEffect tr (Usage.recordCall testPid (Usage.Fix lostId) $ Agent.ModelCall (uid 994) lostAttempt "fixture" "fixture") `shouldReturn` True
+    void $ tryAny $ run lostId "--app-job-lost-session"
+    readIORef lostSessionCalls `shouldReturn` 0
+    dbOne tr [sql|SELECT failure FROM projects.issue_fix_jobs WHERE run_id = ?|] (Only lostId) `shouldReturn` (Just "Native session data is missing. Restore its storage or start a new request." :: Maybe Text)
+    lostRuns <- filter ((== Issues.FixRun lostId) . (.source)) <$> runQueryEffect tr (Issues.listRoutineRuns testPid 12)
+    map (.status) lostRuns `shouldBe` [Issues.RunFailed]
+    map (.error) lostRuns `shouldBe` [Just "Native session data is missing. Restore its storage or start a new request."]
+    dbOne tr [sql|SELECT count(*)::int FROM projects.pr_review_attempts WHERE project_id = ? AND fix_run_id = ?|] (testPid, lostId) `shouldReturn` (1 :: Int)
+    runQueryEffect tr (Fixes.completedResult testPid lostId) >>= (`shouldSatisfy` isNothing)
     (requests, ()) <- run fid "--app-job"
     requests `shouldNotSatisfy` any (\(url, _) -> "/pulls" `T.isInfixOf` url || "/comments" `T.isInfixOf` url)
     completed <- maybe (fail "Verified application result missing") pure =<< runQueryEffect tr (Fixes.completedResult testPid fid)
@@ -4619,7 +4638,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     revisionBefore.author `shouldBe` Memory.Run sharedId
     Just retriedFix <- runQueryEffect tr $ Fixes.completedResult testPid interrupted
     retainedOperation.proposal.call `shouldSatisfy` \case
-      Operation.NativeCall (Operation.WriteWiki proposal) -> retriedFix.attemptId /= proposal.attemptId
+      Operation.NativeCall (Operation.WriteWiki proposal) -> retriedFix.attemptId == proposal.attemptId
       _ -> False
     requireMinio tr pendingWith $ withSystemTempDirectory "retained-fix-media" \mediaRoot -> do
       current <- runQueryEffect tr (Fixes.getRun testPid fid) >>= either (fail . show) (maybe (fail "Completed run missing") pure)

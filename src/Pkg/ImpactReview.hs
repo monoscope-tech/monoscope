@@ -130,12 +130,21 @@ data ReviewResult = ReviewResult
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data ReviewFailure = ReviewFailure Text | ReviewPublicationRefused Text
+data ReviewFailure = ReviewFailure Text | ReviewPublicationRefused Text | NativeSessionLost
   deriving stock (Generic, Show)
   deriving anyclass (Exception)
 
 
 type ReviewCtx = Eff (Error ReviewFailure ': ATBackgroundEffects)
+
+
+nativeSessionLostMessage :: Text
+nativeSessionLostMessage = "Native session data is missing. Restore its storage or start a new request."
+
+
+requireRetainedSession :: (DB es, Error ReviewFailure :> es) => Projects.ProjectId -> Usage.Run kind -> Maybe context -> Eff es ()
+requireRetainedSession pid target saved =
+  when (isNothing saved) $ whenM (Usage.hasModelCalls pid target) $ throwError NativeSessionLost
 
 
 -- | Changed locations, including deletions on the base revision. Context lines
@@ -262,6 +271,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                         | otherwise -> failReview Issues.FailedResult retryMessage (show @Text err)
                       Right Nothing -> failReview Issues.TimedOutResult "Review exceeded its nine-minute budget" "Review timed out"
                       Right (Just (Left (ReviewFailure err))) -> failReview Issues.FailedResult retryMessage err
+                      Right (Just (Left NativeSessionLost)) -> failReview Issues.FailedResult nativeSessionLostMessage nativeSessionLostMessage
                       Right (Just (Left (ReviewPublicationRefused reason))) -> do
                         finish $ Issues.CancelledResult $ Just reason
                         Reviews.recordFailure run reason
@@ -330,6 +340,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       headRevision <- require $ first show $ Agent.mkRevision pr.head.revision
       let mapped = any (isJust . (.service)) mappings
       saved <- if mapped then require =<< Agent.readSessionContext (Agent.ReviewSubject run.id) context.rootId else pure Nothing
+      when mapped $ requireRetainedSession run.projectId (Usage.Review run.id) saved
       initial <- maybe (freshInput cfg baseRevision headRevision) (pure . (.input)) saved
       unless (initial.base == baseRevision && initial.head == headRevision) $ throwError $ ReviewFailure "Review source changed while awaiting continuation"
       let evidence = initial.evidence
@@ -719,7 +730,9 @@ fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob)
   case outcome of
     Right (Just (Right ())) -> pass
     _ -> do
-      let message = "Issue fix failed; retry to collect current evidence"
+      let message = case outcome of
+            Right (Just (Left NativeSessionLost)) -> nativeSessionLostMessage
+            _ -> "Issue fix failed; retry to collect current evidence"
       Fixes.failJob lease message
       Log.logAttention "Issue-fix job failed" (pid, fid)
       throwIO $ ReviewFailure message
@@ -773,6 +786,7 @@ fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob)
       issue <- maybe (throwError $ ReviewFailure "Issue is no longer available") pure =<< Issues.selectIssueById pid run.issueId
       unlessM (Fixes.currentJob lease) $ throwError $ ReviewFailure "Fix authorization is no longer available"
       saved <- require =<< Agent.readSessionContext (Agent.FixSubject fid) context.rootId
+      requireRetainedSession pid target saved
       now <- Time.currentTime
       let since = addUTCTime (negate $ nominalDay * 7) now
           freshIssue = decodeUtf8 (AE.encode $ AE.object ["issueId" AE..= run.issueId, "title" AE..= issue.title, "recommendedAction" AE..= T.take 2000 issue.recommendedAction, "service" AE..= setup.service, "windowStart" AE..= since, "windowEnd" AE..= now])

@@ -1,4 +1,4 @@
-module Models.Projects.AgentUsage (Run (..), Scope (..), startAttempt, ownsAttempt, recordCall, recordUsage, recordAllocation, recordCheck, hasCheck, UsageCost (..), ResourceUsage (..), UsageTotals (..), ProjectUsage (..), usageTotals, customerUsage) where
+module Models.Projects.AgentUsage (Run (..), Scope (..), startAttempt, hasModelCalls, ownsAttempt, recordCall, recordUsage, recordAllocation, recordCheck, hasCheck, UsageCost (..), ResourceUsage (..), UsageTotals (..), ProjectUsage (..), usageTotals, customerUsage) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.CodeReview.Types qualified as Agent
@@ -42,6 +42,16 @@ startAttempt pid target provider modelSpec = do
       OR EXISTS (SELECT 1 FROM projects.issue_fix_runs f WHERE f.id = #{fid} AND f.project_id = p.id))
     RETURNING id
   |]
+
+
+hasModelCalls :: DB es => ProjectId -> Run kind -> Eff es Bool
+hasModelCalls pid target = do
+  let (rid, fid) = targetIds target
+  fromMaybe False
+    <$> Hasql.interpOne
+      [HI.sql| SELECT EXISTS (SELECT 1 FROM projects.agent_model_calls c
+      JOIN projects.pr_review_attempts a ON a.id = c.attempt_id
+      WHERE a.project_id = #{pid} AND a.run_id IS NOT DISTINCT FROM #{rid} AND a.fix_run_id IS NOT DISTINCT FROM #{fid}) |]
 
 
 recordCall :: DB es => ProjectId -> Run kind -> Agent.ModelCall -> Eff es Bool
