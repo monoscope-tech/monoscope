@@ -1,7 +1,7 @@
 # Unified agent PR integration
 
 Canonical integration PR: [#619](https://github.com/monoscope-tech/monoscope/pull/619).
-The selected work is consolidated locally. Publication still requires final local image/signoff after cleanup.
+The selected work is consolidated. Final local image/signoff and recorded recovery acceptance pass; PR 619 remains the review destination.
 This document records integration scope, not merge or deployment authorization.
 The [unified plan](2026-10-30-unified-agent.md) defines the product contract.
 The [current review](../docs/reviews/2026-11-01-agent-cross-module-review.md) records verification.
@@ -56,12 +56,12 @@ The unrelated icon-script rewrite from #692 is excluded; the existing Python hel
 - Preserve master issue lifecycles, signed SQL isolation, shared test helpers and canonical test prelude.
 - Consolidate only branch feature migrations under the user's later explicit instruction. Preserve all master migration bytes.
 
-## Evidence and remaining gates
+## Evidence and publication
 
 The final actual rebase onto master PR #763 preserves selected ancestry and exactly matches an independent merge of the verified branch and the new master.
 The previous branch remains available locally as `codex/slack-agent-before-master-763-cfb98f6df`.
 Current canonical checks, native/KVM recovery and live Slack acceptance are summarized in the consolidated review.
 Detailed merge previews, iteration logs and source hashes remain in Git history and ignored local receipts.
 
-Finish migration/documentation cleanup and affected verification before final Mac-only image/signoff.
-Then push this branch and update #619. Do not merge or deploy without separate authorization.
+Migration/documentation cleanup, affected verification and final Mac-only image/signoff pass.
+Publish updates through this branch and #619. Do not merge or deploy without separate authorization.

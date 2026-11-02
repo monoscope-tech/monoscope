@@ -63,25 +63,26 @@ The final Weeder pass also removed two lookup helpers orphaned by this branch's 
 
 ## Local release verification
 
-All eleven configured checks pass for runtime snapshot `1b8ea825e`, including the explicit-state refinements, migration consolidation and master PR #763. Native and KVM acceptance retain their recorded source scopes. The later master #764 merge changes test infrastructure and fixtures; its final release gate remains pending.
+All eleven configured checks pass for runtime snapshot `a93ad68cf`, including the lost-session guard, migration consolidation and master PR #764. Native and KVM acceptance retain their recorded source scopes.
 
 | Check | Observed result | Scope and limits |
 | --- | --- | --- |
-| Canonical integration | 1,695 examples, zero failures, 25 pending VM cases; twelve successful shards. | Real-service attestation published. Pending VM cases have separate native evidence. |
-| Recorded native recovery group | 28 cases, zero failures; 590 recorded inputs unchanged. | Includes the early-suspension EOF-drain regression and missing-manifest guards. |
+| Canonical integration | 1,665 examples, zero failures, 25 pending VM cases; twelve successful shards. | Real-service attestation published. Pending VM cases have separate native evidence. |
+| Historical native recovery group | 28 cases, zero failures. | Earlier acceptance includes the early-suspension EOF-drain regression and missing-manifest guards; current-source Linux acceptance is listed below. |
 | Fresh Linux/KVM | 16 application cases, zero failures; 26 actual KVM guests observed. | Runtime `cd177d0ff`, including the lost-store guard; controlled model, GitHub and media interpreters. |
-| Recorded virtual-host loss | One case passes in 494.0081 seconds, including natural lease expiry. | Same binary before and after abrupt local Linux VM loss. Original run and attempts survive; completed replay adds no inference. |
+| Paired-checkpoint virtual-host loss | One case passes in 580.7461 seconds, including natural lease expiry. | Runtime `1b8ea825e`, unchanged across the crash. Original run and attempts survive; completed replay adds no inference. |
 | Loss before the first main checkpoint | One Linux case passes in 482.6013 seconds after abrupt host loss and natural lease expiry. | Runtime `cd177d0ff`; zero new inference, attempts, checks, wiki revisions or operations; no false completed result. Uncheckpointed edits are not claimed to resume. |
 | Complete doctests | 2,105 examples, zero errors or failures. | Actual supported target; later canonical gate also passes. |
 | Browser suite | 172 pass, one skip. | Application browser tests; physical devices and screen readers remain unverified. |
 | UI tests | 1,041 tests across 62 files pass. | Canonical local gate. |
 | CLI | Build, package, signature, runtime version and portable linkage checks pass. | Preserves the CLI/shared package boundary. |
-| Native worker image | The optional `impact-worker` target builds as Linux AMD64 on this Mac. Its non-root CLI, SDK imports, skills, private storage and runtime tools pass smoke checks. | Separate from the standard server image and real KVM acceptance. No worker deployment. |
+| Native worker image | `monoscope-impact-worker:a93ad68cf` builds as Linux AMD64 on this Mac. Its non-root CLI, SDK imports, skills, private storage and runtime tools pass smoke checks. | Separate from the standard server image and real KVM acceptance. No worker deployment. |
 | Unit tests | 315 examples, zero failures. | The parser's 22 SQL cases share one pinned golden corpus. |
 | Other canonical checks | HLint, frontend, build and Weeder pass. | All eleven configured checks have matching attestations. |
 | Review artifact | 104 steps pass at 320, 390, 768 and 1280 pixels, without overflow or browser errors. | 111 implementation excerpts match current source; six historical examples remain labeled. |
 
-The literal local `ci-signoff` passes. The AMD64 image for `1b8ea825e` is `sha256:ec2deab560aff852b936eda8499c0d8ac86af3265a9a7db0483173780ad57ec5`, built on this Mac through the local OrbStack builder. The integration lane also runs the PostgreSQL baseline-adoption regression; changes to its helper invalidate that check's fingerprint.
+The literal local `ci-signoff` passes. The AMD64 image for `a93ad68cf` is `sha256:01837969a2ab9cfad53583483b176965970f01503aaa3f5be4581c36b29581a3`, built on this Mac through the local OrbStack builder. The integration lane also runs the PostgreSQL baseline-adoption regression; changes to its helper invalidate that check's fingerprint.
+The first browser run timed out waiting for a dashboard drawer save. Two focused runs and the complete rerun pass on unchanged code, concurrency and timeouts. The failed run produced no browser attestation.
 Canonical PR 619 is the review destination. Production baseline adoption added the single ledger record described below. Merge and deployment remain unauthorized.
 
 ## Slack acceptance
@@ -168,4 +169,4 @@ The fresh, original and production-shaped schemas have identical dumps after exc
 
 Production inspection finds 21 original feature migrations with matching checksums and zero rows in the nine native feature tables.
 The [production transition](../agent-migrations.md) adds one native baseline record and preserves all 273 earlier rows and timestamps. No schema DDL, feature-data mutation or application deployment occurs.
-Final local checks and the immutable image pass. The new Haskell template matches all 253 current migration checksums; full schema, ownership and privileges match the pre-consolidation template. An explicit rollback test also preserves the retained native-recovery fixture across eight tables while adopting the current checksums. Production schema and feature data remain unchanged; native baseline bookkeeping is prepared.
+Final local checks and the immutable image pass. The new Haskell template matches all 253 current migration checksums; full schema, ownership and privileges match the pre-consolidation template. An explicit rollback test also preserves the retained native-recovery fixture across eight tables while adopting the current checksums. Production schema and feature data remain unchanged; native baseline bookkeeping is complete.

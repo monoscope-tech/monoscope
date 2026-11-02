@@ -1,6 +1,6 @@
 # Unified Monoscope agent
 
-Status: implementation consolidated, 2 November 2026. Recorded recovery acceptance passes; final release verification is in progress. Physical-device and screen-reader checks remain unverified. This plan controls the complete branch scope; the checklist below does not replace the product contract.
+Status: ready for user review, 2 November 2026. Recovery acceptance, all eleven local release checks and the Mac-built AMD64 images pass. Physical-device and screen-reader checks remain unverified. This plan controls the complete branch scope; the checklist below does not replace the product contract.
 
 Consolidate Slack, web, scheduled, and event work around one capability catalog, authority evaluator, executor, operation ledger, conversation, and artifact experience. Newly enabled background routines act autonomously within their member's current authority. Optional selected review must not become a mandatory permission loop.
 
@@ -26,8 +26,8 @@ No merge or production deployment is authorized.
 The [consolidated review](../docs/reviews/2026-11-01-agent-cross-module-review.md) records current evidence and its limits.
 Earlier iteration logs remain in Git history and ignored local receipts.
 Migration/documentation consolidation and production-shaped upgrade verification are complete.
-All eleven local release checks and the AMD64 image pass at runtime snapshot `1b8ea825e`.
-The later master #764 merge preserves the five independent error-pattern lifecycles and deterministic agent enrichment checks; its focused 12 examples pass twice. Final signoff for that merge remains pending.
+All eleven local release checks and the AMD64 image pass at runtime snapshot `a93ad68cf`.
+The master #764 merge preserves the five independent error-pattern lifecycles and deterministic agent enrichment checks. Its focused 12 examples pass twice; the final release gate also includes the merged tests and lost-session recovery guard.
 The review records exact counts, native acceptance scopes and the remaining manual checks.
 
 ## Product contract
