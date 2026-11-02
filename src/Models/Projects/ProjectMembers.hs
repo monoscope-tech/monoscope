@@ -212,8 +212,9 @@ activeMembership :: HI.Sql
 activeMembership =
   [HI.sql| AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
     AND project.active AND project.deleted_at IS NULL
-    AND (lower(project.payment_plan) <> 'free' OR member.user_id = (
-      SELECT user_id FROM projects.project_members WHERE project_id = project.id ORDER BY created_at, id LIMIT 1)) |]
+    AND (lower(project.payment_plan) <> 'free' OR member.user_id = |]
+    <> Projects.freeTierOwner "project.id"
+    <> ")"
 
 
 memberPermissionsSql :: HI.Sql -> HI.Sql
@@ -306,12 +307,12 @@ softDeleteProjectMembers ids = do
 deactivateNonOwnerMembers :: DB es => Projects.ProjectId -> Eff es ()
 deactivateNonOwnerMembers pid =
   Hasql.interpExecute_
-    [HI.sql|
+    $ [HI.sql|
       WITH del AS (
         UPDATE projects.project_members SET active = FALSE
-        WHERE project_id = #{pid}
-          AND user_id != (SELECT user_id FROM projects.project_members WHERE project_id = #{pid} ORDER BY created_at, id LIMIT 1)
-        RETURNING user_id
+        WHERE project_id = #{pid} AND user_id != |]
+    <> Projects.freeTierOwner [HI.sql|#{pid}|]
+    <> [HI.sql| RETURNING user_id
       ),
       removed AS (SELECT lower(u.email::text) AS email FROM del JOIN users.users u ON u.id = del.user_id)
       UPDATE projects.teams t SET notify_emails = ARRAY(

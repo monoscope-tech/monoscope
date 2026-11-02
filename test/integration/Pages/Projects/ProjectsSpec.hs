@@ -223,6 +223,19 @@ spec = around withTestResources do
     first' `shouldSatisfy` isJust
     runQueryEffect tr (Projects.createEmptyUser "race@example.com") `shouldReturn` first'
 
+  it "freeTierOwner_earliestMemberRemoved_nextActiveMemberOwns" \tr -> do
+    dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = ?|] (Only testPid)
+    heir <- runQueryEffect tr (Projects.createEmptyUser "heir@example.com") >>= maybe (fail "user not created") pure
+    void $ runQueryEffect tr $ ProjectMembers.insertProjectMembers [ProjectMembers.CreateProjectMembers testPid heir PView]
+    dbExec tr [sql|UPDATE projects.project_members SET active = FALSE, deleted_at = now() WHERE project_id = ? AND user_id <> ?|] (testPid, heir)
+    let owns = do
+          runQueryEffect tr (ProjectMembers.getUserPermission testPid heir) `shouldReturn` Just PView
+          map (.id) <$> runQueryEffect tr (Projects.selectProjectsForUser heir) >>= (`shouldContain` [testPid])
+          runQueryEffect tr (Projects.restrictedFreeProjectTitles heir) `shouldReturn` []
+    owns
+    runQueryEffect tr $ ProjectMembers.deactivateNonOwnerMembers testPid
+    owns
+
   it "@everyone notify_emails follow member changes yet stay the single source of who is paged" \tr -> do
     [alice, bob] <- forM @[] ["Alice@Example.com", "bob@example.com"] \email -> do
       u <- Projects.UserId <$> UUIDV4.nextRandom
