@@ -1,0 +1,72 @@
+<a class="-ms-0.5 max-md:hidden inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-iconBrand hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2" href="https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/" hx-preload="false" target="_blank" rel="noopener" aria-label="Open documentation for this page" data-tippy-placement="right" data-tippy-content="Open documentation for this page"
+<span class="h-4 w-px shrink-0 bg-strokeWeak opacity-60" aria-hidden="true"
+<button type="button" class="inline-flex h-7 min-w-7 items-center justify-center gap-1.5 rounded-md bg-transparent px-1.5 leading-none text-textWeak hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-1 disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-transparent disabled:text-textDisabled" aria-label="Next time window" data-tippy-content="Next time window" data-next-window hx-live:disabled="closest(&#39;[data-time-transport]&#39;).data.live == &#39;true&#39;" _="on click call window.shiftTimeRange(1, me.closest(&#39;[data-time-transport]&#39;))"
+<div class="group/qbox px-1 py-0.5 flex-1 flex flex-col gap-0.5 bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2 focus-within:ring-strokeBrand-weak data-[query-state=error]:border-strokeError-strong has-[.ai-search:focus-visible]:ring-2 has-[.ai-search:focus-visible]:ring-strokeBrand-strong" id="queryBox" data-query-state="ok"
+<button type="button" id="ai-search-submit" aria-label="Generate query" aria-disabled="true" data-tippy-content="Generate query" hx-live:aria-disabled="!q(&#39;#ai-search-input&#39;).value.trim()" class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-iconNeutral aria-disabled:cursor-not-allowed aria-disabled:text-textDisabled aria-[disabled=false]:cursor-pointer aria-[disabled=false]:text-iconBrand aria-[disabled=false]:hover:bg-fillBrand-weak aria-[disabled=false]:active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-1 transition-transform" onclick="if(this.getAttribute(&#39;aria-disabled&#39;)!==&#39;true&#39;) htmx.trigger(&#39;#ai-search-input&#39;, &#39;htmx:trigger&#39;)"
+<button type="button" class="hidden h-8 w-8 items-center justify-center rounded-md text-iconNeutral hover:bg-fillWeak hover:text-iconBrand focus-visible:outline-2 focus-visible:outline-offset-1 active:scale-[0.96] transition-transform md:inline-flex" aria-label="Save query" data-tippy-content="Save query" _="on click set #saveQueryMdl.dataset.pendingQuery to null then call #saveQueryForm.reset() then set #queryLibId.value to &#39;&#39; then call #saveQueryMdl.showModal()"
+<input type="checkbox" class="checkbox checkbox-xs max-md:checkbox-sm" hx-on:click="window.queryEditorCall(&#39;toggleSubQuery&#39;, this.dataset.field, this.dataset.value)" aria-label="resource.service.name equals checkout-svc" data-tippy-content="resource.service.name == &quot;checkout-svc&quot;" data-field="resource.service.name" data-value="checkout-svc"
+<details class="facet-section block border-t border-strokeWeak [&amp;[open]&gt;summary_.facet-chevron]:rotate-0 facet-section-group" data-component="facet-section" data-hx-get="/p/<uuid>/log_explorer/facets?group=http" data-hx-trigger="toggle[target.open] once" data-hx-target="this" data-hx-swap="outerHTML" data-hx-indicator="find .facet-group-loader"
+<div class="absolute top-0 right-0 w-full h-full overflow-hidden c-scroll z-50 bg-bgBase transition-all duration-100 hidden" id="trace_expanded_view" aria-busy="true" _="on closeTraceView
+  add .hidden to me then send toggleFullscreen(mode: &#39;trace&#39;, active: false) to #apiLogsPage
+  call updateUrlState(&#39;showTrace&#39;, &#39;&#39;, &#39;delete&#39;)
+end
+on htmx:after:swap[#apiLogsPage&#39;s @data-fullscreen is &#39;details&#39;] from me
+  send toggleFullscreen(mode: &#39;trace&#39;, active: true) to #apiLogsPage
+end
+on htmx:response:error from me
+  remove .hidden from #trace-load-error
+end
+on loadTrace(url)
+  set my @data-trace-url to url
+  put #trace-loading-skeleton.innerHTML into me then remove .hidden from me
+  send toggleFullscreen(mode: &#39;trace&#39;, active: true) to #apiLogsPage
+  call htmx.ajax(&#39;GET&#39;, url, {target: me, swap: &#39;innerHTML&#39;})
+end
+on openTraceFullscreen(traceId, timestamp) from window
+  call updateUrlState(&#39;showTrace&#39;, traceId + &#39;/?timestamp=&#39; + timestamp)
+  send loadTrace(url: &#39;/p/<uuid>/traces/&#39; + traceId + &#39;/?timestamp=&#39; + encodeURIComponent(timestamp)) to me"
+<div class="details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&amp;.details-open]:block! max-md:[&amp;.details-open]:fixed max-md:[&amp;.details-open]:inset-0 max-md:[&amp;.details-open]:z-10020 max-md:[&amp;.details-open]:w-full max-md:[&amp;.details-open]:max-w-full max-md:[&amp;.details-open]:bg-bgBase peer-checked/drawer:fixed peer-checked/drawer:top-0 peer-checked/drawer:bottom-0 peer-checked/drawer:z-10020 peer-checked/drawer:h-full peer-checked/drawer:w-[min(56rem,94vw)]! peer-checked/drawer:max-w-full! peer-checked/drawer:bg-bgBase peer-checked/drawer:border-l peer-checked/drawer:border-strokeWeak peer-checked/drawer:shadow-2xl peer-checked/drawer:overflow-y-auto peer-checked/drawer:transition-[right] peer-checked/drawer:right-[-100vw] peer-checked/open:right-0! peer-checked/open:block!" data-inline-width id="log_details_container" hx-sync="this:replace" data-has-target="0" _="on checkMobileOpen[window.innerWidth &lt; 768] add .details-open to me
+        init
+          if my @data-has-target is &#39;1&#39; and no &lt;#details-drawer-mode:checked/&gt;
+            send checkMobileOpen to me
+            set w to params().details_width or localStorage.getItem(&#39;resizer-details_width&#39;) or &#39;30%&#39;
+            if w.endsWith(&#39;%&#39;) or w.endsWith(&#39;px&#39;) set my *width to w else set my *width to w + &#39;px&#39; end
+          end
+        end
+        on htmx:after:swap send checkMobileOpen to me end
+        -- The one thing neither HTML nor CSS can express: a key binding. Everything it
+        -- does afterwards is flipping the same checkbox the close label flips.
+        on keydown[key==&#39;Escape&#39; and not (the event&#39;s target matches &lt;input, textarea, select, [contenteditable]/&gt;) and no &lt;[popover]:popover-open/&gt; and no &lt;dialog[open]/&gt;] from window
+          -- `the first &lt;…/&gt; exists`, not a bare `&lt;…/&gt;`: a query literal is a lazy query object
+          -- that stays truthy at zero matches, so a bare `if &lt;sel/&gt;` never falls through.
+          if the first &lt;#trace-details-open:checked/&gt; exists send closeDetailPanel to #trace_details_container
+          otherwise if the first &lt;#trace_expanded_view:not(.hidden)/&gt; exists send closeTraceView to #trace_expanded_view
+          otherwise send closeDetailPanel to me end
+        end
+        on closeDetailPanel
+          set #details-open&#39;s checked to false
+          -- Guarded: this panel also renders on pages (dashboards) that have none of
+          -- the log explorer&#39;s chrome.
+          if the first &lt;#trace_expanded_view/&gt; exists add .hidden to #trace_expanded_view end
+          if the first &lt;#apiLogsPage/&gt; exists send toggleFullscreen(mode: &#39;details&#39;, active: false) to #apiLogsPage end
+          remove .details-open from me
+          set my *width to &#39;0px&#39;
+          if the first &lt;#logs_list_container/&gt; exists set the *width of #logs_list_container to &#39;100%&#39; end
+          remove .bg-fillBrand-strong from &lt;.item-row.bg-fillBrand-strong/&gt;
+          if the first &lt;#resizer-details_width-wrapper/&gt; exists add .hidden .opacity-0 .pointer-events-none to #resizer-details_width-wrapper end
+          call updateUrlState([&#39;details_width&#39;, &#39;target_event&#39;, &#39;showTrace&#39;], &#39;&#39;, &#39;delete&#39;)
+        end"
+<textarea class="w-full min-w-0 text-sm font-mono leading-5 bg-transparent resize-none py-1 outline-none no-focus-ring placeholder:opacity-60" data-query-input aria-label="Query" rows="1" placeholder="level == &quot;ERROR&quot;">
+</textarea>
+<div id="visualization-widget-container" class=" w-full" style="aspect-ratio: 4 / 2;" data-hx-post="/p/<uuid>/widget" data-hx-trigger="intersect once, update-widget" data-hx-target="this" data-hx-swap="innerHTML" data-hx-vals="js:{...widgetJSON}" data-hx-ext="json-enc,forward-page-params" hx-sync="this:replace"
+<script>var widgetJSON = {"_center_title":true,"_project_id":"<uuid>","allow_zoom":true,"id":"visualization-widget","layout":{"h":4,"w":6},"standalone":true,"title":"Visualization","type":"timeseries_line"};</script>
+<template id="trace-loading-skeleton"
+<div data-trace-url="/p/<uuid>/traces/<hex>/?timestamp=2026-07-15T18:59:16.952128Z" _="init send loadTrace(url: my @data-trace-url) to #trace_expanded_view"
+<span class="sr-only">Loading trace…</span>
+<button class="text-textBrand font-medium cursor-pointer hover:underline" aria-label="Retry loading trace" _="on click
+        add .hidden to #trace-load-error
+        call htmx.ajax(&#39;GET&#39;, #trace_expanded_view&#39;s @data-trace-url, {target: #trace_expanded_view, swap: &#39;innerHTML&#39;})
+      end">Retry</button>
+<input class="input input-sm w-full" value name="environment" id="environment" type="text" placeholder="e.g. production"
+<input class="input input-sm w-full" value name="service" id="service" type="text" placeholder="e.g. checkout"
+<h3 class="text-base font-semibold text-textStrong">Create monitor</h3>

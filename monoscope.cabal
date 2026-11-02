@@ -790,8 +790,6 @@ test-suite integration-tests
       ErrorFingerprintStabilitySpec
       EvalConformanceSpec
       ExtractionWorkerSpec
-      FacetsSpec
-      LiveTailSpec
       MinioManagerSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
@@ -819,10 +817,8 @@ test-suite integration-tests
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.PrometheusSpec
-      Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ServiceMapSpec
-      Pages.ShareSpec
       Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
       Pkg.KafkaConsumerSpec
@@ -1102,8 +1098,6 @@ test-suite test-dev
       ErrorFingerprintStabilitySpec
       EvalConformanceSpec
       ExtractionWorkerSpec
-      FacetsSpec
-      LiveTailSpec
       MinioManagerSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
@@ -1131,10 +1125,8 @@ test-suite test-dev
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.PrometheusSpec
-      Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ServiceMapSpec
-      Pages.ShareSpec
       Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
       Pkg.KafkaConsumerSpec

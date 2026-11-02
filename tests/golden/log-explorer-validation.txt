@@ -1,0 +1,18 @@
+(Just "kind == \"log\"",Nothing)
+  QueryValidation {valid = True, message = Nothing, column = Nothing, width = Nothing, hint = Nothing}
+(Just "kind == \"a\" and attribut contains \"x\"",Nothing)
+  QueryValidation {valid = False, message = Just "Unknown field \"attribut\"", column = Just 17, width = Just 8, hint = Just "Did you mean \"attributes\"?"}
+(Just "attributes contains ddd",Nothing)
+  QueryValidation {valid = False, message = Just "Syntax error at column 12: unexpected 'c', expecting '|' or white space", column = Just 12, width = Just 8, hint = Nothing}
+(Just "metric_name == \"redis.commands\" | summarize avg(value) by bin_auto(timestamp)",Just "metrics")
+  QueryValidation {valid = True, message = Nothing, column = Nothing, width = Nothing, hint = Nothing}
+(Just "metric_name == \"redis.commands\" | summarize avg(value) by bin_auto(timestamp)",Nothing)
+  QueryValidation {valid = False, message = Just "Unknown field \"metric_name\"", column = Just 1, width = Just 11, hint = Nothing}
+(Just "context___trace_id != null and resource___service___name == \"api\"",Nothing)
+  QueryValidation {valid = True, message = Nothing, column = Nothing, width = Nothing, hint = Nothing}
+(Just "context___trace_ix != null",Nothing)
+  QueryValidation {valid = False, message = Just "Unknown field \"context___trace_ix\"", column = Just 1, width = Just 18, hint = Just "Did you mean \"context___trace_id\"?"}
+(Nothing,Nothing)
+  QueryValidation {valid = True, message = Nothing, column = Nothing, width = Nothing, hint = Nothing}
+(Just "level == \"ERROR\" | summarize count() by kind | where count_ > 1",Nothing)
+  QueryValidation {valid = True, message = Nothing, column = Nothing, width = Nothing, hint = Nothing}
