@@ -218,6 +218,8 @@ tests:
       - monoscope-shared
       # EmbeddingFairnessSpec inspects documents passed to the LLM effect.
       - langchain-hs
+      # BotsSpec stubs the LLM effect, whose requests are OpenAI chat completions.
+      - openai
       # AuthSpec builds a Set-Cookie header the way a browser round-trips it.
       - cookie
       - case-insensitive

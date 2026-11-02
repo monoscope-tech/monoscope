@@ -15,7 +15,6 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as MonitorsM
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Projects qualified as Projects
-import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.Monitors qualified as Monitors
 import Pages.Settings (PrometheusForm (..), prometheusPostH)
 import Pages.Settings qualified as Settings

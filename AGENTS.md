@@ -385,7 +385,7 @@ So: run the make target. If you invoke `cabal test integration-tests` directly, 
 `USE_EXTERNAL_DB=true` yourself — and before blaming a change for integration failures,
 run one spec it did not touch.
 
-**Golden files** (`tests/golden/`): integration tests cache external API responses. Update with `UPDATE_GOLDEN=true`.
+**Golden files** (`tests/golden/`): integration tests cache external API responses; `UPDATE_GOLDEN=true` re-records them with **real outbound HTTP/LLM calls**. HTML/text/JSON snapshots (`goldenText`/`goldenHtml`) regenerate with `UPDATE_SNAPSHOTS=true` instead — never set `UPDATE_GOLDEN` to refresh a snapshot.
 
 **Testing is critical — always write tests for new features and bug fixes.** Prefer high-level e2e integration tests that exercise handlers or real user actions end-to-end (from HTTP request through DB and back). Tests should assert on responses as users would see them. Only use doctests for isolated pure functions. Avoid low-level unit tests that mock internals — test real behavior through the actual stack. Keep tests concise: no redundant tests, prefer single tests that cover multiple cases implicitly or explicitly rather than many narrow tests.
 
@@ -400,7 +400,7 @@ When you doctest a smart constructor or refined type, **doctest the invariant, n
 
 Test helpers in `Pkg.TestUtils`: `withTestResources` (pool, caches, auth), `toServantResponse` (for handler responses), `runQueryEffect` (for DB effects), `ingestLog`/`ingestTrace`/`ingestMetric` (OTLP ingestion).
 
-`Pkg.TestUtils` is also the test prelude: it re-exports Relude, the Hspec vocabulary, `sql`, `Only`, `def` and `UUIDId`, so specs import it instead of those. Fixture SQL goes through `dbExec`/`dbQuery`/`dbOne` (on the test clock), handler payloads through `call`, presentation through `goldenHtml`/`goldenText` (`UPDATE_GOLDEN=true` rewrites).
+`Pkg.TestUtils` is also the test prelude: it re-exports Relude, the Hspec vocabulary, `sql`, `Only`, `def` and `UUIDId`, so specs import it instead of those. Fixture SQL goes through `dbExec`/`dbQuery`/`dbOne` (on the test clock), handler payloads through `call`, presentation through `goldenHtml`/`goldenText` (`UPDATE_SNAPSHOTS=true` rewrites; `UPDATE_GOLDEN=true` instead re-records external HTTP/LLM responses).
 
 - <http://localhost:8080/p/00000000-0000-0000-0000-000000000000/> project is a demo project which can be accessed with no auth.
 

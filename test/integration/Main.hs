@@ -40,7 +40,7 @@ main = do
         -- use the stable hash so changing CI_SHARDS never drops a spec.
         balanced =
           [ ("Pages.LogExplorer.Log", 4)
-          , ("Pages.Bots.Workflows", 5)
+          , ("Pages.Bots", 5)
           , ("BackgroundJobs.ReportUsage", 2)
           , ("EndpointDiscovery", 7)
           , ("Pages.Endpoints.ApiCatalog", 0)
