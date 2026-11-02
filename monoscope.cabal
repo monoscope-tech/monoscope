@@ -824,9 +824,6 @@ test-suite integration-tests
       MonitoringSpec
       Opentelemetry.IngestionSpec
       Pages.ApiSpec
-      Pages.Bots.AgenticSpec
-      Pages.Bots.BotTestHelpers
-      Pages.Bots.WorkflowsSpec
       Pages.BotsSpec
       Pages.CodeContextSpec
       Pages.DashboardsSpec
@@ -1131,9 +1128,6 @@ test-suite test-dev
       MonitoringSpec
       Opentelemetry.IngestionSpec
       Pages.ApiSpec
-      Pages.Bots.AgenticSpec
-      Pages.Bots.BotTestHelpers
-      Pages.Bots.WorkflowsSpec
       Pages.BotsSpec
       Pages.CodeContextSpec
       Pages.DashboardsSpec

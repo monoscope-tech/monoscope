@@ -73,6 +73,8 @@ module Pkg.TestUtils (
   dbOne,
   seedSlackChannel,
   setupSlackData,
+  setupLinkedSlackData,
+  slackInteraction,
   setupDiscordData,
   withHTTPResponses,
   signSlackBody,
@@ -1356,6 +1358,19 @@ setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
 setupSlackData tr pid teamId = runTestBg frozenTime tr do
   void $ Integrations.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel" "https://hooks.slack.com/services/test" Nothing
   void $ ProjectMembers.addSlackChannelToEveryoneTeam pid "C_NOTIF_CHANNEL"
+
+
+-- | 'setupSlackData' whose requester @U0123ABCDEF@ is linked to the test user.
+setupLinkedSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
+setupLinkedSlackData tr pid teamId = do
+  setupSlackData tr pid teamId
+  dbExec tr [sql|UPDATE apis.slack SET scopes = ARRAY['assistant:write', 'chat:write'] WHERE project_id = ?|] (Only pid)
+  dbExec tr [sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id) VALUES (?, 'U0123ABCDEF', ?, ?)|] (teamId, (Servant.getResponse tr.trSessAndHeader).user.id, pid)
+
+
+-- | Slash command @cmd@ with @query@ from @U0123ABCDEF@ in channel @C0123ABCDEF@ of workspace @teamId@.
+slackInteraction :: Text -> Text -> Text -> SlackBot.SlackInteraction
+slackInteraction cmd query teamId = SlackBot.SlackInteraction teamId cmd query ("https://hooks.slack.com/commands/" <> teamId <> "/response") "T.13579.1234567890.abcdef1234567890abcdef1234567890" "C0123ABCDEF" "general" "U0123ABCDEF"
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()
