@@ -203,7 +203,8 @@ spec = around withCliResources $ describe "CLI" do
           pure (fst <$> viaNonEmpty head choices)
     (pickedEc, picked) <- runCLILifecyclePicking tr choosePattern ["--table", "log-patterns", "get"]
     (pickedEc, "picker test" `T.isInfixOf` picked) `shouldBe` (ExitSuccess, True)
-    cliJson tr ["log-patterns", "bulk", "acknowledge", "--ids", show patternId] `shouldReturn` AE.object ["succeeded" AE..= ([patternId] :: [Int64]), "failed" AE..= ([] :: [AE.Value])]
+    cliJson tr ["log-patterns", "bulk", "ack", "--ids", show patternId] `shouldReturn` AE.object ["succeeded" AE..= ([patternId] :: [Int64]), "failed" AE..= ([] :: [AE.Value])]
+    (cliJson tr ["log-patterns", "get", show patternId] <&> (^? key "summary" . key "state" . _String)) `shouldReturn` Just "acknowledged"
     cliOk tr ["version"] >>= (`shouldSatisfy` T.isInfixOf "monoscope")
     cliJson tr ["me"] >>= (`shouldHaveKeys` ["project", "project_id"])
     cliJson tr ["project", "get"] >>= (`shouldHaveKeys` ["summary"])
