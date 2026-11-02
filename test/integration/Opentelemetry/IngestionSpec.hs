@@ -85,8 +85,8 @@ import Utils (toXXHash)
 spec :: Spec
 spec = do
   it "pure transforms: redaction, endpoint identity, and http.route as the framework's matched route" do
-    now <- getCurrentTime
-    let redacted =
+    let now = frozenTime
+        redacted =
           Telemetry.redactOtelSpan
             (emptySpan now)
               { Telemetry.attributes = Just $ AesonText $ Map.singleton "http.request.headers.authorization" (AE.Array $ V.singleton $ AE.String "Bearer secret")
@@ -417,7 +417,7 @@ spec = do
       send "cafebabe11223344cafebabe11223344" "spaneeee1111" "early-span" [] (addUTCTime (-300) base)
       send "cafebabe11223344cafebabe11223344" "spanffff2222" "late-span" [("session.id", "sess-backfill"), ("user.id", "usr-backfill")] (addUTCTime (-300) base)
       find (\(n, _, _) -> n == "early-span") <$> sessionAndUser "cafebabe11223344cafebabe11223344" `shouldReturn` Just ("early-span", Nothing, Nothing)
-      runTestBg base tr (BackgroundJobs.backfillSessionAttributes tr.trATCtx) >>= (`shouldSatisfy` (> 0))
+      runTestBg base tr (BackgroundJobs.backfillSessionAttributes tr.trATCtx) `shouldReturn` 1
       find (\(n, _, _) -> n == "early-span") <$> sessionAndUser "cafebabe11223344cafebabe11223344" `shouldReturn` Just ("early-span", Just "sess-backfill", Just "usr-backfill")
 
     it "standard OTel spans: SDK conventions normalised, methods recovered, endpoints keyed without hosts, routes shared across a batch, one row per export" \tr -> do
@@ -518,6 +518,7 @@ spec = do
       acks [("redaction", toStrict $ AE.encode withSecret)] `shouldReturn` ["redaction"]
       dbQuery tr [sql| SELECT attributes #>> '{http,request,headers,authorization}', attributes::text LIKE ? FROM otel_logs_and_spans WHERE project_id = ? AND attributes #>> '{http,request,headers,authorization}' IS NOT NULL |] ("%" <> secret <> "%", testPid)
         `shouldReturn` [("[\"[REDACTED]\"]" :: Text, False)]
+      dbOne tr [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND attributes::text LIKE ? |] (testPid, "%" <> secret <> "%") `shouldReturn` (0 :: Int)
       let rawMsg = "{\"duration\":737639,\"host\":\"3.228.92.161\",\"method\":\"POST\",\"path_params\":{\"0\":\"/service/extension/backup/mboximport\"},\"project_id\":\"00000000-0000-0000-0000-000000000000\",\"proto_minor\":1,\"proto_major\":1,\"query_params\":{\"account-name\":[\"admin\"],\"account-status\":[\"1\"],\"ow\":[\"cmd\"]},\"raw_url\":\"/service/extension/backup/mboximport?account-name=admin&account-status=1&ow=cmd\",\"referer\":\"\",\"request_body\":\"e30=\",\"request_headers\":{\"connection\":[\"upgrade\"],\"host\":[\"3.228.92.161\"],\"x-real-ip\":[\"172.31.5.55\"],\"x-forwarded-for\":[\"138.199.34.206, 172.31.5.55\"],\"content-length\":[\"716\"],\"x-forwarded-proto\":[\"http\"],\"x-forwarded-port\":[\"80\"],\"x-amzn-trace-id\":[\"Root=1-65e01ff0-22108e1659ac458930d6e9b0\"],\"user-agent\":[\"Mozilla/5.0 (Windows NT 6.3; Win64; x64; rv:92.0) Gecko/20100101 Firefox/92.0\"],\"accept-encoding\":[\"gzip, deflate\"],\"content-type\":[\"application/x-www-form-urlencoded\"]},\"response_body\":\"Tm90IEZvdW5k\",\"response_headers\":{\"x-powered-by\":[\"Express\"],\"vary\":[\"Origin\"],\"access-control-allow-credentials\":[\"true\"],\"content-type\":[\"text/html; charset=utf-8\"],\"content-length\":[\"9\"],\"etag\":[\"W/\\\"9-0gXL1ngzMqISxa6S1zx3F4wtLyg\\\"\"]},\"sdk_type\":\"JsExpress\",\"status_code\":404,\"timestamp\":\"" <> nowTxt <> "\",\"url_path\":\"/service/extension/backup/mboximport\",\"errors\":[],\"tags\":[],\"msg_id\":\"fdadc75d-5710-49cd-adfd-2d7547c9ab17\"}"
       acks [("raw", encodeUtf8 rawMsg)] `shouldReturn` ["raw"]
       acks [("m1", encoded $ testRequestMsgs.reqMsg1 nowTxt), ("m2", encoded $ testRequestMsgs.reqMsg2 nowTxt)] `shouldReturn` ["m1", "m2"]
@@ -527,6 +528,8 @@ spec = do
       sort (V.toList $ (.urlPath) <$> endpoints) `shouldBe` ["/", "/api/v1/user/login"]
 
     it "extraction worker: flushed patterns tag every event, eager batches derive endpoints and hashes, the safety net re-drives unprocessed rows exactly once" \tr -> do
+      -- Its own project: TimeFusion is shared, so a testPid read could see an earlier run's rows.
+      pid <- createTestProject tr "extraction-worker"
       worker <- ExtractionWorker.initWorkerState 1 100
       let ctx = tr.trATCtx
           withConfig f = tr{trATCtx = ctx{config = f ctx.config}}
@@ -538,28 +541,28 @@ spec = do
             ]
       for_ spans \s ->
         dbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, context___span_id, context___trace_id, summary)
-                        VALUES (?::uuid, ?, ?, ?, 'SERVER', NULLIF(?::text, ''), NULLIF(?::text, ''), ARRAY[?]::text[]) |] (s.eventId, testPid.toText, frozenTime, frozenTime, s.spanCtxId, s.traceId, s.summary)
-      for_ worker.shards \shard -> runTestBg frozenTime (withConfig \c -> c{enableTimefusionWrites = False, enableHashUpdates = True}) $ BackgroundJobs.flushDrainTask shard ExtractionWorker.DrainFlushTask{projectId = testPid, serviceName = service, spans, flushedAt = frozenTime}
+                        VALUES (?::uuid, ?, ?, ?, 'SERVER', NULLIF(?::text, ''), NULLIF(?::text, ''), ARRAY[?]::text[]) |] (s.eventId, pid.toText, frozenTime, frozenTime, s.spanCtxId, s.traceId, s.summary)
+      for_ worker.shards \shard -> runTestBg frozenTime (withConfig \c -> c{enableTimefusionWrites = False, enableHashUpdates = True}) $ BackgroundJobs.flushDrainTask shard ExtractionWorker.DrainFlushTask{projectId = pid, serviceName = service, spans, flushedAt = frozenTime}
       dbQuery tr [sql| SELECT lp.occurrence_count::int, lp.is_error, count(*)::int FROM apis.log_patterns lp JOIN otel_logs_and_spans o ON o.project_id = lp.project_id::text AND o.hashes @> ARRAY['pat:' || lp.pattern_hash]
-                       WHERE lp.project_id = ? AND lp.service_name = ? GROUP BY lp.pattern_hash, lp.occurrence_count, lp.is_error |] (testPid, service)
+                       WHERE lp.project_id = ? AND lp.service_name = ? GROUP BY lp.pattern_hash, lp.occurrence_count, lp.is_error |] (pid, service)
         `shouldReturn` [(3 :: Int, True, 3 :: Int)]
-      apiKey <- createTestAPIKey tr testPid "extraction-worker"
+      apiKey <- createTestAPIKey tr pid "extraction-worker"
       replicateM_ 3 $ ingestTrace tr apiKey "GET /api/parity/check" frozenTime
       replicateM_ 3 $ ingestTrace tr apiKey "POST /api/parity/submit" frozenTime
       let trTf = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = True}, config = ctx.config{enableTimefusionWrites = True}}}
-          countWhere q = dbOne tr q (Only testPid) :: IO Int
+          countWhere q = dbOne tr q (Only pid) :: IO Int
       drainExtractionWorker trTf
       countWhere [sql| SELECT count(*)::int FROM apis.endpoints WHERE project_id = ? AND url_path LIKE '/api/parity/%' |] `shouldReturn` 2
       countWhere [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND processed_at IS NOT NULL AND name LIKE '% /api/parity/%' |] `shouldReturn` 6
-      tfHashes <- runTestBg frozenTime trTf $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT array_to_string(hashes, chr(31)) FROM otel_logs_and_spans WHERE project_id = #{testPid.toText} AND name = 'GET /api/parity/check' |]
-      (tfHashes :: V.Vector Text) `shouldSatisfy` any (T.isInfixOf "pat:")
+      tfHashes <- tf trTf [HI.sql| SELECT array_to_string(hashes, chr(31)) FROM otel_logs_and_spans WHERE project_id = #{pid.toText} AND name = 'GET /api/parity/check' |]
+      V.toList (tfHashes :: V.Vector Text) `shouldSatisfy` \hs -> not (null hs) && all (T.isInfixOf "pat:") hs
       -- Rows the worker dropped (not accepting) stay processed_at IS NULL until the safety net
       -- re-drives them; it selects rows between 10m and 24h old on the DB clock.
       dbNow <- dbOne tr [sql| SELECT now() |] ()
       let shards = V.toList ctx.extractionWorker.shards
-          unprocessed name = dbOne tr [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND processed_at IS NULL AND name = ? |] (testPid, name :: Text) :: IO Int
+          unprocessed name = dbOne tr [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND processed_at IS NULL AND name = ? |] (pid, name :: Text) :: IO Int
           dropped act = atomically (writeTVar ctx.extractionWorker.acceptingBatches False) >> act >> atomically (writeTVar ctx.extractionWorker.acceptingBatches True)
-          safetyNet res = runTestBg dbNow res $ BackgroundJobs.processBackgroundJob res.trATCtx (BackgroundJobs.SafetyNetReprocess testPid)
+          safetyNet res = runTestBg dbNow res $ BackgroundJobs.processBackgroundJob res.trATCtx (BackgroundJobs.SafetyNetReprocess pid)
       dropped $ ingestTrace tr apiKey "GET /api/safetynet/test" (addUTCTime (-3600) dbNow)
       unprocessed "GET /api/safetynet/test" `shouldReturn` 1
       safetyNet tr >> drainExtractionWorker tr
@@ -579,8 +582,8 @@ spec = do
         ingestTrace tr apiKey "GET /api/loop/test" (addUTCTime (-3600) dbNow)
         ingestTrace tr apiKey "GET /api/loop/stale" (addUTCTime (-(3 * 3600)) dbNow)
       safetyNet trNoHash >> drainAt
-      countWhere [sql| SELECT count(*)::int FROM apis.endpoints WHERE project_id = ? AND url_path LIKE '/api/loop/%' |] >>= (`shouldSatisfy` (>= 1))
-      unprocessed "GET /api/loop/test" `shouldReturn` 0
+      dbQuery tr [sql| SELECT url_path FROM apis.endpoints WHERE project_id = ? AND url_path LIKE '/api/loop/%' ORDER BY url_path |] (Only pid) `shouldReturn` [Only ("/api/loop/test" :: Text)]
+      (,) <$> unprocessed "GET /api/loop/test" <*> unprocessed "GET /api/loop/stale" `shouldReturn` (0, 1)
       safetyNet trNoHash
       atomically (sum <$> mapM (fmap length . flushTBQueue . (.ingressQ)) shards) `shouldReturn` 0
 
@@ -688,12 +691,9 @@ spec = do
       -- records for a payload that carried spans, and the allEmpty branch acked every offset.
       -- Converted to zero rows is a DROP: it must surface as poison or a failure, never a clean ack.
       unresolvedBefore <- countDemoSpans tr "ack-unresolvable"
-      unresolved <- send tr [validLogMsg "no-such-project-key-2026-07-27" "ack-unresolvable"] logsAttrs
+      send tr [validLogMsg "no-such-project-key-2026-07-27" "ack-unresolvable"] logsAttrs >>= right
+        >>= (`shouldBe` ([], [("ack-unresolvable", "unresolved project: payload carried telemetry but did not resolve or convert")]))
       countDemoSpans tr "ack-unresolvable" `shouldReturn` unresolvedBefore
-      case unresolved of
-        Right (acks, []) -> expectationFailure $ "SILENT DROP: zero rows written and processList acked " <> show acks <> " with no poison — the offsets commit and the data is gone"
-        Right (_, poison) -> length poison `shouldBe` 1
-        Left _ -> pass
       -- DLQ replay rewrites ONLY the failed leg: the durable leg already holds the row and PG
       -- inserts aren't idempotent. Both pools hit the shared test DB, so a dual-write replay
       -- would add the row twice.
@@ -706,7 +706,7 @@ spec = do
 
     it "kafka polling: a count-based poll is bounded by bytes, an oversized record is admitted alone, the count limit holds, nothing is committed" \tr -> do
       let poll bVar n = runBackground tr.trLogger tr.trATCtx tr.trTracerProvider $ runErrorNoCallStack @K.KafkaError $ runMockProducer bVar $ runMockConsumer ["otlp_logs"] bVar $ Queue.pollKafkaBatch n
-          seeded n value hdrs = newTVarIO $ foldl' (\b _ -> appendRecord "otlp_logs" (Just value) hdrs b) emptyBroker [1 .. n :: Int]
+          seeded n value hdrs = newTVarIO $ appendRecords "otlp_logs" hdrs (replicate n value) emptyBroker
       big <- seeded 32 (BS.replicate (8 * 1024 * 1024) 0) (K.headersFromList [])
       fmap (map (fmap (.crOffset))) <$> poll big 5000 `shouldReturn` Right (map (Right . K.Offset) [0 .. 7])
       readTVarIO big >>= \b -> (Map.lookup ("otlp_logs", 0) b.cursor, b.committed) `shouldBe` (Just 8, mempty)
@@ -718,7 +718,7 @@ spec = do
     it "kafka commits: contiguous watermark, DLQ flushed before commit, no-ack chunks reseeked, chunks concurrent, capacity shared across consumers" \tr -> do
       let committedTo n bVar = readTVar bVar >>= \b -> check (Map.lookup ("otlp_logs", 0) b.committed == Just n)
           ackAll tuples _ = pure (Right (map fst tuples, []))
-          seeded = newTVarIO emptyBroker >>= \bVar -> seedTopic bVar "otlp_logs" [0 .. 4] $> bVar
+          seeded = newTVarIO $ appendRecords "otlp_logs" (K.headersFromList []) (offsets [0 .. 4]) emptyBroker
       bVar <- seeded
       receivedVar <- newTVarIO ([] :: [ByteString])
       b <- drive tr bVar ["otlp_logs"] Queue.KafkaPrimary (\tuples attrs -> atomically (modifyTVar' receivedVar (<> map snd tuples)) >> ackAll tuples attrs) (committedTo 5 bVar)
@@ -741,15 +741,14 @@ spec = do
       readTVarIO attemptVar >>= (`shouldSatisfy` (>= 2))
       -- Four normal 8MB chunks run concurrently within the shared byte budget.
       let tr4 = tr{trATCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.kafkaGroupConcurrency = 4}}}
-      fourVar <- newTVarIO $ foldl' (\acc _ -> appendRecord "otlp_logs" (Just $ BS.replicate (8 * 1024 * 1024) 0) (K.headersFromList []) acc) emptyBroker [1 .. 8 :: Int]
+      fourVar <- newTVarIO $ appendRecords "otlp_logs" (K.headersFromList []) (replicate 8 $ BS.replicate (8 * 1024 * 1024) 0) emptyBroker
       entered <- newTVarIO (0 :: Int)
       four <- drive tr4 fourVar ["otlp_logs"] Queue.KafkaPrimary (\tuples attrs -> atomically (modifyTVar' entered (+ 1)) >> atomically (readTVar entered >>= check . (== 4)) >> ackAll tuples attrs) (committedTo 8 fourVar)
       (,Map.lookup ("otlp_logs", 0) four.committed) <$> readTVarIO entered `shouldReturn` (4, Just 8)
       -- A 64MB chunk holding the shared processing capacity stalls a second consumer, which
       -- resumes once it is released; both commit without losing offsets.
-      large <- newTVarIO $ appendRecord "otlp_logs" (Just $ BS.replicate (64 * 1024 * 1024) 0) (K.headersFromList []) emptyBroker
-      small <- newTVarIO emptyBroker
-      seedTopic small "otlp_logs" [0]
+      large <- newTVarIO $ appendRecords "otlp_logs" (K.headersFromList []) [BS.replicate (64 * 1024 * 1024) 0] emptyBroker
+      small <- newTVarIO $ appendRecords "otlp_logs" (K.headersFromList []) (offsets [0]) emptyBroker
       (largeEntered, resumed, release) <- (,,) <$> newEmptyMVar <*> newEmptyMVar <*> newEmptyMVar
       withAsync (drive tr large ["otlp_logs"] Queue.KafkaPrimary (\tuples attrs -> liftIO (putMVar largeEntered () >> takeMVar release) >> ackAll tuples attrs) (committedTo 1 large)) \largeWorker -> do
         timeout 2_000_000 (takeMVar largeEntered) `shouldReturn` Just ()
@@ -768,12 +767,14 @@ spec = do
     it "kafka DLQ replay: not-yet-due records are redelivered once due, never committed over" \tr -> do
       now <- floor . toRational <$> getPOSIXTime
       let committedAtLeast n bVar = readTVar bVar >>= \s -> check (maybe False (>= n) (Map.lookup ("otlp_deadletter", 0) s.committed))
+          -- Stamped monoscope-next-due-at as every retry-tier publish is; KafkaDlqReplay skips them while now < due.
+          seedDue bVar due = atomically . modifyTVar' bVar . appendRecords "otlp_deadletter" (K.headersFromList [("monoscope-next-due-at", show due)]) . offsets
       overtaken <- newTVarIO emptyBroker
       alone <- newTVarIO emptyBroker
-      for_ ([overtaken, alone] :: [TVar Broker]) \bVar -> seedTopicDue bVar "otlp_deadletter" (now + 2) [0 .. 4]
+      for_ ([overtaken, alone] :: [TVar Broker]) \bVar -> seedDue bVar (now + 2 :: Int) [0 .. 4]
       receivedVar <- newTVarIO ([] :: [ByteString])
       -- 1s in, after the first poll skipped 0..4, already-due records land behind them.
-      _ <- forkIO $ threadDelay 1_000_000 >> seedTopicDue overtaken "otlp_deadletter" (now - 1) [5 .. 9]
+      _ <- forkIO $ threadDelay 1_000_000 >> seedDue overtaken (now - 1) [5 .. 9]
       withAsync (drive tr alone ["otlp_deadletter"] Queue.KafkaDlqReplay (\tuples _ -> pure (Right (map fst tuples, []))) (committedAtLeast 5 alone)) \aloneWorker -> do
         b <- drive tr overtaken ["otlp_deadletter"] Queue.KafkaDlqReplay (\tuples _ -> atomically (modifyTVar' receivedVar (<> map snd tuples)) $> Right (map fst tuples, [])) (committedAtLeast 10 overtaken)
         -- Committing 10 declares 0..9 durable and survives restarts: anything unprocessed is lost.
@@ -970,11 +971,10 @@ drive tr bVar topics role fn done = do
   readTVarIO bVar
 
 
-seedTopic :: TVar Broker -> Text -> [Int64] -> IO ()
-seedTopic bVar topic = atomically . modifyTVar' bVar . flip (foldl' (\acc o -> appendRecord topic (Just (encodeUtf8 (show o))) (K.headersFromList []) acc))
+appendRecords :: Text -> K.Headers -> [ByteString] -> Broker -> Broker
+appendRecords topic hdrs vals b = foldl' (\acc v -> appendRecord topic (Just v) hdrs acc) b vals
 
 
--- | Records stamped @monoscope-next-due-at@ (epoch seconds) as every retry-tier publish is;
--- KafkaDlqReplay's subChunksFor skips them while now < due.
-seedTopicDue :: TVar Broker -> Text -> Int -> [Int64] -> IO ()
-seedTopicDue bVar topic due = atomically . modifyTVar' bVar . flip (foldl' (\acc o -> appendRecord topic (Just (encodeUtf8 (show o))) (K.headersFromList [("monoscope-next-due-at", encodeUtf8 (show due))]) acc))
+-- | Record payloads naming their offsets, so a test can tell which records were processed.
+offsets :: [Int64] -> [ByteString]
+offsets = map show
