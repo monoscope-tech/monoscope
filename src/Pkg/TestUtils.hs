@@ -1101,17 +1101,17 @@ testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, 
 testServant = toServantResponse
 
 
--- | Like testServant but also captures notifications sent during handler execution
+-- | Like testServant but also captures notifications sent during handler execution.
+-- A handler error throws here, so a rejected request cannot pass as "sent nothing".
 testServantWithNotifications :: TestResources -> ATAuthCtx (RespHeaders a) -> IO ([Data.Effectful.Notify.Notification], (RespHeaders a, a))
 testServantWithNotifications TestResources{..} k = do
   tp <- getGlobalTracerProvider
   notifRef <- newIORef []
   headersResp <-
-    ( atAuthToBaseTest notifRef trSessAndHeader k
-        & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
-        & ServantS.runHandler
-    )
-      <&> fromRightShow
+    atAuthToBaseTest notifRef trSessAndHeader k
+      & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
+      & ServantS.runHandler
+      >>= either (fail . ("Servant error: " <>) . show) pure
   notifications <- reverse <$> readIORef notifRef
   pure (notifications, (headersResp, Servant.getResponse headersResp))
 

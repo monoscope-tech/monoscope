@@ -3,7 +3,7 @@
 module Pages.Projects.ProjectsSpec (spec) where
 
 import BackgroundJobs qualified
-import Control.Exception (evaluate, try)
+import Control.Exception (try)
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
@@ -265,11 +265,10 @@ spec = around withTestResources do
 
   it "notification channels: a test send per channel with history, trend fallback, team routing, report, disabled gating" \tr -> do
     -- History rows are stamped on the wall clock, so the 60s test-send rate limit (read on the
-    -- test clock) needs a clean slate; the response is forced so a rejection fails the step.
+    -- test clock) needs a clean slate.
     let send ty ch teamM = do
           dbExec tr [sql|DELETE FROM apis.notification_test_history WHERE project_id = ?|] (Only testPid)
-          (ns, (h, _)) <- testServantWithNotifications tr (Settings.notificationsTestPostH testPid (TestForm ty ch teamM))
-          ns <$ evaluate h
+          fst <$> testServantWithNotifications tr (Settings.notificationsTestPostH testPid (TestForm ty ch teamM))
         history = (.tests) <$> call tr (Settings.notificationsTestHistoryGetH testPid)
         slackTo ns = [d.channelId | SlackNotification d <- ns]
         pagerdutyKey = "a1b2c3d4e5f67890abcdef1234567890"
@@ -288,6 +287,9 @@ spec = around withTestResources do
       setup
       send issueType channel Nothing >>= verify
       map (\h -> (h.status, h.issueType, h.channel)) <$> history `shouldReturn` [(TSSent, issueType, channel)]
+    -- testServantWithNotifications_handlerError_propagates: a rejected send (here the rate limit)
+    -- returned no notifications instead of failing, so assertions on them passed vacuously.
+    isLeft <$> try @SomeException (testServantWithNotifications tr (Settings.notificationsTestPostH testPid (TestForm "runtime_exception" TCEmail Nothing))) `shouldReturn` True
 
     -- An unavailable runtime trend says so, and stays Slack-valid.
     let alert = Mail.RuntimeErrorAlert{issueId = "issue-trend-fallback", issueTitle = "Upstream timeout", errorData = (def :: ErrorPatterns.ATError){ErrorPatterns.hash = "slack-trend-fallback", ErrorPatterns.errorType = "UpstreamTimeout", ErrorPatterns.message = "The upstream request timed out"}, runtimeAlertType = Mail.NewRuntimeError, chartUrl = Nothing, occurrenceText = Nothing, firstSeenText = Nothing, ongoingFor = Nothing}
