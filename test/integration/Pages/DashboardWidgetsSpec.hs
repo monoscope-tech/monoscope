@@ -10,6 +10,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Hasql qualified as Hasql
+import Data.HashMap.Strict qualified as HM
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -18,13 +19,17 @@ import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Types (Query (..))
+import Effectful.Concurrent (runConcurrent)
 import Effectful.Error.Static (catchError)
 import Lucid (Html, toHtml, toHtmlRaw)
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Issues qualified as ApiIssues
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards (DashboardVM (savedViews, schema))
 import Models.Projects.Dashboards qualified as DashboardModel
@@ -34,14 +39,19 @@ import Models.Projects.Projects qualified as Projects
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (BWConfig (..), NavigationResponse (..), PageCtx (..))
+import Pages.BodyWrapper qualified as BodyWrapper
+import Pages.Charts.Types (MetricsStats (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as Issues
 import Pages.LogExplorer.Log qualified as Log
+import Pages.Projects qualified as ManageMembers
 import Pkg.Components.LogQueryBox (VizSurface (..), VizType (..), visTypes)
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (mkHasqlPool)
 import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
+import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
@@ -49,7 +59,9 @@ import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config qualified as Config
+import System.Directory (withCurrentDirectory)
 import System.IO.Error (userError)
+import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Test.Hspec (anyIOException)
@@ -62,6 +74,7 @@ import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.FormUrlEncoded (urlDecodeAsForm)
 import Web.Routes qualified as Routes
+import "cryptonite" Crypto.Hash qualified as Crypto
 
 
 -- Flattened: the eager widgets on these templates are children of a group.
@@ -350,6 +363,27 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       map (LBS.take 8) pngs `shouldBe` replicate 2 "\137PNG\r\n\26\n"
       length (ordNub pngs) `shouldBe` 2
 
+    -- A table's loading shell defers its headings until data arrives.
+    html (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.title = Just "Status Code Breakdown", Widget.columns = Just [def{Widget.field = "status_code", Widget.title = "Status Code"}, def{Widget.field = "count", Widget.title = "Count"}]} `shouldNotSatisfy` T.isInfixOf "<thead"
+
+    -- A failed query renders an uncached PNG, never one cached like a genuinely empty result.
+    let pngFor query appearance = do
+          let encoded = decodeUtf8 @Text $ AE.encode (def :: Widget.Widget){Widget.query = Just query, Widget.pngProfile = Just Widget.PngSlack}
+          toBaseServantResponse tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing (Just "2025-06-01T11:45:00Z") (Just "2025-06-01T12:00:00Z") Nothing Nothing (Just $ Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded) [("appearance", Just appearance)]
+    failed <- pngFor "name ==" "light"
+    failedDark <- pngFor "name ==" "dark"
+    emptyPng <- pngFor "name == \"no-such-png-fixture-operation\"" "light"
+    map (LBS.take 8 . Servant.getResponse) [failed, failedDark, emptyPng] `shouldBe` replicate 3 "\137PNG\r\n\26\n"
+    map (lookup "Cache-Control" . Servant.getHeaders) [failed, emptyPng] `shouldBe` [Just "no-store", Just "public, max-age=31536000, immutable"]
+    Servant.getResponse failed `shouldNotBe` Servant.getResponse emptyPng
+
+    -- A grouped status chart with missing series values still renders, with and without stats.
+    for_ [Nothing, Just (def :: MetricsStats){maxGroupSum = 202}] \stats -> do
+      let rows = AE.toJSON ([[AE.String "timestamp", AE.String "ERROR", AE.String "OK", AE.String "UNSET", AE.String "null"], [AE.Number 1788451200000, AE.Null, AE.Null, AE.Number 187, AE.Number 5], [AE.Number 1788451320000, AE.Number 1, AE.Null, AE.Number 201, AE.Null]] :: [[AE.Value]])
+          encoded = decodeUtf8 @Text $ AE.encode (def :: Widget.Widget){Widget.id = Just "log-explorer-all-traces", Widget.wType = Widget.WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code", Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = rows, Widget.from = Just 1788451200000, Widget.to = Just 1788465600000, Widget.stats = stats}, Widget.yAxis = Just (def :: Widget.WidgetAxis){Widget.showOnlyMaxLabel = Just True}, Widget.unit = Just "rows", Widget.legendPosition = Just "top-right", Widget.legendSize = Just Widget.LSXs, Widget.standalone = Just True, Widget.allowZoom = Just True}
+      response <- toBaseServantResponse tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just $ Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded) []
+      LBS.take 8 (Servant.getResponse response) `shouldBe` "\137PNG\r\n\26\n"
+
   it "saved views: save, scope by tab, override, concurrent writes, reject bad names and other projects" \tr -> do
     did <- newDashboard tr "rum.yaml" "Shared views"
     other <- createTestProject tr "Other saved views"
@@ -574,6 +608,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       E.bracket_ (setPermission ProjectMembers.PView) (setPermission (original :: ProjectMembers.Permissions)) do
         E.try @E.SomeException (chart source []) >>= (`shouldSatisfy` isLeft)
         (.error) <$> chart source signed `shouldReturn` Nothing
+
+    -- Dashboard variables reached widget SQL verbatim, so a quote ended the literal and the rest ran
+    -- as SQL; and request params merged after the server presets could re-point `project_id`.
+    let injected = (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.sql = Just "SELECT v, project_id FROM (SELECT '{{var-service}}'::text AS v, '{{project_id}}'::text AS project_id) t WHERE project_id='{{project_id}}'"}
+    md <- runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid (Just "24h", Nothing, Nothing) [("var-service", Just "a' OR 'x'='x"), ("project_id", Just "11111111-1111-1111-1111-111111111111")] injected
+    (md.error :: Maybe Text) `shouldBe` Nothing
+    md.dataText `shouldBe` [["a' OR 'x'='x", testPid.toText]]
 
   -- The probe counts real executions (each run advances the sequence), so a hit repeats a value.
   it "complete-result SQL cache: hits, isolates keys, shares across stream and JSON, expires, single-flights, degrades" \tr -> do
@@ -889,3 +930,148 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     explorerLinkParams testPid sessionsUrl `shouldBe` [[("since", "7D"), ("viz_type", "sessions"), ("query", browserKql)]]
     -- A link shared from the old page lands on that session.
     explorerLinkParams testPid <$> location [] [("tab", Just "sessions"), ("session", Just "abc")] `shouldReturn` [[("viz_type", "sessions"), ("query", "attributes.session.id == \"abc\"")]]
+
+  it "dashboard list: zero state, template picker, telemetry-free shell, create, tags, rename, delete, duplicate, bulk teams and delete, star and sort" \tr -> do
+    let filters = Dashboards.DashboardFilters []
+        fetch tr' previews fs = call tr' (Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing previews fs)
+        page tr' previews fs =
+          fetch tr' previews fs >>= \case
+            Dashboards.DashboardsGet pc -> pure pc
+            Dashboards.DashboardsGetSlim _ -> fail "expected the full dashboard list"
+        listed = page tr Nothing filters <&> \(PageCtx _ d) -> V.toList d.dashboards
+        titled t = listed >>= maybe (fail $ "no dashboard titled " <> toString t) pure . find ((== t) . (.title))
+        -- In one request, as the page does; the test UUID supply would otherwise repeat ids.
+        create ts = map (show @Text . Servant.getResponse) <$> call tr (traverse (\t -> Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}) ts >>= addRespHeaders)
+    -- The empty state opens the new-dashboard modal (a <label for>), not a dead href="newDashboardMdl".
+    zero <- renderT <$> fetch tr Nothing filters{Dashboards.tag = ["no-such-tag-so-the-list-is-empty"]}
+    zero `shouldContainAll` ["No dashboards yet", "for=\"newDashboardMdl\""]
+    zero `shouldNotSatisfy` T.isInfixOf "href=\"newDashboardMdl\""
+    -- Template previews load only once the modal opens.
+    initial <- renderT <$> fetch tr Nothing filters
+    initial `shouldNotSatisfy` T.isInfixOf "dashboardTemplatePreviews"
+    initial `shouldContainAll` ["hx-get=\"/p/" <> testPid.toText <> "/dashboards/new\"", "hx-trigger=\"change[target.checked] from:#newDashboardMdl\""]
+    picker <- renderT <$> fetch tr (Just "true") filters
+    PageCtx _ pd <- page tr (Just "true") filters
+    picker `shouldContainAll` (["value=\"Blank dashboard\"", "data-title=\"Nginx\"", "Requests"] <> [("data-template=\"" <> fromMaybe "" t.file <> "\"") | t <- pd.dashTemplates])
+    picker `shouldNotSatisfy` T.isInfixOf "http-stats.svg"
+    -- Deployed environments serve templates compiled in, never re-reading YAML from the working directory.
+    withSystemTempDirectory "dashboard-templates" \dir -> withCurrentDirectory dir $ for_ [Config.Prod, Config.Staging] \env -> do
+      PageCtx _ d <- page tr{trATCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.environment = env, Config.liveReloadDashboards = True}}} Nothing filters
+      d.dashTemplates `shouldSatisfy` (not . null)
+    -- The list skips the telemetry scope pickers but keeps the rest of the shell.
+    let scopeFields = ["service.name", "deployment.environment.name"]
+    runHasqlEffect tr $ SchemaCatalog.upsertSummary $ V.singleton (testPid, Catalog.SummaryDoc (HM.fromList [(k, Catalog.FieldStruct mempty mempty Catalog.FCResource False) | k <- scopeFields]) (V.singleton "checkout") (HM.fromList [(k, Catalog.TopK 1 (HM.singleton "production" 1)) | k <- scopeFields]))
+    (_, (_, _, shell)) <- testServant tr $ BodyWrapper.mkPageCtx testPid >>= addRespHeaders
+    shell.envOptions `shouldBe` V.singleton "production"
+    PageCtx bw _ <- page tr Nothing filters
+    (bw.envOptions, bw.serviceOptions, map (.conversationId) bw.conversations, isJust bw.activationProgressM) `shouldBe` (V.empty, V.empty, map (.conversationId) shell.conversations, isJust shell.activationProgressM)
+
+    create ["Dashboard 1", "Dashboard 2", "Test Dashboard"] `shouldReturn` replicate 3 "DashboardNoContent"
+    create [""] `shouldReturn` ["DashboardPostError \"Dashboard title is required\""]
+    -- Removing one tag filter deleted "&tag=prod" by substring, mangling "&tag=production" too.
+    let tagged = UUIDId $ UUID.fromWords 0xda5 0x7a9 0x9 0x1
+    _ <- runTestBg frozenTime tr $ DashboardModel.insert (DashboardModel.mkDashboardVM tagged testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.title = "Tagged", DashboardModel.tags = ["prod", "production"]}
+    tags <- renderT <$> fetch tr Nothing filters{Dashboards.tag = ["prod", "production"]}
+    let removeLink tag = T.takeWhile (/= '"') . T.drop 8 . snd . T.breakOn "hx-get=\"" . snd $ T.breakOn ("aria-label=\"Remove filter: " <> tag <> "\"") tags
+        base = "/p/" <> testPid.toText <> "/dashboards?sort=-updated_at"
+    map removeLink ["prod", "production"] `shouldBe` [base <> "&amp;tag=production", base <> "&amp;tag=prod"]
+    void $ runTestBg frozenTime tr $ DashboardModel.deleteDashboardsByIds testPid [tagged]
+
+    renamed <- titled "Test Dashboard"
+    _ <- testServant tr $ Dashboards.dashboardRenamePatchH testPid renamed.id Dashboards.DashboardRenameForm{Dashboards.title = "Updated Dashboard", Dashboards.fileDir = Nothing}
+    removed <- titled "Dashboard 1"
+    show @Text <$> call tr (Dashboards.dashboardDeleteH testPid removed.id) `shouldReturn` "DashboardNoContent"
+    _ <- titled "Updated Dashboard" >>= testServant tr . Dashboards.dashboardDuplicatePostH testPid . (.id)
+    sort . map (.title) <$> listed `shouldReturn` ["Dashboard 2", "Updated Dashboard", "Updated Dashboard (Copy)"]
+
+    -- Bulk-adding teams adds exactly the selected ones, plus the implicit @everyone.
+    let team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = [], teamMembers = [], discordChannels = [], slackChannels = [], phoneNumbers = [], pagerdutyServices = [], teamId = Nothing}
+    for_ ["hello", "hii", "broo"] \h -> testServant tr $ ManageMembers.manageTeamPostH testPid team{ManageMembers.teamHandle = h} Nothing
+    teams <-
+      call tr (ManageMembers.manageTeamsGetH testPid (Just "")) >>= \case
+        ManageMembers.ManageTeamsGet' (_, _, _, _, ts) -> pure ts
+        _ -> fail "expected ManageTeamsGet'"
+    dIds <- map (.id) . filter ((/= "Updated Dashboard (Copy)") . (.title)) <$> listed
+    _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid Dashboards.BAAddTeams Dashboards.DashboardBulkActionForm{itemId = dIds, teamIds = V.toList $ V.map (.id) $ V.filter ((/= "broo") . (.handle)) teams}
+    let handles db = sort $ mapMaybe (\tid -> (.handle) <$> V.find ((== tid) . (.id)) teams) (V.toList db.teams)
+    sort . map (\db -> (db.title, handles db)) <$> listed
+      `shouldReturn` [("Dashboard 2", ["everyone", "hello", "hii"]), ("Updated Dashboard", ["everyone", "hello", "hii"]), ("Updated Dashboard (Copy)", ["everyone"])]
+    listed >>= \ds -> void $ testServant tr $ Dashboards.dashboardBulkActionPostH testPid Dashboards.BADelete Dashboards.DashboardBulkActionForm{itemId = map (.id) ds, teamIds = []}
+    null <$> listed `shouldReturn` True
+
+    -- Starring toggles, and starred dashboards sort first.
+    create ["Dashboard A", "Dashboard B", "Dashboard C", "Star Test Dashboard"] `shouldReturn` replicate 4 "DashboardNoContent"
+    star <- titled "Star Test Dashboard"
+    star.starredSince `shouldSatisfy` isNothing
+    for_ [isJust, isNothing] \starred -> do
+      _ <- testServant tr $ Dashboards.dashboardStarPostH testPid star.id
+      (.starredSince) <$> titled "Star Test Dashboard" >>= (`shouldSatisfy` starred)
+    for_ ["Dashboard C", "Dashboard A"] \t -> titled t >>= testServant tr . Dashboards.dashboardStarPostH testPid . (.id)
+    map (isJust . (.starredSince)) <$> listed `shouldReturn` [True, True, False, False]
+
+  it "dashboard page and templates: variables, tabs, settle probe, URL precedence; template SQL runs; KQL widgets filter, fail and recover" \tr -> do
+    let var k m v = DashboardModel.Variable{key = k, title = Nothing, multi = m, required = Nothing, reloadOnChange = Nothing, helpText = Nothing, _vType = DashboardModel.VTValues, sql = Nothing, facetField = Nothing, query = Nothing, options = Nothing, value = v, dependsOn = Nothing, sqlSig = Nothing}
+        render dash = renderT $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = "t"} []
+        tab n = (def :: DashboardModel.Tab){DashboardModel.name = n}
+    -- Lucid merged a duplicated data-tagify-mode, silently making multi-select variables single-select.
+    let vars = render (def :: DashboardModel.Dashboard){DashboardModel.variables = Just [var "single" Nothing Nothing, var "multi" (Just True) Nothing], DashboardModel.widgets = [(def :: Widget.Widget){Widget.wType = Widget.WTTimeseriesLine}]}
+    T.count "data-tagify-mode" vars `shouldBe` 1
+    vars `shouldContainAll` ["data-tagify-mode=\"select\"", "sticky top-0 z-10", "dashboard-grid-wrapper relative isolate z-0"]
+    -- Tabs use the shared navigation contract (htmx 4 swap names), no /content partial and no hyperscript.
+    let tabs = render (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [tab "Overview", tab "Errors"]}
+    tabs `shouldContainAll` ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\"", "/dashboards/00000000-0000-0000-0000-000000000000/settled", "duration_ms", "response_bytes", "htmx:before:request", "htmx:after:settle", "keepalive: true"]
+    filter (`T.isInfixOf` tabs) ["hx-select=\"", "/content", "remove .tab-active"] `shouldBe` []
+    -- The settle probe accepts only its closed navigation vocabulary, and only from members.
+    let sample n = AE.eitherDecode @Dashboards.DashboardSettleSample $ "{\"duration_ms\":1,\"response_bytes\":2,\"navigation\":\"" <> n <> "\"}"
+    (sample "initial", sample "tab", isLeft (sample "typo")) `shouldBe` (Right (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardInitial), Right (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardTab), True)
+    victim <- createTestProject tr "victim"
+    _ <- testServant tr $ Dashboards.dashboardsPostH victim Dashboards.DashboardForm{Dashboards.title = "Victim", Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+    victimDash <- runTestBg frozenTime tr (DashboardModel.selectDashboardsSortedBy victim DashboardModel.Asc DashboardModel.DSTitle) >>= maybe (fail "no victim dashboard") pure . viaNonEmpty head
+    assertNonMemberDenied tr victim $ Dashboards.dashboardSettledPostH victim victimDash.id (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardInitial)
+    -- URL values beat declared defaults, so a shared link carries its selections; a cleared value stays cleared.
+    let resolve ps = sortOn fst $ Dashboards.addVariableDefaults ps (Just [var "env" Nothing (Just "prod"), var "region" Nothing (Just "eu")])
+    map resolve [[], [("var-env", Just "staging")], [("var-env", Nothing)]]
+      `shouldBe` [[("var-env", Just "prod"), ("var-region", Just "eu")], [("var-env", Just "staging"), ("var-region", Just "eu")], [("var-env", Nothing), ("var-region", Just "eu")]]
+    Dashboards.addVariableDefaults [("since", Just "1H")] Nothing `shouldBe` [("since", Just "1H")]
+
+    -- Templates: the overview reads the native metric store, every SQL stat decodes as a number
+    -- (`…::text || '%'` rendered "Query execution failed"), and the endpoint template's declared
+    -- SQL source, not its query text, routes to Postgres.
+    overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
+    overview `shouldSatisfy` isJust
+    filter (`T.isInfixOf` show overview) ["telemetry.metrics", "metric_value"] `shouldBe` []
+    stats <- filter (\w -> w.wType == Widget.WTStat && isJust w.sql) . foldMap DashboardModel.allWidgets <$> DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+    length stats `shouldSatisfy` (> 3)
+    for_ stats \w -> do
+      md <- runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid (Just "24h", Nothing, Nothing) [("const-endpointFilter", Just "hashes @> ARRAY['']")] w
+      (w.title, md.error :: Maybe Text) `shouldBe` (w.title, Nothing)
+    endpoint <- DashboardModel.readDashboardFile "static/public/dashboards" "endpoint-stats.yaml"
+    map (fmap (.source) . (.sql)) (fold $ endpoint >>= (.variables)) `shouldBe` [Just LogQueries.SqlPostgres, Just LogQueries.SqlPostgres]
+    noApisPool <- mkHasqlPool 1 (tr.trConnStr <> " dbname=postgres")
+    runQueryEffect tr{trATCtx = tr.trATCtx{Config.hasqlTimefusionPool = noApisPool}} (LogQueries.executeSecuredQuery True testPid (LogQueries.SecuredSql LogQueries.SqlPostgres $ "SELECT COUNT(*)::bigint FROM apis.endpoints WHERE project_id='" <> testPid.toText <> "' AND 'otel_logs_and_spans' = 'otel_logs_and_spans'") 1)
+      >>= (`shouldSatisfy` isRight)
+    -- The dashboard SQL-source migrations have already run in production.
+    forM ["0119_endpoint_dashboard_sql_source", "0120_repair_dashboard_sql_source"] (\m -> show @Text . Crypto.hash @_ @Crypto.MD5 <$> readFileBS ("static/migrations/" <> m <> ".sql"))
+      `shouldReturn` ["27fc8228a167e579b4b7124893921372", "19ac1c6651e59fb3860366eec198201f"]
+
+    -- KQL widgets filter by time range and URL variables, report a malformed query as widget-local
+    -- data, and recover on the next request (the browser's retry contract). A stat that only filters
+    -- grows a count rather than a binned series its decoder cannot read.
+    apiKey <- createTestAPIKey tr testPid "stat-widget-key"
+    ingestTrace tr apiKey "GET /api/stat-widget" frozenTime
+    ingestTrace tr apiKey "GET /api/other-widget" frozenTime
+    ingestTrace tr apiKey "GET /api/old-widget" (addUTCTime (-48 * 60 * 60) frozenTime)
+    let run params wt q = runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid (Just "24h", Nothing, Nothing) params (def :: Widget.Widget){Widget.wType = wt, Widget.query = Just q}
+    logs <- run [] Widget.WTLogs "name == \"GET /api/stat-widget\""
+    table <- run [] Widget.WTTable "name != null | summarize count(*) by service"
+    series <- run [] Widget.WTTimeseries "name != null"
+    map (.error) [logs, table, series] `shouldBe` [Nothing, Nothing, Nothing :: Maybe Text]
+    (V.length logs.dataText, V.null table.dataText, V.null series.dataset) `shouldBe` (1, False, False)
+    for_ ["name != null | summarize dcount(name)", "name != null"] \q -> do
+      md <- run [] Widget.WTStat q
+      (md.error :: Maybe Text, (> 0) <$> (md.dataFloat :: Maybe Double)) `shouldBe` (Nothing, Just True)
+    filtered <- run [("var-operation", Just "GET /api/stat-widget")] Widget.WTLogs "name == \"{{var-operation}}\""
+    (filtered.error :: Maybe Text, V.length filtered.dataText) `shouldBe` (Nothing, 1)
+    (.error) <$> run [] Widget.WTTimeseries "name ==" >>= (`shouldSatisfy` isJust @Text)
+    recovered <- run [] Widget.WTTimeseries "name == \"GET /api/stat-widget\""
+    (recovered.error :: Maybe Text, V.null recovered.dataset) `shouldBe` (Nothing, False)

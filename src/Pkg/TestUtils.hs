@@ -44,6 +44,8 @@ module Pkg.TestUtils (
   toServantResponse,
   runAuthHandler,
   assertNonMemberDenied,
+  httpStatus,
+  setRole,
   toBaseServantResponse,
   runAsBaseRecordingHTTP,
   atAuthToBase,
@@ -184,7 +186,7 @@ import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Dispatch.Dynamic
-import Effectful.Error.Static (Error, runErrorNoCallStack)
+import Effectful.Error.Static (Error, catchError, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, runLabeled)
 import Effectful.Log (Log)
@@ -1083,6 +1085,16 @@ assertNonMemberDenied tr pid k = do
   try (runAuthHandler tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ False} k >>= evaluateWHNF) >>= \case
     Left (ErrorCall msg) -> toText msg `shouldSatisfy` T.isInfixOf "missingProjectPermission"
     Right _ -> expectationFailure "a non-member was served another project's data"
+
+
+-- | A handler's status: 200, or the code of the 'ServantS.ServerError' it threw.
+httpStatus :: TestResources -> ATAuthCtx a -> IO Int
+httpStatus tr k = runAuthHandler tr $ catchError @ServantS.ServerError (k $> 200) (\_ err -> pure err.errHTTPCode)
+
+
+-- | Set the session user's role on @pid@.
+setRole :: TestResources -> Projects.ProjectId -> ProjectMembers.Permissions -> IO ()
+setRole tr pid role = dbExec tr [sql|UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?|] (role, pid, (Servant.getResponse tr.trSessAndHeader).user.id)
 
 
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
