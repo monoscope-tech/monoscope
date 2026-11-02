@@ -308,7 +308,7 @@ tests:
       - kafka-effectful
       - conduit
       - minio-hs
-      # Pages.GitSyncSpec pulls Effectful's transformers-typed internals
+      # Pages.ImpactReviewsSpec throws through Control.Monad.Trans.Except
       - transformers
   unit-tests:
     main: Main.hs
@@ -337,8 +337,6 @@ tests:
       - text
       - uuid
       - uuid-quasi
-      # Pkg.GitSpec serves canned vendor responses to the HTTP effect
-      - http-client
       - neat-interpolation
       - aeson-qq
       - extra

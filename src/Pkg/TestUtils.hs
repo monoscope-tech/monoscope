@@ -79,6 +79,7 @@ module Pkg.TestUtils (
   slackInteraction,
   setupDiscordData,
   withHTTPResponses,
+  mockResponse,
   signSlackBody,
   signDiscordPayload,
   testDiscordPublicKeyHex,
