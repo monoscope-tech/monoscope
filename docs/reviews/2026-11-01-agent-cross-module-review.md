@@ -1,6 +1,6 @@
 # Unified agent design and verification review
 
-Date: 1 November 2026. This record consolidates the branch's implementation reviews.
+Updated: 2 November 2026. This record consolidates the branch's implementation reviews.
 The [main plan](../../plans/2026-10-30-unified-agent.md) retains the product contract and invariants.
 The [interactive artifact](2026-10-30-unified-agent.html) explains the architecture and user experience.
 [Slack setup](../slack/README.md) and [worker operations](../agent-operations.md) cover configuration.
@@ -56,7 +56,7 @@ The migration concern requires an explicit exception: production had applied 21 
 | Early suspension | A knowledge callback could suspend before checkout without graceful child shutdown. | The outer exchange also uses the existing stop action; inner shutdown still precedes VM release. |
 | CI shard gate | A passing test name containing “Interrupted” caused a false failure. | The gate checks complete shard summaries and process exits. Regression cases still reject real interruptions and shutdown failures. |
 
-A later lost-store regression records a model call, returns no native context, and observes an unwanted executor entry (expected zero, actual one). The shared native PR/fix guard now checks the existing usage records before creating another attempt. A separate `NativeSessionLost` constructor retains recovery guidance instead of blind-retry text. The job lifecycle then passes with zero executor entries, one original attempt and no completed result. Its fake interpreter now captures typed fix context; the wiki retry requires the original attempt ID. This refinement still requires the expanded run and final release gate.
+A later lost-store regression records a model call, returns no native context, and observes an unwanted executor entry (expected zero, actual one). The shared native PR/fix guard now checks the existing usage records before creating another attempt. A separate `NativeSessionLost` constructor retains recovery guidance instead of blind-retry text. The job lifecycle then passes with zero executor entries, one original attempt and no completed result. Its fake interpreter now captures typed fix context; the wiki retry requires the original attempt ID. The expanded watcher passes 593 examples with zero failures. The same committed runtime passes the selected 16 Linux/KVM cases with 26 guests observed. Final release verification is recorded separately in canonical PR 619 and its exact-input attestations.
 
 No fix adds a parallel executor, weaker effect row, warning suppression, or authorization bypass.
 The final Weeder pass also removed two lookup helpers orphaned by this branch's table-renderer replacement.
@@ -68,9 +68,10 @@ All eleven configured checks pass for runtime snapshot `1b8ea825e`, including th
 | Check | Observed result | Scope and limits |
 | --- | --- | --- |
 | Canonical integration | 1,695 examples, zero failures, 25 pending VM cases; twelve successful shards. | Real-service attestation published. Pending VM cases have separate native evidence. |
-| Native recovery group | 28 cases, zero failures; 590 recorded inputs unchanged. | Includes the early-suspension EOF-drain regression and missing-manifest guards. |
-| Fresh Linux/KVM | 16 application cases, zero failures; 26 actual KVM guests observed. | Controlled model, GitHub and media interpreters. |
+| Recorded native recovery group | 28 cases, zero failures; 590 recorded inputs unchanged. | Includes the early-suspension EOF-drain regression and missing-manifest guards. |
+| Fresh Linux/KVM | 16 application cases, zero failures; 26 actual KVM guests observed. | Runtime `cd177d0ff`, including the lost-store guard; controlled model, GitHub and media interpreters. |
 | Recorded virtual-host loss | One case passes in 494.0081 seconds, including natural lease expiry. | Same binary before and after abrupt local Linux VM loss. Original run and attempts survive; completed replay adds no inference. |
+| Loss before the first main checkpoint | One Linux case passes in 482.6013 seconds after abrupt host loss and natural lease expiry. | Runtime `cd177d0ff`; zero new inference, attempts, checks, wiki revisions or operations; no false completed result. Uncheckpointed edits are not claimed to resume. |
 | Complete doctests | 2,105 examples, zero errors or failures. | Actual supported target; later canonical gate also passes. |
 | Browser suite | 172 pass, one skip. | Application browser tests; physical devices and screen readers remain unverified. |
 | UI tests | 1,041 tests across 62 files pass. | Canonical local gate. |
