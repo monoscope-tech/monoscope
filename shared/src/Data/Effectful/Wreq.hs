@@ -220,7 +220,7 @@ withGoldenCache
 withGoldenCache goldenDir fileName decodeErr decodeResult action = do
   let filePath = goldenDir </> fileName
   exists <- doesFileExist filePath
-  updateGolden <- isJust <$> lookupEnv "UPDATE_GOLDEN"
+  updateGolden <- (== Just "true") <$> lookupEnv "UPDATE_GOLDEN"
   if exists && not updateGolden
     then do
       content <- readFileLBS filePath
