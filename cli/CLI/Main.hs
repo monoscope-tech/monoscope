@@ -1,5 +1,5 @@
 -- | CLI entry point, in the library so integration tests can drive the real
--- parser + command pipeline in-process (see CLILifecycleSpec). The @monoscope@
+-- parser + command pipeline in-process (see CLI.CLISpec). The @monoscope@
 -- executable is a thin wrapper passing in its Paths_monoscope version.
 module CLI.Main (cliMain, parserInfo, run, GlobalOpts (..)) where
 

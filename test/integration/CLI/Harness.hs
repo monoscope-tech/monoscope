@@ -2,13 +2,14 @@
 -- rather than "Pkg.TestUtils" because it straddles both packages: the CLI is
 -- 'monoscope-cli' (which must never link libpq) while the fake transport routes
 -- into lib:monoscope's servant handlers.
-module CLI.Harness (runCLILifecycle, runCLILifecycleLive, runCLILifecyclePicking) where
+module CLI.Harness (runCLILifecycle, runCLILifecycleLive, runCLILifecyclePicking, withCliBin) where
 
 import CLI.Core (runIngestion)
 import CLI.Main qualified as CLIMain
 import CLI.UI (Picker, runPicker, runPickerWith)
 import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
+import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Version (makeVersion)
 import Effectful (Eff, IOE, runEff)
@@ -16,9 +17,11 @@ import Effectful.Environment (runEnvironment)
 import Effectful.FileSystem (runFileSystem)
 import Options.Applicative qualified as OA
 import Pkg.TestUtils
+import System.Directory (doesFileExist)
 import System.Environment (setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.IO.Silently qualified as Silently
+import System.Process (readProcess)
 import UnliftIO.Exception (bracket_, try)
 
 
@@ -68,3 +71,12 @@ runCLILifecycleWith interpretHTTP interpretPicker args = do
       pure (fromLeft ExitSuccess res, toText out)
   where
     testVersion = makeVersion [0, 0, 0]
+
+
+-- | Run @body@ with the built CLI binary (@MONOSCOPE_BIN@, else where cabal puts it),
+-- pending when it is absent: the repl-driven @make live-test-dev@ loop never builds it,
+-- and CI does.
+withCliBin :: (FilePath -> IO ()) -> IO ()
+withCliBin body = do
+  bin <- lookupEnv "MONOSCOPE_BIN" >>= maybe (toString . T.strip . toText <$> readProcess "scripts/cli-bin.sh" [] "") pure
+  ifM (doesFileExist bin) (body bin) (pendingWith $ "CLI binary not built at " <> bin <> " — run `make cli-build` to enable.")
