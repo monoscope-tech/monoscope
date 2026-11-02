@@ -12,11 +12,13 @@ module Pkg.TestUtils (
   streamFrames,
   completeFrame,
   linkParams,
+  elementsWith,
   renderedWidget,
   eventually,
   withSetup,
   withTestResources,
   withTfChartResources,
+  withTfChartPool,
   fromRightShow,
   TestResources (..),
   testSessionHeader,
@@ -129,6 +131,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue (..))
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
+import Data.Char (isAlphaNum)
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
@@ -838,7 +841,12 @@ withSharedLogger act = act sharedTestLogger
 -- the real TimeFusion when TIMEFUSION_PG_TEST_URL is set; 'withTestResources' wires TF
 -- only through Hasql.
 withTfChartResources :: (TestResources -> IO ()) -> IO ()
-withTfChartResources k = withTestResources \tr ->
+withTfChartResources k = withTestResources (`withTfChartPool` k)
+
+
+-- | The chart TimeFusion pool of 'withTfChartResources', for an example that already holds resources.
+withTfChartPool :: TestResources -> (TestResources -> IO a) -> IO a
+withTfChartPool tr k =
   lookupEnv "TIMEFUSION_PG_TEST_URL" >>= \case
     Nothing -> k tr
     Just url -> bracket (newPool $ setNumStripes (Just 1) $ defaultPoolConfig (connectPostgreSQL $ encodeUtf8 $ toText url) close 60 2) destroyAllResources \pool -> k tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}
@@ -1377,13 +1385,15 @@ resetSchemaLearning tr pids = do
 
 
 -- | Snapshot @tests/golden/html/<name>.html@, one tag per line, so the diff is reviewable.
--- UUIDs, trace ids and issue numbers are scrubbed to keep it stable. Issue numbers gap
+-- UUIDs, trace ids, issue numbers and gzipped widget blobs (their bytes follow the platform's
+-- zlib) are scrubbed to keep it stable. Issue numbers gap
 -- because the seq-num trigger (migration 0051) consumes one per upsert attempt, a known
 -- product bug this scrub does not fix.
 goldenHtml :: Lucid.ToHtml a => FilePath -> a -> Expectation
 goldenHtml name html =
   goldenText ("html/" <> name <> ".html")
     $ T.replace "><" ">\n<" (renderT html)
+    *=~/ [ed|widgetZ=[A-Za-z0-9_=-]+///widgetZ=<gz>|]
     *=~/ [ed|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}///<uuid>|]
     *=~/ [ed|[0-9a-f]{32,}///<hex>|]
     *=~/ [ed|>#[0-9]+///>#<n>|]
@@ -2064,6 +2074,57 @@ shouldContainAll haystack needles = case filter (not . (`T.isInfixOf` haystack))
 -- | Decoded query params of every rendered link to @path@, in document order.
 linkParams :: Text -> Text -> [[(Text, Text)]]
 linkParams path html = [mapMaybe sequence $ parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ T.takeWhile (/= '"') link | link <- drop 1 $ T.splitOn (path <> "?") html]
+
+
+-- | The elements enclosing each occurrence of a marker, whole and in document order: a
+-- marker inside a tag selects that tag's element, a text marker its innermost parent. For
+-- goldens of the fragment under test rather than the page around it.
+elementsWith :: [Text] -> Text -> [Text]
+elementsWith markers html = [T.take (e - s) (T.drop s html) | (s, e) <- sortNub [enclosing (T.length pre) | m <- markers, (pre, _) <- T.breakOnAll m html]]
+  where
+    tags = htmlTags html
+    enclosing p = case [t | t <- tags, t.kind == TagVoid, t.at < p, p < t.end] of
+      t : _ -> (t.at, t.end)
+      [] -> case foldl' push [] (takeWhile ((< p) . (.at)) tags) of
+        t : _ -> (t.at, closing (0 :: Int) (dropWhile ((/= t.at) . (.at)) tags))
+        [] -> (p, p)
+    push st t = case t.kind of
+      TagOpen -> t : st
+      TagClose -> drop 1 $ dropWhile ((/= t.name) . (.name)) st
+      TagVoid -> st
+    closing d = \case
+      t : ts -> case t.kind of
+        TagOpen -> closing (d + 1) ts
+        TagClose -> if d == 1 then t.end else closing (d - 1) ts
+        TagVoid -> closing d ts
+      [] -> T.length html
+
+
+data TagKind = TagOpen | TagClose | TagVoid
+  deriving stock (Eq)
+
+
+data HtmlTag = HtmlTag {at :: Int, end :: Int, name :: Text, kind :: TagKind}
+
+
+-- Lucid escapes @<@ and @>@ everywhere except raw script and style bodies, which are skipped.
+htmlTags :: Text -> [HtmlTag]
+htmlTags = go 0
+  where
+    go off t = case T.breakOn "<" t of
+      (_, "") -> []
+      (a, b) ->
+        let raw = T.takeWhile (/= '>') b
+            at = off + T.length a
+            end = at + T.length raw + 1
+            name = T.toLower $ T.takeWhile (\c -> isAlphaNum c || c == '-') $ T.dropWhile (`elem` ['<', '/']) raw
+            kind
+              | "</" `T.isPrefixOf` raw = TagClose
+              | name `elem` ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"] || "/" `T.isSuffixOf` raw = TagVoid
+              | otherwise = TagOpen
+            rest = T.drop (T.length raw + 1) b
+            skipped = if kind == TagOpen && name `elem` ["script", "style"] then T.length (fst $ T.breakOn ("</" <> name) rest) else 0
+         in [HtmlTag{at, end, name, kind} | not (T.null name)] <> go (end + skipped) (T.drop skipped rest)
 
 
 -- | The first widget a rendered page embeds in a @data-widget@ attribute.
