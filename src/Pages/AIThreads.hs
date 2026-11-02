@@ -46,7 +46,7 @@ import Web.MCP qualified as MCP
 
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
 aiSearchH pid requestBody = do
-  authorizeProject pid
+  _ <- Projects.sessionAndProject pid
   authCtx <- ask @AuthContext
   let envCfg = authCtx.env
       parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody

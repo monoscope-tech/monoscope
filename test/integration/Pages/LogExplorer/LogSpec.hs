@@ -34,6 +34,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
+import Pages.AIThreads qualified as AIThreads
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.LiveTail qualified as LiveTailPage
 import Pages.LogExplorer.Log qualified as Log
@@ -791,6 +792,13 @@ spec = do
       victim <- createTestProject tr "victim"
       assertNonMemberDenied tr victim $ LiveTailPage.liveTailRegisterH victim (newSub "checkout")
       runHasqlEffect tr (LT.countActiveForProject victim) `shouldReturn` 0
+
+    it "aiSearch_demoProjectVisitor_isNotForbidden: the public demo has no member rows; other projects stay members-only" \tr -> do
+      let blank = AE.object ["input" AE..= ("" :: Text)]
+      dbExec tr [sql|DELETE FROM projects.project_members WHERE project_id = ?|] (Only Projects.demoProjectId)
+      httpStatus tr (AIThreads.aiSearchH Projects.demoProjectId blank) `shouldReturn` 400
+      victim <- createTestProject tr "ai-search-victim"
+      assertNonMemberDenied tr victim $ AIThreads.aiSearchH victim blank
 
     it "share links: created from an ingested event, scoped to real events, expired after 48 hours" \tr -> do
       apiKey <- createTestAPIKey tr testPid "shared-event"
