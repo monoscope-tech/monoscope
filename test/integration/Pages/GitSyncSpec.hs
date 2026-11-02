@@ -29,7 +29,6 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (HttpException)
 import Network.Wreq qualified as Wreq
 import OddJobs.Job (createJob)
-import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.GitSync (GitSyncForm (..))
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.DeriveUtils (DB)

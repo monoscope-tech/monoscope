@@ -29,7 +29,6 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types.URI (parseSimpleQuery)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.Dashboards qualified as Dashboards
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Monitors qualified as Monitors

@@ -11,7 +11,6 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Integrations qualified as ApisInt
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
-import Pages.Bots.BotTestHelpers (setupSlackData)
 import Pages.Projects qualified as Pages
 import Pages.Settings (TestChannel (..), TestForm (..), TestStatus (..))
 import Pages.Settings qualified as Integrations

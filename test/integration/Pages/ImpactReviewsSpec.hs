@@ -17,7 +17,6 @@ import Effectful.Reader.Static qualified as Reader
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as Reviews
-import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.CodeContext qualified as CodeContextPage
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.Git qualified as Git

@@ -799,14 +799,7 @@ test-suite integration-tests
       Opentelemetry.TimefusionWriteFailureSpec
       Opentelemetry.TraceSessionPropagationSpec
       Pages.ApiSpec
-      Pages.Bots.AgenticSpec
-      Pages.Bots.BotFixtures
-      Pages.Bots.BotTestHelpers
-      Pages.Bots.DiscordSpec
-      Pages.Bots.SeedTestData
-      Pages.Bots.SlackSpec
-      Pages.Bots.WhatsappSpec
-      Pages.Bots.WorkflowsSpec
+      Pages.BotsSpec
       Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
       Pages.ContainersSpec
@@ -1117,14 +1110,7 @@ test-suite test-dev
       Opentelemetry.TimefusionWriteFailureSpec
       Opentelemetry.TraceSessionPropagationSpec
       Pages.ApiSpec
-      Pages.Bots.AgenticSpec
-      Pages.Bots.BotFixtures
-      Pages.Bots.BotTestHelpers
-      Pages.Bots.DiscordSpec
-      Pages.Bots.SeedTestData
-      Pages.Bots.SlackSpec
-      Pages.Bots.WhatsappSpec
-      Pages.Bots.WorkflowsSpec
+      Pages.BotsSpec
       Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
       Pages.ContainersSpec

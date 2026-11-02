@@ -70,6 +70,14 @@ module Pkg.TestUtils (
   dbQuery,
   dbOne,
   seedSlackChannel,
+  setupSlackData,
+  setupDiscordData,
+  withHTTPResponses,
+  signSlackBody,
+  signDiscordPayload,
+  receiveSlackEvent,
+  slackCallbackEnvelope,
+  slackRootEvent,
   IssueSeed (..),
   issueSeed,
   seedIssue,
@@ -131,6 +139,8 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue (..))
+import Data.ByteArray qualified as BA
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
 import Data.Char (isAlphaNum)
@@ -177,8 +187,11 @@ import Log qualified
 import Log.Data (showLogMessage)
 import Log.Logger (mkBulkLogger)
 import Lucid qualified
+import Models.Apis.Incidents qualified as Incidents
+import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -198,6 +211,7 @@ import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Bots.Slack qualified as SlackBot
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log
@@ -256,6 +270,10 @@ import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.I18n qualified as I18n
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
+import "cryptonite" Crypto.Error (throwCryptoError)
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
+import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 
 
 migrationsDirr :: FilePath
@@ -276,10 +294,27 @@ migrationsFingerprint :: IO Text
 migrationsFingerprint = T.take 12 . toXXHash <$> migrationsChecksum
 
 
--- | Test Discord public key (hex-encoded Ed25519 public key derived from deterministic seed)
--- Matches the public key generated from 32 bytes of 0x42 in BotTestHelpers
+-- | Fixed-seed Ed25519 key: 'signDiscordPayload' signs with it and test configs trust its public half.
+testDiscordKey :: Ed25519.SecretKey
+testDiscordKey = throwCryptoError $ Ed25519.secretKey $ BS.replicate 32 0x42
+
+
 testDiscordPublicKeyHex :: Text
-testDiscordPublicKeyHex = "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
+testDiscordPublicKeyHex = decodeUtf8 $ B16.encode (BA.convert (Ed25519.toPublic testDiscordKey) :: ByteString)
+
+
+-- | A Discord interaction body with its signature and timestamp headers.
+signDiscordPayload :: ByteString -> Text -> (ByteString, ByteString, ByteString)
+signDiscordPayload payload timestamp = (payload, B16.encode $ BA.convert $ Ed25519.sign testDiscordKey (Ed25519.toPublic testDiscordKey) (encodeUtf8 timestamp <> payload), encodeUtf8 timestamp)
+
+
+testSlackSigningSecret :: Text
+testSlackSigningSecret = "test-slack-signing-secret"
+
+
+-- | Slack's @v0@ request signature under the test signing secret.
+signSlackBody :: Text -> ByteString -> Text
+signSlackBody timestamp body = "v0=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 testSlackSigningSecret :: ByteString) ("v0:" <> encodeUtf8 timestamp <> ":" <> body) :: HMAC.HMAC SHA256))
 
 
 migrate :: TmpPostgres.DB -> IO ()
@@ -908,7 +943,8 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
       -- real TimeFusion the labeled pool IS Postgres, so a developer .env with
       -- ENABLE_TIMEFUSION_READS=True would have queries emit TimeFusion-only SQL (the
       -- `variant_get` resource accessor) against Postgres, which errors outright.
-      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = True}
+      -- Bot ingress verifies signatures made with the test keys (signSlackBody, signDiscordPayload).
+      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = True, slackSigningSecret = testSlackSigningSecret, discordPublicKey = testDiscordPublicKeyHex}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- TSC.newTraceSessionCache
@@ -974,8 +1010,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , enablePostgresTelemetryWrites = True
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
-                discordPublicKey = bool envConfig.discordPublicKey testDiscordPublicKeyHex (T.null envConfig.discordPublicKey)
-              , -- Must stay the SID in the committed golden file's name: the golden key is
+                -- Must stay the SID in the committed golden file's name: the golden key is
                 -- derived from the request path, so a different fallback asks for a file that
                 -- does not exist and the WhatsApp examples die in setup (39de508e2 redacted the
                 -- names and contents without moving this default with them).
@@ -1302,6 +1337,64 @@ tablePage :: Table.TableResponse a -> IO (PageCtx (Table.Table a))
 tablePage = \case
   Table.TablePage p -> pure p
   Table.TableRowsOnly _ -> fail "expected a full table page"
+
+
+-- | A Slack install for @pid@ in workspace @teamId@, alerting to @C_NOTIF_CHANNEL@ through the everyone team.
+setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
+setupSlackData tr pid teamId = runTestBg frozenTime tr do
+  void $ Integrations.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel" "https://hooks.slack.com/services/test" Nothing
+  void $ ProjectMembers.addSlackChannelToEveryoneTeam pid "C_NOTIF_CHANNEL"
+
+
+setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()
+setupDiscordData tr pid guildId = dbExec tr [sql|INSERT INTO apis.discord (project_id, guild_id) VALUES (?,?) ON CONFLICT (project_id) DO UPDATE SET guild_id = EXCLUDED.guild_id|] (pid, guildId)
+
+
+-- | Override the bodies of the responses @fixture@ answers; every request is still recorded.
+withHTTPResponses :: (HTTP :> es, IOE :> es) => (W.Options -> String -> IO (Maybe LByteString)) -> Eff es a -> Eff es a
+withHTTPResponses fixture = interpose @HTTP \_ -> \case
+  GetWith opts url -> send (GetWith opts url) >>= respond opts url
+  Get url -> send (Get url) >>= respond W.defaults url
+  Post url value -> send (Post url value) >>= respond W.defaults url
+  Put url value -> send (Put url value) >>= respond W.defaults url
+  Patch url value -> send (Patch url value) >>= respond W.defaults url
+  Delete url -> send (Delete url) >>= respond W.defaults url
+  PostWith opts url value -> send (PostWith opts url value) >>= respond opts url
+  PutWith opts url value -> send (PutWith opts url value) >>= respond opts url
+  PatchWith opts url value -> send (PatchWith opts url value) >>= respond opts url
+  DeleteWith opts url -> send (DeleteWith opts url) >>= respond W.defaults url
+  where
+    respond opts url response = maybe response (\value -> response & W.responseBody .~ value) <$> liftIO (fixture opts url)
+
+
+-- | Accept a signed Slack event through the real endpoint and return its receipt.
+receiveSlackEvent :: TestResources -> AE.Value -> IO (UUIDId "slack_event")
+receiveSlackEvent tr payload = do
+  ts <- show @Text . floor @_ @Integer . utcTimeToPOSIXSeconds <$> getTestTime tr.trTestClock
+  let body = toStrict $ AE.encode payload
+  void $ toBaseServantResponse tr $ SlackBot.slackEventsPostH body (Just ts) (Just $ signSlackBody ts body)
+  dbOne tr [sql|SELECT id FROM apis.slack_events WHERE team_id = (?::jsonb)->>'team_id' AND event_id = (?::jsonb)->>'event_id'|] (payload, payload)
+
+
+-- | The signed callback envelope every Slack event arrives in.
+slackCallbackEnvelope :: Text -> Text -> AE.Value -> AE.Value
+slackCallbackEnvelope teamId eventId event = AE.object ["type" .= ("event_callback" :: Text), "team_id" .= teamId, "api_app_id" .= ("A_TEST" :: Text), "event_id" .= eventId, "event" .= event]
+
+
+-- | Slack's echo of an incident root message we posted, carrying its root id in metadata.
+slackRootEvent :: Text -> Text -> Text -> Incidents.SlackRootId -> Text -> Text -> AE.Value
+slackRootEvent eventId workspace channel rootId timestamp authorApp =
+  slackCallbackEnvelope workspace eventId
+    $ AE.object
+      [ "type" .= ("message" :: Text)
+      , "subtype" .= ("bot_message" :: Text)
+      , "bot_id" .= ("B_TEST" :: Text)
+      , "app_id" .= authorApp
+      , "text" .= ("Monitor alert" :: Text)
+      , "channel" .= channel
+      , "ts" .= timestamp
+      , "metadata" .= AE.object ["event_type" .= ("monoscope_incident_root" :: Text), "event_payload" .= AE.object ["root_id" .= rootId]]
+      ]
 
 
 -- | Raw SQL for fixtures and for state no handler exposes, on the test clock so
