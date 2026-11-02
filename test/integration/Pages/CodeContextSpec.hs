@@ -1156,10 +1156,10 @@ spec = do
         dbExec tr "UPDATE apis.cron_monitors SET name = 'Local edit' WHERE id = ?" (Only edited)
         result <- importDef stale observed (Just original)
         result `shouldSatisfy` isLeft
-        current <- localOf stale
-        current `shouldNotBe` Just (AE.toJSON original)
+        Just current <- localOf stale
+        current `shouldNotBe` AE.toJSON original
         importDef stale observed Nothing `shouldReturn` result
-        localOf stale `shouldReturn` current
+        localOf stale `shouldReturn` Just current
         -- configurationImport_reportsDuplicateCronSlugsWithoutAbortingOtherResources
         for_ (["first", "second", "third"] :: [Text]) \name -> do
           r <- resource =<< register testPid sync.id RepositorySync.Cron ("monitors/" <> name <> ".yaml")
