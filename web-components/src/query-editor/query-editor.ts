@@ -23,6 +23,7 @@ import { schemaManager, type SchemaData, type FieldInfo } from './schema-manager
 import { wordAtCursor, DATA_SOURCES, AGGREGATION_COMMANDS, STATS_FUNCTIONS } from './completion';
 import { completionChrome, completionTheme, completionIcon, completionSection } from './completion-dropdown';
 import { unclosedQuote, verdictToError, type Verdict, type QueryError } from './validation';
+import { isDarkTheme } from '../colorMapping';
 export { schemaManager, unclosedQuote, verdictToError, type Verdict, type SchemaData };
 
 const REGEX_PATTERNS = {
@@ -98,7 +99,7 @@ export class QueryEditorComponent extends LitElement {
   private theme = new Compartment();
   private themeObserver?: MutationObserver;
   private themeExtensions() {
-    const dark = document.body.getAttribute('data-theme') === 'dark';
+    const dark = isDarkTheme();
     return [EditorView.theme({}, { dark }), syntaxHighlighting(dark ? darkHighlightStyle : defaultHighlightStyle)];
   }
   private ready = false;

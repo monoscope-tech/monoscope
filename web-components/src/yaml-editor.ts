@@ -4,6 +4,7 @@ import type * as Monaco from 'monaco-editor';
 import * as monacoInstance from 'monaco-editor/editor/editor.api.js';
 import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import { conf, language } from 'monaco-editor/languages/definitions/yaml/yaml.js';
+import { isDarkTheme } from './colorMapping';
 (self as any).MonacoEnvironment ||= { getWorker: () => new EditorWorker() };
 monacoInstance.languages.register({ id: 'yaml' });
 monacoInstance.languages.setMonarchTokensProvider('yaml', language as Monaco.languages.IMonarchLanguage);
@@ -42,7 +43,7 @@ export class YamlEditorComponent extends LitElement {
   private initEditor(): void {
     if (!this.container || this.editor) return;
 
-    const isDark = document.body.getAttribute('data-theme') === 'dark';
+    const isDark = isDarkTheme();
     const initialValue = this.getAttribute('data-initial-value') || '';
 
     this.editor = monacoInstance.editor.create(this.container, {
@@ -71,7 +72,7 @@ export class YamlEditorComponent extends LitElement {
     this.themeObserver = new MutationObserver((mutations) => {
       mutations.forEach((m) => {
         if (m.attributeName === 'data-theme') {
-          const dark = document.body.getAttribute('data-theme') === 'dark';
+          const dark = isDarkTheme();
           this.editor?.updateOptions({ theme: dark ? 'vs-dark' : 'vs' });
         }
       });

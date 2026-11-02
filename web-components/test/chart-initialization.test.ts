@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { chartLayoutForSize, isNearChartViewport } from '../src/chart-initialization';
-import { registerChartDisposer } from '../src/widgets';
+import { chartLayoutForSize, isNearChartViewport, registerChartDisposer } from '../src/widgets';
 
 test('disposes a chart removed by an HTMX morph navigation', () => {
   const chart = document.createElement('div');

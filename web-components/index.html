@@ -62,7 +62,7 @@
         const editor = document.getElementById('kusto-editor');
         if (!editor) return;
 
-        const { initializeDefaultSchema } = await import('/src/query-editor/query-editor-config.ts');
+        const { initializeDefaultSchema } = await import('/src/query-editor/schema-manager.ts');
 
         // Wait for the component to be fully initialized
         setTimeout(() => {

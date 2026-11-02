@@ -836,39 +836,27 @@ reportProjectUsage authCtx pid =
           (wStart, totals) <- countWindow Nothing
           subItems <- Projects.meterSubItemIds pid
           let meterCfg = Projects.projectMeterConfig project subItems
-          -- 'meterIsDormant' decides whether a dimension cuts submission chunks at
-          -- all. A dormant meter records its total and nothing else: draining
-          -- months of buffered backlog the day a meter goes live is the
-          -- backlog-leak failure we have already hit on a provider switch. A
-          -- misconfigured one cuts chunks anyway, so the drain leaves an
+          -- An unaddressable meter still cuts chunks, so the drain leaves an
           -- auditable, retriable failed row for money we are actually owed.
-          chunks <-
-            concat <$> forM [minBound .. maxBound] \kind -> do
-              let qty = Projects.meterQuantity kind totals
-              case Projects.resolveMeterTarget meterCfg kind of
-                Left reason
-                  | Projects.meterIsDormant reason -> do
-                      -- Events dormant on a paid project is a silent revenue-off
-                      -- switch — the exact shape of the 5-week zero-usage incident.
-                      let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
-                      when (qty > 0 || kind == Projects.Events)
-                        $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "reason", show reason :: Text, "quantity", qty, "provider", show provider :: Text)
-                      pure []
-                -- Both paid providers chunk identically. LS's 1M POST cap forces
-                -- splitting; Stripe has no documented cap but N meter-events with
-                -- the same meter+customer aggregate identically to one big event.
-                --
-                -- The quantity is converted to the target's units BEFORE chunking, so
-                -- the stored quantity is the number actually sent and the 1M cap is
-                -- applied to the value the cap is about. Raw counts stay in
-                -- apis.daily_usage, which is what a reconciliation reads.
-                Right target -> pure $ Projects.splitUsageIntoChunks kind $ case target of
-                  -- Only the shared events item needs restating; a dimension with an
-                  -- item of its own is already priced for it.
-                  Projects.LemonSqueezyEventsItem _ -> Projects.lemonSqueezyEventsEquivalent kind qty
-                  Projects.LemonSqueezyMeter _ -> qty
-                  Projects.StripeMeter _ _ -> qty
-                Left _ -> pure $ Projects.splitUsageIntoChunks kind qty
+          --
+          -- Both paid providers chunk identically. LS's 1M POST cap forces
+          -- splitting; Stripe has no documented cap but N meter-events with
+          -- the same meter+customer aggregate identically to one big event.
+          --
+          -- The quantity is converted to the target's units BEFORE chunking, so
+          -- the stored quantity is the number actually sent and the 1M cap is
+          -- applied to the value the cap is about. Raw counts stay in
+          -- apis.daily_usage, which is what a reconciliation reads.
+          let chunks =
+                [minBound .. maxBound] >>= \kind ->
+                  let qty = Projects.meterQuantity kind totals
+                   in Projects.splitUsageIntoChunks kind $ case Projects.resolveMeterTarget meterCfg kind of
+                        -- Only the shared events item needs restating; a dimension with an
+                        -- item of its own is already priced for it.
+                        Right (Projects.LemonSqueezyEventsItem _) -> Projects.lemonSqueezyEventsEquivalent kind qty
+                        Right (Projects.LemonSqueezyMeter _) -> qty
+                        Right (Projects.StripeMeter _ _) -> qty
+                        Left _ -> qty
           Log.logInfo "Usage to report" $ AE.object ["project_id" AE..= pid.toText, "events" AE..= totals.events, "event_bytes" AE..= totals.eventBytes, "metrics" AE..= totals.metrics, "metric_bytes" AE..= totals.metricBytes, "replays" AE..= totals.replays, "ai_input_tokens" AE..= totals.aiInputTokens, "ai_output_tokens" AE..= totals.aiOutputTokens, "ai_cost_microusd" AE..= totals.aiCostMicrousd, "chunks" AE..= length chunks]
           Projects.recordUsageWindow pid wStart nowU totals chunks
 
@@ -885,42 +873,31 @@ reportProjectUsage authCtx pid =
                     -- the provider UI, which is not indexed by our chunk UUIDs.
                     logFields extra =
                       ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
-                -- A chunk is only ever cut while its meter is live, so a dormant
-                -- reason here means the meter was switched off (or its LS item
-                -- removed) between record and drain. Leave the row pending rather
-                -- than failed: the backlog is bounded and drains cleanly on
-                -- re-enable, whereas 'failed' would re-log it every tick forever.
-                -- A misconfig reason falls through and is marked failed as before.
-                case Projects.resolveMeterTarget meterCfg row.meter of
-                  Left reason
-                    | Projects.meterIsDormant reason ->
-                        Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
-                  target -> do
-                    res <- tryAny $ case target of
-                      Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
-                      Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
-                      Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
-                      -- Not a transient error: throw so the Left branch below marks
-                      -- the chunk failed, rather than no-oping into a 'submitted'.
-                      Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
-                    -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
-                    -- and the status UPDATE would re-select this row next tick and
-                    -- double-submit. Emit a loud manual-reconcile signal on that path.
-                    either
-                      ( \e -> do
-                          let errText = toText (displayException e)
-                          Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
-                          whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id errText) \e2 ->
-                            Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
-                      )
-                      ( \() -> do
-                          markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
-                          case markRes of
-                            Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
-                            Left e2 ->
-                              Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
-                      )
-                      res
+                res <- tryAny $ case Projects.resolveMeterTarget meterCfg row.meter of
+                  Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
+                  Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                  Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                  -- Not a transient error: throw so the Left branch below marks
+                  -- the chunk failed, rather than no-oping into a 'submitted'.
+                  Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
+                -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
+                -- and the status UPDATE would re-select this row next tick and
+                -- double-submit. Emit a loud manual-reconcile signal on that path.
+                either
+                  ( \e -> do
+                      let errText = toText (displayException e)
+                      Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
+                      whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id errText) \e2 ->
+                        Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
+                  )
+                  ( \() -> do
+                      markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
+                      case markRes of
+                        Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
+                        Left e2 ->
+                          Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
+                  )
+                  res
           case provider of
             -- Paid plan with no usable provider: mark every pending chunk 'failed'
             -- once so it persists in pendingUsageSubmissions as an audit signal

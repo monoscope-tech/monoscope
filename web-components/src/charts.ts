@@ -1,5 +1,6 @@
 import { getContrastTextColor, resolveColor } from './colorMapping';
 import debounce from 'lodash/debounce';
+import { scaleDuration } from './stat-value';
 
 const getTimeBounds = (spans: { start: number; value: number }[]): { minStart: number; range: number } => {
   let minStart = Infinity, maxEnd = -Infinity;
@@ -361,23 +362,11 @@ function generateTimeIntervals(duration: number, target: string, padLeft = 0) {
   container.innerHTML = intervals.join('');
 }
 
-function formatDuration(duration: number): string[] {
-  if (duration >= 3600000000000) {
-    return [Number((duration / 3600000000000).toFixed(1)).toString(), 'h'];
-  } else if (duration >= 60000000000) {
-    return [Number((duration / 60000000000).toFixed(1)).toString(), 'm'];
-  } else if (duration >= 1000000000) {
-    const v = duration / 1000000000;
-    return [v >= 10 ? Math.round(v).toString() : v.toFixed(1), 's'];
-  } else if (duration >= 1000000) {
-    const v = duration / 1000000;
-    return [v >= 10 ? Math.round(v).toString() : v.toFixed(1), 'ms'];
-  } else if (duration >= 1000) {
-    const v = duration / 1000;
-    return [v >= 10 ? Math.round(v).toString() : v.toFixed(1), 'µs'];
-  } else {
-    return [duration.toFixed(1), 'ns'];
-  }
+// The waterfall's own rounding: whole numbers from 10 up, and the micro sign (U+00B5).
+export function formatDuration(ns: number): string[] {
+  const [v, unit] = scaleDuration(ns);
+  if (unit === 'ns') return [v.toFixed(1), unit];
+  return [unit === 'h' || unit === 'm' ? String(Number(v.toFixed(1))) : v >= 10 ? Math.round(v).toString() : v.toFixed(1), unit === 'μs' ? 'µs' : unit];
 }
 
 function elt(type: string, props: Record<string, any>, ...children: (HTMLElement | string)[]) {

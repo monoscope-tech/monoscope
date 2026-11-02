@@ -193,4 +193,9 @@ export class SchemaManager {
     (await this.resolveNested(this.defaultSchema, path.join('.'))).map((f) => ({ name: f.name, info: f }));
 }
 export const schemaManager = new SchemaManager();
+/** Kept for integrations that initialize the shared schema before mounting. */
+export function initializeDefaultSchema(): void {
+  schemaManager.setSchemas(['spans', 'metrics']);
+  schemaManager.setDefaultSchema('spans');
+}
 if (typeof window !== 'undefined') (window as any).schemaManager = schemaManager;

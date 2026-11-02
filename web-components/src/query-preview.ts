@@ -3,6 +3,7 @@ import { EditorView, lineNumbers } from '@codemirror/view';
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { PostgreSQL, sql } from '@codemirror/lang-sql';
 import { darkHighlightStyle, language } from './query-editor/language';
+import { isDarkTheme } from './colorMapping';
 
 class QueryPreview extends HTMLElement {
   private view?: EditorView;
@@ -13,7 +14,7 @@ class QueryPreview extends HTMLElement {
     const panel = this.closest('[popover]');
     const show = () => {
       if (this.view) return;
-      const dark = document.body.getAttribute('data-theme') === 'dark';
+      const dark = isDarkTheme();
       const code = this.querySelector('pre');
       this.view = new EditorView({
         parent: this,

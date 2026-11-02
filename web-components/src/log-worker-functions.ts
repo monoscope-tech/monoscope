@@ -5,7 +5,6 @@ import type { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEnt
 
 type Trace = { traceId: string; spans: APTEvent[]; startTime: number; duration: number; trace_start_time: Date | null };
 
-// Inline generateId to avoid importing log-list-utils (which has DOM dependencies)
 export function generateId() {
   return Math.random().toString(36).substring(2, 15);
 }

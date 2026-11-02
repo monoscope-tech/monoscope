@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { readChartResponse } from '../src/chart-stream';
+import { readChartResponse } from '../src/widgets';
 
 const response = (body: ReadableStream<Uint8Array>) => new Response(body, { headers: { 'content-type': 'application/x-ndjson' } });
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value) + '\n');

@@ -5,8 +5,7 @@
 // level at a time. They had no tests, which is how the suggestion suite came to assert
 // against a Monaco internal for months without anyone noticing it asserted nothing.
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { initializeDefaultSchema } from '../src/query-editor/query-editor-config';
-import { schemaManager } from '../src/query-editor/schema-manager';
+import { initializeDefaultSchema, schemaManager } from '../src/query-editor/schema-manager';
 
 vi.stubGlobal('Worker', undefined);
 
