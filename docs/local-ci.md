@@ -325,7 +325,10 @@ the server.
 `make deploy-image` uses the same `scripts/ci/release.sh` recipe as the PR and
 master image jobs. It requires a clean tree and registry access. It publishes
 an immutable digest, a content-input tag, and commit-SHA and source-tree aliases
-without moving `latest`. Master reuses that artifact when its source tree matches. Image labels preserve who built it and from which revision.
+without moving `latest`. Master reuses that artifact when its source tree matches.
+Image labels preserve who built it and from which revision.
+A rebuild can move the source-tree alias to a new digest for the same tree.
+CI resolves that alias once, then verifies and uses the immutable digest.
 
 ## Knobs
 
