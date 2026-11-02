@@ -38,7 +38,6 @@ module Pkg.TestUtils (
   testServantWithNotifications,
   runAllBackgroundJobs,
   getPendingBackgroundJobs,
-  logBackgroundJobsInfo,
   runBackgroundJobsWhere,
   setBjRunAtInThePast,
   toServantResponse,
@@ -87,7 +86,6 @@ module Pkg.TestUtils (
   goldenParts,
   goldenText,
   processMessagesAndBackgroundJobs,
-  createTestSpans,
   -- OTLP/Telemetry helpers
   createTestProject,
   createTestAPIKey,
@@ -219,7 +217,7 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
+import Pkg.DeriveUtils (DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.LiveTail qualified as LiveTail
@@ -1249,21 +1247,6 @@ getPendingBackgroundJobs authCtx = do
     pure (job, bgJob)
 
 
--- | Log background jobs info for debugging (respects LOG_LEVEL)
-logBackgroundJobsInfo :: Log.Logger -> V.Vector (Job, BackgroundJobs.BgJobs) -> IO ()
-logBackgroundJobsInfo logger jobs = do
-  logLevel <- fromMaybe Log.LogTrace . (>>= fromVar) <$> lookupEnv "LOG_LEVEL"
-  let jobsList =
-        V.toList jobs <&> \(job, bgJob) ->
-          AE.object
-            [ "type" AE..= BackgroundJobs.jobTypeName bgJob
-            , "id" AE..= job.jobId
-            ]
-  runEff
-    $ Logging.runLog "test" logger logLevel
-    $ Log.logTrace "Background Jobs Queue" (AE.object ["count" AE..= V.length jobs, "jobs" AE..= jobsList])
-
-
 runAllBackgroundJobs :: UTCTime -> AuthContext -> IO (V.Vector Job)
 runAllBackgroundJobs t authCtx = do
   jobs <- withResource authCtx.pool getBackgroundJobs
@@ -1563,105 +1546,6 @@ processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
   _ <- runTestBg frozenTime tr $ ProcessMessage.processMessages msgs HM.empty
   drainExtractionWorker tr
   void $ runAllBackgroundJobs frozenTime trATCtx
-
-
--- Helper function to create test spans for endpoints
-createTestSpans :: TestResources -> Projects.ProjectId -> Int -> IO ()
-createTestSpans TestResources{..} projectId numRequestsPerEndpoint = do
-  endpoints <-
-    withResource trPool \conn ->
-      V.fromList
-        <$> PGS.query
-          conn
-          [sql|
-    SELECT url_path, url_params, method, host, hash
-    FROM apis.endpoints
-    WHERE project_id = ?
-  |]
-          (Only projectId)
-        :: IO (V.Vector (Text, AE.Value, Text, Text, Text))
-
-  currentTime <- getCurrentTime
-  forM_ endpoints $ \(path, _, method, host, hash) -> do
-    forM_ ([1 .. numRequestsPerEndpoint] :: [Int]) $ \_ -> do
-      spanId <- nextRandom
-      traceIdVal <- nextRandom
-      let attributes =
-            AE.object
-              [ "http.request.method" .= method
-              , "http.request.path" .= path
-              , "http.response.status_code" .= (200 :: Int)
-              , "server.address" .= host
-              , "url.path" .= path
-              , "url.full" .= path
-              ]
-      let resource =
-            AE.object
-              [ "service" .= AE.object ["name" .= ("test-service" :: Text)]
-              ]
-      let context =
-            Telemetry.Context
-              { trace_id = Just $ UUID.toText traceIdVal
-              , span_id = Just $ UUID.toText spanId
-              , trace_state = Nothing
-              , trace_flags = Nothing
-              , is_remote = Nothing
-              }
-      -- Create OtelLogsAndSpans record to generate summary
-      let otelRecord =
-            Telemetry.OtelLogsAndSpans
-              { id = UUID.toText spanId
-              , project_id = projectId.toText
-              , timestamp = currentTime
-              , parent_id = Nothing
-              , observed_timestamp = Nothing
-              , hashes = Just (V.singleton hash)
-              , name = Just (method <> " " <> path)
-              , kind = Just "SERVER"
-              , status_code = Just "200"
-              , status_message = Nothing
-              , level = Nothing
-              , severity = Nothing
-              , body = Nothing
-              , duration = Just 100000000
-              , start_time = currentTime
-              , end_time = Nothing
-              , context = Just context
-              , events = Nothing
-              , links = Nothing
-              , attributes = case attributes of AE.Object km -> Just $ AesonText $ AEKM.toMapText km; _ -> Nothing
-              , resource = case resource of AE.Object km -> Just $ AesonText $ AEKM.toMapText km; _ -> Nothing
-              , date = currentTime
-              , summary = V.empty -- Will be generated
-              , errors = Nothing
-              , message_size_bytes = 0
-              }
-      let summary = Telemetry.generateSummary otelRecord
-      void $ withResource trPool \conn ->
-        PGS.execute
-          conn
-          [sql|
-        INSERT INTO otel_logs_and_spans
-        (id, project_id, timestamp, start_time, name, kind, status_code,
-         duration, hashes, attributes, context, resource, resource___service___name, date, summary)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      |]
-          ( spanId
-          , projectId.toText
-          , currentTime
-          , currentTime
-          , Just (method <> " " <> path)
-          , Just "SERVER"
-          , Just "200"
-          , Just (100000000 :: Int64)
-          , V.singleton hash
-          , case attributes of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
-          , Just context
-          , case resource of AE.Object km -> Just $ AEKM.toMapText km; _ -> Nothing
-          , Just ("test-service" :: Text)
-          , currentTime
-          , summary
-          )
 
 
 -- OTLP/Telemetry helper functions for ingesting test data
