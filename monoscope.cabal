@@ -831,13 +831,12 @@ test-suite integration-tests
       Pages.Bots.WorkflowsSpec
       Pages.BotsSpec
       Pages.CodeContextSpec
-      Pages.ContainersSpec
       Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
       Pages.ErrorPatternsSpec
-      Pages.ExemplarsSpec
       Pages.GitSyncSpec
       Pages.ImpactReviewsSpec
+      Pages.InfrastructureSpec
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
@@ -845,11 +844,7 @@ test-suite integration-tests
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
-      Pages.PrometheusSpec
-      Pages.ServiceMapSpec
-      Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
-      Pkg.KqlSeriesSpec
       ReplaySpec
       Spec
       SpecHook
@@ -1146,13 +1141,12 @@ test-suite test-dev
       Pages.Bots.WorkflowsSpec
       Pages.BotsSpec
       Pages.CodeContextSpec
-      Pages.ContainersSpec
       Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
       Pages.ErrorPatternsSpec
-      Pages.ExemplarsSpec
       Pages.GitSyncSpec
       Pages.ImpactReviewsSpec
+      Pages.InfrastructureSpec
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
@@ -1160,11 +1154,7 @@ test-suite test-dev
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
-      Pages.PrometheusSpec
-      Pages.ServiceMapSpec
-      Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
-      Pkg.KqlSeriesSpec
       ReplaySpec
       Spec
       SpecHook

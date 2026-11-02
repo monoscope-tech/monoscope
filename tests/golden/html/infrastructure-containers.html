@@ -1,0 +1,21 @@
+<div class="flex items-center" data-header-actions
+<div class="flex items-center gap-4 max-lg:gap-2" data-live-data data-live-mode="refresh-only" data-state="paused" _="on change if event.target.matches(&#39;[data-row-stream-toggle]&#39;) call window.syncTimeTransports() end
+          on &quot;live-data-state-change&quot; call window.syncTimeTransports()"
+<div class="facet-rail group/rail flex w-68 shrink-0 flex-col gap-2 text-sm text-textWeak max-md:w-full  max-lg:w-full" data-component="facet-rail" id="containersContainer-facets"
+<span class="facet-count shrink-0 text-xs tabular-nums text-textWeak"
+<input type="radio" class="radio radio-xs max-md:radio-sm" aria-label="otel-demo" value="otel-demo" name="containersContainer_filter_cluster" data-hx-trigger="change" data-hx-get="/p/<uuid>/infrastructure/containers?since=5M&amp;cluster=otel-demo" data-hx-target="#containersContainer" data-hx-select="#containersContainer" data-hx-push-url="true" data-hx-swap="outerHTML"
+<path d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32V274.7l-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7V32zM64 352c-35.3 0-64 28.7-64 64v32c0 35.3 28.7 64 64 64H448c35.3 0 64-28.7 64-64V416c0-35.3-28.7-64-64-64H346.5l-45.3 45.3c-25 25-65.5 25-90.5 0L165.5 352H64zm368 56a24 24 0 1 1 0 48 24 24 0 1 1 0-48z" /
+<th class=" text-left bg-bgAlternate sticky top-0 overflow-hidden w-80 max-w-80 overflow-hidden max-md:w-auto max-md:max-w-none" data-column-key="Container"
+<td class="w-80 max-w-80 overflow-hidden max-md:w-auto max-md:max-w-none" data-column-key="Container"
+<span class="hidden max-md:inline-flex"
+<div class="h-full rounded-full bg-fillWarning-strong" style="width:75%"
+<span class="tooltip tooltip-right shrink-0 inline-flex" data-tip="Runtime: kubernetes"
+<span class="min-w-0 truncate font-medium text-textStrong" data-tippy-content="Container: checkout"
+<span class="inline-flex items-center gap-1.5 whitespace-nowrap text-textStrong" data-tippy-content="Latest reported readiness: Ready"
+<span class="min-w-0 flex-1 truncate" data-tippy-content="Image: demo:2.2.0"
+<span class="badge badge-xs badge-ghost min-w-0 max-w-36 truncate" data-tippy-content="Workload: checkout"
+<div class="flex items-center gap-1.5" data-tippy-content="CPU limit used: 25%"
+<div class="flex items-center gap-1.5" data-tippy-content="Memory limit used: 50%"
+<span class="badge badge-sm badge-error whitespace-nowrap" data-tippy-content="Latest reported readiness: Not ready"
+<button type="button" class="btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none" popovertarget="containersForm-columns" style="anchor-name:--anchor-containersForm-columns"
+<button type="button" class="btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none" onclick="window.exportTableCsv(&#39;#containersForm_grid table&#39;,&#39;containers.csv&#39;)"

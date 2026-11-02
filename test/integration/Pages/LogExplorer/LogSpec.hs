@@ -936,10 +936,6 @@ streamChart :: TestResources -> Hasql.SqlSource -> Maybe Text -> Maybe Text -> T
 streamChart tr src q rawSql from to = runQueryEffect tr (Charts.queryMetricsStream (Just src) (Just Charts.DTMetric) (Just testPid) q rawSql Nothing (Just from) (Just to) (Just "spans") Nothing []) >>= streamFrames >>= either fail pure
 
 
-hexId :: IO Text
-hexId = T.replace "-" "" . UUID.toText <$> nextRandom
-
-
 queryMetrics :: TestResources -> Text -> Text -> Text -> IO Charts.MetricsData
 queryMetrics tr query from to = runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just query) Nothing Nothing (Just from) (Just to) (Just "spans") Nothing []
 

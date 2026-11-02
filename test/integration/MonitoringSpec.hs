@@ -26,6 +26,7 @@ import Models.Apis.ErrorPatterns qualified as Errors
 import Models.Apis.Incidents qualified as I
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -361,6 +362,64 @@ spec = describe "Monitoring" do
       setMonitorQuery tr metric "metrics | where metric_name == \"monitor.regression.pressure\" | summarize max(value)"
       evalMonitorsAt now tr
       ((,) <$> (.currentValue) <*> (.currentStatus)) <$> fetchMonitor tr metric `shouldReturn` (80, Monitors.MSAlerting)
+
+    it "uptime checks and cron monitors: failures open downtime/missed/failed issues, recovery resolves them" \tr -> do
+      pid <- createTestProject tr "uptime-cron"
+      -- A rejected submission swaps nothing so the form keeps what was typed; an accepted one
+      -- re-renders the form blank above the list (htmx 4 needs the explicit :inherited targets).
+      (rejectedH, rejected) <- testServant tr $ Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200))
+      (reswapOf rejectedH, T.isInfixOf "10.0.0.1" (renderT rejected)) `shouldBe` (Just "none", False)
+      (addedH, added) <- testServant tr $ Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200))
+      reswapOf addedH `shouldBe` Nothing
+      renderT added `shouldContainAll` ["https://shop.example.com/health"]
+      cronAdded <- call tr $ Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Nightly billing" 3600 300)
+      goldenParts "uptime-cron-forms" . ordNub $ tagsWith ["value name=\"url\"", "hx-target:inherited=\"this\""] (renderT added) <> tagsWith ["value name=\"slug\"", "hx-target:inherited=\"this\""] (renderT cronAdded)
+
+      -- One failure is a blip; two open a downtime issue; a success resolves it.
+      let uptimeNamed n = maybe (fail $ "no uptime check " <> toString n) pure . find ((== n) . (.name)) =<< runQueryEffect tr (PromCfg.configsByProjectId pid PromCfg.CKUptime)
+      shop <- uptimeNamed "Shop"
+      let probe res = runTestBg frozenTime tr $ Jobs.applyUptimeResult shop frozenTime 120 res
+          downtime = runQueryEffect tr (Issues.selectIssueByHash pid (Issues.uptimeTargetHash shop.id.toText) Issues.AnyIssue)
+      probe (Right 503)
+      (isNothing <$> downtime) `shouldReturn` True
+      probe (Left "connection refused")
+      opened <- downtime >>= maybe (fail "no downtime issue after two failures") pure
+      (opened.title, isNothing opened.archivedAt) `shouldBe` ("Downtime detected for https://shop.example.com/health", True)
+      probe (Right 200)
+      resolved <- downtime >>= maybe (fail "issue vanished") pure
+      isJust resolved.archivedAt `shouldBe` True
+      runTestBg frozenTime tr (Issues.selectLatestStateEvent resolved.id) `shouldReturn` Just Issues.IEResolved
+      -- Through the worker, a refused connection is recorded as a failure.
+      void $ runQueryEffect tr $ PromCfg.insertConfig pid PromCfg.CKUptime "refused" "http://127.0.0.1:1/health" 60 Nothing (AE.object []) (Just 200)
+      refused <- uptimeNamed "refused"
+      runTestBg frozenTime tr $ Jobs.processBackgroundJob tr.trATCtx (Jobs.PrometheusScrapeOne refused.id)
+      Just probed <- runQueryEffect tr (PromCfg.getConfig refused.id)
+      (probed.consecutiveFailures, fmap ("request failed" `T.isPrefixOf`) probed.lastStatus) `shouldBe` (1, Just True)
+
+      -- Cron: a duplicate slug is refused; a check-in keeps it healthy, a missed window and an error
+      -- run open issues, a later check-in resolves. Check-ins go through ingestion (TimeFusion on
+      -- CI), so each evaluation retries until the check-in it depends on is visible.
+      (dupH, _) <- testServant tr $ Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Again" 3600 300)
+      reswapOf dupH `shouldBe` Just "none"
+      [m] <- runQueryEffect tr (Monitors.cronMonitorsByProject pid)
+      apiKey <- createTestAPIKey tr pid "cron-key"
+      let at dt = addUTCTime dt frozenTime
+          checkin status dt = ingestSessionEvent tr apiKey "cron.checkin" [("monitor.slug", "nightly-billing"), ("monitor.status", status)] False (at dt)
+          evaluateAt dt = do
+            fresh <- runQueryEffect tr (Monitors.cronMonitorsByProject pid) >>= maybe (fail "monitor gone") pure . listToMaybe
+            runTestBg (at dt) tr $ Jobs.evaluateCronMonitor (at dt) fresh
+          issue sc = runQueryEffect tr (Issues.selectIssueByHash pid (Issues.cronTargetHash (UUID.toText m.id)) sc)
+          evaluateUntil dt sc ok = eventually (evaluateAt dt >> issue sc) ok
+      checkin "ok" 0
+      void $ eventually (evaluateAt 60 >> (.lastCheckinAt) <<$>> runQueryEffect tr (Monitors.cronMonitorsByProject pid)) (== [Just (at 0)])
+      (isNothing <$> issue Issues.AnyIssue) `shouldReturn` True
+      missed <- evaluateUntil (3600 + 300 + 120) Issues.AnyIssue isJust >>= maybe (fail "no missed issue") pure
+      (missed.title, isNothing missed.archivedAt) `shouldBe` ("Cron missed: Nightly billing", True)
+      checkin "ok" 4200
+      (fmap (isJust . (.archivedAt)) <$> evaluateUntil 4260 Issues.AnyIssue (any (isJust . (.archivedAt)))) `shouldReturn` Just True
+      checkin "error" 8000
+      failed <- evaluateUntil 8060 (Issues.OpenOfType Issues.Cron) isJust >>= maybe (fail "no failed issue") pure
+      failed.title `shouldBe` "Cron failed: Nightly billing"
 
     it "notification policy: free tier emails only the owner, chart snapshot, reminders until stop-after, recovery always, mute suppresses then resumes" \tr -> do
       let free = Monitors.QueryMonitorId [uuid|22222222-2222-2222-2222-222222222222|]
