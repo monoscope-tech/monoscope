@@ -73,7 +73,8 @@ spec :: Spec
 spec = around withCliResources $ describe "CLI" do
   it "binary without a server: packaged release, usage for every command, parse and agent-mode errors" \_ -> withCliBin \bin -> do
     path <- fromMaybe "" <$> lookupEnv "PATH"
-    let run extra args = runBin (Proc.proc bin args){Proc.env = Just $ [("HOME", "/tmp/no-such-monoscope-home-for-tests"), ("PATH", path)] <> extra}
+    -- Without a UTF-8 locale GHC's stdout is ASCII on Linux and help text with `—`/`→` exits 1.
+    let run extra args = runBin (Proc.proc bin args){Proc.env = Just $ [("HOME", "/tmp/no-such-monoscope-home-for-tests"), ("PATH", path), ("LANG", "C.UTF-8")] <> extra}
     withSystemTempDirectory "monoscope-release" \dir -> do
       (status, output, errors) <- Proc.readProcessWithExitCode "scripts/package-cli.sh" [bin, dir <> "/monoscope"] ""
       unless (status == ExitSuccess) $ expectationFailure $ output <> errors
