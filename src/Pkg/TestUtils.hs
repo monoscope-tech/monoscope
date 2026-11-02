@@ -24,6 +24,7 @@ module Pkg.TestUtils (
   TestResources (..),
   testSessionHeader,
   refreshSession,
+  projectOf,
   runTestEffect,
   testRequestMsgs,
   TestRequestMessages (..),
@@ -1147,6 +1148,11 @@ runQueryEffect TestResources{..} action = do
       & Tracing.runTracing tp
       & runEff
       <&> fromRightShow
+
+
+-- | The project's row, failing the example when it is missing.
+projectOf :: TestResources -> Projects.ProjectId -> IO Projects.Project
+projectOf tr pid = runQueryEffect tr (Projects.projectById pid) >>= maybe (fail $ "project missing: " <> toString pid.toText) pure
 
 
 -- | Hasql twin of `runQueryEffect`.
