@@ -1499,16 +1499,17 @@ goldenParts :: FilePath -> [Text] -> Expectation
 goldenParts name = goldenHtml name . Lucid.toHtmlRaw @Text . unlines
 
 
--- | Compare against @tests/golden/<path>@; @UPDATE_GOLDEN=true@ (re)writes it, a missing file fails.
+-- | Compare against @tests/golden/<path>@; @UPDATE_SNAPSHOTS=true@ (re)writes it, a missing file fails.
+-- Deliberately not @UPDATE_GOLDEN@, which also switches HTTP/LLM goldens to live recording.
 goldenText :: FilePath -> Text -> Expectation
 goldenText name actual = do
   let path = "./tests/golden/" <> name
-  update <- (== Just "true") <$> lookupEnv "UPDATE_GOLDEN"
+  update <- (== Just "true") <$> lookupEnv "UPDATE_SNAPSHOTS"
   exists <- doesFileExist path
   if
     | update -> writeFileText path actual
     | exists -> readFileBS path >>= (actual `shouldBe`) . decodeUtf8
-    | otherwise -> expectationFailure $ "missing golden " <> path <> "; rerun with UPDATE_GOLDEN=true"
+    | otherwise -> expectationFailure $ "missing golden " <> path <> "; rerun with UPDATE_SNAPSHOTS=true"
 
 
 -- | Every frame a streaming handler emitted, or the stream's own error.
