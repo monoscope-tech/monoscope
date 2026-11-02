@@ -17,6 +17,7 @@ module Pkg.TestUtils (
   withSetup,
   withTestResources,
   withTfChartResources,
+  withTfChartPool,
   fromRightShow,
   TestResources (..),
   testSessionHeader,
@@ -838,7 +839,12 @@ withSharedLogger act = act sharedTestLogger
 -- the real TimeFusion when TIMEFUSION_PG_TEST_URL is set; 'withTestResources' wires TF
 -- only through Hasql.
 withTfChartResources :: (TestResources -> IO ()) -> IO ()
-withTfChartResources k = withTestResources \tr ->
+withTfChartResources k = withTestResources (`withTfChartPool` k)
+
+
+-- | The chart TimeFusion pool of 'withTfChartResources', for an example that already holds resources.
+withTfChartPool :: TestResources -> (TestResources -> IO a) -> IO a
+withTfChartPool tr k =
   lookupEnv "TIMEFUSION_PG_TEST_URL" >>= \case
     Nothing -> k tr
     Just url -> bracket (newPool $ setNumStripes (Just 1) $ defaultPoolConfig (connectPostgreSQL $ encodeUtf8 $ toText url) close 60 2) destroyAllResources \pool -> k tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}
@@ -1377,13 +1383,15 @@ resetSchemaLearning tr pids = do
 
 
 -- | Snapshot @tests/golden/html/<name>.html@, one tag per line, so the diff is reviewable.
--- UUIDs, trace ids and issue numbers are scrubbed to keep it stable. Issue numbers gap
+-- UUIDs, trace ids, issue numbers and gzipped widget blobs (their bytes follow the platform's
+-- zlib) are scrubbed to keep it stable. Issue numbers gap
 -- because the seq-num trigger (migration 0051) consumes one per upsert attempt, a known
 -- product bug this scrub does not fix.
 goldenHtml :: Lucid.ToHtml a => FilePath -> a -> Expectation
 goldenHtml name html =
   goldenText ("html/" <> name <> ".html")
     $ T.replace "><" ">\n<" (renderT html)
+    *=~/ [ed|widgetZ=[A-Za-z0-9_=-]+///widgetZ=<gz>|]
     *=~/ [ed|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}///<uuid>|]
     *=~/ [ed|[0-9a-f]{32,}///<hex>|]
     *=~/ [ed|>#[0-9]+///>#<n>|]
