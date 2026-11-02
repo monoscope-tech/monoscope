@@ -365,6 +365,9 @@ spec = around withCliResources $ describe "CLI" do
     (nonScalarEc, nonScalar) <- runCLILifecycle tr ["--json", "metrics", "query", "summarize count() by resource.service.name", "--assert", "< 100"]
     nonScalarEc `shouldBe` ExitFailure 1
     jsonOut nonScalar >>= (`shouldHaveKeys` ["dataset"])
+    -- A 200 body that isn't a metrics result (the catalog's, via a base URL whose `?` swallows the path) must fail the gate, not skip it.
+    forM_ [([], ExitSuccess), (["--assert", "> 0"], ExitFailure 1)] \(assertion, code) ->
+      withEnv [("MONOSCOPE_API_URL", "http://cli.test/api/v1/metrics/catalog?")] (fst <$> runCLILifecycle tr ("--json" : count <> assertion)) `shouldReturn` code
     cliOk tr ["metrics", "chart", "body has \"metricsevt\" | summarize count() by bin_auto(timestamp)", "--since", "1h"] >>= (`shouldSatisfy` (not . T.null))
     stat <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just $ toText $ iso8601Show $ addUTCTime (-3600) frozenTime) (Just $ toText $ iso8601Show $ addUTCTime 3600 frozenTime) (Just "spans") Nothing []
     (stat.error, isJust stat.dataFloat) `shouldBe` (Nothing, True)
