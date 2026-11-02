@@ -29,6 +29,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as Email
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, parseQueryToAST, parseQueryToComponents)
 import Pkg.TestUtils
+import Test.Hspec
 import UnliftIO.Async (concurrently)
 import Utils (formatWithCommas)
 

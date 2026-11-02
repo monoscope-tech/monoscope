@@ -53,7 +53,7 @@ spec = do
     it "does not suggest a value for an unclosed string" do
       parseQueryToAST "level == \"==" `shouldSatisfy` either (not . T.isInfixOf "Add a value") (const False)
   describe "parseQueryToSQL" do
-    -- Each case compiles to the SQL pinned in tests/golden/kql-to-sql.txt (UPDATE_GOLDEN=true rewrites it).
+    -- Each case compiles to the SQL pinned in tests/golden/kql-to-sql.txt (UPDATE_SNAPSHOTS=true rewrites it).
     it "compiles KQL to its pinned SQL" do
       let compile = fromRight' . parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing)
           rows = fst . compile

@@ -1,114 +1,45 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pages.Bots.BotTestHelpers (
-  -- * Setup Helpers
-  setupSlackData,
+  assertDeferredJobRunnable,
+  completeTestRun,
+  extractResponseText,
+  extractResponseType,
+  interactiveInvocation,
+  resetLegacyEvidenceScope,
+  scheduledInvocation,
   setupLinkedSlackData,
   setupSlackAgent,
-  scheduledInvocation,
-  interactiveInvocation,
-  completeTestRun,
-  resetLegacyEvidenceScope,
-  withHTTPResponses,
-  withSlackReplyResponses,
+  slackEventCallback,
+  slackInteraction,
+  slackThreadedEvent,
   withSlackMCPResponses,
-  receiveSlackEvent,
-  slackRootEvent,
-  setupDiscordData,
-  setupWhatsappNumber,
-
-  -- * Test Project
-  testPid,
-
-  -- * Config Helpers
-  getOpenAIKey,
-  getOpenAIModel,
-
-  -- * Golden File Helpers
-  assertJsonGolden,
-  writeGoldenFile,
-  readGoldenFile,
-
-  -- * Discord Signature Helpers
-  testDiscordPublicKeyHex,
-  testDiscordSecretKey,
-  signDiscordPayload,
-
-  -- * Response Extraction
-  extractSlackBlocks,
-  extractResponseText,
-
-  -- * Notification Helpers
-
-  -- (Use runTestBackgroundWithNotifications from Pkg.TestUtils instead)
-
-  -- * JSON Response Helpers
-  isValidJsonResponse,
-  isEmptyJsonObject,
-
-  -- * Slack Response Helpers
-  extractResponseType,
-  hasSuccessBlock,
-  getBlockType,
-
-  -- * Discord Response Helpers
-  getDiscordResponseType,
-  hasComponentsV2Flag,
-  hasContainerComponent,
-  countTextComponents,
-  isEmptyResponse,
-
-  -- * WhatsApp Body Detection
-  isDashboardCommand,
-  isWidgetSelect,
-  isDashboardPagination,
-  isPrompt,
-  hasRequiredTemplateVars,
+  withSlackReplyResponses,
 ) where
 
-import Control.Lens (each, filtered, has, lengthOf, to, (.~), (^?))
+import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.Encode.Pretty (encodePretty)
-import Data.Aeson.Key qualified as AEK
-import Data.Aeson.KeyMap qualified as AEKM
-import Data.Aeson.Lens (key, _Array, _Number, _String)
-import Data.ByteArray qualified as BA
-import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as Base16
+import Data.Aeson.Lens (key, _String)
+import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as HTTP
 import Data.Pool (withResource)
-import Data.Text qualified as T
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Time (Time)
-import Models.Apis.Incidents qualified as Incidents
-import Models.Apis.Integrations qualified as Slack
 import Models.Apis.Issues qualified as Issues
-import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (RequestBody (..), defaultRequest, requestBody)
 import Network.HTTP.Types (status202, status204)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types qualified as WreqTypes
+import OddJobs.Job qualified as OddJobs
 import Pages.AIThreads qualified as AIThreads
-import Pages.Bots.BotFixtures (slackCallbackEnvelope)
-import Pages.Bots.Slack qualified as SlackEvents
+import Pages.Bots.Slack qualified as SlackPage
 import Pkg.AI qualified as AI
 import Pkg.TestUtils
 import Servant.API.ResponseHeaders (getResponse)
-import System.Config (AuthContext (..))
-import System.Config qualified as Config
-import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Types (DB)
-import "cryptonite" Crypto.Error qualified as Crypto
-import "cryptonite" Crypto.Hash (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
-import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 
 
 -- | Reproduce pre-migration evidence atomically, restoring trigger state on failure.
@@ -148,27 +79,6 @@ scheduledInvocation tr conversation policy = do
   runTestBg frozenTime tr $ fmap AI.DurableRun $ AI.requireRunContext testPid $ Issues.BackgroundClaim user conversation claimed.runId claimed.claimedAt
 
 
--- * Config Helpers
-
-
-getOpenAIKey :: TestResources -> Text
-getOpenAIKey tr = tr.trATCtx.env.openaiApiKey
-
-
-getOpenAIModel :: TestResources -> Text
-getOpenAIModel tr = tr.trATCtx.env.openaiModel
-
-
--- * Setup Helpers
-
-
-setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ do
-  _ <- Slack.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel" "https://hooks.slack.com/services/test" Nothing
-  ProjectMembers.addSlackChannelToEveryoneTeam pid "C_NOTIF_CHANNEL"
-
-
--- | A linked command requester; unlinked event tests use setupSlackData instead.
 setupLinkedSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
 setupLinkedSlackData tr pid teamId = do
   setupSlackData tr pid teamId
@@ -188,25 +98,6 @@ setupSlackAgent tr pid teamId = do
 
 
 -- | Override selected HTTP responses while retaining request recording.
-withHTTPResponses :: (HTTP.HTTP :> es, IOE :> es) => (HTTP.Options -> String -> IO (Maybe LByteString)) -> Eff es a -> Eff es a
-withHTTPResponses fixture = interpose @HTTP.HTTP \_ -> \case
-  HTTP.GetWith opts url -> send (HTTP.GetWith opts url) >>= respond opts url
-  HTTP.Get url -> send (HTTP.Get url) >>= respond Wreq.defaults url
-  HTTP.Post url value -> send (HTTP.Post url value) >>= respond Wreq.defaults url
-  HTTP.Put url value -> send (HTTP.Put url value) >>= respond Wreq.defaults url
-  HTTP.Patch url value -> send (HTTP.Patch url value) >>= respond Wreq.defaults url
-  HTTP.Delete url -> send (HTTP.Delete url) >>= respond Wreq.defaults url
-  HTTP.PostWith opts url value -> send (HTTP.PostWith opts url value) >>= respond opts url
-  HTTP.PutWith opts url value -> send (HTTP.PutWith opts url value) >>= respond opts url
-  HTTP.PatchWith opts url value -> send (HTTP.PatchWith opts url value) >>= respond opts url
-  HTTP.DeleteWith opts url -> send (HTTP.DeleteWith opts url) >>= respond Wreq.defaults url
-  where
-    respond opts url response = do
-      body <- liftIO $ fixture opts url
-      pure $ maybe response (\value -> response & Wreq.responseBody .~ value) body
-
-
--- | Exercise the real HTTP effect and recorder with a deterministic MCP peer.
 withSlackMCPResponses :: (HTTP.HTTP :> es, IOE :> es) => (HTTP.Options -> AE.Value -> IO AE.Value) -> Eff es a -> Eff es a
 withSlackMCPResponses fixture = interpose @HTTP.HTTP \_ -> \case
   HTTP.PostWith options url@"https://mcp.slack.com/mcp" payload -> do
@@ -249,243 +140,66 @@ withSlackReplyResponses fixture =
       )
 
 
-setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupDiscordData tr pid guildId =
-  void
-    $ dbExec tr [sql|INSERT INTO apis.discord (project_id, guild_id) VALUES (?,?) ON CONFLICT (project_id) DO UPDATE SET guild_id = EXCLUDED.guild_id|] (pid, guildId)
-
-
-setupWhatsappNumber :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupWhatsappNumber tr pid phoneNumber =
-  void
-    $ dbExec
-      tr
-      [sql|UPDATE projects.teams SET phone_numbers = ARRAY[?]
-           WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL|]
-      (phoneNumber, pid)
-
-
--- * Golden File Helpers
-
-
-goldenDir :: FilePath
-goldenDir = "./tests/golden/bots/"
-
-
-assertJsonGolden :: FilePath -> AE.Value -> IO ()
-assertJsonGolden path actual = do
-  updateGolden <- isJust <$> lookupEnv "UPDATE_GOLDEN"
-  let fullPath = goldenDir <> path
-  exists <- doesFileExist fullPath
-  if not exists || updateGolden
-    then writeGoldenFile fullPath actual
-    else do
-      expectedM <- readGoldenFile fullPath
-      case expectedM of
-        Nothing -> expectationFailure $ "Could not read golden file: " <> fullPath
-        Just expected -> actual `shouldBe` expected
-
-
-writeGoldenFile :: FilePath -> AE.Value -> IO ()
-writeGoldenFile path val = do
-  let dir = reverse $ dropWhile (/= '/') $ reverse path
-  createDirectoryIfMissing True dir
-  writeFileLBS path (encodePretty val)
-
-
-readGoldenFile :: FilePath -> IO (Maybe AE.Value)
-readGoldenFile path = do
-  exists <- doesFileExist path
-  if exists
-    then AE.decode <$> readFileLBS path
-    else pure Nothing
-
-
--- * Discord Signature Helpers
-
-
--- Deterministic test keypair from a fixed 32-byte seed
-
--- | Test secret key derived from deterministic seed (32 bytes of 0x42)
-testDiscordSecretKey :: Ed25519.SecretKey
-testDiscordSecretKey = case Ed25519.secretKey (BS.replicate 32 0x42) of
-  Crypto.CryptoPassed sk -> sk
-  Crypto.CryptoFailed err -> error $ "Failed to create test secret key: " <> show err
-{-# NOINLINE testDiscordSecretKey #-}
-
-
--- | Corresponding public key derived from the secret key
-testDiscordPublicKey :: Ed25519.PublicKey
-testDiscordPublicKey = Ed25519.toPublic testDiscordSecretKey
-{-# NOINLINE testDiscordPublicKey #-}
-
-
--- | Hex-encoded public key for use in config/tests
-testDiscordPublicKeyHex :: Text
-testDiscordPublicKeyHex = decodeUtf8 $ Base16.encode (BA.convert testDiscordPublicKey :: BS.ByteString)
-{-# NOINLINE testDiscordPublicKeyHex #-}
-
-
--- | Sign a Discord payload with the test secret key
-signDiscordPayload :: BS.ByteString -> Text -> (BS.ByteString, BS.ByteString, BS.ByteString)
-signDiscordPayload payload timestamp =
-  let ts = encodeUtf8 timestamp
-      message = ts <> payload
-      signature = Ed25519.sign testDiscordSecretKey testDiscordPublicKey message
-      sigHex = Base16.encode (BA.convert signature :: BS.ByteString)
-   in (payload, sigHex, ts)
-
-
--- * Response Extraction
-
-
-extractSlackBlocks :: AE.Value -> Maybe AE.Value
-extractSlackBlocks val = case val of
-  AE.Object obj -> AEKM.lookup (AEK.fromText "blocks") obj
-  _ -> Nothing
-
-
 extractResponseText :: AE.Value -> Maybe Text
-extractResponseText val = case val of
-  AE.Object obj ->
-    case AEKM.lookup (AEK.fromText "text") obj of
-      Just (AE.String t) -> Just t
-      _ ->
-        case AEKM.lookup (AEK.fromText "content") obj of
-          Just (AE.String t) -> Just t
-          _ -> Nothing
-  _ -> Nothing
-
-
--- * Notification Helpers
-
-
--- Note: Use runTestBackgroundWithNotifications from Pkg.TestUtils to capture notifications
-
--- * JSON Response Helpers
-
-
-isValidJsonResponse :: AE.Value -> Bool
-isValidJsonResponse (AE.Object _) = True
-isValidJsonResponse _ = False
-
-
-isEmptyJsonObject :: AE.Value -> Bool
-isEmptyJsonObject (AE.Object obj) = AEKM.null obj
-isEmptyJsonObject _ = False
-
-
--- * Slack Response Helpers
+extractResponseText val = (val ^? key "text" . _String) <|> (val ^? key "content" . _String)
 
 
 extractResponseType :: AE.Value -> Maybe Text
-extractResponseType val = case val of
-  AE.Object obj ->
-    case AEKM.lookup "response_type" obj of
-      Just (AE.String t) -> Just t
-      _ -> Nothing
-  _ -> Nothing
+extractResponseType val = val ^? key "response_type" . _String
 
 
-hasSuccessBlock :: AE.Value -> Bool
-hasSuccessBlock val = case extractSlackBlocks val of
-  Just (AE.Array blocks) -> V.any hasSuccessEmoji blocks
-  _ -> False
+slackInteraction :: Text -> Text -> Text -> SlackPage.SlackInteraction
+slackInteraction cmd query teamId =
+  SlackPage.SlackInteraction
+    teamId -- team_id
+    cmd -- command
+    query -- text
+    ("https://hooks.slack.com/commands/" <> teamId <> "/response") -- response_url
+    ("T.13579.1234567890.abcdef1234567890abcdef1234567890") -- trigger_id (realistic format)
+    "C0123ABCDEF" -- channel_id (realistic Slack channel ID)
+    "general" -- channel_name
+    "U0123ABCDEF" -- user_id (realistic Slack user ID)
+
+
+-- | The signed-callback envelope every Slack event arrives in. Only the inner
+-- event varies between tests; the wrapper never does.
+slackEventCallback :: Text -> Text -> Text -> Text -> Maybe Text -> AE.Value
+slackEventCallback teamId channelId userText ts threadTsM =
+  [aesonQQ|{
+    "type": "event_callback",
+    "token": "xoxb-test-fake-token-not-real",
+    "team_id": #{teamId},
+    "api_app_id": "A0123ABCDEF",
+    "event": {
+      "type": "message",
+      "user": "U0123ABCDEF",
+      "text": #{userText},
+      "ts": #{ts},
+      "channel": #{channelId},
+      "event_ts": #{ts},
+      "thread_ts": #{maybeToJSON threadTsM}
+    },
+    "event_id": "Ev0123ABCDEF",
+    "event_time": 1700000000
+  }|]
   where
-    hasSuccessEmoji block =
-      let blockStr = decodeUtf8 $ toStrict $ AE.encode block
-       in T.isInfixOf "🟢" blockStr || T.isInfixOf "success" blockStr
+    maybeToJSON :: Maybe Text -> AE.Value
+    maybeToJSON = maybe AE.Null AE.String
 
 
-getBlockType :: AE.Value -> Maybe Text
-getBlockType val = case val of
-  AE.Object obj ->
-    case AEKM.lookup "type" obj of
-      Just (AE.String t) -> Just t
-      _ -> Nothing
-  _ -> Nothing
+slackThreadedEvent :: Text -> Text -> Text -> Text -> Text -> AE.Value
+slackThreadedEvent teamId channelId userText ts threadTs =
+  slackEventCallback teamId channelId userText ts (Just threadTs)
 
 
--- * Discord Response Helpers
-
-
-getDiscordResponseType :: AE.Value -> Maybe Int
-getDiscordResponseType val = val ^? key "type" . _Number . to round
-
-
-isEmptyResponse :: AE.Value -> Bool
-isEmptyResponse (AE.Object o) = null o
-isEmptyResponse _ = False
-
-
-hasComponentsV2Flag :: AE.Value -> Bool
-hasComponentsV2Flag val = val ^? key "data" . key "flags" . _Number . to round == Just (32768 :: Int)
-
-
-hasContainerComponent :: AE.Value -> Bool
-hasContainerComponent val = has (key "data" . key "components" . _Array . each . filtered isContainer) val
-  where
-    isContainer v = v ^? key "type" . _Number . to round == Just (17 :: Int)
-
-
-countTextComponents :: AE.Value -> Int
-countTextComponents val = lengthOf (key "data" . key "components" . _Array . each . key "components" . _Array . each . filtered isText) val
-  where
-    isText v = v ^? key "type" . _Number . to round == Just (10 :: Int)
-
-
--- * WhatsApp Body Detection
-
-
-isDashboardCommand :: Text -> Bool
-isDashboardCommand = (== "/dashboard")
-
-
-isWidgetSelect :: Text -> Bool
-isWidgetSelect body = "widg___" `T.isPrefixOf` body
-
-
-isDashboardPagination :: Text -> Bool
-isDashboardPagination body = "dashboard___" `T.isPrefixOf` body
-
-
-isPrompt :: Text -> Bool
-isPrompt body =
-  not (isDashboardCommand body)
-    && not (isWidgetSelect body)
-    && not (isDashboardPagination body)
-    && not ("dash___" `T.isPrefixOf` body)
-
-
-hasRequiredTemplateVars :: AE.Value -> Bool
-hasRequiredTemplateVars val = case val of
-  AE.Object obj -> AEKM.member "1" obj
-  _ -> False
-
-
-receiveSlackEvent :: TestResources -> AE.Value -> IO (UUIDId "slack_event")
-receiveSlackEvent tr payload = do
-  now <- getTestTime tr.trTestClock
-  let timestamp = show @Text (floor (utcTimeToPOSIXSeconds now) :: Integer)
-      body = toStrict $ AE.encode payload
-      secret = "test-slack-signing-secret" :: ByteString
-      signature = "v0=" <> decodeUtf8 (Base16.encode $ BA.convert (HMAC.hmac secret ("v0:" <> encodeUtf8 timestamp <> ":" <> body) :: HMAC.HMAC SHA256))
-      cfg = tr.trATCtx.env{Config.slackSigningSecret = decodeUtf8 secret}
-  void $ toBaseServantResponse tr{trATCtx = tr.trATCtx{Config.env = cfg}} $ SlackEvents.slackEventsPostH body (Just timestamp) (Just signature)
-  [PGS.Only receipt] <- dbQuery tr [sql|SELECT id FROM apis.slack_events WHERE team_id = (?::jsonb)->>'team_id' AND event_id = (?::jsonb)->>'event_id'|] (Aeson payload, Aeson payload)
-  pure receipt
-
-
-slackRootEvent :: Text -> Text -> Text -> Incidents.SlackRootId -> Text -> Text -> AE.Value
-slackRootEvent eventId workspace channel rootId timestamp authorApp =
-  slackCallbackEnvelope workspace eventId
-    $ AE.object
-      [ "type" AE..= ("message" :: Text)
-      , "subtype" AE..= ("bot_message" :: Text)
-      , "bot_id" AE..= ("B_TEST" :: Text)
-      , "app_id" AE..= authorApp
-      , "text" AE..= ("Monitor alert" :: Text)
-      , "channel" AE..= channel
-      , "ts" AE..= timestamp
-      , "metadata" AE..= AE.object ["event_type" AE..= ("monoscope_incident_root" :: Text), "event_payload" AE..= AE.object ["root_id" AE..= rootId]]
-      ]
+assertDeferredJobRunnable :: PGS.Connection -> AE.Value -> IO ()
+assertDeferredJobRunnable conn payload = PGS.withTransaction conn do
+  void $ PGS.execute_ conn [sql|CREATE TEMP TABLE slack_deferred_poll (LIKE background_jobs INCLUDING ALL) ON COMMIT DROP|]
+  copied <- PGS.execute conn [sql|INSERT INTO slack_deferred_poll SELECT * FROM background_jobs WHERE payload = ? ORDER BY run_at DESC LIMIT 1|] (PGS.Only $ Aeson payload)
+  copied `shouldBe` 1
+  void $ PGS.execute_ conn [sql|UPDATE slack_deferred_poll SET run_at = clock_timestamp() + interval '1 hour'|]
+  OddJobs.jobPollingIO conn "slack-regression" "slack_deferred_poll" 60 >>= (`shouldBe` [])
+  void $ PGS.execute_ conn [sql|UPDATE slack_deferred_poll SET run_at = clock_timestamp() - interval '1 second'|]
+  selected <- OddJobs.jobPollingIO conn "slack-regression" "slack_deferred_poll" 60
+  length selected `shouldBe` 1
+  OddJobs.jobPollingIO conn "slack-regression" "slack_deferred_poll" 60 >>= (`shouldBe` [])

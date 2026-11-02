@@ -1,22 +1,21 @@
 module Web.ApiV1Spec (spec) where
 
-import CLI.Resource qualified as Resource
 import Control.Lens (cosmos, ix, (^.), (^..), (^?), _Just)
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPRecord)
-import Data.List (lookup)
 import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
-import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+import Data.Vector qualified as V
 import Effectful (Eff, IOE, (:>))
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Endpoints qualified as Endpoints
@@ -26,17 +25,26 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
+import Network.GRPC.Common.Protobuf (Proto (..))
+import Network.HTTP.Types qualified as H
+import Network.Wai qualified as Wai
+import Network.Wai.Test qualified as WT
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.Charts.Types (MetricsData (..))
-import Pages.Dashboards qualified as DashPage
 import Pages.LogExplorer.Log qualified as Log
-import Pkg.AI qualified as AI
-import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Git qualified as Git
 import Pkg.Parser.Expr qualified as ParserExpr
+import CLI.Resource qualified as Resource
+import Data.Set qualified as S
+import Pages.Dashboards qualified as DashPage
+import Pkg.AI qualified as AI
+import Pkg.AgentCatalog qualified as Catalog
 import Pkg.TestUtils
 import Servant (NoContent (..))
+import Servant qualified
+import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx, ApiPrincipal (..), effToServantHandlerTestHTTP)
 import Web.ApiHandlers qualified as ApiH
@@ -47,25 +55,8 @@ import Web.Routes (apiV1OpenApiSpec, apiV1Server)
 import Web.Routes qualified as Routes
 import Web.Wire qualified as Wire
 
-import Data.Vector qualified as V
-import Network.GRPC.Common.Protobuf (Proto (..))
-import Network.HTTP.Types qualified as H
-import Network.Wai qualified as Wai
-import Network.Wai.Test qualified as WT
-import Opentelemetry.OtlpServer qualified as OtlpServer
-import Servant qualified
-import Servant.Server.Generic (genericServeTWithContext)
-
-
-specJson :: AE.Value
-specJson = AE.toJSON apiV1OpenApiSpec
-
 
 -- | The whole server minus production's WAI middleware stack.
-topApp :: TestResources -> Wai.Application
-topApp = topAppWithHTTP (runHTTPGolden "./tests/golden/")
-
-
 topAppWithHTTP :: (forall x es. IOE :> es => Eff (HTTP ': es) x -> Eff es x) -> TestResources -> Wai.Application
 topAppWithHTTP http tr =
   genericServeTWithContext
@@ -74,965 +65,464 @@ topAppWithHTTP http tr =
     (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
 
 
+request :: Wai.Application -> H.Method -> ByteString -> H.RequestHeaders -> LByteString -> IO WT.SResponse
+request app method path headers body = WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest{Wai.requestMethod = method, Wai.requestHeaders = headers} path) body)) app
+
+
+getPath :: TestResources -> ByteString -> H.RequestHeaders -> IO WT.SResponse
+getPath tr path headers = request (topAppWithHTTP (runHTTPGolden "./tests/golden/") tr) H.methodGet path headers ""
+
+
+status :: WT.SResponse -> Int
+status = H.statusCode . WT.simpleStatus
+
+
+demo, json :: H.Header
+demo = ("X-Project-Id", "00000000-0000-0000-0000-000000000000")
+json = (H.hContentType, "application/json")
+
+
+bearer :: Text -> H.Header
+bearer k = ("Authorization", encodeUtf8 $ "Bearer " <> k)
+
+
+rpc :: Text -> [AET.Pair] -> AE.Value
+rpc method params = AE.object $ ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (1 :: Int), "method" AE..= method] <> ["params" AE..= AE.object params | not (null params)]
+
+
+toolCall :: Text -> [AET.Pair] -> AE.Value
+toolCall name args = rpc "tools/call" ["name" AE..= name, "arguments" AE..= AE.object args]
+
+
+team :: Text -> Text -> ApiT.TeamInput
+team name handle = ApiT.TeamInput name handle Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+
+
+liveSchemaFields :: Maybe AE.Value -> Either String [Text]
+liveSchemaFields = maybe (Left "structuredContent missing") (fmap (Map.keys . (.fields)) . AET.parseEither (AE.parseJSON @Schema.Schema))
+
+
 spec :: Spec
-spec = around withTestResources do
-  describe "API v1" do
-    describe "OpenAPI spec" do
-      it "round-trips through JSON and has correct metadata" $ \_tr -> do
-        AE.eitherDecode @OpenApi (AE.encode apiV1OpenApiSpec) `shouldSatisfy` isRight
-        (apiV1OpenApiSpec ^. info . title) `shouldBe` "Monoscope API"
-        (apiV1OpenApiSpec ^. info . version) `shouldBe` "1.0"
+spec = describe "API v1" do
+  it "OpenAPI spec, telemetry schema and MCP registry form the CLI/agent contract" do
+    let specJson = AE.toJSON apiV1OpenApiSpec
+        at p = foldlM (\v k -> v ^? key (AEK.fromText k)) specJson (T.splitOn "." p)
+        filled = maybe False (not . null)
+        params p = at ("paths." <> p <> ".get.parameters") ^.. _Just . _Array . traverse . key "name" . _String
+        reg = MCP.allTools apiV1OpenApiSpec (\pid tz input -> pure $ Right $ AE.object ["query" AE..= input, "project_id" AE..= pid, "timezone" AE..= tz])
+    AE.eitherDecode @OpenApi (AE.encode apiV1OpenApiSpec) `shouldSatisfy` isRight
+    (apiV1OpenApiSpec ^. info . title, apiV1OpenApiSpec ^. info . version) `shouldBe` ("Monoscope API", "1.0")
+    (filled (at "servers" ^? _Just . _Array), filled (at "security" ^? _Just . _Array), isJust (at "components.securitySchemes.BearerAuth")) `shouldBe` (True, True, True)
+    [(p, n) | p <- ["/metrics", "/events"], n <- ["environment", "service"], n `notElem` params p] `shouldBe` []
+    (at "components.schemas.EventsQuery.properties" ^? _Just . _Object) `shouldSatisfy` maybe False (\o -> all (`AEKM.member` o) ["environment", "service"])
+    (at "components.schemas.LogResult.properties" ^? _Just . _Object) `shouldSatisfy` maybe False (not . null)
+    -- Every path the CLI constructs (minus the /api/v1 base): a renamed Servant route fails here first.
+    [p | p <- words "/events /metrics /metrics/catalog /schema /monitors /monitors/{monitor_id} /monitors/{monitor_id}/mute /monitors/{monitor_id}/unmute /monitors/{monitor_id}/resolve /monitors/{monitor_id}/toggle_active /monitors/{monitor_id}/yaml /monitors/apply /monitors/bulk /dashboards /dashboards/{dashboard_id} /dashboards/apply /dashboards/{dashboard_id}/duplicate /dashboards/{dashboard_id}/star /dashboards/{dashboard_id}/yaml /dashboards/{dashboard_id}/widgets /dashboards/{dashboard_id}/widgets/{widget_id} /dashboards/{dashboard_id}/widgets/order /dashboards/bulk /api_keys /api_keys/{key_id} /api_keys/{key_id}/activate /api_keys/{key_id}/deactivate /events/query /share /me /project /issues /issues/{issue_id} /issues/{issue_id}/ack /issues/{issue_id}/unack /issues/{issue_id}/archive /issues/{issue_id}/unarchive /issues/bulk /incidents /incidents/{incident_id} /endpoints /endpoints/{endpoint_id} /log_patterns /log_patterns/{pattern_id} /log_patterns/{pattern_id}/ack /log_patterns/bulk /teams /teams/{team_id} /teams/bulk /members /members/{user_id}", isNothing (specJson ^? key "paths" . key (AEK.fromText p))]
+      `shouldBe` []
+    [s | s <- words "LogResult TraceTreeEntry MetricsData Schema QueryMonitor", isNothing (at ("components.schemas." <> s))] `shouldBe` []
+    let schema = Schema.telemetrySchema
+    [f | f <- ["timestamp", "status_code", "body"], not (Map.member f schema.fields)] `shouldBe` []
+    AE.eitherDecode @Schema.Schema (AE.encode schema) `shouldBe` Right schema
+    -- Verb-first canonical toolCall names; the MCP endpoint itself is never a tool.
+    [n | n <- words "search_events list_events list_monitors get_monitor mute_monitor apply_dashboard get_dashboard_yaml get_schema whoami list_incidents get_incident list_metrics", not (Map.member n reg)] `shouldBe` []
+    filter (`Map.member` reg) ["post_mcp", "mcp_post"] `shouldBe` []
 
-      it "has server base path and security definitions" $ \_tr -> do
-        (specJson ^? key "servers" . _Array) `shouldSatisfy` \case
-          Just arr -> not (null arr)
-          Nothing -> False
-        (specJson ^? key "components" . key "securitySchemes" . key "BearerAuth") `shouldSatisfy` isJust
-        (specJson ^? key "security" . _Array) `shouldSatisfy` \case
-          Just arr -> not (null arr)
-          Nothing -> False
+  around withTestResources do
+    it "HTTP auth: API keys gate /api/v1 and MCP, the demo project is open, secrets are never echoed or cached" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "ingestion-key-auth"
+      runQueryEffect tr (traverse (`resolveApiKeyProject` Nothing) ([apiKey, "invalid-key", ""] :: [Text])) `shouldReturn` [Just testPid, Nothing, Nothing]
+      let app = topAppWithHTTP (runHTTPGolden "./tests/golden/") tr
+          widgetBody extra = AE.encode $ case AE.toJSON ((def :: Widget.Widget){Widget.warningThreshold = Just 7}) of
+            AE.Object fields -> AE.Object $ fields <> foldMap (\field -> AEKM.singleton field (AE.toJSON (7 :: Double))) extra
+            value -> value
+          cases :: [(String, H.Method, ByteString, H.RequestHeaders, LByteString, Int)]
+          cases =
+            [ ("no auth", H.methodGet, "/api/v1/schema", [], "", 401)
+            , ("demo project", H.methodGet, "/api/v1/schema", [demo], "", 200)
+            , ("ingestion key, no key", H.methodGet, "/api/v1/ingestion-key", [demo], "", 401)
+            , ("ingestion key, invalid key", H.methodGet, "/api/v1/ingestion-key", [demo, bearer "invalid-key"], "", 401)
+            , ("mcp, no key", H.methodPost, "/api/v1/mcp", [json], AE.encode (rpc "tools/list" []), 401)
+            , -- /chart_data_shot predated signed PNG export and ran the caller's KQL/SQL against any pid, unauthenticated.
+              ("chart_data_shot", H.methodGet, "/chart_data_shot?data_type=text&pid=" <> encodeUtf8 testPid.toText <> "&query=summarize%20count()", [], "", 404)
+            , ("strict JSON API sort", H.methodGet, "/api/v1/dashboards?sort=bogus", [demo], "", 400)
+            , ("widget JSON", H.methodPost, "/p/00000000-0000-0000-0000-000000000000/widget", [json], widgetBody Nothing, 200)
+            , ("widget JSON, legacy field", H.methodPost, "/p/00000000-0000-0000-0000-000000000000/widget", [json], widgetBody (Just "arning_threshold"), 400)
+            , ("widget JSON, unknown field", H.methodPost, "/p/00000000-0000-0000-0000-000000000000/widget", [json], widgetBody (Just "unexpected_field"), 400)
+            ]
+      responses <- forM cases \(_, m, p, h, b, _) -> request app m p h b
+      [(l, status r) | ((l, _, _, _, _, _), r) <- zip cases responses] `shouldBe` [(l, s) | (l, _, _, _, _, s) <- cases]
+      [l | ((l, _, _, _, _, s), r) <- zip cases responses, s == 401, apiKey `T.isInfixOf` decodeUtf8 (WT.simpleBody r)] `shouldBe` []
+      accepted <- getPath tr "/api/v1/ingestion-key" [demo, bearer apiKey]
+      status accepted `shouldBe` 200
+      List.lookup "Cache-Control" (WT.simpleHeaders accepted) `shouldBe` Just "no-store"
+      returned <- either fail pure $ AE.eitherDecode @Wire.IngestionKey (WT.simpleBody accepted)
+      runQueryEffect tr (resolveApiKeyProject returned.key Nothing) `shouldReturn` Just testPid
+      -- MCP through the real route with a key: the registry and a live toolCall call.
+      mcpKey <- createTestAPIKey tr testPid "mcp-e2e"
+      let mcp body = request app H.methodPost "/api/v1/mcp" [json, bearer mcpKey] (AE.encode body) <&> \r -> (status r, AE.decode @AE.Value (WT.simpleBody r))
+      (listStatus, listed) <- mcp (rpc "tools/list" [])
+      (callStatus, called) <- mcp (toolCall "get_schema" [])
+      (listStatus, callStatus) `shouldBe` (200, 200)
+      let names = listed ^.. _Just . key "result" . key "tools" . _Array . traverse . key "name" . _String
+      filter (`notElem` names) ["get_schema", "list_monitors", "find_error_patterns"] `shouldBe` []
+      called ^? _Just . key "result" . key "isError" `shouldBe` Just (AE.Bool False)
+      liveSchemaFields (called ^? _Just . key "result" . key "structuredContent") `shouldBe` Right (Map.keys (Schema.deriveSchema ParserExpr.flattenedOtelAttributes).fields)
 
-      it "makes metrics and event environment/service scopes explicit optional parameters" $ \_tr -> do
-        let metricParameters = specJson ^? key "paths" . key "/metrics" . key "get" . key "parameters" . _Array
-            eventParameters = specJson ^? key "paths" . key "/events" . key "get" . key "parameters" . _Array
-            hasParameter name = maybe False (any $ \parameter -> parameter ^? key "name" . _String == Just name)
-        metricParameters `shouldSatisfy` hasParameter "environment"
-        metricParameters `shouldSatisfy` hasParameter "service"
-        eventParameters `shouldSatisfy` hasParameter "environment"
-        eventParameters `shouldSatisfy` hasParameter "service"
-
-      -- This list doubles as the CLI contract: every path the CLI constructs
-      -- (without the /api/v1 prefix the Servant base already provides) must
-      -- appear here. If a Servant route is renamed, this test fails first.
-      it "declares all expected endpoint paths" $ \_tr -> do
-        let expectedPaths :: [Text]
-            expectedPaths =
-              [ "/events"
-              , "/metrics"
-              , "/metrics/catalog"
-              , "/schema"
-              , "/monitors"
-              , "/monitors/{monitor_id}"
-              , "/monitors/{monitor_id}/mute"
-              , "/monitors/{monitor_id}/unmute"
-              , "/monitors/{monitor_id}/resolve"
-              , "/monitors/{monitor_id}/toggle_active"
-              , "/monitors/{monitor_id}/yaml"
-              , "/monitors/apply"
-              , "/monitors/bulk"
-              , "/dashboards"
-              , "/dashboards/{dashboard_id}"
-              , "/dashboards/apply"
-              , "/dashboards/{dashboard_id}/duplicate"
-              , "/dashboards/{dashboard_id}/star"
-              , "/dashboards/{dashboard_id}/yaml"
-              , "/dashboards/{dashboard_id}/widgets"
-              , "/dashboards/{dashboard_id}/widgets/{widget_id}"
-              , "/dashboards/{dashboard_id}/widgets/order"
-              , "/dashboards/bulk"
-              , "/api_keys"
-              , "/api_keys/{key_id}"
-              , "/api_keys/{key_id}/activate"
-              , "/api_keys/{key_id}/deactivate"
-              , "/events/query"
-              , "/share"
-              , "/me"
-              , "/project"
-              , "/issues"
-              , "/issues/{issue_id}"
-              , "/issues/{issue_id}/ack"
-              , "/issues/{issue_id}/unack"
-              , "/issues/{issue_id}/archive"
-              , "/issues/{issue_id}/unarchive"
-              , "/issues/bulk"
-              , "/incidents"
-              , "/incidents/{incident_id}"
-              , "/endpoints"
-              , "/endpoints/{endpoint_id}"
-              , "/log_patterns"
-              , "/log_patterns/{pattern_id}"
-              , "/log_patterns/{pattern_id}/ack"
-              , "/log_patterns/bulk"
-              , "/teams"
-              , "/teams/{team_id}"
-              , "/teams/bulk"
-              , "/members"
-              , "/members/{user_id}"
-              ]
-        for_ expectedPaths $ \p ->
-          (specJson ^? key "paths" . key (AEK.fromText p)) `shouldSatisfy` isJust
-
-      it "includes schema definitions for response types" $ \_tr -> do
-        let schemas = specJson ^? key "components" . key "schemas" . _Object
-        schemas `shouldSatisfy` isJust
-        (specJson ^? key "components" . key "schemas" . key "LogResult") `shouldSatisfy` isJust
-        (specJson ^? key "components" . key "schemas" . key "LogResult" . key "properties" . _Object) `shouldSatisfy` \case
-          Just obj -> not (null obj)
-          Nothing -> False
-        (specJson ^? key "components" . key "schemas" . key "TraceTreeEntry") `shouldSatisfy` isJust
-        (specJson ^? key "components" . key "schemas" . key "MetricsData") `shouldSatisfy` isJust
-        (specJson ^? key "components" . key "schemas" . key "Schema") `shouldSatisfy` isJust
-        (specJson ^? key "components" . key "schemas" . key "QueryMonitor") `shouldSatisfy` isJust
-
-    describe "API key auth" do
-      it "ingestionKey_demoProject_requiresCredentials_andDoesNotCacheSecrets" \tr -> do
-        apiKey <- createTestAPIKey tr testPid "ingestion-key-auth"
-        let request headers = WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest{Wai.requestHeaders = ("X-Project-Id", "00000000-0000-0000-0000-000000000000") : headers} "/api/v1/ingestion-key") "")) (topApp tr)
-        forM_ ([[], [("Authorization", "Bearer invalid-key")]] :: [H.RequestHeaders]) \headers -> do
-          rejected <- request headers
-          H.statusCode (WT.simpleStatus rejected) `shouldBe` 401
-          WT.simpleBody rejected `shouldSatisfy` (not . T.isInfixOf apiKey . decodeUtf8)
-        accepted <- request [("Authorization", encodeUtf8 $ "Bearer " <> apiKey)]
-        H.statusCode (WT.simpleStatus accepted) `shouldBe` 200
-        List.lookup "Cache-Control" (WT.simpleHeaders accepted) `shouldBe` Just "no-store"
-        case AE.eitherDecode @Wire.IngestionKey (WT.simpleBody accepted) of
-          Left err -> expectationFailure err
-          Right returned -> runQueryEffect tr (resolveApiKeyProject returned.key Nothing) >>= (`shouldBe` Just testPid)
-
-      it "resolves valid keys and rejects invalid ones" $ \tr -> do
-        apiKey <- createTestAPIKey tr testPid "test-v1-key"
-        result <- runQueryEffect tr $ resolveApiKeyProject apiKey Nothing
-        result `shouldBe` Just testPid
-
-        invalidResult <- runQueryEffect tr $ resolveApiKeyProject "invalid-key" Nothing
-        invalidResult `shouldBe` Nothing
-
-        emptyResult <- runQueryEffect tr $ resolveApiKeyProject "" Nothing
-        emptyResult `shouldBe` Nothing
-
-      -- /chart_data_shot was a leftover from before signed PNG export: it sat outside every
-      -- auth layer and ran the caller's KQL or raw SQL against whatever pid it was given.
-      it "chartDataShot_isNotServed" \tr -> do
-        let req = WT.setPath Wai.defaultRequest ("/chart_data_shot?data_type=text&pid=" <> encodeUtf8 testPid.toText <> "&query=summarize%20count()")
-        resp <- WT.runSession (WT.srequest (WT.SRequest req "")) (topApp tr)
-        H.statusCode (WT.simpleStatus resp) `shouldBe` 404
-
-      it "rejects API requests with no auth and no demo project header" $ \tr -> do
-        let req = WT.setPath Wai.defaultRequest "/api/v1/schema"
-        resp <- WT.runSession (WT.srequest (WT.SRequest req "")) (topApp tr)
-        H.statusCode (WT.simpleStatus resp) `shouldBe` 401
-
-      it "allows unauthenticated access when X-Project-Id is the demo project" $ \tr -> do
-        let req =
-              WT.setPath
-                Wai.defaultRequest
-                  { Wai.requestHeaders = [("X-Project-Id", "00000000-0000-0000-0000-000000000000")]
-                  }
-                "/api/v1/schema"
-        resp <- WT.runSession (WT.srequest (WT.SRequest req "")) (topApp tr)
-        H.statusCode (WT.simpleStatus resp) `shouldBe` 200
-
-    it "dashboardNew_returnsOnlyTheCreationForm" $ \tr -> do
-      resp <- WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest "/p/00000000-0000-0000-0000-000000000000/dashboards/new") "")) (topApp tr)
-      H.statusCode (WT.simpleStatus resp) `shouldBe` 200
-      let body = decodeUtf8 @Text (WT.simpleBody resp)
-      for_ ["id=\"newDashboardForm\"", "data-template=\"nginx.yaml\""] $ \markup -> body `shouldSatisfy` T.isInfixOf markup
-      for_ ["<!DOCTYPE", "id=\"main-sidenav\"", "id=\"dashboardsTableContainer\""] $ \markup -> body `shouldSatisfy` (not . T.isInfixOf markup)
-
-    -- Old onboarding links carry free-text steps; master fell back to Info. The JSON API stays strict.
-    it "onboardingUnknownStep_fallsBackToInfo_apiDashboardSortStaysStrict" $ \tr -> do
-      let fetch path = WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest{Wai.requestHeaders = [("X-Project-Id", "00000000-0000-0000-0000-000000000000")]} path) "")) (topApp tr)
-      onboarding <- fetch "/p/00000000-0000-0000-0000-000000000000/onboarding?step=bogus"
-      H.statusCode (WT.simpleStatus onboarding) `shouldBe` 200
-      decodeUtf8 @Text (WT.simpleBody onboarding) `shouldSatisfy` T.isInfixOf "firstName"
-      (H.statusCode . WT.simpleStatus <$> fetch "/api/v1/dashboards?sort=bogus") `shouldReturn` 400
-
-    it "widgetJSON_rejectsLegacyAndUnknownFields" $ \tr -> do
-      for_ ([(Nothing, 200), (Just "arning_threshold", 400), (Just "unexpected_field", 400)] :: [(Maybe AEK.Key, Int)]) $ \(fieldM, status) -> do
-        let body = AE.encode $ case AE.toJSON ((def :: Widget.Widget){Widget.warningThreshold = Just 7}) of
-              AE.Object fields -> AE.Object $ fields <> foldMap (\field -> AEKM.singleton field (AE.toJSON (7 :: Double))) fieldM
-              value -> value
-            req = (WT.setPath Wai.defaultRequest "/p/00000000-0000-0000-0000-000000000000/widget"){Wai.requestMethod = H.methodPost, Wai.requestHeaders = [(H.hContentType, "application/json")]}
-        resp <- WT.runSession (WT.srequest (WT.SRequest req body)) (topApp tr)
-        H.statusCode (WT.simpleStatus resp) `shouldBe` status
-
-    it "avatar_usesLocalInitialsInsteadOfAnotherRemoteFallback" $ \tr -> do
+    it "HTTP pages: dashboard form fragment, onboarding fallback, avatars, proxied docs" \tr -> do
+      newForm <- getPath tr "/p/00000000-0000-0000-0000-000000000000/dashboards/new" []
+      status newForm `shouldBe` 200
+      let formBody = decodeUtf8 @Text (WT.simpleBody newForm)
+      formBody `shouldContainAll` ["id=\"newDashboardForm\"", "data-template=\"nginx.yaml\""]
+      filter (`T.isInfixOf` formBody) ["<!DOCTYPE", "id=\"main-sidenav\"", "id=\"dashboardsTableContainer\""] `shouldBe` []
+      -- Old onboarding links carry free-text steps: unknown ones fall back to Info.
+      onboarding <- getPath tr "/p/00000000-0000-0000-0000-000000000000/onboarding?step=bogus" [demo]
+      (status onboarding, "firstName" `T.isInfixOf` decodeUtf8 (WT.simpleBody onboarding)) `shouldBe` (200, True)
+      -- No display image: one Gravatar probe with d=404, then local initials, cached a week.
       let uid = (Servant.getResponse tr.trSessAndHeader).persistentSession.user.getUser.id
       runHasqlEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE users.users SET display_image_url = '' WHERE id = #{uid} |]
       requests <- newIORef []
-      resp <- WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest (encodeUtf8 $ "/api/avatar/" <> uid.toText)) "")) (topAppWithHTTP (runHTTPRecord requests) tr)
-      H.statusCode (WT.simpleStatus resp) `shouldBe` 200
-      urls <- map fst <$> readIORef requests
-      urls `shouldSatisfy` \case
-        [url] -> "https://www.gravatar.com/avatar/" `T.isPrefixOf` url && "?d=404" `T.isSuffixOf` url
-        _ -> False
-      lookup H.hCacheControl (WT.simpleHeaders resp) `shouldBe` Just "public, max-age=604800"
+      avatar <- request (topAppWithHTTP (runHTTPRecord requests) tr) H.methodGet (encodeUtf8 $ "/api/avatar/" <> uid.toText) [] ""
+      status avatar `shouldBe` 200
+      (map fst <$> readIORef requests) >>= (`shouldSatisfy` \case [url] -> "https://www.gravatar.com/avatar/" `T.isPrefixOf` url && "?d=404" `T.isSuffixOf` url; _ -> False)
+      List.lookup H.hCacheControl (WT.simpleHeaders avatar) `shouldBe` Just "public, max-age=604800"
+      -- nginx keeps the first of duplicate Content-Types, which served the SVG fallback as octet-stream.
+      unknown <- getPath tr "/api/avatar/00000000-0000-0000-0000-00000000dead" []
+      status unknown `shouldBe` 200
+      filter ((== H.hContentType) . fst) (WT.simpleHeaders unknown) `shouldBe` [(H.hContentType, "image/svg+xml")]
+      decodeUtf8 @Text (WT.simpleBody unknown) `shouldSatisfy` T.isInfixOf "?</text>"
+      docs <- getPath tr "/proxy/docs/sdks/nodejs/expressjs" [(H.hAccept, "text/html"), ("HX-Request", "true")]
+      status docs `shouldBe` 200
+      filter ((== H.hContentType) . fst) (WT.simpleHeaders docs) `shouldBe` [(H.hContentType, "text/html;charset=utf-8")]
+      decodeUtf8 @Text (WT.simpleBody docs) `shouldContainAll` ["<article id=\"mainArticle\">", "<h1>ExpressJS integration</h1>", "href=\"https://monoscope.tech/docs/sdks/\""]
 
-    -- nginx keeps the first of duplicate Content-Type headers, which served the SVG
-    -- fallback as application/octet-stream: a broken image in the sidebar.
-    it "avatar_unknownUser_servesInitialsSvgWithOneContentType" $ \tr -> do
-      resp <- WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest "/api/avatar/00000000-0000-0000-0000-00000000dead") "")) (topApp tr)
-      H.statusCode (WT.simpleStatus resp) `shouldBe` 200
-      filter ((== H.hContentType) . fst) (WT.simpleHeaders resp) `shouldBe` [(H.hContentType, "image/svg+xml")]
-      decodeUtf8 @Text (WT.simpleBody resp) `shouldSatisfy` T.isInfixOf "?</text>"
+    it "monitors: CRUD, persisted active/scope/compiled SQL, notification fields, bulk results and 404" \tr -> do
+      let runB :: ATBaseCtx a -> IO a
+          runB = toBaseServantResponse tr
+          stored mid = runQueryEffect tr (Monitors.queryMonitorById mid) >>= maybe (fail "monitor not stored") pure
+          input t q = (def :: ApiT.MonitorInput){ApiT.title = t, ApiT.query = q, ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
+      created <- runB $ ApiH.apiMonitorCreate testPid (input "t1" "status_code == 200 | summarize count()" :: ApiT.MonitorInput){ApiT.unit = Just " s ", ApiT.environment = Just "production", ApiT.service = Just "checkout"}
+      (created.alertConfig.title, created.logQuery, created.environment, created.service) `shouldBe` ("t1", "status_code == 200 | summarize count()", Just "production", Just "checkout")
+      -- Scope lives outside the customer's KQL, in the compiled SQL alert evaluation runs.
+      (.logQueryAsSql) <$> stored created.id >>= (`shouldContainAll` ["resource___deployment___environment___name = 'production'", "resource___service___name = 'checkout'", "200"])
+      runQueryEffect tr (Monitors.queryMonitorsAll testPid) >>= \all' -> do
+        AE.eitherDecode @[Monitors.QueryMonitor] (AE.encode all') `shouldSatisfy` isRight
+        map (.id) all' `shouldBe` [created.id]
+      got <- runB $ ApiH.apiMonitorGet testPid created.id
+      (got.id, got.alertConfig.unit) `shouldBe` (created.id, Just "s")
+      (.alertConfig.title) <$> runB (ApiH.apiMonitorPatch testPid created.id (def :: ApiT.MonitorPatch){ApiT.title = Just "t2"}) `shouldReturn` "t2"
+      (.alertConfig.unit) <$> runB (ApiH.apiMonitorGet testPid created.id) `shouldReturn` Just "s"
+      void $ runB $ ApiH.apiMonitorPatch testPid created.id (def :: ApiT.MonitorPatch){ApiT.unit = Just "ms"}
+      exported <- runB $ ApiH.apiMonitorYaml testPid created.id
+      (exported.unit, exported.environment, exported.service) `shouldBe` (Just "ms", Just "production", Just "checkout")
+      -- PATCH used to keep the OLD compiled SQL, so the monitor kept alerting on its previous query.
+      void $ runB $ ApiH.apiMonitorPatch testPid created.id (def :: ApiT.MonitorPatch){ApiT.query = Just "status_code == 500"}
+      recompiled <- stored created.id
+      recompiled.logQuery `shouldBe` "status_code == 500"
+      recompiled.logQueryAsSql `shouldSatisfy` T.isInfixOf "500"
+      notify <- runB $ ApiH.apiMonitorPatch testPid created.id (def :: ApiT.MonitorPatch){ApiT.emails = Just ["a@b.com"], ApiT.emailAll = Just True, ApiT.slackChannels = Just ["#alerts"], ApiT.severity = Just "critical"}
+      (length notify.alertConfig.emails, notify.alertConfig.emailAll, toList notify.alertConfig.slackChannels, notify.alertConfig.severity) `shouldBe` (1, True, ["#alerts"], "critical")
+      (.mutedUntil) <$> runB (ApiH.apiMonitorMute testPid created.id (Just 60)) >>= (`shouldSatisfy` isJust)
+      (.mutedUntil) <$> runB (ApiH.apiMonitorUnmute testPid created.id) `shouldReturn` Nothing
+      -- deactivated_at was DB-inert on upsert: assert against a re-read, never the handler's return.
+      void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input "toggle" "count(*)" :: ApiT.MonitorInput){ApiT.active = Just False}
+      (.deactivatedAt) <$> stored created.id >>= (`shouldSatisfy` isJust)
+      void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input "toggle" "count(*)" :: ApiT.MonitorInput){ApiT.active = Just True}
+      (.deactivatedAt) <$> stored created.id `shouldReturn` Nothing
+      inactive <- runB $ ApiH.apiMonitorCreate testPid (input "inactive-on-create" "count(*)" :: ApiT.MonitorInput){ApiT.active = Just False}
+      inactive.deactivatedAt `shouldSatisfy` isJust
+      (.deactivatedAt) <$> stored inactive.id >>= (`shouldSatisfy` isJust)
+      spare <- runB $ ApiH.apiMonitorCreate testPid (input "bulk-b" "count(*)")
+      deleted <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [inactive.id.unwrap, spare.id.unwrap], ApiT.durationMinutes = Nothing}
+      (length deleted.succeeded, deleted.failed) `shouldBe` (2, [])
+      bogus <- replicateM 2 UUIDV4.nextRandom
+      missing <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = bogus, ApiT.durationMinutes = Nothing}
+      -- SDK wire shape: each failure is {id, error}, not a tuple.
+      missing.succeeded `shouldBe` []
+      map (\f -> (f.id, f.error)) missing.failed `shouldMatchList` map (,"not applied") bogus
+      runB (ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "nuke", ApiT.ids = [], ApiT.durationMinutes = Nothing}) `shouldThrow` anyException
+      runB (ApiH.apiMonitorGet testPid (Monitors.QueryMonitorId UUID.nil)) `shouldThrow` anyException
+      NoContent <- runB $ ApiH.apiMonitorDelete testPid created.id
+      pass
 
-    it "onboardingDocs_acceptsHtmxHtmlRequest_andPreservesArticleMarkup" $ \tr -> do
-      let req = WT.setPath Wai.defaultRequest{Wai.requestHeaders = [(H.hAccept, "text/html"), ("HX-Request", "true")]} "/proxy/docs/sdks/nodejs/expressjs"
-      resp <- WT.runSession (WT.srequest (WT.SRequest req "")) (topApp tr)
-      H.statusCode (WT.simpleStatus resp) `shouldBe` 200
-      filter ((== H.hContentType) . fst) (WT.simpleHeaders resp) `shouldBe` [(H.hContentType, "text/html;charset=utf-8")]
-      let body = decodeUtf8 @Text (WT.simpleBody resp)
-      for_ ["<article id=\"mainArticle\">", "<h1>ExpressJS integration</h1>", "href=\"https://monoscope.tech/docs/sdks/\""] $ \markup ->
-        body `shouldSatisfy` T.isInfixOf markup
+    it "dashboards: create into everyone, star, apply idempotently without taking over repository-owned paths, bulk and single delete" \tr -> do
+      let runB :: ATBaseCtx a -> IO a
+          runB = toBaseServantResponse tr
+          input t = ApiT.DashboardInput{ApiT.title = t, ApiT.tags = Just ["a"], ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
+          doc p t = ApiT.DashboardYAMLDoc{ApiT.filePath = p, ApiT.title = Just t, ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.schema = def}
+      created <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid (input "d1")
+      everyone <- runB $ PM.getEveryoneTeam testPid
+      (created.summary.title, created.summary.teams) `shouldBe` ("d1", V.fromList (map (.id) $ maybeToList everyone))
+      V.length created.summary.teams `shouldBe` 1
+      (.summary.id) <$> runB (ApiH.apiDashboardGet testPid created.summary.id) `shouldReturn` created.summary.id
+      (.summary.starred) <$> runB (ApiH.apiDashboardStar testPid created.summary.id) `shouldReturn` True
+      NoContent <- runB $ ApiH.apiDashboardUnstar testPid created.summary.id
+      applied <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid (doc "dashes/foo.yaml" "foo")
+      (.summary.id) <$> runB (ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid (doc "dashes/foo.yaml" "foo")) `shouldReturn` applied.summary.id
+      Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
+      remote <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid (doc "overview.yaml" "Repository overview")
+      runQueryEffect tr (GitSync.assignDashboardRepository testPid remote.summary.id sync.id) `shouldReturn` Right ()
+      localDash <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid (doc "overview.yaml" "Local overview")
+      localDash.summary.id `shouldNotBe` remote.summary.id
+      fmap (.title) <$> runQueryEffect tr (Dashboards.getDashboardByProjectId testPid remote.summary.id) `shouldReturn` Just "Repository overview"
+      bulk <- runB $ ApiH.apiDashboardBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [applied.summary.id.unwrap, localDash.summary.id.unwrap], ApiT.durationMinutes = Nothing}
+      length bulk.succeeded `shouldBe` 2
+      NoContent <- runB $ ApiH.apiDashboardDelete testPid created.summary.id
+      pass
 
-    describe "Schema endpoint" do
-      it "returns schema with expected fields and valid JSON round-trip" $ \_tr -> do
-        let schema = Schema.telemetrySchema
-        schema.fields `shouldSatisfy` (not . null)
-        Map.lookup "timestamp" schema.fields `shouldSatisfy` isJust
-        Map.lookup "status_code" schema.fields `shouldSatisfy` isJust
-        Map.lookup "body" schema.fields `shouldSatisfy` isJust
-        AE.eitherDecode @Schema.Schema (AE.encode schema) `shouldBe` Right schema
+    it "teams, members, API keys, project and /me round-trip" \tr -> do
+      let runB :: ATBaseCtx a -> IO a
+          runB = toBaseServantResponse tr
+      created <- runB $ ApiH.apiTeamCreate testPid $ ApiT.TeamInput "ops" "ops-team" (Just "Ops oncall") Nothing (Just ["ops@example.com"]) Nothing Nothing Nothing Nothing
+      (created.summary.name, created.summary.handle, created.summary.isEveryone) `shouldBe` ("ops", "ops-team", False)
+      (.summary.id) <$> runB (ApiH.apiTeamGet testPid created.summary.id) `shouldReturn` created.summary.id
+      (.summary.name) <$> runB (ApiH.apiTeamPatch testPid created.summary.id (ApiT.TeamPatch (Just "ops-v2") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)) `shouldReturn` "ops-v2"
+      (runB (ApiH.apiTeamCreate testPid (team "everyone" "everyone")) >>= evaluateWHNF_) `shouldThrow` anyException
+      runB (ApiH.apiTeamsList testPid) >>= (`shouldSatisfy` any (.isEveryone))
+      NoContent <- runB $ ApiH.apiTeamDelete testPid created.summary.id
+      t1 <- runB $ ApiH.apiTeamCreate testPid (team "t-a" "t-a")
+      t2 <- runB $ ApiH.apiTeamCreate testPid (team "t-b" "t-b")
+      (length . (.succeeded)) <$> runB (ApiH.apiTeamsBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [t1.summary.id, t2.summary.id], ApiT.durationMinutes = Nothing}) `shouldReturn` 2
 
-    describe "Monitors endpoint" do
-      it "returns JSON-serializable monitors list for project" $ \tr -> do
-        result <- runQueryEffect tr $ Monitors.queryMonitorsAll testPid
-        AE.eitherDecode @[Monitors.QueryMonitor] (AE.encode result) `shouldSatisfy` isRight
+      added <- runB $ ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Just "member@example.com", ApiT.userId = Nothing, ApiT.permission = Just PM.PView}
+      (added.email, added.permission) `shouldBe` ("member@example.com", PM.PView)
+      (.permission) <$> runB (ApiH.apiMemberPatch testPid added.userId (ApiT.MemberPatch PM.PAdmin)) `shouldReturn` PM.PAdmin
+      NoContent <- runB $ ApiH.apiMemberRemove testPid added.userId
+      (runB (ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Nothing, ApiT.userId = Nothing, ApiT.permission = Nothing}) >>= evaluateWHNF_) `shouldThrow` anyException
 
-    describe "Events endpoint" do
-      it "returns valid LogResult with expected JSON structure" $ \tr -> do
-        result <-
-          toBaseServantResponse tr
-            $ Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-        let json = AE.toJSON result
-        (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
-        (json ^? key "cols" . _Array) `shouldSatisfy` isJust
-        (json ^? key "colIdxMap" . _Object) `shouldSatisfy` isJust
-        (json ^? key "count" . _Number) `shouldSatisfy` isJust
-        (json ^? key "traces" . _Array) `shouldSatisfy` isJust
-        (json ^? key "hasMore") `shouldSatisfy` isJust
+      key' <- runB $ ApiH.apiKeyCreate testPid ApiT.ApiKeyCreate{ApiT.title = "k1"}
+      (key'.summary.title, T.null key'.key) `shouldBe` ("k1", False)
+      runB (ApiH.apiKeysList testPid) >>= (`shouldSatisfy` elem key'.summary.id . fmap (.id))
+      (.id) <$> runB (ApiH.apiKeyGet testPid key'.summary.id) `shouldReturn` key'.summary.id
+      (.active) <$> runB (ApiH.apiKeyDeactivate testPid key'.summary.id) `shouldReturn` False
 
-      it "returns 400 for malformed query" $ \tr -> do
-        ( toBaseServantResponse tr (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
-            >>= evaluateWHNF_
-          )
-          `shouldThrow` anyException
+      me <- runB $ ApiH.apiMe testPid
+      (me.projectId, me.project.id) `shouldBe` (testPid, testPid)
+      let emptyPatch = Projects.ProjectPatch Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (.summary.title) <$> runB (ApiH.apiProjectPatch testPid emptyPatch{Projects.title = Just "Plan B Patched"}) `shouldReturn` "Plan B Patched"
+      (.summary.title) <$> runB (ApiH.apiProjectGet testPid) `shouldReturn` "Plan B Patched"
 
-    describe "Metrics endpoint" do
-      it "returns valid MetricsData for count query with JSON round-trip" $ \tr -> do
-        result <-
-          toBaseServantResponse tr
-            $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing (Just "1h") Nothing Nothing (Just "spans") Nothing []
-        result.rowsCount `shouldSatisfy` (>= 0)
-        AE.eitherDecode @MetricsData (AE.encode result) `shouldSatisfy` isRight
+    it "tenant scoping: another project's resources are 404 by id and absent from listings" \tr -> do
+      let runB :: ATBaseCtx a -> IO a
+          runB = toBaseServantResponse tr
+          denied :: IO () -> IO ()
+          denied = (`shouldThrow` anyException)
+      otherPid <- createTestProject tr "Other API project"
+      monitor <- runB $ ApiH.apiMonitorCreate otherPid (def :: ApiT.MonitorInput){ApiT.title = "foreign", ApiT.query = "count(*)", ApiT.alertThreshold = 1, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
+      dash <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal otherPid ApiT.DashboardInput{ApiT.title = "foreign", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
+      foreignTeam <- runB $ ApiH.apiTeamCreate otherPid (team "foreign" "foreign")
+      foreignKey <- runB $ ApiH.apiKeyCreate otherPid ApiT.ApiKeyCreate{ApiT.title = "foreign"}
+      [ownId, foreignId] <- replicateM 2 (UUIDId <$> UUIDV4.nextRandom)
+      sourceId <- UUIDV4.nextRandom
+      runB
+        $ Hasql.interpExecute_
+          [HI.sql|INSERT INTO apis.incident_episodes (id, project_id, source_kind, source_id, phase, started_at, last_event_at)
+            VALUES (#{ownId}, #{testPid}, 'issue', #{sourceId}, 'active', #{frozenTime}, #{frozenTime}),
+                   (#{foreignId}, #{otherPid}, 'issue', #{sourceId}, 'active', #{frozenTime}, #{frozenTime})|]
+      map (.id) <$> runB (ApiH.apiIncidentsList testPid Nothing Nothing) `shouldReturn` [ownId]
+      (.id) <$> runB (ApiH.apiIncidentGet testPid ownId) `shouldReturn` ownId
+      sequence_
+        [ denied $ void $ runB (ApiH.apiIncidentGet testPid foreignId)
+        , denied $ void $ runB (ApiH.apiMonitorGet testPid monitor.id)
+        , denied $ void $ runB (ApiH.apiDashboardGet testPid dash.summary.id)
+        , denied $ void $ runB (ApiH.apiTeamGet testPid foreignTeam.summary.id)
+        , denied $ void $ runB (ApiH.apiKeyGet testPid foreignKey.summary.id)
+        ]
 
-    describe "Monitor CRUD + lifecycle" do
-      it "create → get → patch → mute → unmute → delete round-trip" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            input = (def :: ApiT.MonitorInput){ApiT.unit = Just " s ", ApiT.title = "t1", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
-        created <- runB $ ApiH.apiMonitorCreate testPid input
-        created.alertConfig.title `shouldBe` "t1"
-        got <- runB $ ApiH.apiMonitorGet testPid created.id
-        got.id `shouldBe` created.id
-        got.alertConfig.unit `shouldBe` Just "s"
-        patched <- runB $ ApiH.apiMonitorPatch testPid created.id ((def :: ApiT.MonitorPatch){ApiT.title = Just "t2"})
-        patched.alertConfig.title `shouldBe` "t2"
-        retained <- runB $ ApiH.apiMonitorGet testPid created.id
-        retained.alertConfig.unit `shouldBe` Just "s"
-        void $ runB $ ApiH.apiMonitorPatch testPid created.id ((def :: ApiT.MonitorPatch){ApiT.unit = Just "ms"})
-        exported <- runB $ ApiH.apiMonitorYaml testPid created.id
-        exported.unit `shouldBe` Just "ms"
-        muted <- runB $ ApiH.apiMonitorMute testPid created.id (Just 60)
-        muted.mutedUntil `shouldSatisfy` isJust
-        unmuted <- runB $ ApiH.apiMonitorUnmute testPid created.id
-        unmuted.mutedUntil `shouldBe` Nothing
-        NoContent <- runB $ ApiH.apiMonitorDelete testPid created.id
-        pass
+    it "events, metrics and listings: envelopes, malformed KQL, opt-in attributes and with_children descendants" \tr -> do
+      let runB :: ATBaseCtx a -> IO a
+          runB = toBaseServantResponse tr
+      events <- AE.toJSON <$> runB (Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
+      [k | (k, present) <- [("logsData", isJust (events ^? key "logsData" . _Array)), ("cols", isJust (events ^? key "cols" . _Array)), ("colIdxMap", isJust (events ^? key "colIdxMap" . _Object)), ("count", isJust (events ^? key "count" . _Number)), ("traces", isJust (events ^? key "traces" . _Array)), ("hasMore", isJust (events ^? key "hasMore"))], not present] `shouldBe` ([] :: [Text])
+      (runB (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing) >>= evaluateWHNF_) `shouldThrow` anyException
+      metrics <- runB $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing (Just "1h") Nothing Nothing (Just "spans") Nothing []
+      metrics.rowsCount `shouldSatisfy` (>= 0)
+      AE.eitherDecode @MetricsData (AE.encode metrics) `shouldSatisfy` isRight
+      let body = (def :: ApiT.EventsQuery){ApiT.query = Just "", ApiT.since = Just "1h"}
+      bodyJson <- AE.toJSON <$> runB (ApiH.apiEventsQuery Log.queryEvents testPid body)
+      (isJust (bodyJson ^? key "logsData" . _Array), isJust (bodyJson ^? key "count" . _Number)) `shouldBe` (True, True)
+      (.cols) <$> runB (ApiH.apiEventsQuery Log.queryEvents testPid (body :: ApiT.EventsQuery){ApiT.includeAttributes = Just True}) >>= (`shouldContain` ["attributes"])
 
-      -- queryMonitorUpsert omitted deactivated_at from both the INSERT column list and
-      -- the ON CONFLICT SET, so `active` was DB-inert: the handler returned the record it
-      -- had built (showing the monitor disabled) while the row stayed live and kept firing.
-      -- Assert against a re-read, never against the handler's own return value.
-      it "monitorCreate_activeFalse_persistsDeactivatedAt" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            input = (def :: ApiT.MonitorInput){ApiT.title = "inactive-on-create", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15, ApiT.active = Just False}
-        created <- runB $ ApiH.apiMonitorCreate testPid input
-        created.deactivatedAt `shouldSatisfy` isJust
-        stored <- runQueryEffect tr $ Monitors.queryMonitorById created.id
-        (stored >>= (.deactivatedAt)) `shouldSatisfy` isJust
+      -- Search used to return every span in a matching trace; now exact match, and
+      -- with_children adds only the descendants of each match (C under B under A, not D under E).
+      apiKey <- createTestAPIKey tr testPid "with-children-key"
+      trId <- show <$> UUIDV4.nextRandom
+      [spanA, spanB, spanC, spanE, spanD] <- replicateM 5 (show <$> UUIDV4.nextRandom)
+      marker <- ("wc-" <>) . UUID.toText <$> UUIDV4.nextRandom
+      let ingest sid pidM name extras = void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider $ Proto (mkSpanRequest trId sid pidM name [] Nothing extras (mkResource apiKey []) (addUTCTime (-30) frozenTime))
+      ingest spanA Nothing "tree.root" [mkAttr "wc.marker" marker]
+      ingest spanB (Just spanA) "tree.child" []
+      ingest spanC (Just spanB) "tree.grandchild" []
+      ingest spanE Nothing "tree.unrelated.root" []
+      ingest spanD (Just spanE) "tree.unrelated.child" []
+      let tree = (body :: ApiT.EventsQuery){ApiT.query = Just $ "attributes.wc.marker == \"" <> marker <> "\""}
+      V.length . (.logsData) <$> runB (ApiH.apiEventsQuery Log.queryEvents testPid tree) `shouldReturn` 1
+      V.length . (.logsData) <$> runB (ApiH.apiEventsQuery Log.queryEvents testPid (tree :: ApiT.EventsQuery){ApiT.withChildren = Just True}) `shouldReturn` 3
 
-      it "monitorUpdate_activeToggle_persistsDeactivatedAt" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            input act = (def :: ApiT.MonitorInput){ApiT.title = "toggle-active", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15, ApiT.active = Just act}
-        created <- runB $ ApiH.apiMonitorCreate testPid (input True)
-        void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input False)
-        disabled <- runQueryEffect tr $ Monitors.queryMonitorById created.id
-        (disabled >>= (.deactivatedAt)) `shouldSatisfy` isJust
-        void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input True)
-        reenabled <- runQueryEffect tr $ Monitors.queryMonitorById created.id
-        (reenabled >>= (.deactivatedAt)) `shouldBe` Nothing
+      issues <- runB $ ApiH.apiIssuesList testPid Nothing Nothing Nothing Nothing Nothing
+      (issues.perPage > 0, issues.totalCount >= 0) `shouldBe` (True, True)
+      (.succeeded) <$> runB (ApiH.apiIssuesBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing}) `shouldReturn` []
+      (.perPage) <$> runB (ApiH.apiLogPatternsList testPid Nothing Nothing) >>= (`shouldSatisfy` (> 0))
+      (.succeeded) <$> runB (ApiH.apiLogPatternsBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing}) `shouldReturn` []
+      runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ fromList [(def :: Endpoints.Endpoint){Endpoints.projectId = testPid, Endpoints.urlPath = "/api-v1-probe", Endpoints.urlParams = AE.object [], Endpoints.method = "GET", Endpoints.host = "probe.test", Endpoints.hash = "api-v1-probe", Endpoints.serviceName = Just "probe"}]
+      endpoints <- runB $ ApiH.apiEndpointsList testPid (Just "api-v1-probe") Nothing Nothing Nothing
+      map (\e -> (e.urlPath, e.host, e.serviceName)) endpoints.items `shouldBe` [("/api-v1-probe", "probe.test", Just "probe")]
+      ep <- maybe (fail "probe endpoint not listed") pure (viaNonEmpty head endpoints.items)
+      (.summary.hash) <$> runB (ApiH.apiEndpointGet testPid ep.id) `shouldReturn` "api-v1-probe"
 
-      -- log_query_as_sql is the compiled form that alert evaluation actually runs.
-      -- PATCH built the merged monitor from `existing`, so it updated log_query and
-      -- inherited the OLD compiled SQL -- the monitor kept alerting on its previous
-      -- query. PUT/apply recompute it via monitorFromInput; PATCH did not.
-      it "monitorPatch_query_recompilesTheCompiledSql" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            input = (def :: ApiT.MonitorInput){ApiT.title = "recompile", ApiT.query = "status_code == 200", ApiT.alertThreshold = 1, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
-        created <- runB $ ApiH.apiMonitorCreate testPid input
-        compiledBefore <- runQueryEffect tr $ Monitors.queryMonitorById created.id
-        fmap (.logQueryAsSql) compiledBefore `shouldSatisfy` maybe False (T.isInfixOf "200")
-        void $ runB $ ApiH.apiMonitorPatch testPid created.id ((def :: ApiT.MonitorPatch){ApiT.query = Just "status_code == 500"})
-        compiledAfter <- runQueryEffect tr $ Monitors.queryMonitorById created.id
-        fmap (.logQuery) compiledAfter `shouldBe` Just "status_code == 500"
-        fmap (.logQueryAsSql) compiledAfter `shouldSatisfy` maybe False (T.isInfixOf "500")
-
-      it "persists monitor environment and service scope outside customer KQL" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            input =
-              (def :: ApiT.MonitorInput)
-                { ApiT.title = "scoped-monitor"
-                , ApiT.query = "status_code >= 500 | summarize count()"
-                , ApiT.alertThreshold = 1
-                , ApiT.checkIntervalMins = 5
-                , ApiT.timeWindowMins = 15
-                , ApiT.environment = Just "production"
-                , ApiT.service = Just "checkout"
-                }
-        created <- runB $ ApiH.apiMonitorCreate testPid input
-        created.logQuery `shouldBe` input.query
-        created.environment `shouldBe` Just "production"
-        created.service `shouldBe` Just "checkout"
-        created.logQueryAsSql `shouldContainAll` ["resource___deployment___environment___name = 'production'", "resource___service___name = 'checkout'"]
-        exported <- runB $ ApiH.apiMonitorYaml testPid created.id
-        exported.environment `shouldBe` Just "production"
-        exported.service `shouldBe` Just "checkout"
-
-      it "bulk delete marks monitors as deleted" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            mkInput n = (def :: ApiT.MonitorInput){ApiT.title = "bulk-" <> n, ApiT.query = "count(*)", ApiT.alertThreshold = 1, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
-        m1 <- runB $ ApiH.apiMonitorCreate testPid (mkInput "a")
-        m2 <- runB $ ApiH.apiMonitorCreate testPid (mkInput "b")
-        res <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [m1.id.unwrap, m2.id.unwrap], ApiT.durationMinutes = Nothing}
-        length res.succeeded `shouldBe` 2
-        res.failed `shouldBe` []
-
-      it "bulk delete against non-existent ids reports them in failed with error text" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-        bogus1 <- UUIDV4.nextRandom
-        bogus2 <- UUIDV4.nextRandom
-        res <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [bogus1, bogus2], ApiT.durationMinutes = Nothing}
-        res.succeeded `shouldBe` []
-        length res.failed `shouldBe` 2
-        -- SDK-facing wire shape: each failure is {id, error}, not a tuple
-        fmap (.id) res.failed `shouldMatchList` [bogus1, bogus2]
-        fmap (.error) res.failed `shouldSatisfy` all (== "not applied")
-
-      it "bulk with unknown action raises 400" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-        runB (ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "nuke", ApiT.ids = [], ApiT.durationMinutes = Nothing})
-          `shouldThrow` anyException
-
-      it "get with non-existent id raises 404" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-        bogus <- UUIDV4.nextRandom
-        runB (ApiH.apiMonitorGet testPid (Monitors.QueryMonitorId bogus))
-          `shouldThrow` anyException
-
-      it "patch propagates notification fields (emails, emailAll, slackChannels)" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            input = (def :: ApiT.MonitorInput){ApiT.title = "notify-t", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
-        created <- runB $ ApiH.apiMonitorCreate testPid input
-        patched <-
-          runB
-            $ ApiH.apiMonitorPatch
-              testPid
-              created.id
-              ((def :: ApiT.MonitorPatch){ApiT.emails = Just ["a@b.com"], ApiT.emailAll = Just True, ApiT.slackChannels = Just ["#alerts"], ApiT.severity = Just "critical"})
-        length patched.alertConfig.emails `shouldBe` 1
-        patched.alertConfig.emailAll `shouldBe` True
-        toList patched.alertConfig.slackChannels `shouldBe` ["#alerts"]
-        patched.alertConfig.severity `shouldBe` "critical"
-
-    describe "Dashboard CRUD" do
-      it "returns an empty dashboard's title and widget list" $ \tr -> do
-        created <- toBaseServantResponse tr $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid ApiT.DashboardInput{ApiT.title = "empty dashboard", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
-        rendered <- toBaseServantResponse tr $ DashPage.apiDashboardData testPid created.summary.id Nothing Nothing (Just "1h") Nothing Nothing []
-        rendered.id `shouldBe` created.summary.id
-        rendered.title `shouldBe` "empty dashboard"
-        rendered.widgets `shouldSatisfy` null
-
-      it "create → star → unstar → delete round-trip" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            input = ApiT.DashboardInput{ApiT.title = "d1", ApiT.tags = Just ["a"], ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
-        created <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid input
-        created.summary.title `shouldBe` "d1"
-        everyone <- runB $ PM.getEveryoneTeam testPid
-        V.length created.summary.teams `shouldBe` 1
-        created.summary.teams `shouldBe` V.fromList (map (.id) $ maybeToList everyone)
-        starred <- runB $ ApiH.apiDashboardStar testPid created.summary.id
-        starred.summary.starred `shouldBe` True
-        NoContent <- runB $ ApiH.apiDashboardUnstar testPid created.summary.id
-        NoContent <- runB $ ApiH.apiDashboardDelete testPid created.summary.id
-        pass
-
-      it "bulk delete removes multiple dashboards" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            mkInput n = ApiT.DashboardInput{ApiT.title = "bulk-d-" <> n, ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
-        d1 <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid (mkInput "a")
-        d2 <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid (mkInput "b")
-        res <- runB $ ApiH.apiDashboardBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [d1.summary.id.unwrap, d2.summary.id.unwrap], ApiT.durationMinutes = Nothing}
-        length res.succeeded `shouldBe` 2
-
-      it "apply upserts by file_path (idempotent)" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            doc = ApiT.DashboardYAMLDoc{ApiT.filePath = "dashes/foo.yaml", ApiT.title = Just "foo", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.schema = def}
-        d1 <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc
-        d2 <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc
-        d1.summary.id `shouldBe` d2.summary.id -- same row updated, not inserted again
-      it "apply_doesNotOverwriteARepositoryOwnedDashboardWithTheSamePath" $ \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            doc = ApiT.DashboardYAMLDoc{ApiT.filePath = "overview.yaml", ApiT.title = Just "Repository overview", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.schema = def}
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
-        remote <- toBaseServantResponse tr $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc
-        runQueryEffect tr (GitSync.assignDashboardRepository testPid remote.summary.id sync.id) `shouldReturn` Right ()
-        applied <- toBaseServantResponse tr $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc{ApiT.title = Just "Local overview"}
-        applied.summary.id `shouldNotBe` remote.summary.id
-        Just retained <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid remote.summary.id
-        retained.title `shouldBe` "Repository overview"
-    describe "API keys CRUD" do
-      it "create returns plaintext once; list includes it; delete deactivates" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-        created <- runB $ ApiH.apiKeyCreate testPid ApiT.ApiKeyCreate{ApiT.title = "k1"}
-        created.summary.title `shouldBe` "k1"
-        created.key `shouldSatisfy` not . T.null
-        keys <- runB $ ApiH.apiKeysList testPid
-        (created.summary.id `elem` fmap (.id) keys) `shouldBe` True
-        deact <- runB $ ApiH.apiKeyDeactivate testPid created.summary.id
-        deact.active `shouldBe` False
-
-    describe "Events body query" do
-      it "accepts EventsQuery payload and returns LogResult" $ \tr -> do
-        result <-
-          toBaseServantResponse tr
-            $ ApiH.apiEventsQuery Log.queryEvents testPid (def :: ApiT.EventsQuery){ApiT.query = Just "", ApiT.since = Just "1h"}
-        let json = AE.toJSON result
-        (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
-        (json ^? key "count" . _Number) `shouldSatisfy` isJust
-
-      it "includes optional environment and service scopes in the EventsQuery schema" $ \_tr -> do
-        let bodyProperties = specJson ^? key "components" . key "schemas" . key "EventsQuery" . key "properties" . _Object
-        bodyProperties `shouldSatisfy` maybe False (AEKM.member "environment")
-        bodyProperties `shouldSatisfy` maybe False (AEKM.member "service")
-
-      it "includes attributes only when requested" $ \tr -> do
-        result <-
-          toBaseServantResponse tr
-            $ ApiH.apiEventsQuery Log.queryEvents testPid (def :: ApiT.EventsQuery){ApiT.query = Just "", ApiT.since = Just "1h", ApiT.includeAttributes = Just True}
-        result.cols `shouldContain` ["attributes"]
-
-      -- Regression: previously the search backend returned every span in a
-      -- matching trace, including siblings/parents/uncles that failed the
-      -- predicate. Default is now exact-match; @with_children=true@ opts
-      -- back into trace context, but only the descendants of each match.
-      it "with_children: default returns only predicate hits; flag adds descendants" $ \tr -> do
-        apiKey <- createTestAPIKey tr testPid "with-children-key"
-        -- Tests run with the Time effect frozen at 'frozenTime' (2025-01-01),
-        -- so spans must land inside the (frozenTime - 1h, frozenTime] window.
-        let ts = addUTCTime (-30) frozenTime
-        trId <- show <$> UUIDV4.nextRandom
-        spanA <- show <$> UUIDV4.nextRandom -- root, the predicate match
-        spanB <- show <$> UUIDV4.nextRandom -- child of A
-        spanC <- show <$> UUIDV4.nextRandom -- grandchild of A (child of B)
-        spanE <- show <$> UUIDV4.nextRandom -- sibling root in the same trace
-        spanD <- show <$> UUIDV4.nextRandom -- child of E — same trace, NOT a descendant of A
-        marker <- ("wc-" <>) . UUID.toText <$> UUIDV4.nextRandom
-        let resource = mkResource apiKey []
-            ingest sid pidM name extras =
-              void
-                $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
-                $ Proto (mkSpanRequest trId sid pidM name [] Nothing extras resource ts)
-        ingest spanA Nothing "tree.root" [mkAttr "wc.marker" marker]
-        ingest spanB (Just spanA) "tree.child" []
-        ingest spanC (Just spanB) "tree.grandchild" []
-        ingest spanE Nothing "tree.unrelated.root" []
-        ingest spanD (Just spanE) "tree.unrelated.child" [] -- shares trace_id with A but not in A's subtree
-        let q = "attributes.wc.marker == \"" <> marker <> "\""
-            base = (def :: ApiT.EventsQuery){ApiT.query = Just q, ApiT.since = Just "1h"}
-
-        rDefault <- toBaseServantResponse tr $ ApiH.apiEventsQuery Log.queryEvents testPid base
-        V.length rDefault.logsData `shouldBe` 1 -- only A matches the predicate
-        rWith <-
-          toBaseServantResponse tr
-            $ ApiH.apiEventsQuery Log.queryEvents testPid base{ApiT.withChildren = Just True}
-        -- A + B + C. D is in the same trace but lives under E, not A — the
-        -- old buggy behaviour would have included it; the descendant filter
-        -- excludes it.
-        V.length rWith.logsData `shouldBe` 3
-
-    describe "Plan B — /me + project singular" do
-      it "returns project id and summary for /me" $ \tr -> do
-        res <- toBaseServantResponse tr (ApiH.apiMe testPid)
-        res.projectId `shouldBe` testPid
-        res.project.id `shouldBe` testPid
-
-      it "project get/patch round-trip updates title" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            emptyPatch = Projects.ProjectPatch Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-        original <- runB (ApiH.apiProjectGet testPid)
-        patched <- runB (ApiH.apiProjectPatch testPid emptyPatch{Projects.title = Just "Plan B Patched"})
-        patched.summary.title `shouldBe` "Plan B Patched"
-        _ <- runB (ApiH.apiProjectPatch testPid emptyPatch{Projects.title = Just original.summary.title})
-        pass
-
-    describe "Plan B — issues/endpoints/log-patterns listing" do
-      it "issues list returns a Paged envelope" $ \tr -> do
-        res <- toBaseServantResponse tr (ApiH.apiIssuesList testPid Nothing Nothing Nothing Nothing Nothing)
-        res.perPage `shouldSatisfy` (> 0)
-        res.totalCount `shouldSatisfy` (>= 0)
-
-      it "issues bulk with empty ids succeeds with empty result" $ \tr -> do
-        res <- toBaseServantResponse tr (ApiH.apiIssuesBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
-        res.succeeded `shouldBe` []
-
-      it "endpoints list and get decode stored rows" $ \tr -> do
-        runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ fromList [(def :: Endpoints.Endpoint){Endpoints.projectId = testPid, Endpoints.urlPath = "/api-v1-probe", Endpoints.urlParams = AE.object [], Endpoints.method = "GET", Endpoints.host = "probe.test", Endpoints.hash = "api-v1-probe", Endpoints.serviceName = Just "probe"}]
-        res <- toBaseServantResponse tr (ApiH.apiEndpointsList testPid (Just "api-v1-probe") Nothing Nothing Nothing)
-        map (\e -> (e.urlPath, e.host, e.serviceName)) res.items `shouldBe` [("/api-v1-probe", "probe.test", Just "probe")]
-        ep <- maybe (fail "probe endpoint not listed") pure (viaNonEmpty head res.items)
-        full <- toBaseServantResponse tr (ApiH.apiEndpointGet testPid ep.id)
-        full.summary.hash `shouldBe` "api-v1-probe"
-
-      it "log patterns list returns a Paged envelope" $ \tr -> do
-        res <- toBaseServantResponse tr (ApiH.apiLogPatternsList testPid Nothing Nothing)
-        res.perPage `shouldSatisfy` (> 0)
-
-      it "log patterns bulk with empty ids succeeds with empty result" $ \tr -> do
-        res <- toBaseServantResponse tr (ApiH.apiLogPatternsBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
-        res.succeeded `shouldBe` []
-
-      it "incidents list and get stay inside the authorized project" $ \tr -> do
-        otherPid <- createTestProject tr "Other incident API project"
-        ownId <- UUIDId <$> UUIDV4.nextRandom
-        foreignId <- UUIDId <$> UUIDV4.nextRandom
-        sourceId <- UUIDV4.nextRandom
-        toBaseServantResponse tr
-          $ Hasql.interpExecute_
-            [HI.sql|INSERT INTO apis.incident_episodes
-              (id, project_id, source_kind, source_id, phase, started_at, last_event_at)
-              VALUES (#{ownId}, #{testPid}, 'issue', #{sourceId}, 'active', #{frozenTime}, #{frozenTime}),
-                     (#{foreignId}, #{otherPid}, 'issue', #{sourceId}, 'active', #{frozenTime}, #{frozenTime})|]
-        listed <- toBaseServantResponse tr $ ApiH.apiIncidentsList testPid Nothing Nothing
-        map (.id) listed `shouldBe` [ownId]
-        (.id) <$> toBaseServantResponse tr (ApiH.apiIncidentGet testPid ownId) `shouldReturn` ownId
-        (toBaseServantResponse tr (ApiH.apiIncidentGet testPid foreignId) >>= evaluateWHNF_)
-          `shouldThrow` anyException
-
-    describe "Plan B — teams CRUD" do
-      it "create → get → patch → delete round-trip" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            input =
-              ApiT.TeamInput
-                { ApiT.name = "ops"
-                , ApiT.handle = "ops-team"
-                , ApiT.description = Just "Ops oncall"
-                , ApiT.members = Nothing
-                , ApiT.notifyEmails = Just ["ops@example.com"]
-                , ApiT.slackChannels = Nothing
-                , ApiT.discordChannels = Nothing
-                , ApiT.phoneNumbers = Nothing
-                , ApiT.pagerdutyServices = Nothing
-                }
-        created <- runB $ ApiH.apiTeamCreate testPid input
-        created.summary.name `shouldBe` "ops"
-        created.summary.handle `shouldBe` "ops-team"
-        created.summary.isEveryone `shouldBe` False
-        got <- runB $ ApiH.apiTeamGet testPid created.summary.id
-        got.summary.id `shouldBe` created.summary.id
-        patched <-
-          runB
-            $ ApiH.apiTeamPatch
-              testPid
-              created.summary.id
-              (ApiT.TeamPatch (Just "ops-v2") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
-        patched.summary.name `shouldBe` "ops-v2"
-        NoContent <- runB $ ApiH.apiTeamDelete testPid created.summary.id
-        pass
-
-      it "create with 'everyone' handle is rejected" $ \tr -> do
-        let input =
-              ApiT.TeamInput
-                { ApiT.name = "everyone"
-                , ApiT.handle = "everyone"
-                , ApiT.description = Nothing
-                , ApiT.members = Nothing
-                , ApiT.notifyEmails = Nothing
-                , ApiT.slackChannels = Nothing
-                , ApiT.discordChannels = Nothing
-                , ApiT.phoneNumbers = Nothing
-                , ApiT.pagerdutyServices = Nothing
-                }
-        (toBaseServantResponse tr (ApiH.apiTeamCreate testPid input) >>= evaluateWHNF_) `shouldThrow` anyException
-
-      it "teams list includes the built-in everyone team" $ \tr -> do
-        teams <- toBaseServantResponse tr (ApiH.apiTeamsList testPid)
-        any (.isEveryone) teams `shouldBe` True
-
-      it "bulk delete over teams returns success count" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-            mkInput n =
-              ApiT.TeamInput
-                { ApiT.name = "t-" <> n
-                , ApiT.handle = "t-" <> n
-                , ApiT.description = Nothing
-                , ApiT.members = Nothing
-                , ApiT.notifyEmails = Nothing
-                , ApiT.slackChannels = Nothing
-                , ApiT.discordChannels = Nothing
-                , ApiT.phoneNumbers = Nothing
-                , ApiT.pagerdutyServices = Nothing
-                }
-        t1 <- runB $ ApiH.apiTeamCreate testPid (mkInput "a")
-        t2 <- runB $ ApiH.apiTeamCreate testPid (mkInput "b")
-        res <-
-          runB
-            $ ApiH.apiTeamsBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [t1.summary.id, t2.summary.id], ApiT.durationMinutes = Nothing}
-        length res.succeeded `shouldBe` 2
-
-    describe "Plan B — members" do
-      it "add by email → patch permission → remove" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = toBaseServantResponse tr k
-        added <-
-          runB
-            $ ApiH.apiMemberAdd
-              testPid
-              ApiT.MemberAdd{ApiT.email = Just "member@example.com", ApiT.userId = Nothing, ApiT.permission = Just PM.PView}
-        added.email `shouldBe` "member@example.com"
-        added.permission `shouldBe` PM.PView
-        patched <- runB $ ApiH.apiMemberPatch testPid added.userId (ApiT.MemberPatch PM.PAdmin)
-        patched.permission `shouldBe` PM.PAdmin
-        NoContent <- runB $ ApiH.apiMemberRemove testPid added.userId
-        pass
-
-      it "add without email or user_id is rejected" $ \tr -> do
-        ( toBaseServantResponse tr (ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Nothing, ApiT.userId = Nothing, ApiT.permission = Nothing})
-            >>= evaluateWHNF_
-          )
-          `shouldThrow` anyException
-
-    describe "MCP" do
+    it "MCP JSON-RPC: initialize, tools/list, tool results as isError not RPC errors, POST bodies forwarded, notifications null" \tr -> do
       let reg = MCP.allTools apiV1OpenApiSpec (\pid tz input -> pure $ Right $ AE.object ["query" AE..= input, "project_id" AE..= pid, "timezone" AE..= tz])
-          dummyApp = error "dummyApp invoked unexpectedly"
-          buildTestApp tr pid =
-            genericServeTWithContext
-              (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-              (apiV1Server (Authenticated pid))
-              Servant.EmptyContext
-          mcpHttp tr authHdr body =
-            let req =
-                  WT.setPath
-                    Wai.defaultRequest
-                      { Wai.requestMethod = H.methodPost
-                      , Wai.requestHeaders = ("Content-Type", "application/json") : authHdr
-                      }
-                    "/api/v1/mcp"
-             in WT.runSession (WT.srequest (WT.SRequest req (AE.encode body))) (topApp tr)
-          rpcCall body =
-            AE.object
-              [ "jsonrpc" AE..= ("2.0" :: Text)
-              , "id" AE..= (1 :: Int)
-              , "method" AE..= ("tools/call" :: Text)
-              , "params" AE..= body
+          app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (apiV1Server (Authenticated testPid)) Servant.EmptyContext
+          via a = toBaseServantResponse tr . MCP.handleJsonRpc reg a testPid
+          -- Protocol and composite-toolCall paths must never reach the REST app.
+          send = via (error "REST app invoked unexpectedly")
+          isError r = r ^? key "result" . key "isError"
+      initialized <- send (rpc "initialize" [])
+      (isJust (initialized ^? key "result" . key "protocolVersion"), isJust (initialized ^? key "result" . key "serverInfo" . key "name")) `shouldBe` (True, True)
+      tools <- (^.. key "result" . key "tools" . _Array . traverse) <$> send (rpc "tools/list" [])
+      case tools of
+        t : _ -> [k | k <- ["name", "description", "inputSchema"], isNothing (t ^? key k)] `shouldBe` []
+        [] -> expectationFailure "expected at least one tool"
+      -- Composite workflow tools sit alongside the REST tools.
+      filter (`notElem` (tools ^.. traverse . key "name" . _String)) ["find_error_patterns", "search_events_nl", "analyze_issue", "get_schema"] `shouldBe` []
+      schema <- via app (toolCall "get_schema" [])
+      isError schema `shouldBe` Just (AE.Bool False)
+      liveSchemaFields (schema ^? key "result" . key "structuredContent") `shouldBe` Right (Map.keys (Schema.deriveSchema ParserExpr.flattenedOtelAttributes).fields)
+      patterns <- send (toolCall "find_error_patterns" ["limit" AE..= (5 :: Int)])
+      (isError patterns, isJust (patterns ^? key "result" . key "structuredContent" . key "patterns" . _Array), isJust (patterns ^? key "result" . key "structuredContent" . key "as_of")) `shouldBe` (Just (AE.Bool False), True, True)
+      failures <- traverse send [toolCall "does_not_exist" [], toolCall "search_events_nl" ["input" AE..= ("" :: Text)], toolCall "analyze_issue" ["issue_id" AE..= ("not-a-uuid" :: Text)]]
+      map (\r -> (isError r, r ^? key "error")) failures `shouldBe` replicate 3 (Just (AE.Bool True), Nothing)
+      send (rpc "notifications/initialized" []) `shouldReturn` AE.Null
+      teamHandle <- ("body-test-" <>) . UUID.toText <$> UUIDV4.nextRandom
+      created <- via app (toolCall "create_team" ["body" AE..= AE.object ["name" AE..= teamHandle, "handle" AE..= teamHandle]])
+      (isError created, created ^? key "result" . key "structuredContent" . key "summary" . key "handle" . _String) `shouldBe` (Just (AE.Bool False), Just teamHandle)
+
+    let specJson = AE.toJSON apiV1OpenApiSpec
+    let reg = MCP.allTools apiV1OpenApiSpec (\pid tz input -> pure $ Right $ AE.object ["query" AE..= input, "project_id" AE..= pid, "timezone" AE..= tz])
+        dummyApp = error "dummyApp invoked unexpectedly"
+        buildTestApp tr pid =
+          genericServeTWithContext
+            (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+            (apiV1Server (Authenticated pid))
+            Servant.EmptyContext
+        rpcCall body =
+          AE.object
+            [ "jsonrpc" AE..= ("2.0" :: Text)
+            , "id" AE..= (1 :: Int)
+            , "method" AE..= ("tools/call" :: Text)
+            , "params" AE..= body
+            ]
+        rpcCallNamed name args =
+          rpcCall (AE.object ["name" AE..= (name :: Text), "arguments" AE..= args])
+
+
+
+    it "returns an empty dashboard's title and widget list" $ \tr -> do
+      created <- toBaseServantResponse tr $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid ApiT.DashboardInput{ApiT.title = "empty dashboard", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
+      rendered <- toBaseServantResponse tr $ DashPage.apiDashboardData testPid created.summary.id Nothing Nothing (Just "1h") Nothing Nothing []
+      rendered.id `shouldBe` created.summary.id
+      rendered.title `shouldBe` "empty dashboard"
+      rendered.widgets `shouldSatisfy` null
+
+    it "runs the Agent project adapter through the same MCP route" \tr -> do
+      let backend = Routes.mcpProjectTools
+      result <- toBaseServantResponse tr $ AI.invoke backend ApiT.ApiKeyPrincipal testPid "get_project" Map.empty
+      (result ^? key "isError") `shouldBe` Just (AE.Bool False)
+      (result ^? key "structuredContent" . key "summary" . key "id" . _String) `shouldBe` Just testPid.toText
+      direct <- toBaseServantResponse tr $ ApiH.apiProjectGet testPid
+      result ^? key "structuredContent" `shouldBe` Just (AE.toJSON direct)
+
+    it "catalog covers every published operation once and shares the CLI resource routes" $ \_tr -> do
+      let documented =
+            S.fromList
+              [ (H.renderStdMethod method, AEK.toText path)
+              | Just (AE.Object paths) <- [specJson ^? key "paths"]
+              , (path, AE.Object methods) <- AEKM.toList paths
+              , (verb, _) <- AEKM.toList methods
+              , Right method <- [H.parseMethod $ encodeUtf8 $ T.toUpper $ AEK.toText verb]
+              , (H.renderStdMethod method, AEK.toText path) /= (H.methodPost, "/mcp")
               ]
-          rpcCallNamed name args =
-            rpcCall (AE.object ["name" AE..= (name :: Text), "arguments" AE..= args])
-          rpcSimple m =
-            AE.object
-              [ "jsonrpc" AE..= ("2.0" :: Text)
-              , "id" AE..= (1 :: Int)
-              , "method" AE..= (m :: Text)
-              ]
+          exposed = S.fromList [(binding.method, binding.path) | tool <- Map.elems reg, MCP.ViaOpenApi binding <- [tool.dispatch]]
+          names = map (fst . snd) (Map.toList Catalog.apiOperations) <> map (.name) Catalog.compositeTools <> map (.name) (Map.elems Catalog.localTools)
+      exposed `shouldBe` documented
+      Map.keysSet Catalog.apiOperations `shouldBe` documented
+      length names `shouldBe` S.size (S.fromList names)
+      Map.size Catalog.localTools `shouldBe` length [minBound .. maxBound :: Catalog.LocalOperation]
+      for_ [Resource.Monitors, Resource.Dashboards, Resource.ApiKeys, Resource.Teams, Resource.Members, Resource.Issues, Resource.Incidents, Resource.Endpoints, Resource.LogPatterns] \kind ->
+        ((H.methodGet,) <$> T.stripPrefix "/api/v1" (Resource.resourcePath kind)) `shouldSatisfy` maybe False (`S.member` documented)
 
-      it "runs the Agent project adapter through the same MCP route" \tr -> do
-        let backend = Routes.mcpProjectTools
-        result <- toBaseServantResponse tr $ AI.invoke backend ApiT.ApiKeyPrincipal testPid "get_project" Map.empty
-        (result ^? key "isError") `shouldBe` Just (AE.Bool False)
-        (result ^? key "structuredContent" . key "summary" . key "id" . _String) `shouldBe` Just testPid.toText
-        direct <- toBaseServantResponse tr $ ApiH.apiProjectGet testPid
-        result ^? key "structuredContent" `shouldBe` Just (AE.toJSON direct)
+    it "requires an explicit Agent policy or exclusion for every MCP operation" $ \_tr -> do
+      let policies = Map.mapMaybe (.agentPolicy) reg
+          covered = Map.keysSet policies `S.union` Map.keysSet MCP.agentExclusions
+      Map.keysSet reg `shouldBe` covered
+      Map.keysSet policies `S.intersection` Map.keysSet MCP.agentExclusions `shouldBe` S.empty
+      Map.lookup "list_metrics" policies `shouldBe` Just (MCP.ReadOnly PM.PView)
+      Map.lookup "search_events" policies `shouldBe` Just (MCP.ReadOnly PM.PView)
+      Map.lookup "create_monitor" policies `shouldBe` Just (MCP.ProjectWrite)
+      for_ (["bulk_monitors", "remove_member", "delete_dashboard"] :: [Text]) \name -> Map.lookup name policies `shouldBe` Just (MCP.Administration PM.PView)
+      for_ (["create_api_key", "activate_api_key", "deactivate_api_key", "delete_api_key"] :: [Text]) \name -> Map.lookup name policies `shouldBe` Just (MCP.Administration PM.PAdmin)
 
-      it "registry uses verb-first canonical tool names" $ \_tr -> do
-        Map.member "search_events" reg `shouldBe` True
-        Map.member "list_events" reg `shouldBe` True
-        Map.member "list_monitors" reg `shouldBe` True
-        Map.member "get_monitor" reg `shouldBe` True
-        Map.member "mute_monitor" reg `shouldBe` True
-        Map.member "apply_dashboard" reg `shouldBe` True
-        Map.member "get_dashboard_yaml" reg `shouldBe` True
-        Map.member "get_schema" reg `shouldBe` True
-        Map.member "whoami" reg `shouldBe` True
-        Map.member "list_incidents" reg `shouldBe` True
-        Map.member "list_metrics" reg `shouldBe` True
-        Map.member "get_incident" reg `shouldBe` True
+    it "toolsList_bodySchemaIncludesReferencedApiFields" $ \tr -> do
+      let req = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (1 :: Int), "method" AE..= ("tools/list" :: Text)]
+      resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
+      let tools = resp ^.. key "result" . key "tools" . _Array . traverse
+          body name = do
+            input <- find (\tool -> (tool ^? key "name" . _String) == Just name) tools >>= (^? key "inputSchema")
+            schema <- input ^? key "properties" . key "body"
+            pure $ fromMaybe schema do
+              reference <- schema ^? key "$ref" . _String
+              definition <- T.stripPrefix "#/$defs/" reference
+              input ^? key "$defs" . key (AEK.fromText definition)
+      for_ ([("create_monitor", ["title", "query", "alert_threshold"]), ("search_events", ["query", "since"])] :: [(Text, [Text])]) $ \(name, fields) -> do
+        schema <- maybe (fail $ "Missing body schema: " <> toString name) pure $ body name
+        for_ fields $ \field -> schema ^? key "properties" . key (AEK.fromText field) `shouldSatisfy` isJust
+      for_ (tools ^.. traverse . key "inputSchema") $ \schema ->
+        for_ (schema ^.. cosmos . key "$ref" . _String) $ \reference -> do
+          definition <- maybe (fail $ "Unbound schema reference: " <> toString reference) pure $ T.stripPrefix "#/$defs/" reference
+          schema ^? key "$defs" . key (AEK.fromText definition) `shouldSatisfy` isJust
 
-      it "catalog covers every published operation once and shares the CLI resource routes" $ \_tr -> do
-        let documented =
-              S.fromList
-                [ (H.renderStdMethod method, AEK.toText path)
-                | Just (AE.Object paths) <- [specJson ^? key "paths"]
-                , (path, AE.Object methods) <- AEKM.toList paths
-                , (verb, _) <- AEKM.toList methods
-                , Right method <- [H.parseMethod $ encodeUtf8 $ T.toUpper $ AEK.toText verb]
-                , (H.renderStdMethod method, AEK.toText path) /= (H.methodPost, "/mcp")
-                ]
-            exposed = S.fromList [(binding.method, binding.path) | tool <- Map.elems reg, MCP.ViaOpenApi binding <- [tool.dispatch]]
-            names = map (fst . snd) (Map.toList Catalog.apiOperations) <> map (.name) Catalog.compositeTools <> map (.name) (Map.elems Catalog.localTools)
-        exposed `shouldBe` documented
-        Map.keysSet Catalog.apiOperations `shouldBe` documented
-        length names `shouldBe` S.size (S.fromList names)
-        Map.size Catalog.localTools `shouldBe` length [minBound .. maxBound :: Catalog.LocalOperation]
-        for_ [Resource.Monitors, Resource.Dashboards, Resource.ApiKeys, Resource.Teams, Resource.Members, Resource.Issues, Resource.Incidents, Resource.Endpoints, Resource.LogPatterns] \kind ->
-          ((H.methodGet,) <$> T.stripPrefix "/api/v1" (Resource.resourcePath kind)) `shouldSatisfy` maybe False (`S.member` documented)
+    it "tools/list derives read hints from operation policy, including POST queries and privileged reads" $ \tr -> do
+      let req = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (1 :: Int), "method" AE..= ("tools/list" :: Text)]
+      resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
+      let tools = resp ^.. key "result" . key "tools" . _Array . traverse
+          hint name = find (\tool -> (tool ^? key "name" . _String) == Just name) tools >>= (^? key "annotations" . key "readOnlyHint")
+      for_ ([("search_events", True), ("get_api_key", True), ("analyze_issue", True), ("create_monitor", False), ("delete_dashboard", False)] :: [(Text, Bool)]) $ \(name, readOnly) ->
+        hint name `shouldBe` Just (AE.Bool readOnly)
+      hint "submit_rrweb_event" `shouldBe` Nothing
 
-      it "requires an explicit Agent policy or exclusion for every MCP operation" $ \_tr -> do
-        let policies = Map.mapMaybe (.agentPolicy) reg
-            covered = Map.keysSet policies `S.union` Map.keysSet MCP.agentExclusions
-        Map.keysSet reg `shouldBe` covered
-        Map.keysSet policies `S.intersection` Map.keysSet MCP.agentExclusions `shouldBe` S.empty
-        Map.lookup "list_metrics" policies `shouldBe` Just (MCP.ReadOnly PM.PView)
-        Map.lookup "search_events" policies `shouldBe` Just (MCP.ReadOnly PM.PView)
-        Map.lookup "create_monitor" policies `shouldBe` Just (MCP.ProjectWrite)
-        for_ (["bulk_monitors", "remove_member", "delete_dashboard"] :: [Text]) \name -> Map.lookup name policies `shouldBe` Just (MCP.Administration PM.PView)
-        for_ (["create_api_key", "activate_api_key", "deactivate_api_key", "delete_api_key"] :: [Text]) \name -> Map.lookup name policies `shouldBe` Just (MCP.Administration PM.PAdmin)
+    it "tools/call list_metrics returns a project-scoped catalog page" $ \tr -> do
+      runQueryEffect tr
+        $ Hasql.interpExecute_
+          [HI.sql|INSERT INTO otel_metrics_meta
+          (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
+          VALUES (#{testPid}, 'checkout.duration', 'GAUGE', 'ms', 'request metric', 'checkout', 'test', '{}', #{frozenTime}, #{frozenTime}, #{frozenTime}, #{frozenTime})|]
+      let oldTime = addUTCTime (-(8 * 24 * 3600)) frozenTime
+      runQueryEffect tr
+        $ Hasql.interpExecute_
+          [HI.sql|INSERT INTO otel_metrics_meta
+          (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
+          VALUES (#{testPid}, 'checkout.old', 'GAUGE', 'ms', 'old metric', 'checkout', 'test', '{}', #{oldTime}, #{oldTime}, #{oldTime}, #{oldTime})|]
+      resp <-
+        toBaseServantResponse tr
+          $ MCP.handleJsonRpc
+            reg
+            (buildTestApp tr testPid)
+            testPid
+            (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "limit" AE..= (1 :: Int)])
+      (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
+      (resp ^? key "result" . key "structuredContent" . key "metrics" . _Array . ix 0 . key "metricName" . _String) `shouldBe` Just "checkout.duration"
+      inactive <-
+        toBaseServantResponse tr
+          $ MCP.handleJsonRpc
+            reg
+            (buildTestApp tr testPid)
+            testPid
+            (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "active" AE..= False])
+      (inactive ^? key "result" . key "structuredContent" . key "active") `shouldBe` Just (AE.Bool False)
+      (inactive ^? key "result" . key "structuredContent" . key "metrics" . _Array . ix 0 . key "metricName" . _String) `shouldBe` Just "checkout.old"
 
-      it "does not expose the MCP endpoint as its own tool" $ \_tr -> do
-        Map.member "post_mcp" reg `shouldBe` False
-        Map.member "mcp_post" reg `shouldBe` False
-
-      it "tools/list returns named tools with name/description/inputSchema" $ \tr -> do
-        let req =
-              AE.object
-                [ "jsonrpc" AE..= ("2.0" :: Text)
-                , "id" AE..= (1 :: Int)
-                , "method" AE..= ("tools/list" :: Text)
-                ]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        let tools = resp ^.. key "result" . key "tools" . _Array . traverse
-        tools `shouldSatisfy` (not . null)
-        case tools of
-          (t : _) -> for_ ["name", "description", "inputSchema"] $ \k ->
-            (t ^? key (AEK.fromText k)) `shouldSatisfy` isJust
-          [] -> expectationFailure "expected at least one tool"
-
-      it "toolsList_bodySchemaIncludesReferencedApiFields" $ \tr -> do
-        let req = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (1 :: Int), "method" AE..= ("tools/list" :: Text)]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        let tools = resp ^.. key "result" . key "tools" . _Array . traverse
-            body name = do
-              input <- find (\tool -> (tool ^? key "name" . _String) == Just name) tools >>= (^? key "inputSchema")
-              schema <- input ^? key "properties" . key "body"
-              pure $ fromMaybe schema do
-                reference <- schema ^? key "$ref" . _String
-                definition <- T.stripPrefix "#/$defs/" reference
-                input ^? key "$defs" . key (AEK.fromText definition)
-        for_ ([("create_monitor", ["title", "query", "alert_threshold"]), ("search_events", ["query", "since"])] :: [(Text, [Text])]) $ \(name, fields) -> do
-          schema <- maybe (fail $ "Missing body schema: " <> toString name) pure $ body name
-          for_ fields $ \field -> schema ^? key "properties" . key (AEK.fromText field) `shouldSatisfy` isJust
-        for_ (tools ^.. traverse . key "inputSchema") $ \schema ->
-          for_ (schema ^.. cosmos . key "$ref" . _String) $ \reference -> do
-            definition <- maybe (fail $ "Unbound schema reference: " <> toString reference) pure $ T.stripPrefix "#/$defs/" reference
-            schema ^? key "$defs" . key (AEK.fromText definition) `shouldSatisfy` isJust
-
-      it "tools/list derives read hints from operation policy, including POST queries and privileged reads" $ \tr -> do
-        let req = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (1 :: Int), "method" AE..= ("tools/list" :: Text)]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        let tools = resp ^.. key "result" . key "tools" . _Array . traverse
-            hint name = find (\tool -> (tool ^? key "name" . _String) == Just name) tools >>= (^? key "annotations" . key "readOnlyHint")
-        for_ ([("search_events", True), ("get_api_key", True), ("analyze_issue", True), ("create_monitor", False), ("delete_dashboard", False)] :: [(Text, Bool)]) $ \(name, readOnly) ->
-          hint name `shouldBe` Just (AE.Bool readOnly)
-        hint "submit_rrweb_event" `shouldBe` Nothing
-
-      it "initialize returns protocolVersion + serverInfo" $ \tr -> do
-        let req =
-              AE.object
-                [ "jsonrpc" AE..= ("2.0" :: Text)
-                , "id" AE..= (1 :: Int)
-                , "method" AE..= ("initialize" :: Text)
-                ]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        (resp ^? key "result" . key "protocolVersion") `shouldSatisfy` isJust
-        (resp ^? key "result" . key "serverInfo" . key "name") `shouldSatisfy` isJust
-
-      it "tools/call get_schema round-trips through to the derived live schema" $ \tr -> do
-        let req =
-              rpcCall
-                $ AE.object
-                  [ "name" AE..= ("get_schema" :: Text)
-                  , "arguments" AE..= AE.object []
-                  ]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid req)
-        let isErr = resp ^? key "result" . key "isError"
-            content = resp ^? key "result" . key "content" . _Array . traverse . key "text"
-        when (isErr /= Just (AE.Bool False))
-          $ expectationFailure ("schema_get returned isError; body: " <> show content)
-        let structured = resp ^? key "result" . key "structuredContent"
-        case structured of
-          Just v -> case AE.fromJSON @Schema.Schema v of
-            AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys (Schema.deriveSchema ParserExpr.flattenedOtelAttributes).fields
-            AE.Error e -> expectationFailure ("structuredContent did not decode as Schema: " <> e)
-          Nothing -> expectationFailure ("structuredContent missing; body: " <> show content)
-
-      it "tools/call list_metrics returns a project-scoped catalog page" $ \tr -> do
-        runQueryEffect tr
-          $ Hasql.interpExecute_
-            [HI.sql|INSERT INTO otel_metrics_meta
-            (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
-            VALUES (#{testPid}, 'checkout.duration', 'GAUGE', 'ms', 'request metric', 'checkout', 'test', '{}', #{frozenTime}, #{frozenTime}, #{frozenTime}, #{frozenTime})|]
-        let oldTime = addUTCTime (-(8 * 24 * 3600)) frozenTime
-        runQueryEffect tr
-          $ Hasql.interpExecute_
-            [HI.sql|INSERT INTO otel_metrics_meta
-            (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
-            VALUES (#{testPid}, 'checkout.old', 'GAUGE', 'ms', 'old metric', 'checkout', 'test', '{}', #{oldTime}, #{oldTime}, #{oldTime}, #{oldTime})|]
-        resp <-
-          toBaseServantResponse tr
-            $ MCP.handleJsonRpc
-              reg
-              (buildTestApp tr testPid)
-              testPid
-              (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "limit" AE..= (1 :: Int)])
-        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
-        (resp ^? key "result" . key "structuredContent" . key "metrics" . _Array . ix 0 . key "metricName" . _String) `shouldBe` Just "checkout.duration"
-        inactive <-
-          toBaseServantResponse tr
-            $ MCP.handleJsonRpc
-              reg
-              (buildTestApp tr testPid)
-              testPid
-              (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "active" AE..= False])
-        (inactive ^? key "result" . key "structuredContent" . key "active") `shouldBe` Just (AE.Bool False)
-        (inactive ^? key "result" . key "structuredContent" . key "metrics" . _Array . ix 0 . key "metricName" . _String) `shouldBe` Just "checkout.old"
-
-      it "tools/call with unknown tool name returns isError result, not JSON-RPC error" $ \tr -> do
-        let req =
-              rpcCall
-                $ AE.object
-                  [ "name" AE..= ("does_not_exist" :: Text)
-                  , "arguments" AE..= AE.object []
-                  ]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
-        (resp ^? key "error") `shouldBe` Nothing
-
-      it "tools/list includes composite workflow tools alongside REST tools" $ \tr -> do
-        let req =
-              AE.object
-                [ "jsonrpc" AE..= ("2.0" :: Text)
-                , "id" AE..= (1 :: Int)
-                , "method" AE..= ("tools/list" :: Text)
-                ]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        let names :: [Text]
-            names =
-              resp
-                ^.. key "result"
-                  . key "tools"
-                  . _Array
-                  . traverse
-                  . key "name"
-                  . _String
-        ("find_error_patterns" `elem` names) `shouldBe` True
-        ("search_events_nl" `elem` names) `shouldBe` True
-        ("analyze_issue" `elem` names) `shouldBe` True
-        -- And REST tools still present
-        ("get_schema" `elem` names) `shouldBe` True
-
-      it "tools/call find_error_patterns returns OK with patterns array" $ \tr -> do
-        let req =
-              rpcCall
-                $ AE.object
-                  [ "name" AE..= ("find_error_patterns" :: Text)
-                  , "arguments" AE..= AE.object ["limit" AE..= (5 :: Int)]
-                  ]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
-        (resp ^? key "result" . key "structuredContent" . key "patterns" . _Array) `shouldSatisfy` isJust
-        (resp ^? key "result" . key "structuredContent" . key "as_of") `shouldSatisfy` isJust
-
-      it "tools/call search_events_nl with empty input returns isError" $ \tr -> do
-        let req =
-              rpcCall
-                $ AE.object
-                  [ "name" AE..= ("search_events_nl" :: Text)
-                  , "arguments" AE..= AE.object ["input" AE..= ("" :: Text)]
-                  ]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
-
-      it "tools/call search_events_nl passes project and timezone to the registered translator" $ \tr -> do
-        let req = rpcCallNamed "search_events_nl" $ AE.object ["input" AE..= ("checkout errors" :: Text), "timezone" AE..= ("Europe/Berlin" :: Text)]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        (resp ^? key "result" . key "structuredContent" . key "project_id") `shouldBe` Just (AE.toJSON testPid)
-        (resp ^? key "result" . key "structuredContent" . key "query") `shouldBe` Just (AE.String "checkout errors")
-        (resp ^? key "result" . key "structuredContent" . key "timezone") `shouldBe` Just (AE.String "Europe/Berlin")
-
-      it "tools/call analyze_issue with bad UUID returns isError, not JSON-RPC error" $ \tr -> do
-        let req =
-              rpcCall
-                $ AE.object
-                  [ "name" AE..= ("analyze_issue" :: Text)
-                  , "arguments" AE..= AE.object ["issue_id" AE..= ("not-a-uuid" :: Text)]
-                  ]
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
-        (resp ^? key "error") `shouldBe` Nothing
-
-      it "e2e: rejects /api/v1/mcp without a valid API key" $ \tr -> do
-        resp <- mcpHttp tr [] (rpcSimple "tools/list")
-        H.statusCode (WT.simpleStatus resp) `shouldBe` 401
-
-      it "e2e: tools/list through real HTTP route returns the registry" $ \tr -> do
-        apiKey <- createTestAPIKey tr testPid "mcp-e2e-list"
-        resp <- mcpHttp tr [("Authorization", "Bearer " <> encodeUtf8 apiKey)] (rpcSimple "tools/list")
-        H.statusCode (WT.simpleStatus resp) `shouldBe` 200
-        let body = AE.decode (WT.simpleBody resp) :: Maybe AE.Value
-            names = body ^.. _Just . key "result" . key "tools" . _Array . traverse . key "name" . _String
-        for_ ["get_schema", "list_monitors", "find_error_patterns"] $ \n ->
-          (n `elem` (names :: [Text])) `shouldBe` True
-
-      it "e2e: tools/call get_schema through real HTTP route returns the schema" $ \tr -> do
-        apiKey <- createTestAPIKey tr testPid "mcp-e2e-call"
-        resp <-
-          mcpHttp
-            tr
-            [("Authorization", "Bearer " <> encodeUtf8 apiKey)]
-            (rpcCallNamed "get_schema" (AE.object []))
-        H.statusCode (WT.simpleStatus resp) `shouldBe` 200
-        let body = AE.decode (WT.simpleBody resp) :: Maybe AE.Value
-        (body ^? _Just . key "result" . key "isError") `shouldBe` Just (AE.Bool False)
-        case body ^? _Just . key "result" . key "structuredContent" of
-          Just v -> case AE.fromJSON @Schema.Schema v of
-            AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys (Schema.deriveSchema ParserExpr.flattenedOtelAttributes).fields
-            AE.Error e -> expectationFailure ("structuredContent did not decode as Schema: " <> e)
-          Nothing -> expectationFailure ("structuredContent missing in body: " <> show body)
-
-      it "notifications/* return JSON null with no envelope" $ \tr -> do
-        let req = rpcSimple "notifications/initialized"
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        resp `shouldBe` AE.Null
-
-      it "tools/call create_team forwards POST body and round-trips" $ \tr -> do
-        teamHandle <- ("body-test-" <>) . UUID.toText <$> UUIDV4.nextRandom
-        let body = AE.object ["name" AE..= teamHandle, "handle" AE..= teamHandle]
-            req = rpcCallNamed "create_team" (AE.object ["body" AE..= body])
-        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid req)
-        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
-        (resp ^? key "result" . key "structuredContent" . key "summary" . key "handle" . _String) `shouldBe` Just teamHandle
+    it "tools/call search_events_nl passes project and timezone to the registered translator" $ \tr -> do
+      let req = rpcCallNamed "search_events_nl" $ AE.object ["input" AE..= ("checkout errors" :: Text), "timezone" AE..= ("Europe/Berlin" :: Text)]
+      resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
+      (resp ^? key "result" . key "structuredContent" . key "project_id") `shouldBe` Just (AE.toJSON testPid)
+      (resp ^? key "result" . key "structuredContent" . key "query") `shouldBe` Just (AE.String "checkout errors")
+      (resp ^? key "result" . key "structuredContent" . key "timezone") `shouldBe` Just (AE.String "Europe/Berlin")

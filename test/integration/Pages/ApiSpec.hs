@@ -11,6 +11,7 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
 import Pkg.TestUtils
 import Servant (ServerError (..), getResponse)
+import Test.Hspec
 import UnliftIO.Exception (bracket_)
 
 import Pages.Settings qualified as Api

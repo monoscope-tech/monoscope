@@ -1,0 +1,112 @@
+<table class="dashboard-table table table-zebra table-sm w-full relative" id>
+<thead class="sticky top-0 z-10 before:content-[&#39;&#39;] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak">
+<tr>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none">
+<button type="button" class="w-full text-left cursor-pointer hover:bg-fillWeak group" data-sort-field="q" data-sort-direction="none" _="on click
+                  set fetcher to the closest &lt;[data-table-fetch]/&gt;
+                  if not fetcher halt end
+                  set sort to &#39;+&#39; + my @data-sort-field
+                  if my @data-sort-direction is &#39;asc&#39; set sort to &#39;-&#39; + my @data-sort-field end
+                  set fetcher.dataset.tableSort to sort
+                  trigger &#39;table-sort&#39; on fetcher">
+<div class=" flex items-center justify-between ">
+<span>Query</span>
+<span class="sort-arrow ml-1 text-iconNeutral">↕</span>
+</div>
+</button>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr class="hover">
+<td class>
+<div class="group flex items-center gap-1 min-w-0">select 1<button type="button" class="btn btn-xs btn-ghost shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100" _="on click call navigator.clipboard.writeText(my @data-copy) then put &#39;Copied!&#39; into the first &lt;span/&gt; in me then wait 2s then put &#39;Copy&#39; into the first &lt;span/&gt; in me" data-copy="select 1">
+<svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
+<g fill="currentColor">
+<path d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16l140.1 0L400 115.9V320c0 8.8-7.2 16-16 16zM192 384H384c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64V320c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64V448c0 35.3 28.7 64 64 64H256c35.3 0 64-28.7 64-64V416H272v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16H96V128H64z" />
+</g>
+</svg>
+<span>Copy</span>
+</button>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+<table class="dashboard-table table table-zebra table-sm w-full relative" id>
+<thead class="sticky top-0 z-10 before:content-[&#39;&#39;] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak">
+<tr>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none">
+<button type="button" class="w-full text-left cursor-pointer hover:bg-fillWeak group" data-sort-field="session_id" data-sort-direction="none" _="on click
+                  set fetcher to the closest &lt;[data-table-fetch]/&gt;
+                  if not fetcher halt end
+                  set sort to &#39;+&#39; + my @data-sort-field
+                  if my @data-sort-direction is &#39;asc&#39; set sort to &#39;-&#39; + my @data-sort-field end
+                  set fetcher.dataset.tableSort to sort
+                  trigger &#39;table-sort&#39; on fetcher">
+<div class=" flex items-center justify-between ">
+<span>Session</span>
+<span class="sort-arrow ml-1 text-iconNeutral">↕</span>
+</div>
+</button>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr class="hover">
+<td class>
+<a href="/p/<uuid>/log_explorer?viz_type=sessions&amp;query=session%20%2F%20id" class="text-textBrand hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong rounded-sm">session / id</a>
+</td>
+</tr>
+</tbody>
+</table>
+<table class="dashboard-table table table-zebra table-sm w-full relative" id>
+<thead class="sticky top-0 z-10 before:content-[&#39;&#39;] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak">
+<tr>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none">
+<button type="button" class="w-full text-left cursor-pointer hover:bg-fillWeak group" data-sort-field="service" data-sort-direction="none" _="on click
+                  set fetcher to the closest &lt;[data-table-fetch]/&gt;
+                  if not fetcher halt end
+                  set sort to &#39;+&#39; + my @data-sort-field
+                  if my @data-sort-direction is &#39;asc&#39; set sort to &#39;-&#39; + my @data-sort-field end
+                  set fetcher.dataset.tableSort to sort
+                  trigger &#39;table-sort&#39; on fetcher">
+<div class=" flex items-center justify-between ">
+<span>Service</span>
+<span class="sort-arrow ml-1 text-iconNeutral">↕</span>
+</div>
+</button>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr class="hover cursor-pointer" data-hx-get="/p/<uuid>/dashboards/d1?var-env=prod&amp;var-service=api" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _=" on keydown[key==&#39;Enter&#39; or key==&#39; &#39;] halt the event then call me.click() end on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" hx-preload="mousedown" name="dashboard-variable-option" data-variable-key="service" data-variable-value="api" data-variable-label="api" hx-on:htmx:before:request="syncDashboardVariable(this, true)" hx-on:htmx:finally:request="syncDashboardVariable(this, false)" tabindex="0" aria-label="Filter by api">
+<td class>api</td>
+</tr>
+</tbody>
+</table>
+<table class="dashboard-table table table-zebra table-sm w-full relative" id>
+<thead class="sticky top-0 z-10 before:content-[&#39;&#39;] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak">
+<tr>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none">
+<button type="button" class="w-full text-left cursor-pointer hover:bg-fillWeak group" data-sort-field="service" data-sort-direction="none" _="on click
+                  set fetcher to the closest &lt;[data-table-fetch]/&gt;
+                  if not fetcher halt end
+                  set sort to &#39;+&#39; + my @data-sort-field
+                  if my @data-sort-direction is &#39;asc&#39; set sort to &#39;-&#39; + my @data-sort-field end
+                  set fetcher.dataset.tableSort to sort
+                  trigger &#39;table-sort&#39; on fetcher">
+<div class=" flex items-center justify-between ">
+<span>Service</span>
+<span class="sort-arrow ml-1 text-iconNeutral">↕</span>
+</div>
+</button>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr class="hover cursor-pointer" data-hx-get="/p/<uuid>/dashboards/d1/tab/overview?var-env=prod&amp;var-service=api" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _=" on keydown[key==&#39;Enter&#39; or key==&#39; &#39;] halt the event then call me.click() end on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content" hx-preload="mousedown" name="dashboard-variable-option" data-variable-key="service" data-variable-value="api" data-variable-label="api" hx-on:htmx:before:request="syncDashboardVariable(this, true)" hx-on:htmx:finally:request="syncDashboardVariable(this, false)" tabindex="0" aria-label="Filter by api">
+<td class>api</td>
+</tr>
+</tbody>
+</table>

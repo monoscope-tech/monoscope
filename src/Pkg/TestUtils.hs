@@ -12,11 +12,14 @@ module Pkg.TestUtils (
   streamFrames,
   completeFrame,
   linkParams,
+  elementsWith,
+  tagsWith,
   renderedWidget,
   eventually,
   withSetup,
   withTestResources,
   withTfChartResources,
+  withTfChartPool,
   fromRightShow,
   TestResources (..),
   testSessionHeader,
@@ -67,12 +70,22 @@ module Pkg.TestUtils (
   dbQuery,
   dbOne,
   seedSlackChannel,
+  setupSlackData,
+  setupDiscordData,
+  withHTTPResponses,
+  signSlackBody,
+  signDiscordPayload,
+  testDiscordPublicKeyHex,
+  receiveSlackEvent,
+  slackCallbackEnvelope,
+  slackRootEvent,
   IssueSeed (..),
   issueSeed,
   seedIssue,
   countIssues,
   resetSchemaLearning,
   goldenHtml,
+  goldenParts,
   goldenText,
   processMessagesAndBackgroundJobs,
   createTestSpans,
@@ -111,6 +124,7 @@ module Pkg.TestUtils (
   mergeSpanRequests,
   mkResource,
   mkAttr,
+  toNanos,
   -- MinIO test helpers
   requireMinio,
   slackPayloadViolations,
@@ -128,8 +142,11 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue (..))
+import Data.ByteArray qualified as BA
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
+import Data.Char (isAlphaNum)
 import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace
@@ -176,8 +193,11 @@ import Log qualified
 import Log.Data (showLogMessage)
 import Log.Logger (mkBulkLogger)
 import Lucid qualified
+import Models.Apis.Incidents qualified as Incidents
+import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -197,6 +217,7 @@ import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Bots.Slack qualified as SlackBot
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log
@@ -256,6 +277,10 @@ import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.I18n qualified as I18n
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
+import "cryptonite" Crypto.Error (throwCryptoError)
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
+import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 
 
 migrationsDirr :: FilePath
@@ -276,10 +301,27 @@ migrationsFingerprint :: IO Text
 migrationsFingerprint = T.take 12 . toXXHash <$> migrationsChecksum
 
 
--- | Test Discord public key (hex-encoded Ed25519 public key derived from deterministic seed)
--- Matches the public key generated from 32 bytes of 0x42 in BotTestHelpers
+-- | Fixed-seed Ed25519 key: 'signDiscordPayload' signs with it and test configs trust its public half.
+testDiscordKey :: Ed25519.SecretKey
+testDiscordKey = throwCryptoError $ Ed25519.secretKey $ BS.replicate 32 0x42
+
+
 testDiscordPublicKeyHex :: Text
-testDiscordPublicKeyHex = "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
+testDiscordPublicKeyHex = decodeUtf8 $ B16.encode (BA.convert (Ed25519.toPublic testDiscordKey) :: ByteString)
+
+
+-- | A Discord interaction body with its signature and timestamp headers.
+signDiscordPayload :: ByteString -> Text -> (ByteString, ByteString, ByteString)
+signDiscordPayload payload timestamp = (payload, B16.encode $ BA.convert $ Ed25519.sign testDiscordKey (Ed25519.toPublic testDiscordKey) (encodeUtf8 timestamp <> payload), encodeUtf8 timestamp)
+
+
+testSlackSigningSecret :: Text
+testSlackSigningSecret = "test-slack-signing-secret"
+
+
+-- | Slack's @v0@ request signature under the test signing secret.
+signSlackBody :: Text -> ByteString -> Text
+signSlackBody timestamp body = "v0=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 testSlackSigningSecret :: ByteString) ("v0:" <> encodeUtf8 timestamp <> ":" <> body) :: HMAC.HMAC SHA256))
 
 
 migrate :: TmpPostgres.DB -> IO ()
@@ -846,7 +888,12 @@ withSharedLogger act = act sharedTestLogger
 -- the real TimeFusion when TIMEFUSION_PG_TEST_URL is set; 'withTestResources' wires TF
 -- only through Hasql.
 withTfChartResources :: (TestResources -> IO ()) -> IO ()
-withTfChartResources k = withTestResources \tr ->
+withTfChartResources k = withTestResources (`withTfChartPool` k)
+
+
+-- | The chart TimeFusion pool of 'withTfChartResources', for an example that already holds resources.
+withTfChartPool :: TestResources -> (TestResources -> IO a) -> IO a
+withTfChartPool tr k =
   lookupEnv "TIMEFUSION_PG_TEST_URL" >>= \case
     Nothing -> k tr
     Just url -> bracket (newPool $ setNumStripes (Just 1) $ defaultPoolConfig (connectPostgreSQL $ encodeUtf8 $ toText url) close 60 2) destroyAllResources \pool -> k tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}
@@ -906,7 +953,8 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
       -- real TimeFusion the labeled pool IS Postgres, so a developer .env with
       -- ENABLE_TIMEFUSION_READS=True would have queries emit TimeFusion-only SQL (the
       -- `variant_get` resource accessor) against Postgres, which errors outright.
-      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = True}
+      -- Bot ingress verifies signatures made with the test keys (signSlackBody, signDiscordPayload).
+      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = True, slackSigningSecret = testSlackSigningSecret, discordPublicKey = testDiscordPublicKeyHex}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- TSC.newTraceSessionCache
@@ -961,7 +1009,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
                 -- base64→JSON decode of the pusher service account fails and 500s. "e30=" is base64 of "{}".
                 monoscopePusherServiceAccountB64 = bool envConfig.monoscopePusherServiceAccountB64 "e30=" (T.null envConfig.monoscopePusherServiceAccountB64)
               , -- Without this the field defaults to "" (no .env in CI), so DLQ poison
-                -- routes to topic "" and KafkaConsumerSpec's "otlp_deadletter" lookup finds nothing.
+                -- routes to topic "" and the Kafka specs' "otlp_deadletter" lookup finds nothing.
                 kafkaDeadLetterTopic = bool envConfig.kafkaDeadLetterTopic "otlp_deadletter" (T.null envConfig.kafkaDeadLetterTopic)
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
@@ -972,8 +1020,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , enablePostgresTelemetryWrites = True
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
-                discordPublicKey = bool envConfig.discordPublicKey testDiscordPublicKeyHex (T.null envConfig.discordPublicKey)
-              , -- Must stay the SID in the committed golden file's name: the golden key is
+                -- Must stay the SID in the committed golden file's name: the golden key is
                 -- derived from the request path, so a different fallback asks for a file that
                 -- does not exist and the WhatsApp examples die in setup (39de508e2 redacted the
                 -- names and contents without moving this default with them).
@@ -1303,6 +1350,64 @@ tablePage = \case
   Table.TableRowsOnly _ -> fail "expected a full table page"
 
 
+-- | A Slack install for @pid@ in workspace @teamId@, alerting to @C_NOTIF_CHANNEL@ through the everyone team.
+setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
+setupSlackData tr pid teamId = runTestBg frozenTime tr do
+  void $ Integrations.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel" "https://hooks.slack.com/services/test" Nothing
+  void $ ProjectMembers.addSlackChannelToEveryoneTeam pid "C_NOTIF_CHANNEL"
+
+
+setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()
+setupDiscordData tr pid guildId = dbExec tr [sql|INSERT INTO apis.discord (project_id, guild_id) VALUES (?,?) ON CONFLICT (project_id) DO UPDATE SET guild_id = EXCLUDED.guild_id|] (pid, guildId)
+
+
+-- | Override the bodies of the responses @fixture@ answers; every request is still recorded.
+withHTTPResponses :: (HTTP :> es, IOE :> es) => (W.Options -> String -> IO (Maybe LByteString)) -> Eff es a -> Eff es a
+withHTTPResponses fixture = interpose @HTTP \_ -> \case
+  GetWith opts url -> send (GetWith opts url) >>= respond opts url
+  Get url -> send (Get url) >>= respond W.defaults url
+  Post url value -> send (Post url value) >>= respond W.defaults url
+  Put url value -> send (Put url value) >>= respond W.defaults url
+  Patch url value -> send (Patch url value) >>= respond W.defaults url
+  Delete url -> send (Delete url) >>= respond W.defaults url
+  PostWith opts url value -> send (PostWith opts url value) >>= respond opts url
+  PutWith opts url value -> send (PutWith opts url value) >>= respond opts url
+  PatchWith opts url value -> send (PatchWith opts url value) >>= respond opts url
+  DeleteWith opts url -> send (DeleteWith opts url) >>= respond W.defaults url
+  where
+    respond opts url response = maybe response (\value -> response & W.responseBody .~ value) <$> liftIO (fixture opts url)
+
+
+-- | Accept a signed Slack event through the real endpoint and return its receipt.
+receiveSlackEvent :: TestResources -> AE.Value -> IO (UUIDId "slack_event")
+receiveSlackEvent tr payload = do
+  ts <- show @Text . floor @_ @Integer . utcTimeToPOSIXSeconds <$> getTestTime tr.trTestClock
+  let body = toStrict $ AE.encode payload
+  void $ toBaseServantResponse tr $ SlackBot.slackEventsPostH body (Just ts) (Just $ signSlackBody ts body)
+  dbOne tr [sql|SELECT id FROM apis.slack_events WHERE team_id = (?::jsonb)->>'team_id' AND event_id = (?::jsonb)->>'event_id'|] (payload, payload)
+
+
+-- | The signed callback envelope every Slack event arrives in.
+slackCallbackEnvelope :: Text -> Text -> AE.Value -> AE.Value
+slackCallbackEnvelope teamId eventId event = AE.object ["type" .= ("event_callback" :: Text), "team_id" .= teamId, "api_app_id" .= ("A_TEST" :: Text), "event_id" .= eventId, "event" .= event]
+
+
+-- | Slack's echo of an incident root message we posted, carrying its root id in metadata.
+slackRootEvent :: Text -> Text -> Text -> Incidents.SlackRootId -> Text -> Text -> AE.Value
+slackRootEvent eventId workspace channel rootId timestamp authorApp =
+  slackCallbackEnvelope workspace eventId
+    $ AE.object
+      [ "type" .= ("message" :: Text)
+      , "subtype" .= ("bot_message" :: Text)
+      , "bot_id" .= ("B_TEST" :: Text)
+      , "app_id" .= authorApp
+      , "text" .= ("Monitor alert" :: Text)
+      , "channel" .= channel
+      , "ts" .= timestamp
+      , "metadata" .= AE.object ["event_type" .= ("monoscope_incident_root" :: Text), "event_payload" .= AE.object ["root_id" .= rootId]]
+      ]
+
+
 -- | Raw SQL for fixtures and for state no handler exposes, on the test clock so
 -- @app_now()@ triggers stamp test time rather than wall time.
 dbExec :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO ()
@@ -1386,28 +1491,36 @@ resetSchemaLearning tr pids = do
 
 
 -- | Snapshot @tests/golden/html/<name>.html@, one tag per line, so the diff is reviewable.
--- UUIDs, trace ids and issue numbers are scrubbed to keep it stable. Issue numbers gap
+-- UUIDs, trace ids, issue numbers and gzipped widget blobs (their bytes follow the platform's
+-- zlib) are scrubbed to keep it stable. Issue numbers gap
 -- because the seq-num trigger (migration 0051) consumes one per upsert attempt, a known
 -- product bug this scrub does not fix.
 goldenHtml :: Lucid.ToHtml a => FilePath -> a -> Expectation
 goldenHtml name html =
   goldenText ("html/" <> name <> ".html")
     $ T.replace "><" ">\n<" (renderT html)
+    *=~/ [ed|widgetZ=[A-Za-z0-9_=-]+///widgetZ=<gz>|]
     *=~/ [ed|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}///<uuid>|]
     *=~/ [ed|[0-9a-f]{32,}///<hex>|]
     *=~/ [ed|>#[0-9]+///>#<n>|]
 
 
--- | Compare against @tests/golden/<path>@; @UPDATE_GOLDEN=true@ (re)writes it, a missing file fails.
+-- | A golden of raw HTML fragments, e.g. from 'elementsWith', one per line.
+goldenParts :: FilePath -> [Text] -> Expectation
+goldenParts name = goldenHtml name . Lucid.toHtmlRaw @Text . unlines
+
+
+-- | Compare against @tests/golden/<path>@; @UPDATE_SNAPSHOTS=true@ (re)writes it, a missing file fails.
+-- Deliberately not @UPDATE_GOLDEN@, which also switches HTTP/LLM goldens to live recording.
 goldenText :: FilePath -> Text -> Expectation
 goldenText name actual = do
   let path = "./tests/golden/" <> name
-  update <- (== Just "true") <$> lookupEnv "UPDATE_GOLDEN"
+  update <- (== Just "true") <$> lookupEnv "UPDATE_SNAPSHOTS"
   exists <- doesFileExist path
   if
     | update -> writeFileText path actual
     | exists -> readFileBS path >>= (actual `shouldBe`) . decodeUtf8
-    | otherwise -> expectationFailure $ "missing golden " <> path <> "; rerun with UPDATE_GOLDEN=true"
+    | otherwise -> expectationFailure $ "missing golden " <> path <> "; rerun with UPDATE_SNAPSHOTS=true"
 
 
 -- | Every frame a streaming handler emitted, or the stream's own error.
@@ -2078,6 +2191,62 @@ shouldContainAll haystack needles = case filter (not . (`T.isInfixOf` haystack))
 -- | Decoded query params of every rendered link to @path@, in document order.
 linkParams :: Text -> Text -> [[(Text, Text)]]
 linkParams path html = [mapMaybe sequence $ parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ T.takeWhile (/= '"') link | link <- drop 1 $ T.splitOn (path <> "?") html]
+
+
+-- | The elements enclosing each occurrence of a marker, whole and in document order: a
+-- marker inside a tag selects that tag's element, a text marker its innermost parent. For
+-- goldens of the fragment under test rather than the page around it.
+elementsWith :: [Text] -> Text -> [Text]
+elementsWith markers html = [T.take (e - s) (T.drop s html) | (s, e) <- sortNub [enclosing (T.length pre) | m <- markers, (pre, _) <- T.breakOnAll m html]]
+  where
+    tags = htmlTags html
+    enclosing p = case [t | t <- tags, t.kind == TagVoid, t.at < p, p < t.end] of
+      t : _ -> (t.at, t.end)
+      [] -> case foldl' push [] (takeWhile ((< p) . (.at)) tags) of
+        t : _ -> (t.at, closing (0 :: Int) (dropWhile ((/= t.at) . (.at)) tags))
+        [] -> (p, p)
+    push st t = case t.kind of
+      TagOpen -> t : st
+      TagClose -> drop 1 $ dropWhile ((/= t.name) . (.name)) st
+      TagVoid -> st
+    closing d = \case
+      t : ts -> case t.kind of
+        TagOpen -> closing (d + 1) ts
+        TagClose -> if d == 1 then t.end else closing (d - 1) ts
+        TagVoid -> closing d ts
+      [] -> T.length html
+
+
+-- | Just the opening tags of 'elementsWith': attributes without the subtree.
+tagsWith :: [Text] -> Text -> [Text]
+tagsWith markers = map (T.takeWhile (/= '>')) . elementsWith markers
+
+
+data TagKind = TagOpen | TagClose | TagVoid
+  deriving stock (Eq)
+
+
+data HtmlTag = HtmlTag {at :: Int, end :: Int, name :: Text, kind :: TagKind}
+
+
+-- Lucid escapes @<@ and @>@ everywhere except raw script and style bodies, which are skipped.
+htmlTags :: Text -> [HtmlTag]
+htmlTags = go 0
+  where
+    go off t = case T.breakOn "<" t of
+      (_, "") -> []
+      (a, b) ->
+        let raw = T.takeWhile (/= '>') b
+            at = off + T.length a
+            end = at + T.length raw + 1
+            name = T.toLower $ T.takeWhile (\c -> isAlphaNum c || c == '-') $ T.dropWhile (`elem` ['<', '/']) raw
+            kind
+              | "</" `T.isPrefixOf` raw = TagClose
+              | name `elem` ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"] || "/" `T.isSuffixOf` raw = TagVoid
+              | otherwise = TagOpen
+            rest = T.drop (T.length raw + 1) b
+            skipped = if kind == TagOpen && name `elem` ["script", "style"] then T.length (fst $ T.breakOn ("</" <> name) rest) else 0
+         in [HtmlTag{at, end, name, kind} | not (T.null name)] <> go (end + skipped) (T.drop skipped rest)
 
 
 -- | The first widget a rendered page embeds in a @data-widget@ attribute.

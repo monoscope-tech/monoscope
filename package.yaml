@@ -218,6 +218,7 @@ tests:
       - monoscope-shared
       # EmbeddingFairnessSpec inspects documents passed to the LLM effect.
       - langchain-hs
+      # BotsSpec stubs the LLM effect, whose requests are OpenAI chat completions.
       - openai
       # AuthSpec builds a Set-Cookie header the way a browser round-trips it.
       - cookie
@@ -235,7 +236,7 @@ tests:
       - aeson
       # EvalConformanceSpec renders an Expr to SQL via its Display instance.
       - text-display
-      # LiveTailSpec races registrations through a ki scope, and fakes a broker that throws.
+      # The log explorer spec races live-tail registrations through a ki scope, and fakes a broker that throws.
       - ki
       - safe-exceptions
       # DashboardWidgetsSpec slugifies widget titles the way the page does.
@@ -286,7 +287,6 @@ tests:
       - base16-bytestring
       - directory
       - filepath
-      - http-api-data
       - pg-transact
       - openapi3
       - monad-time-effectful

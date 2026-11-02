@@ -1,0 +1,18 @@
+<a href="/p/<uuid>/ai/routines" class="hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center justify-between rounded-md px-2 py-1.5 text-2xs font-medium text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-1 transition-colors">
+<span>Routines</span>
+<span class="text-2xs tabular-nums text-textDisabled">0</span>
+</a>
+<a href="/p/<uuid>/ai" class="hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center justify-between rounded-md px-2 py-1.5 text-2xs font-medium text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-1 transition-colors">
+<span>Conversations</span>
+<span class="text-2xs tabular-nums text-textDisabled">2</span>
+</a>
+<dialog id="ai-composer-modal" class="modal !items-start px-4 pt-[15vh] backdrop:backdrop-blur-sm" aria-labelledby="ai-composer-modal-title"
+<div class="flex items-center" data-header-actions
+<div class="flex items-center" data-header-actions
+<input type="radio" name="nav-view" id="nav-view-ai" class="sr-only" checked hx-live="if (!this.dataset.seeded) { this.dataset.seeded = &#39;1&#39;; this.checked = this.value === (sessionStorage.getItem(&#39;sidebar-view&#39;) || &#39;ai&#39;) }" _="on input call sessionStorage.setItem(&#39;sidebar-view&#39;, my.value)" value="ai"
+<div class="flex items-center" data-header-actions
+<a href="/p/<uuid>/ai/<uuid>?doc=checkout-review" class="flex max-w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-textWeak hover:bg-fillHover hover:text-textStrong" data-hx-get="/p/<uuid>/ai/<uuid>?doc=checkout-review" data-hx-target="#ai-inspector" data-hx-select="#ai-inspector" data-hx-swap="outerHTML" _="on htmx:response:error or htmx:error
+                  send errorToast(value: [&#39;Could not load the details. Try again.&#39;]) to &lt;body/&gt;"
+<a href="/p/<uuid>/issues/<uuid>" class="btn btn-sm btn-ghost gap-2 active:scale-[0.96] transition-transform" aria-label="View issue" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;"
+<a href="#ai-document-<uuid>-followup" class="block truncate text-textBrand hover:underline">Follow-up</a>
+<h2 id="ai-document-<uuid>-followup" tabindex="-1">Follow-up</h2>

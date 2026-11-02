@@ -12,6 +12,7 @@ import Models.Projects.Projects (pattern UserId)
 import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils
 import Relude.Unsafe qualified as Unsafe
+import Test.Hspec
 
 
 newUser :: Projects.UserId -> Text -> TestResources -> IO ()

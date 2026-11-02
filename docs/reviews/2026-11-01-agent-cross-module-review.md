@@ -55,6 +55,7 @@ The migration concern requires an explicit exception: production had applied 21 
 | Bridge cleanup | A Close acknowledgement could precede EOF drain. | Close input and await process exit inside the existing cleanup deadline. |
 | Early suspension | A knowledge callback could suspend before checkout without graceful child shutdown. | The outer exchange also uses the existing stop action; inner shutdown still precedes VM release. |
 | CI shard gate | A passing test name containing “Interrupted” caused a false failure. | The gate checks complete shard summaries and process exits. Regression cases still reject real interruptions and shutdown failures. |
+| Loading fixture | Aborting the editor chunk invoked stale-chunk recovery during a layout measurement. | Hold the request pending while measuring the skeleton; retain both layout assertions. The document-navigation probe and 24 focused repetitions pass. |
 
 A later lost-store regression records a model call, returns no native context, and observes an unwanted executor entry (expected zero, actual one). The shared native PR/fix guard now checks the existing usage records before creating another attempt. A separate `NativeSessionLost` constructor retains recovery guidance instead of blind-retry text. The job lifecycle then passes with zero executor entries, one original attempt and no completed result. Its fake interpreter now captures typed fix context; the wiki retry requires the original attempt ID. The expanded watcher passes 593 examples with zero failures. The same committed runtime passes the selected 16 Linux/KVM cases with 26 guests observed. Final release verification is recorded separately in canonical PR 619 and its exact-input attestations.
 
@@ -63,14 +64,14 @@ The final Weeder pass also removed two lookup helpers orphaned by this branch's 
 
 ## Local release verification
 
-All eleven configured checks pass for runtime snapshot `a93ad68cf`, including the lost-session guard, migration consolidation and master PR #764. Native and KVM acceptance retain their recorded source scopes.
+All eleven configured checks pass for implementation snapshot `4ef2f337e`, including the lost-session guard, migration consolidation and master PRs #764 and #765. Native and KVM acceptance retain their recorded source scopes.
 
 | Check | Observed result | Scope and limits |
 | --- | --- | --- |
-| Canonical integration | 1,665 examples, zero failures, 25 pending VM cases; twelve successful shards. | Real-service attestation published. Pending VM cases have separate native evidence. |
+| Canonical integration | 1,589 examples, zero failures, 25 pending VM cases; twelve successful shards. | Real-service attestation published. Master #765 consolidates dashboard cases into twelve lifecycles. Pending VM cases have separate native evidence. |
 | Historical native recovery group | 28 cases, zero failures. | Earlier acceptance includes the early-suspension EOF-drain regression and missing-manifest guards; current-source Linux acceptance is listed below. |
 | Fresh Linux/KVM | 16 application cases, zero failures; 26 actual KVM guests observed. | Runtime `cd177d0ff`, including the lost-store guard; controlled model, GitHub and media interpreters. |
-| Paired-checkpoint virtual-host loss | One case passes in 580.7461 seconds, including natural lease expiry. | Runtime `1b8ea825e`, unchanged across the crash. Original run and attempts survive; completed replay adds no inference. |
+| Paired-checkpoint virtual-host loss | One case passes in 526.5371 seconds, including natural lease expiry. | Pinned `2d2c9d2c5` binary; all native runtime and worker inputs match `4ef2f337e`. All 17 retained files survive unchanged. The original run, attempts, regression and wiki action survive; completed replay adds no inference. |
 | Loss before the first main checkpoint | One Linux case passes in 482.6013 seconds after abrupt host loss and natural lease expiry. | Runtime `cd177d0ff`; zero new inference, attempts, checks, wiki revisions or operations; no false completed result. Uncheckpointed edits are not claimed to resume. |
 | Complete doctests | 2,105 examples, zero errors or failures. | Actual supported target; later canonical gate also passes. |
 | Browser suite | 172 pass, one skip. | Application browser tests; physical devices and screen readers remain unverified. |
@@ -81,8 +82,8 @@ All eleven configured checks pass for runtime snapshot `a93ad68cf`, including th
 | Other canonical checks | HLint, frontend, build and Weeder pass. | All eleven configured checks have matching attestations. |
 | Review artifact | 104 steps pass at 320, 390, 768 and 1280 pixels, without overflow or browser errors. | 111 implementation excerpts match current source; six historical examples remain labeled. |
 
-The literal local `ci-signoff` passes. The AMD64 image for `a93ad68cf` is `sha256:01837969a2ab9cfad53583483b176965970f01503aaa3f5be4581c36b29581a3`, built on this Mac through the local OrbStack builder. The integration lane also runs the PostgreSQL baseline-adoption regression; changes to its helper invalidate that check's fingerprint.
-The first browser run timed out waiting for a dashboard drawer save. Two focused runs and the complete rerun pass on unchanged code, concurrency and timeouts. The failed run produced no browser attestation.
+The literal local `ci-signoff` passes. The AMD64 image for `4ef2f337e` is `sha256:57a9f7feb3040cac0ca6310248e3bcf094f646183b2d87b0d6d257ca2ca67fb2`, built on this Mac through the local OrbStack builder. The integration lane also runs the PostgreSQL baseline-adoption regression; changes to its helper invalidate that check's fingerprint.
+An earlier browser run timed out waiting for a dashboard drawer save; focused checks and the full rerun pass on unchanged code, concurrency and timeouts. The post-merge loading-fixture failure is fixed by holding the module pending instead of aborting it. The current complete browser run passes; failed runs produced no browser attestations.
 Canonical PR 619 is the review destination. Production baseline adoption added the single ledger record described below. Merge and deployment remain unauthorized.
 
 ## Slack acceptance
@@ -129,6 +130,7 @@ The final actual rebase onto master `d842c8dc3` preserves all twenty selected PR
 Its tree exactly matches an independent merge: only the incoming golden-test helper, parser table, golden fixture and repository guidance change from the verified branch.
 Canonical TestUtils/prelude imports retain the original regression bodies and stronger assertions.
 A subsequent non-rewriting merge of master `d16b57f00` preserves published ancestry and adopts its five independent error-pattern lifecycles. The grouping lifecycle retains the activated enrichment routine, deterministic LLM interpreter, successful shared runs and saved analysis assertions. Its new snapshot retains the existing request identity and form-local HTMX behavior. The five lifecycles and seven notification cases pass twice: 12 examples, zero failures.
+The following merge of master `603e33aa0` adopts its twelve dashboard lifecycles and shared helpers while preserving the branch's scalar PNG regression and actual handler owner. The dashboard, error-pattern, issue and notification group passes 31 examples repeatedly.
 Master migration names and contents remain unchanged.
 The user's later request explicitly permits consolidation of this branch's unreleased migration files.
 Production inspection and any necessary transition must precede production migration changes.
@@ -140,7 +142,8 @@ Useful source and result indexes include:
 - `native-review-suspension-independent-review.json`: failing-first shutdown fix and repeated reviews.
 - `native-review-suspension-integration-rerun-result.json`: canonical integration result.
 - `linux-native-suspension-acceptance.json`: fresh KVM acceptance.
-- `linux-hostloss-v4-independent-result.json`: current-binary virtual-host-loss proof.
+- `linux-hostloss-v6-acceptance.json`: current-native-runtime paired-checkpoint host-loss proof.
+- `linux-uncheckpointed-v2-independent-result.json`: current missing-first-checkpoint host-loss proof.
 - `native-worker-current-ci-result.json`: final pre-consolidation gate results.
 - `native-worker-artifact-source-refresh-page.json`: exact hosted artifact readback.
 - `master-762-integration-preview.json`: rebase, reconciliation and ancestry.
@@ -170,3 +173,75 @@ The fresh, original and production-shaped schemas have identical dumps after exc
 Production inspection finds 21 original feature migrations with matching checksums and zero rows in the nine native feature tables.
 The [production transition](../agent-migrations.md) adds one native baseline record and preserves all 273 earlier rows and timestamps. No schema DDL, feature-data mutation or application deployment occurs.
 Final local checks and the immutable image pass. The new Haskell template matches all 253 current migration checksums; full schema, ownership and privileges match the pre-consolidation template. An explicit rollback test also preserves the retained native-recovery fixture across eight tables while adopting the current checksums. Production schema and feature data remain unchanged; native baseline bookkeeping is complete.
+
+## Integrated pull requests
+
+Canonical [PR 619](https://github.com/monoscope-tech/monoscope/pull/619) contains twenty selected incoming heads from the recorded 28-PR inventory.
+The sixteen-PR impact stack ends at #709. All twenty selected heads remain ancestors after rebasing onto master `17e9e0128` (#772).
+The superseded PRs are closed. Unrelated OIDC, tooltip, SARIF, hardware-visualization and protobuf work stays separate.
+
+| PR | Contribution | Reconciliation |
+| --- | --- | --- |
+| [#693](https://github.com/monoscope-tech/monoscope/pull/693) | Pi/Gondolin review and fix infrastructure, durable receipts, usage, artifacts, cache maintenance, and conversational wiki tools. | Reuse the shared infrastructure. Preserve the Slack branch's newer routine and authorization contracts. |
+| [#694](https://github.com/monoscope-tech/monoscope/pull/694) | Haskell impact-evaluation orchestration. | Keep within the stack. Do not create another evaluation runner here. |
+| [#696](https://github.com/monoscope-tech/monoscope/pull/696) | Haskell source-review comparisons and validation. | Keep its common validation and evidence contracts. |
+| [#697](https://github.com/monoscope-tech/monoscope/pull/697) | Offline guest localhost resolution. | Retain the guest correction and regression. |
+| [#698](https://github.com/monoscope-tech/monoscope/pull/698) | Host mappings and regression input guidance. | Preserve through runtime reconciliation. |
+| [#699](https://github.com/monoscope-tech/monoscope/pull/699) | Complete regression patches and explicit parse failures. | Preserve complete input transport and useful failures. |
+| [#700](https://github.com/monoscope-tech/monoscope/pull/700) | Caller tracing and review-premise guidance. | Reuse existing policy text rather than adding another prompt system. |
+| [#701](https://github.com/monoscope-tech/monoscope/pull/701) | Frozen regression patches from complete test files. | Retain the Haskell input boundary and regression constraints. |
+| [#702](https://github.com/monoscope-tech/monoscope/pull/702) | Isolated scratch clones of protected source. | Preserve source protection and private workspace behavior. |
+| [#703](https://github.com/monoscope-tech/monoscope/pull/703) | Fingerprints for tracked submodule directories. | Retain the source inventory correction. |
+| [#704](https://github.com/monoscope-tech/monoscope/pull/704) | Native advisory file tools selected by Haskell policy. | Preserve the role policy through the runtime merge. |
+| [#705](https://github.com/monoscope-tech/monoscope/pull/705) | Native Pi guidance and one review response schema. | Retain the shared schema and native guidance. |
+| [#706](https://github.com/monoscope-tech/monoscope/pull/706) | Shell deadlines that preserve the review workspace. | Required regression for the reconciled runtime. |
+| [#707](https://github.com/monoscope-tech/monoscope/pull/707) | Typed evaluation modes and selectors. | Keep typed selectors and the shared runner. |
+| [#708](https://github.com/monoscope-tech/monoscope/pull/708) | Screenshot image bytes through native file reads. | Required regression for the reconciled runtime. |
+| [#709](https://github.com/monoscope-tech/monoscope/pull/709) | Review evidence guidance and recorded model comparisons. | Retain runtime guidance and comparison commands. Historical research exports remain in Git history; they do not prove general accuracy. |
+| #692 | Haskell VM ownership, fix orchestration and SDK host protocol. Reconciled with later stack receipts and artifacts; replaced JavaScript workflow paths removed. | Reuse the shared runtime and authority boundaries. |
+| #661 | Matching and total production-evidence series through the existing scoped query tool and PNG renderer. No second model query planner. | Reuse the shared runtime and authority boundaries. |
+| #571 | Slack threadless fallback, bounded recovery, diagnostics, reconnect guidance and prompts through the current receipt/run path. | Reuse the shared runtime and authority boundaries. |
+| #568 | Five-minute infrastructure-health work budget and cancellation coverage. | Reuse the shared runtime and authority boundaries. |
+
+The runtime retains Haskell guest ownership, typed review/fix proofs, frozen regressions, private receipts and current member authority.
+Slack activation grants no publication or deployment authority. Browser-only demo/sudo behavior stays outside background actors.
+Original requester, evidence audience, routine policy and operation identity survive retries.
+The unrelated icon-script rewrite from #692 remains excluded.
+
+## Rebase and reduction on 2 November
+
+The first rebase adopts master #769; a second adopts #772 after master advances during verification. Backup refs retain the published head and both intermediate trees.
+This supersedes the earlier ancestry-preserving merges: publication requires a lease against the old branch head.
+Master's lifecycle suites own the shared baseline behavior; unique branch regressions remain alongside them.
+
+| Consolidation | Retained owner |
+| --- | --- |
+| Duplicate incident suite | Monitoring lifecycle suite, including autonomous analysis, standalone delivery and signed title linkage |
+| Duplicate bot fixtures and recorded-query seeds | Canonical test prelude, shared bot helpers and bot lifecycle suite |
+| Duplicate Slack, routine and conversation tests | Bot lifecycle suite; authority and recovery matrices remain in Agentic/Workflows |
+| Separate native design note | Operations guide, including workflow ownership and checkpoint recovery |
+| Separate integration and superseded UX notes | This review and the existing visual artifact |
+| Unrelated import-only edits | Restore master imports to reduce changed-file noise |
+
+The worker lockfile pins SDK dependencies. Bundled skills and their license are runtime inputs.
+Native fixtures exercise distinct protocol boundaries; the interactive artifact is the requested review surface.
+Small runtime modules retain their capability, persistence or interpreter boundaries; concatenating them would save little code.
+Production runtime and applied migration bytes are unchanged by this reduction.
+
+The affected watcher passes 693 examples with zero failures in 628.5473 seconds, including native SDK recovery.
+After helper simplification, 545 focused examples pass in 206.9954 seconds. The conversation snapshot detects the wrong page target, then passes after restoration.
+The local CI self-test passes with the explicit OrbStack context and builder. An invocation without the builder correctly fails its guard.
+Repeated Haskell reviews and final manual simplification retain the effect, authority, budget and client-side boundaries; Weeder also identifies three orphan test helpers, which are removed.
+Exact-input release results and image provenance are recorded in PR 619; earlier results above retain their stated source scopes.
+
+| Cleanup against master #769, before the second rebase | Before cleanup | After cleanup |
+| --- | ---: | ---: |
+| Changed files | 193 | 176 |
+| Added lines | 39,765 | 37,137 |
+| Deleted lines | 3,531 | 4,087 |
+
+The older +36,112 display used a different master revision. These figures use one base so the reduction is comparable.
+
+Master #772 consolidates ingestion tests. Its new lifecycle suite retains the branch's HTTP header-only, sibling-isolation and credential-precedence assertions in one example.
+All 15 ingestion lifecycles pass. The branch's typed project-routing implementation remains unchanged; master now includes the corresponding header-only fix.
+The second rebase retains every selected head and removes the superseded ingestion spec. Native runtime inputs remain unchanged from the prior acceptance scope.

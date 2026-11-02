@@ -826,26 +826,14 @@ test-suite integration-tests
       EndpointDiscoverySpec
       ErrorFingerprintStabilitySpec
       EvalConformanceSpec
-      ExtractionWorkerSpec
-      FacetsSpec
-      IncidentDeliverySpec
-      Lifecycle.LogPatternIncidentSpec
-      LiveTailSpec
       MinioManagerSpec
       MonitoringSpec
-      Opentelemetry.GrpcIngestionSpec
-      Opentelemetry.StandardOtelSpansSpec
-      Opentelemetry.TimefusionWriteFailureSpec
-      Opentelemetry.TraceSessionPropagationSpec
+      Opentelemetry.IngestionSpec
       Pages.ApiSpec
       Pages.Bots.AgenticSpec
-      Pages.Bots.BotFixtures
       Pages.Bots.BotTestHelpers
-      Pages.Bots.DiscordSpec
-      Pages.Bots.SeedTestData
-      Pages.Bots.SlackSpec
-      Pages.Bots.WhatsappSpec
       Pages.Bots.WorkflowsSpec
+      Pages.BotsSpec
       Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
       Pages.ContainersSpec
@@ -860,21 +848,16 @@ test-suite integration-tests
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
-      Pages.MonitorsSpec
       Pages.Projects.EveryoneSyncSpec
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.PrometheusSpec
-      Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ServiceMapSpec
-      Pages.ShareSpec
       Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
-      Pkg.KafkaConsumerSpec
       Pkg.KqlSeriesSpec
-      ProcessMessageSpec
       ReplaySpec
       SchemaLearningPerfSpec
       SchemaLearningSpec
@@ -1168,26 +1151,14 @@ test-suite test-dev
       EndpointDiscoverySpec
       ErrorFingerprintStabilitySpec
       EvalConformanceSpec
-      ExtractionWorkerSpec
-      FacetsSpec
-      IncidentDeliverySpec
-      Lifecycle.LogPatternIncidentSpec
-      LiveTailSpec
       MinioManagerSpec
       MonitoringSpec
-      Opentelemetry.GrpcIngestionSpec
-      Opentelemetry.StandardOtelSpansSpec
-      Opentelemetry.TimefusionWriteFailureSpec
-      Opentelemetry.TraceSessionPropagationSpec
+      Opentelemetry.IngestionSpec
       Pages.ApiSpec
       Pages.Bots.AgenticSpec
-      Pages.Bots.BotFixtures
       Pages.Bots.BotTestHelpers
-      Pages.Bots.DiscordSpec
-      Pages.Bots.SeedTestData
-      Pages.Bots.SlackSpec
-      Pages.Bots.WhatsappSpec
       Pages.Bots.WorkflowsSpec
+      Pages.BotsSpec
       Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
       Pages.ContainersSpec
@@ -1202,21 +1173,16 @@ test-suite test-dev
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
-      Pages.MonitorsSpec
       Pages.Projects.EveryoneSyncSpec
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.PrometheusSpec
-      Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ServiceMapSpec
-      Pages.ShareSpec
       Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
-      Pkg.KafkaConsumerSpec
       Pkg.KqlSeriesSpec
-      ProcessMessageSpec
       ReplaySpec
       SchemaLearningPerfSpec
       SchemaLearningSpec

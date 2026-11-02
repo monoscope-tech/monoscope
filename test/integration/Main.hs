@@ -39,9 +39,10 @@ main = do
         -- Measured overrides for the local CI default of 12 shards; other totals
         -- use the stable hash so changing CI_SHARDS never drops a spec.
         balanced =
-          [ ("Pages.LogExplorer.Log", 4)
-          , ("Pages.Bots.Workflows", 5)
+          [ ("Pages.LogExplorer.Log", 9)
+          , ("Pages.Bots", 5)
           , ("BackgroundJobs.ReportUsage", 2)
           , ("EndpointDiscovery", 7)
           , ("Pages.Endpoints.ApiCatalog", 0)
+          , ("Opentelemetry.Ingestion", 6)
           ]

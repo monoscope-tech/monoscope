@@ -1,6 +1,6 @@
 # Unified Monoscope agent
 
-Status: ready for user review, 2 November 2026. Recovery acceptance, all eleven local release checks and the Mac-built AMD64 images pass. Physical-device and screen-reader checks remain unverified. This plan controls the complete branch scope; the checklist below does not replace the product contract.
+Status: implementation complete, rebased onto master #772 and reduced on 2 November 2026. The review records recovery acceptance and the source scope of earlier release checks. Current release results belong to canonical PR 619. Physical-device and screen-reader checks remain unverified. This plan controls the complete branch scope; the checklist below does not replace the product contract.
 
 Consolidate Slack, web, scheduled, and event work around one capability catalog, authority evaluator, executor, operation ledger, conversation, and artifact experience. Newly enabled background routines act autonomously within their member's current authority. Optional selected review must not become a mandatory permission loop.
 
@@ -10,13 +10,14 @@ The [visual review](https://chatgpt.com/space/page_9c75b6b56b0481918e666edd7a89a
 
 ## Current implementation and remaining work
 
-All twenty selected incoming PR heads, published PR 619 and master `d16b57f00` remain ancestors of this branch.
-The [integration record](2026-10-30-agent-pr-integration.md) defines that selection.
+All twenty selected incoming PR heads and master `17e9e0128` (#772) remain ancestors of this branch.
+The published PR 619 head is retained by a backup ref; this rebase requires a guarded branch update.
+The [integration record](../docs/reviews/2026-11-01-agent-cross-module-review.md#integrated-pull-requests) defines that selection.
 The shared executor, capability catalog, authority evaluator, operation ledger, wiki and conversation inspector are implemented.
 Slack requests, native review/fix work, schedules, enrichment and incident analysis reuse those boundaries.
 The consolidated review records current native, browser and real Monoscope Slack acceptance.
 
-Migration and file consolidation, affected verification, repeated reviews and Mac-only image/signoff pass.
+Migration and file consolidation, affected verification and repeated reviews pass. Exact-input release checks and Mac-only image provenance are recorded in PR 619.
 Use canonical PR 619 for review. Other existing feature databases require the documented baseline-adoption step before the new version starts. Production baseline adoption is complete; its schema and feature data are unchanged.
 Physical-device, VoiceOver, physical Mac power-loss and hosted iframe interaction remain unverified.
 No merge or production deployment is authorized.
@@ -26,8 +27,8 @@ No merge or production deployment is authorized.
 The [consolidated review](../docs/reviews/2026-11-01-agent-cross-module-review.md) records current evidence and its limits.
 Earlier iteration logs remain in Git history and ignored local receipts.
 Migration/documentation consolidation and production-shaped upgrade verification are complete.
-All eleven local release checks and the AMD64 image pass at runtime snapshot `a93ad68cf`.
-The master #764 merge preserves the five independent error-pattern lifecycles and deterministic agent enrichment checks. Its focused 12 examples pass twice; the final release gate also includes the merged tests and lost-session recovery guard.
+All eleven local release checks and the AMD64 image pass at implementation snapshot `4ef2f337e`.
+Master #764 and #765 preserve the independent error-pattern and dashboard lifecycles, deterministic agent enrichment checks and scalar PNG regression. The final 31 focused examples pass repeatedly; the release gate includes the merged tests and lost-session guard. Current-runtime paired host loss and loss before the first main checkpoint both pass with their distinct recovery outcomes.
 The review records exact counts, native acceptance scopes and the remaining manual checks.
 
 ## Product contract
@@ -264,7 +265,7 @@ Slack's [official search reference](https://github.com/slackapi/slack-skills-plu
 
 ## Implementation sequence
 
-First complete the [open-PR integration prerequisite](2026-10-30-agent-pr-integration.md).
+First complete the [open-PR integration prerequisite](../docs/reviews/2026-11-01-agent-cross-module-review.md#integrated-pull-requests).
 The existing impact-agent stack already supplies wiki tools, attempts, receipts, usage, and retained artifacts.
 Reuse that work instead of implementing these systems again.
 Reconcile the divergent Haskell runtime before adding another executor or worker protocol.

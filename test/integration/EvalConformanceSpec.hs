@@ -25,6 +25,7 @@ import Data.Text.Display (display)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple (Only (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..))
 import Pkg.Parser.Eval (evalExpr, filterExpr, resolveIn)

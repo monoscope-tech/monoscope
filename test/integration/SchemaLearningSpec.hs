@@ -16,9 +16,11 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.ToRow qualified
 import Database.PostgreSQL.Simple.Types qualified
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker

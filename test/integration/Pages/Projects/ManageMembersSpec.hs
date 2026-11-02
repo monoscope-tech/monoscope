@@ -19,6 +19,7 @@ import Pkg.TestUtils
 import Relude.Unsafe qualified as Unsafe
 import Servant (ServerError (..), getResponse)
 import System.Config qualified as Config
+import Test.Hspec
 import UnliftIO.Exception (bracket_)
 
 

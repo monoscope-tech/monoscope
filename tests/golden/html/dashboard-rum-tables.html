@@ -1,0 +1,169 @@
+<table class="dashboard-table table table-zebra table-sm w-full relative" id>
+<thead class="sticky top-0 z-10 before:content-[&#39;&#39;] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak">
+<tr>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none">
+<div class=" flex items-center justify-between ">
+<span>Vital</span>
+</div>
+</th>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none" data-tippy-content="75th percentile: three in four page loads were at least this fast. ≈ marks an estimate inside a bucket that crosses a threshold." aria-description="75th percentile: three in four page loads were at least this fast. ≈ marks an estimate inside a bucket that crosses a threshold.">
+<div class=" flex items-center justify-between ">
+<span class="underline decoration-dotted decoration-strokeStrong underline-offset-4">P75</span>
+</div>
+</th>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none" data-tippy-content="Against Google&#39;s field thresholds. &quot;Likely&quot; ratings come from an estimate, not the bucket alone." aria-description="Against Google&#39;s field thresholds. &quot;Likely&quot; ratings come from an estimate, not the bucket alone.">
+<div class=" flex items-center justify-between ">
+<span class="underline decoration-dotted decoration-strokeStrong underline-offset-4">Rating</span>
+</div>
+</th>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none" data-tippy-content="The histogram bucket the P75 falls in. The browser SDK&#39;s bucket edges decide how precise this can be." aria-description="The histogram bucket the P75 falls in. The browser SDK&#39;s bucket edges decide how precise this can be.">
+<div class=" flex items-center justify-between ">
+<span class="underline decoration-dotted decoration-strokeStrong underline-offset-4">Known range</span>
+</div>
+</th>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none" data-tippy-content="Real-user observations in the selected window." aria-description="Real-user observations in the selected window.">
+<div class=" flex items-center justify-between ">
+<span class="underline decoration-dotted decoration-strokeStrong underline-offset-4">Samples</span>
+</div>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr class="hover">
+<td class data-tippy-content="Largest Contentful Paint: when the main content becomes visible. Good ≤ 2.5 s, poor &gt; 4 s." aria-description="Largest Contentful Paint: when the main content becomes visible. Good ≤ 2.5 s, poor &gt; 4 s.">LCP</td>
+<td class>2500 ms</td>
+<td class>
+<span class="inline-flex flex-wrap items-center gap-1">
+<span class="cbadge-sm badge-success" title="rating: Good">Good</span>
+</span>
+</td>
+<td class>1000 – 2500</td>
+<td class=" monospace">
+<div class="flex items-center gap-2">
+<span class="inline-block text-left monospace" style="width: 5ch">16</span>
+<progress class="progress w-12 ml-2 progress-brand" value="100.0" max="100">
+</progress>
+</div>
+</td>
+</tr>
+<tr class="hover">
+<td class data-tippy-content="Interaction to Next Paint: how quickly the page responds to clicks, taps and keys. Good ≤ 200 ms, poor &gt; 500 ms." aria-description="Interaction to Next Paint: how quickly the page responds to clicks, taps and keys. Good ≤ 200 ms, poor &gt; 500 ms.">INP</td>
+<td class>≈ 250 ms</td>
+<td class>
+<span class="inline-flex flex-wrap items-center gap-1">
+<span class="cbadge-sm badge-3xx" title="rating: Likely needs improvement">Likely needs improvement</span>
+</span>
+</td>
+<td class>100 – 300</td>
+<td class=" monospace">
+<div class="flex items-center gap-2">
+<span class="inline-block text-left monospace" style="width: 5ch">4</span>
+<progress class="progress w-12 ml-2 progress-brand" value="25.0" max="100">
+</progress>
+</div>
+</td>
+</tr>
+<tr class="hover">
+<td class data-tippy-content="Cumulative Layout Shift: how much content moves while loading. Good ≤ 0.1, poor &gt; 0.25." aria-description="Cumulative Layout Shift: how much content moves while loading. Good ≤ 0.1, poor &gt; 0.25.">CLS</td>
+<td class>—</td>
+<td class>
+<span class="inline-flex flex-wrap items-center gap-1">
+<span class="cbadge-sm badge-neutral" title="rating: Buckets too coarse to rate">Buckets too coarse to rate</span>
+</span>
+</td>
+<td class>0 – 5</td>
+<td class=" monospace">
+<div class="flex items-center gap-2">
+<span class="inline-block text-left monospace" style="width: 5ch">4</span>
+<progress class="progress w-12 ml-2 progress-brand" value="25.0" max="100">
+</progress>
+</div>
+</td>
+</tr>
+<tr class="hover">
+<td class data-tippy-content="First Contentful Paint: when the first text or image appears. Good ≤ 1.8 s, poor &gt; 3 s." aria-description="First Contentful Paint: when the first text or image appears. Good ≤ 1.8 s, poor &gt; 3 s.">FCP</td>
+<td class>—</td>
+<td class>
+<span class="inline-flex flex-wrap items-center gap-1">
+<span class="cbadge-sm badge-neutral" title="rating: No observations in this window">No observations in this window</span>
+</span>
+</td>
+<td class>
+</td>
+<td class=" monospace">
+<div class="flex items-center gap-2">
+<span class="inline-block text-left monospace" style="width: 5ch">0</span>
+<progress class="progress w-12 ml-2 progress-brand" value="0.0" max="100">
+</progress>
+</div>
+</td>
+</tr>
+<tr class="hover">
+<td class data-tippy-content="Time to First Byte: server and network time before the page starts arriving. Good ≤ 800 ms, poor &gt; 1.8 s." aria-description="Time to First Byte: server and network time before the page starts arriving. Good ≤ 800 ms, poor &gt; 1.8 s.">TTFB</td>
+<td class>—</td>
+<td class>
+<span class="inline-flex flex-wrap items-center gap-1">
+<span class="cbadge-sm badge-neutral" title="rating: No observations in this window">No observations in this window</span>
+</span>
+</td>
+<td class>
+</td>
+<td class=" monospace">
+<div class="flex items-center gap-2">
+<span class="inline-block text-left monospace" style="width: 5ch">0</span>
+<progress class="progress w-12 ml-2 progress-brand" value="0.0" max="100">
+</progress>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+<table class="dashboard-table table table-zebra table-sm w-full relative" id>
+<thead class="sticky top-0 z-10 before:content-[&#39;&#39;] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak">
+<tr>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none">
+<div class=" flex items-center justify-between ">
+<span>Page</span>
+</div>
+</th>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none">
+<div class=" flex items-center justify-between ">
+<span>Views</span>
+</div>
+</th>
+<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none" data-tippy-content="75th percentile page-load duration: three in four loads were at least this fast." aria-description="75th percentile page-load duration: three in four loads were at least this fast.">
+<div class=" flex items-center justify-between ">
+<span class="underline decoration-dotted decoration-strokeStrong underline-offset-4">P75</span>
+</div>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr class="hover">
+<td class>
+<a href="/p/<uuid>/log_explorer?query=%28name%20%3D%3D%20%22documentLoad%22%20or%20name%20startswith%20%22Pageview%20%22%29%20and%20%28attributes.url.path%20matches%20regex%20%22%5E%2Fcart%24%22%20or%20attributes.url.full%20matches%20regex%20%22%5E%28%5BA-Za-z%5D%5BA-Za-z0-9%2B.-%5D%2A%3A%2F%2F%5B%5E%2F%3F%23%5D%2B%29%3F%2Fcart%28%5B%3F%23%5D.%2A%29%3F%24%22%29&amp;since=7D" class="text-textBrand hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong rounded-sm">/cart</a>
+</td>
+<td class=" monospace">
+<div class="flex items-center gap-2">
+<span class="inline-block text-left monospace" style="width: 5ch">1</span>
+<progress class="progress w-12 ml-2 progress-brand" value="100.0" max="100">
+</progress>
+</div>
+</td>
+<td class=" monospace">100.0 ms</td>
+</tr>
+<tr class="hover">
+<td class>
+<a href="/p/<uuid>/log_explorer?query=%28name%20%3D%3D%20%22documentLoad%22%20or%20name%20startswith%20%22Pageview%20%22%29%20and%20%28attributes.url.path%20matches%20regex%20%22%5E%2Forders%2F%5B%5E%2F%5D%2B%24%22%20or%20attributes.url.full%20matches%20regex%20%22%5E%28%5BA-Za-z%5D%5BA-Za-z0-9%2B.-%5D%2A%3A%2F%2F%5B%5E%2F%3F%23%5D%2B%29%3F%2Forders%2F%5B%5E%2F%5D%2B%28%5B%3F%23%5D.%2A%29%3F%24%22%29&amp;since=7D" class="text-textBrand hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong rounded-sm">/orders/:id</a>
+</td>
+<td class=" monospace">
+<div class="flex items-center gap-2">
+<span class="inline-block text-left monospace" style="width: 5ch">1</span>
+<progress class="progress w-12 ml-2 progress-brand" value="100.0" max="100">
+</progress>
+</div>
+</td>
+<td class=" monospace">100.0 ms</td>
+</tr>
+</tbody>
+</table>

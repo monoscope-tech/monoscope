@@ -19,6 +19,7 @@ import Pkg.TestClock (setTestTime)
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import System.Config qualified as Config
+import Test.Hspec
 
 
 -- A production-shaped trace across two instrumented services that also talks to an

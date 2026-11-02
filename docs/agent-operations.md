@@ -1,9 +1,58 @@
 # Native agent operations
 
 Use the [adapter README](../impact-review-worker/README.md) for SDK/guest setup and the acknowledged process protocol.
-Use the [native design](native-agent.md) for workflow ownership and recovery guarantees.
 Build the public CLI with `make cli-build`.
 Current workspace commands use the shared Haskell implementation; prototype JavaScript launchers are removed.
+
+## Workflow and recovery
+
+Haskell owns admission, repository identity, candidate verification, independent review and publication.
+The Node adapter owns the Pi model session, metering and tool forwarding.
+Repository tools run as UID 1000 inside the Haskell-owned guest.
+Model tools cannot use the private supervisor protocol or start another VM.
+The public CLI depends only on the DB-free shared package.
+
+PR reviews bind the project, repository, base/head revisions, service and telemetry window.
+Findings distinguish source evidence from production evidence.
+Source-only evaluations have no telemetry or wiki tools.
+The comparison runner keeps its scoring rubric outside model input.
+Every interpreter applies the caller's response validator before accepting a result.
+Failed calls and unknown costs remain explicit.
+
+A fix follows these steps:
+
+1. Admit a bounded reproduction against the pinned revision.
+2. Reproduce the issue before source edits become available.
+3. Freeze the admitted tests and retain their identities.
+4. Capture the candidate commit and artifacts through native host operations.
+5. Verify the exact candidate and regression artifacts.
+6. Run independent review in a distinct attempt bound to that candidate.
+7. Retain the explanation, media and package before publication.
+
+`VerifiedFix`, `ReviewedFix` and `ExplainedFix` are opaque proofs.
+Admission requires a nonblank bounded rationale.
+Host verification checks paths, sizes, digests and artifact identities.
+A model's claim that a command succeeded does not establish success.
+Wiki writes and publication use shared operation records and current application authority.
+Issue jobs retain their original requester, administrator ceiling and shared run.
+Slack activation grants no code-publication or deployment authority.
+
+A session checkpoint pairs the SDK transcript, VM snapshot, budgets and workflow phase.
+The worker saves its manifest before pruning old snapshots.
+Missing or conflicting retained state stops execution before another inference call.
+Recovery preserves the original run and attempt identities.
+Completed replay verifies the retained result without another inference call.
+Uncheckpointed host loss can fail closed instead of resuming transient edits.
+Uncertain external actions require operation-specific reconciliation.
+An operation claim does not establish universal exactly-once effects.
+
+The SDK closes before guest release, including suspension before checkout.
+Close acknowledgement, input EOF and process exit share the existing cleanup deadline.
+The process-group finalizer terminates remaining children and retains cleanup failures.
+Run evidence, media and protected downloads stay inside the conversation inspector.
+Wiki revisions retain the actual writing attempt and shared run.
+Usage distinguishes model calls, missing receipts, verifier checks, workspace allocations and retained media.
+Cost estimates remain separate from customer charges.
 
 ## Prepare a project workspace
 
@@ -83,9 +132,6 @@ Unknown entries, invalid checkpoints, unavailable archives and active leases rem
 This is a periodic reclamation budget, not an allocation quota: active workloads can grow between passes. SIGKILL lease/VM orphan reconciliation and remote retention remain separate work. Transfer and prune records retain explicit unpriced status; customer billing ingestion and storage byte-time pricing remain unfinished.
 
 
-Maintenance verification on 2026-10-22: the watcher passed 25 impact-review examples, including native preparation, lease protection, S3 archive/restore, automatic re-archiving before eviction, refused oversized transfers and preservation of unknown data. All 67 selected bot workflow and permission examples also passed after the background effect-stack change. The initial missing-root case failed before the directory-creation fix and passes in the retained CLI regression. The development CLI builds, but its release linkage guard fails on Homebrew zlib; release packaging and deployment are not signed off.
-
-
 ### Recover interrupted checkpoint staging
 
 New restore and eviction operations write a private project-scoped record under `stages/` before creating scratch data. The record binds a UUID directory to its operation, identity, phase and timestamps. Recovery runs before budget eviction, including when the cache is under budget, and skips projects whose native lock is busy.
@@ -103,7 +149,7 @@ Generate production images on this Mac with OrbStack and Rosetta AMD64 emulation
 Use the local `orbstack` Docker context and `monoscope-local-amd64` builder.
 Inspect their endpoints before building; the socket must be local to this Mac.
 Do not use an SSH builder, production server or GitHub runner for image generation.
-The [local CI reference](../local-ci.md) defines builder setup and final signoff.
+The [local CI reference](local-ci.md) defines builder setup and final signoff.
 
 The optional worker target can be built locally after implementation and focused verification:
 
@@ -133,4 +179,4 @@ The environment file supplies the existing application database, storage and mod
 
 Run regular server mode because `CONSUMER_ONLY=True` skips odd-jobs. Dedicated job routing remains a follow-up. The runtime receives no Docker socket. Guest creation is a trusted operator build step; repository agents use the offline VM and approved tools. A bare minimal guest supports shell investigation; repositories needing GHC, Node or the Monoscope CLI need a prepared dependency profile.
 
-Current verification and limits are recorded in the [consolidated review](../reviews/2026-11-01-agent-cross-module-review.md). Building this target does not deploy it.
+Current verification and limits are recorded in the [consolidated review](reviews/2026-11-01-agent-cross-module-review.md). Building this target does not deploy it.
