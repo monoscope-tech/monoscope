@@ -4,7 +4,6 @@ module Pages.ImpactReviewsSpec (spec) where
 
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
-import CLI.CLIE2ESpec qualified as CLIBinary
 import CLI.Harness qualified as CLI
 import Control.Monad.Trans.Except (throwE)
 import Data.Aeson qualified as AE
@@ -345,7 +344,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       sessions >>= (`shouldNotContain` [vmId])
 
   for_ @[] [False, True] \abrupt ->
-    it ("retains interrupted verifier evidence after SDK " <> if abrupt then "caller loss" else "cancellation") \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-cancellation" \temporary -> do
+    it ("retains interrupted verifier evidence after SDK " <> if abrupt then "caller loss" else "cancellation") \_tr -> CLI.withCliBin \cli -> withSystemTempDirectory "native-sdk-cancellation" \temporary -> do
       available <- doesFileExist "impact-review-worker/.guest/manifest.json"
       unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
       directory <- canonicalizePath temporary
@@ -554,7 +553,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         isLeft invalid `shouldBe` True
       length <$> requests `shouldReturn` beforeInvalid
 
-  it "nativeSession_resumesFixAdmissionAndPeerWithoutRepeatingCompletedWork" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-fix" \temporary -> do
+  it "nativeSession_resumesFixAdmissionAndPeerWithoutRepeatingCompletedWork" \_tr -> CLI.withCliBin \cli -> withSystemTempDirectory "native-sdk-fix" \temporary -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
     directory <- canonicalizePath temporary
@@ -866,7 +865,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         isLeft <$> waitCatch worker `shouldReturn` True
       length <$> readIORef checks `shouldReturn` beforeCancel
 
-  it "calibrates pinned source with protected gitlinks, isolated scratch clones and durable evidence" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-calibration" \temporary -> do
+  it "calibrates pinned source with protected gitlinks, isolated scratch clones and durable evidence" \_tr -> CLI.withCliBin \cli -> withSystemTempDirectory "native-sdk-calibration" \temporary -> do
     configuredProfile <- lookupEnv "IMPACT_REVIEW_TEST_PROFILE"
     let profile = fromMaybe "impact-review-worker/.guest" configuredProfile
     available <- doesFileExist $ profile </> "manifest.json"
@@ -1025,7 +1024,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       observed <- jsonText <$> requests
       for_ @[] ["Private reference must", "Private grading", "query_telemetry", "recall_knowledge"] \private -> observed `shouldNotSatisfy` T.isInfixOf private
 
-  it "preserves screenshot images through pinned SDK read tools, with skills, memory, bounded evidence and isolated cancellation" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-exploration" \temporary -> do
+  it "preserves screenshot images through pinned SDK read tools, with skills, memory, bounded evidence and isolated cancellation" \_tr -> CLI.withCliBin \cli -> withSystemTempDirectory "native-sdk-exploration" \temporary -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest before running sandbox exploration tests"
     directory <- canonicalizePath temporary
@@ -1232,7 +1231,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           Agent.allocationAttempt allocation `shouldBe` request.attemptId
           parse (field "outcome") (AE.toJSON allocation) `shouldReturn` ("released" :: Text)
 
-  it "evaluates actual SDK reviews with compaction receipts and explicit schema, citation and provider failures" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-evaluation" \temporary -> do
+  it "evaluates actual SDK reviews with compaction receipts and explicit schema, citation and provider failures" \_tr -> CLI.withCliBin \cli -> withSystemTempDirectory "native-sdk-evaluation" \temporary -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest before running evaluation integration tests"
     directory <- canonicalizePath temporary
@@ -1571,7 +1570,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       length <$> requests `shouldReturn` count
       listDirectory sdkTemp `shouldReturn` []
 
-  it "replays offline npm dependencies through the SDK without install scripts or shared mutations" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-dependencies" \temporary -> do
+  it "replays offline npm dependencies through the SDK without install scripts or shared mutations" \_tr -> CLI.withCliBin \cli -> withSystemTempDirectory "native-sdk-dependencies" \temporary -> do
     configuredProfile <- lookupEnv "IMPACT_REVIEW_TEST_PROFILE"
     let profile = fromMaybe "impact-review-worker/.guest-monoscope" configuredProfile
     available <- doesFileExist $ profile </> "manifest.json"
@@ -2142,7 +2141,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             writeFileLBS remote $ AE.encode remoteConfiguration
             roomy <- maintain maxBound
             parse (field "failures") roomy `shouldReturn` ([] :: [AE.Value])
-            CLIBinary.withCliBin \cli -> do
+            CLI.withCliBin \cli -> do
               removePathForcibly $ takeDirectory checkpoint
               controlledBridge <- canonicalizePath "test/fixtures/stage-recovery-bridge.sh"
               environment <- getEnvironment

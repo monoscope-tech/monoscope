@@ -814,9 +814,6 @@ test-suite integration-tests
   other-modules:
       BackgroundJobsSpec
       BillingSpec
-      CLI.CLIBinarySpec
-      CLI.CLIE2ESpec
-      CLI.CLILifecycleSpec
       CLI.CLISpec
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
@@ -1124,9 +1121,6 @@ test-suite test-dev
       Web.Routes
       BackgroundJobsSpec
       BillingSpec
-      CLI.CLIBinarySpec
-      CLI.CLIE2ESpec
-      CLI.CLILifecycleSpec
       CLI.CLISpec
       CLI.Harness
       Data.Effectful.HasqlGuardSpec

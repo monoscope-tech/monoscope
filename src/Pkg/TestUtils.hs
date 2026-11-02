@@ -200,7 +200,6 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Network.HTTP.Client (createCookieJar, defaultRequest)
@@ -1822,27 +1821,8 @@ parseIntId t = fromMaybe (error $ "invalid int in CLI test path: " <> t) (readMa
 
 routeRequest :: TestResources -> Text -> [(Text, Text)] -> IO (Response LBS.ByteString)
 routeRequest tr path params
-  | "/log_explorer/schema" `T.isPrefixOf` path =
-      pure $ mockResponse $ AE.encode Schema.telemetrySchemaJson
-  | "/log_explorer" `T.isPrefixOf` path = do
-      (_, pg) <-
-        testServant tr
-          $ Log.logExplorerDataH testPid def{Log.query = query, Log.since = since, Log.from = from, Log.to = to, Log.source = source, Log.sort = lookupParam "sort" params}
-      pure $ mockResponse $ AE.encode pg
-  | "/chart_data" `T.isPrefixOf` path = do
-      result <-
-        runQueryEffect tr
-          $ Charts.queryMetrics Nothing Nothing (Just testPid) query Nothing since from to source Nothing []
-      pure $ mockResponse $ AE.encode result
   | "/api/v1/" `T.isPrefixOf` path = routeApiV1Get tr (T.drop 8 path) params
   | otherwise = error $ "runHTTPtoServant: unhandled GET path: " <> path
-  where
-    p = lookupParam
-    query = p "query" params
-    since = p "since" params
-    from = p "from" params
-    to = p "to" params
-    source = p "source" params
 
 
 -- | Run a handler in the base context and encode its result as a mock HTTP
@@ -1853,7 +1833,7 @@ jsonRoute tr = fmap (mockResponse . AE.encode) . toBaseServantResponse tr
 
 routeApiV1Get :: TestResources -> Text -> [(Text, Text)] -> IO (Response LBS.ByteString)
 routeApiV1Get tr rest params = case T.splitOn "/" rest of
-  ["issues"] -> jsonRoute tr (ApiH.apiIssuesList testPid Nothing Nothing Nothing (pInt "page" params) (pInt "per_page" params))
+  ["issues"] -> jsonRoute tr (ApiH.apiIssuesList testPid (rightToMaybe . Servant.parseQueryParam =<< lookupParam "status" params) (lookupParam "type" params) (lookupParam "service" params) (pInt "page" params) (pInt "per_page" params))
   ["issues", iid] -> jsonRoute tr (ApiH.apiIssueGet testPid (parseUUIDId iid))
   ["incidents"] -> jsonRoute tr (ApiH.apiIncidentsList testPid Nothing (pInt "limit" params))
   ["incidents", iid] -> jsonRoute tr (ApiH.apiIncidentGet testPid (parseUUIDId iid))

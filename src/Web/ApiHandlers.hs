@@ -529,9 +529,11 @@ count = fmap BulkCount
 -- a 'BulkSucceeded' op reports per-id partial success and a 'BulkPartial' op
 -- carries its own failure reasons.
 -- Ops that cannot report a count can @pure (BulkCount (length ba.ids))@.
+-- @ack@/@unack@ alias @acknowledge@/@unacknowledge@ on every resource.
 bulkExec :: Eq a => BulkAction a -> [(Text, ATBaseCtx (BulkOpResult a))] -> ATBaseCtx (BulkResult a)
 bulkExec ba ops = do
-  r <- fromMaybe (throwError err400{errBody = encodeUtf8 $ "Unknown bulk action: " <> ba.action}) $ List.lookup (T.toLower ba.action) ops
+  let action = T.toLower ba.action
+  r <- fromMaybe (throwError err400{errBody = encodeUtf8 $ "Unknown bulk action: " <> ba.action}) $ List.lookup (fromMaybe action $ List.lookup action [("ack", "acknowledge"), ("unack", "unacknowledge")]) ops
   let mkResult ok = BulkResult{succeeded = ok, failed = [BulkFailure{id = i, error = "not applied"} | i <- ba.ids, i `notElem` ok]}
   pure $ case r of
     BulkCount n -> mkResult $ bool [] ba.ids (n > 0)
@@ -1225,18 +1227,12 @@ apiIssuesBulk :: ApiActor -> Projects.ProjectId -> BulkAction Issues.IssueId -> 
 apiIssuesBulk principal pid ba = do
   now <- Time.currentTime
   ackSet <- mkAckSet principal ba.durationMinutes
-  let ack = count $ Issues.setAckState pid ba.ids (Just ackSet)
-      unack = count $ Issues.setAckState pid ba.ids Nothing
-      archive = count $ Issues.setArchiveState pid ba.ids (Just (now, Issues.ArchiveIndefinite))
-      unarchive = count $ Issues.setArchiveState pid ba.ids Nothing
   bulkExec
     ba
-    [ ("acknowledge", ack)
-    , ("ack", ack)
-    , ("unack", unack)
-    , ("unacknowledge", unack)
-    , ("archive", archive)
-    , ("unarchive", unarchive)
+    [ ("acknowledge", count $ Issues.setAckState pid ba.ids (Just ackSet))
+    , ("unacknowledge", count $ Issues.setAckState pid ba.ids Nothing)
+    , ("archive", count $ Issues.setArchiveState pid ba.ids (Just (now, Issues.ArchiveIndefinite)))
+    , ("unarchive", count $ Issues.setArchiveState pid ba.ids Nothing)
     ]
 
 

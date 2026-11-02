@@ -910,16 +910,17 @@ guard you have.
 
 ### 3. Binary smoke tests (no server)
 
-`test/integration/CLI/CLIBinarySpec.hs` runs `monoscope --help` for every
-subcommand and asserts exit code 0. This catches optparse parser
-construction errors before they reach a user. **Add an entry to `helpCases`
-when you add a new `command "..."` in `cli/CLI/Main.hs`** — the test catches
-copy-paste typos in metavar / parser wiring instantly.
+`test/integration/CLI/CLISpec.hs` runs `monoscope <command> --help` for every
+subcommand and asserts exit code 0 and that the usage line names that command.
+This catches optparse parser construction errors before they reach a user.
+**Add an entry to the `leaves`/`groups` table when you add a new `command "..."`
+in `cli/CLI/Main.hs`** — the test catches copy-paste typos in metavar / parser
+wiring instantly.
 
 ### 4. End-to-end against a real server
 
-`test/integration/CLI/CLIE2ESpec.hs` runs the actual `monoscope` binary
-against an HTTP server. This is what catches wire-format regressions
+The "binary against a live server" example in `test/integration/CLI/CLISpec.hs`
+runs the actual `monoscope` binary against an HTTP server. This is what catches wire-format regressions
 (KQL operator changes, JSON envelope drift, missing query params, broken
 auth headers) — the bug class that motivated the audit.
 
@@ -935,12 +936,12 @@ TEST_MATCH=CLI make live-test-dev
 To exercise an external server, set `MONOSCOPE_API_KEY` and optionally
 `MONOSCOPE_API_URL` and `MONOSCOPE_PROJECT`. With an explicit key, the URL
 defaults to `https://api.monoscope.tech` and the project to the public demo UUID.
-External-server tests report pending when that server is unavailable or rejects
-the supplied credentials. The default local-server tests fail on these errors.
+The external-server run reports pending when that server rejects `monoscope me`.
+The default local-server run fails on these errors.
 
-Each spec checks a single audit finding (KQL operator, kind→source mapping,
-error-body surfacing, list envelope, agent-mode JSON, validation messages,
-etc.) — adding a new feature? Add the regression test alongside.
+Each audit finding (KQL operator, kind→source mapping, error-body surfacing,
+list envelope, agent-mode JSON, validation messages, etc.) is a row in one of its
+tables — adding a new feature? Add the regression row alongside.
 
 ### When you add a new CLI feature
 
@@ -949,9 +950,9 @@ etc.) — adding a new feature? Add the regression test alongside.
 2. Implement in `cli/CLI/Commands.hs` or `cli/CLI/Resource.hs`; pure helpers go
    in `cli/CLI/Validate.hs` (with doctests) and rendering in `cli/CLI/Chart.hs`
    / `CLI/LogView.hs` / `CLI/Dashboard.hs` (with a case in `cli/test/Main.hs`).
-3. Add an `it "<feature>" $ withReachableServer $ \cfg -> ...` in
-   `test/integration/CLI/CLIE2ESpec.hs` that asserts the wire-level
-   behaviour — the JSON envelope shape, the exit code, the error message.
+3. Add a row to the live-server tables in `test/integration/CLI/CLISpec.hs`
+   that asserts the wire-level behaviour — the JSON envelope shape, the exit
+   code, the error message.
 4. Run the e2e suite locally before merging if the change touches the
    request URL, the query params, or the response shape.
 5. Keep the new code free of DB imports. `monoscope-cli` depends only on

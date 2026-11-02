@@ -3,7 +3,6 @@ module Models.Telemetry.Schema (
   Schema (..),
   PopularOtelQuery (..),
   telemetrySchema,
-  telemetrySchemaJson,
   generateSchemaForAI,
   popularOtelQueries,
   popularOtelQueriesJson,
@@ -174,11 +173,6 @@ telemetrySchema =
           , ("resource.user_agent.original", FieldInfo "string" "Original user agent string" Nothing)
           ]
     }
-
-
--- | Convert the schema to JSON for frontend consumption
-telemetrySchemaJson :: AE.Value
-telemetrySchemaJson = AE.toJSON telemetrySchema
 
 
 -- | Generate a concise schema description for AI queries by categorizing fields
