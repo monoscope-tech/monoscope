@@ -13,6 +13,7 @@ module Pkg.TestUtils (
   completeFrame,
   linkParams,
   elementsWith,
+  tagsWith,
   renderedWidget,
   eventually,
   withSetup,
@@ -75,6 +76,7 @@ module Pkg.TestUtils (
   countIssues,
   resetSchemaLearning,
   goldenHtml,
+  goldenParts,
   goldenText,
   processMessagesAndBackgroundJobs,
   createTestSpans,
@@ -1399,6 +1401,11 @@ goldenHtml name html =
     *=~/ [ed|>#[0-9]+///>#<n>|]
 
 
+-- | A golden of raw HTML fragments, e.g. from 'elementsWith', one per line.
+goldenParts :: FilePath -> [Text] -> Expectation
+goldenParts name = goldenHtml name . Lucid.toHtmlRaw @Text . unlines
+
+
 -- | Compare against @tests/golden/<path>@; @UPDATE_GOLDEN=true@ (re)writes it, a missing file fails.
 goldenText :: FilePath -> Text -> Expectation
 goldenText name actual = do
@@ -2098,6 +2105,11 @@ elementsWith markers html = [T.take (e - s) (T.drop s html) | (s, e) <- sortNub 
         TagClose -> if d == 1 then t.end else closing (d - 1) ts
         TagVoid -> closing d ts
       [] -> T.length html
+
+
+-- | Just the opening tags of 'elementsWith': attributes without the subtree.
+tagsWith :: [Text] -> Text -> [Text]
+tagsWith markers = map (T.takeWhile (/= '>')) . elementsWith markers
 
 
 data TagKind = TagOpen | TagClose | TagVoid
