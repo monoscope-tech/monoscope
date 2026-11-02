@@ -1,13 +1,17 @@
 module Pages.Projects.ProjectsSpec (spec) where
 
+import BackgroundJobs qualified
 import Control.Exception (ErrorCall (..), evaluate, try)
 import Control.Lens ((.~))
 import Data.Generics.Labels ()
 import Data.Generics.Product.Fields (field)
+import Data.Effectful.Notify (Notification (..))
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Error.Static (catchError)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
@@ -138,3 +142,54 @@ spec = around withTestResources do
       project.description `shouldBe` "Test Description2"
       project.paymentPlan `shouldBe` "GraduatedPricing"
       project.timeZone `shouldBe` "Africa/Accra"
+
+  describe "Deleted Project Notification Lifecycle" do
+    it "stops ingest, reports, and alerts after the customer deletes the project" \tr -> do
+      let monitorId = Monitors.QueryMonitorId $ fromMaybe (error "invalid test UUID") $ UUID.fromText "de1e7ed0-0000-0000-0000-000000000001"
+          countLogs marker = dbOne @_ @Int tr [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ? AND body::text LIKE '%' || ? || '%' |] (testPid, marker :: Text)
+          countReports = dbOne @_ @Int tr [sql|SELECT COUNT(*)::INT FROM apis.reports WHERE project_id = ?|] (Only testPid)
+          monitor =
+            def
+              { Monitors.id = monitorId
+              , Monitors.projectId = testPid
+              , -- A real KQL query, not a canned logQueryAsSql: evaluateQueryMonitor re-parses logQuery on
+                -- every run, and an empty one throws before it can notify (silently: the throw is logged).
+                Monitors.logQuery = "summarize count()"
+              , Monitors.logQueryAsSql = ""
+              , -- One log is ingested before deletion, so threshold 0 makes the monitor fire on the way in.
+                Monitors.alertThreshold = 0
+              , Monitors.checkIntervalMins = 1
+              , -- Not from `def` (0): migration 0135's query_monitors_positive_time_window rejects it.
+                Monitors.timeWindowMins = 60
+              , Monitors.alertConfig = def{Monitors.title = "Deleted project guard"}
+              }
+
+      apiKey <- createTestAPIKey tr testPid "deleted-project-ingest"
+      ingestLog tr apiKey "before project deletion" frozenTime
+      countLogs "before project deletion" `shouldReturn` 1
+
+      void $ runTestBg frozenTime tr $ Monitors.queryMonitorUpsert monitor
+      dbExec
+        tr
+        [sql| UPDATE projects.teams SET pagerduty_services = ARRAY['deleted-project-test'], disabled_channels = array_remove(disabled_channels, 'pagerduty')
+              WHERE project_id = ? AND handle = 'everyone' |]
+        (Only testPid)
+
+      before <- fst <$> captureNotifs tr BackgroundJobs.checkTriggeredQueryMonitors
+      before `shouldSatisfy` any (\case PagerdutyNotification{} -> True; _ -> False)
+
+      void $ testServant tr $ CreateProject.deleteProjectGetH testPid
+      void $ try @SomeException $ ingestLog tr apiKey "after project deletion" (addUTCTime 1 frozenTime)
+      countLogs "after project deletion" `shouldReturn` 0
+      isNothing <$> runTestBgNoReset tr (Projects.activeProjectById testPid) `shouldReturn` True
+      reportsBefore <- countReports
+      reportNotifs <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.DailyReports testPid)
+      reportNotifs `shouldBe` []
+      countReports `shouldReturn` reportsBefore
+      dbExec
+        tr
+        [sql|UPDATE monitors.query_monitors SET current_status = 'normal', alert_last_triggered = NULL, notification_count = 0, last_evaluated = '2020-01-01' WHERE id = ?|]
+        (Only monitorId)
+
+      after <- fst <$> captureNotifs tr BackgroundJobs.checkTriggeredQueryMonitors
+      after `shouldBe` []

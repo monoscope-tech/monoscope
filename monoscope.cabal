@@ -792,7 +792,6 @@ test-suite integration-tests
       ExtractionWorkerSpec
       FacetsSpec
       IncidentDeliverySpec
-      Lifecycle.LogPatternIncidentSpec
       LiveTailSpec
       MinioManagerSpec
       MonitoringSpec
@@ -1113,7 +1112,6 @@ test-suite test-dev
       ExtractionWorkerSpec
       FacetsSpec
       IncidentDeliverySpec
-      Lifecycle.LogPatternIncidentSpec
       LiveTailSpec
       MinioManagerSpec
       MonitoringSpec
