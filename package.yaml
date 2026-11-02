@@ -281,7 +281,7 @@ tests:
       - text
       - cryptonite
       - aeson-pretty
-      # ApiDocsSpec re-parses the openapi.yaml route to prove it matches the JSON one.
+      # EndpointsSpec re-parses the openapi.yaml route to prove it matches the JSON one.
       - yaml
       - memory
       - base16-bytestring

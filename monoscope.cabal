@@ -786,7 +786,7 @@ test-suite integration-tests
       CLI.CLISpec
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
-      EndpointDiscoverySpec
+      EndpointsSpec
       ErrorFingerprintStabilitySpec
       EvalConformanceSpec
       MinioManagerSpec
@@ -799,8 +799,6 @@ test-suite integration-tests
       Pages.ContainersSpec
       Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
-      Pages.Endpoints.ApiCatalogSpec
-      Pages.Endpoints.ApiDocsSpec
       Pages.ErrorPatternsSpec
       Pages.ExemplarsSpec
       Pages.GitSyncSpec
@@ -819,8 +817,6 @@ test-suite integration-tests
       Pkg.EmbeddingFairnessSpec
       Pkg.KqlSeriesSpec
       ReplaySpec
-      SchemaLearningPerfSpec
-      SchemaLearningSpec
       Spec
       SpecHook
       System.MigrationRunnerSpec
@@ -1088,7 +1084,7 @@ test-suite test-dev
       CLI.CLISpec
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
-      EndpointDiscoverySpec
+      EndpointsSpec
       ErrorFingerprintStabilitySpec
       EvalConformanceSpec
       MinioManagerSpec
@@ -1101,8 +1097,6 @@ test-suite test-dev
       Pages.ContainersSpec
       Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
-      Pages.Endpoints.ApiCatalogSpec
-      Pages.Endpoints.ApiDocsSpec
       Pages.ErrorPatternsSpec
       Pages.ExemplarsSpec
       Pages.GitSyncSpec
@@ -1121,8 +1115,6 @@ test-suite test-dev
       Pkg.EmbeddingFairnessSpec
       Pkg.KqlSeriesSpec
       ReplaySpec
-      SchemaLearningPerfSpec
-      SchemaLearningSpec
       Spec
       SpecHook
       System.MigrationRunnerSpec

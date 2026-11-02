@@ -42,7 +42,6 @@ main = do
           [ ("Pages.LogExplorer.Log", 9)
           , ("Pages.Bots", 5)
           , ("BackgroundJobs.ReportUsage", 2)
-          , ("EndpointDiscovery", 7)
-          , ("Pages.Endpoints.ApiCatalog", 0)
+          , ("Endpoints", 7)
           , ("Opentelemetry.Ingestion", 6)
           ]
