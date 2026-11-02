@@ -192,11 +192,12 @@ spec = around withTestResources do
 
     -- Invite, re-role, list, remove and re-add.
     roleOf "example@gmail.com" <$> save ["example@gmail.com"] [PAdmin] `shouldReturn` Just PAdmin
-    roleOf "example@gmail.com" <$> save ["example@gmail.com"] [PView] `shouldReturn` Just PView
-    Pages.ManageMembersGet (PageCtx _ (_, listed, _, _, _)) <- call tr $ Pages.manageMembersGetH testPid
-    map (.email) (V.toList listed) `shouldMatchList` ["test@monoscope.tech", "example@gmail.com"]
+    -- reinviteRemovedAdmin_asViewer_staysViewer: reactivating the old row kept its admin role.
     map (.email) <$> save [] [] >>= (`shouldNotContain` ["example@gmail.com"])
     roleOf "example@gmail.com" <$> save ["example@gmail.com"] [PView] `shouldReturn` Just PView
+    roleOf "example@gmail.com" <$> save ["example@gmail.com"] [PEdit] `shouldReturn` Just PEdit
+    Pages.ManageMembersGet (PageCtx _ (_, listed, _, _, _)) <- call tr $ Pages.manageMembersGetH testPid
+    map (.email) (V.toList listed) `shouldMatchList` ["test@monoscope.tech", "example@gmail.com"]
 
     -- Viewers and editors see no member controls and cannot re-role, invite or remove.
     Just guardMember <- find ((== "permission-guard@example.com") . (.email)) <$> save ["test@monoscope.tech", "permission-guard@example.com"] [PAdmin, PView]

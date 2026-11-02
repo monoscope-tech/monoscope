@@ -152,7 +152,7 @@ insertProjectMembers members = do
         WITH ins AS (
           INSERT INTO projects.project_members(project_id, user_id, permission)
           SELECT * FROM unnest(#{pids}::uuid[], #{map (.userId) members}::uuid[], #{map (.permission) members}::projects.project_permissions[])
-          ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE, deleted_at = NULL
+          ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE, deleted_at = NULL, permission = EXCLUDED.permission
           RETURNING project_id, user_id
         ),
         added AS (
