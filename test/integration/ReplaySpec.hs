@@ -1,646 +1,183 @@
+-- | Session replay end to end: the SDK's upload contract → kafka entry point (parser,
+-- counters, poison) → per-session merge lease → MinIO objects, merge cron and sealed shards
+-- → the player's read path.
 module ReplaySpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
-import Data.Conduit.Combinators qualified as CC
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Data.UUID qualified as UUID
+import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Entity.DBT qualified as DBT
 import GHC.Conc (getAllocationCounter, setAllocationCounter)
-import Models.Projects.Projects qualified as Projects
-import Network.Minio qualified as Minio
-import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, replayPostH, replaySessionGetH, sessionFileKeys, splitReplayPayload)
+import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, releaseMergeLease, replayObjectPrefix, replayPostH, replaySessionGetH, sessionFileKeys, splitReplayPayload)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.TestUtils
-import System.Config (AuthContext (..))
 import System.Mem (performGC)
-
-
--- | The `merged` flag decides whether the cron will ever look at a session
--- again, so it is worth asserting on directly rather than inferring from counts.
-mergedFlag :: TestResources -> UUID.UUID -> IO Bool
-mergedFlag tr sid = do
-  rows :: V.Vector (Only Bool) <-
-    withPool tr.trPool
-      $ DBT.query [sql| SELECT merged FROM projects.replay_sessions WHERE session_id = ? AND project_id = ? |] (sid, testPid)
-  pure $ maybe False fromOnly (rows V.!? 0)
-
-
-clearReplaySessions :: TestResources -> IO ()
-clearReplaySessions tr =
-  void
-    $ withPool tr.trPool
-    $ DBT.execute
-      [sql| DELETE FROM projects.replay_sessions WHERE project_id = ? |]
-      (Only testPid)
-
-
--- | Bytes allocated on the current thread while forcing the action's result to
--- WHNF, via the per-thread allocation counter (no profiling build needed).
--- Callers pass actions returning a fully-strict scalar (Double/Int) so WHNF is
--- full NF — enough to force the whole parse/decode being measured.
-allocatedBy :: IO a -> IO Int64
-allocatedBy act = do
-  performGC
-  setAllocationCounter maxBound
-  r <- act
-  _ <- evaluateWHNF r
-  end <- getAllocationCounter
-  pure (maxBound - end)
-
-
--- | Full-decode an events blob into an `AE.Array` and force its length —
--- reproduces the old merge-path cost (the whole array is realized).
-decodeArrayLen :: BS.ByteString -> Int
-decodeArrayLen bs = case AE.eitherDecodeStrict bs of
-  Right (AE.Array a) -> V.length a
-  _ -> 0
 
 
 spec :: Spec
 spec = around withTestResources do
-  -- The browser SDK sends user and tenant as nested objects, while this endpoint was written
-  -- expecting flat userId/userEmail/userName. Nothing errored — the fields simply decoded as
-  -- Nothing on every upload, so every recording in the product showed no user, permanently and
-  -- silently. These pin both shapes so the wire contract cannot drift apart again unnoticed.
-  describe "ReplayPost user metadata" do
-    let postWith extra =
-          AE.eitherDecodeStrict @ReplayPost
-            $ "{\"events\":[],\"sessionId\":\"00000000-0000-0000-0000-00000000002a\",\"timestamp\":\"2026-05-08T00:00:00Z\""
-            <> extra
-            <> "}"
+  it "wire contracts: SDK user shapes, object layout, raw-JSON splicing and the kafka payload parser" \_ -> do
+    -- The browser SDK sends user/tenant as nested objects while this endpoint expected flat
+    -- fields: every recording silently showed no user. Older SDKs still send the flat shape.
+    let decodeUser extra = AE.eitherDecodeStrict @ReplayPost ("{\"events\":[],\"sessionId\":\"00000000-0000-0000-0000-00000000002a\",\"timestamp\":\"2026-05-08T00:00:00Z\"" <> extra <> "}") <&> \p -> (p.userId, p.userEmail, p.userName)
+    map
+      decodeUser
+      [ ",\"user\":{\"id\":\"u-1\",\"email\":\"a@b.c\",\"name\":\"Ada\"},\"tenant\":{\"id\":\"t-1\"}"
+      , ",\"user\":{\"id\":\"u-2\",\"full_name\":\"Ada Lovelace\"}"
+      , ",\"userId\":\"u-3\",\"userEmail\":\"c@d.e\",\"userName\":\"Grace\""
+      , ""
+      ]
+      `shouldBe` map Right [(Just "u-1", Just "a@b.c", Just "Ada"), (Just "u-2", Nothing, Just "Ada Lovelace"), (Just "u-3", Just "c@d.e", Just "Grace"), (Nothing, Nothing, Nothing)]
 
-    it "reads the nested user object the browser SDK actually sends" $ \_ ->
-      case postWith ",\"user\":{\"id\":\"u-1\",\"email\":\"a@b.c\",\"name\":\"Ada\"},\"tenant\":{\"id\":\"t-1\"}" of
-        Left err -> expectationFailure $ "decode failed: " <> err
-        Right p -> (p.userId, p.userEmail, p.userName) `shouldBe` (Just "u-1", Just "a@b.c", Just "Ada")
-
-    -- MonoscopeUser carries both `name` and `full_name`; SDKs and callers use either.
-    it "falls back to full_name when the user has no name" $ \_ ->
-      case postWith ",\"user\":{\"id\":\"u-2\",\"full_name\":\"Ada Lovelace\"}" of
-        Left err -> expectationFailure $ "decode failed: " <> err
-        Right p -> p.userName `shouldBe` Just "Ada Lovelace"
-
-    -- Older SDK builds send the flat shape and are already deployed in the wild, so it has to
-    -- keep working rather than being replaced.
-    it "still reads the flat fields older SDKs send" $ \_ ->
-      case postWith ",\"userId\":\"u-3\",\"userEmail\":\"c@d.e\",\"userName\":\"Grace\"" of
-        Left err -> expectationFailure $ "decode failed: " <> err
-        Right p -> (p.userId, p.userEmail, p.userName) `shouldBe` (Just "u-3", Just "c@d.e", Just "Grace")
-
-    it "decodes an upload carrying no user at all" $ \_ ->
-      case postWith "" of
-        Left err -> expectationFailure $ "decode failed: " <> err
-        Right p -> (p.userId, p.userEmail, p.userName) `shouldBe` (Nothing, Nothing, Nothing)
-
-    it "replayPostH accepts an upload with or without events and echoes its session; an unknown session reads back no events" \tr -> do
-      let sid = UUID.fromWords 0 0 0 43
-      for_ @[] [V.singleton (AE.object ["type" AE..= ("click" :: Text), "timestamp" AE..= (1000 :: Int)]), V.empty] \events -> do
-        res <- toBaseServantResponse tr $ replayPostH testPid ReplayPost{events = AE.Array events, sessionId = sid, timestamp = frozenTime, userId = Nothing, userEmail = Nothing, userName = Nothing}
-        -- "warning" (with a reason) where no rrweb topic is configured or publishing fails.
-        let field k = case res of AE.Object o -> AEKM.lookup k o; _ -> Nothing
-        (field "sessionId", field "status") `shouldSatisfy` \(s, st) -> s == Just (AE.toJSON sid) && st `elem` map (Just . AE.String) ["ok", "warning"]
-      unknown <- call tr $ replaySessionGetH testPid (UUID.fromWords 0 0 0 44)
-      (AE.decode @AE.Value (AE.encode unknown) >>= \case AE.Object o -> AEKM.lookup "events" o; _ -> Nothing) `shouldBe` Just (AE.Array V.empty)
-
-  describe "replay object layout" do
+    -- One rrweb root, then project, ISO date, session; both legacy shapes migrate onto it, idempotently.
     let at = UTCTime (fromGregorian 2026 5 8) 0
         sid = UUID.fromWords 0 0 0 42
         prefix = "rrweb/" <> UUID.toText UUID.nil <> "/2026-05-08/" <> UUID.toText sid <> "/"
-    it "groups keys under one rrweb root, then project, ISO date, and session" $ \_ ->
-      replayObjectPrefix testPid at sid `shouldBe` prefix
-    -- Both legacy shapes must land on the new root: the flat session-scoped keys
-    -- and the interim <project>/rrweb/… ones that predate the root segment.
-    it "maps legacy keys without changing their filename" $ \_ -> do
-      migratedReplayKey testPid at sid (UUID.toText sid <> "/shard-000001-10.json.gz")
-        `shouldBe` prefix <> "shard-000001-10.json.gz"
-      migratedReplayKey testPid at sid (UUID.toText UUID.nil <> "/rrweb/2026-05-07/" <> UUID.toText sid <> "/shard-000001-10.json.gz")
-        `shouldBe` prefix <> "shard-000001-10.json.gz"
-    it "is idempotent for already structured keys" $ \_ -> do
-      let key = prefix <> "20260508T000000.json"
-      migratedReplayKey testPid at sid key `shouldBe` key
+    replayObjectPrefix testPid at sid `shouldBe` prefix
+    map (migratedReplayKey testPid at sid) [UUID.toText sid <> "/shard-000001-10.json.gz", UUID.toText UUID.nil <> "/rrweb/2026-05-07/" <> UUID.toText sid <> "/shard-000001-10.json.gz", prefix <> "20260508T000000.json"]
+      `shouldBe` [prefix <> "shard-000001-10.json.gz", prefix <> "shard-000001-10.json.gz", prefix <> "20260508T000000.json"]
 
-  describe "concatRawJsonArrays" do
-    it "handles single non-empty array" $ \_ ->
-      concatRawJsonArrays ["[{\"a\":1}]"] `shouldBe` "[{\"a\":1}]"
+    concatRawJsonArrays ["[{\"a\":1}]"] `shouldBe` "[{\"a\":1}]"
+    AE.decode (concatRawJsonArrays ["[1,2,3]", "[4,5,6]"]) `shouldBe` Just ([1 .. 6] :: [Int])
+    length <$> AE.decode @[Int] (concatRawJsonArrays (replicate 1000 "[1,2,3,4,5]")) `shouldBe` Just 5000
 
-    it "round-trips valid JSON" $ \_ -> do
-      let input = ["[1,2,3]", "[4,5,6]"]
-          result = concatRawJsonArrays input
-      AE.decode result `shouldBe` Just ([1, 2, 3, 4, 5, 6] :: [Int])
+    -- The viewer splices the events bytes verbatim (never re-encoded): non-canonical spacing survives.
+    let rawBytes = "[{\"type\":3,   \"timestamp\":10}]"
+        envelope r = AE.decode @AE.Object (AE.encode r)
+    BS.isInfixOf (BL.toStrict rawBytes) (BL.toStrict $ AE.encode ReplaySessionResp{events = RawJson rawBytes, partial = Just False, errorMsg = Nothing, meta = Nothing}) `shouldBe` True
+    (envelope ReplaySessionResp{events = RawJson rawBytes, partial = Just False, errorMsg = Nothing, meta = Nothing} <&> \o -> (AEKM.lookup "partial" o, AEKM.lookup "events" o <&> \case AE.Array a -> V.length a; _ -> -1))
+      `shouldBe` Just (Just (AE.Bool False), Just 1)
+    (envelope ReplaySessionResp{events = RawJson "[]", partial = Nothing, errorMsg = Just "boom", meta = Nothing} <&> \o -> (AEKM.member "partial" o, AEKM.lookup "error" o))
+      `shouldBe` Just (False, Just (AE.String "boom"))
 
-  describe "sessionFileKeys" do
-    it "returns empty list for unknown session" $ \tr -> do
-      keys <- runQueryEffect tr $ sessionFileKeys testPid UUID.nil
-      keys `shouldBe` []
+    -- rrweb mutations carry empty strings; the old skipper ate the closing quote of `""`, the
+    -- message was dropped and the player went black. Payloads go through AE.encode, as kafka sees them.
+    let ev ty ts d = AE.object ["type" AE..= (ty :: Int), "data" AE..= AE.object d, "timestamp" AE..= (ts :: Int)]
+        leaf = AE.object ["tagName" AE..= ("" :: Text), "attributes" AE..= AE.object [], "childNodes" AE..= ([] :: [AE.Value])]
+        long = T.replicate 1000000 "x"
+        roundTrip events = splitReplayPayload (BL.toStrict $ AE.encode $ AE.object ["events" AE..= events, "sessionId" AE..= UUID.toText sid, "projectId" AE..= UUID.toText UUID.nil, "timestamp" AE..= at]) >>= AE.eitherDecodeStrict @AE.Value . (.eventsBytes)
+        payloads :: [AE.Value]
+        payloads =
+          [ AE.Array [ev 2 1000 ["node" AE..= AE.object []]]
+          , AE.toJSON $ replicate 2 $ ev 3 1000 ["text" AE..= ("" :: Text), "tag" AE..= ("div" :: Text)]
+          , AE.Array [ev 3 2000 ["text" AE..= ("]],}\"hi\\there" :: Text)]]
+          , AE.Array [ev 2 3000 ["node" AE..= AE.object ["tagName" AE..= ("div" :: Text), "attributes" AE..= AE.object ["class" AE..= ("" :: Text)], "childNodes" AE..= AE.Array [leaf, leaf]]]]
+          , AE.Array [AE.String (long <> "\"\\é🙂" <> long), ""]
+          ]
+    map roundTrip payloads `shouldBe` map Right payloads
 
-    it "returns tracked file keys after insert" $ \tr -> do
-      clearReplaySessions tr
-      let sid = UUID.nil
-          key1 = UUID.toText sid <> "/20260101T000000.json"
-      void
-        $ withPool tr.trPool
-        $ DBT.execute
-          [sql|
-          INSERT INTO projects.replay_sessions
-            (session_id, project_id, last_event_at, event_file_count, file_keys)
-          VALUES (?, ?, now(), 1, ARRAY[?]::text[])
-          ON CONFLICT (session_id) DO NOTHING
-        |]
-          (sid, testPid, key1)
-      keys <- runQueryEffect tr $ sessionFileKeys testPid sid
-      keys `shouldBe` [key1]
-      let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-      runQueryEffect tr (sessionFileKeys otherPid sid) `shouldReturn` []
-      clearReplaySessions tr
+    -- P0: the merge path needs only the first event's timestamp; a full decode realised the whole
+    -- array (the largest term in the prod heap census). Revert to a full decode and the ratio
+    -- collapses. Both paths are warmed first so one-time CAF init doesn't pollute the measurement.
+    let big = "[" <> BS.intercalate "," (replicate 50000 ("{\"type\":3,\"timestamp\":1000,\"data\":{\"text\":\"" <> BS.replicate 64 0x78 <> "\"}}")) <> "]"
+        firstTsOf bs = either (const (-1)) id $ firstEventTimestampRaw (BL.fromStrict bs)
+        fullDecodeOf bs = case AE.eitherDecodeStrict bs of Right (AE.Array a) -> V.length a; _ -> 0 :: Int
+        allocatedBy act = performGC >> setAllocationCounter maxBound >> act >>= evaluateWHNF >> (maxBound -) <$> getAllocationCounter
+    _ <- evaluateWHNF big >> evaluateWHNF (firstTsOf big) >> evaluateWHNF (fullDecodeOf big)
+    rawAlloc <- allocatedBy $ pure $ firstTsOf big
+    decAlloc <- allocatedBy $ pure $ fullDecodeOf big
+    firstEventTimestampRaw (BL.fromStrict big) `shouldBe` Right 1000
+    (rawAlloc * 20) `shouldSatisfy` (< decAlloc)
 
-  -- Regression for the 2026-07-13 incident: a live 1.4 GiB session had ~24
-  -- MergeReplaySession jobs enqueued and running concurrently, each decompressing
-  -- a 528 MB merged blob into multi-GB heap — every app replica OOM/CPU-melted.
-  -- The lease guarantees at most one merge per (project, session) runs at a time;
-  -- duplicate jobs claim-and-skip.
-  describe "merge lease (per-session serialization)" do
-    let seed tr sid startedAt =
-          void
-            $ withPool tr.trPool
-            $ DBT.execute
-              [sql|
-              INSERT INTO projects.replay_sessions
-                (session_id, project_id, last_event_at, event_file_count, merge_started_at)
-              VALUES (?, ?, now(), 1, ?)
-              ON CONFLICT (session_id) DO UPDATE SET merge_started_at = EXCLUDED.merge_started_at
-            |]
-              (sid, testPid, startedAt :: Maybe UTCTime)
+  it "upload, kafka parsing and the merge lease: valid messages are never counted as corrupt, one merge per session" \tr -> do
+    -- "warning" (with a reason) where no rrweb topic is configured or publishing fails.
+    sid <- nextRandom
+    for_ @[] [V.singleton (AE.object ["type" AE..= ("click" :: Text), "timestamp" AE..= (1000 :: Int)]), V.empty] \events -> do
+      res <- toBaseServantResponse tr $ replayPostH testPid ReplayPost{events = AE.Array events, sessionId = sid, timestamp = frozenTime, userId = Nothing, userEmail = Nothing, userName = Nothing}
+      let field k = case res of AE.Object o -> AEKM.lookup k o; _ -> Nothing
+      (field "sessionId", field "status") `shouldSatisfy` \(s, st) -> s == Just (AE.toJSON sid) && st `elem` map (Just . AE.String) ["ok", "warning"]
+    unknown <- call tr . replaySessionGetH testPid =<< nextRandom
+    (AE.decode @AE.Object (AE.encode unknown) >>= AEKM.lookup "events") `shouldBe` Just (AE.Array V.empty)
 
-    it "claims an unheld session and then refuses a concurrent claim" $ \tr -> do
-      clearReplaySessions tr
-      let sid = UUID.fromWords 0 0 0 200
-      seed tr sid Nothing
-      first' <- runQueryEffect tr $ claimMergeLease testPid sid
-      second' <- runQueryEffect tr $ claimMergeLease testPid sid
-      (first', second') `shouldBe` (True, False)
-      clearReplaySessions tr
+    -- Through the kafka entry point with a project that does not exist, so the write short-
+    -- circuits at the lookup: parser-valid messages (incl. empty strings) ack; corrupt and
+    -- oversized go to poison for the DLQ, and only they bump their counters.
+    let counters = readIORef wireTypeErrorsRef <&> \(m, _) -> [maybe 0 fst (HM.lookup k m) | k <- ["replay:decode_error", "replay:oversize_message"]]
+        body events = BL.toStrict $ AE.encode $ AE.object ["events" AE..= (events :: [AE.Value]), "sessionId" AE..= sid, "projectId" AE..= ("ffffffff-ffff-ffff-ffff-ffffffffffff" :: Text), "timestamp" AE..= frozenTime]
+        ev t = AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= (t :: Text), "tag" AE..= t], "timestamp" AE..= (1 :: Int)]
+        process batch = do
+          before <- counters
+          res <- runTestBg frozenTime tr $ processReplayEvents batch HM.empty
+          after <- counters
+          pure (bimap sort (sort . map (\(a, _, _) -> a)) <$> rightToMaybe res, zipWith (-) after before)
+    process [("ack-good", body [ev "hi"]), ("ack-empty-strings", body [ev ""]), ("ack-corrupt", "{not valid json"), ("ack-oversized", BS.replicate (101 * 1024 * 1024) 0x20)]
+      `shouldReturn` (Just (["ack-empty-strings", "ack-good"], ["ack-corrupt", "ack-oversized"]), [1, 1])
+    process [] `shouldReturn` (Just ([], []), [0, 0])
 
-    it "reclaims a stale lease (worker died mid-merge)" $ \tr -> do
-      clearReplaySessions tr
-      let sid = UUID.fromWords 0 0 0 201
-      stale <- addUTCTime (negate 3600) <$> getCurrentTime
-      seed tr sid (Just stale)
-      claimed <- runQueryEffect tr $ claimMergeLease testPid sid
-      claimed `shouldBe` True
-      clearReplaySessions tr
+    -- File keys are tenant-scoped.
+    let key = UUID.toText sid <> "/20260101T000000.json"
+    dbExec tr [sql| INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at, event_file_count, file_keys) VALUES (?, ?, now(), 1, ARRAY[?]) |] (sid, testPid, key)
+    (otherPid, unknownSid) <- (,) <$> (UUIDId <$> nextRandom) <*> nextRandom
+    runQueryEffect tr (traverse (uncurry sessionFileKeys) [(testPid, sid), (otherPid, sid), (testPid, unknownSid)]) `shouldReturn` [[key], [], []]
 
-    it "release frees the lease for the next worker" $ \tr -> do
-      clearReplaySessions tr
-      let sid = UUID.fromWords 0 0 0 202
-      seed tr sid Nothing
-      _ <- runQueryEffect tr $ claimMergeLease testPid sid
-      runQueryEffect tr $ releaseMergeLease testPid sid
-      reclaimed <- runQueryEffect tr $ claimMergeLease testPid sid
-      reclaimed `shouldBe` True
-      clearReplaySessions tr
+    -- 2026-07-13: ~24 concurrent merges of one 1.4 GiB session OOM'd every replica. The lease
+    -- admits one merge per session; duplicates claim-and-skip; a dead worker's lease goes stale.
+    let claim = runQueryEffect tr $ claimMergeLease testPid sid
+    sequence [claim, claim] `shouldReturn` [True, False]
+    runQueryEffect tr (releaseMergeLease testPid sid)
+    claim `shouldReturn` True
+    dbExec tr [sql| UPDATE projects.replay_sessions SET merge_started_at = now() - interval '1 hour' WHERE session_id = ? |] (Only sid)
+    claim `shouldReturn` True
 
-  describe "compressAndMergeReplaySessions batch selection" do
-    it "picks up sessions older than 30 min with merged=FALSE" $ \tr -> do
-      clearReplaySessions tr
-      let sid = UUID.fromWords 0 0 0 1
-      void
-        $ withPool tr.trPool
-        $ DBT.execute
-          [sql|
-          INSERT INTO projects.replay_sessions
-            (session_id, project_id, last_event_at, event_file_count, merged)
-          VALUES (?, ?, now() - interval '2 hours', 0, FALSE)
-          ON CONFLICT (session_id) DO NOTHING
-        |]
-          (sid, testPid)
-      rows :: V.Vector (UUID.UUID, Int) <-
-        withPool tr.trPool
-          $ DBT.query
-            [sql|
-          SELECT session_id, event_file_count
-          FROM projects.replay_sessions
-          WHERE merged = FALSE
-            AND last_event_at < now() - interval '30 minutes'
-            AND project_id = ?
-        |]
-            (Only testPid)
-      rows `shouldSatisfy` (not . V.null)
-      clearReplaySessions tr
-
-    it "does not pick up recently active sessions" $ \tr -> do
-      clearReplaySessions tr
-      let sid = UUID.fromWords 0 0 0 2
-      void
-        $ withPool tr.trPool
-        $ DBT.execute
-          [sql|
-          INSERT INTO projects.replay_sessions
-            (session_id, project_id, last_event_at, event_file_count, merged)
-          VALUES (?, ?, now(), 0, FALSE)
-          ON CONFLICT (session_id) DO NOTHING
-        |]
-          (sid, testPid)
-      rows :: V.Vector (Only UUID.UUID) <-
-        withPool tr.trPool
-          $ DBT.query
-            [sql|
-          SELECT session_id FROM projects.replay_sessions
-          WHERE merged = FALSE
-            AND last_event_at < now() - interval '30 minutes'
-            AND project_id = ?
-        |]
-            (Only testPid)
-      rows `shouldBe` V.empty
-      clearReplaySessions tr
-
-  describe "splitReplayPayload" do
-    -- Reconstructs a kafka-published replay message (events + metadata).
-    -- We build payloads with `AE.encode` so we exercise whatever key order
-    -- aeson emits, which is exactly what kafka consumers see in prod.
-    let mkPayload events =
-          BL.toStrict
-            $ AE.encode
-            $ AE.object
-              [ "events" AE..= (events :: AE.Value)
-              , "sessionId" AE..= ("00000000-0000-0000-0000-000000000001" :: Text)
-              , "projectId" AE..= ("00000000-0000-0000-0000-000000000002" :: Text)
-              , "timestamp" AE..= ("2026-01-01T00:00:00Z" :: Text)
-              ]
-        roundTrip events = case splitReplayPayload (mkPayload events) of
-          Left e -> error $ "splitReplayPayload failed: " <> toText e
-          Right p -> AE.eitherDecodeStrict p.eventsBytes :: Either String AE.Value
-
-    it "round-trips a single rrweb event" $ \_ -> do
-      let event = AE.object ["type" AE..= (2 :: Int), "data" AE..= AE.object ["node" AE..= AE.object []], "timestamp" AE..= (1000 :: Int)]
-          events = AE.toJSON ([event] :: [AE.Value]) :: AE.Value
-      roundTrip events `shouldBe` Right events
-
-    -- Regression for the black-player bug: rrweb mutation events frequently
-    -- carry empty-string fields (e.g. `data.text`, removed `tagName`). The
-    -- previous skipJsonString consumed the closing `"` of `""` as if it
-    -- were content, the parser bailed, the message was silently dropped,
-    -- and the session ended up with zero events.
-    it "round-trips events containing empty strings" $ \_ -> do
-      let event =
-            AE.object
-              [ "type" AE..= (3 :: Int)
-              , "data" AE..= AE.object ["text" AE..= ("" :: Text), "tag" AE..= ("div" :: Text)]
-              , "timestamp" AE..= (1000 :: Int)
-              ]
-          events = AE.toJSON ([event, event] :: [AE.Value]) :: AE.Value
-      roundTrip events `shouldBe` Right events
-
-    it "round-trips events with strings containing JSON-meaningful chars" $ \_ -> do
-      let event =
-            AE.object
-              [ "type" AE..= (3 :: Int)
-              , "data" AE..= AE.object ["text" AE..= ("]],}\"hi\\there" :: Text)]
-              , "timestamp" AE..= (2000 :: Int)
-              ]
-          events = AE.toJSON ([event] :: [AE.Value]) :: AE.Value
-      roundTrip events `shouldBe` Right events
-
-    it "round-trips deeply nested rrweb DOM mutation events" $ \_ -> do
-      let leaf = AE.object ["tagName" AE..= ("" :: Text), "attributes" AE..= AE.object [], "childNodes" AE..= ([] :: [AE.Value])]
-          tree = AE.object ["tagName" AE..= ("div" :: Text), "attributes" AE..= AE.object ["class" AE..= ("" :: Text)], "childNodes" AE..= ([leaf, leaf] :: [AE.Value])]
-          event = AE.object ["type" AE..= (2 :: Int), "data" AE..= AE.object ["node" AE..= tree], "timestamp" AE..= (3000 :: Int)]
-          events = AE.toJSON ([event] :: [AE.Value]) :: AE.Value
-      roundTrip events `shouldBe` Right events
-
-    it "round-trips long strings around escapes and UTF-8 characters" $ \_ -> do
-      let content = T.replicate 1000000 "x"
-          events = AE.toJSON ([content <> "\"\\é🙂" <> content, ""] :: [Text])
-      roundTrip events `shouldBe` Right events
-
-  describe "processReplayEvents (e2e)" do
-    -- End-to-end through the kafka batch entry point. Uses a nonexistent
-    -- project_id so `saveReplayMinio` short-circuits in the project-lookup
-    -- path (returns ackId) — we don't need a live MinIO to verify that
-    -- valid messages aren't dropped at the parser. The regression we're
-    -- guarding against: empty-string fields inside rrweb events used to
-    -- bump `replay:decode_error` and ack the message as "garbage". With
-    -- the fix, only genuinely-corrupt JSON should hit that counter.
-    let nonexistentPid = "ffffffff-ffff-ffff-ffff-ffffffffffff" :: Text
-        mkBody events =
-          BL.toStrict
-            $ AE.encode
-            $ AE.object
-              [ "events" AE..= (events :: AE.Value)
-              , "sessionId" AE..= ("00000000-0000-0000-0000-000000000099" :: Text)
-              , "projectId" AE..= nonexistentPid
-              , "timestamp" AE..= ("2026-05-08T00:00:00Z" :: Text)
-              ]
-        readCounter k = do
-          (m, _) <- readIORef wireTypeErrorsRef
-          pure $ maybe 0 fst $ HM.lookup k m
-        oversize = BS.replicate (101 * 1024 * 1024) 0x20 -- 101 MB of spaces, over the 100 MiB maxReplayMessageBytes cap
-        evNonEmpty = AE.toJSON ([AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("hi" :: Text)], "timestamp" AE..= (1 :: Int)]] :: [AE.Value]) :: AE.Value
-        evEmptyStr = AE.toJSON ([AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("" :: Text), "tag" AE..= ("" :: Text)], "timestamp" AE..= (2 :: Int)]] :: [AE.Value]) :: AE.Value
-
-    it "acks valid + corrupt; counts only the genuinely-corrupt as decode errors" $ \tr -> do
-      decodeBefore <- readCounter "replay:decode_error"
-      oversizeBefore <- readCounter "replay:oversize_message"
-      let batch =
-            [ ("ack-good", mkBody evNonEmpty)
-            , ("ack-empty-strings", mkBody evEmptyStr) -- regression case
-            , ("ack-corrupt", "{not valid json")
-            , ("ack-oversized", oversize)
-            ]
-          frozen = UTCTime (fromGregorian 2026 5 8) 0
-      ackedRes <- runTestBg frozen tr $ processReplayEvents batch HM.empty
-      decodeAfter <- readCounter "replay:decode_error"
-      oversizeAfter <- readCounter "replay:oversize_message"
-      -- Parser-valid messages (good + empty-strings) land in the ack list;
-      -- the truly corrupt one goes to the poison list so Pkg.Queue can DLQ
-      -- it (no silent drop). Oversized is also poison.
-      case ackedRes of
-        Right (acked, poison) -> do
-          sort acked `shouldBe` sort ["ack-good", "ack-empty-strings"]
-          sort (map (\(a, _, _) -> a) poison) `shouldContain` ["ack-corrupt"]
-        Left _ -> expectationFailure "processReplayEvents returned Left; replay path never surfaces WriteFailure"
-      -- The load-bearing assertion: only the truly-corrupt JSON bumped the
-      -- decode counter. Before the fix this would be 2.
-      decodeAfter - decodeBefore `shouldBe` 1
-      oversizeAfter - oversizeBefore `shouldBe` 1
-
-    it "returns empty list and bumps no counters on empty input" $ \tr -> do
-      decodeBefore <- readCounter "replay:decode_error"
-      oversizeBefore <- readCounter "replay:oversize_message"
-      let frozen = UTCTime (fromGregorian 2026 5 8) 0
-      acked <- runTestBg frozen tr $ processReplayEvents [] HM.empty
-      decodeAfter <- readCounter "replay:decode_error"
-      oversizeAfter <- readCounter "replay:oversize_message"
-      case acked of
-        Right (ids, poison) -> do
-          ids `shouldBe` []
-          poison `shouldBe` []
-        Left _ -> expectationFailure "processReplayEvents returned Left WriteFailure"
-      decodeAfter `shouldBe` decodeBefore
-      oversizeAfter `shouldBe` oversizeBefore
-
-  -- True end-to-end coverage against a real MinIO. The previous specs
-  -- short-circuit at the project lookup so they never hit S3; these run
-  -- the actual ingestion path (parser → MinIO put → DB row) and the
-  -- player's read path (`replaySessionGetH` / `fetchReplaySession`) so
-  -- a regression in object-keying, gzip framing, or DB column shape
-  -- surfaces before deploy. Each spec calls `requireMinio` so a missing
-  -- MinIO turns into a clear `pending` rather than a confusing failure.
-  describe "replay round-trip (MinIO required)" do
+  -- The real path against MinIO: parser → object put → DB row → merge cron → shards → player read.
+  it "MinIO round trip: kafka batches survive merge cron passes and shard sealing, read back in event order" \tr -> requireMinio tr pendingWith do
+    project <- projectOf tr testPid
     let frozen = UTCTime (fromGregorian 2026 5 8) 0
-        nonEmptyEvents =
-          AE.toJSON
-            ( [ AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("hello" :: Text)], "timestamp" AE..= (1000 :: Int)]
-              , AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("world" :: Text)], "timestamp" AE..= (2000 :: Int)]
-              ]
-                :: [AE.Value]
-            )
-            :: AE.Value
-        -- Regression payload: the bug we just fixed silently dropped these.
-        emptyStringEvents =
-          AE.toJSON
-            ( [ AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("" :: Text), "tag" AE..= ("" :: Text)], "timestamp" AE..= (3000 :: Int)]
-              , AE.object ["type" AE..= (2 :: Int), "data" AE..= AE.object ["node" AE..= AE.object ["tagName" AE..= ("" :: Text)]], "timestamp" AE..= (4000 :: Int)]
-              ]
-                :: [AE.Value]
-            )
-            :: AE.Value
-        mkBody sessionId events =
-          BL.toStrict
-            $ AE.encode
-            $ AE.object
-              [ "events" AE..= (events :: AE.Value)
-              , "sessionId" AE..= UUID.toText sessionId
-              , "projectId" AE..= UUID.toText UUID.nil
-              , "timestamp" AE..= ("2026-05-08T00:00:00Z" :: Text)
-              ]
-        clearSessionRow tr sid =
-          void
-            $ withPool tr.trPool
-            $ DBT.execute
-              [sql| DELETE FROM projects.replay_sessions WHERE session_id = ? AND project_id = ? |]
-              (sid, testPid)
-        -- Pull events from the player's-API surface: same code-path as
-        -- `replaySessionGetH`, sans the cookie-session machinery (which
-        -- would force every test to set up a logged-in user just to read
-        -- a row it knows it just wrote).
-        fetchEventsFor tr sid = do
-          projM <- runQueryEffect tr $ Projects.projectById testPid
-          case projM of
-            Nothing -> expectationFailure "test project not found" >> pure V.empty
-            Just p -> do
-              resp <- runTestBg frozen tr $ fetchReplaySession p sid
-              -- Decode the *serialized* envelope (exactly what servant sends the
-              -- browser) so the RawJson byte-splice is exercised, not just the
-              -- pre-serialization value.
-              case AE.decode (AE.encode resp) of
-                Just (AE.Object obj) | Just (AE.Array a) <- AEKM.lookup "events" obj -> pure a
-                _ -> expectationFailure "serialized response missing events array" >> pure V.empty
+        atSec i = UTCTime (fromGregorian 2026 5 8) (fromIntegral i)
+        ev t d = AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object d, "timestamp" AE..= (t :: Int)]
+        -- Distinct frozen times keep each message's object key from clobbering the previous one.
+        ingest sid i events = runTestBg (atSec i) tr $ processReplayEvents [("m" <> show i, BL.toStrict $ AE.encode $ AE.object ["events" AE..= (events :: [AE.Value]), "sessionId" AE..= sid, "projectId" AE..= UUID.nil, "timestamp" AE..= frozen])] HM.empty
+        -- Decoded from the serialized envelope, so the RawJson byte-splice is exercised.
+        readBack sid = do
+          resp <- runTestBg frozen tr $ fetchReplaySession project sid
+          pure $ AE.decode @AE.Object (AE.encode resp) >>= AEKM.lookup "events"
+        timestamps sid = readBack sid <&> \case Just (AE.Array a) -> [t | AE.Object o <- V.toList a, Just (AE.Number t) <- [AEKM.lookup "timestamp" o]]; _ -> []
+        fileCount sid = length <$> runQueryEffect tr (sessionFileKeys testPid sid)
+        merged sid = dbOne @_ @Bool tr [sql| SELECT merged FROM projects.replay_sessions WHERE session_id = ? |] (Only sid)
+        cron t = void $ runTestBg t tr compressAndMergeReplaySessions
+    [plain, emptyStrings, twoBatches, stranded, sealed, absent] <- replicateM 6 nextRandom
 
-    it "round-trips events posted via the kafka entry point through the player API" $ \tr ->
-      requireMinio tr pendingWith $ do
-        sid <- UUID.fromWords 0 0 0 100 & pure
-        clearSessionRow tr sid
-        acked <- runTestBg frozen tr $ processReplayEvents [("ack-1", mkBody sid nonEmptyEvents)] HM.empty
-        case acked of
-          Right (ids, _poison) -> ids `shouldBe` ["ack-1"]
-          Left _ -> expectationFailure "processReplayEvents returned Left WriteFailure"
-        storedKeys <- runQueryEffect tr $ sessionFileKeys testPid sid
-        storedKeys `shouldSatisfy` (\ks -> not (null ks) && all ((replayObjectPrefix testPid frozen sid) `T.isPrefixOf`) ks)
-        events <- fetchEventsFor tr sid
-        -- Ingested array must come back byte-equivalent (rrweb relies on
-        -- exact event objects + timestamp ordering).
-        AE.Array events `shouldBe` nonEmptyEvents
-        clearSessionRow tr sid
+    -- Byte-equivalent round trip, including the empty-string events the black-player bug dropped.
+    for_ @[] [(plain, [ev 1000 ["text" AE..= ("hello" :: Text)], ev 2000 ["text" AE..= ("world" :: Text)]]), (emptyStrings, [ev 3000 ["text" AE..= ("" :: Text), "tag" AE..= ("" :: Text)], AE.object ["type" AE..= (2 :: Int), "data" AE..= AE.object ["node" AE..= AE.object ["tagName" AE..= ("" :: Text)]], "timestamp" AE..= (4000 :: Int)]])] \(sid, events) -> do
+      rightToMaybe <$> ingest sid (0 :: Int) events `shouldReturn` Just (["m0"], [])
+      keys <- runQueryEffect tr $ sessionFileKeys testPid sid
+      (length keys, all (replayObjectPrefix testPid (atSec (0 :: Int)) sid `T.isPrefixOf`) keys) `shouldBe` (1, True)
+      readBack sid `shouldReturn` Just (AE.toJSON events)
+    -- Separate kafka batches merge in event-time order.
+    for_ @[] [(1, 10), (2, 20)] \(i, t) -> ingest twoBatches (i :: Int) [ev t []]
+    timestamps twoBatches `shouldReturn` [10, 20]
 
-    it "preserves rrweb events containing empty strings end-to-end (regression)" $ \tr ->
-      -- This is the test that would have caught the black-player bug at
-      -- the data-flow boundary. With the buggy parser, `processReplayEvents`
-      -- would drop the message via `replay:decode_error`, no S3 object
-      -- would be written, and `fetchReplaySession` would return [].
-      requireMinio tr pendingWith $ do
-        sid <- UUID.fromWords 0 0 0 101 & pure
-        clearSessionRow tr sid
-        acked <- runTestBg frozen tr $ processReplayEvents [("ack-empty", mkBody sid emptyStringEvents)] HM.empty
-        case acked of
-          Right (ids, _poison) -> ids `shouldBe` ["ack-empty"]
-          Left _ -> expectationFailure "processReplayEvents returned Left WriteFailure"
-        events <- fetchEventsFor tr sid
-        AE.Array events `shouldBe` emptyStringEvents
-        clearSessionRow tr sid
+    -- 2026-08-26: a session holding more files than one pass consumes was marked merged after
+    -- its FIRST pass, stranding the rest (183 sessions, 9,999 files in prod). The cron only
+    -- takes sessions idle for 30 min against its own clock, so at write time it does nothing.
+    for_ [1 .. 26 :: Int] \i -> ingest stranded i [ev (i * 10) []]
+    cron frozen
+    (,) <$> fileCount stranded <*> merged stranded `shouldReturn` (26, False)
+    let afterIdle = addUTCTime 3600 frozen
+    cron afterIdle
+    (,) <$> fileCount stranded <*> merged stranded `shouldReturn` (1, False)
+    cron afterIdle
+    (,) <$> fileCount stranded <*> merged stranded `shouldReturn` (0, True)
 
-    it "merges multiple kafka batches into one replayable session" $ \tr ->
-      requireMinio tr pendingWith $ do
-        sid <- UUID.fromWords 0 0 0 102 & pure
-        clearSessionRow tr sid
-        let batchA = AE.toJSON ([AE.object ["type" AE..= (3 :: Int), "timestamp" AE..= (10 :: Int), "data" AE..= AE.object []]] :: [AE.Value]) :: AE.Value
-            batchB = AE.toJSON ([AE.object ["type" AE..= (3 :: Int), "timestamp" AE..= (20 :: Int), "data" AE..= AE.object []]] :: [AE.Value]) :: AE.Value
-            -- Distinct frozen times so the per-message S3 object keys
-            -- (`<sid>/<HHMMSS%q>.json`) don't collide and the second
-            -- write doesn't clobber the first.
-            tA = UTCTime (fromGregorian 2026 5 8) 1
-            tB = UTCTime (fromGregorian 2026 5 8) 2
-        _ <- runTestBg tA tr $ processReplayEvents [("a", mkBody sid batchA)] HM.empty
-        _ <- runTestBg tB tr $ processReplayEvents [("b", mkBody sid batchB)] HM.empty
-        events <- fetchEventsFor tr sid
-        -- Order matters for replay — getSessionEvents folds individual
-        -- file_keys via mergeEventArrays which sorts by first-event ts.
-        V.length events `shouldBe` 2
-        let timestamps = V.toList $ V.map (\v -> case v of AE.Object o -> AEKM.lookup "timestamp" o; _ -> Nothing) events
-        timestamps `shouldBe` [Just (AE.Number 10), Just (AE.Number 20)]
-        clearSessionRow tr sid
+    -- Layer B: the merge seals byte-bounded, append-only shards (three 7 MiB batches against a
+    -- 12 MiB budget seal two); the manifest lists them in order and the read stitches them.
+    let pad = decodeUtf8 (BS.replicate (7 * 1024 * 1024) 0x78) :: Text
+    for_ @[] [(1, 10), (2, 20), (3, 30)] \(i, t) -> ingest sealed (i :: Int) [ev t ["text" AE..= pad]]
+    void $ runTestBg frozen tr $ mergeReplaySession testPid sealed
+    fileCount sealed `shouldReturn` 0
+    manifest <- runTestBg frozen tr $ buildReplayManifest project sealed
+    -- The .gz suffix is how the read path itself decides to gunzip.
+    map (\s -> (".gz" `T.isSuffixOf` s.key && "/shard-" `T.isInfixOf` s.key, s.firstTs)) manifest.segments `shouldBe` [(True, 10), (True, 30)]
+    shard0 <- maybe (fail "no shard segment") (pure . (.key)) (viaNonEmpty head manifest.segments)
+    RawJson raw <- runTestBg frozen tr $ fetchReplayShard project sealed (Just shard0)
+    length <$> AE.decode @[AE.Value] raw `shouldBe` Just 2
+    timestamps sealed `shouldReturn` [10, 20, 30]
 
-    -- Layer B: the merge seals events into append-only, byte-bounded shards
-    -- (<sid>/shard-<idx>-<firstTs>.json.gz) instead of one growing merged.json.gz.
-    -- This is the O(n²)→O(n)/flat-heap fix. Verify end-to-end: batches → shards,
-    -- the manifest lists them in order, and the read path stitches them back in
-    -- event-time order with nothing lost.
-    -- Regression (2026-08-26): a session holding more than `maxFilesPerMerge`
-    -- files was marked merged after its FIRST pass, and the cron selects on
-    -- `merged = FALSE` — so the remainder was stranded with no way back. Found
-    -- in production as 183 sessions holding 9,999 unmerged files, the worst
-    -- 798. The cron path is the one that marks; `mergeReplaySession` passes
-    -- `const pass`, which is why the per-session job never showed the bug.
-    it "keeps merged=FALSE while a session still has unmerged files" $ \tr ->
-      requireMinio tr pendingWith $ do
-        let sid = UUID.fromWords 0 0 0 301
-            ev t = AE.object ["type" AE..= (3 :: Int), "timestamp" AE..= (t :: Int), "data" AE..= AE.object []] :: AE.Value
-        clearSessionRow tr sid
-        -- One file per batch, one more than a single pass can consume. Distinct
-        -- frozen times keep the per-message object keys from colliding.
-        forM_ [1 .. 26 :: Int] $ \i ->
-          void
-            $ runTestBg (UTCTime (fromGregorian 2026 5 8) (fromIntegral i)) tr
-            $ processReplayEvents [("m" <> show i, mkBody sid (AE.toJSON ([ev (i * 10)] :: [AE.Value])))] HM.empty
-        (length <$> runQueryEffect tr (sessionFileKeys testPid sid)) `shouldReturn` 26
-        -- The cron only picks up sessions idle for 30 min, measured against the
-        -- clock it is handed — so it has to run LATER than the writes, not at
-        -- the same frozen instant, or it selects nothing and proves nothing.
-        let afterIdle = addUTCTime 3600 frozen
-        void $ runTestBg afterIdle tr compressAndMergeReplaySessions
-        -- A pass consumes at most maxFilesPerMerge, leaving one behind …
-        (length <$> runQueryEffect tr (sessionFileKeys testPid sid)) `shouldReturn` 1
-        -- … so the session must stay selectable, or the cron never returns for it.
-        mergedFlag tr sid `shouldReturn` False
-        -- And a second pass finishes the job and only then marks it merged.
-        void $ runTestBg afterIdle tr compressAndMergeReplaySessions
-        (length <$> runQueryEffect tr (sessionFileKeys testPid sid)) `shouldReturn` 0
-        mergedFlag tr sid `shouldReturn` True
-        clearSessionRow tr sid
-
-    it "seals ingested events into ordered shards; manifest + read return them in order" $ \tr ->
-      requireMinio tr pendingWith $ do
-        let sid = UUID.fromWords 0 0 0 300
-        clearSessionRow tr sid -- shard keys live in the DB row, so clearing it isolates reruns
-        projM <- runQueryEffect tr $ Projects.projectById testPid
-        project <- maybe (expectationFailure "test project not found" >> error "unreachable") pure projM
-        -- 7 MiB padding per batch so the 12 MiB shard byte-budget seals >1 shard.
-        let pad = decodeUtf8 (BS.replicate (7 * 1024 * 1024) 0x78)
-            ev t = AE.object ["type" AE..= (3 :: Int), "timestamp" AE..= (t :: Int), "data" AE..= AE.object ["text" AE..= (pad :: Text)]] :: AE.Value
-            batchAt t = AE.toJSON ([ev t] :: [AE.Value]) :: AE.Value
-            times = [10, 20, 30] :: [Int]
-        forM_ (zip [1 :: Int ..] times) $ \(i, t) ->
-          void $ runTestBg (UTCTime (fromGregorian 2026 5 8) (fromIntegral i)) tr $ processReplayEvents [("k" <> show i, mkBody sid (batchAt t))] HM.empty
-        -- Seal the tracked files into shards.
-        void $ runTestBg frozen tr $ mergeReplaySession testPid sid
-        -- The merge consumed the individual file_keys.
-        keysAfter <- runQueryEffect tr $ sessionFileKeys testPid sid
-        keysAfter `shouldBe` []
-        -- Manifest: at least two gzip shard segments (byte budget split the batches),
-        -- keyed under <sid>/shard-, with non-decreasing first-event timestamps.
-        manifest <- runTestBg frozen tr $ buildReplayManifest project sid
-        -- Sealed shards are always `<prefix>/shard-<idx>-<ts>.json.gz`; the suffix is how
-        -- the read path itself decides to gunzip (see fetchReplayShard), so the test keys
-        -- off the same signal rather than a manifest field the client never read.
-        let shardSegs = filter (\s -> ".gz" `T.isSuffixOf` s.key) manifest.segments
-        length shardSegs `shouldSatisfy` (>= 2)
-        all (\s -> ("/shard-" :: Text) `T.isInfixOf` s.key) shardSegs `shouldBe` True
-        map (\s -> s.firstTs) shardSegs `shouldBe` sort (map (\s -> s.firstTs) shardSegs)
-        -- A single shard fetch returns a valid, non-empty JSON events array.
-        case shardSegs of
-          (s0 : _) -> do
-            RawJson raw <- runTestBg frozen tr $ fetchReplayShard project sid (Just s0.key)
-            (AE.decode raw :: Maybe [AE.Value]) `shouldSatisfy` maybe False (not . null)
-          [] -> expectationFailure "expected at least one shard segment"
-        -- Read path stitches shards back in event-time order, nothing dropped.
-        events <- fetchEventsFor tr sid
-        V.length events `shouldBe` 3
-        let tss = V.toList $ V.map (\v -> case v of AE.Object o -> AEKM.lookup "timestamp" o; _ -> Nothing) events
-        tss `shouldBe` [Just (AE.Number 10), Just (AE.Number 20), Just (AE.Number 30)]
-        clearSessionRow tr sid
-
-    it "returns a user-facing error (not crash) for a session with no data" $ \tr ->
-      requireMinio tr pendingWith $ do
-        sid <- UUID.fromWords 0 0 0 999 & pure
-        clearSessionRow tr sid
-        events <- fetchEventsFor tr sid
-        -- Empty events array + an `error` field is the player's "nothing
-        -- to play" signal — the worst-case response should still be
-        -- well-formed, not an exception or 500.
-        events `shouldBe` V.empty
-
-  describe "concatRawJsonArrays large input" do
-    it "handles many arrays efficiently without OOM" $ \_ -> do
-      let validChunk = "[1,2,3,4,5]" :: BL.ByteString
-          manyChunks = replicate 1000 validChunk
-          result = concatRawJsonArrays manyChunks
-      -- Should produce valid JSON array of 5000 numbers
-      let decoded = AE.decode result :: Maybe [Int]
-      fmap length decoded `shouldBe` Just 5000
-
-  -- P1: the viewer serves the events array as raw bytes spliced verbatim into
-  -- the JSON envelope — never re-parsed into an AE.Array or re-encoded. If anyone
-  -- reintroduces a decode/re-encode, the non-canonical spacing below is normalized
-  -- away and the verbatim-substring assertion fails.
-  describe "ReplaySessionResp serialization (P1: raw events spliced, not re-encoded)" do
-    it "splices the exact events bytes into the envelope and stays well-formed" $ \_ -> do
-      let rawBytes = "[{\"type\":3,   \"timestamp\":10}]" :: BL.ByteString -- deliberately non-canonical spacing
-          resp = ReplaySessionResp{events = RawJson rawBytes, partial = Just False, errorMsg = Nothing, meta = Nothing}
-          encoded = AE.encode resp
-      BS.isInfixOf (BL.toStrict rawBytes) (BL.toStrict encoded) `shouldBe` True
-      case AE.decode encoded of
-        Just (AE.Object o) -> do
-          AEKM.lookup "partial" o `shouldBe` Just (AE.Bool False)
-          (AEKM.lookup "events" o >>= \case AE.Array a -> Just (V.length a); _ -> Nothing) `shouldBe` Just 1
-        _ -> expectationFailure "envelope not a JSON object"
-
-    it "omits partial when absent and surfaces the error field" $ \_ ->
-      case AE.decode (AE.encode ReplaySessionResp{events = RawJson "[]", partial = Nothing, errorMsg = Just "boom", meta = Nothing}) of
-        Just (AE.Object o) -> do
-          AEKM.member "partial" o `shouldBe` False
-          AEKM.lookup "error" o `shouldBe` Just (AE.String "boom")
-        _ -> expectationFailure "envelope not a JSON object"
-
-  -- The heap-pressure regression this whole task exists for. The merge path
-  -- only needs the *first* event's timestamp (to sort files), but the old code
-  -- fully decoded every blob into an `AE.Array` — ~5-10x the raw bytes, the
-  -- single largest term in the prod census. `decodeArrayLen` below simulates
-  -- that old cost in-test; `firstEventTimestampRaw` is the P0 fix. We assert the
-  -- fix allocates dramatically less. If anyone reverts the parser to a full
-  -- decode, the ratio collapses and this fails.
-  describe "merge path: first-event extraction does not materialize the array (P0)" do
-    it "allocates far less than a full decode and stays tiny regardless of array size" $ \_ -> do
-      let ev = "{\"type\":3,\"timestamp\":1000,\"data\":{\"text\":\"" <> BS.replicate 64 0x78 <> "\"}}"
-          big = "[" <> BS.intercalate "," (replicate 50000 ev) <> "]"
-      -- Build the blob and warm both code paths once BEFORE measuring: the first
-      -- call to each charges one-time CAF/dictionary init (aeson/attoparsec) that
-      -- would otherwise pollute the measurement — badly so under the interpreted
-      -- `live-test-dev` loop, where that init dwarfs the parse itself.
-      _ <- evaluateWHNF big
-      _ <- evaluateWHNF $ either (const (-1)) id $ firstEventTimestampRaw (BL.fromStrict big)
-      _ <- evaluateWHNF $ decodeArrayLen big
-      rawAlloc <- allocatedBy $ pure $ either (const (-1)) id $ firstEventTimestampRaw (BL.fromStrict big)
-      decAlloc <- allocatedBy $ pure $ decodeArrayLen big
-      -- Both agree on the first timestamp — the fix changes cost, not behaviour.
-      firstEventTimestampRaw (BL.fromStrict big) `shouldBe` Right 1000
-      -- The prefix parse touches only the first of 50k events, so it must allocate
-      -- an order of magnitude less than a full decode. This ratio is the regression
-      -- guard: revert to a full decode and it collapses. (No absolute-bytes bound —
-      -- that is calibrated to compiled -O2 and flakes under interpreted bytecode.)
-      (rawAlloc * 20) `shouldSatisfy` (< decAlloc)
+    -- Nothing recorded: a well-formed empty answer, not an exception.
+    readBack absent `shouldReturn` Just (AE.Array V.empty)

@@ -1,0 +1,7 @@
+<input type="radio" name="trace-tabs" id="tab-map" class="sr-only" _="on change send &quot;tab-visible&quot; to #service_map"
+<input type="search" class="min-w-0 grow bg-transparent max-md:text-base" placeholder="Search spans" aria-label="Search spans" id="search-input" _="on input set v to my value.toLowerCase() then repeat for el in &lt;#trace_span_container .span-filterble/&gt; if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end on htmx:after:swap from document if my value is not &#39;&#39; send input to me end on keydown[key is &#39;Escape&#39;] set my value to &#39;&#39; then send input to me"
+<button class="h-6 w-6 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-strokeWeak text-textStrong cursor-pointer" aria-label="Previous matching span" data-tippy-content="Previous matching span" onpointerdown="navigateSpans(&#39;prev&#39;)"
+<button class="h-6 w-6 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-strokeWeak text-textStrong cursor-pointer" aria-label="Next matching span" data-tippy-content="Next matching span" onpointerdown="navigateSpans(&#39;next&#39;)"
+<div role="tabpanel" class="a-tab-content pt-2 hidden group-has-[#tab-map:checked]/tt:block" id="service_map"
+<p class="text-xs leading-relaxed whitespace-pre-wrap break-normal [overflow-wrap:anywhere] font-mono text-textStrong">SELECT &lt;unsafe&gt;
+  FROM checkout</p>

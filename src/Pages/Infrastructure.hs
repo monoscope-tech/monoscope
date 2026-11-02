@@ -14,6 +14,11 @@ module Pages.Infrastructure (
   KubernetesGet (..),
   HostMapGet (..),
   DetailGet (..),
+  HostRow (..),
+  ImageRow (..),
+  KubeRow (..),
+  KubeStatus (..),
+  InfraIntegration (..),
 ) where
 
 import Data.Default (def)
