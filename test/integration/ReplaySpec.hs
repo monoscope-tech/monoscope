@@ -15,7 +15,7 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import GHC.Conc (getAllocationCounter, setAllocationCounter)
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
-import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload)
+import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, replayPostH, replaySessionGetH, sessionFileKeys, splitReplayPayload)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.TestUtils
 import System.Config (AuthContext (..))
@@ -98,6 +98,15 @@ spec = around withTestResources do
       case postWith "" of
         Left err -> expectationFailure $ "decode failed: " <> err
         Right p -> (p.userId, p.userEmail, p.userName) `shouldBe` (Nothing, Nothing, Nothing)
+
+    it "replayPostH accepts an upload with or without events and echoes its session; an unknown session reads back no events" \tr -> do
+      let sid = UUID.fromWords 0 0 0 43
+      for_ @[] [V.singleton (AE.object ["type" AE..= ("click" :: Text), "timestamp" AE..= (1000 :: Int)]), V.empty] \events -> do
+        res <- toBaseServantResponse tr $ replayPostH testPid ReplayPost{events = AE.Array events, sessionId = sid, timestamp = frozenTime, userId = Nothing, userEmail = Nothing, userName = Nothing}
+        -- "warning" (with a reason) where no rrweb topic is configured.
+        res `shouldSatisfy` (`elem` [AE.object ["sessionId" AE..= sid, "status" AE..= ("ok" :: Text)], AE.object ["sessionId" AE..= sid, "status" AE..= ("warning" :: Text), "message" AE..= ("No rrweb pubsub topics configured" :: Text)]])
+      unknown <- call tr $ replaySessionGetH testPid (UUID.fromWords 0 0 0 44)
+      (AE.decode @AE.Value (AE.encode unknown) >>= \case AE.Object o -> AEKM.lookup "events" o; _ -> Nothing) `shouldBe` Just (AE.Array V.empty)
 
   describe "replay object layout" do
     let at = UTCTime (fromGregorian 2026 5 8) 0

@@ -1,0 +1,223 @@
+<div id="storage-connection-content" class="h-full">
+<div class="w-full h-full overflow-y-auto">
+<section class="py-6 px-4 sm:py-8 sm:px-8 lg:px-12 max-w-4xl space-y-6">
+<div class=" flex items-center justify-between ">
+<h2 class="text-textStrong text-xl sm:text-2xl font-bold tracking-tight">Storage</h2>
+<div id="connectedInd">
+<span class="badge badge-sm badge-soft gap-1 badge-success">
+<svg class="icon h-3 w-3" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM369 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-111 111-47-47c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l64 64c9.4 9.4 24.6 9.4 33.9 0L369 209z" />
+</g>
+</svg>Connected</span>
+</div>
+</div>
+<div role="alert" class="rounded-lg bg-fillError-weak p-3 space-y-1">
+<p class="text-sm text-textError">&quot;INVALID_bucket&quot; isn&#39;t a valid bucket name.</p>
+<p class="text-sm text-textStrong">The saved connection is unchanged.</p>
+</div>
+<p class="text-sm text-textWeak max-w-2xl">Connect your own S3-compatible bucket to store telemetry in your infrastructure. Validate the connection before saving.</p>
+<form class="space-y-4" data-hx-post="/p/<uuid>/byob_s3" data-hx-swap="outerHTML" data-hx-target="#storage-connection-content" data-hx-indicator="#indicator">
+<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+<fieldset class="fieldset flex-1 min-w-0">
+<label class="label text-xs text-textStrong" for="accessKey">Access Key ID<span class="text-textError">*</span>
+</label>
+<input class="input input-sm w-full" value="fixture-access" name="accessKey" id="accessKey" type="text" placeholder="Access Key ID" required="true">
+</fieldset>
+<fieldset class="fieldset flex-1 min-w-0">
+<label class="label text-xs text-textStrong" for="secretKey">Secret Access Key<span class="text-textError">*</span>
+</label>
+<input class="input input-sm w-full" value="replacement-secret" name="secretKey" id="secretKey" type="password" placeholder="Secret Access Key" required="true">
+</fieldset>
+<fieldset class="fieldset flex-1 min-w-0">
+<label class="label text-xs text-textStrong" for="region">Region<span class="text-textError">*</span>
+</label>
+<input class="input input-sm w-full" value="us-east-1" name="region" id="region" type="text" placeholder="us-east-1" required="true" list="aws-regions">
+</fieldset>
+<fieldset class="fieldset flex-1 min-w-0">
+<label class="label text-xs text-textStrong" for="bucket">Bucket Name<span class="text-textError">*</span>
+</label>
+<input class="input input-sm w-full" value="INVALID_bucket" name="bucket" id="bucket" type="text" placeholder="Bucket Name" required="true">
+</fieldset>
+</div>
+<datalist id="aws-regions">
+<option value="us-east-1">US East (N. Virginia)</option>
+<option value="us-east-2">US East (Ohio)</option>
+<option value="us-west-1">US West (N. California)</option>
+<option value="us-west-2">US West (Oregon)</option>
+<option value="ca-central-1">Canada (Central)</option>
+<option value="eu-west-1">Europe (Ireland)</option>
+<option value="eu-west-2">Europe (London)</option>
+<option value="eu-west-3">Europe (Paris)</option>
+<option value="eu-central-1">Europe (Frankfurt)</option>
+<option value="eu-north-1">Europe (Stockholm)</option>
+<option value="ap-south-1">Asia Pacific (Mumbai)</option>
+<option value="ap-southeast-1">Asia Pacific (Singapore)</option>
+<option value="ap-southeast-2">Asia Pacific (Sydney)</option>
+<option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
+<option value="sa-east-1">South America (São Paulo)</option>
+</datalist>
+<fieldset class="fieldset flex-1 min-w-0">
+<label class="label text-xs text-textStrong" for="endpointUrl">Custom Endpoint</label>
+<input class="input input-sm w-full" value name="endpointUrl" id="endpointUrl" type="text" placeholder="https://s3.example.com" aria-describedby="endpointUrl-hint" pattern="https?://.*">
+<p id="endpointUrl-hint" class="text-xs text-textWeak">Leave blank for AWS S3. For S3-compatible providers (MinIO, DigitalOcean Spaces, Cloudflare R2, Backblaze, OVH), set the endpoint URL and enter the region your provider expects — e.g. auto for R2, nyc3 for DigitalOcean, or us-east-1 for MinIO.</p>
+</fieldset>
+<div class="flex items-center justify-between pt-2">
+<div class="flex items-center gap-3">
+<button type="submit" class="btn btn-sm btn-primary gap-1">Validate &amp; Save<span id="indicator" class="htmx-indicator loading loading-dots loading-xs" role="status" aria-label="Loading">
+</span>
+</button>
+</div>
+<label class="btn btn-sm btn-ghost gap-1 text-textError hover:bg-fillError-weak" for="remove-modal">
+<svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 640 640">
+<g>
+<path d="M232.2 68.8C236.9 56.3 248.8 48 262.2 48L377.8 48C391.1 48 403.1 56.3 407.8 68.8L424 112L520 112C533.3 112 544 122.7 544 136C544 149.3 533.3 160 520 160L120 160C106.7 160 96 149.3 96 136C96 122.7 106.7 112 120 112L216 112L232.2 68.8zM147.6 516.8L124.7 208L172.9 208L195.5 513.2C196.1 521.6 203.1 528 211.5 528L428.6 528C437 528 443.9 521.5 444.6 513.2L467.2 208L515.3 208L492.4 516.7C489.9 550.1 462.1 576 428.6 576L211.5 576C178 576 150.2 550.1 147.7 516.7z" />
+</g>
+</svg>
+<span>Remove</span>
+</label>
+<input class="modal-toggle" id="remove-modal" type="checkbox" aria-label="Toggle modal" _="on keyup[key is &#39;Escape&#39;] from window or closeModal from body if my.checked set my.checked to false then send change to me end
+          on change if my.checked then
+            add .overflow-hidden to &lt;body/&gt;
+            wait 50ms then
+            set :modal to the next &lt;.modal/&gt; then
+            set :focusable to :modal.querySelector(&#39;[autofocus]&#39;) or :modal.querySelector(&#39;input:not([type=hidden]):not([type=checkbox]), textarea, select, [tabindex]:not([tabindex=&quot;-1&quot;])&#39;) then
+            if :focusable then call :focusable.focus() end
+          else
+            remove .overflow-hidden from &lt;body/&gt;
+          end">
+<div class="modal w-screen " role="dialog" aria-label="Modal dialog" style="--color-base-100: var(--color-fillWeaker)" _="on keydown[key==&#39;Enter&#39; and target.tagName==&#39;INPUT&#39; and target.type!=&#39;textarea&#39;]
+        set :form to target.closest(&#39;form&#39;) then
+        if :form then halt the event then call :form.requestSubmit() end">
+<label class="modal-backdrop" for="remove-modal" aria-label="Close modal">
+</label>
+<div class="modal-box relative w-auto flex flex-col gap-5 p-6">
+<div class="space-y-2">
+<div class="flex items-start gap-3 mb-4">
+<div class="w-fit shrink-0 p-2 rounded-full bg-fillError-weak">
+<svg class="icon h-4 w-4 text-iconError" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M248.4 84.3c1.6-2.7 4.5-4.3 7.6-4.3s6 1.6 7.6 4.3L461.9 410c1.4 2.3 2.1 4.9 2.1 7.5c0 8-6.5 14.5-14.5 14.5H62.5c-8 0-14.5-6.5-14.5-14.5c0-2.7 .7-5.3 2.1-7.5L248.4 84.3zm-41-25L9.1 385c-6 9.8-9.1 21-9.1 32.5C0 452 28 480 62.5 480h387c34.5 0 62.5-28 62.5-62.5c0-11.5-3.2-22.7-9.1-32.5L304.6 59.3C294.3 42.4 275.9 32 256 32s-38.3 10.4-48.6 27.3zM288 368a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zm-8-184c0-13.3-10.7-24-24-24s-24 10.7-24 24v96c0 13.3 10.7 24 24 24s24-10.7 24-24V184z" />
+</g>
+</svg>
+</div>
+<div>
+<h3 class="text-lg font-semibold text-textStrong">Remove bucket?</h3>
+<p class="text-sm text-textWeak mt-1">This will disconnect your S3 bucket. Data already stored will remain in your bucket.</p>
+</div>
+</div>
+<div class="flex justify-end gap-2 mt-6">
+<label class="btn btn-sm btn-ghost" for="remove-modal">Cancel</label>
+<button type="button" class="btn btn-sm bg-fillError-strong text-white hover:opacity-90" data-hx-delete="/p/<uuid>/byob_s3" data-hx-swap="outerHTML" data-hx-target="#storage-connection-content">Remove bucket</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</form>
+</section>
+</div>
+</div>
+<div id="storage-connection-content" class="h-full">
+<div class="w-full h-full overflow-y-auto">
+<section class="py-6 px-4 sm:py-8 sm:px-8 lg:px-12 max-w-4xl space-y-6">
+<div class=" flex items-center justify-between ">
+<h2 class="text-textStrong text-xl sm:text-2xl font-bold tracking-tight">Storage</h2>
+<div id="connectedInd">
+<span class="badge badge-sm badge-soft gap-1 badge-secondary">
+<svg class="icon h-3 w-3" width="1em" height="1em" viewBox="0 0 20 20">
+<g>
+<path d="M10.0001 13.3334V10.0001M10.0001 6.66675H10.0084M18.3334 10.0001C18.3334 14.6025 14.6025 18.3334 10.0001 18.3334C5.39771 18.3334 1.66675 14.6025 1.66675 10.0001C1.66675 5.39771 5.39771 1.66675 10.0001 1.66675C14.6025 1.66675 18.3334 5.39771 18.3334 10.0001Z" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+</g>
+</svg>Not connected</span>
+</div>
+</div>
+<p class="text-sm text-textWeak max-w-2xl">Connect your own S3-compatible bucket to store telemetry in your infrastructure. Validate the connection before saving.</p>
+<form class="space-y-4" data-hx-post="/p/<uuid>/byob_s3" data-hx-swap="outerHTML" data-hx-target="#storage-connection-content" data-hx-indicator="#indicator">
+<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+<fieldset class="fieldset flex-1 min-w-0">
+<label class="label text-xs text-textStrong" for="accessKey">Access Key ID<span class="text-textError">*</span>
+</label>
+<input class="input input-sm w-full" value name="accessKey" id="accessKey" type="text" placeholder="Access Key ID" required="true">
+</fieldset>
+<fieldset class="fieldset flex-1 min-w-0">
+<label class="label text-xs text-textStrong" for="secretKey">Secret Access Key<span class="text-textError">*</span>
+</label>
+<input class="input input-sm w-full" value name="secretKey" id="secretKey" type="password" placeholder="Secret Access Key" required="true">
+</fieldset>
+<fieldset class="fieldset flex-1 min-w-0">
+<label class="label text-xs text-textStrong" for="region">Region<span class="text-textError">*</span>
+</label>
+<input class="input input-sm w-full" value="us-east-1" name="region" id="region" type="text" placeholder="us-east-1" required="true" list="aws-regions">
+</fieldset>
+<fieldset class="fieldset flex-1 min-w-0">
+<label class="label text-xs text-textStrong" for="bucket">Bucket Name<span class="text-textError">*</span>
+</label>
+<input class="input input-sm w-full" value name="bucket" id="bucket" type="text" placeholder="Bucket Name" required="true">
+</fieldset>
+</div>
+<datalist id="aws-regions">
+<option value="us-east-1">US East (N. Virginia)</option>
+<option value="us-east-2">US East (Ohio)</option>
+<option value="us-west-1">US West (N. California)</option>
+<option value="us-west-2">US West (Oregon)</option>
+<option value="ca-central-1">Canada (Central)</option>
+<option value="eu-west-1">Europe (Ireland)</option>
+<option value="eu-west-2">Europe (London)</option>
+<option value="eu-west-3">Europe (Paris)</option>
+<option value="eu-central-1">Europe (Frankfurt)</option>
+<option value="eu-north-1">Europe (Stockholm)</option>
+<option value="ap-south-1">Asia Pacific (Mumbai)</option>
+<option value="ap-southeast-1">Asia Pacific (Singapore)</option>
+<option value="ap-southeast-2">Asia Pacific (Sydney)</option>
+<option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
+<option value="sa-east-1">South America (São Paulo)</option>
+</datalist>
+<fieldset class="fieldset flex-1 min-w-0">
+<label class="label text-xs text-textStrong" for="endpointUrl">Custom Endpoint</label>
+<input class="input input-sm w-full" value name="endpointUrl" id="endpointUrl" type="text" placeholder="https://s3.example.com" aria-describedby="endpointUrl-hint" pattern="https?://.*">
+<p id="endpointUrl-hint" class="text-xs text-textWeak">Leave blank for AWS S3. For S3-compatible providers (MinIO, DigitalOcean Spaces, Cloudflare R2, Backblaze, OVH), set the endpoint URL and enter the region your provider expects — e.g. auto for R2, nyc3 for DigitalOcean, or us-east-1 for MinIO.</p>
+</fieldset>
+<div class="flex items-center justify-between pt-2">
+<div class="flex items-center gap-3">
+<button type="submit" class="btn btn-sm btn-primary gap-1">Validate &amp; Save<span id="indicator" class="htmx-indicator loading loading-dots loading-xs" role="status" aria-label="Loading">
+</span>
+</button>
+</div>
+</div>
+</form>
+</section>
+</div>
+</div>
+<div id="storage-connection-content" class="h-full">
+<div class="w-full h-full overflow-y-auto">
+<section class="py-6 px-4 sm:py-8 sm:px-8 lg:px-12 max-w-4xl space-y-6">
+<div class=" flex items-center justify-between ">
+<h2 class="text-textStrong text-xl sm:text-2xl font-bold tracking-tight">Storage</h2>
+<div id="connectedInd">
+<span class="badge badge-sm badge-soft gap-1 badge-success">
+<svg class="icon h-3 w-3" width="1em" height="1em" viewBox="0 0 512 512">
+<g>
+<path d="M256 48a208 208 0 1 1 0 416 208 208 0 1 1 0-416zm0 464A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM369 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-111 111-47-47c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l64 64c9.4 9.4 24.6 9.4 33.9 0L369 209z" />
+</g>
+</svg>Connected</span>
+</div>
+</div>
+<p class="text-sm text-textWeak">A project editor can configure storage.</p>
+<dl class="grid gap-4 sm:grid-cols-2">
+<div class="space-y-1 min-w-0">
+<dt class="text-xs text-textWeak">Bucket</dt>
+<dd class="text-sm text-textStrong break-all">fixture-bucket</dd>
+</div>
+<div class="space-y-1 min-w-0">
+<dt class="text-xs text-textWeak">Region</dt>
+<dd class="text-sm text-textStrong break-all">us-east-1</dd>
+</div>
+<div class="space-y-1 min-w-0">
+<dt class="text-xs text-textWeak">Endpoint</dt>
+<dd class="text-sm text-textStrong break-all">AWS S3</dd>
+</div>
+</dl>
+</section>
+</div>
+</div>

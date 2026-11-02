@@ -811,12 +811,8 @@ test-suite integration-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
-      BackgroundJobs.DailyScheduleSpec
-      BackgroundJobs.DashboardAutoProvisionSpec
-      BackgroundJobs.DigestFlushSpec
-      BackgroundJobs.ExpirySpec
-      BackgroundJobs.NotificationsSpec
-      BackgroundJobs.ReportUsageSpec
+      BackgroundJobsSpec
+      BillingSpec
       CLI.CLIBinarySpec
       CLI.CLIE2ESpec
       CLI.CLILifecycleSpec
@@ -834,7 +830,6 @@ test-suite integration-tests
       Pages.Bots.BotTestHelpers
       Pages.Bots.WorkflowsSpec
       Pages.BotsSpec
-      Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
       Pages.ContainersSpec
       Pages.DashboardsSpec
@@ -851,7 +846,6 @@ test-suite integration-tests
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.PrometheusSpec
-      Pages.ReportsSpec
       Pages.ServiceMapSpec
       Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
@@ -1132,12 +1126,8 @@ test-suite test-dev
       Web.I18n
       Web.MCP
       Web.Routes
-      BackgroundJobs.DailyScheduleSpec
-      BackgroundJobs.DashboardAutoProvisionSpec
-      BackgroundJobs.DigestFlushSpec
-      BackgroundJobs.ExpirySpec
-      BackgroundJobs.NotificationsSpec
-      BackgroundJobs.ReportUsageSpec
+      BackgroundJobsSpec
+      BillingSpec
       CLI.CLIBinarySpec
       CLI.CLIE2ESpec
       CLI.CLILifecycleSpec
@@ -1155,7 +1145,6 @@ test-suite test-dev
       Pages.Bots.BotTestHelpers
       Pages.Bots.WorkflowsSpec
       Pages.BotsSpec
-      Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
       Pages.ContainersSpec
       Pages.DashboardsSpec
@@ -1172,7 +1161,6 @@ test-suite test-dev
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.PrometheusSpec
-      Pages.ReportsSpec
       Pages.ServiceMapSpec
       Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
