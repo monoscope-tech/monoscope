@@ -60,6 +60,11 @@ cliJson :: HasCallStack => TestResources -> [String] -> IO AE.Value
 cliJson tr args = cliOk tr ("--json" : args) >>= jsonOut
 
 
+-- | Run a CLI binary process, capturing exit code, stdout and stderr.
+runBin :: Proc.CreateProcess -> IO (ExitCode, Text, Text)
+runBin cp = Proc.readCreateProcessWithExitCode cp "" <&> \(ec, out, err) -> (ec, toText out, toText err)
+
+
 withEnv :: [(String, String)] -> IO a -> IO a
 withEnv vars = bracket_ (for_ vars (uncurry setEnv)) (for_ vars (unsetEnv . fst))
 
@@ -68,9 +73,7 @@ spec :: Spec
 spec = around withCliResources $ describe "CLI" do
   it "binary without a server: packaged release, usage for every command, parse and agent-mode errors" \_ -> withCliBin \bin -> do
     path <- fromMaybe "" <$> lookupEnv "PATH"
-    let run extra args = do
-          (ec, out, err) <- Proc.readCreateProcessWithExitCode (Proc.proc bin args){Proc.env = Just $ [("HOME", "/tmp/no-such-monoscope-home-for-tests"), ("PATH", path)] <> extra} ""
-          pure (ec, toText out, toText err)
+    let run extra args = runBin (Proc.proc bin args){Proc.env = Just $ [("HOME", "/tmp/no-such-monoscope-home-for-tests"), ("PATH", path)] <> extra}
     withSystemTempDirectory "monoscope-release" \dir -> do
       (status, output, errors) <- Proc.readProcessWithExitCode "scripts/package-cli.sh" [bin, dir <> "/monoscope"] ""
       unless (status == ExitSuccess) $ expectationFailure $ output <> errors
@@ -116,9 +119,7 @@ spec = around withCliResources $ describe "CLI" do
   it "binary config scripts write owner-only files, redact secrets and report errors on stderr without prompting" \_ -> withCliBin \bin -> withSystemTempDirectory "monoscope-config" \dir -> do
     inherited <- getEnvironment
     let isolated = ("XDG_CONFIG_HOME", dir) : filter (\(k, _) -> k /= "XDG_CONFIG_HOME" && not ("MONOSCOPE_" `isPrefixOf` k)) inherited
-        run args = do
-          (ec, out, err) <- Proc.readCreateProcessWithExitCode (Proc.proc bin ("--json" : args)){Proc.cwd = Just dir, Proc.env = Just isolated} ""
-          pure (ec, toText out, toText err)
+        run args = runBin (Proc.proc bin ("--json" : args)){Proc.cwd = Just dir, Proc.env = Just isolated}
         mode file = (.&. 0o077) . fileMode <$> getFileStatus (dir <> "/monoscope" <> file)
     forM_ [("/config.yaml", ["config", "set", "api_key"]), ("/tokens.json", ["auth", "login", "--token"])] \(file, args) ->
       forM_ [False, True] \overwrite -> do
@@ -143,9 +144,7 @@ spec = around withCliResources $ describe "CLI" do
   it "binary against a live server: identity, schema, facets, search filters and validation, services, resource lists" \tr -> withCliBin \bin -> do
     path <- fromMaybe "" <$> lookupEnv "PATH"
     let walk url apiKey project = do
-          let run args = do
-                (ec, out, err) <- Proc.readCreateProcessWithExitCode (Proc.proc bin args){Proc.env = Just [("MONOSCOPE_API_URL", url), ("MONOSCOPE_API_KEY", apiKey), ("MONOSCOPE_PROJECT", project), ("MONOSCOPE_AGENT_MODE", "1"), ("PATH", path)]} ""
-                pure (ec, toText out, toText err)
+          let run args = runBin (Proc.proc bin args){Proc.env = Just [("MONOSCOPE_API_URL", url), ("MONOSCOPE_API_KEY", apiKey), ("MONOSCOPE_PROJECT", project), ("MONOSCOPE_AGENT_MODE", "1"), ("PATH", path)]}
               runJson args = do
                 (ec, out, err) <- run args
                 unless (ec == ExitSuccess) $ expectationFailure $ show args <> " exited " <> show ec <> ": " <> toString err
@@ -189,8 +188,8 @@ spec = around withCliResources $ describe "CLI" do
       Just apiKey -> do
         url <- fromMaybe "https://api.monoscope.tech" <$> lookupEnv "MONOSCOPE_API_URL"
         project <- fromMaybe (UUID.toString UUID.nil) <$> lookupEnv "MONOSCOPE_PROJECT"
-        (reachable, _, err) <- Proc.readCreateProcessWithExitCode (Proc.proc bin ["me"]){Proc.env = Just [("MONOSCOPE_API_URL", url), ("MONOSCOPE_API_KEY", apiKey), ("MONOSCOPE_PROJECT", project), ("MONOSCOPE_AGENT_MODE", "1")]} ""
-        if reachable == ExitSuccess then walk url apiKey project else pendingWith $ "external server " <> url <> " rejected `me`: " <> err
+        (reachable, _, err) <- runBin (Proc.proc bin ["me"]){Proc.env = Just [("MONOSCOPE_API_URL", url), ("MONOSCOPE_API_KEY", apiKey), ("MONOSCOPE_PROJECT", project), ("MONOSCOPE_AGENT_MODE", "1")]}
+        if reachable == ExitSuccess then walk url apiKey project else pendingWith $ "external server " <> url <> " rejected `me`: " <> toString err
 
   it "scripts: invalid input and missing ids exit 1 before querying; pickers; identity, project and bulk routes" \tr -> do
     let missingIds = [["dashboards", "render"], ["dashboards", "get"], ["monitors", "get"], ["issues", "get"], ["incidents", "get"], ["endpoints", "get"], ["log-patterns", "get"], ["teams", "get"], ["members", "get"], ["api-keys", "get"], ["dashboards", "patch", "dashboard.yaml"], ["members", "patch", "view"], ["dashboards", "widget", "delete", "widget-id"]]
@@ -266,9 +265,9 @@ spec = around withCliResources $ describe "CLI" do
     map (\i -> (i.base.targetHash, i.lastSeen)) issues `shouldBe` [(groupHash, groupLatest), (oldHash, latest), (newerHash, later)]
     cliJson tr ["issues", "bulk", "acknowledge", "--ids", toString (T.intercalate "," [oldHash, newerHash])] `shouldReturn` AE.object ["succeeded" AE..= ([oldHash, newerHash] :: [Text]), "failed" AE..= ([] :: [AE.Value])]
 
-  it "monitors as code: apply is idempotent by title, the yaml dump round-trips, mute, unmute and delete" \tr -> do
-    let yamlPath = "/tmp/monoscope-lifecycle-monitor.yaml"
-        dumpPath = "/tmp/monoscope-lifecycle-monitor-dump.yaml"
+  it "monitors as code: apply is idempotent by title, the yaml dump round-trips, mute, unmute and delete" \tr -> withSystemTempDirectory "monoscope-monitor" \dir -> do
+    let yamlPath = dir <> "/monitor.yaml"
+        dumpPath = dir <> "/monitor-dump.yaml"
         monitorIds = idsAt "data" <$> cliJson tr ["monitors", "list"]
     writeFileText yamlPath $ unlines ["title: Lifecycle error-rate alert", "query: 'severity.severity_text == \"error\"'", "alert_threshold: 10", "trigger_less_than: false", "check_interval_mins: 5", "time_window_mins: 15", "emails: []", "slack_channels: []", "teams: []"]
     replicateM_ 2 $ cliOk tr ["--json", "monitors", "apply", yamlPath]
@@ -313,9 +312,9 @@ spec = around withCliResources $ describe "CLI" do
     context <- cliJson tr ["events", "context", "--at", iso8601Show center, "--window", "5m"]
     map (AE.fromJSON @UTCTime) (context ^.. key "events" . values . key "timestamp") `shouldMatchList` [AE.Success (addUTCTime offset center) | offset <- [-60, 60]]
 
-  it "dashboards as code: the yaml dump applies idempotently keyed on file_path; picker, star, duplicate, delete" \tr -> do
-    let createPath = "/tmp/monoscope-lifecycle-dashboard.yaml"
-        dumpPath = "/tmp/monoscope-lifecycle-dashboard-dump.yaml"
+  it "dashboards as code: the yaml dump applies idempotently keyed on file_path; picker, star, duplicate, delete" \tr -> withSystemTempDirectory "monoscope-dashboard" \dir -> do
+    let createPath = dir <> "/dashboard.yaml"
+        dumpPath = dir <> "/dashboard-dump.yaml"
         dashboardIds = idsAt "data" <$> cliJson tr ["dashboards", "list"]
     writeFileText createPath $ unlines ["title: Lifecycle dashboard", "file_path: dashboards/lifecycle.yaml"]
     void $ cliOk tr ["--json", "dashboards", "create", createPath]
@@ -399,7 +398,6 @@ spec = around withCliResources $ describe "CLI" do
       withEnv [("MONOSCOPE_TEST_API_KEY", toString apiKey), ("OTEL_EXPORTER_OTLP_ENDPOINT", server)]
         $ void
         $ cliOk tr ["send-event", "-m", "Deploy completed lifecycleping", "--service", "lifecycle-cli", "-t", "deploy.id:d1"]
-      unsetEnv "OTEL_EXPORTER_OTLP_ENDPOINT"
       (loginEc, _) <- withEnv [("MONOSCOPE_TEST_API_KEY", "00000000-0000-0000-0000-000000000002"), ("MONOSCOPE_API_URL", server)] $ runCLILifecycleLive ["telemetrygen", "--kind=trace", "--count=3", "--rate=1000", "--service", "cli-login-regression", "--resource", "service.name:overridden"]
       loginEc `shouldBe` ExitSuccess
     -- spans land at wall-clock time; the in-process server resolves --since against the frozen clock
