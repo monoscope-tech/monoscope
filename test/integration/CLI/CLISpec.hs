@@ -73,8 +73,8 @@ spec :: Spec
 spec = around withCliResources $ describe "CLI" do
   it "binary without a server: packaged release, usage for every command, parse and agent-mode errors" \_ -> withCliBin \bin -> do
     path <- fromMaybe "" <$> lookupEnv "PATH"
-    -- Without a UTF-8 locale GHC's stdout is ASCII on Linux and help text with `—`/`→` exits 1.
-    let run extra args = runBin (Proc.proc bin args){Proc.env = Just $ [("HOME", "/tmp/no-such-monoscope-home-for-tests"), ("PATH", path), ("LANG", "C.UTF-8")] <> extra}
+    -- LC_ALL=C (minimal Linux images): GHC's stdout is ASCII there, and help text with `—`/`→` used to exit 1 mid-usage.
+    let run extra args = runBin (Proc.proc bin args){Proc.env = Just $ [("HOME", "/tmp/no-such-monoscope-home-for-tests"), ("PATH", path), ("LC_ALL", "C")] <> extra}
     withSystemTempDirectory "monoscope-release" \dir -> do
       (status, output, errors) <- Proc.readProcessWithExitCode "scripts/package-cli.sh" [bin, dir <> "/monoscope"] ""
       unless (status == ExitSuccess) $ expectationFailure $ output <> errors
@@ -101,7 +101,7 @@ spec = around withCliResources $ describe "CLI" do
           ok = ec == ExitSuccess && (usage == expected || not leaf && (expected <> " ") `T.isPrefixOf` usage)
       pure [(args, ec, usage) | not ok]
     concat misusage `shouldBe` []
-    forM_ [([], ["events", "metrics", "auth"]), (["events", "search"], ["--since", "--from"]), (["logs", "search"], ["--since", "--from"]), (["auth", "login"], ["--token"])] \(args, needles) -> do
+    forM_ [([], ["events", "metrics", "auth"]), (["events", "search"], ["--since", "--from", "--service worker → in"]), (["issues"], ["Acknowledge issue — pauses"]), (["logs", "search"], ["--since", "--from"]), (["auth", "login"], ["--token"])] \(args, needles) -> do
       (ec, out, _) <- run [] (args <> ["--help"])
       ec `shouldBe` ExitSuccess
       out `shouldContainAll` needles
