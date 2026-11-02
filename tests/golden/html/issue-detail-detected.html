@@ -885,8 +885,9 @@
 <div id="ai-response-container" class="flex-1 overflow-y-auto flex flex-col px-3" data-hx-get="/p/<uuid>/issues/<uuid>/ai_chat/history" data-hx-trigger="load-chat once" hx-on::after:swap="window.evalScriptsFromContent &amp;&amp; window.evalScriptsFromContent(event.target === this ? this : this.lastElementChild); this.lastElementChild?.scrollIntoView({behavior: &#39;smooth&#39;, block: &#39;start&#39;})">
 </div>
 <div class="shrink-0 border-t border-strokeWeak p-3 flex flex-col gap-2">
-<form data-hx-post="/p/<uuid>/issues/<uuid>/ai_chat" data-hx-target="#ai-response-container" data-hx-swap="beforeend" data-hx-indicator="#ai-chat-loader" hx-on::after:request="this.reset()">
+<form id="issue-ai-form" data-hx-post="/p/<uuid>/issues/<uuid>/ai_chat" data-hx-target="#ai-response-container" data-hx-swap="innerHTML" data-hx-indicator="#ai-chat-loader">
 <div class="flex items-center gap-2 bg-fillWeaker rounded-lg px-3 py-2 has-[:focus]:ring-1 has-[:focus]:ring-strokeBrand-weak transition-shadow">
+<input type="hidden" name="requestId" value="<uuid>">
 <input class="flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm" placeholder="Ask about this issue..." name="query" id="ai-chat-input" autocomplete="off">
 <span class="htmx-indicator" id="ai-chat-loader">
 <svg class="icon w-4 h-4 animate-spin text-iconBrand" width="1em" height="1em" viewBox="0 0 16 16">
@@ -1795,8 +1796,9 @@
 <div id="ai-response-container" class="flex-1 overflow-y-auto flex flex-col px-3" data-hx-get="/p/<uuid>/issues/<uuid>/ai_chat/history" data-hx-trigger="load-chat once" hx-on::after:swap="window.evalScriptsFromContent &amp;&amp; window.evalScriptsFromContent(event.target === this ? this : this.lastElementChild); this.lastElementChild?.scrollIntoView({behavior: &#39;smooth&#39;, block: &#39;start&#39;})">
 </div>
 <div class="shrink-0 border-t border-strokeWeak p-3 flex flex-col gap-2">
-<form data-hx-post="/p/<uuid>/issues/<uuid>/ai_chat" data-hx-target="#ai-response-container" data-hx-swap="beforeend" data-hx-indicator="#ai-chat-loader" hx-on::after:request="this.reset()">
+<form id="issue-ai-form" data-hx-post="/p/<uuid>/issues/<uuid>/ai_chat" data-hx-target="#ai-response-container" data-hx-swap="innerHTML" data-hx-indicator="#ai-chat-loader">
 <div class="flex items-center gap-2 bg-fillWeaker rounded-lg px-3 py-2 has-[:focus]:ring-1 has-[:focus]:ring-strokeBrand-weak transition-shadow">
+<input type="hidden" name="requestId" value="<uuid>">
 <input class="flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm" placeholder="Ask about this issue..." name="query" id="ai-chat-input" autocomplete="off">
 <span class="htmx-indicator" id="ai-chat-loader">
 <svg class="icon w-4 h-4 animate-spin text-iconBrand" width="1em" height="1em" viewBox="0 0 16 16">
@@ -2691,8 +2693,9 @@
 <div id="ai-response-container" class="flex-1 overflow-y-auto flex flex-col px-3" data-hx-get="/p/<uuid>/issues/<uuid>/ai_chat/history" data-hx-trigger="load-chat once" hx-on::after:swap="window.evalScriptsFromContent &amp;&amp; window.evalScriptsFromContent(event.target === this ? this : this.lastElementChild); this.lastElementChild?.scrollIntoView({behavior: &#39;smooth&#39;, block: &#39;start&#39;})">
 </div>
 <div class="shrink-0 border-t border-strokeWeak p-3 flex flex-col gap-2">
-<form data-hx-post="/p/<uuid>/issues/<uuid>/ai_chat" data-hx-target="#ai-response-container" data-hx-swap="beforeend" data-hx-indicator="#ai-chat-loader" hx-on::after:request="this.reset()">
+<form id="issue-ai-form" data-hx-post="/p/<uuid>/issues/<uuid>/ai_chat" data-hx-target="#ai-response-container" data-hx-swap="innerHTML" data-hx-indicator="#ai-chat-loader">
 <div class="flex items-center gap-2 bg-fillWeaker rounded-lg px-3 py-2 has-[:focus]:ring-1 has-[:focus]:ring-strokeBrand-weak transition-shadow">
+<input type="hidden" name="requestId" value="<uuid>">
 <input class="flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm" placeholder="Ask about this issue..." name="query" id="ai-chat-input" autocomplete="off">
 <span class="htmx-indicator" id="ai-chat-loader">
 <svg class="icon w-4 h-4 animate-spin text-iconBrand" width="1em" height="1em" viewBox="0 0 16 16">

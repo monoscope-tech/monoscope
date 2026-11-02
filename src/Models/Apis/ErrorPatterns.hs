@@ -62,6 +62,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), enumLit, selectFrom)
@@ -419,9 +420,9 @@ setErrorPatternAssignee eid assigneeIdM now =
       |]
 
 
-updateErrorPatternAnalysis :: DB es => ErrorPatternId -> Text -> Text -> Eff es Int64
+updateErrorPatternAnalysis :: ErrorPatternId -> Text -> Text -> Tx.Transaction ()
 updateErrorPatternAnalysis eid rc eCat =
-  Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET root_cause = #{rc}, error_category = #{eCat} WHERE id = #{eid} |]
+  Hasql.executeTx [HI.sql| UPDATE apis.error_patterns SET root_cause = #{rc}, error_category = #{eCat} WHERE id = #{eid} |]
 
 
 updateErrorPatternSubscription :: DB es => ErrorPatternId -> Bool -> Int -> UTCTime -> Eff es Int64

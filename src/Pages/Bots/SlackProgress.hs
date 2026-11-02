@@ -1,13 +1,18 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.Bots.SlackProgress (Snapshot (..), Task (..), TaskStatus (..), snapshot, payload) where
+module Pages.Bots.SlackProgress (Snapshot (..), Task (..), TaskStatus (..), ReviewNotice (..), snapshot, endReview, payload, streamFrame, streamChunks, reviewDecision) where
 
 import Data.Aeson qualified as AE
+import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Deriving.Aeson qualified as DAE
+import Data.Vector qualified as V
 import Langchain.LLM.Core qualified as LLM
+import Models.Apis.Investigations (Task (..), TaskStatus (..))
 import Models.Apis.Investigations qualified as Investigations
+import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId, encodeEnumSC)
 import Relude
+import Web.HttpApiData (parseUrlPiece)
 
 
 -- $setup
@@ -17,21 +22,15 @@ import Relude
 -- >>> let activity :: Investigations.Event -> Investigations.Entry; activity = Investigations.Entry (UUIDId $ UUID.fromWords 0 0 0 1) "1.0" (UTCTime (fromGregorian 2025 1 1) 0)
 
 
-data TaskStatus = InProgress | Complete | Error
-  deriving stock (Eq, Generic, Show)
-  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier DAE.CamelToSnake] TaskStatus
-
-
-data Task = Task {task_id :: Text, title :: Text, status :: TaskStatus}
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.ToJSON)
-
-
 data TaskKind = Decision | HistoryRead | FollowupRead | Evidence Text
   deriving stock (Eq, Show)
 
 
-data Snapshot = Snapshot {title :: Text, tasks :: [Task], observedAt :: UTCTime, limited :: Bool}
+data ReviewNotice = PendingNotice (UUIDId "agent_operation") UTCTime | EndedNotice (UUIDId "agent_operation")
+  deriving stock (Eq, Show)
+
+
+data Snapshot = Snapshot {title :: Text, tasks :: [Task], observedAt :: UTCTime, limited :: Bool, review :: Maybe ReviewNotice}
   deriving stock (Eq, Show)
 
 
@@ -58,18 +57,24 @@ snapshot messageTs history = do
         Investigations.InvestigationFinished -> "Investigation response ready"
         Investigations.InvestigationFailed -> "Investigation could not finish"
         Investigations.InvestigationInterrupted -> "Investigation interrupted"
+        Investigations.InvestigationAwaitingReview{} -> "Awaiting action review"
         (Investigations.InvestigationStarted{}; Investigations.ModelStarted{}; Investigations.ModelReturned{}; Investigations.ToolStarted{}; Investigations.ToolReturned{}; Investigations.InvestigationHistoryRead{}; Investigations.FollowupsAccepted{}) -> "Investigating"
   guard $ not $ null tasks
-  pure $ Snapshot title tasks latest.observedAt history.limitReached
+  pure $ Snapshot title tasks latest.observedAt history.limitReached $ case latest.event of
+    Investigations.InvestigationAwaitingReview identifier expiresAt -> Just (PendingNotice identifier expiresAt)
+    (Investigations.InvestigationStarted{}; Investigations.ModelStarted{}; Investigations.ModelReturned{}; Investigations.ToolStarted{}; Investigations.ToolReturned{}; Investigations.InvestigationHistoryRead{}; Investigations.FollowupsAccepted{}; Investigations.InvestigationFinished; Investigations.InvestigationFailed; Investigations.InvestigationInterrupted) -> Nothing
   where
-    update tasks entry =
-      let key iteration kind = (entry.runId, iteration, kind)
+    update prior entry =
+      let tasks = case entry.event of
+            Investigations.ToolReturned _ tool _ -> map (\(taskKey@(_, _, kind), task) -> (taskKey, if kind == toolKind tool && task.status == Pending then task{status = Complete} else task)) prior
+            (Investigations.InvestigationStarted{}; Investigations.ModelStarted{}; Investigations.ModelReturned{}; Investigations.ToolStarted{}; Investigations.InvestigationHistoryRead{}; Investigations.FollowupsAccepted{}; Investigations.InvestigationAwaitingReview{}; Investigations.InvestigationFinished; Investigations.InvestigationFailed; Investigations.InvestigationInterrupted) -> prior
+          key iteration kind = (entry.runId, iteration, kind)
           upsertTask taskKey title status =
             if any ((== taskKey) . fst) tasks
               then map (\(oldKey, old) -> (oldKey, if oldKey == taskKey then old{title = title, status = status} else old)) tasks
               else tasks <> [(taskKey, Task (show $ length tasks) title status)]
           toolKind tool = if LLM.toolFunctionName (LLM.toolCallFunction tool) == "get_investigation_history" then HistoryRead else Evidence (LLM.toolCallId tool)
-          stop = map (\(taskKey@(runId, _, _), task) -> (taskKey, if runId == entry.runId && task.status == InProgress then task{status = Error} else task)) tasks
+          stop status = map (\(taskKey@(runId, _, _), task) -> (taskKey, if runId == entry.runId && task.status == InProgress then task{status = status} else task)) tasks
        in case entry.event of
             Investigations.InvestigationStarted{} -> tasks
             Investigations.ModelStarted iteration -> upsertTask (key iteration Decision) "Assess the evidence" InProgress
@@ -80,8 +85,9 @@ snapshot messageTs history = do
             Investigations.ToolReturned iteration tool _ -> upsertTask (key iteration $ toolKind tool) (toolTitle tool) Complete
             Investigations.InvestigationHistoryRead iteration -> upsertTask (key iteration HistoryRead) "Read prior investigation activity" Complete
             Investigations.FollowupsAccepted iteration _ -> upsertTask (key iteration FollowupRead) "Read new thread replies" Complete
+            Investigations.InvestigationAwaitingReview{} -> stop Pending
             Investigations.InvestigationFinished -> tasks
-            (Investigations.InvestigationFailed; Investigations.InvestigationInterrupted) -> stop
+            (Investigations.InvestigationFailed; Investigations.InvestigationInterrupted) -> stop Error
     toolTitle tool = case LLM.toolFunctionName $ LLM.toolCallFunction tool of
       "get_incident_context" -> "Read the incident record"
       "get_investigation_history" -> "Read prior investigation activity"
@@ -99,27 +105,93 @@ snapshot messageTs history = do
       _ -> "Check an evidence request"
 
 
+-- | Retain the history link after stopping; a claimed action may have taken effect.
+endReview :: ReviewNotice -> Maybe UTCTime -> Investigations.OperationOutcome -> Snapshot -> Snapshot
+endReview notice finishedAt outcome progress =
+  progress{title = "Investigation stopped" <> suffix, review = Just $ EndedNotice $ noticeOperation notice, observedAt = fromMaybe progress.observedAt finishedAt, tasks = map stopTask progress.tasks}
+  where
+    (status, suffix) = case outcome of
+      (Investigations.OperationRunning; Investigations.OperationUnknown) -> (Error, " (outcome uncertain)")
+      (Investigations.OperationUnstarted; Investigations.OperationRefused{}) -> (Error, " (not completed)")
+      Investigations.OperationReturned{} -> (Complete, "")
+    stopTask task = case task.status of
+      (Pending; InProgress) -> task{status = status, title = task.title <> suffix}
+      (Complete; Error) -> task
+
+
+noticeOperation :: ReviewNotice -> UUIDId "agent_operation"
+noticeOperation = \case
+  PendingNotice identifier _ -> identifier
+  EndedNotice identifier -> identifier
+
+
+-- | Decode only this app's typed review controls.
+--
+-- >>> reviewDecision "monoscope_review_approved"
+-- Just ReviewApproved
+-- >>> reviewDecision "monoscope_review_delete"
+-- Nothing
+-- >>> reviewDecision "dashboard_approved"
+-- Nothing
+reviewDecision :: Text -> Maybe Investigations.ReviewDecision
+reviewDecision identifier = T.stripPrefix "monoscope_review_" identifier >>= rightToMaybe . parseUrlPiece
+
+
 -- | Slack plan blocks accept at most fifty tasks. The journal reader bounds the
 -- projection to fifty events; each event creates at most one task.
-payload :: Snapshot -> AE.Value
-payload progress =
+payload :: Text -> Projects.ProjectId -> Snapshot -> AE.Value
+payload hostUrl project progress =
   AE.object
     [ "text" AE..= (unlines (progress.title : map taskText progress.tasks) <> "Updated " <> show progress.observedAt <> ". Completed steps mean a response was recorded; check the findings for results.")
     , "blocks"
         AE..= AE.Array
-          [ AE.object ["type" AE..= ("plan" :: Text), "title" AE..= progress.title, "tasks" AE..= progress.tasks]
-          , AE.object
-              [ "type" AE..= ("context" :: Text)
-              , "elements"
-                  AE..= AE.Array
-                    [ AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= ("Updated " <> show progress.observedAt <> ". Completed steps record responses, not confirmed causes." <> if progress.limited then " Showing recent activity only." else "")]
-                    ]
-              ]
-          ]
+          ( [ AE.object ["type" AE..= ("plan" :: Text), "title" AE..= progress.title, "tasks" AE..= progress.tasks]
+            , AE.object
+                [ "type" AE..= ("context" :: Text)
+                , "elements"
+                    AE..= AE.Array
+                      [ AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= ("Updated " <> show progress.observedAt <> ". Completed steps record responses, not confirmed causes." <> if progress.limited then " Showing recent activity only." else "")]
+                      ]
+                ]
+            ]
+              <> foldMap
+                ( \notice ->
+                    let identifier = noticeOperation notice
+                        decisions = case notice of
+                          PendingNotice{} -> [button Investigations.ReviewApproved "Approve action" identifier, button Investigations.ReviewRejected "Decline action" identifier]
+                          EndedNotice{} -> []
+                     in V.singleton
+                          $ AE.object
+                            [ "type" AE..= ("actions" :: Text)
+                            , "elements" AE..= AE.Array ([AE.object ["type" AE..= ("button" :: Text), "action_id" AE..= ("monoscope_review_details" :: Text), "url" AE..= (T.dropWhileEnd (== '/') hostUrl <> "/p/" <> project.toText <> "/ai/operations/" <> identifier.toText), "text" AE..= AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= ("Review details" :: Text)]]] <> decisions)
+                            ]
+                )
+                progress.review
+          )
     ]
   where
+    button decision label identifier =
+      AE.object
+        [ "type" AE..= ("button" :: Text)
+        , "action_id" AE..= ("monoscope_review_" <> toText (encodeEnumSC @"Review" decision) :: Text)
+        , "value" AE..= identifier
+        , "text" AE..= AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= (label :: Text)]
+        ]
     taskText task =
       task.title <> ": " <> case task.status of
+        Pending -> "awaiting review"
         InProgress -> "in progress"
         Complete -> "response recorded"
         Error -> "did not finish"
+
+
+streamFrame :: Snapshot -> Either Text Investigations.StreamFrame
+streamFrame progress = Investigations.mkStreamFrame progress.title progress.tasks
+
+
+streamChunks :: UUIDId "slack_progress" -> Investigations.StreamFrame -> [AE.Value]
+streamChunks publication frame =
+  AE.object ["type" AE..= ("plan_update" :: Text), "title" AE..= Investigations.streamTitle frame]
+    : [ AE.object ["type" AE..= ("task_update" :: Text), "id" AE..= (publication.toText <> ":" <> task.task_id), "title" AE..= task.title, "status" AE..= task.status]
+      | task <- toList $ Investigations.streamTasks frame
+      ]

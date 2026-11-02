@@ -1,6 +1,7 @@
+{-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsWorkerConfig, jobsRunner, runWorkspaceMaintenanceTimer, ensureDailyJobScheduled, processBackgroundJob, processBackgroundJobWithTools, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -8,6 +9,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
 import Control.Lens (view, (.~), (?~), (^.), (^?), _1, _3)
+import Control.Monad.Except (throwError)
 import Control.Monad.Extra (whileM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
@@ -17,6 +19,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Default (def)
 import Data.Default qualified as Default
+import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.Hasql (Hasql, withHasqlTimefusion)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
@@ -45,7 +48,8 @@ import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
-import Effectful.Concurrent.Async (concurrently, concurrently_, forConcurrently, forConcurrently_)
+import Effectful.Concurrent qualified as EC
+import Effectful.Concurrent.Async (concurrently, concurrently_, forConcurrently, forConcurrently_, race)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -73,6 +77,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Integrations
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -95,7 +100,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job (ConcurrencyControl (..), Config (cfgJobOrdering), Job (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
+import OddJobs.Job (ConcurrencyControl (..), Config (cfgJobOrdering, cfgOnJobFailed, cfgOnJobTimeout), Job (..), JobErrHandler (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, Status (Failed), createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OddJobs.Types (FailureMode (FailPermanent))
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
@@ -105,6 +110,8 @@ import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.AI qualified as AI
 import Pkg.AdConversions qualified as AdConversions
+import Pkg.AgentCatalog qualified as Catalog
+import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
@@ -136,7 +143,7 @@ import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatu
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
-import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny)
+import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny, withException)
 import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierUsageStatus, hostPath, nonEmptyT, toUriStr, toXXHash, truncateHour, usageWindowStart)
 
 
@@ -150,8 +157,8 @@ jobTypeName :: BgJobs -> Text
 jobTypeName bgJob = T.takeWhile (/= ' ') $ toText $ show bgJob
 
 
-jobsRunner :: Logger -> Config.AuthContext -> TracerProvider -> Job -> IO ()
-jobsRunner logger authCtx tp job = when authCtx.config.enableBackgroundJobs $ do
+jobsRunner :: Logger -> Config.AuthContext -> TracerProvider -> Maybe AI.ProjectTools -> Job -> IO ()
+jobsRunner logger authCtx tp projectTools job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx tp $ do
     let jobType = jobTypeName bgJob
@@ -163,7 +170,7 @@ jobsRunner logger authCtx tp job = when authCtx.config.enableBackgroundJobs $ do
       ]
       $ \sp -> do
         addEvent sp "job.started" []
-        result <- try $ processBackgroundJob authCtx bgJob
+        result <- try $ processBackgroundJobWithTools projectTools authCtx bgJob
         -- Re-throw after recording, so odd-jobs still sees the failure.
         case result of
           Left (e :: SomeException) -> do
@@ -215,7 +222,11 @@ renderAndSend to (subj, html) = sendRenderedEmail to subj (ET.renderEmail subj h
 
 -- | Process a background job - extracted so it can be run with different effect interpreters
 processBackgroundJob :: Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
-processBackgroundJob authCtx bgJob =
+processBackgroundJob = processBackgroundJobWithTools Nothing
+
+
+processBackgroundJobWithTools :: Maybe AI.ProjectTools -> Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
+processBackgroundJobWithTools projectTools authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     DashboardsAutoProvision scheduledTime -> autoProvisionDashboards scheduledTime
@@ -289,13 +300,16 @@ processBackgroundJob authCtx bgJob =
         Tx.statement pid [resultlessStatement|DELETE FROM tests.collections WHERE project_id = $1 :: uuid AND title != 'Default Health check'|]
         Tx.statement pid [resultlessStatement|DELETE FROM projects.project_api_keys WHERE project_id = $1 :: uuid AND title != 'Default API Key'|]
     SlackNotification pid message -> sendSlackMessage pid message
-    ProcessSlackEvent eventId -> Slack.processSlackEvent eventId
+    ProcessSlackEvent eventId -> Slack.processSlackEventWithTools projectTools eventId
     RefreshSlackProgress publicationId -> Slack.refreshSlackProgress publicationId
-    AIRoutineRun routineId scheduledAt -> runAIRoutine authCtx routineId scheduledAt
+    RunConversation pid runId -> runConversation pid runId
+    AIRoutineRun routineId scheduledAt -> runAIRoutine authCtx projectTools routineId scheduledAt
+    InvestigateIncident pid eventId rootId -> investigateIncident pid eventId rootId
     ResetSlackSession pid uid receiptId -> Slack.resetSlackSession pid uid receiptId
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
     ReviewPullRequest rid -> ImpactReview.reviewPullRequest rid
+    FixIssue pid fid -> ImpactReview.fixIssue pid fid
     AnalyzeRepository pid rid -> analyzeRepository pid rid
     RepositorySyncTick scheduled -> unlessStale scheduled 300 do
       syncs <- Hasql.interp @[GitSync.GitHubSync] [HI.sql| SELECT * FROM projects.git_sync WHERE sync_enabled |]
@@ -349,6 +363,52 @@ processBackgroundJob authCtx bgJob =
     UsageAuditReport -> runUsageAuditReport authCtx
     AdConversion conv -> AdConversions.sendConversion authCtx conv
   where
+    investigateIncident pid eventId rootId = do
+      acquired <- withXactLease authCtx ("incident-investigation:" <> rootId.toText)
+        $ whenJustM (Incidents.getIncidentEventContext pid eventId rootId) \incident ->
+          for_ (rightToMaybe $ Issues.incidentChannel incident.teamId incident.channelId) \channel ->
+            whenJustM (Issues.getIncidentRoutine pid channel) \routine -> do
+              let conversation = UUIDId incident.issueId.unUUIDId
+                  source = Issues.IncidentEvent eventId rootId
+                  input = "Investigate this recorded incident event. Its phase is the phase at the event time, not a claim about later measurements.\n" <> decodeUtf8 (AE.encode incident)
+              void $ Issues.getOrCreateConversation pid conversation Issues.CTAnomaly (AE.object [])
+              whenJustM (Issues.startEventRun routine (Issues.IncidentEventRequest eventId rootId) Issues.ContinueRun conversation input) \execution -> do
+                when (execution.status == Issues.RunRunning) do
+                  context <- AI.requireRunContext pid $ Issues.EventClaim source execution.id execution.startedAt
+                  let config =
+                        (AI.defaultAgenticConfig pid)
+                          { AI.conversationId = Just conversation
+                          , AI.conversationType = Just Issues.CTAnomaly
+                          , AI.access = AI.MemberAccess AI.SharedMember execution.requestedBy
+                          , AI.invocationMode = AI.DurableRun context
+                          , AI.projectTools = projectTools
+                          , AI.sourceConfig = Just authCtx.config
+                          , AI.useTimefusion = authCtx.env.enableTimefusionReads
+                          }
+                      failRun finish reason = do
+                        active <- Issues.routineRunActive pid execution.id
+                        completed <- Issues.completeRun context $ if active then finish $ Issues.RunFailure reason Issues.RunOnly else Issues.CancelledResult Nothing
+                        case completed of
+                          Issues.RunCompleted (Issues.CompletedFailed; Issues.CompletedTimedOut) _ -> throwIO $ CE.ErrorCall $ toString reason
+                          (Issues.CompletionRejected; Issues.RunCompleted (Issues.CompletedSucceeded; Issues.CompletedNoFindings; Issues.CompletedCancelled) _) -> pass
+                  ( do
+                      outcome <-
+                        Timeout.timeout (120 * 1_000_000)
+                          $ tryAny
+                          $ AI.runAgenticChatWithHistory config input authCtx.config.openaiModel authCtx.config.openaiApiKey
+                      case outcome of
+                        Nothing -> failRun Issues.TimedOutResult "Incident investigation timed out."
+                        Just (Left err)
+                          | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> Jobs.deferOperationReview pid identifier deadline
+                          | otherwise -> failRun Issues.FailedResult "Incident investigation was interrupted before completion."
+                        Just (Right (Left _)) -> failRun Issues.FailedResult "Incident investigation did not return a report."
+                        Just (Right (Right answer)) -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ AI.prepareRunAnswer answer
+                    )
+                    `withException` \(_ :: SomeException) -> void (Issues.completeRun context $ Issues.FailedResult $ Issues.RunFailure "Incident investigation worker stopped before recording its result." Issues.RunOnly)
+                now <- Time.currentTime
+                Incidents.queueIncidentReport now authCtx.env.hostUrl pid eventId rootId execution.id
+      when (isNothing acquired) $ throwIO $ CE.ErrorCall "Another investigation is using this incident thread."
+
     analyzeRepository :: Projects.ProjectId -> GitSync.RepositoryId -> ATBackgroundCtx ()
     analyzeRepository pid rid = whenJustM (GitSync.getRepository pid rid) \repository -> do
       ctx <- ask @Config.AuthContext
@@ -379,16 +439,39 @@ processBackgroundJob authCtx bgJob =
         let suggestions = GitSync.AnalysisSuggestions names matches metadata.defaultBranch
         lift $ Hasql.interpExecute_ [HI.sql| INSERT INTO projects.repository_analysis (repository_id, suggestions) VALUES (#{rid}, #{suggestions}) ON CONFLICT (repository_id) DO UPDATE SET suggestions = EXCLUDED.suggestions, analyzed_at = now(), error = NULL |]
       for_ (leftToMaybe result) \err -> Hasql.interpExecute_ [HI.sql| INSERT INTO projects.repository_analysis (repository_id, error) VALUES (#{rid}, #{err}) ON CONFLICT (repository_id) DO UPDATE SET error = EXCLUDED.error, analyzed_at = now() |]
+    runConversation :: Projects.ProjectId -> UUIDId "ai_routine_run" -> ATBackgroundCtx ()
+    runConversation project identifier = do
+      let claim = Issues.runContextFor project $ Issues.ConversationClaim identifier
+      whenJustM claim \queued -> do
+        acquired <- withXactLease authCtx ("agent-conversation:" <> project.toText <> ":" <> queued.conversationId.toText)
+          $ whenJustM claim \context -> do
+            result <- tryAny do
+              void $ Issues.runContextAuthority context >>= maybe (throwIO AI.AgentStopped) pure
+              case context.source of
+                Issues.ConversationRun{} -> do
+                  input <- maybe (throwIO AI.AgentStopped) pure context.input
+                  response <- Bots.processAIQueryWithMode (Just authCtx.config) authCtx.env.enableTimefusionReads projectTools (AI.DurableRun context) (AI.MemberAccess AI.ProjectMember context.requestedBy) project input (Just context.conversationId) authCtx.config.openaiModel authCtx.config.openaiApiKey
+                  for_ (leftToMaybe response) $ throwIO . CE.ErrorCall . toString
+                Issues.TriggeredRun Issues.SlackCommand{} -> Slack.runCommandWithTools projectTools context
+                _ -> throwIO AI.AgentStopped
+            case result of
+              Right _ -> pass
+              Left err
+                | Just (AI.AgentAwaitingReview operation deadline) <- fromException err -> Jobs.deferOperationReview project operation deadline
+                | isJust (fromException @AI.AgentStopped err) || isJust (fromException @AI.AgentAccessDenied err) -> void $ Issues.completeRun context $ Issues.CancelledResult Nothing
+                | otherwise -> throwIO err
+        when (isNothing acquired) $ throwIO $ CE.ErrorCall "Conversation is already executing; retry queued request"
+
     unlessStale scheduledTime buffer action = do
       now <- Time.currentTime
       bool action (Log.logTrace ("Skipping stale " <> jobTypeName bgJob) scheduledTime) $ diffUTCTime now scheduledTime > (buffer :: NominalDiffTime)
 
 
-runAIRoutine :: Config.AuthContext -> UUIDId "ai_routine" -> UTCTime -> ATBackgroundCtx ()
-runAIRoutine authCtx =
+runAIRoutine :: Config.AuthContext -> Maybe AI.ProjectTools -> UUIDId "ai_routine" -> UTCTime -> ATBackgroundCtx ()
+runAIRoutine authCtx projectTools =
   runAIRoutineWith
     routineRunTimeoutMicros
-    (\config -> AI.runAgenticChatWithHistory config routinePrompt authCtx.config.openaiModel authCtx.config.openaiApiKey)
+    (\config -> AI.runAgenticChatWithHistory config{AI.projectTools = projectTools} routinePrompt authCtx.config.openaiModel authCtx.config.openaiApiKey)
     (enqueueAIRoutine authCtx)
     authCtx
   where
@@ -408,44 +491,36 @@ runAIRoutineWith
   -> UTCTime
   -> ATBackgroundCtx ()
 runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt = whenJustM (Issues.claimRoutine routineId scheduledAt) \routine -> do
+  context <- AI.requireRunContext routine.projectId $ Issues.BackgroundClaim routine.requestedBy routine.conversationId routine.runId routine.claimedAt
   conversationM <- Issues.getConversation routine.projectId routine.conversationId
   let conversationType = maybe Issues.CTWeb (.conversationType) conversationM
       deliveryContext = case routine.destination of
         Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
         Issues.DestinationConversation -> Nothing
-      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.invocationMode = AI.ScheduledRoutine routineId routine.allowActions}
+      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.timezone = Just routine.timezone, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess AI.ProjectMember routine.requestedBy, AI.invocationMode = AI.DurableRun context}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
-    Issues.routineRunCancelled routineId routine.claimedAt >>= \case
-      True -> pure (Issues.CompletedCancelled, Nothing, Nothing, Nothing)
-      False -> case result of
-        Left err -> do
-          Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent ("Routine failed: " <> err) Nothing Nothing
-          pure (Issues.CompletedFailed, Nothing, Nothing, Just err)
-        Right answer
-          | routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) ->
-              pure (Issues.CompletedNoFindings, Nothing, Just $ AE.toJSON answer.toolCalls, Nothing)
-          | otherwise -> do
-              void $ Bots.storeAgenticResponse routine.projectId routine.conversationId answer
-              pure (Issues.CompletedSucceeded, Just $ AE.toJSON answer, Just $ AE.toJSON answer.toolCalls, Nothing)
+    AI.requireAgentAccess config.access routine.projectId
+    pure $ case result of
+      Left err -> Issues.FailedResult $ Issues.RunFailure err (Issues.ConversationNotice $ "Routine failed: " <> err)
+      Right answer -> (if routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) then Issues.CompletedResult Issues.ResultNoFindings Issues.RetainAnswer else Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer) $ AI.prepareRunAnswer answer
   case outcome of
-    Nothing -> do
-      ifM
-        (Issues.routineRunCancelled routineId routine.claimedAt)
-        (recordRun routine Issues.CompletedCancelled Nothing Nothing Nothing)
-        do
+    Just (Left err)
+      | Just (AI.AgentAwaitingReview identifier deadline) <- fromException err -> do
+          Jobs.deferOperationReview routine.projectId identifier deadline
+          Log.logInfo "AI routine is awaiting action review" $ AE.object ["routine_id" AE..= routineId, "operation_id" AE..= identifier]
+    _ -> do
+      completion <- case outcome of
+        Nothing -> do
           Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
-          noteFailure "AI routine timeout event was not recorded" $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine timed out. It will run again at the next interval." Nothing Nothing
-          recordRun routine Issues.CompletedTimedOut Nothing Nothing (Just "Routine execution timed out")
-    Just (Left err) -> do
-      Log.logAttention "AI routine run failed" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text err]
-      noteFailure "AI routine failure event was not recorded" $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine failed unexpectedly. It will run again at the next interval." Nothing Nothing
-      recordRun routine Issues.CompletedFailed Nothing Nothing (Just $ show @Text err)
-    Just (Right (status, findings, actions, err)) -> recordRun routine status findings actions err
-  whenJustM (Issues.completeRoutine routineId scheduledAt routine.claimedAt) $ enqueueNext routineId
-  where
-    recordRun routine status findings actions err = noteFailure "AI routine run result was not recorded" $ Issues.finishRoutineRun routine.runId routine.claimedAt status findings actions err
-    noteFailure msg action = whenLeftM_ (tryAny action) \e -> Log.logAttention msg $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text e]
+          pure $ Issues.TimedOutResult $ Issues.RunFailure "Routine execution timed out" $ Issues.ConversationNotice "Routine timed out. It will run again at the next interval."
+        Just (Left err) -> do
+          Log.logAttention "AI routine run failed" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text err]
+          pure $ Issues.FailedResult $ Issues.RunFailure (show @Text err) $ Issues.ConversationNotice "Routine failed unexpectedly. It will run again at the next interval."
+        Just (Right result) -> pure result
+      Issues.completeRun context completion >>= \case
+        Issues.CompletionRejected -> pass
+        Issues.RunCompleted _ next -> for_ next $ \slot -> enqueueNext slot.id slot.scheduledAt
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.
@@ -1022,8 +1097,18 @@ tryStepIO logger ctx label action =
 -- health — and posts a single consolidated Discord alert if either flags a
 -- problem. Never throws: each check's failure becomes alert text, so a broker
 -- blip or TF outage surfaces rather than crashing the job.
+-- Bounded: the parity check runs up to 30 sequential TimeFusion aggregates, and
+-- a slow one held a worker for 25+ minutes on 2026-09-16 — six of them at once
+-- starved every other job for two hours. A watchdog that cannot finish within
+-- the hour it reports on has nothing useful left to say.
 runInfraHealthCheck :: Config.AuthContext -> ATBackgroundCtx ()
 runInfraHealthCheck authCtx = do
+  outcome <- race (EC.threadDelay $ 5 * 60 * 1_000_000) (infraHealthCheck authCtx)
+  whenLeft_ outcome \_ -> Log.logAttention "InfraHealthCheck exceeded its budget and was abandoned" ("budget_seconds" :: Text, 300 :: Int)
+
+
+infraHealthCheck :: Config.AuthContext -> ATBackgroundCtx ()
+infraHealthCheck authCtx = do
   now <- Time.currentTime
   -- Last fully-elapsed clock hour: settled past the ~10-min TF flush, fresh
   -- enough to catch a loss within the hour it starts.
@@ -1378,7 +1463,8 @@ retryOnDeadlock label = go 2
 runHourlyJob :: UTCTime -> Int -> ATBackgroundCtx ()
 runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
-  tryStep "ai-routine-recovery" $ Issues.listDueRoutines 100 >>= traverse_ (\routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt)
+  tryStep "ai-routine-recovery" $ Issues.recoverDueRoutines 100 >>= traverse_ (\routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt)
+  tryStep "ai-conversation-recovery" recoverFailedConversations
   tryStep "metric-catalog-flush" $ Telemetry.flushMetricCatalog ctx.metricCatalogBuffer
   tryStep "metric-catalog-reconcile" Telemetry.reconcileMetricCatalog
   tryStep "endpoint-shape-report" reportUnwrittenIdRules
@@ -1421,6 +1507,18 @@ runHourlyJob scheduledTime hour = do
   checkFreeTierUsageNotifications activeProjects scheduledTime
 
   Log.logTrace "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
+  where
+    recoverFailedConversations = do
+      requests <-
+        Hasql.interp @[(Projects.ProjectId, UUIDId "ai_routine_run")]
+          [HI.sql|SELECT run.project_id, run.id FROM apis.ai_routine_runs run
+          JOIN background_jobs job ON job.payload = jsonb_build_object('tag', 'RunConversation', 'contents', jsonb_build_array(run.project_id, run.id))
+          WHERE run.status = 'running' AND job.status = 'failed'
+            AND NOT EXISTS (SELECT 1 FROM background_jobs newer WHERE newer.payload = job.payload AND newer.id > job.id)
+          ORDER BY job.updated_at, job.id LIMIT 100|]
+      for_ requests \(project, identifier) ->
+        whenJustM (Issues.runContextFor project $ Issues.ConversationClaim identifier) \context ->
+          void $ Issues.completeRun context $ Issues.FailedResult queuedFailure
 
 
 -- | Create dashboards from templates whose @discovery_metrics@ prefixes match
@@ -2689,6 +2787,18 @@ runSchemaFlusherFiber logger ctx tp
       SchemaWorker.runSchemaFlusher ctx.config.schemaFlushIntervalSecs refs flushOne
 
 
+runWorkspaceMaintenanceTimer :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
+runWorkspaceMaintenanceTimer logger ctx tp = for_ ctx.config.impactReviewWorkspaceMaintenance \config -> forever do
+  runBackground logger ctx tp $ tryStep "workspace-maintenance" do
+    Workspace.maintainWorkspaces config >>= \case
+      Left message -> Log.logAttention "Workspace maintenance failed" message
+      Right report ->
+        if Workspace.maintenanceBudgetMet report
+          then Log.logInfo "Workspace maintenance complete" (AE.toJSON report)
+          else Log.logAttention "Workspace maintenance could not meet its budget" (AE.toJSON report)
+  threadDelay 300_000_000
+
+
 -- | 1-minute error-count decay tick. Propagates merged counts and decays
 -- occurrence counters without treating inactivity as recovery.
 -- Runs every minute per active project.
@@ -3088,14 +3198,8 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
           else do
             previous <- Incidents.latestEpisodeTx monitor.projectId source
             let active = mfilter ((== Incidents.EpisodeActive) . (.phase)) previous
-            -- One long-lived issue per monitor: a firing reopens it rather than
-            -- starting a new row, so every episode hangs off the same history.
-            --
-            -- Still gated on a transition, not run every tick: the write bumps
-            -- occurrence_count and affected_requests, so an unconditional call
-            -- would count evaluation ticks rather than firings — a monitor that
-            -- alerts once and stays alerting on a 1-minute interval would report
-            -- 1440 occurrences a day on the issue page and in every alert body.
+            -- One long-lived issue per monitor, written on a transition only:
+            -- the write bumps occurrence_count, so every tick would inflate it.
             persistedId <-
               if delivery == Incidents.PublishIncident || status /= monitor.currentStatus || isNothing (active >>= (.issueId))
                 then traverse (Issues.reopenOrInsertIssueTx observedAt) issue
@@ -3161,7 +3265,11 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl subj rend
 
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
-jobsWorkerInit logger appCtx tp = when appCtx.config.enableBackgroundJobs do
+jobsWorkerInit logger appCtx tp = jobsWorkerInitWithTools logger appCtx tp Nothing
+
+
+jobsWorkerInitWithTools :: Logger -> Config.AuthContext -> TracerProvider -> Maybe AI.ProjectTools -> IO ()
+jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enableBackgroundJobs do
   when appCtx.config.enableDailyJobScheduling $ ensureDailyJobScheduled appCtx
   -- Scoped to the runner so a supervisor restart does not leak another backstop loop.
   UIO.concurrently_
@@ -3170,8 +3278,30 @@ jobsWorkerInit logger appCtx tp = when appCtx.config.enableBackgroundJobs do
         tryStepIO logger appCtx "ensureDailyJobScheduled" $ ensureDailyJobScheduled appCtx
     )
     $ startJobRunner
-    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs appCtx.config.maxConcurrentJobs) (jobsRunner logger appCtx tp) (\cfg -> cfg{cfgJobOrdering = EarliestRunAtFirst})
+    $ jobsWorkerConfig logger appCtx tp projectTools
+
+
+queuedFailure :: Issues.RunFailure
+queuedFailure =
+  let message = "This request stopped after exhausting its worker retries. Its run retains any saved results and action history."
+   in Issues.RunFailure message $ Issues.ConversationNotice message
+
+
+jobsWorkerConfig :: Logger -> Config.AuthContext -> TracerProvider -> Maybe AI.ProjectTools -> OddJobs.Job.Config
+jobsWorkerConfig logger appCtx tp projectTools =
+  mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs appCtx.config.maxConcurrentJobs) (jobsRunner logger appCtx tp projectTools) \cfg ->
+    cfg
+      { cfgJobOrdering = EarliestRunAtFirst
+      , cfgOnJobFailed = [JobErrHandler $ \(err :: SomeException) job _ -> finishFailedJob (Issues.FailedResult queuedFailure) job >> throwIO err]
+      , cfgOnJobTimeout = finishFailedJob $ Issues.TimedOutResult queuedFailure
+      }
   where
+    finishFailedJob completion job = when (job.jobStatus == Failed) $ case AE.fromJSON job.jobPayload of
+      AE.Success (RunConversation project identifier) -> runBackground logger appCtx tp
+        $ whenJustM (Issues.runContextFor project $ Issues.ConversationClaim identifier)
+        $ \context ->
+          void $ Issues.completeRun context completion
+      _ -> pass
     -- Drop the poll chatter. odd-jobs emits 'LogPoll' on every poll of the job
     -- table, and a LevelWarn @LogText "NOT polling the job queue due to
     -- concurrency control"@ on every poll while at max concurrency — so the
@@ -3767,11 +3897,22 @@ processIssuesEnhancement scheduledTime = do
   issuesToEnhance <-
     Hasql.interp
       [HI.sql| SELECT id, project_id
-              FROM apis.issues
+              FROM apis.issues issue
               WHERE created_at >= #{oneHourAgo} AND created_at < #{scheduledTime}
                 AND llm_enhanced_at IS NULL
                 AND acknowledged_at IS NULL
                 AND archived_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM apis.ai_routine_runs run
+                  WHERE run.project_id = issue.project_id
+                    AND run.source = jsonb_build_object('tag', 'TriggeredRun', 'contents',
+                      jsonb_build_object('tag', 'IssueEnrichment', 'contents', issue.id))
+                    AND (run.status IN (#{Issues.RunSucceeded}, #{Issues.RunNoFindings}, #{Issues.RunCancelled})
+                      OR (run.status = #{Issues.RunRunning} AND EXISTS (
+                        SELECT 1 FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs origin ON origin.id = operation.run_id
+                        WHERE origin.project_id = run.project_id AND origin.root_run_id = run.root_run_id
+                          AND operation.outcome = #{HI.AsJsonb Investigations.OperationUnstarted}
+                          AND operation.review->>'tag' = 'ReviewPending'
+                          AND (operation.review #>> '{contents,expiresAt}')::timestamptz > app_now()))))
               ORDER BY project_id
               LIMIT 100 |]
 
@@ -3779,49 +3920,59 @@ processIssuesEnhancement scheduledTime = do
   enqueueJobs ctx [Jobs.EnhanceIssuesWithLLM pid (V.fromList $ map (UUIDId . fst) $ toList g) | g@((_, pid) :| _) <- NE.groupAllWith snd issuesToEnhance]
 
 
--- | Enhance issues with LLM-generated titles and descriptions
+-- | Issue metadata is changed only by an explicitly activated routine.
 enhanceIssuesWithLLM :: Projects.ProjectId -> V.Vector Issues.IssueId -> ATBackgroundCtx ()
 enhanceIssuesWithLLM pid issueIds = do
   ctx <- ask @Config.AuthContext
-  if T.null ctx.config.openaiApiKey
-    then Log.logAttention "OpenAI API key not configured, skipping issue enhancement" pid
-    else do
-      Log.logInfo "Enhancing issues with LLM" (pid.toText, V.length issueIds)
-      forM_ issueIds \issueId -> do
-        issueM <- Issues.selectIssueById pid issueId
-        case issueM of
-          Nothing -> Log.logTrace "Issue not found for enhancement (likely cleaned up by endpoint canonicalization)" issueId
-          Just issue
-            | Issues.isNewEndpointOnly issue -> Log.logTrace "Skipping LLM enhancement for new endpoint issue" issueId
-            | otherwise -> do
-                enhancementResult <- Enhancement.enhanceIssueWithLLM ctx issue
-                case enhancementResult of
-                  Left err -> Log.logAttention "Failed to enhance issue with LLM" (issueId, err)
-                  Right enhancement -> do
-                    void
-                      $ Issues.updateIssueEnhancement
-                        enhancement.issueId
-                        enhancement.enhancedTitle
-                        enhancement.recommendedAction
-                        enhancement.migrationComplexity
-                    -- Schema observations do not establish consumer compatibility or urgency.
-                    when (issue.issueType /= Issues.ApiChange) do
-                      criticalityResult <- Enhancement.classifyIssueCriticality ctx issue
-                      case criticalityResult of
-                        Left err -> Log.logAttention "Failed to classify issue criticality" (issueId, err)
-                        Right (isCritical, breakingCount, _incrementalCount) -> do
-                          void $ Enhancement.updateIssueClassification issue.id isCritical breakingCount
-                          Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
-
-                    -- Analyze error patterns for root cause and category.
-                    -- Left = not a runtime exception, or the LLM call failed.
-                    Enhancement.analyzeErrorPattern ctx issue >>= \case
-                      Left _ -> pass
-                      Right (rootCause, category) -> do
-                        epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
-                        for_ epM \ep -> void $ ErrorPatterns.updateErrorPatternAnalysis ep.id rootCause category
-
-                    Log.logInfo "Successfully enhanced issue" issueId
+  unless (T.null ctx.config.openaiApiKey) $ for_ issueIds \issueId ->
+    whenJustM (Issues.getEventRoutine pid Issues.EventIssueEnrichment) \routine -> do
+      acquired <- withXactLease ctx ("issue-enrichment:" <> pid.toText <> ":" <> issueId.toText)
+        $ whenJustM (Issues.selectIssueById pid issueId) \issue -> unless (Issues.isNewEndpointOnly issue) do
+          let convId = UUIDId issueId.unUUIDId
+          void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object [])
+          whenJustM (Issues.startEventRun routine (Issues.IssueEnrichmentRequest issueId) Issues.ContinueRun convId ("Enrich issue: " <> issue.title)) \execution ->
+            when (execution.status == Issues.RunRunning) do
+              context <- AI.requireRunContext pid $ Issues.EventClaim (Issues.IssueEnrichment issueId) execution.id execution.startedAt
+              outcome <- tryAny $ Timeout.timeout (120 * 1_000_000) $ runExceptT do
+                let target = Investigations.RunCheckpoint $ Investigations.RunTurn pid context.conversationId context.requestedBy context.rootId
+                saved <- lift $ Investigations.loadCheckpointFor target
+                enrichment <- case saved of
+                  Just Investigations.SavedCheckpoint{checkpoint = Investigations.NativePending (Operation.EnrichIssue retained)} -> pure retained
+                  Just Investigations.SavedCheckpoint{checkpoint = (Investigations.ModelPending{}; Investigations.ToolsPending{}; Investigations.AnswerReady{}; Investigations.LegacyUncertain{}; Investigations.NativePending{}; Investigations.NativeReady)} -> throwError "Issue enrichment checkpoint has another operation"
+                  Nothing -> do
+                    let complete = AI.callRoutineLLM ctx.config ctx.config.openaiSmallModel context
+                    enhancement <- ExceptT $ Enhancement.enhanceIssueWithLLM complete issue
+                    classification <- if issue.issueType == Issues.ApiChange then pure Nothing else Just <$> ExceptT (Enhancement.classifyIssueCriticality complete issue)
+                    analysis <- if issue.issueType /= Issues.RuntimeException then pure Nothing else Just <$> ExceptT (Enhancement.analyzeErrorPattern complete issue)
+                    now <- lift Time.currentTime
+                    pure $ Enhancement.IssueEnrichment enhancement classification analysis now
+                decision <- lift $ AI.authorizeRunOperation context Catalog.ProjectWrite
+                policy <- case decision of
+                  Right snapshot -> pure snapshot.execution
+                  Left (AI.AuthorityDenied Issues.ActionGrantRequired) -> pure Issues.Observe
+                  Left denial -> throwError $ AI.toolDenialMessage denial
+                pure (enrichment, policy)
+              case outcome of
+                Right (Just (Right (enrichment, policy))) -> case policy of
+                  Issues.Observe -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Enhancement.enrichmentAnswer Enhancement.Observed enrichment
+                  (Issues.Autonomous; Issues.ReviewSelected{}) ->
+                    ( do
+                        result <- AI.executeNativeOperation context (Operation.EnrichIssue enrichment) \case
+                          Operation.EnrichIssue frozen -> AI.AtomicOperation $ Enhancement.completeEnrichmentTx context frozen
+                          (Operation.WriteWiki{}; Operation.PublishPullRequestComment{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+                        for_ (leftToMaybe result) $ \reason -> void $ Issues.completeRun context $ Issues.CancelledResult $ Just reason
+                    )
+                      `catch` \(AI.AgentAwaitingReview identifier deadline) -> Jobs.deferOperationReview pid identifier deadline
+                _ -> do
+                  active <- Issues.routineRunActive pid execution.id
+                  let message = "Issue enrichment failed. A retry will create a new attempt."
+                      failure = Issues.RunFailure message Issues.RunOnly
+                      completion = if not active then Issues.CancelledResult Nothing else case outcome of Right Nothing -> Issues.TimedOutResult failure; _ -> Issues.FailedResult failure
+                  void $ Issues.completeRun context completion
+                  when active $ throwIO $ CE.ErrorCall $ toString message
+      when (isNothing acquired) do
+        now <- Time.currentTime
+        enqueueAt ctx (addUTCTime 1 now) [Jobs.EnhanceIssuesWithLLM pid $ V.singleton issueId]
 
 
 patternEmbeddingAndMerge :: Projects.ProjectId -> ATBackgroundCtx ()
@@ -4907,32 +5058,44 @@ runSlackIncidentDeliveries = do
         Just sd | sd.teamId == delivery.teamId -> do
           let (operation, parent) = case delivery.operation of
                 Incidents.PostRoot -> (Notify.SlackPost, Nothing)
+                Incidents.PostStandalone -> (Notify.SlackPost, Nothing)
                 Incidents.PostReply ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
+                Incidents.PostAnalysis ts _ -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
               message =
                 Notify.SlackData
                   { Notify.channelId = delivery.channelId
                   , Notify.botToken = sd.botToken
                   , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery $ case delivery.operation of
-                      Incidents.PostReply _ -> delivery.payload
+                      (Incidents.PostReply _; Incidents.PostAnalysis _ _) -> delivery.payload
                       Incidents.PostRoot -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+                      Incidents.PostStandalone -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
                       Incidents.UpdateRoot _ -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
                   , Notify.threadTs = parent
                   , Notify.webhookUrl = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
                   , Notify.projectIdCtx = delivery.projectId.toText
                   , Notify.teamIdCtx = sd.teamId
                   }
-          Notify.deliverSlack operation message <&> \case
-            Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
-            Notify.SlackAccepted -> Incidents.WebhookAccepted
-            Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
-            Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
-            Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"
+          allowed <- case delivery.operation of
+            Incidents.PostAnalysis _ runId -> Issues.incidentReportAllowed delivery.projectId runId
+            (Incidents.PostRoot; Incidents.PostStandalone; Incidents.PostReply{}; Incidents.UpdateRoot{}) -> pure True
+          if not allowed
+            then pure $ Incidents.DeliveryRejected "incident_routine_authority_withdrawn"
+            else
+              Notify.deliverSlack operation message <&> \case
+                Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
+                -- Without a bot token nothing can ever recover the timestamp.
+                Notify.SlackAccepted ->
+                  Incidents.WebhookAccepted $ if T.null sd.botToken then Incidents.Threadless else Incidents.ThreadCapable
+                Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
+                Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
+                Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"
         _ -> pure $ Incidents.DeliveryRejected "installation_replaced_or_removed"
       finishedAt <- Time.currentTime
       saved <- Incidents.finishSlackDelivery finishedAt delivery outcome
       unless saved $ Log.logAttention "Slack delivery completion did not match its lease or root" (delivery.id, delivery.rootId)
     Slack.reconcileIncidentDeliveries
+    Incidents.enqueueIncidentInvestigations
 
 
 -- | An unavailable evaluation changes evidence availability, not the alert state.

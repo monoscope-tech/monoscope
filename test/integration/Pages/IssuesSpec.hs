@@ -339,7 +339,7 @@ spec = around withTestResources $ describe "Issues" do
     void $ call tr $ IssuesPage.errorUnmergePostH testPid member
     dbOne tr [sql| SELECT merge_override FROM apis.error_patterns WHERE id=? |] (Only member) `shouldReturn` False
 
-    assertNonMemberDenied tr otherPid $ IssuesPage.aiChatPostH otherPid parent (IssuesPage.AIChatForm "summarise this")
+    assertNonMemberDenied tr otherPid $ IssuesPage.aiChatPostHWithTools Nothing otherPid parent (IssuesPage.AIChatForm "summarise this" Nothing)
     dbOne tr [sql| SELECT count(*)::int FROM apis.ai_chat_messages WHERE project_id=? |] (Only otherPid) `shouldReturn` (0 :: Int)
 
     -- Hover preloads every hx-get, so no issue mutation may be reachable by GET.

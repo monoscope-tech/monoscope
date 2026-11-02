@@ -65,12 +65,14 @@ import ProcessMessage (PathClassifier (..), emptyPathClassifier, processMessages
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
+import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualified as TSF
 import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
 import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields qualified as PLF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
+import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
@@ -210,6 +212,43 @@ spec = do
       -- The whole bulk request goes in one column-oriented INSERT…SELECT…unnest.
       void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime k1 ["bulk-8.1/" <> show i | i <- [1 .. 2000 :: Int]] frozenTime)
       dbOne tr [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND body::text LIKE '%bulk-8.1/%' |] (Only pid) `shouldReturn` (2000 :: Int)
+
+    it "HTTP credentials: header-only exports persist, keyed siblings stay isolated, and resource keys retain precedence" \tr -> do
+      pid <- createTestProject tr "otlp-http-credentials"
+      other <- createTestProject tr "otlp-http-other"
+      key <- createTestAPIKey tr pid "resource-key"
+      otherKey <- createTestAPIKey tr other "header-key"
+      let sendBoth header logs traces =
+            for_ [OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider header (encodeMessage logs), OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider header (encodeMessage traces)] \export ->
+              export `shouldReturn` (Right "" :: Either Text ByteString)
+          assertRows project service expected = do
+            result <- queryLogs tr project (Just $ "resource.service.name == \"" <> service <> "\"")
+            result.error `shouldBe` Nothing
+            V.length result.logsData `shouldBe` expected
+          headerService = "header-only-http-exports"
+          headerResource = defMessage & PRF.attributes .~ [mkAttr "service.name" headerService]
+          headerLogs = createOtelLogAtTime "" ["Log via header auth"] frozenTime & LSF.resourceLogs . traverse . PLF.resource .~ headerResource
+          headerTraces = createOtelSpanAtTime "" "abc123" "def456" Nothing "GET /header-auth" frozenTime & TSF.resourceSpans . traverse . PTF.resource .~ headerResource
+      sendBoth (Just key) headerLogs headerTraces
+      assertRows pid headerService 2
+      let siblingService = "resource-only-sibling-exports"
+          uncredentialed = defMessage & PRF.attributes .~ [mkAttr "service.name" siblingService, mkAttr "qa.sibling" "uncredentialed"]
+          siblingLogs =
+            createOtelLogAtTime key ["Resource-only log"] frozenTime
+              & LSF.resourceLogs . traverse . PLF.resource .~ mkResource key [mkAttr "service.name" siblingService]
+              & LSF.resourceLogs %~ (\resources -> resources <> map (PLF.resource .~ uncredentialed) resources)
+          siblingTraces =
+            createOtelSpanAtTime key "abc124" "def457" Nothing "GET /resource-only" frozenTime
+              & TSF.resourceSpans . traverse . PTF.resource .~ mkResource key [mkAttr "service.name" siblingService]
+              & TSF.resourceSpans %~ (\resources -> resources <> map ((PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.spanId .~ "sibling") . (PTF.resource .~ uncredentialed)) resources)
+      sendBoth Nothing siblingLogs siblingTraces
+      assertRows pid siblingService 2
+      assertRows other siblingService 0
+      let dualService = "dual-auth-log"
+          dualRequest = createOtelLogAtTime key ["Dual auth log"] frozenTime & LSF.resourceLogs . traverse . PLF.resource .~ mkResource key [mkAttr "service.name" dualService]
+      OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just otherKey) (encodeMessage dualRequest) `shouldReturn` (Right "" :: Either Text ByteString)
+      assertRows pid dualService 1
+      assertRows other dualService 0
 
     it "metrics: gauges, histograms, exponential histograms and summaries keep native columns; catalog and pages; replays dedupe; overflow poisoned; every write target idempotent" \tr -> do
       -- TimeFusion is one shared store, so every count here is over a project of this example's own.

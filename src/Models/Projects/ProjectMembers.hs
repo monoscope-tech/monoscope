@@ -11,6 +11,10 @@ module Models.Projects.ProjectMembers (
   getActiveProjectMemberByUserId,
   selectAllProjectMembers,
   getUserPermission,
+  activeMembership,
+  memberPermissionsSql,
+  getSessionPermission,
+  sessionPermissionSql,
   sessionAndProjectAtLeast,
   updateProjectMembersPermissons,
   softDeleteProjectMembers,
@@ -201,13 +205,48 @@ getActiveProjectMemberByUserId pid uid =
     <> Projects.accessibleMembership
 
 
+-- | Current account, project, and plan eligibility, shared by member and Slack authorization.
+-- Requires the query to alias @projects.project_members@ as @member@,
+-- @users.users@ as @account@ and @projects.projects@ as @project@.
+activeMembership :: HI.Sql
+activeMembership =
+  [HI.sql| AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
+    AND project.active AND project.deleted_at IS NULL
+    AND (lower(project.payment_plan) <> 'free' OR member.user_id = (
+      SELECT user_id FROM projects.project_members WHERE project_id = project.id ORDER BY created_at, id LIMIT 1)) |]
+
+
+memberPermissionsSql :: HI.Sql -> HI.Sql
+memberPermissionsSql scope =
+  [HI.sql|SELECT member.project_id, member.user_id, member.permission FROM projects.project_members member
+    JOIN users.users account ON account.id = member.user_id
+    JOIN projects.projects project ON project.id = member.project_id WHERE (|]
+    <> scope
+    <> [HI.sql|)|]
+    <> activeMembership
+
+
 getUserPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
 getUserPermission pid uid =
   Hasql.interp
-    $ [HI.sql| SELECT pm.permission FROM projects.project_members pm
-           JOIN projects.projects p ON p.id = pm.project_id
-           WHERE pm.project_id = #{pid} AND pm.user_id = #{uid} |]
-    <> Projects.accessibleMembership
+    $ [HI.sql|SELECT permission FROM (|]
+    <> memberPermissionsSql [HI.sql|member.project_id = #{pid} AND member.user_id = #{uid}|]
+    <> [HI.sql|) eligible|]
+
+
+getSessionPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
+getSessionPermission pid user = Hasql.interp $ sessionPermissionSql pid user
+
+
+sessionPermissionSql :: Projects.ProjectId -> Projects.UserId -> HI.Sql
+sessionPermissionSql pid user =
+  [HI.sql|WITH member_permission AS (|]
+    <> memberPermissionsSql [HI.sql|member.project_id = #{pid} AND member.user_id = #{user}|]
+    <> [HI.sql|) SELECT permission FROM member_permission
+      UNION ALL SELECT #{PAdmin} FROM users.users account
+      WHERE account.id = #{user} AND account.active AND account.deleted_at IS NULL AND account.is_sudo
+        AND EXISTS (SELECT 1 FROM projects.projects WHERE id = #{pid})
+        AND NOT EXISTS (SELECT 1 FROM member_permission)|]
 
 
 -- | 'Projects.sessionAndProject' (members only), then at least @perm@ on the project. A membership's

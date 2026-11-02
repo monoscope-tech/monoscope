@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Models.Apis.Incidents (
   EpisodeId,
   IncidentEventId,
@@ -16,9 +18,14 @@ module Models.Apis.Incidents (
   RecordConflict (..),
   recordIncidentEvent,
   recordIncidentEventTx,
+  IncidentEventContext (..),
+  getIncidentEventContext,
+  enqueueIncidentInvestigations,
+  queueIncidentReport,
   getEpisode,
   listEpisodes,
   threadConversationId,
+  threadConversationIdTx,
   InvestigationContext (..),
   slackInvestigationContext,
   RelatedIncidentMatch (..),
@@ -35,12 +42,14 @@ module Models.Apis.Incidents (
   SlackDelivery,
   SlackDeliveryF (..),
   DeliveryOutcome (..),
+  RootThreading (..),
   claimSlackDeliveries,
   finishSlackDelivery,
   captureSlackRoot,
   IncidentSearch,
   IncidentSearchF (..),
   claimIncidentSearches,
+  SearchProgress (..),
   saveIncidentSearchCursor,
   confirmIncidentSearch,
   correlateSlackDelivery,
@@ -48,21 +57,22 @@ module Models.Apis.Incidents (
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
-import Data.Char (isDigit)
 import Data.Effectful.Hasql (executeTx, oneTx, queryTx)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
 import Effectful.Exception (throwIO)
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Integrations qualified as Integrations
+import Models.Apis.Investigations (SlackTimestamp, slackTimestamp, slackTimestampText)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -203,10 +213,12 @@ episodeSource alias =
 -- | Rebuild 'DeliveryOperation' from the stored operation and its root timestamp.
 deliveryOperation :: HI.Sql
 deliveryOperation =
-  [HI.sql|CASE d.operation
-    WHEN 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
-    WHEN 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
-    WHEN 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
+  [HI.sql|CASE
+    WHEN d.operation = 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
+    WHEN d.operation = 'post_reply' AND r.threadless THEN jsonb_build_object('tag', 'PostStandalone')
+    WHEN d.operation = 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
+    WHEN d.operation = 'post_analysis' THEN jsonb_build_object('tag', 'PostAnalysis', 'contents', jsonb_build_array(r.message_ts, d.agent_run_id))
+    WHEN d.operation = 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
   END|]
 
 
@@ -250,10 +262,14 @@ listEpisodes pid phase limit =
 -- only valid if it equals what this returns for the thread it claims to be in.
 -- It must therefore stay the single place that mapping is computed.
 threadConversationId :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Eff es (UUIDId "conversation")
-threadConversationId pid teamId channelId threadTs =
+threadConversationId pid teamId channelId threadTs = Hasql.transaction TxS.ReadCommitted TxS.Read $ threadConversationIdTx pid teamId channelId threadTs
+
+
+threadConversationIdTx :: Projects.ProjectId -> Text -> Text -> Text -> Tx.Transaction (UUIDId "conversation")
+threadConversationIdTx pid teamId channelId threadTs =
   maybe (Issues.slackScopedConversationId pid teamId channelId threadTs) (\iid -> UUIDId iid.unUUIDId)
     . join
-    <$> Hasql.interpOne @(Maybe Issues.IssueId)
+    <$> Hasql.queryTx @(Maybe (Maybe Issues.IssueId))
       [HI.sql|SELECT episode.issue_id FROM apis.slack_incident_roots root
         JOIN apis.incident_episodes episode ON episode.id = root.episode_id
         WHERE root.team_id = #{teamId} AND root.channel_id = #{channelId}
@@ -443,6 +459,73 @@ recordIncidentEvent :: DB es => IncidentUpdate -> Eff es RecordResult
 recordIncidentEvent = Hasql.transaction TxS.ReadCommitted TxS.Write . recordIncidentEventTx
 
 
+data IncidentEventContext timestamp = IncidentEventContext
+  { eventId :: IncidentEventId
+  , rootId :: SlackRootId
+  , episodeId :: EpisodeId
+  , issueId :: Issues.IssueId
+  , phase :: EpisodePhase
+  , observedAt :: UTCTime
+  , teamId :: Text
+  , channelId :: Text
+  , threadTs :: timestamp
+  , notification :: SlackPayload
+  }
+  deriving stock (Foldable, Functor, Generic, Show, Traversable)
+  deriving anyclass (AE.ToJSON, HI.DecodeRow)
+
+
+getIncidentEventContext :: DB es => Projects.ProjectId -> IncidentEventId -> SlackRootId -> Eff es (Maybe (IncidentEventContext SlackTimestamp))
+getIncidentEventContext pid eventId rootId = do
+  saved <-
+    Hasql.interpOne @(IncidentEventContext Text)
+      [HI.sql|SELECT event.id, root.id, episode.id, episode.issue_id,
+      CASE event.event_kind WHEN 'alert' THEN 'active' WHEN 'recovered' THEN 'recovered' ELSE 'resolved' END,
+      event.observed_at, root.team_id, root.channel_id, root.message_ts, event.reply_payload
+      FROM apis.incident_events event JOIN apis.slack_incident_roots root ON root.episode_id = event.episode_id
+      JOIN apis.incident_episodes episode ON episode.id = root.episode_id
+      WHERE event.id = #{eventId} AND root.id = #{rootId} AND event.project_id = #{pid} AND episode.project_id = #{pid}
+        AND episode.issue_id IS NOT NULL AND event.event_kind IN ('alert', 'recovered', 'resolved')
+        AND root.message_ts IS NOT NULL AND NOT root.threadless|]
+  pure $ saved >>= traverse slackTimestamp
+
+
+enqueueIncidentInvestigations :: (DB es, Time.Time :> es) => Eff es ()
+enqueueIncidentInvestigations = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql|INSERT INTO background_jobs (run_at, status, payload)
+      SELECT #{now}, 'queued', identity.payload FROM apis.incident_events event
+      JOIN apis.slack_incident_roots root ON root.episode_id = event.episode_id
+      JOIN apis.ai_routines routine ON routine.project_id = event.project_id AND routine.schedule_kind = 'incident'
+        AND routine.incident_team_id = root.team_id AND routine.incident_channel_id = root.channel_id
+      CROSS JOIN LATERAL (SELECT
+        jsonb_build_object('tag', 'InvestigateIncident', 'contents', jsonb_build_array(event.project_id, event.id, root.id)) AS payload,
+        jsonb_build_object('tag', 'TriggeredRun', 'contents', jsonb_build_object('tag', 'IncidentEvent', 'contents', jsonb_build_array(event.id, root.id))) AS source) identity
+      WHERE routine.active AND event.observed_at >= routine.incident_enabled_at
+        AND root.message_ts IS NOT NULL AND NOT root.threadless AND event.event_kind IN ('alert', 'recovered', 'resolved')
+        AND NOT EXISTS (SELECT 1 FROM apis.ai_routine_runs run WHERE run.project_id = event.project_id AND run.source = identity.source)
+        AND NOT EXISTS (SELECT 1 FROM background_jobs job WHERE job.payload ->> 'tag' = 'InvestigateIncident' AND job.payload = identity.payload)
+      ORDER BY event.observed_at, event.id, root.id LIMIT 50 ON CONFLICT DO NOTHING|]
+
+
+queueIncidentReport :: DB es => UTCTime -> Text -> Projects.ProjectId -> IncidentEventId -> SlackRootId -> UUIDId "ai_routine_run" -> Eff es ()
+queueIncidentReport now host pid eventId rootId runId =
+  whenM (Issues.incidentReportAllowed pid runId)
+    $ Hasql.interpExecute_
+      [HI.sql|INSERT INTO apis.slack_incident_deliveries
+      (root_id, episode_id, event_id, operation, available_at, history_retry_at, agent_run_id, agent_payload)
+      SELECT root.id, root.episode_id, event.id, 'post_analysis', #{now}, #{now}, run.id,
+        jsonb_build_object('text', 'AI incident analysis' || E'\n\n' || left(artifact.content, 3000) || E'\n\n' || #{host} || 'p/' || #{pid.toText} || '/ai/runs/' || #{runId.toText})
+      FROM apis.slack_incident_roots root JOIN apis.incident_events event ON event.episode_id = root.episode_id
+      JOIN apis.ai_routine_runs run ON run.id = #{runId} AND run.project_id = event.project_id
+      JOIN apis.ai_routines routine ON routine.id = run.routine_id AND routine.destination = 'slack'
+      JOIN apis.ai_routine_run_artifacts artifact ON artifact.run_id = run.id AND artifact.key = 'latest-result'
+      WHERE root.id = #{rootId} AND event.id = #{eventId} AND event.project_id = #{pid} AND run.status = 'succeeded'
+        AND run.source = #{Issues.TriggeredRun $ Issues.IncidentEvent eventId rootId}
+      ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
+
+
 -- | Export the transaction as well as its interpreter so the monitor can commit
 -- its status, event, and delivery outbox in one database transaction.
 -- No network operation occurs while this source lock is held.
@@ -562,33 +645,15 @@ recordIncidentEventTx update = do
                               (root_id, episode_id, event_id, operation, available_at)
                               SELECT #{rootId}, #{eid}, #{eventId}, #{operation}, #{at}
                               FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id <> #{eventId}
+                                AND NOT (threadless AND #{operation} = 'update_root')
                               ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
                     pure $ Recorded current eventId
 
 
-newtype SlackTimestamp = SlackTimestamp Text
-  deriving stock (Eq, Show)
-  deriving newtype (AE.ToJSON, HI.EncodeValue)
-
-
--- | Parse Slack's decimal timestamp without losing precision.
---
--- >>> fmap slackTimestampText (slackTimestamp "1788900000.000001")
--- Just "1788900000.000001"
--- >>> all (isNothing . slackTimestamp) ["", "1", ".1", "1.", "1.2.3", "-1.1"]
--- True
-slackTimestamp :: Text -> Maybe SlackTimestamp
-slackTimestamp value =
-  let (seconds, fraction) = T.breakOn "." value
-      digits text = not (T.null text) && T.all isDigit text
-   in SlackTimestamp value <$ guard (digits seconds && digits (T.drop 1 fraction))
-
-
-slackTimestampText :: SlackTimestamp -> Text
-slackTimestampText (SlackTimestamp value) = value
-
-
-data DeliveryOperation timestamp = PostRoot | PostReply timestamp | UpdateRoot timestamp
+-- | 'PostStandalone' is a reply with no thread to join. It posts like a root but
+-- is not one: it can never own the root's timestamp, and only 'PostRoot' may wait
+-- on one (@CHECK (operation = 'post_root' OR state <> 'waiting_root')@).
+data DeliveryOperation timestamp = PostRoot | PostStandalone | PostReply timestamp | PostAnalysis timestamp (UUIDId "ai_routine_run") | UpdateRoot timestamp
   deriving stock (Eq, Foldable, Functor, Generic, Show, Traversable)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson (DeliveryOperation timestamp)
@@ -614,9 +679,21 @@ data SlackDeliveryF timestamp = SlackDelivery
   deriving anyclass (HI.DecodeRow)
 
 
+-- | Whether a root posted by this transport can ever acquire a timestamp.
+-- Recovery needs a bot token, so a webhook-only install never will.
+data RootThreading = ThreadCapable | Threadless
+  deriving stock (Eq, Show)
+
+
+-- | How long a webhook-accepted root may wait for @conversations.history@ to
+-- recover its timestamp before it is treated as one that never will.
+timestampRecoveryWindow :: NominalDiffTime
+timestampRecoveryWindow = 30 * 60
+
+
 data DeliveryOutcome
   = DeliveryConfirmed SlackTimestamp
-  | WebhookAccepted
+  | WebhookAccepted RootThreading
   | DeliveryRetry UTCTime Text
   | DeliveryRejected Text
   | DeliveryUncertain Text
@@ -653,6 +730,28 @@ claimSlackDeliveriesTx now = do
     [HI.sql|UPDATE apis.slack_incident_deliveries
     SET state = 'uncertain', last_error = 'send_lease_expired'
     WHERE state = 'sending' AND lease_until < #{now}|]
+  -- Recovery out of time leaves a root that will never be threaded, so treat it
+  -- as one — but never while a worker holds the search lease: it may be one page
+  -- away from the timestamp.
+  let recoveryDeadline = addUTCTime (negate timestampRecoveryWindow) now
+  executeTx
+    [HI.sql|WITH exhausted AS (
+      UPDATE apis.slack_incident_roots r SET threadless = TRUE
+      FROM apis.slack_incident_deliveries d
+      WHERE d.root_id = r.id AND d.operation = 'post_root' AND d.state = 'waiting_root'
+        AND d.available_at <= #{recoveryDeadline} AND d.history_lease_token IS NULL
+        AND r.message_ts IS NULL AND NOT r.threadless
+      RETURNING r.id
+    ) UPDATE apis.slack_incident_deliveries d
+    SET state = 'delivered', last_error = 'timestamp_recovery_exhausted', lease_token = NULL, lease_until = NULL
+    FROM exhausted WHERE d.root_id = exhausted.id AND d.operation = 'post_root' AND d.state = 'waiting_root'|]
+  -- A root turns threadless only once its post_root settles, so an event
+  -- arriving before that still queues an edit. Settle those here too.
+  executeTx
+    [HI.sql|UPDATE apis.slack_incident_deliveries d
+    SET state = 'failed', last_error = 'threadless_root_cannot_be_edited', lease_token = NULL, lease_until = NULL
+    FROM apis.slack_incident_roots r
+    WHERE r.id = d.root_id AND r.threadless AND d.operation = 'update_root' AND d.state = 'pending'|]
   let leaseUntil = addUTCTime 120 now
   queryTx
     $ [HI.sql|WITH candidates AS (
@@ -662,7 +761,8 @@ claimSlackDeliveriesTx now = do
       WHERE d.state = 'pending' AND d.available_at <= #{now}
         AND NOT EXISTS (SELECT 1 FROM monitors.query_monitors monitor
           WHERE episode.source_kind = 'monitor' AND monitor.id = episode.source_id AND monitor.muted_until > #{now})
-        AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL) AND |]
+        AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL
+             OR (r.threadless AND d.operation = 'post_reply')) AND |]
     <> noEarlierUnsettledDelivery
     <> [HI.sql|ORDER BY d.sequence LIMIT 50 FOR UPDATE OF d SKIP LOCKED
     ), claimed AS (
@@ -671,7 +771,7 @@ claimSlackDeliveriesTx now = do
       FROM candidates c WHERE d.id = c.id RETURNING d.*
     ) SELECT d.id, d.root_id, d.episode_id, e.project_id, r.team_id, r.channel_id, |]
     <> deliveryOperation
-    <> [HI.sql|, CASE WHEN d.operation = 'post_reply' THEN e.reply_payload ELSE e.root_payload END,
+    <> [HI.sql|, CASE WHEN d.operation = 'post_analysis' THEN d.agent_payload WHEN d.operation = 'post_reply' THEN e.reply_payload ELSE e.root_payload END,
         initial.root_payload,
         d.lease_token, d.attempts
       FROM claimed d JOIN apis.incident_events e ON e.id = d.event_id
@@ -687,7 +787,9 @@ finishSlackDelivery :: DB es => UTCTime -> SlackDelivery -> DeliveryOutcome -> E
 finishSlackDelivery now delivery outcome = Hasql.transaction TxS.ReadCommitted TxS.Write do
   let (deliveryState, availableAt, messageTs, err) = case outcome of
         DeliveryConfirmed ts -> ("delivered", now, Just ts, Nothing)
-        WebhookAccepted -> (if delivery.operation == PostRoot then "waiting_root" else "delivered", now, Nothing, Nothing)
+        -- Parking a threadless root would block its follow-ups for good.
+        WebhookAccepted ThreadCapable -> (if delivery.operation == PostRoot then "waiting_root" else "delivered", now, Nothing, Nothing)
+        WebhookAccepted Threadless -> ("delivered", now, Nothing, Nothing)
         DeliveryRetry retryAt reason -> ("pending", max now retryAt, Nothing, Just reason)
         DeliveryRejected reason -> ("failed", now, Nothing, Just reason)
         DeliveryUncertain reason -> ("uncertain", now, Nothing, Just reason)
@@ -699,11 +801,15 @@ finishSlackDelivery now delivery outcome = Hasql.transaction TxS.ReadCommitted T
     WHERE id = #{delivery.id} AND lease_token = #{delivery.leaseToken} AND state IN ('sending', 'uncertain')
     RETURNING root_id|]
   case (listToMaybe completed, delivery.operation, outcome) of
+    -- On the root, not the delivery: follow-ups need to know there is no thread.
+    (Just rid, PostRoot, WebhookAccepted Threadless) -> do
+      executeTx [HI.sql|UPDATE apis.slack_incident_roots SET threadless = TRUE WHERE id = #{rid} AND message_ts IS NULL AND NOT threadless|]
+      pure True
     (Just rid, PostRoot, DeliveryConfirmed ts) -> do
       roots <-
         queryTx @[SlackRootId]
           [HI.sql|UPDATE apis.slack_incident_roots SET message_ts = #{ts}
-        WHERE id = #{rid} AND (message_ts IS NULL OR message_ts = #{ts}) RETURNING id|]
+        WHERE id = #{rid} AND NOT threadless AND (message_ts IS NULL OR message_ts = #{ts}) RETURNING id|]
       when (null roots)
         $ executeTx
           [HI.sql|UPDATE apis.slack_incident_deliveries
@@ -717,7 +823,9 @@ correlateSlackDelivery :: SlackDelivery -> SlackPayload -> SlackPayload
 correlateSlackDelivery delivery (SlackPayload payload) =
   let eventType = case delivery.operation of
         PostRoot -> "monoscope_incident_root"
-        PostReply _ -> "monoscope_incident_delivery"
+        -- Not a root: a Slack event carrying it must not claim the root's timestamp.
+        PostStandalone -> "monoscope_incident_delivery"
+        (PostReply _; PostAnalysis _ _) -> "monoscope_incident_delivery"
         UpdateRoot _ -> "monoscope_incident_root"
    in SlackPayload
         $ KM.insert
@@ -795,6 +903,8 @@ claimIncidentSearches now =
           JOIN apis.slack s ON s.project_id = e.project_id AND s.team_id = r.team_id
           WHERE d.attempts > 0 AND d.history_retry_at <= #{now} AND p.active AND p.deleted_at IS NULL
             AND (d.state IN ('uncertain', 'waiting_root') OR (d.state = 'sending' AND d.lease_until < #{now}))
+            -- Recovery reads conversations.history, the one call it cannot make.
+            AND NOT r.threadless
             AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL) AND |]
     <> noEarlierUnsettledDelivery
     <> [HI.sql|ORDER BY d.history_retry_at, d.sequence LIMIT 20 FOR UPDATE OF d SKIP LOCKED
@@ -808,17 +918,33 @@ claimIncidentSearches now =
           JOIN apis.incident_episodes e ON e.id = r.episode_id|]
 
 
-saveIncidentSearchCursor :: DB es => IncidentSearch -> Maybe Text -> UTCTime -> Eff es ()
-saveIncidentSearchCursor search next retryAt =
+-- | A search that paged is making progress; one that threw is not, and only the
+-- latter has a reason to record. Without it a stuck root looks identical to one
+-- still working — which is how 110 went unnoticed for six days.
+data SearchProgress = SearchAdvanced (Maybe Text) | SearchStalled Text
+  deriving stock (Eq, Show)
+
+
+saveIncidentSearchCursor :: DB es => IncidentSearch -> SearchProgress -> UTCTime -> Eff es ()
+saveIncidentSearchCursor search progress retryAt =
   Hasql.interpExecute_
-    [HI.sql|UPDATE apis.slack_incident_deliveries SET history_cursor = #{next}, history_retry_at = #{retryAt}, history_lease_token = NULL
+    [HI.sql|UPDATE apis.slack_incident_deliveries SET history_cursor = #{cursor}, history_retry_at = #{retryAt}, history_lease_token = NULL,
+        last_error = COALESCE(#{reason}, last_error)
     WHERE id = #{search.id} AND state IN ('uncertain', 'waiting_root', 'sending') AND history_lease_token = #{search.leaseToken}|]
+  where
+    (cursor, reason) = case progress of
+      SearchAdvanced next -> (next, Nothing)
+      SearchStalled why -> (search.cursor, Just $ T.take 500 why)
 
 
 confirmIncidentSearch :: DB es => IncidentSearch -> SlackTimestamp -> Eff es Bool
 confirmIncidentSearch search timestamp = case search.operation of
   PostRoot -> observeSlackRoot search.projectId (SlackDestination search.teamId search.channelId) search.rootId timestamp
+  -- Its root is threadless, so claimIncidentSearches never offers one; confirming
+  -- it would need a root timestamp that by definition does not exist.
+  PostStandalone -> pure False
   PostReply root -> confirmAt root
+  PostAnalysis root _ -> confirmAt root
   UpdateRoot root -> confirmAt root
   where
     confirmAt root =
@@ -830,7 +956,7 @@ confirmIncidentSearch search timestamp = case search.operation of
         WHERE d.id = #{search.id} AND d.root_id = #{search.rootId} AND r.id = d.root_id AND e.id = r.episode_id
           AND e.project_id = #{search.projectId} AND r.team_id = #{search.teamId} AND r.channel_id = #{search.channelId}
           AND r.message_ts = #{root} AND d.history_lease_token = #{search.leaseToken} AND d.state IN ('uncertain', 'sending')
-          AND ((d.operation = 'update_root' AND #{timestamp} = r.message_ts) OR (d.operation = 'post_reply' AND #{timestamp} <> r.message_ts))
+          AND ((d.operation = 'update_root' AND #{timestamp} = r.message_ts) OR (d.operation IN ('post_reply', 'post_analysis') AND #{timestamp} <> r.message_ts))
         RETURNING TRUE|]
 
 
@@ -839,7 +965,7 @@ observeSlackRoot pid destination rootId timestamp = Hasql.transaction TxS.ReadCo
   roots <-
     queryTx @[SlackRootId]
       [HI.sql|UPDATE apis.slack_incident_roots r SET message_ts = #{timestamp}
-    FROM apis.incident_episodes e WHERE r.id = #{rootId} AND r.episode_id = e.id
+    FROM apis.incident_episodes e WHERE r.id = #{rootId} AND r.episode_id = e.id AND NOT r.threadless
       AND e.project_id = #{pid} AND r.team_id = #{destination.teamId} AND r.channel_id = #{destination.channelId}
       AND (r.message_ts IS NULL OR r.message_ts = #{timestamp})
       AND EXISTS (SELECT 1 FROM apis.slack_incident_deliveries d

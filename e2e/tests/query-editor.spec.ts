@@ -37,7 +37,8 @@ const labels = (items: { label: string }[]) => items.map(({ label }) => label);
 // inside a box with room for 30 — so the row sat 2px out of line on every page load
 // until the editor upgraded. Blocking the chunk is what makes that state hold still.
 test("keeps the row aligned while the editor is still loading", async ({ page }) => {
-  await page.route("**/query-editor*.js", (route) => route.abort());
+  // Hold the request pending; aborting it triggers stale-chunk recovery.
+  await page.route("**/query-editor*.js", () => {});
   await page.goto(`/p/${DEMO_PROJECT}/log_explorer`, { waitUntil: "domcontentloaded" });
   await page.locator("#filterElement").waitFor({ state: "attached" });
 

@@ -90,7 +90,6 @@ module Models.Projects.GitSync (
 import Control.Lens (toListOf, (.~), (?~), (^.), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, values, _Integer, _String)
-import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.Char (isAlphaNum)
 import Data.Default (Default (..), def)
@@ -113,6 +112,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Effectful (Eff, IOE, (:>))
+import Effectful.Exception (throwIO)
 import Effectful.Log (Log)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -124,7 +124,7 @@ import Jose.Jws qualified as Jws
 import Jose.Jwt (Jwt (..))
 import Models.Projects.Dashboards (Dashboard, DashboardId)
 import Models.Projects.Dashboards qualified as Dashboards
-import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
+import Models.Projects.ProjectApiKeys (decryptAPIKey, decryptSecret, encryptSecret)
 import Models.Projects.Projects (PersistentSessionId, ProjectId)
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), selectFrom)
 import Pkg.Git qualified as Git
@@ -351,16 +351,18 @@ data SyncAction
 
 
 -- Token encryption helpers
-encryptToken :: ByteString -> Text -> Text
-encryptToken encKey = extractBase64 . B64.encodeBase64 . encryptAPIKey encKey . encodeUtf8
+encryptToken :: UUIDEff.UUIDEff :> es => ByteString -> Text -> Eff es Text
+encryptToken encKey token = encryptSecret encKey (encodeUtf8 token) >>= either throwIO pure
 
 
 -- | Decrypt an access token. Returns Left with error description if decryption fails.
 -- SECURITY: Never falls back to plaintext - callers must handle Left appropriately.
 decryptToken :: ByteString -> Text -> Either Text Text
-decryptToken encKey encryptedB64 =
-  bimap ("Base64 decode failed: " <>) (decodeUtf8 . decryptAPIKey encKey)
-    $ B64.decodeBase64Untyped (encodeUtf8 encryptedB64)
+decryptToken encKey encryptedB64
+  | ":" `T.isInfixOf` encryptedB64 = decodeUtf8 <$> first show (decryptSecret encKey encryptedB64)
+  | otherwise =
+      bimap ("Base64 decode failed: " <>) (decodeUtf8 . decryptAPIKey encKey)
+        $ B64.decodeBase64Untyped (encodeUtf8 encryptedB64)
 
 
 -- | Decrypt a row's stored PAT in place. A row with no token is a GitHub App installation
@@ -467,31 +469,34 @@ getGitHubCredential encKey pid cid =
 -- because the same installation arriving twice is the same grant, not a second one.
 --
 -- Keyed on project, host, server origin and account.
-upsertGitHubCredential :: DB es => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Maybe Int64 -> Maybe Text -> Eff es (Maybe GitHubCredential)
-upsertGitHubCredential encKey pid host apiBase account instId token =
+upsertGitHubCredential :: (DB es, UUIDEff.UUIDEff :> es) => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Maybe Int64 -> Maybe Text -> Eff es (Maybe GitHubCredential)
+upsertGitHubCredential encKey pid host apiBase account instId token = do
+  encrypted <- traverse (encryptToken encKey) token
   Hasql.interp
     [HI.sql| INSERT INTO projects.git_credentials (project_id, host, api_base, account, installation_id, access_token)
-             VALUES (#{pid}, #{host}, #{apiBase}, projects.git_identity_name(#{host}, #{account}), #{instId}, #{encryptToken encKey <$> token})
+             VALUES (#{pid}, #{host}, #{apiBase}, projects.git_identity_name(#{host}, #{account}), #{instId}, #{encrypted})
              ON CONFLICT (project_id, host, api_base, account)
              DO UPDATE SET installation_id = EXCLUDED.installation_id, access_token = COALESCE(EXCLUDED.access_token, projects.git_credentials.access_token), updated_at = now()
              RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
 
 
 -- | Create a token grant or replace the exact grant the editor inspected.
-saveTokenCredential :: DB es => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Text -> Maybe GitHubCredential -> Eff es (Maybe GitHubCredential)
-saveTokenCredential encKey pid host origin account token = \case
-  Nothing ->
-    Hasql.interp
-      [HI.sql| INSERT INTO projects.git_credentials (project_id, host, api_base, account, access_token)
-             VALUES (#{pid}, #{host}, #{origin}, projects.git_identity_name(#{host}, #{account}), #{encryptToken encKey token})
-             ON CONFLICT (project_id, host, api_base, account) DO NOTHING
-             RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
-  Just observed ->
-    Hasql.interp
-      [HI.sql| UPDATE projects.git_credentials SET access_token = #{encryptToken encKey token}, updated_at = now()
-             WHERE project_id = #{pid} AND id = #{observed.id} AND host = #{host} AND api_base IS NOT DISTINCT FROM #{origin} AND account = projects.git_identity_name(host, #{account})
-               AND installation_id IS NULL AND updated_at = #{observed.updatedAt} AND access_token IS NOT DISTINCT FROM #{observed.accessToken}
-             RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
+saveTokenCredential :: (DB es, UUIDEff.UUIDEff :> es) => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Text -> Maybe GitHubCredential -> Eff es (Maybe GitHubCredential)
+saveTokenCredential encKey pid host origin account token observedM = do
+  encrypted <- encryptToken encKey token
+  case observedM of
+    Nothing ->
+      Hasql.interp
+        [HI.sql| INSERT INTO projects.git_credentials (project_id, host, api_base, account, access_token)
+               VALUES (#{pid}, #{host}, #{origin}, projects.git_identity_name(#{host}, #{account}), #{encrypted})
+               ON CONFLICT (project_id, host, api_base, account) DO NOTHING
+               RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
+    Just observed ->
+      Hasql.interp
+        [HI.sql| UPDATE projects.git_credentials SET access_token = #{encrypted}, updated_at = now()
+               WHERE project_id = #{pid} AND id = #{observed.id} AND host = #{host} AND api_base IS NOT DISTINCT FROM #{origin} AND account = projects.git_identity_name(host, #{account})
+                 AND installation_id IS NULL AND updated_at = #{observed.updatedAt} AND access_token IS NOT DISTINCT FROM #{observed.accessToken}
+               RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
 
 
 -- DB Operations
@@ -528,17 +533,17 @@ getGitSyncsByRepo host owner repo = Hasql.interp (selectFrom @GitHubSync <> [HI.
 -- | Split the two auth states back into the two nullable columns that denote them. The sum
 -- type is what makes the row's @installation_id IS NOT NULL OR access_token IS NOT NULL@
 -- check hold by construction rather than by every caller remembering to fill one in.
-credColumns :: ByteString -> GitCreds -> (Maybe Int64, Maybe Text)
+credColumns :: UUIDEff.UUIDEff :> es => ByteString -> GitCreds -> Eff es (Maybe Int64, Maybe Text)
 credColumns encKey = \case
-  AppInstallation i -> (Just i, Nothing)
-  PersonalToken t -> (Nothing, Just (encryptToken encKey t))
+  AppInstallation i -> pure (Just i, Nothing)
+  PersonalToken t -> (Nothing,) . Just <$> encryptToken encKey t
 
 
 -- | Insert a sync config, authenticated either by a GitHub App installation or by a token the
 -- user created — the only option on every host except GitHub, and still available there.
-insertGitHubSync :: DB es => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Text -> Text -> GitCreds -> Maybe Text -> Text -> Eff es (Maybe GitHubSync)
+insertGitHubSync :: (DB es, UUIDEff.UUIDEff :> es) => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Text -> Text -> GitCreds -> Maybe Text -> Text -> Eff es (Maybe GitHubSync)
 insertGitHubSync encKey pid host apiBase ownerVal repoVal branchVal creds webhookSecretVal prefix = do
-  let (instM, tokenM) = credColumns encKey creds
+  (instM, tokenM) <- credColumns encKey creds
   Hasql.interp
     [HI.sql| WITH registered AS (
                INSERT INTO projects.repositories (project_id, host, api_base, owner, repo)
@@ -552,8 +557,9 @@ insertGitHubSync encKey pid host apiBase ownerVal repoVal branchVal creds webhoo
 -- | Re-point a sync row at a repository. 'Nothing' keeps what is stored: a form that left the
 -- token box empty must not blank the credential, and the App path has no folder field to send.
 -- Saving always re-enables sync, matching the column default a fresh connection gets.
-updateGitHubSync :: (DB es, Time :> es) => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Eff es (Maybe GitHubSync)
+updateGitHubSync :: (DB es, Time :> es, UUIDEff.UUIDEff :> es) => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Eff es (Maybe GitHubSync)
 updateGitHubSync encKey sid ownerVal repoVal branchVal tokenM prefixM = do
+  encrypted <- traverse (encryptToken encKey) tokenM
   now <- Time.currentTime
   Hasql.interp
     [HI.sql| WITH registered AS (
@@ -570,7 +576,7 @@ updateGitHubSync encKey sid ownerVal repoVal branchVal tokenM prefixM = do
              )
              UPDATE projects.git_sync
              SET owner = projects.git_identity_name(host, #{ownerVal}), repo = projects.git_identity_name(host, #{repoVal}), branch = #{branchVal}, sync_enabled = true, updated_at = #{now}
-               , access_token = COALESCE(#{encryptToken encKey <$> tokenM}, access_token)
+               , access_token = COALESCE(#{encrypted}, access_token)
                , path_prefix = COALESCE(#{prefixM}, path_prefix)
              WHERE id = #{sid} RETURNING * |]
 
@@ -924,7 +930,7 @@ installationErrorMessage = \case
 
 
 -- | GitHub's setup ID is untrusted until its user-token installation listing confirms it.
-authorizeGitHubInstallation :: (DB es, W.HTTP :> es) => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Text -> Int64 -> Eff es (Either InstallationError ())
+authorizeGitHubInstallation :: (DB es, UUIDEff.UUIDEff :> es, W.HTTP :> es) => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Text -> Int64 -> Eff es (Either InstallationError ())
 authorizeGitHubInstallation encKey pid appId clientId secret code callback iid = runExceptT do
   expectedApp <- hoistEither $ maybeToRight InstallationConfigurationMissing $ readMaybe @Integer $ toString appId
   response <-

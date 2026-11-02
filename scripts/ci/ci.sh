@@ -172,6 +172,8 @@ detect_caps() {
   command -v cabal >/dev/null 2>&1 && caps="$caps ghc"
   command -v node >/dev/null 2>&1 && caps="$caps node"
   command -v bun >/dev/null 2>&1 && caps="$caps bun"
+  command -v python3 >/dev/null 2>&1 && caps="$caps python3"
+  command -v psql >/dev/null 2>&1 && command -v createdb >/dev/null 2>&1 && command -v dropdb >/dev/null 2>&1 && caps="$caps pg-cli"
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1 && caps="$caps docker"
   command -v hlint >/dev/null 2>&1 && caps="$caps hlint"
   probe_tcp "${DB_HOST:-localhost}" "${DB_PORT:-5432}" && caps="$caps pg"
@@ -400,7 +402,12 @@ run_body() { # <check>
       prepare_browser
       scripts/e2e.sh
       ;;
-    integration-tests) run_integration ;;
+    # Provisioned SDK guests run through the Haskell suite; its inputs include the worker.
+    integration-tests)
+      test -x scripts/package-cli.sh
+      PGHOST=${DB_HOST:-localhost} PGPORT=${DB_PORT:-5432} PGUSER=postgres PGPASSWORD=postgres PGDATABASE=postgres PYTHONDONTWRITEBYTECODE=1 python3 scripts/baseline-agent-migrations-test.py
+      run_integration
+      ;;
     *) die "no body for check '$1'" ;;
   esac
 }
@@ -410,14 +417,22 @@ run_body() { # <check>
 # resource-pool lifecycle (see test/integration/Main.hs). Keep shards * ~9 conns
 # under the server's max_connections.
 run_integration() {
-  local shards bin i green shard_rc=0
+  local shards bin i shard_rc=0
   local -a shard_pids=()
   shards=${CI_SHARDS:-4}
   # Without a reachable TimeFusion the URL must go, or every example dies dialling
   # a dead host instead of taking TestUtils' Postgres-as-TimeFusion fallback. Only
   # reached under CI_ALLOW_DEGRADED — cmd_run refuses this check otherwise.
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
-  export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
+  export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn} HOST_URL=http://localhost:8080/
+  cabal build monoscope-cli:exe:monoscope -j $CABAL_FLAGS "$CABAL_OPTS"
+  MONOSCOPE_BIN=$(scripts/cli-bin.sh $CABAL_FLAGS "$CABAL_OPTS")
+  export MONOSCOPE_BIN
+  [ -x "$MONOSCOPE_BIN" ] || die "CLI binary was not built at $MONOSCOPE_BIN"
+  if ! command -v ffmpeg >/dev/null || ! command -v dot >/dev/null; then
+    apt-get update && apt-get install -y --no-install-recommends ffmpeg graphviz
+  fi
+  (cd impact-review-worker && npm ci --ignore-scripts --no-audit && npm test)
   prepare_web_deps
   prepare_browser
   # The checkout is bind-mounted from the host: building to ./chart-cli here would
@@ -438,15 +453,20 @@ run_integration() {
     shard_pids+=("$!")
   done
   for i in "${shard_pids[@]}"; do wait "$i" || shard_rc=1; done
+  check_integration_shards "$shards" "$shard_rc"
+}
+
+check_integration_shards() {
+  local shards=$1 shard_rc=$2 i green f rc
   echo "=== per-shard (wall-clock | result) — wide spreads ⇒ rebalance ==="
   for i in $(seq 0 $((shards - 1))); do
     printf "shard %s: %-6s | %s\n" "$i" "$(sed -n 's/.*\[shard-time\] //p' "build-shard-$i.log" | tail -1)" \
       "$(grep -hE 'examples?, [0-9]+ failures?' "build-shard-$i.log" | tail -1)"
   done
   green=$(grep -lE "examples?, 0 failures" build-shard-*.log | wc -l | tr -d ' ')
-  # green==N already means every shard printed a clean summary; don't also grep for
-  # "error:" — the app logs error: lines at LOG_LEVEL=warn on passing runs.
-  if [ "$shard_rc" -ne 0 ] || [ "$green" -ne "$shards" ] || grep -qE "[1-9][0-9]* failures?|Interrupted" build-shard-*.log; then
+  # Require a clean summary and successful process exits. Test names and
+  # application diagnostics are not verdicts.
+  if [ "$shard_rc" -ne 0 ] || [ "$green" -ne "$shards" ]; then
     echo "SHARDED RUN FAILED ($green/$shards green):"
     for f in build-shard-*.log; do
       rc=$(sed -n 's/^\[shard-exit\] //p' "$f" | tail -1)
@@ -789,18 +809,9 @@ cmd_clean() { compose down -v --remove-orphans && docker volume rm "${SHARED_VOL
 # be recorded at build time or it is unanswerable.
 IMAGE=${MONOSCOPE_IMAGE:-ghcr.io/monoscope-tech/monoscope}
 
-# The image must be linux/amd64 because prod is. On an Apple Silicon laptop that
-# means emulation, and an emulated GHC build is the slowest thing in this repo —
-# slow enough that it pushes people back to "push it and let CI do it", which is
-# the habit this whole file exists to kill. A BUILDER naming a native amd64
-# buildx endpoint removes the emulation instead of tolerating it.
-#
-# Deploy images build on the native builder `make builder-setup` creates over SSH when it
-# exists (that host is production; the builder container is capped by builder-setup), else
-# on this machine. Emulated builds took long enough — and crashed Docker Desktop/OrbStack
-# often enough — that sign-off rarely produced an image and CI rebuilt it from scratch
-# (~1h). MONOSCOPE_BUILDER= (empty) forces a local build.
-BUILDER=${MONOSCOPE_BUILDER-monoscope-amd64}
+# Production image generation stays on this Mac's OrbStack builder. release.sh
+# checks its endpoint and rejects missing builders rather than falling back.
+BUILDER=${MONOSCOPE_BUILDER-monoscope-local-amd64}
 
 # A TimeFusion image built for this machine's own architecture. `make tf-image`
 # produces it; cmd_local picks it up on its own.
@@ -816,37 +827,19 @@ cmd_image() { # [sha] — build and push the production image for a commit
   publish_attestation image "$sha" docker linux-amd64
 }
 
-# A native amd64 builder, so the image build is a build and not an emulation.
-# BUILD_HOST is any amd64 machine you can `ssh` to that runs Docker; the deploy
-# host itself is the obvious one, and it is also the machine that will pull the
-# image, so the push is a local-network hop.
-#
-# The buildkit container is capped, because that host is usually production:
-# BUILD_CPUS cores and BUILD_MEMORY are all it may take. Uncapped, a -j48 GHC
-# build competes with the thing it is being built to replace.
+# Local AMD64 emulation through OrbStack/Rosetta; never allocate an SSH builder.
 cmd_builder() { # setup | rm | status
-  local host=${BUILD_HOST:-} cpus=${BUILD_CPUS:-12} mem=${BUILD_MEMORY:-48g} container
-  container="buildx_buildkit_${BUILDER}0"
   case "${1:-status}" in
     setup)
-      [ -n "$host" ] || die "BUILD_HOST is unset, e.g. BUILD_HOST=ubuntu@build.example.com make builder-setup"
-      ssh -o BatchMode=yes "$host" 'docker info >/dev/null' \
-        || die "cannot reach docker on $host over ssh"
-      case "$(ssh -o BatchMode=yes "$host" 'uname -m')" in
-        x86_64|amd64) ;;
-        *) die "$host is not amd64 — a builder there would emulate too" ;;
-      esac
-      docker buildx inspect "$BUILDER" >/dev/null 2>&1 && { note "builder '$BUILDER' already exists"; return 0; }
-      docker buildx create --name "$BUILDER" --driver docker-container \
-        --platform linux/amd64 --driver-opt env.BUILDKIT_STEP_LOG_MAX_SIZE=-1 "ssh://$host" >/dev/null
+      [ -z "${BUILD_HOST:-}" ] || die "BUILD_HOST is prohibited; image builders must stay on this Mac"
+      MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh local-context
+      if ! docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
+        docker buildx create --name "$BUILDER" --driver docker-container \
+          --platform linux/amd64 --driver-opt env.BUILDKIT_STEP_LOG_MAX_SIZE=-1 orbstack >/dev/null
+      fi
+      MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh local-builder
       docker buildx inspect --bootstrap "$BUILDER" >/dev/null
-      # Resource limits are applied to the container rather than passed as
-      # driver-opts: buildx only learned those opts after the version Docker
-      # Desktop ships, and a builder that refuses to be created is worse than
-      # one that is capped a second later.
-      ssh -o BatchMode=yes "$host" "docker update --cpus $cpus --memory $mem --memory-swap $mem $container" >/dev/null \
-        || note "could not cap the builder container — it will use the whole host"
-      note "builder '$BUILDER' ready on $host (capped at ${cpus} cpus / ${mem})"
+      note "builder '$BUILDER' ready on this Mac's OrbStack context"
       ;;
     rm)     docker buildx rm "$BUILDER" >/dev/null 2>&1 && note "removed '$BUILDER'" || note "no builder '$BUILDER'" ;;
     status) docker buildx inspect "$BUILDER" 2>/dev/null | grep -E '^(Name|Status|Platforms|Endpoint):' || note "no builder '$BUILDER' — \`make builder-setup\`" ;;
@@ -1022,7 +1015,7 @@ assert() { # <desc> <expected> <actual>
 cmd_selftest() {
   SELFTEST_RC=0
   node --test scripts/ci/release-test.mjs || SELFTEST_RC=1
-  local body_rc=0 BG_DIR
+  local body_rc=0 BG_DIR shard_case
   CI_UNIT_BIN=false "$0" body unit-tests >/dev/null 2>&1 || body_rc=$?
   assert "body stops at first failure" 1 "$body_rc"
   assert "built unit binary runs without Cabal" ok "$(CI_UNIT_BIN=$(command -v true) "$0" body unit-tests && echo ok)"
@@ -1034,6 +1027,22 @@ cmd_selftest() {
   collect_background failing || body_rc=$?
   assert "background failure propagates" 1 "$body_rc"
   assert "background diagnostics retained" yes "$([ -f "$BG_DIR/failing.log" ] && echo yes || echo no)"
+  rm -rf "$BG_DIR"
+  BG_DIR=$(mktemp -d -t ci-selftest-shards.XXXXXX)
+  printf 'checkout_RebuildsInterruptedCache [passed]\n1 example, 0 failures\n[shard-exit] 0\n' > "$BG_DIR/build-shard-0.log"
+  body_rc=0
+  (cd "$BG_DIR"; check_integration_shards 1 0 >/dev/null) || body_rc=$?
+  assert "passing Interrupted test name cannot fail shard gate" 0 "$body_rc"
+  for shard_case in failure interrupted shutdown; do
+    case "$shard_case" in
+      failure) printf '1 example, 1 failure\n[shard-exit] 1\n' ;;
+      interrupted) printf 'Interrupted.\n[shard-exit] 130\n' ;;
+      shutdown) printf '1 example, 0 failures\n[shard-exit] 139\n' ;;
+    esac > "$BG_DIR/build-shard-0.log"
+    body_rc=0
+    (cd "$BG_DIR"; check_integration_shards 1 1 >/dev/null) || body_rc=$?
+    assert "shard $shard_case still fails" 1 "$body_rc"
+  done
   rm -rf "$BG_DIR"
   BG_DIR=$(mktemp -d -t ci-selftest-browser.XXXXXX)
   printf '#!/bin/sh\necho install >> "%s/calls"\n' "$BG_DIR" > "$BG_DIR/npm"
@@ -1110,6 +1119,11 @@ cmd_selftest() {
   before=$(fingerprint ui-tests)
   : > "static/public/assets/js/thirdparty/$probe"; WORKTREE_TREE=''; after=$(fingerprint ui-tests); rm -f "static/public/assets/js/thirdparty/$probe"
   assert "vendored parser change moves UI fp" changed "$([ "$before" != "$after" ] && echo changed)"
+
+  WORKTREE_TREE=''
+  before=$(fingerprint integration-tests)
+  : > "scripts/baseline-agent-migrations-$probe.py"; WORKTREE_TREE=''; after=$(fingerprint integration-tests); rm -f "scripts/baseline-agent-migrations-$probe.py"
+  assert "baseline adoption change moves integration fp" changed "$([ "$before" != "$after" ] && echo changed)"
 
   : > "web-components/$probe.bun-build"; WORKTREE_TREE=''
   after=$(git ls-tree "$(worktree_tree)" -- "web-components/$probe.bun-build")

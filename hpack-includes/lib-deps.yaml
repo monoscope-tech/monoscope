@@ -54,6 +54,7 @@
 - envy
 - errors
 - mmark
+- modern-uri
 - commonmark >= 0.2.6.1 && < 0.3
 - commonmark-extensions >= 0.2.6 && < 0.3
 - Diff >= 1.0 && < 1.1
@@ -137,6 +138,7 @@
 - network-uri
 - scotty
 - filepath
+- filelock >= 0.1.1.7 && < 0.2
 - file-embed
 - http-client
 - wai-middleware-static

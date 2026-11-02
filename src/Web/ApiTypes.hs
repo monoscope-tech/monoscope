@@ -1,9 +1,10 @@
 -- | JSON request/response types for the public REST API.
 --
--- Wire format for /api/v1/{monitors,dashboards,api-keys,...}. Domain logic lives
--- in Models.* — handlers in Web.ApiHandlers adapt these types to the underlying
--- representations used by the HTML handlers.
+-- Wire format for /api/v1/{monitors,dashboards,api-keys,...}. Most handlers
+-- live in Web.ApiHandlers; Pages.Dashboards renders dashboard data.
 module Web.ApiTypes (
+  ApiActor (..),
+  principalUser,
   -- Monitor types
   MonitorInput (..),
   MonitorPatch (..),
@@ -22,6 +23,8 @@ module Web.ApiTypes (
   ApiKeySummary (..),
   -- Events query (body variant)
   EventsQuery (..),
+  LogResult (..),
+  TraceTreeEntry (..),
   -- Generic bulk
   BulkAction (..),
   BulkFailure (..),
@@ -41,6 +44,7 @@ module Web.ApiTypes (
   -- Issues
   IssueApiSummary (..),
   IssueApiFull (..),
+  IssueApiActivity (..),
   IssueStatus (..),
   -- Incidents
   IncidentSummary (..),
@@ -58,10 +62,14 @@ module Web.ApiTypes (
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
+import Data.HashMap.Strict qualified as HM
+import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
@@ -74,10 +82,19 @@ import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types qualified as Charts
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (JsonValueSchema (..), SnakeJSON (..), SnakeSchema (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (CamelSchema (..), JsonValueSchema (..), SnakeJSON (..), SnakeSchema (..), WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
 import Web.Wire (Paged (..))
+
+
+data ApiActor = ApiKeyPrincipal | MemberPrincipal Projects.UserId
+  deriving stock (Eq, Show)
+
+
+principalUser :: ApiActor -> Maybe Projects.UserId
+principalUser ApiKeyPrincipal = Nothing
+principalUser (MemberPrincipal userId) = Just userId
 
 
 -- | Patch: all fields optional; only provided fields are updated.
@@ -278,6 +295,39 @@ data EventsQuery = EventsQuery
   deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON SnakeSchema EventsQuery
 
 
+data TraceTreeEntry = TraceTreeEntry
+  { traceId :: Text
+  , startTime :: Int64
+  , duration :: Int64
+  , traceStartTime :: Maybe Text
+  , root :: Text
+  , children :: Map.Map Text [Text]
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.ToJSON) via DAE.Snake TraceTreeEntry
+  deriving (ToSchema) via SnakeSchema TraceTreeEntry
+
+
+data LogResult = LogResult
+  { logsData :: V.Vector (V.Vector AE.Value)
+  , cols :: [Text]
+  , colIdxMap :: HM.HashMap Text Int
+  , cursor :: Maybe Text
+  , nextUrl, resetLogsUrl, recentUrl :: Text
+  , serviceColors :: HM.HashMap Text Text
+  , queryResultCount, count :: Int
+  , hasMore :: Bool
+  , traces :: [TraceTreeEntry]
+  , error :: Maybe Text
+  -- ^ Sanitized backend-failure message. When set, the web client renders an
+  -- error state (inline on first load, toast on refresh) instead of the
+  -- misleading empty "no events" list. Raw detail stays in the OTEL span + log.
+  }
+  deriving stock (Generic)
+  deriving (ToSchema) via CamelSchema LogResult
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] LogResult
+
+
 -- | Generic bulk envelope parameterised by id type (UUIDs for most resources,
 -- Int64 for log patterns).
 data BulkAction a = BulkAction
@@ -439,11 +489,21 @@ data IssueApiSummary = IssueApiSummary
   deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON SnakeSchema IssueApiSummary
 
 
+data IssueApiActivity = IssueApiActivity
+  { event :: Text
+  , createdBy :: Maybe Projects.UserId
+  , createdAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON SnakeSchema IssueApiActivity
+
+
 data IssueApiFull = IssueApiFull
   { summary :: IssueApiSummary
   , recommendedAction :: Text
   , migrationComplexity :: Text
   , issueData :: AE.Value
+  , activity :: [IssueApiActivity]
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON JsonValueSchema IssueApiFull

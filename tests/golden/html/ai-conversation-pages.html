@@ -11,13 +11,8 @@
 <div class="flex items-center" data-header-actions
 <input type="radio" name="nav-view" id="nav-view-ai" class="sr-only" checked hx-live="if (!this.dataset.seeded) { this.dataset.seeded = &#39;1&#39;; this.checked = this.value === (sessionStorage.getItem(&#39;sidebar-view&#39;) || &#39;ai&#39;) }" _="on input call sessionStorage.setItem(&#39;sidebar-view&#39;, my.value)" value="ai"
 <div class="flex items-center" data-header-actions
-<a href="?doc=checkout-review" class="inline-flex items-center gap-1.5 rounded-md border border-strokeWeak px-2 py-1 text-xs font-medium text-textStrong hover:bg-fillHover"
+<a href="/p/<uuid>/ai/<uuid>?doc=checkout-review" class="flex max-w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-textWeak hover:bg-fillHover hover:text-textStrong" data-hx-get="/p/<uuid>/ai/<uuid>?doc=checkout-review" data-hx-target="#ai-inspector" data-hx-select="#ai-inspector" data-hx-swap="outerHTML" _="on htmx:response:error or htmx:error
+                  send errorToast(value: [&#39;Could not load the details. Try again.&#39;]) to &lt;body/&gt;"
 <a href="/p/<uuid>/issues/<uuid>" class="btn btn-sm btn-ghost gap-2 active:scale-[0.96] transition-transform" aria-label="View issue" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;"
-<a href="#followup" class="block truncate rounded px-2 py-1 text-xs text-textWeak hover:bg-fillHover hover:text-textStrong">Follow-up</a>
-<div class="prose prose-sm mt-6 max-w-none [&amp;_h2]:scroll-mt-4">
-<h2 id="summary">Summary</h2>
-<p>All good.</p>
-<h2 id="followup">Follow-up</h2>
-<p>Latency recovered.</p>
-</div>
-<a href="#followup" class="block truncate rounded px-2 py-1 text-xs text-textWeak hover:bg-fillHover hover:text-textStrong">Follow-up</a>
+<a href="#ai-document-<uuid>-followup" class="block truncate text-textBrand hover:underline">Follow-up</a>
+<h2 id="ai-document-<uuid>-followup" tabindex="-1">Follow-up</h2>

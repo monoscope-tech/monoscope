@@ -28,6 +28,7 @@ import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Models.Projects.ProjectApiKeys qualified as Keys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
@@ -43,6 +44,7 @@ import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Test qualified as WT
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job qualified as Jobs
+import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.CodeContext qualified as PageCodeContext
 import Pages.Components (stackTrace_)
@@ -58,7 +60,6 @@ import System.Environment (getEnvironment)
 import System.Process.Typed (proc, readProcessStdout_, setEnv)
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx)
-import Test.Hspec
 import UnliftIO.Async (cancel, concurrently, wait, waitCatch, withAsync)
 import UnliftIO.Exception (bracket, throwIO, try)
 import Web.Routes qualified as Routes
@@ -222,7 +223,7 @@ spec = do
             app =
               genericServeTWithContext
                 (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
+                (Routes.server (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             base pid = "/p/" <> pid.toText <> "/memories"
             authorization = ("Authorization", "Bearer " <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId)
@@ -398,7 +399,7 @@ spec = do
         let app =
               genericServeTWithContext
                 (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
+                (Routes.server (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             token = UUID.toString (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId
         Warp.testWithApplication (pure app) \port -> do
@@ -580,6 +581,30 @@ spec = do
           html `shouldSatisfy` T.isInfixOf "team/checkout"
           html `shouldNotSatisfy` T.isInfixOf "name=\"credentialId\""
           for_ ["Unlink", "Link repository", "Save review settings", "Install GitHub App", "Connect with token"] \control -> html `shouldNotSatisfy` T.isInfixOf control
+
+      it "credentialEncryption_usesFreshNoncesAuthenticatesCiphertextAndReadsLegacyTokens" \tr -> do
+        let encKey = BS.replicate 32 7
+            token = "same-provider-token"
+        Just alpha <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "alpha" Nothing (Just token)
+        Just beta <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "beta" Nothing (Just token)
+        let firstToken = alpha.accessToken :: Maybe Text
+            secondToken = beta.accessToken :: Maybe Text
+        firstToken `shouldNotBe` secondToken
+        for_ [alpha, beta] \credential -> do
+          recovered <- runQueryEffect tr $ GitSync.getGitHubCredential encKey testPid credential.id
+          fmap (.accessToken) recovered `shouldBe` Just (Just token)
+        encoded <- maybe (fail "Missing encrypted credential") pure firstToken
+        body <- maybe (fail "Missing authenticated envelope") pure $ T.stripPrefix "v1:" encoded
+        bytes <- either (fail . toString) pure $ B64.decodeBase64Untyped $ encodeUtf8 body
+        let corrupt = "v1:" <> extractBase64 (B64.encodeBase64 $ BS.map (`xor` 1) bytes)
+            legacy = extractBase64 $ B64.encodeBase64 $ Keys.encryptAPIKey encKey $ encodeUtf8 token
+        withResource tr.trPool \conn -> do
+          void $ PG.execute conn "UPDATE projects.git_credentials SET access_token = ? WHERE id = ?" (corrupt, alpha.id)
+          void $ PG.execute conn "UPDATE projects.git_credentials SET access_token = ? WHERE id = ?" (legacy, beta.id)
+        runQueryEffect tr (GitSync.getGitHubCredential encKey testPid alpha.id) >>= (`shouldSatisfy` isNothing)
+        old <- runQueryEffect tr $ GitSync.getGitHubCredential encKey testPid beta.id
+        fmap (.accessToken) old `shouldBe` Just (Just token)
+        runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "empty" "" Nothing) `shouldThrow` (== Keys.EmptySecret)
 
       it "repositoryConnections_githubCasingDoesNotDuplicateConnectionsOrSyncs" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
@@ -910,9 +935,9 @@ spec = do
         _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout") (Just "main") (Just "foreign") Nothing Nothing Nothing (Just foreignAccount.id))
         runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \rows -> length rows `shouldBe` 2
 
-      it "repositoryConnection_survivesCapabilityRemovalAndKeepsItsOwnDetails" \tr -> do
+      it "repositoryConnection_missingReviewRunnerIsNotReadyAndRetainsDetails" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "fixture", githubAppId = "fixture", githubAppPrivateKey = "fixture"}}}
+            configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "fixture", githubAppId = "fixture", githubAppPrivateKey = "fixture", impactReviewAgent = Just "test/fixtures/impact-review-agent.mjs"}}}
         Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
         runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "team" "checkout" "main") (Just "checkout") "/app/" "src"
         Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "checkout" "main" (GitSync.AppInstallation 42) Nothing "ops"
@@ -921,12 +946,19 @@ spec = do
         render (Lucid.toHtml details.content) `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/" <> repository.id.toText <> "/source\"")
         map (.service) details.content.mappings `shouldBe` [Just "checkout"]
         fmap (.id) details.content.dashboardSync `shouldBe` Just sync.id
-        details.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False
+        details.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsRoutine -> True; _ -> False
+        void $ testServant configured $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
+        (_, activated) <- testServant configured $ PageCodeContext.repositoryGetH testPid repository.id
+        activated.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False
+        let withoutAgent = configured{trATCtx = configured.trATCtx{config = configured.trATCtx.config{impactReviewAgent = Nothing}}}
+        (_, noRunner) <- testServant withoutAgent $ PageCodeContext.repositoryGetH testPid repository.id
+        render (Lucid.toHtml noRunner.content) `shouldNotSatisfy` T.isInfixOf "Ready for pull requests"
+        render (Lucid.toHtml noRunner.content) `shouldSatisfy` T.isInfixOf "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
         let incomplete = configured{trATCtx = configured.trATCtx{config = configured.trATCtx.config{githubAppPrivateKey = ""}}}
         unavailable <- call incomplete $ PageCodeContext.repositoryGetH testPid repository.id
         unavailable.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsServer -> True; _ -> False
         runQueryEffect tr $ ImpactReviews.updateSettings testPid (ImpactReviews.ReviewSettings "team" "checkout" False False)
-        disabled <- call configured $ PageCodeContext.repositoryGetH testPid repository.id
+        disabled <- call withoutAgent $ PageCodeContext.repositoryGetH testPid repository.id
         disabled.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewDisabled -> True; _ -> False
         for_ details.content.mappings \mapping -> runQueryEffect tr $ CodeContext.deleteCodeMapping testPid mapping.id
         void $ runQueryEffect tr $ GitSync.deleteGitHubSync sync.id

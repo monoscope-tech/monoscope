@@ -23,7 +23,12 @@ build	ghc	@hs @fe
 doctests	ghc	@hs @fe
 unit-tests	ghc	@hs @fe
 cli-tests	ghc	@cli
-integration-tests	ghc node bun pg minio tf-real	@hs @fe e2e/package.json e2e/package-lock.json
+# Integration installs SDK/media tools and runs the VM-free SDK protocol tests.
+# Container VM cases remain pending without
+# guest assets and a hypervisor; provisioned hosts verify those cases separately.
+# Shards require clean summaries and successful process exits; diagnostic text
+# and test names do not determine their result.
+integration-tests	ghc node bun python3 pg pg-cli minio tf-real	@hs @fe impact-review-worker e2e/package.json e2e/package-lock.json scripts/cli-bin.sh scripts/package-cli.sh scripts/check-cli-linkage.sh scripts/baseline-agent-migrations*.py docs/slack/agent-manifest.json
 weeder	ghc	@hs @fe
 hlint	hlint	src shared/src cli .hlint.yaml
 ui-tests	node	@fe @uisrc

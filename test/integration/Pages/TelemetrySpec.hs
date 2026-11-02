@@ -8,7 +8,7 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Numeric (showHex)
 import Pages.BodyWrapper (PageCtx (..))
@@ -17,7 +17,6 @@ import Pages.Telemetry qualified as Trace
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import System.Config (AuthContext (metricCatalogBuffer))
-import Test.Hspec
 
 
 spec :: Spec
@@ -305,13 +304,13 @@ spec = do
       forM_ ["z.old.one", "z.old.two"] (`seedAt` stale)
 
       -- Page 1: two of five active, the full active count, and every inactive metric.
-      p1 <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing Nothing cutoff 2 0 True
+      p1 <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing Nothing cutoff 2 0 Telemetry.ActivePageWithInactive
       map (.metricName) (V.toList p1.active) `shouldBe` ["a.five", "a.four"]
       p1.activeTotal `shouldBe` 5
       map (.metricName) (V.toList p1.inactive) `shouldBe` ["z.old.one", "z.old.two"]
 
       -- Page 2 continues the same ordering and reports the same total...
-      p2 <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing Nothing cutoff 2 2 False
+      p2 <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing Nothing cutoff 2 2 Telemetry.ActivePage
       map (.metricName) (V.toList p2.active) `shouldBe` ["a.one", "a.three"]
       p2.activeTotal `shouldBe` 5
       -- ...but must NOT drag the inactive tail along on every scroll request.
@@ -333,13 +332,13 @@ spec = do
       seed "runtime.two" "checkout" ["attributes.zone"]
       seed "runtime.two" "billing" ["attributes.other"]
       seed "literal%_&+" "checkout" []
-      firstMatch <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid (Just "checkout") Nothing (Just "RUNTIME") cutoff 1 0 False
-      secondMatch <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid (Just "checkout") Nothing (Just "RUNTIME") cutoff 1 1 False
+      firstMatch <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid (Just "checkout") Nothing (Just "RUNTIME") cutoff 1 0 Telemetry.ActivePage
+      secondMatch <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid (Just "checkout") Nothing (Just "RUNTIME") cutoff 1 1 Telemetry.ActivePage
       firstMatch.activeTotal `shouldBe` 2
       map (.metricName) (V.toList firstMatch.active) `shouldBe` ["runtime.one"]
       map (.metricName) (V.toList secondMatch.active) `shouldBe` ["runtime.two"]
       map (.metricLabels) (V.toList secondMatch.active) `shouldBe` [V.singleton "attributes.zone"]
-      literal <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing (Just "%_&+") cutoff 12 0 False
+      literal <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing (Just "%_&+") cutoff 12 0 Telemetry.ActivePage
       map (.metricName) (V.toList literal.active) `shouldBe` ["literal%_&+"]
       groups <- runTestBg frozenTime tr $ Telemetry.getMetricGroups testPid
       groups `shouldContain` ["runtime."]

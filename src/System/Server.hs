@@ -389,7 +389,7 @@ runServer appLogger env tp = do
           . AdConversions.attributionMiddleware
           . hashedAssetMiddleware
           $ server
-  let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
+  let bgJobWorker = BackgroundJobs.jobsWorkerInitWithTools appLogger env tp (Just Routes.mcpProjectTools)
       effectiveReplayBatch =
         if env.config.replayBatchSize == 0
           then max 1 (env.config.messagesPerPubsubPullBatch `div` 2)
@@ -495,6 +495,7 @@ runServer appLogger env tp = do
           , Just t <- [liveTailKafkaTopic]
           ]
             & listToMaybe
+        , guard (isJust env.config.impactReviewWorkspaceMaintenance) $> fiber "workspace-maintenance" (BackgroundJobs.runWorkspaceMaintenanceTimer appLogger env tp)
         ]
       <> fmap Just schemaFibers
       <> (if consumerOnly then [] else fmap Just jobFibers)
@@ -583,7 +584,7 @@ mkServer logger env tp = do
     (effToServantHandler env logger tp)
     -- OTLP/HTTP handlers injected here: Routes can't import OtlpServer
     -- (proto-lens orphan IsLabel instances clash with generic-lens #labels)
-    (Routes.server logger env tp (OtlpServer.httpTracesExport logger env tp) (OtlpServer.httpLogsExport logger env tp))
+    (Routes.server (OtlpServer.httpTracesExport logger env tp) (OtlpServer.httpLogsExport logger env tp))
     (Routes.genAuthServerContext logger env)
 
 

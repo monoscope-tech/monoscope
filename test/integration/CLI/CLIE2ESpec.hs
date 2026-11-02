@@ -16,7 +16,7 @@
 -- bodies, validation, agentic JSON shape) has at least one assertion below.
 -- If the bug regresses, the test for it must regress too — that is the
 -- point of this file.
-module CLI.CLIE2ESpec (spec) where
+module CLI.CLIE2ESpec (spec, withCliBin) where
 
 import Pkg.TestUtils
 
@@ -31,7 +31,6 @@ import Network.HTTP.Types.Status (statusCode)
 import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
 import System.Process qualified as Proc
-import Test.Hspec
 import UnliftIO.Exception (tryAny)
 
 

@@ -29,7 +29,7 @@ beforeEach(() => {
   repo = join(root, 'repo');
   mkdirSync(join(repo, 'scripts/ci'), { recursive: true });
   copyFileSync(script, join(repo, 'scripts/ci/release.sh'));
-  env = { ...process.env, REGISTRY: join(root, 'registry.json'), CALLS: join(root, 'calls'), CI_ROOT: repo, GITHUB_OUTPUT: join(root, 'outputs') };
+  env = { ...process.env, REGISTRY: join(root, 'registry.json'), CALLS: join(root, 'calls'), CI_ROOT: repo, GITHUB_OUTPUT: join(root, 'outputs'), DOCKER_CONTEXT: 'orbstack', MONOSCOPE_BUILDER: 'monoscope-local-amd64', GITHUB_ACTIONS: '', BUILD_HOST: '' };
   git('init', '-q');
   git('config', 'user.email', 'test@example.com');
   git('config', 'user.name', 'test');
@@ -42,6 +42,8 @@ beforeEach(() => {
   git('push', '-q', 'origin', 'HEAD:master');
   const bin = join(root, 'bin');
   mkdirSync(bin);
+  writeFileSync(join(bin, 'uname'), '#!/bin/sh\nif [ "$1" = -s ]; then printf "%s\\n" "${TEST_PLATFORM:-Darwin}"; else exec /usr/bin/uname "$@"; fi\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nprintf attempted > "$CALLS-ssh"\nexit 99\n', { mode: 0o755 });
   writeFileSync(join(bin, 'docker'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
@@ -49,7 +51,16 @@ fs.appendFileSync(process.env.CALLS, JSON.stringify(args) + '\\n');
 const path = process.env.REGISTRY;
 const state = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, 'utf8')) : {};
 const is = (...prefix) => prefix.every((arg, i) => args[i] === arg);
-if (is('manifest', 'inspect')) process.exit(args[2] in state ? 0 : 1);
+if (is('context', 'inspect', 'orbstack')) console.log(process.env.TEST_DOCKER_ENDPOINT ?? 'unix:///Users/test/.orbstack/run/docker.sock');
+else if (is('buildx', 'inspect')) {
+  const name = args[2] === '--bootstrap' ? args[3] : args[2];
+  if (name !== 'monoscope-local-amd64' || process.env.TEST_BUILDER_MISSING && !fs.existsSync(process.env.CALLS + '-builder')) process.exit(1);
+  console.log('Name: monoscope-local-amd64');
+  console.log('Driver: docker-container');
+  for (const endpoint of (process.env.TEST_BUILDER_ENDPOINT ?? 'orbstack').split(',')) console.log('Endpoint: ' + endpoint);
+}
+else if (is('buildx', 'create')) fs.writeFileSync(process.env.CALLS + '-builder', args.at(-1));
+else if (is('manifest', 'inspect')) process.exit(args[2] in state ? 0 : 1);
 else if (is('buildx', 'imagetools', 'inspect')) {
   const ref = args[3];
   const digest = ref === 'ghcr.io/monoscope-tech/monoscope-deps:latest' ? state.deps ?? 'sha256:' + 'a'.repeat(64)
@@ -94,6 +105,8 @@ test('squash merge reuses digest without rebuilding or moving latest', () => {
   git('commit', '--allow-empty', '-qm', 'squash metadata');
   release(['build']);
   assert.equal(builds().length, 1);
+  for (const [flag, value] of [['--builder', 'monoscope-local-amd64'], ['--platform', 'linux/amd64']])
+    assert.equal(builds()[0][builds()[0].indexOf(flag) + 1], value);
   assert.ok(!builds().some(args => args.includes(`${image}:latest`)));
   assert.equal(registry()[`${image}:${git('rev-parse', 'HEAD')}`], digest);
 });
@@ -162,10 +175,59 @@ test('failed build keeps lookup diagnostics and does not publish a digest or pro
   assert.ok(!existsSync(env.GITHUB_OUTPUT));
 });
 
-test('unavailable native builder falls back', () => {
-  env.MONOSCOPE_BUILDER = 'missing';
+for (const [name, overrides] of [
+  ['missing builder', { MONOSCOPE_BUILDER: 'missing' }],
+  ['unset builder', { MONOSCOPE_BUILDER: '' }],
+  ['unavailable local builder', { TEST_BUILDER_MISSING: 'true' }],
+  ['wrong context', { DOCKER_CONTEXT: 'production' }],
+  ['remote Docker socket', { TEST_DOCKER_ENDPOINT: 'ssh://production.example' }],
+  ['remote builder node', { TEST_BUILDER_ENDPOINT: 'ssh://production.example' }],
+  ['extra remote node', { TEST_BUILDER_ENDPOINT: 'orbstack,ssh://production.example' }],
+  ['GitHub runner', { GITHUB_ACTIONS: 'true' }],
+  ['Linux host', { TEST_PLATFORM: 'Linux' }],
+]) {
+  test(`image generation rejects ${name} without falling back`, () => {
+    const result = spawnSync('bash', [script, 'build'], { cwd: repo, env: { ...env, ...overrides }, encoding: 'utf8' });
+    assert.ifError(result.error);
+    assert.doesNotMatch(result.stderr, /SyntaxError|ReferenceError/);
+    assert.notEqual(result.status, 0, `${name} must reject image generation`);
+    assert.equal(builds().length, 0, `${name} must not start a build`);
+  });
+}
+
+test('builder setup creates only the local OrbStack node and reuses it', () => {
+  env.TEST_BUILDER_MISSING = 'true';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = spawnSync('bash', [join(dirname(script), 'ci.sh'), 'builder', 'setup'], { cwd: repo, env, encoding: 'utf8' });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const created = calls().filter(args => args[0] === 'buildx' && args[1] === 'create');
+  assert.equal(created.length, 1);
+  assert.equal(created[0].at(-1), 'orbstack');
+  assert.equal(existsSync(`${env.CALLS}-ssh`), false);
+});
+
+test('legacy BUILD_HOST is rejected before any SSH or Docker operation', () => {
+  env.BUILD_HOST = 'ubuntu@production.example';
+  const result = spawnSync('bash', [join(dirname(script), 'ci.sh'), 'builder', 'setup'], { cwd: repo, env, encoding: 'utf8' });
+  assert.ifError(result.error);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /BUILD_HOST is prohibited/);
+  assert.equal(existsSync(`${env.CALLS}-ssh`), false);
+  assert.deepEqual(calls(), []);
+});
+
+test('CI can reuse a locally built image without generating another', () => {
   release(['build']);
-  assert.ok(!builds()[0].includes('--builder'));
+  git('commit', '--allow-empty', '-qm', 'merge metadata');
+  env.GITHUB_ACTIONS = 'true';
+  env.TEST_PLATFORM = 'Linux';
+  env.DOCKER_CONTEXT = 'default';
+  env.MONOSCOPE_BUILDER = '';
+  release(['build']);
+  assert.equal(builds().length, 1);
+  assert.equal(registry()[`${image}:${git('rev-parse', 'HEAD')}`], digest);
 });
 
 test('requested revision must match checkout', () => {
@@ -206,14 +268,27 @@ process.stdout.write('200');
 test('cold Cabal cache preserves prebuilt dependencies and subsequent additions', () => {
   const dockerfile = readFileSync(new URL('../../Dockerfile', import.meta.url), 'utf8');
   const mounts = [...dockerfile.matchAll(/--mount=type=cache[^\s]*target=\/root\/\.cabal\/store[^\s]*/g)].map(([mount]) => `${mount},id=monoscope-seed-${root.split('/').at(-1)}`);
-  assert.equal(mounts.length, 2);
+  assert.equal(mounts.length, 3);
+  copyFileSync(new URL('../../.dockerignore', import.meta.url), join(repo, '.dockerignore'));
+  writeFileSync(join(repo, 'cabal.project'), 'packages: .');
+  writeFileSync(join(repo, 'cabal.project.local'), 'unreviewed build flags');
   const fixture = `FROM debian:12-slim AS dependencies
 RUN mkdir -p /root/.cabal/store && printf 'prebuilt' > /root/.cabal/store/dependency
 FROM dependencies AS builder
-RUN ${mounts[0]} test "$(cat /root/.cabal/store/dependency)" = prebuilt && printf 'incremental' > /root/.cabal/store/addition
+COPY cabal.project* /inputs/
+RUN test ! -e /inputs/cabal.project.local
+RUN ${mounts[0]} test ! -e /root/.cabal/store/addition && test "$(cat /root/.cabal/store/dependency)" = prebuilt && printf 'incremental' > /root/.cabal/store/addition
 RUN ${mounts[1]} test "$(cat /root/.cabal/store/dependency)" = prebuilt && test "$(cat /root/.cabal/store/addition)" = incremental
+RUN ${mounts[2]} test "$(cat /root/.cabal/store/dependency)" = prebuilt && test "$(cat /root/.cabal/store/addition)" = incremental
 `;
-  const result = spawnSync('docker', ['buildx', 'build', '--no-cache', '--progress=plain', '-f', '-', repo], {
+  const builder = process.platform === 'darwin' ? ['--builder', 'monoscope-local-amd64'] : [];
+  if (process.platform === 'darwin') {
+    const checked = spawnSync('bash', [script, 'local-builder'], { env: process.env, encoding: 'utf8' });
+    assert.ifError(checked.error);
+    assert.equal(checked.status, 0, checked.stderr);
+  }
+  // The unique mount ID and first assertion establish coldness without resetting later mounts.
+  const result = spawnSync('docker', ['buildx', 'build', ...builder, '--progress=plain', '-f', '-', repo], {
     input: fixture, encoding: 'utf8', env: process.env,
   });
   assert.ifError(result.error);

@@ -7,6 +7,9 @@ module Models.Projects.ProjectApiKeys (
   getProjectIdByApiKey,
   activateApiKey,
   decryptAPIKey,
+  SecretError (..),
+  encryptSecret,
+  decryptSecret,
   newProjectApiKeys,
   insertProjectApiKey,
   projectApiKeysByProjectId,
@@ -18,8 +21,12 @@ where
 
 import Control.Exception (throwIO)
 import Data.Base64.Types qualified as B64T
+import Data.ByteArray qualified as BA
+import Data.ByteString qualified as BS
 import Data.Cache qualified as Cache
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.UUID qualified as UUIDEff
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -41,8 +48,8 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import "base64" Data.ByteString.Base64 qualified as B64
 import "cryptonite" Crypto.Cipher.AES (AES256)
-import "cryptonite" Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
-import "cryptonite" Crypto.Error (throwCryptoError)
+import "cryptonite" Crypto.Cipher.Types qualified as Cipher
+import "cryptonite" Crypto.Error (eitherCryptoError, throwCryptoError)
 
 
 type ProjectApiKeyId = UUIDId "project_api_key"
@@ -151,15 +158,76 @@ projectIdsByProjectApiKeys projectKeys =
 
 -- | AES256-CTR; symmetric, so 'decryptAPIKey' is the same function.
 encryptAPIKey :: ByteString -> ByteString -> ByteString
-encryptAPIKey key = ctrCombine ctx nullIV
+encryptAPIKey key = Cipher.ctrCombine ctx Cipher.nullIV
   where
     ctx :: AES256
-    ctx = throwCryptoError $ cipherInit key
+    ctx = throwCryptoError $ Cipher.cipherInit key
 
 
 -- | @decryptAPIKey secretKey ciphertext@ — inverse of 'encryptAPIKey'.
 decryptAPIKey :: ByteString -> ByteString -> ByteString
 decryptAPIKey = encryptAPIKey
+
+
+data SecretError = EmptySecret | InvalidSecretKey | InvalidSecretEnvelope | SecretAuthenticationFailed
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Exception)
+
+
+-- | Authenticated storage for provider tokens, with one fresh nonce per secret.
+--
+-- >>> let key = BS.replicate 32 7
+-- >>> sealed <- seal key "provider-token"
+-- >>> (sealed >>= decryptSecret key) == Right "provider-token"
+-- True
+-- >>> seal key ""
+-- Left EmptySecret
+-- >>> seal "short" "provider-token"
+-- Left InvalidSecretKey
+-- >>> sealed >>= decryptSecret (BS.replicate 32 8)
+-- Left SecretAuthenticationFailed
+-- >>> decryptSecret key "v1:AAAA"
+-- Left InvalidSecretEnvelope
+encryptSecret :: UUIDEff.UUIDEff :> es => ByteString -> ByteString -> Eff es (Either SecretError Text)
+encryptSecret key plaintext = do
+  nonce <- UUIDEff.genUUID
+  pure do
+    when (BS.null plaintext) $ Left EmptySecret
+    let iv = toStrict $ UUID.toByteString nonce
+    cipher <- secretCipher key iv
+    let (tag, ciphertext) = Cipher.aeadSimpleEncrypt cipher (encodeUtf8 secretVersion :: ByteString) plaintext 16
+    pure $ secretVersion <> B64T.extractBase64 (B64.encodeBase64 $ iv <> BA.convert tag <> ciphertext)
+
+
+decryptSecret :: ByteString -> Text -> Either SecretError ByteString
+decryptSecret key encoded = do
+  body <- maybeToRight InvalidSecretEnvelope $ T.stripPrefix secretVersion encoded
+  payload <- first (const InvalidSecretEnvelope) $ B64.decodeBase64Untyped $ encodeUtf8 body
+  unless (BS.length payload > 32) $ Left InvalidSecretEnvelope
+  let (iv, rest) = BS.splitAt 16 payload
+      (tag, ciphertext) = BS.splitAt 16 rest
+  cipher <- secretCipher key iv
+  maybeToRight SecretAuthenticationFailed $ Cipher.aeadSimpleDecrypt cipher (encodeUtf8 secretVersion :: ByteString) ciphertext (Cipher.AuthTag $ BA.convert tag)
+
+
+secretVersion :: Text
+secretVersion = "v1:"
+
+
+secretCipher :: ByteString -> ByteString -> Either SecretError (Cipher.AEAD AES256)
+secretCipher key iv = do
+  cipher <- first (const InvalidSecretKey) $ eitherCryptoError $ Cipher.cipherInit key
+  first (const InvalidSecretEnvelope) $ eitherCryptoError $ Cipher.aeadInit Cipher.AEAD_GCM cipher iv
+
+
+-- $setup
+-- >>> :set -XOverloadedStrings
+-- >>> import Data.ByteString qualified as BS
+-- >>> import Data.Text (Text)
+-- >>> import Data.UUID qualified as UUID
+-- >>> import Data.Effectful.UUID qualified as UUIDEff
+-- >>> import Effectful qualified as Eff
+-- >>> let seal :: BS.ByteString -> BS.ByteString -> IO (Either SecretError Text); seal key = Eff.runEff . UUIDEff.runStaticUUID [UUID.nil] . encryptSecret key
 
 
 -- | Encrypt a random UUID with the project's secret key, base64-encode it — the one-shot

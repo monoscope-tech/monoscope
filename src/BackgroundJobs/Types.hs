@@ -1,13 +1,20 @@
-module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob) where
+{-# LANGUAGE OrPatterns #-}
+
+module BackgroundJobs.Types (BgJobs (..), Conversion (..), insertJob, wakeJob, reviewOperation, deferOperationReview, wakeStoppedReviews, startConversation, startCommand) where
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Wreq qualified as HTTP
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Effectful (Eff)
+import Effectful (Eff, (:>))
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Projects qualified as Projects
@@ -40,11 +47,14 @@ data BgJobs
   | SlackNotification Projects.ProjectId Text
   | ProcessSlackEvent (UUIDId "slack_event")
   | RefreshSlackProgress (UUIDId "slack_progress")
+  | RunConversation Projects.ProjectId (UUIDId "ai_routine_run")
   | AIRoutineRun (UUIDId "ai_routine") UTCTime
+  | InvestigateIncident Projects.ProjectId (UUIDId "incident_event") (UUIDId "slack_incident_root")
   | ResetSlackSession Projects.ProjectId Projects.UserId (UUIDId "slack_event")
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
   | ReviewPullRequest (UUIDId "pr_review")
+  | FixIssue Projects.ProjectId (UUIDId "issue_fix")
   | AnalyzeRepository Projects.ProjectId (UUIDId "repository")
   | RepositorySyncTick UTCTime
   | GitSyncFromRepo Projects.ProjectId
@@ -140,3 +150,112 @@ data Conversion = Signup Projects.UserId | Activated Projects.ProjectId
 -- writes, for modules that cannot import 'BackgroundJobs' or hold no 'jobsPool'.
 insertJob :: DB es => BgJobs -> Eff es ()
 insertJob job = Hasql.interpExecute_ [HI.sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued', #{HI.AsJsonb job}) |]
+
+
+wakeJob :: DB es => BgJobs -> Eff es ()
+wakeJob = Hasql.transaction TxS.ReadCommitted TxS.Write . queueJobTx WakeNow
+
+
+-- Retain the human decision and its continuation in one transaction.
+reviewOperation :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> Investigations.ReviewDecision -> Eff es Investigations.ReviewResponse
+reviewOperation project = Investigations.decideOperationReviewWith (queueReviewTx project ResumeReview) project
+
+
+deferOperationReview :: DB es => Projects.ProjectId -> UUIDId "agent_operation" -> UTCTime -> Eff es ()
+deferOperationReview project identifier deadline = Hasql.transaction TxS.ReadCommitted TxS.Write $ queueReviewTx project (DeferReview deadline) identifier
+
+
+wakeStoppedReviews :: DB es => Issues.RunStop -> Eff es ()
+wakeStoppedReviews scope = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  let stopped = Issues.runStopScopeSql scope
+  operations <-
+    Hasql.queryTx @[(Projects.ProjectId, UUIDId "agent_operation")]
+      [HI.sql|SELECT operation.project_id, operation.id FROM apis.ai_agent_operations operation
+      JOIN apis.ai_routine_runs run ON run.id = operation.run_id AND run.project_id = operation.project_id
+      JOIN apis.slack_events receipt ON receipt.id = CASE WHEN run.source #>> '{contents,tag}' = 'SlackMessage'
+        THEN (run.source #>> '{contents,contents}')::uuid END
+      WHERE run.source->>'tag' = 'TriggeredRun' AND receipt.processed_at IS NULL
+        AND operation.review->>'tag' <> 'NoReview' AND ^{stopped}|]
+  for_ operations $ \(project, identifier) -> queueReviewTx project FinishCancelledReview identifier
+
+
+startConversation :: (DB es, Time.Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> UUIDId "ai_routine_run" -> Text -> Issues.ExecutionPolicy -> Issues.InteractiveOrigin -> Eff es Issues.InteractiveStart
+startConversation project conversation user request =
+  Issues.startMemberConversationRunWith
+    ( \scheduled -> do
+        queueJobTx WakeNow $ RunConversation project request
+        for_ scheduled $ \routine -> queueJobTx (DeferUntil routine.scheduledAt) $ AIRoutineRun routine.id routine.scheduledAt
+    )
+    project
+    conversation
+    user
+    request
+
+
+startCommand :: (DB es, Time.Time :> es) => Issues.EventRoutine -> Issues.CommandOrigin -> UUIDId "conversation" -> Projects.UserId -> Text -> Eff es (Maybe Issues.EventRun)
+startCommand routine =
+  Issues.startCommandRunWith
+    (queueJobTx WakeNow . RunConversation routine.projectId . (.id))
+    routine
+
+
+data ReviewWake = ResumeReview | DeferReview UTCTime | FinishCancelledReview
+
+
+queueReviewTx :: Projects.ProjectId -> ReviewWake -> UUIDId "agent_operation" -> Tx.Transaction ()
+queueReviewTx project wake identifier = do
+  let (timing, waiting) = case wake of
+        (ResumeReview; FinishCancelledReview) -> (WakeNow, mempty)
+        DeferReview deadline -> (DeferUntil deadline, [HI.sql| AND operation.review->>'tag' = 'ReviewPending'|])
+      (status, active) = case wake of
+        FinishCancelledReview -> (Issues.RunCancelled, mempty)
+        (ResumeReview; DeferReview{}) ->
+          ( Issues.RunRunning
+          , [HI.sql| AND routine.active
+          AND (run.source <> #{Issues.ScheduledRun} OR routine.next_run_at = run.scheduled_at)|]
+          )
+  slots <-
+    Hasql.queryTx @[(Issues.RoutineRunSource, UUIDId "ai_routine", UTCTime)]
+      $ [HI.sql|SELECT run.source, run.routine_id, run.scheduled_at |]
+      <> Investigations.operationRunSql project identifier
+      <> [HI.sql| AND run.status = #{status}
+      AND run.requested_by IS NOT DISTINCT FROM operation.requested_by
+      AND EXISTS (SELECT 1 FROM apis.ai_routines routine WHERE routine.id = run.routine_id
+        AND routine.project_id = run.project_id ^{active})|]
+      <> waiting
+      <> [HI.sql| FOR UPDATE OF operation|]
+  requests <-
+    Hasql.queryTx @[UUIDId "ai_routine_run"]
+      $ [HI.sql|SELECT run.id |]
+      <> Investigations.operationRunSql project identifier
+      <> [HI.sql| AND run.status = #{status} AND (run.source->>'tag' = 'ConversationRun' OR (run.source->>'tag' = 'TriggeredRun' AND run.source #>> '{contents,tag}' = 'SlackCommand'))
+      AND run.requested_by IS NOT DISTINCT FROM operation.requested_by|]
+      <> waiting
+      <> [HI.sql| FOR UPDATE OF operation|]
+  for_ requests $ queueJobTx timing . RunConversation project
+  for_ slots $ \(source, routine, scheduled) -> do
+    let continuation = case source of
+          Issues.ScheduledRun -> Just $ AIRoutineRun routine scheduled
+          Issues.TriggeredRun (Issues.SlackMessage receipt) -> Just $ ProcessSlackEvent receipt
+          Issues.TriggeredRun (Issues.PullRequestReview review) -> Just $ ReviewPullRequest review
+          Issues.TriggeredRun (Issues.IssueEnrichment issue) -> Just $ EnhanceIssuesWithLLM project (V.singleton issue)
+          Issues.TriggeredRun (Issues.IncidentEvent event root) -> Just $ InvestigateIncident project event root
+          (Issues.FixRun{}; Issues.TriggeredRun{}; Issues.InteractiveRun{}; Issues.ConversationRun{}) -> Nothing
+    for_ continuation $ queueJobTx timing
+
+
+data JobTiming = WakeNow | DeferUntil UTCTime
+
+
+queueJobTx :: JobTiming -> BgJobs -> Tx.Transaction ()
+queueJobTx timing payload = do
+  let job = HI.AsJsonb payload
+      (at, bound) = case timing of
+        WakeNow -> ([HI.sql|app_now()|], [HI.sql|LEAST(run_at, app_now())|])
+        DeferUntil deadline -> ([HI.sql|#{deadline}|], [HI.sql|GREATEST(run_at, #{deadline})|])
+  Hasql.executeTx
+    [HI.sql|WITH ready AS (
+      UPDATE background_jobs SET run_at = ^{bound}
+      WHERE payload = #{job} AND status IN ('queued', 'retry') RETURNING id
+    ) INSERT INTO background_jobs (run_at, status, payload)
+      SELECT ^{at}, 'queued', #{job} WHERE NOT EXISTS (SELECT 1 FROM ready)|]

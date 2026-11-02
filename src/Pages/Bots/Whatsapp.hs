@@ -14,7 +14,7 @@ import Models.Apis.Integrations (getDashboardsForWhatsapp)
 import Models.Projects.Dashboards (Dashboard (..))
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq
-import Pages.Bots.Utils (BotReply (..), BotType (..), runBotQuery, withDashboardTemplate)
+import Pages.Bots.Utils (BotReply (..), BotType (..), runBotQueryWithTools, withDashboardTemplate)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
 import Relude
@@ -30,8 +30,8 @@ joiner :: Text
 joiner = "___"
 
 
-whatsappIncomingPostH :: TwilioWhatsAppMessage -> ATBaseCtx AE.Value
-whatsappIncomingPostH val = do
+whatsappIncomingPostH :: Maybe AI.ProjectTools -> TwilioWhatsAppMessage -> ATBaseCtx AE.Value
+whatsappIncomingPostH projectTools val = do
   Log.logTrace ("WhatsApp interaction received" :: Text) $ AE.object ["from" AE..= val.from, "body" AE..= val.body]
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = authCtx.config
@@ -56,7 +56,7 @@ whatsappIncomingPostH val = do
         -- string appended to the chart endpoint, "4" the host-relative link.
         let opts = "time=" <> toUriStr (show now) <> "&p=" <> p.id.toText <> "&widget=" <> toUriStr (decodeUtf8 @Text $ AE.encode w)
         sendWhatsappResponse (AE.object ["1" AE..= ("*" <> val.body <> "*"), "2" AE..= ("`" <> widget <> "`"), "3" AE..= opts, "4" AE..= (p.id.toText <> "/dashboards")]) val.from envCfg.whatsappBotChart Nothing
-    Prompt -> forkBackground authCtx.backgroundScope ("WhatsApp prompt (" <> val.from <> ")") $ runBotQuery WhatsApp send envCfg AI.ServiceAccess p.id val.body (pure Nothing)
+    Prompt -> forkBackground authCtx.backgroundScope ("WhatsApp prompt (" <> val.from <> ")") $ void $ runBotQueryWithTools (AI.viewerProjectTools <$> projectTools) AI.InteractiveReadOnly WhatsApp send envCfg AI.ServiceAccess p.id val.body (pure Nothing)
   pure $ AE.object []
 
 

@@ -1,4 +1,6 @@
-module Pkg.SlackRateLimit (SlackRateLimited (..), withRateLimits) where
+{-# LANGUAGE OrPatterns #-}
+
+module Pkg.SlackRateLimit (SlackRateLimited (..), SlackHttpFailure, slackHttpStatus, withRateLimits) where
 
 import Control.Exception (ErrorCall (..))
 import Control.Lens ((?~), (^.))
@@ -10,7 +12,7 @@ import Effectful (Eff, type (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Exception (throwIO)
 import Hasql.Interpolate qualified as HI
-import Network.HTTP.Types (statusCode, statusIsSuccessful)
+import Network.HTTP.Types (Status, statusCode, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Relude
 import System.Types (DB)
@@ -21,17 +23,26 @@ newtype SlackRateLimited = SlackRateLimited UTCTime
   deriving anyclass (Exception)
 
 
+newtype SlackHttpFailure = SlackHttpFailure Status
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
+slackHttpStatus :: SlackHttpFailure -> Status
+slackHttpStatus (SlackHttpFailure status) = status
+
+
 -- | Cooldowns are shared by workers and survive process restarts. Non-Slack
 -- requests retain their original transport options and error handling.
 withRateLimits :: (DB es, HTTP.HTTP :> es) => Text -> Eff es a -> Eff es a
 withRateLimits workspace = interpose @HTTP.HTTP $ \_ request -> case request of
   HTTP.PostWith options url body -> limited workspace options url $ \opts -> send $ HTTP.PostWith opts url body
   HTTP.GetWith options url -> limited workspace options url $ \opts -> send $ HTTP.GetWith opts url
-  _ -> send @HTTP.HTTP $ coerce request
+  (HTTP.Get{}; HTTP.Post{}; HTTP.Put{}; HTTP.Patch{}; HTTP.Delete{}; HTTP.PutWith{}; HTTP.PatchWith{}; HTTP.DeleteWith{}) -> send @HTTP.HTTP $ coerce request
 
 
 limited :: DB es => Text -> HTTP.Options -> String -> (HTTP.Options -> Eff es (HTTP.Response LByteString)) -> Eff es (HTTP.Response LByteString)
-limited workspace options url request = case T.stripPrefix "https://slack.com/api/" $ toText url of
+limited workspace options url request = case if url == "https://mcp.slack.com/mcp" then Just "mcp" else T.stripPrefix "https://slack.com/api/" (toText url) of
   Nothing -> request options
   Just path -> do
     let method = T.takeWhile (/= '?') path
@@ -54,5 +65,5 @@ limited workspace options url request = case T.stripPrefix "https://slack.com/ap
         for_ saved $ \(HI.OneColumn retryAt) -> throwIO $ SlackRateLimited retryAt
         throwIO $ ErrorCall "Saving the Slack rate-limit deadline returned no row"
       else do
-        unless (statusIsSuccessful $ response ^. Wreq.responseStatus) $ throwIO $ ErrorCall "Slack returned an unsuccessful HTTP status"
+        unless (url == "https://mcp.slack.com/mcp" || statusIsSuccessful (response ^. Wreq.responseStatus)) $ throwIO $ SlackHttpFailure $ response ^. Wreq.responseStatus
         pure response

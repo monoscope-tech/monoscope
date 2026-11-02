@@ -275,7 +275,23 @@ extra-source-files:
     static/migrations/0256_ai_artifacts.sql
     static/migrations/0257_ad_attribution.sql
     static/migrations/0258_app_now_inlinable_created_at_defaults.sql
+    static/migrations/0259_native_agent_records.sql
+    static/migrations/0260_shared_agent_runs.sql
+    static/migrations/0261_slack_agent_delivery.sql
+    static/migrations/0262_legacy_slack_evidence.sql
+    static/migrations/0263_native_agent_runs.sql
+    test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
+    test/fixtures/impact-review-agent.mjs
+    test/fixtures/issue-fix-agent.mjs
+    test/fixtures/native-checkout-agent.mjs
+    test/fixtures/native-child-lifetime.mjs
+    test/fixtures/native-publication-gh.mjs
+    test/fixtures/native-regression-caller.mjs
+    test/fixtures/native-sandbox.sh
+    test/fixtures/regression-admission-agent.mjs
+    test/fixtures/review-image.png
+    test/fixtures/stage-recovery-bridge.sh
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
     static/public/dashboards/_overview.yaml
@@ -320,9 +336,21 @@ library
   exposed-modules:
       BackgroundJobs
       BackgroundJobs.Types
+      Data.Effectful.AgentArtifacts
+      Data.Effectful.CodeReview
+      Data.Effectful.CodeReview.Artifacts
+      Data.Effectful.CodeReview.Checkout
+      Data.Effectful.CodeReview.Explanation
+      Data.Effectful.CodeReview.Outbox
+      Data.Effectful.CodeReview.Policy
+      Data.Effectful.CodeReview.Types
+      Data.Effectful.GitPublication
+      Data.Effectful.GitPublication.Native
+      Data.Effectful.GitPublication.Types
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
+      Data.Effectful.ReviewEvaluation
       Data.Effectful.Sleep
       Data.Effectful.UUID
       Devel
@@ -333,6 +361,7 @@ library
       Models.Apis.Integrations
       Models.Apis.Investigations
       Models.Apis.IssueEnhancement
+      Models.Apis.IssueEnhancement.Types
       Models.Apis.Issues
       Models.Apis.LogPatterns
       Models.Apis.LogQueries
@@ -343,11 +372,13 @@ library
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
       Models.Projects.Activation
+      Models.Projects.AgentUsage
       Models.Projects.CodeContext
       Models.Projects.Dashboards
       Models.Projects.DashboardTemplates
       Models.Projects.GitSync
       Models.Projects.ImpactReviews
+      Models.Projects.IssueFixes
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.ProjectMemory
@@ -391,6 +422,8 @@ library
       Pages.Share
       Pages.Telemetry
       Pkg.AdConversions
+      Pkg.AgentCatalog
+      Pkg.AgentOperation
       Pkg.AI
       Pkg.AssetManifestFingerprint
       Pkg.Components.Facets
@@ -425,6 +458,8 @@ library
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.SlackMCP
+      Pkg.SlackOAuth
       Pkg.SlackRateLimit
       Pkg.StackTrace
       Pkg.TestClock
@@ -561,6 +596,7 @@ library
     , errors
     , extra
     , file-embed
+    , filelock >=0.1.1.7 && <0.2
     , filepath
     , fmt
     , generic-lens
@@ -611,6 +647,7 @@ library
     , mime-mail
     , minio-hs
     , mmark
+    , modern-uri
     , monad-time-effectful
     , monoscope-cli
     , monoscope-shared
@@ -793,6 +830,9 @@ test-suite integration-tests
       MonitoringSpec
       Opentelemetry.IngestionSpec
       Pages.ApiSpec
+      Pages.Bots.AgenticSpec
+      Pages.Bots.BotTestHelpers
+      Pages.Bots.WorkflowsSpec
       Pages.BotsSpec
       Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
@@ -871,6 +911,7 @@ test-suite integration-tests
     , effectful
     , effectful-core
     , effectful-postgresql
+    , filepath
     , generic-lens
     , grapesy
     , hasql
@@ -946,9 +987,21 @@ test-suite test-dev
   other-modules:
       BackgroundJobs
       BackgroundJobs.Types
+      Data.Effectful.AgentArtifacts
+      Data.Effectful.CodeReview
+      Data.Effectful.CodeReview.Artifacts
+      Data.Effectful.CodeReview.Checkout
+      Data.Effectful.CodeReview.Explanation
+      Data.Effectful.CodeReview.Outbox
+      Data.Effectful.CodeReview.Policy
+      Data.Effectful.CodeReview.Types
+      Data.Effectful.GitPublication
+      Data.Effectful.GitPublication.Native
+      Data.Effectful.GitPublication.Types
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
+      Data.Effectful.ReviewEvaluation
       Data.Effectful.Sleep
       Data.Effectful.UUID
       Devel
@@ -959,6 +1012,7 @@ test-suite test-dev
       Models.Apis.Integrations
       Models.Apis.Investigations
       Models.Apis.IssueEnhancement
+      Models.Apis.IssueEnhancement.Types
       Models.Apis.Issues
       Models.Apis.LogPatterns
       Models.Apis.LogQueries
@@ -969,11 +1023,13 @@ test-suite test-dev
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
       Models.Projects.Activation
+      Models.Projects.AgentUsage
       Models.Projects.CodeContext
       Models.Projects.Dashboards
       Models.Projects.DashboardTemplates
       Models.Projects.GitSync
       Models.Projects.ImpactReviews
+      Models.Projects.IssueFixes
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.ProjectMemory
@@ -1017,6 +1073,8 @@ test-suite test-dev
       Pages.Share
       Pages.Telemetry
       Pkg.AdConversions
+      Pkg.AgentCatalog
+      Pkg.AgentOperation
       Pkg.AI
       Pkg.AssetManifestFingerprint
       Pkg.Components.Facets
@@ -1051,6 +1109,8 @@ test-suite test-dev
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.SlackMCP
+      Pkg.SlackOAuth
       Pkg.SlackRateLimit
       Pkg.StackTrace
       Pkg.TestClock
@@ -1091,6 +1151,9 @@ test-suite test-dev
       MonitoringSpec
       Opentelemetry.IngestionSpec
       Pages.ApiSpec
+      Pages.Bots.AgenticSpec
+      Pages.Bots.BotTestHelpers
+      Pages.Bots.WorkflowsSpec
       Pages.BotsSpec
       Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
@@ -1238,6 +1301,7 @@ test-suite test-dev
     , errors
     , extra
     , file-embed
+    , filelock >=0.1.1.7 && <0.2
     , filepath
     , fmt
     , generic-lens
@@ -1288,6 +1352,7 @@ test-suite test-dev
     , mime-mail
     , minio-hs
     , mmark
+    , modern-uri
     , monad-time-effectful
     , monoscope-cli
     , monoscope-shared
@@ -1438,6 +1503,7 @@ test-suite unit-tests
     , hasql-pool
     , hs-opentelemetry-instrumentation-auto
     , hspec
+    , http-api-data
     , http-client
     , http-types
     , langchain-hs

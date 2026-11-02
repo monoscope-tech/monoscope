@@ -74,6 +74,7 @@ module Pkg.TestUtils (
   withHTTPResponses,
   signSlackBody,
   signDiscordPayload,
+  testDiscordPublicKeyHex,
   receiveSlackEvent,
   slackCallbackEnvelope,
   slackRootEvent,
@@ -90,6 +91,7 @@ module Pkg.TestUtils (
   createTestProject,
   createTestAPIKey,
   ingestLog,
+  ingestLogWithResource,
   ingestErrorLog,
   ingestTrace,
   ingestSpanLinked,
@@ -144,11 +146,14 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
 import Data.Char (isAlphaNum)
 import Data.Default (def)
+import Data.Effectful.AgentArtifacts qualified as Artifacts
+import Data.Effectful.AgentWorkspace qualified as Workspace
+import Data.Effectful.CodeReview qualified as CodeReview
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.Sleep (runNoSleep)
-import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
+import Data.Effectful.UUID (UUIDEff, runStaticUUID, runStaticUUIDRef, runUUID)
 import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPRecord, runHTTPWreq)
 import Data.Either.Extra
 import Data.Generics.Product.Fields (field)
@@ -265,6 +270,7 @@ import Text.RE.TDFA.Text (ed, (*=~/))
 import Unsafe.Coerce (unsafeCoerce)
 import Utils (toXXHash)
 import Web.ApiHandlers qualified as ApiH
+import Web.ApiTypes (ApiActor (..))
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.I18n qualified as I18n
@@ -675,6 +681,9 @@ runTestBackgroundWithHTTP http clock logger appCtx process = do
       & runNoSleep
       & http
       & ELLM.runLLMGolden "./tests/golden/"
+      & CodeReview.runCodeReviewTest (const $ Left "No review agent fixture configured") (const $ Left "No fix agent fixture configured") (const $ Left "No admission agent fixture configured") (const $ Left "No artifact verification fixture configured") (const $ Left "No explanation fixture configured") (const $ Left "No independent fix review fixture configured")
+      & Workspace.runWorkspaceTest (\_ _ _ -> Left "No workspace fixture") (\_ _ -> Left Workspace.RegressionUnavailable) (\_ _ -> Left "No prune fixture") (const $ Left "No maintenance fixture")
+      & Artifacts.runAgentArtifactsTest (const $ Left Artifacts.StorageUnavailable) (\_ _ -> Left Artifacts.ArtifactUnavailable)
       & runConcurrent
       & Ki.runStructuredConcurrency
       & Timeout.runTimeout
@@ -1123,11 +1132,12 @@ runAsBaseRecordingHTTP TestResources{..} k = do
 -- | Run a query effect (like Charts.queryMetrics) in test context
 -- This is for effects that return data directly (not wrapped in RespHeaders)
 -- Uses frozen time to match background job context
-runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time :> es, Tracing :> es) => Eff es a) -> IO a
+runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO a
 runQueryEffect TestResources{..} action = do
   tp <- getGlobalTracerProvider
   withSharedLogger \logger ->
     action
+      & runStaticUUIDRef trUUIDRef
       & runErrorNoCallStack @ServantS.ServerError
       & Effectful.Reader.Static.runReader trATCtx
       & runLabeled @"timefusion" (runHasqlPool trATCtx.hasqlTimefusionPool)
@@ -1596,10 +1606,14 @@ createTestAPIKey tr projectId keyName = do
 
 -- | Ingest via resource attribute (key embedded in payload) or via header (key in Authorization header)
 ingestLog, ingestLogWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
-ingestLog tr apiKey bodyText timestamp =
-  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime apiKey [bodyText] timestamp)
+ingestLog tr apiKey = ingestLogWithResource tr apiKey []
 ingestLogWithHeader tr apiKey bodyText timestamp =
   void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) (createOtelLogAtTime "" [bodyText] timestamp)
+
+
+ingestLogWithResource :: TestResources -> Text -> [(Text, Text)] -> Text -> UTCTime -> IO ()
+ingestLogWithResource tr apiKey attributes bodyText timestamp =
+  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider $ Proto $ createOtelLogAtTime apiKey [bodyText] timestamp & LSF.resourceLogs . traverse . PLF.resource .~ mkResource apiKey (map (uncurry mkAttr) attributes)
 
 
 -- | Ingest an ERROR-severity log record with optional @exception.*@ attributes.
@@ -1756,7 +1770,7 @@ runHTTPtoServant tr = interpret $ \_ -> \case
 -- that need a real HTTP listener — e.g. the OTel SDK exporter inside
 -- @send-event@, which ships OTLP/HTTP outside the 'HTTP' effect.
 withLiveServer :: TestResources -> (Int -> IO a) -> IO a
-withLiveServer tr = Warp.testWithApplication (pure (Server.mkServer tr.trLogger tr.trATCtx tr.trTracerProvider))
+withLiveServer tr = Warp.testWithApplication (pure $ Server.hashedAssetMiddleware $ Server.mkServer tr.trLogger tr.trATCtx tr.trTracerProvider)
 
 
 extractPath :: String -> Text
@@ -1834,6 +1848,7 @@ routeApiV1Get tr rest params = case T.splitOn "/" rest of
       (Log.queryEvents testPid (lookupParam "query" params) (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) (pInt "limit" params) (pBool "with_children" params) (pBool "include_attributes" params) (lookupParam "environment" params) (lookupParam "service" params))
   ["events", eid, "time", ts] -> jsonRoute tr (ApiH.apiEventGet testPid (rawUUID eid) (parseISOTime ts))
   ["facets"] -> jsonRoute tr (ApiH.apiFacets testPid (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "field" params))
+  ["metrics", "catalog"] -> jsonRoute tr (ApiH.apiMetricsCatalog testPid (lookupParam "service" params) (lookupParam "search" params) (pInt "limit" params) (pInt "offset" params) (pBool "active" params))
   ["metrics"] -> do
     result <-
       runQueryEffect tr
@@ -1858,20 +1873,20 @@ routeWriteRequest tr verb path params body
 
 routeApiV1Write :: TestResources -> Text -> Text -> [(Text, Text)] -> LBS.ByteString -> IO (Response LBS.ByteString)
 routeApiV1Write tr verb rest params body = case (verb, T.splitOn "/" rest) of
-  ("POST", ["issues", iid, "ack"]) -> jsonRoute tr (ApiH.apiIssueAck testPid (parseUUIDId iid) (pInt "duration_minutes" params))
+  ("POST", ["issues", iid, "ack"]) -> jsonRoute tr (ApiH.apiIssueAck ApiKeyPrincipal testPid (parseUUIDId iid) (pInt "duration_minutes" params))
   ("POST", ["issues", iid, "unack"]) -> jsonRoute tr (ApiH.apiIssueUnack testPid (parseUUIDId iid))
   ("POST", ["issues", iid, "archive"]) -> jsonRoute tr (ApiH.apiIssueArchive testPid (parseUUIDId iid))
   ("POST", ["issues", iid, "unarchive"]) -> jsonRoute tr (ApiH.apiIssueUnarchive testPid (parseUUIDId iid))
-  ("POST", ["issues", "bulk"]) -> jsonRoute tr (ApiH.apiIssuesBulk testPid (decodeBody "BulkAction IssueId"))
-  ("POST", ["log_patterns", lpid, "ack"]) -> jsonRoute tr (ApiH.apiLogPatternAck testPid (parseIntId lpid))
-  ("POST", ["log_patterns", "bulk"]) -> jsonRoute tr (ApiH.apiLogPatternsBulk testPid (decodeBody "BulkAction Int64"))
+  ("POST", ["issues", "bulk"]) -> jsonRoute tr (ApiH.apiIssuesBulk ApiKeyPrincipal testPid (decodeBody "BulkAction IssueId"))
+  ("POST", ["log_patterns", lpid, "ack"]) -> jsonRoute tr (ApiH.apiLogPatternAck ApiKeyPrincipal testPid (parseIntId lpid))
+  ("POST", ["log_patterns", "bulk"]) -> jsonRoute tr (ApiH.apiLogPatternsBulk ApiKeyPrincipal testPid (decodeBody "BulkAction Int64"))
   ("POST", ["monitors"]) -> jsonRoute tr (ApiH.apiMonitorCreate testPid (decodeBody "MonitorInput"))
   ("POST", ["monitors", "apply"]) -> jsonRoute tr (ApiH.apiMonitorApply testPid (decodeBody "MonitorInput"))
   ("POST", ["share"]) -> jsonRoute tr (ApiH.apiShareLinkCreate testPid (decodeBody "ShareLinkCreate"))
-  ("POST", ["dashboards"]) -> jsonRoute tr (ApiH.apiDashboardCreate testPid (decodeBody "DashboardInput"))
-  ("POST", ["dashboards", "apply"]) -> jsonRoute tr (ApiH.apiDashboardApply testPid (decodeBody "DashboardYAMLDoc"))
+  ("POST", ["dashboards"]) -> jsonRoute tr (ApiH.apiDashboardCreate ApiKeyPrincipal testPid (decodeBody "DashboardInput"))
+  ("POST", ["dashboards", "apply"]) -> jsonRoute tr (ApiH.apiDashboardApply ApiKeyPrincipal testPid (decodeBody "DashboardYAMLDoc"))
   ("PUT", ["dashboards", did]) -> jsonRoute tr (ApiH.apiDashboardUpdate testPid (parseUUIDId did) (decodeBody "DashboardInput"))
-  ("POST", ["dashboards", did, "duplicate"]) -> jsonRoute tr (ApiH.apiDashboardDuplicate testPid (parseUUIDId did))
+  ("POST", ["dashboards", did, "duplicate"]) -> jsonRoute tr (ApiH.apiDashboardDuplicate ApiKeyPrincipal testPid (parseUUIDId did))
   ("POST", ["dashboards", did, "star"]) -> jsonRoute tr (ApiH.apiDashboardStar testPid (parseUUIDId did))
   ("PUT", ["dashboards", did, "widgets"]) -> jsonRoute tr (ApiH.apiDashboardWidgetUpsert testPid (parseUUIDId did) (decodeBody "Widget"))
   ("PUT", ["monitors", mid]) -> jsonRoute tr (ApiH.apiMonitorUpdate testPid (monitorId mid) (decodeBody "MonitorInput"))

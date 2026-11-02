@@ -1,6 +1,6 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Charts.Charts (queryMetrics, queryMetricsStream, ChartStream, streamQuery_, MetricsData (..), MetricsStats (..), DataType (..), convertTimestampsToMs) where
+module Pages.Charts.Charts (queryMetrics, queryProjectMetrics, queryMetricsStream, ChartStream, streamQuery_, MetricsData (..), MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
 import Control.Concurrent (threadDelay, threadWaitRead)
 import Control.Concurrent.STM qualified as STM
@@ -142,12 +142,15 @@ usesTimefusionBackend enableTimefusionReads = maybe enableTimefusionReads (== Sq
 
 
 queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => M SqlSource -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
-queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> queryM) (Utils.nonEmptyT -> querySQLM) (Utils.nonEmptyT -> sinceM) (Utils.nonEmptyT -> fromM) (Utils.nonEmptyT -> toM) (Utils.nonEmptyT -> sourceM) binDensityM allParams = do
+queryMetrics dbSource respDataType pidM queryM querySQLM sinceM fromM toM sourceM binDensityM allParams = do
+  pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
+  queryProjectMetrics dbSource respDataType pid queryM querySQLM sinceM fromM toM sourceM binDensityM allParams
+
+
+queryProjectMetrics :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => M SqlSource -> M DataType -> Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryProjectMetrics dbSource (maybeToMonoid -> respDataType) pid (Utils.nonEmptyT -> queryM) (Utils.nonEmptyT -> querySQLM) (Utils.nonEmptyT -> sinceM) (Utils.nonEmptyT -> fromM) (Utils.nonEmptyT -> toM) (Utils.nonEmptyT -> sourceM) binDensityM allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
-  -- project_id is required for every query path; a missing one is a malformed request,
-  -- not a 500 (this used to be `Unsafe.fromJust pidM`, which crashed the handler).
-  pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let density = fromMaybe def binDensityM
       -- The chart routes bind this to the authenticated session instead of trusting a

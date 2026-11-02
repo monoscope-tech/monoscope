@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -340,6 +340,41 @@ data Widget = Widget
 instance ToHtml Widget where
   toHtml w = toHtml $ widget_ w
   toHtmlRaw = toHtml
+
+
+-- | Model visualizations retain their wire shape without server execution fields.
+--
+-- >>> import Relude
+-- >>> import Data.Aeson qualified as AE
+-- >>> let wire = "{\"type\":\"stat\",\"query\":\"summarize count()\",\"title\":\"Requests\"}"
+-- >>> fmap AE.toJSON (AE.eitherDecode @ModelWidget wire) == AE.eitherDecode @AE.Value wire
+-- True
+-- >>> map (isLeft . AE.eitherDecode @ModelWidget) ["{\"type\":\"stat\",\"sql\":\"SELECT 1\"}", "{\"type\":\"stat\",\"html\":\"<b>untrusted</b>\"}", "{\"type\":\"timeseries\",\"queries\":[{\"sql\":\"SELECT 1\"}]}", "{\"type\":\"group\",\"children\":[{\"type\":\"stat\",\"sql\":\"SELECT 1\"}]}", "{\"type\":\"stat\",\"_project_id\":\"00000000-0000-0000-0000-000000000000\"}"]
+-- [True,True,True,True,True]
+-- >>> isRight $ AE.eitherDecode @ModelWidget "{\"type\":\"timeseries\",\"queries\":[{\"query\":\"summarize count()\"}]}"
+-- True
+-- >>> isLeft $ AE.eitherDecode @ModelWidget "{\"type\":\"table\",\"columns\":[{\"field\":\"name\",\"title\":\"Name\",\"link\":\"javascript:alert(1)\"}]}"
+-- True
+newtype ModelWidget = ModelWidget Widget
+  deriving stock (Show)
+  deriving newtype (AE.ToJSON)
+
+
+instance AE.FromJSON ModelWidget where
+  parseJSON value = do
+    widget <- AE.parseJSON value
+    unless (safe widget) $ fail "Model widgets cannot contain SQL, executable content, or server context"
+    pure $ ModelWidget widget
+    where
+      safe widget =
+        not (or [isJust widget.sql, isJust widget.rollupSql, isJust widget.sqlSig, isJust widget.html, isJust widget.expandBtnFn, isJust widget.expandPushUrl, isJust widget.groupByUrl, isJust widget.groupByTarget, isJust widget.onRowClick, isJust widget.cta, isJust widget._projectId, isJust widget._dashboardId, isJust widget._tabSlug, isJust widget.dbSource, isJust widget.pngUrl])
+          && all (isNothing . (.sql)) (fold widget.queries)
+          && all (isNothing . (.link)) (fold widget.columns)
+          && all safe (fold widget.children)
+
+
+modelWidget :: ModelWidget -> Widget
+modelWidget (ModelWidget widget) = widget
 
 
 data WidgetDataset = WidgetDataset
@@ -1405,6 +1440,23 @@ unitValueExprJS unitWord unitM
 
 -- Function to convert Widget to ECharts options
 widgetToECharts :: Widget -> AE.Value
+widgetToECharts widget
+  | widget.wType == WTStat =
+      AE.object
+        [ "graphic"
+            AE..= AE.object
+              [ "type" AE..= ("text" :: Text)
+              , "left" AE..= ("center" :: Text)
+              , "top" AE..= ("middle" :: Text)
+              , "style"
+                  AE..= AE.object
+                    [ "text" AE..= maybe "N/A" (\value -> formatStatValue value $ fromMaybe "" widget.unit) (widget.dataset >>= (.value))
+                    , "fontSize" AE..= (48 :: Int)
+                    , "fontWeight" AE..= (600 :: Int)
+                    , "fill" AE..= (if widget.theme == Just "dark" then "#cbd5e1" else "#334155" :: Text)
+                    ]
+              ]
+        ]
 widgetToECharts widget =
   let isStat = widget.wType == WTTimeseriesStat
       axisVisibility = not isStat

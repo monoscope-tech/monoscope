@@ -1,6 +1,8 @@
 module Pages.ErrorPatternsSpec (spec) where
 
 import BackgroundJobs qualified
+import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.Notify (Notification (..), SlackData (..))
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -8,6 +10,9 @@ import Data.Time (NominalDiffTime, addUTCTime, zonedTimeToUTC)
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Effectful.Dispatch.Dynamic (interpose)
+import Effectful.Reader.Static qualified as Reader
+import Hasql.Transaction.Sessions qualified as TxS
 import Lucid (toHtmlRaw)
 import Models.Apis.ErrorPatterns (ErrorState (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
@@ -15,6 +20,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.Projects qualified as Projects
+import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Issues qualified
 import Pkg.Components.Table qualified as Table
@@ -22,6 +28,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
+import System.Config (AuthContext (..), EnvConfig (..))
 
 
 spec :: Spec
@@ -82,7 +89,7 @@ spec = around withTestResources $ describe "Error patterns" do
     (e.release, e.environment, e.handled, e.mechanism) `shouldBe` (Just "26.3.1", Just "production", Just False, Just ErrorPatterns.CMExceptionEvent)
     (e.browser, e.os, e.device, e.userAgent) `shouldBe` (Just "Chrome", Just "Windows", Just "Desktop", Just ua)
     (e.geoCountry, e.geoCity, e.threadName, e.attachments) `shouldBe` (Just "US", Just "Santa Clara", Just "main", Just ["https://cdn.example.com/shot.png"])
-    void $ bg tr $ ErrorPatterns.updateErrorPatternAnalysis ctx.id "The cart line has no price" "data"
+    bg tr $ Hasql.transaction TxS.ReadCommitted TxS.Write $ ErrorPatterns.updateErrorPatternAnalysis ctx.id "The cart line has no price" "data"
     contextEvent "26.3.2" (-14)
     extract tr
     ((.lastRelease) &&& fmap zonedTimeToUTC . (.lastReleaseSince)) <$> patternOf tr "ContextError" `shouldReturn` (Just "26.3.2", Just (at (-14)))
@@ -245,12 +252,37 @@ spec = around withTestResources $ describe "Error patterns" do
     exc "GET /api/orders/:id" "TypeError" "Cannot read properties of undefined (reading 'orderId')" "TypeError: Cannot read properties of undefined (reading 'orderId')\n    at OrderController.getOrder (/app/src/controllers/order.js:38:12)\n    at Layer.handle (/app/node_modules/express/lib/router/layer.js:95:5)" (at (-20))
     exc "POST /api/connect" "ConnectionRefusedError" "connect ECONNREFUSED 10.0.0.1:5432" "ConnectionRefusedError: connect ECONNREFUSED 10.0.0.1:5432\n    at TCPConnectWrap.afterConnect (/app/node_modules/pg/lib/connection.js:79:18)" (at (-10))
     forM_ ([("MergeAError", -50), ("MergeBError", -40)] :: [(Text, NominalDiffTime)]) \(ty, dt) -> exc "GET /api/merge" ty "merge probe" (ty <> ": merge probe\n    at probe (/app/src/" <> ty <> ".js:1:1)") (at dt)
-    -- Embeddings are set by hand below, so the embed-and-merge job must not run first.
-    let noEmbed = \case BackgroundJobs.PatternEmbeddingAndMerge{} -> False; _ -> True
+    -- Keep the queued enrichment jobs for the deterministic LLM interpreter below.
     drainExtractionWorker tr
-    replicateM_ 2 $ runBackgroundJobsWhere frozenTime tr.trATCtx noEmbed
+    void $ runBackgroundJobsWhere frozenTime tr.trATCtx quiet
+
+    void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
+    routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventIssueEnrichment) >>= maybe (fail "Missing activated enrichment template") pure
+    queued <- getPendingBackgroundJobs tr.trATCtx
+    let enhancements = [job | (_, job@BackgroundJobs.EnhanceIssuesWithLLM{}) <- toList queued]
+        provider = interpose @LLM.LLM \_ -> \case
+          LLM.CallLLM _ prompt _ ->
+            pure
+              $ Right
+              $ if
+                | "issue titler" `T.isInfixOf` prompt -> "Checkout runtime failure"
+                | "issue describer" `T.isInfixOf` prompt -> "A runtime failure was observed.\nCompare the application trace.\nlow"
+                | "issue-severity" `T.isInfixOf` prompt -> "critical\n0\n0"
+                | otherwise -> "The fixture application dereferenced an absent value.\nruntime"
+          LLM.CallAgenticChat{} -> pure $ Left "Unexpected agent call"
+          LLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        appCtx = tr.trATCtx{config = tr.trATCtx.config{openaiApiKey = "issue-routine-test-key"}}
+    enhancements `shouldSatisfy` (not . null)
+    runTestBg frozenTime tr $ Reader.local (const appCtx) $ provider $ traverse_ (BackgroundJobs.processBackgroundJob appCtx) enhancements
+    executions <- runQueryEffect tr $ Issues.listConversationRuns testPid routine.conversationId 100
+    executions `shouldSatisfy` (not . null)
+    map (.status) executions `shouldSatisfy` all (== Issues.RunSucceeded)
+    artifacts <- runQueryEffect tr $ concat <$> traverse (Issues.listRunArtifacts testPid . (.id)) executions
+    mapMaybe (.content) artifacts `shouldSatisfy` any (T.isInfixOf "The fixture application dereferenced an absent value.")
+    void $ testServant tr $ AIThreads.routinePausePostH testPid routine.conversationId
+
     titles <- map fromOnly <$> dbQuery tr [sql| SELECT title FROM apis.issues WHERE project_id = ? AND issue_type = 'runtime_exception' |] (Only testPid)
-    titles `shouldSatisfy` any (not . T.isInfixOf ": ")
+    titles `shouldSatisfy` any (== "Checkout runtime failure")
     dbOne tr [sql| SELECT count(*)::int FROM apis.error_patterns WHERE project_id = ? AND root_cause IS NOT NULL AND error_category IS NOT NULL |] (Only testPid) >>= (`shouldSatisfy` (>= (1 :: Int)))
 
     let typeEmb = [0.9, 0.3, 0.1] :: [Float]

@@ -1,19 +1,32 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Models.Apis.Investigations (
   Scope (..),
   Turn (..),
   Step (..),
   Checkpoint (..),
   loadCheckpoint,
+  loadCheckpointFor,
+  CheckpointTarget (..),
+  RunTurn (..),
+  RunLease (..),
+  CheckpointAccessDenied (..),
   SavedCheckpoint (..),
   CheckpointCursor (..),
   CheckpointConflict (..),
   startCheckpoint,
+  startCheckpointFor,
+  prepareNativeOperation,
+  adoptSlackCheckpoint,
+  operationResponse,
+  mkToolCallInfo,
   commitProgress,
   AgenticChatResult (..),
   ToolCallInfo (..),
   loadAnswer,
   saveAnswer,
   ReplyBatch (..),
+  ReplyDestination (..),
   loadReplyBatch,
   saveReplyBatch,
   claimReplyPart,
@@ -31,10 +44,51 @@ module Models.Apis.Investigations (
   Entry (..),
   History (..),
   ToolResult (..),
+  OperationProposal (..),
+  OperationClaim,
+  operationId,
+  OperationDecision (..),
+  OperationResult (..),
+  OperationOutcome (..),
+  OperationConflict (..),
+  OperationEntry (..),
+  ReviewApprover (..),
+  ReviewRequest (..),
+  ReviewDecision (..),
+  ReviewReceipt (..),
+  OperationReview (..),
+  ReviewResponse (..),
+  ReviewRefusal (..),
+  reviewRefusalMessage,
+  decideOperationReview,
+  decideOperationReviewWith,
+  beginOperation,
+  completeOperation,
+  atomicOperation,
+  listOperations,
+  getOperationRun,
+  operationRunSql,
   recordEvent,
   recentEvents,
   ProgressTarget (..),
   ProgressMessage (..),
+  ProgressDelivery (..),
+  progressTimestamp,
+  SlackTimestamp,
+  slackTimestamp,
+  slackTimestampText,
+  Task (..),
+  TaskStatus (..),
+  StreamFrame,
+  mkStreamFrame,
+  streamTasks,
+  streamTitle,
+  StreamSession (..),
+  StreamState (..),
+  StreamRequest (..),
+  StreamPhase (..),
+  rejectStreamStart,
+  commitStream,
   loadProgress,
   loadProgressRefresh,
   loadProgressSearch,
@@ -44,26 +98,57 @@ module Models.Apis.Investigations (
   rejectProgress,
   captureProgress,
   recentProgressEvents,
+  conversationEvidencePermission,
+  retainEvidencePermission,
+  classifyLegacyEvidence,
+  visibleConversationIds,
+  EvidenceAudience (..),
+  EvidenceViewer (..),
+  canReadEvidence,
+  meetEvidenceAudience,
+  conversationEvidenceAudience,
+  retainEvidenceAudience,
 ) where
 
 import Data.Aeson qualified as AE
+import Data.ByteString qualified as BS
+import Data.Char (isDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM ()
+import Data.Effectful.Wreq qualified as HTTP
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as S
+import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.UUID.V5 qualified as UUID5
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Deriving.Aeson qualified as JSON
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
 import Effectful.Exception (throwIO)
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
 import Models.Apis.Integrations qualified as Integrations
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
-import Pkg.DeriveUtils (UUIDId)
+import Pkg.AgentCatalog (ReviewApprover (..))
+import Pkg.AgentCatalog qualified as Catalog
+import Pkg.AgentOperation qualified as Operation
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
 import System.Types (DB)
+import Web.HttpApiData (FromHttpApiData)
+import Prelude (until)
+
+
+-- $setup
+-- >>> import Relude
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Data.Aeson.Types qualified as AET
 
 
 data Scope = Scope
@@ -82,6 +167,98 @@ data Scope = Scope
 data ToolResult = ToolResult {formatted :: Text, rawData :: Maybe AE.Value}
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | The proposal is immutable. Its policy is a typed caller-supplied audit snapshot.
+data OperationProposal policy = OperationProposal {call :: Operation.OperationCall, policy :: policy}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson (OperationProposal policy)
+
+
+newtype OperationClaim = OperationClaim (UUIDId "agent_operation")
+  deriving stock (Show)
+
+
+operationId :: OperationClaim -> UUIDId "agent_operation"
+operationId (OperationClaim identifier) = identifier
+
+
+data OperationResult = RecordedResult ToolResult | UncertainResult OperationClaim Operation.OperationCall (UUIDId "ai_routine_run") | WaitingResult (UUIDId "agent_operation") ReviewRequest | RefusedResult (UUIDId "agent_operation") ReviewRefusal
+  deriving stock (Show)
+
+
+data OperationDecision
+  = AwaitOperationReview (UUIDId "agent_operation") ReviewRequest
+  | RefuseOperation (UUIDId "agent_operation") ReviewRefusal
+  | ExecuteOperation OperationClaim
+  | RetainedOperation ToolResult
+  | ReconcileOperation OperationClaim Operation.OperationCall (UUIDId "ai_routine_run")
+  deriving stock (Show)
+
+
+-- Returning a tool response does not assert that the domain operation succeeded.
+data OperationOutcome = OperationUnstarted | OperationRunning | OperationUnknown | OperationReturned ToolResult | OperationRefused ReviewRefusal
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson OperationOutcome
+
+
+data ReviewRefusal = ReviewDeclined | ReviewTimedOut | ReviewAuthorityWithdrawn | ReviewRequestEnded
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+reviewRefusalMessage :: ReviewRefusal -> Text
+reviewRefusalMessage = \case
+  ReviewDeclined -> "A reviewer declined this action. It was not executed."
+  ReviewTimedOut -> "The review expired before this action could execute."
+  ReviewAuthorityWithdrawn -> "This approval no longer meets current project permissions. Start a new request."
+  ReviewRequestEnded -> "This request ended before the action executed. Start a new request."
+
+
+data ReviewRequest = ReviewRequest {expiresAt :: UTCTime, approver :: ReviewApprover}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ReviewDecision = ReviewApproved | ReviewRejected
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "Review" ReviewDecision
+
+
+data ReviewReceipt = ReviewReceipt {decidedBy :: Projects.UserId, decidedAt :: UTCTime, decision :: ReviewDecision, authority :: ReviewApprover}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data OperationReview = NoReview | ReviewPending ReviewRequest | ReviewResolved ReviewRequest ReviewReceipt
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson OperationReview
+
+
+data ReviewResponse = ReviewSaved ReviewReceipt | ReviewAlreadyDecided ReviewReceipt | ReviewExpired | ReviewUnavailable
+  deriving stock (Eq, Show)
+
+
+data OperationConflict = OperationScopeMismatch | OperationStepMoved | OperationProposalChanged | OperationOutcomeChanged | OperationResponseInvalid | OperationAuthorityWithdrawn
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
+data OperationEntry policy = OperationEntry
+  { id :: UUIDId "agent_operation"
+  , runId :: UUIDId "ai_routine_run"
+  , requestedBy :: Projects.UserId
+  , proposal :: OperationProposal policy
+  , outcome :: OperationOutcome
+  , review :: OperationReview
+  , createdAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
 
 
 data ModelOutcome = ModelAnswered LLM.Message | ModelRequestFailed
@@ -114,12 +291,12 @@ pendingFollowups scope =
       JOIN users.users account ON account.id = identity.user_id
       JOIN projects.projects project ON project.id = member.project_id
       JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = identity.team_id
-      WHERE identity.team_id = #{scope.teamId} AND identity.slack_user_id = payload->'event'->>'user'|]
+      WHERE identity.team_id = #{scope.teamId} AND identity.slack_user_id = payload->'event'->>'user' AND member.user_id = #{scope.userId}|]
     <> Integrations.activeMembership
     <> [HI.sql|) AND processed_at IS NULL AND team_id = #{scope.teamId} AND payload->>'team_id' = #{scope.teamId}
       AND payload->'event'->>'channel' = #{scope.channelId}
       AND payload->'event'->>'thread_ts' = #{scope.threadTs}
-      AND payload->'event'->>'type' IN ('message', 'app_mention')
+      AND payload->'event'->>'type' IN ('message', 'app_mention', 'monoscope_message_shortcut')
       AND payload->'event'->>'subtype' IS NULL AND payload->'event'->>'bot_id' IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM apis.investigation_journal journal
@@ -158,6 +335,7 @@ data Event
     -- ToolStarted event retains the call ID and arguments.
     InvestigationHistoryRead Int
   | FollowupsAccepted Int (NonEmpty Followup)
+  | InvestigationAwaitingReview (UUIDId "agent_operation") UTCTime
   | InvestigationFinished
   | InvestigationFailed
   | InvestigationInterrupted
@@ -240,32 +418,33 @@ data Turn = Turn
 
 
 loadAnswer :: DB es => Turn -> Eff es (Maybe AgenticChatResult)
-loadAnswer turn =
-  Hasql.interpOneJson
-    [HI.sql|SELECT answer FROM apis.slack_turn_answers
-    WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
+loadAnswer turn = do
+  canonical <-
+    Hasql.interpOne @SavedCheckpoint
+      [HI.sql|SELECT checkpoint.revision, checkpoint.checkpoint FROM apis.slack_turn_checkpoints checkpoint
+    JOIN apis.ai_routine_runs run ON run.root_run_id = checkpoint.run_id AND run.project_id = checkpoint.project_id
+    JOIN apis.slack_events receipt ON receipt.id::text = run.source #>> '{contents,contents}'
+    WHERE checkpoint.project_id = #{turn.projectId} AND checkpoint.conversation_id = #{turn.conversationId} AND checkpoint.user_id = #{turn.userId}
+      AND run.source #>> '{contents,tag}' = 'SlackMessage' AND receipt.payload #>> '{event,ts}' = #{turn.messageTs}
+    ORDER BY run.started_at DESC, run.id DESC LIMIT 1|]
+  maybe (loadCheckpoint turn) (pure . Just) canonical >>= \case
+    Just SavedCheckpoint{checkpoint = AnswerReady answer} -> pure $ Just answer
+    Just SavedCheckpoint{checkpoint = LegacyUncertain answer _} -> pure $ Just answer
+    (Nothing; Just SavedCheckpoint{checkpoint = ModelPending{}}; Just SavedCheckpoint{checkpoint = ToolsPending{}}; Just SavedCheckpoint{checkpoint = NativePending{}}; Just SavedCheckpoint{checkpoint = NativeReady}) ->
+      Hasql.interpOneJson
+        [HI.sql|SELECT answer FROM apis.slack_turn_answers
+      WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+        AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
 
 
--- | Save the complete result and its conversation message together. A competing
--- writer receives the already committed answer rather than replacing it.
+-- | The checkpoint retains the answer; recording its message is replay-safe.
 saveAnswer :: DB es => Turn -> AgenticChatResult -> Eff es AgenticChatResult
 saveAnswer turn answer =
-  Hasql.interpOneJsonOrThrow
-    "Saving a Slack answer"
-    [HI.sql|WITH saved AS (
-      INSERT INTO apis.slack_turn_answers (project_id, conversation_id, user_id, message_ts, answer)
-      VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson answer})
-      ON CONFLICT (project_id, conversation_id, user_id, message_ts)
-      DO UPDATE SET answer = slack_turn_answers.answer RETURNING answer
-    ), message AS (
-      INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
-      SELECT #{turn.projectId}, #{turn.conversationId}, 'assistant', answer->>'response', #{turn.messageTs}, clock_timestamp() FROM saved
-      ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING
-    ), cleared AS (
-      DELETE FROM apis.slack_turn_checkpoints WHERE project_id = #{turn.projectId}
-        AND conversation_id = #{turn.conversationId} AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}
-    ) SELECT answer FROM saved|]
+  Hasql.interpExecute_
+    [HI.sql|INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
+    VALUES (#{turn.projectId}, #{turn.conversationId}, 'assistant', #{answer.response}, #{turn.messageTs}, clock_timestamp())
+    ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING|]
+    $> answer
 
 
 -- | Freeze every rendered part before the first send. A confirmed part is never
@@ -275,39 +454,62 @@ data ReplyBatch = ReplyBatch {replies :: NonEmpty AE.Value, deliveredCount :: In
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ReplyBatch
 
 
-loadReplyBatch :: DB es => Turn -> Eff es (Maybe ReplyBatch)
-loadReplyBatch turn =
-  Hasql.interpOneJson
-    [HI.sql|SELECT to_jsonb(batch) FROM apis.slack_reply_batches batch
-      WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-        AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
+data ReplyDestination = ReplyDestination {teamId :: Text, channelId :: Text, threadTs :: Maybe Text}
+  deriving stock (Eq, Show)
 
 
-saveReplyBatch :: DB es => Turn -> NonEmpty AE.Value -> Eff es ReplyBatch
-saveReplyBatch turn replies =
-  Hasql.interpOneJsonOrThrow
-    "Saving a Slack reply batch"
-    [HI.sql|WITH saved AS (
-      INSERT INTO apis.slack_reply_batches (project_id, conversation_id, user_id, message_ts, replies)
-      VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson replies})
-      ON CONFLICT (project_id, conversation_id, user_id, message_ts)
-      DO UPDATE SET replies = slack_reply_batches.replies RETURNING *
-    ) SELECT to_jsonb(saved) FROM saved|]
+replyScopeSql :: CheckpointTarget -> HI.Sql
+replyScopeSql = \case
+  SlackCheckpoint turn ->
+    [HI.sql|project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+    AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs} AND run_id IS NULL|]
+  RunCheckpoint turn ->
+    [HI.sql|project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+    AND user_id = #{turn.userId} AND run_id = #{turn.runId} AND message_ts IS NULL|]
+
+
+loadReplyBatch :: DB es => CheckpointTarget -> Eff es (Maybe ReplyBatch)
+loadReplyBatch target =
+  let scope = replyScopeSql target
+   in Hasql.interpOneJson [HI.sql|SELECT to_jsonb(batch) FROM apis.slack_reply_batches batch WHERE ^{scope}|]
+
+
+saveReplyBatch :: DB es => CheckpointTarget -> NonEmpty AE.Value -> Eff es ReplyBatch
+saveReplyBatch target replies =
+  let (projection, conflict) = case target of
+        SlackCheckpoint turn ->
+          ( [HI.sql|SELECT #{turn.projectId}::uuid AS project_id, #{turn.conversationId}::uuid AS conversation_id,
+              #{turn.userId}::uuid AS user_id, #{turn.messageTs}::text AS message_ts, NULL::uuid AS run_id|]
+          , [HI.sql|project_id, conversation_id, user_id, message_ts|]
+          )
+        RunCheckpoint turn ->
+          ( [HI.sql|SELECT project_id, conversation_id, requested_by AS user_id, NULL::text AS message_ts, id AS run_id
+              FROM apis.ai_routine_runs WHERE id = #{turn.runId} AND root_run_id = id AND project_id = #{turn.projectId}
+                AND conversation_id = #{turn.conversationId} AND requested_by = #{turn.userId}|]
+          , [HI.sql|run_id|]
+          )
+   in Hasql.interpOneJsonOrThrow
+        "Saving a Slack reply batch"
+        [HI.sql|WITH saved AS (
+          INSERT INTO apis.slack_reply_batches (project_id, conversation_id, user_id, message_ts, run_id, replies)
+          SELECT source.project_id, source.conversation_id, source.user_id, source.message_ts, source.run_id, #{Aeson replies}
+          FROM (^{projection}) source
+          ON CONFLICT (^{conflict}) DO UPDATE SET replies = slack_reply_batches.replies RETURNING *
+        ) SELECT to_jsonb(saved) FROM saved|]
 
 
 -- | Reserve before HTTP. An existing unacknowledged reservation must not repost.
-claimReplyPart :: DB es => Turn -> Text -> Text -> Text -> Int -> Eff es (Maybe (UUIDId "slack_reply"))
-claimReplyPart turn team channel thread part =
-  fmap HI.getOneColumn
-    <$> Hasql.interpOne
-      [HI.sql|INSERT INTO apis.slack_reply_publications
-      (project_id, conversation_id, user_id, message_ts, part, team_id, channel_id, thread_ts)
-    SELECT project_id, conversation_id, user_id, message_ts, #{part}, #{team}, #{channel}, #{thread}
-    FROM apis.slack_reply_batches WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}
-      AND delivered_count = #{part} AND delivered_count < jsonb_array_length(replies)
-    ON CONFLICT (project_id, conversation_id, user_id, message_ts, part) DO NOTHING
-    RETURNING publication_id|]
+claimReplyPart :: DB es => CheckpointTarget -> ReplyDestination -> Int -> Eff es (Maybe (UUIDId "slack_reply"))
+claimReplyPart target destination part =
+  let scope = replyScopeSql target
+   in fmap HI.getOneColumn
+        <$> Hasql.interpOne
+          [HI.sql|WITH batch AS (SELECT * FROM apis.slack_reply_batches WHERE ^{scope} FOR UPDATE)
+          INSERT INTO apis.slack_reply_publications
+            (project_id, conversation_id, user_id, message_ts, run_id, part, team_id, channel_id, thread_ts)
+          SELECT project_id, conversation_id, user_id, message_ts, run_id, #{part}, #{destination.teamId}, #{destination.channelId}, #{destination.threadTs}
+          FROM batch WHERE delivered_count = #{part} AND delivered_count < jsonb_array_length(replies)
+          ON CONFLICT DO NOTHING RETURNING publication_id|]
 
 
 -- | Acknowledgement and batch advancement are atomic. Repeated matching evidence
@@ -322,7 +524,8 @@ confirmReplyPublication publicationId timestamp = do
     ), advanced AS (
       UPDATE apis.slack_reply_batches b SET delivered_count = delivered_count + 1 FROM confirmed p
       WHERE b.project_id = p.project_id AND b.conversation_id = p.conversation_id
-        AND b.user_id = p.user_id AND b.message_ts = p.message_ts AND b.delivered_count = p.part
+        AND b.user_id = p.user_id AND b.message_ts IS NOT DISTINCT FROM p.message_ts
+        AND b.run_id IS NOT DISTINCT FROM p.run_id AND b.delivered_count = p.part
     ) SELECT TRUE FROM confirmed|]
   pure $ isJust confirmed
 
@@ -346,7 +549,9 @@ captureReplyPublication appId receiptId = do
       AND p.publication_id::text = se.payload #>> '{event,metadata,event_payload,publication_id}'
       AND se.team_id = p.team_id AND se.payload->>'api_app_id' = #{appId}
       AND se.payload #>> '{event,channel}' = p.channel_id
-      AND se.payload #>> '{event,thread_ts}' = p.thread_ts
+      AND ((p.thread_ts IS NOT NULL AND se.payload #>> '{event,thread_ts}' = p.thread_ts)
+        OR (p.thread_ts IS NULL AND (se.payload #>> '{event,thread_ts}' IS NULL
+          OR se.payload #>> '{event,thread_ts}' = se.payload #>> '{event,ts}')))
       AND se.payload #>> '{event,type}' = 'message'
       AND COALESCE(se.payload #>> '{event,subtype}', 'bot_message') = 'bot_message'
       AND COALESCE(se.payload #>> '{event,app_id}', se.payload #>> '{event,bot_profile,app_id}') = #{appId}
@@ -360,20 +565,23 @@ data PublicationSearch kind = PublicationSearch
   { publicationId :: UUIDId kind
   , teamId :: Text
   , channelId :: Text
-  , threadTs :: Text
-  , messageTs :: Text
+  , threadTs :: Maybe Text
+  , oldest :: Text
   , cursor :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
 
-loadReplySearch :: DB es => Turn -> Int -> Eff es (Maybe (PublicationSearch "slack_reply"))
-loadReplySearch turn part =
-  Hasql.interpOne
-    [HI.sql|SELECT publication_id, team_id, channel_id, thread_ts, message_ts, history_cursor
-    FROM apis.slack_reply_publications WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs} AND part = #{part} AND slack_ts IS NULL|]
+loadReplySearch :: DB es => CheckpointTarget -> Int -> Eff es (Maybe (PublicationSearch "slack_reply"))
+loadReplySearch target part =
+  let scope = replyScopeSql target
+   in Hasql.interpOne
+        [HI.sql|WITH publication AS (SELECT * FROM apis.slack_reply_publications
+          WHERE ^{scope} AND part = #{part} AND slack_ts IS NULL)
+          SELECT p.publication_id, p.team_id, p.channel_id, p.thread_ts,
+            COALESCE(p.message_ts, extract(epoch FROM run.started_at)::text), p.history_cursor
+          FROM publication p LEFT JOIN apis.ai_routine_runs run ON run.id = p.run_id|]
 
 
 saveReplySearchCursor :: DB es => PublicationSearch "slack_reply" -> Maybe Text -> Eff es ()
@@ -401,6 +609,9 @@ data Checkpoint
   = ModelPending Step
   | ToolsPending Step LLM.Message [(LLM.ToolCall, ToolResult)] [LLM.ToolCall]
   | AnswerReady AgenticChatResult
+  | LegacyUncertain AgenticChatResult Checkpoint
+  | NativePending Operation.NativeOperation
+  | NativeReady
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson Checkpoint
@@ -411,7 +622,23 @@ data SavedCheckpoint = SavedCheckpoint {revision :: Int64, checkpoint :: Checkpo
   deriving anyclass (AE.ToJSON, HI.DecodeRow)
 
 
-data CheckpointCursor = CheckpointCursor {turn :: Turn, revision :: Int64}
+data RunTurn = RunTurn
+  { projectId :: Projects.ProjectId
+  , conversationId :: UUIDId "conversation"
+  , userId :: Projects.UserId
+  , runId :: UUIDId "ai_routine_run"
+  }
+  deriving stock (Show)
+
+
+data RunLease = RunLease {turn :: RunTurn, startedAt :: UTCTime}
+
+
+data CheckpointTarget = SlackCheckpoint Turn | RunCheckpoint RunTurn
+  deriving stock (Show)
+
+
+data CheckpointCursor = CheckpointCursor {target :: CheckpointTarget, revision :: Int64}
   deriving stock (Show)
 
 
@@ -420,22 +647,422 @@ data CheckpointConflict = CheckpointConflict
   deriving anyclass (Exception)
 
 
+data CheckpointAccessDenied = CheckpointAccessDenied
+  deriving stock (Generic, Show)
+  deriving anyclass (Exception)
+
+
+checkpointIdentity :: CheckpointTarget -> (Projects.ProjectId, UUIDId "conversation", Projects.UserId, Maybe Text, Maybe (UUIDId "ai_routine_run"))
+checkpointIdentity = \case
+  SlackCheckpoint turn -> (turn.projectId, turn.conversationId, turn.userId, Just turn.messageTs, Nothing)
+  RunCheckpoint turn -> (turn.projectId, turn.conversationId, turn.userId, Nothing, Just turn.runId)
+
+
+checkpointSql :: CheckpointTarget -> HI.Sql
+checkpointSql target =
+  let (project, conversation, user, message, run) = checkpointIdentity target
+   in [HI.sql|SELECT revision, checkpoint FROM apis.slack_turn_checkpoints
+      WHERE project_id = #{project} AND conversation_id = #{conversation} AND user_id = #{user}
+        AND message_ts IS NOT DISTINCT FROM #{message} AND run_id IS NOT DISTINCT FROM #{run}|]
+
+
+-- | The transaction guard runs under the claim locks; rejection rolls back the
+-- claim. Interrupted retained invocations become explicitly uncertain.
+beginOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es, Time.Time :> es) => Tx.Transaction (Either OperationConflict ()) -> RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Eff es OperationDecision
+beginOperation authorize lease cursor proposal review = do
+  now <- Time.currentTime
+  result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    outcome <-
+      beginOperationTx now lease cursor proposal review >>= \case
+        Right decision@ExecuteOperation{} -> (decision <$) <$> authorize
+        other -> pure other
+    when (isLeft outcome) Tx.condemn
+    pure outcome
+  either throwIO pure result
+
+
+beginOperationTx :: forall policy. (AE.FromJSON policy, AE.ToJSON policy) => UTCTime -> RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Tx.Transaction (Either OperationConflict OperationDecision)
+beginOperationTx now lease cursor proposal review = runExceptT do
+  let turn = lease.turn
+      (project, conversation, user, message, checkpointRun) = checkpointIdentity cursor.target
+      identifier = operationIdentity cursor
+      matchingScope = project == turn.projectId && conversation == turn.conversationId && user == turn.userId
+  unless matchingScope $ hoistEither $ Left OperationScopeMismatch
+  runs <-
+    lift
+      $ Hasql.queryTx @[HI.OneColumn (UUIDId "ai_routine_run")]
+        [HI.sql|SELECT root_run_id FROM apis.ai_routine_runs WHERE id = #{turn.runId} AND project_id = #{project}
+      AND conversation_id = #{conversation} AND requested_by = #{user} AND started_at = #{lease.startedAt} AND status = 'running' FOR UPDATE|]
+  unless (case runs of [HI.OneColumn root] -> all (== root) checkpointRun; _ -> False) $ hoistEither $ Left OperationScopeMismatch
+  checkpoints <-
+    lift
+      $ Hasql.queryTx @[HI.OneColumn Checkpoint]
+        [HI.sql|SELECT checkpoint FROM apis.slack_turn_checkpoints
+      WHERE project_id = #{project} AND conversation_id = #{conversation} AND user_id = #{user}
+      AND message_ts IS NOT DISTINCT FROM #{message} AND run_id IS NOT DISTINCT FROM #{checkpointRun}
+      AND revision = #{cursor.revision} FOR UPDATE|]
+  when (null checkpoints) $ hoistEither $ Left OperationStepMoved
+  unless
+    ( case checkpoints of
+        [HI.OneColumn (ToolsPending _ _ _ (expected : _))] -> Operation.ModelCall expected == proposal.call
+        [HI.OneColumn (NativePending expected)] -> Operation.NativeCall expected == proposal.call
+        _ -> False
+    )
+    $ hoistEither
+    $ Left OperationProposalChanged
+  let matchingCall = case proposal.call of
+        Operation.ModelCall call -> [HI.sql|operation.proposal->'call'->'function' = #{Aeson $ LLM.toolCallFunction call}|]
+        Operation.NativeCall (Operation.WriteWiki write) ->
+          [HI.sql|operation.proposal #>> '{call,contents,tag}' = 'WriteWiki'
+          AND operation.proposal #> '{call,contents,contents,edit}' = #{Aeson write.edit}|]
+        Operation.NativeCall operation@(Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) ->
+          [HI.sql|operation.proposal->'call' = #{Aeson $ Operation.NativeCall operation}|]
+  prior <-
+    lift
+      $ Hasql.queryTx @[OperationEntry policy]
+      $ operationsSql project turn.runId
+      <> [HI.sql| AND (operation.id = #{identifier}
+        OR operation.outcome->>'tag' IN ('OperationUnstarted', 'OperationRunning', 'OperationUnknown')
+        OR ^{matchingCall})
+        ORDER BY operation.created_at, operation.id FOR UPDATE OF operation|]
+  case find ((== identifier) . (.id)) prior of
+    Just entry -> do
+      unless (entry.proposal.call == proposal.call) $ hoistEither $ Left OperationProposalChanged
+      reuse entry
+    Nothing -> case find unresolved prior <|> find (Operation.sameOperation proposal.call . (.call) . (.proposal)) prior of
+      Just entry -> reuse entry
+      Nothing -> do
+        let outcome = maybe OperationRunning (const OperationUnstarted) review
+            requirement = maybe NoReview ReviewPending review
+        inserted <-
+          lift
+            $ Hasql.queryTx @[OperationEntry policy]
+              [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome, review)
+            VALUES (#{identifier}, #{project}, #{turn.runId}, #{user}, #{cursor.revision}, #{Aeson proposal}, #{Aeson outcome}, #{Aeson requirement})
+            ON CONFLICT DO NOTHING RETURNING id, run_id, requested_by, proposal, outcome, review, created_at|]
+        case inserted of
+          [entry] -> if isJust review then reuse entry else pure $ ExecuteOperation $ OperationClaim entry.id
+          _ -> hoistEither $ Left OperationProposalChanged
+  where
+    unresolved entry = case entry.outcome of OperationUnstarted -> True; OperationRunning -> True; OperationUnknown -> True; OperationReturned{} -> False; OperationRefused{} -> False
+    reuse :: OperationEntry policy -> ExceptT OperationConflict Tx.Transaction OperationDecision
+    reuse entry = case entry.outcome of
+      OperationUnstarted -> case entry.review of
+        NoReview -> start entry
+        ReviewPending request -> if now < request.expiresAt then pure $ AwaitOperationReview entry.id request else refuse entry ReviewTimedOut
+        ReviewResolved request receipt -> case receipt.decision of
+          ReviewApproved ->
+            if now >= request.expiresAt
+              then refuse entry ReviewTimedOut
+              else do
+                roles <-
+                  lift
+                    $ Hasql.queryTx @[HI.OneColumn ProjectMembers.Permissions]
+                    $ [HI.sql|SELECT permission FROM (|]
+                    <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{lease.turn.projectId} AND member.user_id = #{receipt.decidedBy}|]
+                    <> [HI.sql|) eligible|]
+                let required = max request.approver $ maybe request.approver (.approver) review
+                if receipt.authority >= required && case (roles, Catalog.policyForCall entry.proposal.call) of ([HI.OneColumn role], Just capability) -> role >= max (Catalog.minimumPermission capability) (Catalog.approverPermission required); _ -> False
+                  then start entry
+                  else refuse entry ReviewAuthorityWithdrawn
+          ReviewRejected -> refuse entry ReviewDeclined
+      OperationReturned response -> pure $ RetainedOperation response
+      OperationRefused reason -> pure $ RefuseOperation entry.id reason
+      OperationRunning -> do
+        lift $ Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET outcome = #{Aeson OperationUnknown}, updated_at = clock_timestamp() WHERE id = #{entry.id}|]
+        pure $ ReconcileOperation (OperationClaim entry.id) entry.proposal.call entry.runId
+      OperationUnknown -> pure $ ReconcileOperation (OperationClaim entry.id) entry.proposal.call entry.runId
+    refuse entry reason = do
+      lift $ Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET outcome = #{Aeson $ OperationRefused reason}, updated_at = clock_timestamp() WHERE id = #{entry.id}|]
+      pure $ RefuseOperation entry.id reason
+    start entry = do
+      lift $ Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET outcome = #{Aeson OperationRunning}, updated_at = clock_timestamp() WHERE id = #{entry.id}|]
+      pure $ ExecuteOperation $ OperationClaim entry.id
+
+
+-- | The mutation and its retained outcome commit together. A failed transaction
+-- leaves no claimed operation, so a later worker can safely execute it.
+atomicOperation :: (AE.FromJSON policy, AE.ToJSON policy, DB es, Time.Time :> es) => RunLease -> CheckpointCursor -> OperationProposal policy -> Maybe ReviewRequest -> Tx.Transaction (Either OperationConflict ToolResult) -> Eff es OperationResult
+atomicOperation lease cursor proposal review action = do
+  now <- Time.currentTime
+  result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    outcome <-
+      beginOperationTx now lease cursor proposal review >>= \case
+        Left conflict -> pure $ Left conflict
+        Right (RefuseOperation identifier reason) -> pure $ Right $ RefusedResult identifier reason
+        Right (AwaitOperationReview identifier request) -> pure $ Right $ WaitingResult identifier request
+        Right (RetainedOperation retained) -> pure $ Right $ RecordedResult retained
+        Right (ReconcileOperation claim original run) -> pure $ Right $ UncertainResult claim original run
+        Right (ExecuteOperation claim) ->
+          action >>= \case
+            Left conflict -> pure $ Left conflict
+            Right response -> (RecordedResult response <$) <$> completeOperationTx claim response
+    when (isLeft outcome) Tx.condemn
+    pure outcome
+  either throwIO pure result
+
+
+completeOperation :: DB es => OperationClaim -> ToolResult -> Eff es ()
+completeOperation claim result = Hasql.transaction TxS.ReadCommitted TxS.Write (completeOperationTx claim result) >>= either throwIO pure
+
+
+completeOperationTx :: OperationClaim -> ToolResult -> Tx.Transaction (Either OperationConflict ())
+completeOperationTx (OperationClaim identifier) result = do
+  changed <-
+    Hasql.queryTx @[UUIDId "agent_operation"]
+      [HI.sql|UPDATE apis.ai_agent_operations SET outcome = #{Aeson $ OperationReturned result}, updated_at = clock_timestamp()
+      WHERE id = #{identifier} AND outcome->>'tag' IN ('OperationRunning', 'OperationUnknown') RETURNING id|]
+  if not (null changed)
+    then pure $ Right ()
+    else do
+      same <- Hasql.queryTx @[Bool] [HI.sql|SELECT outcome = #{Aeson $ OperationReturned result} FROM apis.ai_agent_operations WHERE id = #{identifier}|]
+      pure $ if same == [True] then Right () else Left OperationOutcomeChanged
+
+
+decideOperationReview :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> ReviewDecision -> Eff es ReviewResponse
+decideOperationReview = decideOperationReviewWith (const pass)
+
+
+decideOperationReviewWith :: (DB es, HTTP.HTTP :> es, Time.Time :> es) => (UUIDId "agent_operation" -> Tx.Transaction ()) -> Projects.ProjectId -> Projects.UserId -> UUIDId "agent_operation" -> ReviewDecision -> Eff es ReviewResponse
+decideOperationReviewWith enqueue project reviewer identifier decision = do
+  permission <- ProjectMembers.getUserPermission project reviewer
+  conversation <- Hasql.interpOne @(HI.OneColumn (UUIDId "conversation")) $ [HI.sql|SELECT run.conversation_id |] <> operationRunSql project identifier
+  case (permission, conversation) of
+    (Just role, Just (HI.OneColumn scope)) | role >= ProjectMembers.PEdit -> do
+      visible <- canReadEvidence project role (MemberViewer reviewer) scope
+      if not visible
+        then pure ReviewUnavailable
+        else do
+          now <- Time.currentTime
+          Hasql.transaction TxS.ReadCommitted TxS.Write do
+            entries <-
+              Hasql.queryTx @[(OperationProposal AE.Value, Aeson OperationReview, Maybe (Aeson Catalog.ReviewSelection), Bool)]
+                $ [HI.sql|SELECT operation.proposal, operation.review, run.policy_limit->'review_selected',
+                    run.status = 'running' AND run.requested_by IS NOT DISTINCT FROM operation.requested_by
+                      AND operation.outcome->>'tag' = 'OperationUnstarted' |]
+                <> operationRunSql project identifier
+                <> [HI.sql| FOR UPDATE OF operation|]
+            current <-
+              Hasql.queryTx @[HI.OneColumn ProjectMembers.Permissions]
+                $ [HI.sql|SELECT permission FROM (|]
+                <> ProjectMembers.memberPermissionsSql [HI.sql|member.project_id = #{project} AND member.user_id = #{reviewer}|]
+                <> [HI.sql|) eligible|]
+            let permitted selection request proposal = do
+                  [HI.OneColumn fresh] <- pure current
+                  policy <- Catalog.policyForCall proposal.call
+                  let required = max request.approver $ maybe request.approver (\(Aeson value) -> value.approver) selection
+                  guard $ fresh >= max (Catalog.minimumPermission policy) (Catalog.approverPermission required)
+                  case fresh of
+                    ProjectMembers.PView -> Nothing
+                    ProjectMembers.PEdit -> Just ReviewEditors
+                    ProjectMembers.PAdmin -> Just ReviewAdministrators
+            result <- case entries of
+              [(proposal, Aeson review, selection, live)] -> case review of
+                NoReview -> pure ReviewUnavailable
+                ReviewResolved request receipt -> pure $ if isJust (permitted selection request proposal) then ReviewAlreadyDecided receipt else ReviewUnavailable
+                ReviewPending request -> case permitted selection request proposal of
+                  Just authority
+                    | live ->
+                        if now >= request.expiresAt
+                          then pure ReviewExpired
+                          else do
+                            let receipt = ReviewReceipt reviewer now decision authority
+                            Hasql.executeTx [HI.sql|UPDATE apis.ai_agent_operations SET review = #{Aeson $ ReviewResolved request receipt}, updated_at = clock_timestamp() WHERE id = #{identifier}|]
+                            pure $ ReviewSaved receipt
+                  _ -> pure ReviewUnavailable
+              _ -> pure ReviewUnavailable
+            case result of
+              ReviewUnavailable -> pass
+              (ReviewSaved{}; ReviewAlreadyDecided{}; ReviewExpired) -> enqueue identifier
+            pure result
+    _ -> pure ReviewUnavailable
+
+
+getOperationRun :: DB es => Projects.ProjectId -> UUIDId "agent_operation" -> Eff es (Maybe (UUIDId "ai_routine_run"))
+getOperationRun project identifier = Hasql.interpOne $ [HI.sql|SELECT run.id |] <> operationRunSql project identifier
+
+
+-- Keep the proposal on its original attempt while resolving the request's latest attempt.
+operationRunSql :: Projects.ProjectId -> UUIDId "agent_operation" -> HI.Sql
+operationRunSql project identifier =
+  [HI.sql|FROM apis.ai_agent_operations operation
+    JOIN apis.ai_routine_runs origin ON origin.id = operation.run_id AND origin.project_id = operation.project_id
+    JOIN LATERAL (SELECT candidate.* FROM apis.ai_routine_runs candidate
+      WHERE candidate.root_run_id = origin.root_run_id AND candidate.project_id = origin.project_id
+        AND candidate.conversation_id = origin.conversation_id
+      ORDER BY candidate.attempt DESC, candidate.started_at DESC, candidate.id DESC LIMIT 1) run ON TRUE
+    WHERE operation.id = #{identifier} AND operation.project_id = #{project}|]
+
+
+listOperations :: (AE.FromJSON policy, DB es) => Projects.ProjectId -> UUIDId "ai_routine_run" -> Eff es [OperationEntry policy]
+listOperations project run = Hasql.interp $ operationsSql project run <> [HI.sql| ORDER BY operation.created_at DESC, operation.id DESC LIMIT 200|]
+
+
+operationsSql :: Projects.ProjectId -> UUIDId "ai_routine_run" -> HI.Sql
+operationsSql project run =
+  [HI.sql|SELECT operation.id, operation.run_id, operation.requested_by, operation.proposal, operation.outcome, operation.review, operation.created_at
+    FROM apis.ai_agent_operations operation
+    JOIN apis.ai_routine_runs origin ON origin.id = operation.run_id
+    JOIN apis.ai_routine_runs selected ON selected.id = #{run} AND selected.project_id = #{project}
+    WHERE operation.project_id = #{project} AND (origin.root_run_id = selected.root_run_id
+      OR (selected.source->>'tag' = 'TriggeredRun' AND origin.source = selected.source
+        AND operation.outcome->>'tag' IN ('OperationUnstarted', 'OperationRunning', 'OperationUnknown')))|]
+
+
 loadCheckpoint :: DB es => Turn -> Eff es (Maybe SavedCheckpoint)
-loadCheckpoint turn =
-  Hasql.interpOne
-    [HI.sql|SELECT revision, checkpoint FROM apis.slack_turn_checkpoints
-    WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
+loadCheckpoint = loadCheckpointFor . SlackCheckpoint
+
+
+loadCheckpointFor :: DB es => CheckpointTarget -> Eff es (Maybe SavedCheckpoint)
+loadCheckpointFor = Hasql.interpOne . checkpointSql
 
 
 startCheckpoint :: DB es => Turn -> Checkpoint -> Eff es SavedCheckpoint
-startCheckpoint turn checkpoint =
-  Hasql.interpOneOrThrow
-    "Starting a Slack checkpoint"
-    [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, message_ts, checkpoint)
-    VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson checkpoint})
-    ON CONFLICT (project_id, conversation_id, user_id, message_ts)
-    DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
+startCheckpoint = startCheckpointFor . SlackCheckpoint
+
+
+prepareNativeOperation :: DB es => RunTurn -> Operation.NativeOperation -> Eff es (CheckpointCursor, Operation.NativeOperation)
+prepareNativeOperation turn proposed = do
+  let target = RunCheckpoint turn
+  saved <- loadCheckpointFor target >>= maybe (startCheckpointFor target $ NativePending proposed) pure
+  let cursor = CheckpointCursor target saved.revision
+  case saved.checkpoint of
+    NativePending retained -> pure (cursor, retained)
+    NativeReady -> do
+      next <- commitProgress (Just cursor) Nothing (NativePending proposed) Nothing
+      maybe (throwIO CheckpointAccessDenied) (\position -> pure (position, proposed)) next
+    (ModelPending{}; ToolsPending{}; AnswerReady{}; LegacyUncertain{}) -> throwIO CheckpointAccessDenied
+
+
+operationIdentity :: CheckpointCursor -> UUIDId "agent_operation"
+operationIdentity cursor = UUIDId $ UUID5.generateNamed UUID5.namespaceOID $ BS.unpack $ toStrict $ AE.encode (checkpointIdentity cursor.target, cursor.revision)
+
+
+-- | Adopt the historical message checkpoint under its original conservative grant.
+-- A pending mutation without a retained response cannot be replayed.
+adoptSlackCheckpoint :: forall policy es. (AE.FromJSON policy, AE.ToJSON policy, DB es) => RunLease -> Turn -> (Catalog.AgentPolicy -> policy) -> Eff es (Maybe SavedCheckpoint)
+adoptSlackCheckpoint lease turn policy = do
+  unless (lease.turn.projectId == turn.projectId && lease.turn.conversationId == turn.conversationId && lease.turn.userId == turn.userId) $ throwIO CheckpointAccessDenied
+  result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    outcome <- runExceptT do
+      roots <-
+        lift
+          $ Hasql.queryTx @[(UUIDId "ai_routine_run", Bool)]
+            [HI.sql|SELECT run.root_run_id, run.policy = '"observe"'::jsonb FROM apis.ai_routine_runs run
+        JOIN apis.ai_routine_runs root ON root.id = run.root_run_id
+        JOIN apis.slack_events receipt ON receipt.id::text = run.source #>> '{contents,contents}'
+        WHERE run.id = #{lease.turn.runId} AND run.project_id = #{turn.projectId} AND run.conversation_id = #{turn.conversationId}
+          AND run.requested_by = #{turn.userId} AND run.started_at = #{lease.startedAt} AND run.status = 'running'
+          AND run.source #>> '{contents,tag}' = 'SlackMessage' AND receipt.payload #>> '{event,ts}' = #{turn.messageTs}
+        FOR UPDATE OF root|]
+      (root, readOnly) <- case roots of [bound] -> pure bound; _ -> hoistEither $ Left CheckpointAccessDenied
+      legacy <- lift $ Hasql.queryTx @[SavedCheckpoint] $ checkpointSql (SlackCheckpoint turn) <> [HI.sql| FOR UPDATE|]
+      historical <-
+        lift
+          $ Hasql.queryTx @[HI.OneColumn (Aeson AgenticChatResult)]
+            [HI.sql|SELECT answer FROM apis.slack_turn_answers WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+          AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
+      let saved = listToMaybe legacy <|> (\(HI.OneColumn (Aeson answer)) -> SavedCheckpoint 0 $ AnswerReady answer) <$> listToMaybe historical
+          target = RunCheckpoint lease.turn{runId = root}
+      forM saved \original -> do
+        unless readOnly $ hoistEither $ Left CheckpointAccessDenied
+        revision <-
+          lift
+            $ Hasql.oneTx @(HI.OneColumn Int64)
+              [HI.sql|SELECT greatest(#{original.revision}, coalesce(max(operation.checkpoint_revision) + 1, 0))
+          FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id WHERE run.root_run_id = #{root}|]
+        let cursor = CheckpointCursor target revision.getOneColumn
+        checkpoint <- case original.checkpoint of
+          ToolsPending step message completed (call : pending) -> do
+            let capability = fromMaybe (Catalog.Administration ProjectMembers.PAdmin) $ join $ Map.lookup (LLM.toolFunctionName call.toolCallFunction) Catalog.policiesByName
+                uncertain identifier run =
+                  let result = operationResponse turn.projectId $ UncertainResult (OperationClaim identifier) (Operation.ModelCall call) run
+                   in LegacyUncertain (AgenticChatResult result.formatted $ step.toolCalls <> map (uncurry mkToolCallInfo) completed <> [mkToolCallInfo call result]) original.checkpoint
+            case capability of
+              Catalog.ReadOnly{} -> pure original.checkpoint
+              (Catalog.ConversationWrite; Catalog.ProjectMemoryWrite; Catalog.ProjectWrite; Catalog.ExternalPublication; Catalog.Administration{}) -> do
+                prior <-
+                  lift
+                    $ Hasql.queryTx @[OperationEntry policy]
+                    $ operationsSql turn.projectId lease.turn.runId
+                    <> [HI.sql| AND operation.id = #{operationIdentity $ CheckpointCursor (SlackCheckpoint turn) original.revision} FOR UPDATE OF operation|]
+                case prior of
+                  entry : _ -> do
+                    unless (entry.proposal.call == Operation.ModelCall call) $ hoistEither $ Left CheckpointAccessDenied
+                    pure $ case entry.outcome of
+                      OperationReturned result -> ToolsPending step message (completed <> [(call, result)]) pending
+                      OperationUnstarted -> original.checkpoint
+                      OperationRefused reason -> ToolsPending step message (completed <> [(call, reviewResponse entry.id reason)]) pending
+                      (OperationRunning; OperationUnknown) -> uncertain entry.id entry.runId
+                  [] -> do
+                    let identifier = operationIdentity cursor
+                        proposal = OperationProposal (Operation.ModelCall call) $ policy capability
+                    lift
+                      $ Hasql.executeTx
+                        [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
+                    VALUES (#{identifier}, #{turn.projectId}, #{lease.turn.runId}, #{turn.userId}, #{cursor.revision}, #{Aeson proposal}, #{Aeson OperationUnknown})|]
+                    pure $ uncertain identifier lease.turn.runId
+          (ModelPending{}; ToolsPending{}; AnswerReady{}; LegacyUncertain{}) -> pure original.checkpoint
+          (NativePending{}; NativeReady) -> hoistEither $ Left CheckpointAccessDenied
+        created <-
+          lift
+            $ Hasql.oneTx @SavedCheckpoint
+              [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, run_id, revision, checkpoint)
+          VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{root}, #{cursor.revision}, #{Aeson checkpoint})
+          ON CONFLICT (project_id, conversation_id, user_id, message_ts, run_id)
+          DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
+        lift
+          $ Hasql.executeTx
+            [HI.sql|DELETE FROM apis.slack_turn_checkpoints WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+          AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs} AND run_id IS NULL|]
+        pure created
+    when (isLeft outcome) Tx.condemn
+    pure outcome
+  either throwIO pure result
+
+
+-- | The run lock serializes initialization only. Model calls never hold it.
+-- Event input and the initial checkpoint commit together, once per request.
+startCheckpointFor :: DB es => CheckpointTarget -> Checkpoint -> Eff es SavedCheckpoint
+startCheckpointFor target checkpoint = do
+  let (project, conversation, user, message, run) = checkpointIdentity target
+  result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    permitted <- case run of
+      Nothing -> pure True
+      Just identifier ->
+        not
+          . null
+          <$> Hasql.queryTx @[UUIDId "ai_routine_run"]
+            [HI.sql|SELECT id FROM apis.ai_routine_runs
+          WHERE id = #{identifier} AND project_id = #{project} AND conversation_id = #{conversation}
+            AND requested_by = #{user} FOR UPDATE|]
+    if not permitted
+      then pure $ Left CheckpointAccessDenied
+      else do
+        saved <- Hasql.queryTx @[SavedCheckpoint] $ checkpointSql target
+        case saved of
+          existing : _ -> pure $ Right existing
+          [] -> do
+            created <-
+              Hasql.oneTx
+                [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, message_ts, run_id, checkpoint, revision)
+              SELECT #{project}, #{conversation}, #{user}, #{message}, #{run}, #{Aeson checkpoint}, coalesce(max(operation.checkpoint_revision) + 1, 0)
+              FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs origin ON origin.id = operation.run_id
+              WHERE origin.root_run_id = #{run}
+              ON CONFLICT (project_id, conversation_id, user_id, message_ts, run_id)
+              DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
+            case checkpoint of
+              (NativePending{}; NativeReady) -> pass
+              (ModelPending{}; ToolsPending{}; AnswerReady{}; LegacyUncertain{}) -> for_ run $ \identifier ->
+                Hasql.executeTx
+                  [HI.sql|INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
+              SELECT run.project_id, run.conversation_id, 'user', run.input, receipt.payload #>> '{event,ts}', clock_timestamp()
+              FROM apis.ai_routine_runs run LEFT JOIN apis.slack_events receipt
+                ON receipt.id = CASE WHEN run.source #>> '{contents,tag}' = 'SlackMessage' THEN (run.source #>> '{contents,contents}')::uuid END
+              WHERE run.id = #{identifier} AND run.input IS NOT NULL AND run.source <> '{"tag":"ScheduledRun"}'::jsonb
+              ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING|]
+            pure $ Right created
+  either throwIO pure result
 
 
 -- | A stale worker cannot replace newer progress. Updating the checkpoint and
@@ -449,20 +1076,22 @@ commitProgress cursor scope checkpoint event
         updated <- case cursor of
           Nothing -> pure $ Right Nothing
           Just key -> do
+            let (project, conversation, user, message, run) = checkpointIdentity key.target
             versions <-
               Hasql.queryTx @[Int64]
                 [HI.sql|UPDATE apis.slack_turn_checkpoints SET checkpoint = #{Aeson checkpoint},
                 revision = revision + 1, updated_at = clock_timestamp()
-                WHERE project_id = #{key.turn.projectId} AND conversation_id = #{key.turn.conversationId}
-                  AND user_id = #{key.turn.userId} AND message_ts = #{key.turn.messageTs}
+                WHERE project_id = #{project} AND conversation_id = #{conversation} AND user_id = #{user}
+                  AND message_ts IS NOT DISTINCT FROM #{message} AND run_id IS NOT DISTINCT FROM #{run}
                   AND revision = #{key.revision} RETURNING revision|]
             pure $ case versions of
               [version] -> Right $ Just (key{revision = version} :: CheckpointCursor)
               _ -> Left CheckpointConflict
         for_ (rightToMaybe updated) $ \_ -> for_ scope $ \key -> for_ event $ \activity -> do
           Hasql.executeTx $ recordEventSql key activity
-          case (cursor, activity) of
-            (Just turnCursor, FollowupsAccepted _ followups) -> for_ followups $ \followup ->
+          case activity of
+            FollowupsAccepted _ followups | Just turnCursor <- cursor -> for_ followups $ \followup -> do
+              let (project, conversation, _, _, _) = checkpointIdentity turnCursor.target
               Hasql.executeTx
                 [HI.sql|WITH accepted AS (
                   UPDATE apis.slack_events SET processed_at = clock_timestamp()
@@ -471,14 +1100,14 @@ commitProgress cursor scope checkpoint event
                     AND payload->'event'->>'thread_ts' = #{key.threadTs}
                     AND payload->'event'->>'ts' = #{followup.messageTs}
                     AND payload->'event'->>'user' = #{followup.slackUserId}
-                    AND payload->'event'->>'type' IN ('message', 'app_mention')
+                    AND payload->'event'->>'type' IN ('message', 'app_mention', 'monoscope_message_shortcut')
                     AND payload->'event'->>'subtype' IS NULL AND payload->'event'->>'bot_id' IS NULL
                   RETURNING id
                 ) INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
-                  SELECT #{turnCursor.turn.projectId}, #{turnCursor.turn.conversationId}, 'user', #{followup.text}, #{followup.messageTs}, clock_timestamp()
+                  SELECT #{project}, #{conversation}, 'user', #{followup.text}, #{followup.messageTs}, clock_timestamp()
                   WHERE EXISTS (SELECT 1 FROM accepted)
                   ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING|]
-            _ -> pass
+            (InvestigationStarted{}; ModelStarted{}; ModelReturned{}; ToolStarted{}; ToolReturned{}; InvestigationHistoryRead{}; FollowupsAccepted{}; InvestigationAwaitingReview{}; InvestigationFinished; InvestigationFailed; InvestigationInterrupted) -> pass
         pure updated
       either throwIO pure result
 
@@ -502,24 +1131,197 @@ recentProgressEvents :: DB es => ProgressTarget -> Eff es History
 recentProgressEvents target = readEvents target.projectId target.teamId target.channelId target.threadTs (Just target.messageTs)
 
 
-data ProgressMessage = ProgressMessage {publicationId :: UUIDId "slack_progress", timestamp :: Maybe Text}
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+newtype SlackTimestamp = SlackTimestamp Text
+  deriving stock (Eq, Show)
+  deriving newtype (AE.ToJSON, HI.EncodeValue)
+
+
+instance AE.FromJSON SlackTimestamp where
+  parseJSON = AE.withText "Slack timestamp" $ maybe (fail "Invalid Slack timestamp") pure . slackTimestamp
+
+
+-- | Parse Slack's decimal timestamp without losing precision.
+--
+-- >>> fmap slackTimestampText (slackTimestamp "1788900000.000001")
+-- Just "1788900000.000001"
+-- >>> all (isNothing . slackTimestamp) ["", "1", ".1", "1.", "1.2.3", "-1.1"]
+-- True
+-- >>> AE.encode <$> slackTimestamp "1788900000.000001"
+-- Just "\"1788900000.000001\""
+-- >>> isLeft (AE.eitherDecode @SlackTimestamp "\"invalid\"")
+-- True
+-- >>> AET.parseEither (AE.genericParseJSON AE.defaultOptions :: AE.Value -> AET.Parser SlackTimestamp) (AE.String "invalid")
+-- ...
+-- ...No instance for...Generic SlackTimestamp...
+-- ...
+slackTimestamp :: Text -> Maybe SlackTimestamp
+slackTimestamp value =
+  let (seconds, fraction) = T.breakOn "." value
+      digits text = not (T.null text) && T.all isDigit text
+   in SlackTimestamp value <$ guard (digits seconds && digits (T.drop 1 fraction))
+
+
+slackTimestampText :: SlackTimestamp -> Text
+slackTimestampText (SlackTimestamp value) = value
+
+
+data TaskStatus = Pending | InProgress | Complete | Error
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via JSON.CustomJSON '[JSON.ConstructorTagModifier JSON.CamelToSnake] TaskStatus
+
+
+data Task = Task {task_id :: Text, title :: Text, status :: TaskStatus}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data StreamFrame = StreamFrame {title :: Text, tasks :: NonEmpty Task}
+  deriving stock (Eq, Show)
+
+
+instance AE.ToJSON StreamFrame where
+  toJSON frame = AE.object ["title" AE..= frame.title, "tasks" AE..= frame.tasks]
+
+
+instance AE.FromJSON StreamFrame where
+  parseJSON = AE.withObject "Slack stream frame" \fields -> do
+    title <- fields AE..: "title"
+    tasks <- fields AE..: "tasks"
+    either (fail . toString) pure $ mkStreamFrame title tasks
+
+
+-- | Reuse fifty canonical task IDs across frames, so the whole stream stays
+-- within Slack's lifetime task limit, including after history truncation.
+--
+-- >>> let task = Task "0" "Read evidence" InProgress
+-- >>> (toList . streamTasks <$> mkStreamFrame "Investigating" [task]) == Right [task]
+-- True
+-- >>> mkStreamFrame "" [task]
+-- Left "A Slack stream frame needs a title"
+-- >>> mkStreamFrame "Investigating" []
+-- Left "A Slack stream frame needs a task"
+-- >>> isLeft $ mkStreamFrame "Investigating" [task, task]
+-- True
+-- >>> isLeft $ mkStreamFrame "Investigating" [task{task_id = "50"}]
+-- True
+-- >>> isLeft $ mkStreamFrame "Investigating" [task{task_id = "01"}]
+-- True
+-- >>> isLeft $ mkStreamFrame "Investigating" [task{task_id = show n} | n <- [1..51 :: Int]]
+-- True
+-- >>> fmap (AE.eitherDecode @StreamFrame . AE.encode) (mkStreamFrame "Investigating" [task]) == fmap Right (mkStreamFrame "Investigating" [task])
+-- True
+-- >>> (AE.toJSON <$> mkStreamFrame "Investigating" [task]) == Right (AE.object ["title" AE..= ("Investigating" :: Text), "tasks" AE..= ([task] :: [Task])])
+-- True
+-- >>> AE.eitherDecode @StreamFrame "{\"title\":\"Investigating\",\"tasks\":[]}"
+-- Left "Error in $: A Slack stream frame needs a task"
+-- >>> AET.parseEither (AE.genericParseJSON AE.defaultOptions :: AE.Value -> AET.Parser StreamFrame) (AE.object ["title" AE..= ("" :: Text), "tasks" AE..= ([task] :: [Task])])
+-- ...
+-- ...No instance for...Generic StreamFrame...
+-- ...
+mkStreamFrame :: Text -> [Task] -> Either Text StreamFrame
+mkStreamFrame title tasks = do
+  when (T.null $ T.strip title) $ Left "A Slack stream frame needs a title"
+  items <- maybeToRight "A Slack stream frame needs a task" $ nonEmpty tasks
+  unless (length items <= 50) $ Left "A Slack stream permits at most fifty tasks"
+  let identifiers = S.fromList $ map (.task_id) tasks
+  unless (S.size identifiers == length items && identifiers `S.isSubsetOf` S.fromList (map show [0 .. 49 :: Int])) $ Left "Slack stream task IDs must be unique indices from zero through forty-nine"
+  pure $ StreamFrame title items
+
+
+streamTasks :: StreamFrame -> NonEmpty Task
+streamTasks = (.tasks)
+
+
+streamTitle :: StreamFrame -> Text
+streamTitle = (.title)
+
+
+data StreamSession = StreamSession {timestamp :: SlackTimestamp, startedAt :: UTCTime}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data StreamPhase = StreamInProgress | StreamCompleted
+  deriving stock (Eq, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "Stream" StreamPhase
+
+
+data StreamRequest
+  = StartStream UTCTime StreamFrame
+  | AppendStream StreamSession StreamFrame StreamFrame
+  | StopStream StreamSession StreamFrame StreamFrame
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data StreamState
+  = StreamPending StreamRequest
+  | StreamReady StreamSession StreamFrame
+  | StreamClosed SlackTimestamp
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ProgressDelivery = SnapshotDelivery (Maybe SlackTimestamp) | StreamDelivery StreamState
+  deriving stock (Eq, Show)
+
+
+data ProgressMessage = ProgressMessage {publicationId :: UUIDId "slack_progress", delivery :: ProgressDelivery}
+  deriving stock (Show)
+
+
+-- | A publication cannot be both a legacy receipt and a stream receipt.
+--
+-- >>> isRight $ AE.eitherDecode @ProgressMessage "{\"publication_id\":\"00000000-0000-0000-0000-000000000001\",\"stream_state\":{\"tag\":\"StreamClosed\",\"contents\":\"1.1\"}}"
+-- True
+-- >>> isLeft $ AE.eitherDecode @ProgressMessage "{\"publication_id\":\"00000000-0000-0000-0000-000000000001\",\"progress_ts\":\"1.0\",\"stream_state\":{\"tag\":\"StreamClosed\",\"contents\":\"1.1\"}}"
+-- True
+instance AE.FromJSON ProgressMessage where
+  parseJSON = AE.withObject "Slack progress publication" \fields -> do
+    publicationId <- fields AE..: "publication_id"
+    stream <- fields AE..:? "stream_state"
+    timestamp <- fields AE..:? "progress_ts"
+    delivery <- case (stream, timestamp) of
+      (Nothing, legacy) -> pure $ SnapshotDelivery legacy
+      (Just checkpoint, Nothing) -> pure $ StreamDelivery checkpoint
+      (Just _, Just _) -> fail "Conflicting Slack progress receipts"
+    pure ProgressMessage{..}
+
+
+progressTimestamp :: ProgressMessage -> Maybe Text
+progressTimestamp publication =
+  slackTimestampText <$> case publication.delivery of
+    SnapshotDelivery timestamp -> timestamp
+    StreamDelivery checkpoint -> case checkpoint of
+      StreamPending request -> case request of
+        StartStream{} -> Nothing
+        AppendStream session _ _ -> Just session.timestamp
+        StopStream session _ _ -> Just session.timestamp
+      StreamReady session _ -> Just session.timestamp
+      StreamClosed timestamp -> Just timestamp
+
+
+commitStream :: DB es => UUIDId "slack_progress" -> StreamState -> StreamState -> Eff es Bool
+commitStream publicationId previous next =
+  isJust
+    <$> Hasql.interpOne @(HI.OneColumn Bool)
+      [HI.sql|UPDATE apis.slack_investigation_progress SET stream_state = #{Aeson next}, history_cursor = NULL
+      WHERE publication_id = #{publicationId} AND stream_state = #{Aeson previous} RETURNING TRUE|]
 
 
 loadProgress :: DB es => ProgressTarget -> Eff es (Maybe ProgressMessage)
 loadProgress target =
-  Hasql.interpOne
-    [HI.sql|SELECT publication_id, progress_ts FROM apis.slack_investigation_progress
+  Hasql.interpOneJson
+    [HI.sql|SELECT to_jsonb(p) FROM apis.slack_investigation_progress p
     WHERE project_id = #{target.projectId} AND team_id = #{target.teamId}
       AND channel_id = #{target.channelId} AND thread_ts = #{target.threadTs} AND message_ts = #{target.messageTs}|]
 
 
-loadProgressRefresh :: DB es => UUIDId "slack_progress" -> Eff es (Maybe (ProgressTarget, Maybe Text))
+loadProgressRefresh :: DB es => UUIDId "slack_progress" -> Eff es (Maybe (ProgressTarget, ProgressMessage))
 loadProgressRefresh publicationId =
-  fmap (\(Aeson target, timestamp) -> (target, timestamp))
+  fmap (\(Aeson target, Aeson publication) -> (target, publication))
     <$> Hasql.interpOne
-      [HI.sql|SELECT to_jsonb(p), progress_ts FROM apis.slack_investigation_progress p
+      [HI.sql|SELECT to_jsonb(p), to_jsonb(p) FROM apis.slack_investigation_progress p
       WHERE publication_id = #{publicationId} AND user_id IS NOT NULL AND slack_user_id IS NOT NULL|]
 
 
@@ -538,14 +1340,14 @@ saveProgressSearchCursor search next =
       AND history_cursor IS NOT DISTINCT FROM #{search.cursor}|]
 
 
-claimProgress :: DB es => ProgressTarget -> Eff es (Maybe ProgressMessage)
-claimProgress target =
-  Hasql.interpOne
+claimProgress :: DB es => ProgressTarget -> Maybe (UTCTime, StreamFrame) -> Eff es (Maybe ProgressMessage)
+claimProgress target stream =
+  Hasql.interpOneJson
     [HI.sql|INSERT INTO apis.slack_investigation_progress
-    (project_id, team_id, channel_id, thread_ts, message_ts, user_id, slack_user_id)
-    VALUES (#{target.projectId}, #{target.teamId}, #{target.channelId}, #{target.threadTs}, #{target.messageTs}, #{target.userId}, #{target.slackUserId})
+    AS p (project_id, team_id, channel_id, thread_ts, message_ts, user_id, slack_user_id, stream_state)
+    VALUES (#{target.projectId}, #{target.teamId}, #{target.channelId}, #{target.threadTs}, #{target.messageTs}, #{target.userId}, #{target.slackUserId}, #{Aeson . StreamPending . uncurry StartStream <$> stream})
     ON CONFLICT (project_id, team_id, channel_id, thread_ts, message_ts) DO NOTHING
-    RETURNING publication_id, progress_ts|]
+    RETURNING to_jsonb(p)|]
 
 
 confirmProgress :: DB es => UUIDId "slack_progress" -> Text -> Eff es Bool
@@ -553,7 +1355,7 @@ confirmProgress publicationId timestamp =
   isJust
     <$> Hasql.interpOne @(HI.OneColumn Bool)
       [HI.sql|UPDATE apis.slack_investigation_progress SET progress_ts = #{timestamp}
-    WHERE publication_id = #{publicationId} AND (progress_ts IS NULL OR progress_ts = #{timestamp}) RETURNING TRUE|]
+    WHERE publication_id = #{publicationId} AND stream_state IS NULL AND (progress_ts IS NULL OR progress_ts = #{timestamp}) RETURNING TRUE|]
 
 
 -- | Release only a definitely rejected publication. A concurrent signed
@@ -562,7 +1364,15 @@ rejectProgress :: DB es => UUIDId "slack_progress" -> Eff es ()
 rejectProgress publicationId =
   Hasql.interpExecute_
     [HI.sql|DELETE FROM apis.slack_investigation_progress
-    WHERE publication_id = #{publicationId} AND progress_ts IS NULL|]
+    WHERE publication_id = #{publicationId} AND stream_state IS NULL AND progress_ts IS NULL|]
+
+
+rejectStreamStart :: DB es => UUIDId "slack_progress" -> UTCTime -> StreamFrame -> Eff es ()
+rejectStreamStart publicationId startedAt frame =
+  let pending = StreamPending $ StartStream startedAt frame
+   in Hasql.interpExecute_
+        [HI.sql|DELETE FROM apis.slack_investigation_progress
+      WHERE publication_id = #{publicationId} AND stream_state = #{Aeson pending}|]
 
 
 -- | Mirror incident-root reconciliation: require a signed stored receipt and
@@ -573,7 +1383,7 @@ captureProgress appId receiptId =
     <$> Hasql.interp
       [HI.sql|UPDATE apis.slack_investigation_progress p SET progress_ts = se.payload #>> '{event,ts}'
     FROM apis.slack_events se, apis.slack s
-    WHERE se.id = #{receiptId} AND #{appId} <> ''
+    WHERE se.id = #{receiptId} AND #{appId} <> '' AND p.stream_state IS NULL
       AND p.user_id IS NOT NULL AND p.slack_user_id IS NOT NULL
       AND s.project_id = p.project_id AND s.team_id = p.team_id
       AND p.publication_id::text = se.payload #>> '{event,metadata,event_payload,publication_id}'
@@ -588,3 +1398,256 @@ captureProgress appId receiptId =
       AND (se.payload #>> '{event,ts}') ~ '^[0-9]+\.[0-9]+$'
       AND (p.progress_ts IS NULL OR p.progress_ts = se.payload #>> '{event,ts}')
     RETURNING to_jsonb(p), p.progress_ts|]
+
+
+-- | A conversation and its retained runs share the strongest evidence requirement.
+data EvidenceAudience = ProjectAudience | PersonalAudience Projects.UserId | SlackChannelAudience Integrations.SlackChannel | NoAudience
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data EvidenceViewer = ProjectViewer | MemberViewer Projects.UserId | ChannelViewer Projects.UserId Integrations.SlackChannel | DirectMessageViewer Projects.UserId Text Text Text
+
+
+canReadEvidence :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> ProjectMembers.Permissions -> EvidenceViewer -> UUIDId "conversation" -> Eff es Bool
+canReadEvidence project permission viewer conversation = do
+  required <- conversationEvidencePermission project conversation
+  Aeson audience <- Hasql.interpScalar $ conversationReadAudienceSql project [HI.sql|#{conversation}|]
+  if permission < required then pure False else audienceVisible project viewer audience
+
+
+audienceVisible :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> EvidenceViewer -> EvidenceAudience -> Eff es Bool
+audienceVisible project viewer = \case
+  ProjectAudience -> pure True
+  NoAudience -> pure False
+  PersonalAudience owner -> case viewer of
+    MemberViewer member | owner == member -> isJust <$> ProjectMembers.getUserPermission project member
+    DirectMessageViewer member team user channel | owner == member -> Integrations.slackDirectMessageOwner project member team user channel
+    (ProjectViewer; MemberViewer{}; ChannelViewer{}; DirectMessageViewer{}) -> pure False
+  SlackChannelAudience channel -> case viewer of
+    MemberViewer member -> Integrations.slackChannelMember project member channel
+    ChannelViewer member destination | channel == destination -> Integrations.slackChannelMember project member channel
+    (ProjectViewer; ChannelViewer{}; DirectMessageViewer{}) -> pure False
+
+
+-- | Project evidence adds no restriction; distinct private audiences cannot mix.
+--
+-- >>> import Data.UUID qualified as UUID
+-- >>> import Pkg.DeriveUtils (UUIDId(..))
+-- >>> let personal = PersonalAudience (UUIDId UUID.nil)
+-- >>> meetEvidenceAudience ProjectAudience personal == personal
+-- True
+-- >>> meetEvidenceAudience personal personal == personal
+-- True
+-- >>> meetEvidenceAudience personal (PersonalAudience (UUIDId (UUID.fromWords 0 0 0 1))) == NoAudience
+-- True
+-- >>> meetEvidenceAudience NoAudience personal == NoAudience
+-- True
+meetEvidenceAudience :: EvidenceAudience -> EvidenceAudience -> EvidenceAudience
+meetEvidenceAudience ProjectAudience audience = audience
+meetEvidenceAudience audience ProjectAudience = audience
+meetEvidenceAudience left right = if left == right then left else NoAudience
+
+
+conversationEvidenceAudience :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es EvidenceAudience
+conversationEvidenceAudience project conversation = do
+  Aeson audience <- Hasql.interpScalar [HI.sql|SELECT apis.conversation_evidence_audience(#{project}, #{conversation})|]
+  pure audience
+
+
+-- | Transcript provenance restricts readers without treating a member's request as fetched evidence.
+conversationReadAudienceSql :: Projects.ProjectId -> HI.Sql -> HI.Sql
+conversationReadAudienceSql project conversation =
+  [HI.sql|WITH receipts AS (
+    SELECT event.team_id AS team, event.payload #>> '{event,channel}' AS channel
+    FROM apis.ai_routine_runs run LEFT JOIN apis.slack_events event
+      ON event.id = CASE WHEN run.source #>> '{contents,tag}' = 'SlackMessage'
+        THEN (run.source #>> '{contents,contents}')::uuid END
+    WHERE run.project_id = #{project} AND run.conversation_id = ^{conversation}
+      AND run.source->>'tag' = 'TriggeredRun' AND run.source #>> '{contents,tag}' = 'SlackMessage'
+    UNION ALL
+    SELECT command_origin->>'team_id', command_origin->>'channel_id'
+    FROM apis.ai_routine_runs WHERE project_id = #{project} AND conversation_id = ^{conversation}
+      AND command_origin IS NOT NULL
+  ), roots AS (
+    SELECT * FROM receipts
+    UNION ALL
+    SELECT context->>'team_id', context->>'channel_id'
+    FROM apis.ai_conversations WHERE project_id = #{project} AND conversation_id = ^{conversation}
+      AND conversation_type = 'slack_thread' AND NOT EXISTS (SELECT 1 FROM receipts)
+  ), owner AS (
+    SELECT count(DISTINCT user_id) AS count, min(user_id::text) AS id,
+      COALESCE(bool_or(user_id IS NULL), true) AS unknown FROM (
+      SELECT requested_by AS user_id FROM apis.ai_routine_runs WHERE project_id = #{project} AND conversation_id = ^{conversation}
+      UNION ALL SELECT user_id FROM apis.slack_turn_checkpoints
+        WHERE project_id = #{project} AND conversation_id = ^{conversation} AND message_ts IS NOT NULL
+      UNION ALL SELECT user_id FROM apis.slack_turn_answers
+        WHERE project_id = #{project} AND conversation_id = ^{conversation}
+    ) authors
+  ) SELECT apis.meet_evidence_audiences(audience) FROM (
+    SELECT apis.conversation_evidence_audience(#{project}, ^{conversation}) AS audience
+    UNION ALL
+    SELECT CASE WHEN apis.valid_evidence_audience(channel.audience) THEN channel.audience
+      WHEN roots.channel ~ '^D[A-Z0-9]+$' AND length(btrim(roots.team)) > 0
+        AND owner.count = 1 AND NOT owner.unknown
+      THEN jsonb_build_object('tag', 'PersonalAudience', 'contents', owner.id)
+      ELSE #{Aeson NoAudience} END
+    FROM roots CROSS JOIN owner CROSS JOIN LATERAL (
+      SELECT jsonb_build_object('tag', 'SlackChannelAudience', 'contents',
+        jsonb_build_object('teamId', roots.team, 'channelId', roots.channel)) AS audience
+    ) channel
+  ) scopes|]
+
+
+retainEvidenceAudience :: DB es => Projects.ProjectId -> UUIDId "conversation" -> EvidenceAudience -> Eff es Bool
+retainEvidenceAudience project conversation requested = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  void $ Hasql.queryTx @[UUIDId "ai_routine_run"] [HI.sql|SELECT id FROM apis.ai_routine_runs WHERE project_id = #{project} AND conversation_id = #{conversation} ORDER BY id FOR UPDATE|]
+  anchor <- Hasql.queryTx @[UUIDId "conversation"] [HI.sql|SELECT conversation_id FROM apis.ai_conversations WHERE project_id = #{project} AND conversation_id = #{conversation} FOR UPDATE|]
+  Aeson existing <- HI.getOneColumn <$> Hasql.oneTx @(HI.OneColumn (Aeson EvidenceAudience)) [HI.sql|SELECT apis.conversation_evidence_audience(#{project}, #{conversation})|]
+  let combined = meetEvidenceAudience existing requested
+  if null anchor || combined == NoAudience
+    then pure False
+    else do
+      Hasql.executeTx [HI.sql|UPDATE apis.ai_routine_runs SET evidence_audience = #{Aeson combined} WHERE project_id = #{project} AND conversation_id = #{conversation}|]
+      Hasql.executeTx [HI.sql|UPDATE apis.ai_conversations SET evidence_audience = #{Aeson combined} WHERE project_id = #{project} AND conversation_id = #{conversation}|]
+      pure True
+
+
+-- | A conversation and its retained runs share the strongest evidence requirement.
+conversationEvidencePermission :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ProjectMembers.Permissions
+conversationEvidencePermission project conversation = do
+  classifyLegacyEvidence project (Just conversation)
+  Hasql.interpScalar
+    [HI.sql|SELECT COALESCE(apis.conversation_evidence_permission(#{project}, #{conversation}), 'view'::projects.project_permissions)|]
+
+
+-- | Locks match completion's run-before-conversation order. Updates are monotonic.
+retainEvidencePermission :: DB es => Projects.ProjectId -> [UUIDId "conversation"] -> ProjectMembers.Permissions -> Eff es ()
+retainEvidencePermission project conversations permission = unless (null conversations) $ Hasql.transaction TxS.ReadCommitted TxS.Write do
+  void
+    $ Hasql.queryTx @[UUIDId "ai_routine_run"]
+      [HI.sql|SELECT id FROM apis.ai_routine_runs WHERE project_id = #{project} AND conversation_id = ANY(#{conversations})
+      AND (evidence_permission IS NULL OR apis.evidence_permission_rank(evidence_permission) < apis.evidence_permission_rank(#{permission})) ORDER BY id FOR UPDATE|]
+  Hasql.executeTx
+    [HI.sql|UPDATE apis.ai_routine_runs SET evidence_permission = #{permission}
+    WHERE project_id = #{project} AND conversation_id = ANY(#{conversations})
+      AND (evidence_permission IS NULL OR apis.evidence_permission_rank(evidence_permission) < apis.evidence_permission_rank(#{permission}))|]
+  Hasql.executeTx
+    [HI.sql|UPDATE apis.ai_conversations SET evidence_permission = #{permission}
+    WHERE project_id = #{project} AND conversation_id = ANY(#{conversations})
+      AND (evidence_permission IS NULL OR apis.evidence_permission_rank(evidence_permission) < apis.evidence_permission_rank(#{permission}))|]
+
+
+-- | Classify historical tool evidence and copied instructions through the shared catalog.
+-- Unknown/malformed historical evidence remains administrator-only.
+classifyLegacyEvidence :: DB es => Projects.ProjectId -> Maybe (UUIDId "conversation") -> Eff es ()
+classifyLegacyEvidence project selected = do
+  pending <-
+    Hasql.interp @[UUIDId "conversation"]
+      [HI.sql|WITH RECURSIVE subjects(conversation_id) AS (
+      SELECT conversation_id FROM (
+        SELECT conversation_id FROM apis.ai_conversations WHERE project_id = #{project} AND evidence_permission IS NULL
+        UNION SELECT conversation_id FROM apis.ai_routine_runs WHERE project_id = #{project} AND evidence_permission IS NULL
+      ) legacy WHERE #{selected} IS NULL OR conversation_id = #{selected}
+      UNION SELECT routine.conversation_id FROM subjects
+        JOIN apis.ai_routine_runs run ON run.project_id = #{project} AND run.conversation_id = subjects.conversation_id
+        JOIN apis.ai_routines routine ON routine.id = run.routine_id AND routine.project_id = #{project}
+    ) SELECT conversation_id FROM subjects|]
+  unless (null pending) do
+    existing <-
+      Hasql.interp @[(UUIDId "conversation", ProjectMembers.Permissions)]
+        [HI.sql|SELECT conversation_id, evidence_permission FROM apis.ai_conversations
+        WHERE project_id = #{project} AND conversation_id = ANY(#{pending}) AND evidence_permission IS NOT NULL
+        UNION ALL SELECT conversation_id, evidence_permission FROM apis.ai_routine_runs
+        WHERE project_id = #{project} AND conversation_id = ANY(#{pending}) AND evidence_permission IS NOT NULL|]
+    sources <-
+      Hasql.interp @[(UUIDId "conversation", Maybe (UUIDId "conversation"))]
+        [HI.sql|SELECT DISTINCT run.conversation_id, routine.conversation_id FROM apis.ai_routine_runs run
+        LEFT JOIN apis.ai_routines routine ON routine.id = run.routine_id AND routine.project_id = #{project}
+        WHERE run.project_id = #{project} AND run.conversation_id = ANY(#{pending}) AND run.source->>'tag' NOT IN ('InteractiveRun', 'ConversationRun')|]
+    calls <-
+      Hasql.interp @[(UUIDId "conversation", Aeson AE.Value)]
+        [HI.sql|SELECT conversation_id, metadata FROM apis.ai_chat_messages
+        WHERE project_id = #{project} AND conversation_id = ANY(#{pending}) AND role = 'assistant' AND metadata IS NOT NULL
+        UNION ALL SELECT conversation_id, actions FROM apis.ai_routine_runs
+        WHERE project_id = #{project} AND conversation_id = ANY(#{pending}) AND actions IS NOT NULL|]
+    checkpoints <-
+      Hasql.interp @[(UUIDId "conversation", Aeson AE.Value)]
+        [HI.sql|SELECT conversation_id, checkpoint FROM apis.slack_turn_checkpoints
+        WHERE project_id = #{project} AND conversation_id = ANY(#{pending})|]
+    operations <-
+      Hasql.interp @[(UUIDId "conversation", Aeson AE.Value, Aeson AE.Value)]
+        [HI.sql|SELECT run.conversation_id, COALESCE(operation.proposal->'call', 'null'::jsonb),
+          COALESCE(operation.proposal #> '{policy,capability}', 'null'::jsonb)
+        FROM apis.ai_agent_operations operation JOIN apis.ai_routine_runs run ON run.id = operation.run_id
+        WHERE run.project_id = #{project} AND run.conversation_id = ANY(#{pending})|]
+    let policies =
+          Map.fromListWith max
+            $ [(conversation, ProjectMembers.PView) | conversation <- pending]
+            <> existing
+            <> [(conversation, parsed (toolsPermission . (map (.name) :: [ToolCallInfo] -> [Text])) payload) | (conversation, Aeson payload) <- calls]
+            <> [(conversation, parsed (toolsPermission . checkpointNames) payload) | (conversation, Aeson payload) <- checkpoints]
+            <> [(conversation, max (parsed (toolPermission . Catalog.operationName) call) (parsed Catalog.disclosurePermission capability)) | (conversation, Aeson call, Aeson capability) <- operations]
+        inherit roles = Map.unionWith max roles $ Map.fromListWith max [(target, maybe ProjectMembers.PAdmin (\source -> Map.findWithDefault ProjectMembers.PAdmin source roles) origin) | (target, origin) <- sources]
+        resolved = until (\roles -> inherit roles == roles) inherit policies
+    for_ (Map.toList $ Map.fromListWith (<>) [(role, [conversation]) | (conversation, role) <- Map.toList resolved]) $ \(role, conversations) -> retainEvidencePermission project conversations role
+  where
+    parsed :: AE.FromJSON value => (value -> ProjectMembers.Permissions) -> AE.Value -> ProjectMembers.Permissions
+    parsed permission value = case AE.fromJSON value of
+      AE.Error _ -> ProjectMembers.PAdmin
+      AE.Success stored -> permission stored
+    toolsPermission = foldl' max ProjectMembers.PView . map toolPermission
+    toolPermission name = maybe ProjectMembers.PAdmin Catalog.disclosurePermission $ join $ Map.lookup name Catalog.policiesByName
+    checkpointNames = \case
+      AnswerReady answer -> map (.name) answer.toolCalls
+      ModelPending step -> map (.name) step.toolCalls
+      ToolsPending step _ completed pending -> map (.name) step.toolCalls <> map (LLM.toolFunctionName . LLM.toolCallFunction) (map fst completed <> pending)
+      NativePending operation -> [Catalog.operationName $ Operation.NativeCall operation]
+      NativeReady -> []
+      LegacyUncertain _ original -> checkpointNames original
+
+
+visibleConversationIds :: (DB es, HTTP.HTTP :> es) => Projects.ProjectId -> ProjectMembers.Permissions -> EvidenceViewer -> Eff es [UUIDId "conversation"]
+visibleConversationIds project permission viewer = do
+  classifyLegacyEvidence project Nothing
+  let readAudience = conversationReadAudienceSql project [HI.sql|eligible.conversation_id|]
+  scopes <-
+    Hasql.interp @[(UUIDId "conversation", Aeson EvidenceAudience)]
+      [HI.sql|SELECT eligible.conversation_id, audience.audience FROM (
+        SELECT conversation_id FROM (
+          SELECT conversation_id, evidence_permission FROM apis.ai_conversations WHERE project_id = #{project}
+          UNION ALL SELECT conversation_id, evidence_permission FROM apis.ai_routine_runs WHERE project_id = #{project}
+        ) scopes GROUP BY conversation_id
+        HAVING max(apis.evidence_permission_rank(evidence_permission)) <= apis.evidence_permission_rank(#{permission})
+      ) eligible CROSS JOIN LATERAL (
+        ^{readAudience}
+      ) audience(audience)|]
+  visible <- S.fromList <$> filterM (audienceVisible project viewer) (ordNub [audience | (_, Aeson audience) <- scopes])
+  pure [conversation | (conversation, Aeson audience) <- scopes, audience `S.member` visible]
+
+
+operationResponse :: Projects.ProjectId -> OperationResult -> ToolResult
+operationResponse project = \case
+  RefusedResult identifier reason -> reviewResponse identifier reason
+  WaitingResult identifier request -> ToolResult "This action is waiting for review." (Just $ AE.object ["operation_id" AE..= identifier, "expires_at" AE..= request.expiresAt])
+  RecordedResult result -> result
+  UncertainResult claim _ run ->
+    let identifier = operationId claim
+     in ToolResult
+          ("This request has an action with an uncertain outcome. It may still complete. Further changes were not executed. [View action history](/p/" <> project.toText <> "/ai/runs/" <> run.toText <> "#operation-" <> identifier.toText <> ") before making another request.")
+          (Just $ AE.object ["operation_id" AE..= identifier, "run_id" AE..= run, "outcome" AE..= OperationUnknown])
+
+
+-- | Create ToolCallInfo from a tool call and its result
+mkToolCallInfo :: LLM.ToolCall -> ToolResult -> ToolCallInfo
+mkToolCallInfo tc result =
+  ToolCallInfo
+    { name = LLM.toolFunctionName (LLM.toolCallFunction tc)
+    , args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
+    , resultPreview = T.take 2000 result.formatted
+    , rawData = result.rawData
+    }
+
+
+reviewResponse :: UUIDId "agent_operation" -> ReviewRefusal -> ToolResult
+reviewResponse identifier reason = ToolResult (reviewRefusalMessage reason) (Just $ AE.object ["operation_id" AE..= identifier, "review_refusal" AE..= reason])

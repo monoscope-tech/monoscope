@@ -62,7 +62,7 @@ Tool names follow a verb-first snake_case convention (`list_monitors`,
 authoritative set.
 
 **REST-derived tools** mirror the OpenAPI spec — `list_events`,
-`search_events`, `get_schema`, `list_facets`, `list_monitors`,
+`search_events`, `get_schema`, `list_facets`, `list_metrics`, `list_monitors`,
 `create_monitor`, `get_monitor`, `mute_monitor`, `delete_monitor`,
 `list_dashboards`, `apply_dashboard`, `get_dashboard_yaml`, `list_api_keys`,
 `whoami`, `get_project`, `list_endpoints`, `list_log_patterns`,

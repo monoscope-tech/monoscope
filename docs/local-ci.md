@@ -4,14 +4,19 @@ Run checks locally before pushing. Use `make ci-signoff` to run the CI checks an
 The final status output shows which checks still need a remote run.
 
 GitHub runs checks without matching attestations on standard GitHub-hosted runners.
-All workflows use GitHub runners, including releases and image builds.
+For work from this Mac, generate production images locally with OrbStack before a push.
+Do not use production servers or GitHub runners for image generation.
 
 A signoff records passing checks for specific file contents. It does not bypass failed checks or approve different contents.
 Repository push access identifies who can publish these records. A Git `Signed-off-by` trailer does not replace CI results.
 
 ## The short version
 
+Before the first run, [create the local builder](#local-amd64-images-on-this-mac).
+
 ```bash
+export DOCKER_CONTEXT=orbstack
+export MONOSCOPE_BUILDER=monoscope-local-amd64
 make ci-signoff     # local checks, published results, then remaining remote checks
 make ci             # run everything CI runs, in CI's own containers
 make ci-status      # what CI would run right now, without running any of it
@@ -153,6 +158,34 @@ shows no health status is therefore normal, not broken.
 Dependency images rebuild when their declared inputs change or through a manual workflow run.
 There is no weekly rebuild. Use the manual run for base image or system package updates.
 
+### Native Linux and KVM checks
+
+The normal CI container has no KVM device and deliberately hides host guest images.
+A passing container check does not establish native VM acceptance.
+On this Mac, the OrbStack host also has no `/dev/kvm` device.
+Use a separate local Linux VM for those checks; keep image builds on OrbStack.
+
+The tested setup uses Lima 2.2.1 with `vmType: vz`, `arch: aarch64`,
+and `nestedVirtualization: true`, as described by the
+[Lima configuration](https://github.com/lima-vm/lima/blob/v2.2.1/templates/default.yaml).
+The outer VM has four CPUs, eight GiB of RAM, and a 64 GiB sparse disk.
+Project and home folders are not mounted. Rosetta shares only its runtime.
+The SDK's inner guest uses two CPUs and 1024 MiB.
+Check the KVM API, actual QEMU accelerator, and open device descriptor;
+an existing device path alone does not prove that a guest uses KVM.
+The [workspace review](reviews/2026-11-01-agent-cross-module-review.md) records the current acceptance scope.
+Keep test binaries, assets, and receipts in the guest user's home; a VM reboot clears `/tmp`.
+
+Application fix-job checks also require FFmpeg, Graphviz, and an absolute `HOST_URL`,
+as supplied by `scripts/ci/ci.sh`. Without them, media preparation or publication packages fail.
+For an isolated VM, install `ffmpeg` and `graphviz` and set `HOST_URL=http://localhost:8080/`.
+Use `USE_EXTERNAL_DB=true` with the local test database and an empty `.env`;
+do not copy production credentials into the VM.
+
+If a required watcher restart leaves an orphaned GHC process, inspect its parent,
+working directory, listeners, and children before cleanup. Stop only a confirmed
+detached process from that checkout. Preserve active watchers and other worktrees.
+
 ## Production images and deployment
 
 Same-repository PRs run `Production image ready` and publish a production image.
@@ -186,8 +219,8 @@ outside GitHub's concurrency group. The ref check and tag/deployment updates are
 separate operations; a merge between them can make an update stale.
 
 ```bash
-make deploy-image          # build or reuse an image for this clean checkout
-make ship                  # check, build/reuse, and deploy already-merged master
+DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make deploy-image
+DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make ship
 make deploy-app SHA=<sha>  # deploy current master only
 make rollback-app SHA=<sha> # explicitly deploy an older image already on master
 make deploy-status
@@ -196,7 +229,7 @@ make deploy-status
 `make ship` never pushes to master. Merge the pull request first, then use a
 clean checkout of that merged revision. Every deploy-path check must be proven
 for this tree. GitHub still verifies the gate and skips checks with matching
-attestations; the registry cache makes its image build a lookup and promotion.
+attestations; its image step resolves and aliases the locally built registry artifact.
 
 `make ci-signoff CHECKS="release-tests"` runs the release regression suite on the
 host using Node’s built-in test runner, with no npm dependencies, and records its
@@ -207,22 +240,58 @@ prebuilt packages instead of hiding them beneath an empty cache.
 squash reuse, source and toolchain invalidation, pinned build inputs, rejection
 of dirty or mismatched checkouts, and stale local/remote deployment prevention.
 
-### A native amd64 builder (do this once)
+On this Mac, the real cold-cache fixture validates and selects the local builder.
+Each run uses a new cache ID and asserts that only the prebuilt dependency exists
+before adding a file. Later build steps must retain both files. It avoids global
+`--no-cache`, which can discard cache mounts, as discussed in
+[BuildKit's cache-mount issue](https://github.com/moby/buildkit/issues/5305).
 
-Prod is `linux/amd64`. On Apple Silicon that build is emulated, and an emulated
-GHC build is slow enough that people go back to letting CI do it — which is the
-habit this file exists to remove. Point buildx at any amd64 machine you can SSH
-to and the build is native:
+### Local AMD64 images on this Mac
+
+Production uses `linux/amd64`. This Mac uses Apple Silicon.
+[OrbStack uses Rosetta](https://docs.orbstack.dev/docker/#intel-x86-emulation)
+to run AMD64 containers locally. The image build must execute on this Mac.
+Do not use a production host, an SSH builder, or a GitHub runner for this build.
+
+Create the local builder once:
 
 ```bash
-BUILD_HOST=ubuntu@your-amd64-box make builder-setup
-make builder-status
+docker --context orbstack buildx create --name monoscope-local-amd64 --driver docker-container orbstack
+docker --context orbstack buildx inspect --bootstrap monoscope-local-amd64
 ```
 
-The buildkit container is capped (`BUILD_CPUS`, default 12; `BUILD_MEMORY`,
-default 48g) because that host is often also serving something. Nothing requires
-a builder: with none configured the build falls back to the emulated local one,
-and a stale `MONOSCOPE_BUILDER` name falls back too rather than failing a deploy.
+Inspect the Docker context and builder endpoint before a build:
+
+```bash
+docker context inspect orbstack
+docker --context orbstack buildx inspect monoscope-local-amd64
+docker --context orbstack run --rm --platform linux/amd64 debian:12-slim uname -m
+```
+
+The context must use a local Unix socket. The builder endpoint must be
+`orbstack`. The container command must return `x86_64`.
+
+Select this context and builder explicitly:
+
+```bash
+DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make ci-signoff
+DOCKER_CONTEXT=orbstack MONOSCOPE_BUILDER=monoscope-local-amd64 make deploy-image
+```
+
+`release.sh` checks the Mac host, explicit context, Unix socket, builder name,
+and sole `orbstack` node before image generation. Missing builders fail instead
+of falling back. CI can reuse and alias a completed registry image; a cache miss
+fails with instructions to build locally. CI does not compile a production image.
+
+`make builder-setup` now creates only the local OrbStack builder. It rejects
+`BUILD_HOST` before any SSH or Docker operation. The default builder name is
+`monoscope-local-amd64`; select the context and builder explicitly as above.
+Registry pulls and pushes transfer artifacts. They do not move compilation to another host.
+
+`ci-signoff` runs checks and an image build. Report their progress separately.
+The image fingerprint includes immutable dependency and runtime image digests.
+A changed base digest can require another image, even with unchanged application code.
+Use `make ci-status` for a status check instead of another signoff run.
 
 The production Dockerfile locks its application compiler cache during each build
 step. A separate cache namespace excludes artifacts from older unlocked builds.
@@ -267,8 +336,8 @@ match. Image labels preserve who built it and from which revision.
 | `CI_ATTEST_DISABLED=true` | ignore all attestations — set as a repo variable to force full CI runs |
 | `MONOSCOPE_CI_TF_IMAGE` / `MONOSCOPE_CI_TF_PLATFORM` | point at a locally built TimeFusion image (auto-detected after `make tf-image`) |
 | `TF_TARGET_CPU` | CPU baseline used by `make tf-image`; defaults to `neoverse-n1` on arm64 and `x86-64-v3` on amd64. Override only for a known compatible target. |
-| `BUILD_HOST` / `BUILD_CPUS` / `BUILD_MEMORY` | the native amd64 build host and its caps (`make builder-setup`) |
-| `MONOSCOPE_BUILDER` | buildx builder to build the image with; falls back to the default builder if absent |
+| `BUILD_HOST` | rejected by `builder-setup`; SSH image builders are prohibited |
+| `DOCKER_CONTEXT` / `MONOSCOPE_BUILDER` | for this Mac, set `orbstack` and `monoscope-local-amd64` explicitly. Inspect their local endpoint before a build. |
 | `SHIP_ANY_BRANCH=1` | let `make ship` deploy something other than master |
 
 `CI_UNIT_BIN`, `CI_CLI_BIN`, `CI_INTEGRATION_BIN`, `E2E_SERVER_BIN`, and

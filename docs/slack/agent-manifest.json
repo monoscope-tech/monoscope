@@ -12,25 +12,7 @@
       "messages_tab_read_only_enabled": false
     },
     "agent_view": {
-      "agent_description": "Investigate production issues, understand what changed, and coordinate recovery in Slack.",
-      "suggested_prompts": [
-        {
-          "title": "What needs attention?",
-          "message": "What needs attention?"
-        },
-        {
-          "title": "Investigate this alert",
-          "message": "Investigate this alert"
-        },
-        {
-          "title": "What changed before this started?",
-          "message": "What changed before this started?"
-        },
-        {
-          "title": "Show the relevant dashboard",
-          "message": "Show the relevant dashboard"
-        }
-      ]
+      "agent_description": "Investigate production issues, understand what changed, and coordinate recovery in Slack."
     },
     "slash_commands": [
       {
@@ -51,6 +33,14 @@
         "description": "Share a project dashboard",
         "should_escape": true
       }
+    ],
+    "shortcuts": [
+      {
+        "name": "Ask Monoscope about this",
+        "type": "message",
+        "callback_id": "monoscope-investigate-message",
+        "description": "Investigate this message in its Slack thread"
+      }
     ]
   },
   "oauth_config": {
@@ -58,6 +48,16 @@
       "https://YOUR_MONOSCOPE_HOST/slack/oauth/callback"
     ],
     "scopes": {
+      "user": [
+        "search:read.public",
+        "search:read.private",
+        "search:read.im",
+        "search:read.mpim",
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "mpim:history"
+      ],
       "bot": [
         "assistant:write",
         "chat:write",
@@ -67,6 +67,8 @@
         "app_mentions:read",
         "channels:read",
         "groups:read",
+        "im:read",
+        "mpim:read",
         "channels:history",
         "groups:history",
         "im:history",
@@ -85,6 +87,7 @@
         "message.im",
         "message.mpim",
         "app_home_opened",
+        "tokens_revoked",
         "app_context_changed",
         "agent_session_stopped",
         "agent_session_title_changed",
@@ -100,72 +103,5 @@
     "incoming_webhooks": {
       "incoming_webhooks_enabled": true
     }
-  },
-  "metadata": {
-    "event_subscriptions": [
-      {
-        "event_type": "monoscope_incident_root",
-        "schema": {
-          "type": "object",
-          "properties": {
-            "root_id": {
-              "type": "string"
-            },
-            "delivery_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "root_id"
-          ]
-        }
-      },
-      {
-        "event_type": "monoscope_investigation_progress",
-        "schema": {
-          "type": "object",
-          "properties": {
-            "publication_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "publication_id"
-          ]
-        }
-      },
-      {
-        "event_type": "monoscope_investigation_reply",
-        "schema": {
-          "type": "object",
-          "properties": {
-            "publication_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "publication_id"
-          ]
-        }
-      },
-      {
-        "event_type": "monoscope_incident_delivery",
-        "schema": {
-          "type": "object",
-          "properties": {
-            "root_id": {
-              "type": "string"
-            },
-            "delivery_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "root_id",
-            "delivery_id"
-          ]
-        }
-      }
-    ]
   }
 }

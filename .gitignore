@@ -31,6 +31,7 @@ apitoolkit-server-exe
 .vscode
 /logs/
 monoscope-server-exe
+/monoscope
 gha-creds-*.json
 .DS_Store
 **/*/.DS_Store
@@ -75,3 +76,4 @@ scripts/local/
 # Playwright run output
 test-results/
 .test-args
+__pycache__/

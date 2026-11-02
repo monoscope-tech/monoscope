@@ -379,7 +379,7 @@ processList msgs !attrs =
             ( \ft caches keyToId req ->
                 let !rls = V.fromList $ req ^. PLF.resourceLogs
                     !pids = pidsForKeys keyToId (getLogApiKey rls)
-                 in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
+                 in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches (ProjectRouting Nothing pids)) rls
             )
             (spansInsert "logs")
         Just "org.opentelemetry.otlp.traces.v1" ->
@@ -393,7 +393,7 @@ processList msgs !attrs =
             (const Nothing)
             ( \ft caches keyToId req ->
                 let !rss = V.fromList $ req ^. PTF.resourceSpans
-                 in V.fromList $ convertResourceSpansToOtelLogs ft caches (pidsForKeys keyToId (getSpanApiKey rss)) rss
+                 in V.fromList $ convertResourceSpansToOtelLogs ft caches (ProjectRouting Nothing (pidsForKeys keyToId (getSpanApiKey rss))) rss
             )
             (spansInsert "traces")
         Just "org.opentelemetry.otlp.metrics.v1" ->
@@ -987,17 +987,23 @@ forKnownProject :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projec
 forKnownProject projectCaches pid records = bool [] records (HM.member pid projectCaches)
 
 
+data ProjectRouting = ProjectRouting
+  { metadataProject :: Maybe Projects.ProjectId
+  , resourceProjects :: V.Vector (Text, Projects.ProjectId)
+  }
+
+
+resourceProject :: ProjectRouting -> Maybe Text -> Maybe Text -> Maybe Projects.ProjectId
+resourceProject routing key projectId =
+  (key >>= \k -> snd <$> find ((== k) . fst) routing.resourceProjects)
+    <|> (Projects.projectIdFromText =<< projectId)
+    <|> routing.metadataProject
+
+
 -- | Convert ResourceLogs to OtelLogsAndSpans
-convertResourceLogsToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> PL.ResourceLogs -> [OtelLogsAndSpans]
-convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
-  let projectKey = fromMaybe "" $ getApiKeyAttr (resourceLogs ^. PLF.resource . PRF.attributes)
-      projectId =
-        (snd <$> find (\(k, _) -> k == projectKey && k /= "") pids)
-          <|> (Projects.projectIdFromText =<< (V.!? 0) (getLogAttributeValue "at-project-id" (V.singleton resourceLogs)))
-          -- Fall back to the batch's project only when it is unambiguous (a
-          -- single project). Picking V.head of a multi-project batch silently
-          -- mis-attributes logs to the wrong project (cross-tenant leak).
-          <|> (case V.toList pids of [(_, sole)] -> Just sole; _ -> Nothing)
+convertResourceLogsToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> ProjectRouting -> PL.ResourceLogs -> [OtelLogsAndSpans]
+convertResourceLogsToOtelLogs !fallbackTime !projectCaches routing resourceLogs =
+  let projectId = resourceProject routing (getApiKeyAttr (resourceLogs ^. PLF.resource . PRF.attributes)) ((V.!? 0) (getLogAttributeValue "at-project-id" (V.singleton resourceLogs)))
    in maybe [] (\pid -> forKnownProject projectCaches pid $ convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs) projectId
 
 
@@ -1076,18 +1082,11 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM logRecord =
 
 
 -- | Convert ResourceSpans to OtelLogsAndSpans
-convertResourceSpansToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
-convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans = concatMap convertOne (V.toList resourceSpans)
+convertResourceSpansToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> ProjectRouting -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
+convertResourceSpansToOtelLogs !fallbackTime !projectCaches routing !resourceSpans = concatMap convertOne (V.toList resourceSpans)
   where
     convertOne rs =
-      let projectKey = fromMaybe "" $ getApiKeyAttr (rs ^. PTF.resource . PRF.attributes)
-          projectId =
-            (snd <$> find (\(k, _) -> k == projectKey && k /= "") pids)
-              <|> (Projects.projectIdFromText =<< (V.!? 0) (getSpanAttributeValue "at-project-id" (V.singleton rs)))
-              -- Fall back to the batch's project only when it is unambiguous (a
-              -- single project). Picking V.head of a multi-project batch silently
-              -- mis-attributes spans to the wrong project (cross-tenant leak).
-              <|> (case V.toList pids of [(_, sole)] -> Just sole; _ -> Nothing)
+      let projectId = resourceProject routing (getApiKeyAttr (rs ^. PTF.resource . PRF.attributes)) ((V.!? 0) (getSpanAttributeValue "at-project-id" (V.singleton rs)))
        in maybe [] (\pid -> forKnownProject projectCaches pid $ convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs) projectId
 
 
@@ -1409,16 +1408,16 @@ runServer appLogger appCtx tp = do
 processTraceRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req =
   let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
-   in processSignalRequest "Traces" "traces" "Received trace export request" "spans" "span_count" metadataApiKey (getSpanApiKey resourceSpans) (V.toList $ getSpanAttributeValue "at-project-id" resourceSpans) $ \currentTime projectCaches projectIdsAndKeys ->
-        V.fromList $ convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
+   in processSignalRequest "Traces" "traces" "Received trace export request" "spans" "span_count" metadataApiKey (getSpanApiKey resourceSpans) (V.toList $ getSpanAttributeValue "at-project-id" resourceSpans) $ \currentTime projectCaches routing ->
+        V.fromList $ convertResourceSpansToOtelLogs currentTime projectCaches routing resourceSpans
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
 processLogsRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req =
   let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
-   in processSignalRequest "Logs" "logs" "Received logs export request" "logs" "log_count" metadataApiKey (getLogApiKey resourceLogs) (V.toList $ getLogAttributeValue "at-project-id" resourceLogs) $ \currentTime projectCaches projectIdsAndKeys ->
-        V.fromList $ concatMap (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) (V.toList resourceLogs)
+   in processSignalRequest "Logs" "logs" "Received logs export request" "logs" "log_count" metadataApiKey (getLogApiKey resourceLogs) (V.toList $ getLogAttributeValue "at-project-id" resourceLogs) $ \currentTime projectCaches routing ->
+        V.fromList $ concatMap (convertResourceLogsToOtelLogs currentTime projectCaches routing) (V.toList resourceLogs)
 
 
 -- | Shared gRPC-direct ingestion pipeline for traces and logs: auth-verify, cache-fetch,
@@ -1436,7 +1435,7 @@ processSignalRequest
   -> Maybe Text
   -> V.Vector Text
   -> [Text]
-  -> (UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> V.Vector OtelLogsAndSpans)
+  -> (UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> ProjectRouting -> V.Vector OtelLogsAndSpans)
   -> Eff es ()
 processSignalRequest label signal receivedMsg noun countKey metadataApiKey projectKeys atIds' convert = do
   Log.logTrace receivedMsg AE.Null
@@ -1461,7 +1460,8 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
       (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectCaches <- checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectCaches") $ fetchIngestCaches allProjectIds
-  let !records = convert currentTime projectCaches projectIdsAndKeys
+  let routing = ProjectRouting (metadataApiKey >>= \key -> snd <$> find ((== key) . fst) projectIdsAndKeys) projectIdsAndKeys
+      !records = convert currentTime projectCaches routing
 
   Log.logTrace
     (label <> ": Converted resource " <> noun <> " to OtelLogs")

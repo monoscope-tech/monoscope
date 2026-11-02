@@ -325,6 +325,23 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     (got.sql, got.title) `shouldBe` (bigSqlWidget.sql, bigSqlWidget.title)
     Widget.decodeWidgetZ "not-a-gzip-blob" `shouldReturn` Nothing
 
+    -- statPng_rendersTheScalarInsteadOfAnEmptyChart: missing data, zero and a scalar differ.
+    for_ [(profile, appearance) | profile <- [Nothing, Just Widget.PngSlack], appearance <- ["light", "dark"]] \(profile, appearance) -> do
+      pngs <- forM [Nothing, Just 0, Just 44] \value -> do
+        let widget =
+              (def :: Widget.Widget)
+                { Widget.wType = Widget.WTStat
+                , Widget.pngProfile = profile
+                , Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.value = value}
+                }
+            encoded = decodeUtf8 @Text $ AE.encode widget
+            signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded
+        response <- toBaseServantResponse tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just signature) [("appearance", Just appearance)]
+        let bytes = Servant.getResponse response
+        LBS.take 8 bytes `shouldBe` "\137PNG\r\n\26\n"
+        pure bytes
+      length (ordNub pngs) `shouldBe` 3
+
     -- A signed table widget renders to a PNG that changes with its data, on both profiles.
     for_ [Nothing, Just Widget.PngSlack] \profile -> do
       pngs <- forM [2, 3 :: Int] \count -> do
@@ -672,7 +689,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let backend = ["backend", "25.0", "25.0", "0.4", "0.4", "2"]
         frontend = ["frontend", "50.0", "50.0", "0.8", "0.8", "2"]
     for_ [(Nothing :: Maybe Text, [frontend, backend]), (Just "+service", [backend, frontend]), (Just "-service", [frontend, backend]), (Just "-service; SELECT 1", [frontend, backend])] \(sortParam, expected) -> do
-      result <- toBaseServantResponse tr' $ Api.apiDashboardData testPid dashId Nothing (Just "resources") (Just "24h") Nothing Nothing [("table-sort", sortParam)]
+      result <- toBaseServantResponse tr' $ Dashboards.apiDashboardData testPid dashId Nothing (Just "resources") (Just "24h") Nothing Nothing [("table-sort", sortParam)]
       [(w.error, w.textRows, w.columns) | w <- result.widgets :: [ApiTypes.RenderedWidget]] `shouldBe` [(Nothing, expected, ["Service/Container", "CPU Avg", "CPU Max", "Mem Avg", "Mem Max", "Samples"])]
 
     -- The sort reaches rows outside the original top twenty, keeps numbers numeric, and rejects injection.

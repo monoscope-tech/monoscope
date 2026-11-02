@@ -18,6 +18,7 @@ import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Pkg.TestUtils
 import System.Config (runPendingMigrations)
+import System.Directory (removeFile)
 import System.IO.Temp (withSystemTempDirectory)
 
 
@@ -54,7 +55,7 @@ spec = around withTestResources do
   describe "runPendingMigrations" do
     it "applies every pending file, and is a no-op on the second run" \tr -> do
       withSystemTempDirectory "migr" \dir -> do
-        writeMigration dir "9001_first.sql" (createsTable "zz_migr_first")
+        writeMigration dir "9001_first.sql" (createsTable "zz_migr_first" <> "INSERT INTO zz_migr_first VALUES (42);")
         writeMigration dir "9002_second.sql" (createsTable "zz_migr_second")
 
         firstRun <- run tr dir
@@ -65,6 +66,14 @@ spec = around withTestResources do
         -- Nothing is pending now, so this must not re-run anything or fail.
         secondRun <- run tr dir
         secondRun `shouldSatisfy` isSuccess
+
+        removeFile $ dir <> "/9001_first.sql"
+        writeMigration dir "9003_followup.sql" "ALTER TABLE zz_migr_first ADD COLUMN retained boolean NOT NULL DEFAULT true;"
+        run tr dir >>= (`shouldSatisfy` isSuccess)
+        withResource tr.trPool \conn -> do
+          Migrations.runMigration conn Migrations.defaultOptions (Migrations.MigrationDirectory dir) >>= (`shouldSatisfy` isSuccess)
+          PGS.query_ conn "SELECT id, retained FROM zz_migr_first" `shouldReturn` [(42 :: Int, True)]
+          PGS.query_ conn "SELECT count(*)::int FROM schema_migrations WHERE filename = '9001_first.sql'" `shouldReturn` [PGS.Only (1 :: Int)]
 
     it "applies a file added after the others" \tr -> do
       withSystemTempDirectory "migr" \dir -> do

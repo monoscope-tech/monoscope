@@ -7,6 +7,84 @@ Installation requests expire after 15 minutes and can be used once. If the
 exchange fails or the request expires, start again from Monoscope.
 Do not construct an OAuth URL with a project ID as `state`; the callback rejects it.
 
+## Activate the Slack routine
+
+1. Open **Agents → Routines** in the connected project.
+2. Add **Slack investigation**. You need project edit or admin permission.
+3. Open the routine to review or change its instructions.
+4. Mention Monoscope, send a direct message, or use `/monoscope` in Slack.
+5. Open **View runs and artifacts** in the reply to inspect the result.
+
+Each request uses the linked member's current project access. The routine also
+checks the access of the member who activated it. If that member loses edit
+permission, another editor must resume the routine. New installations use
+Autonomous: requested project changes use the linked member's current role and
+the shared action ledger. Existing Observe installations keep their policy until
+an editor changes it. Channel replies cannot use private administrative evidence.
+
+The routine stores the request, requester, instructions, status, results, and
+artifacts. Each retry keeps a separate attempt. Changes to instructions apply to
+future runs. Past runs keep their own instructions and artifacts. Run links open
+the conversation with its run details beside it. Within a conversation, runs and
+artifacts open in the same detail panel without clearing your draft. On narrow
+screens, close the panel or press Escape to return to the conversation.
+
+For optional review, choose **Review selected actions** under **Execution policy**
+in the routine's conversation. Select the action classes and required reviewer,
+then save. Other actions stay automatic. Waiting actions appear in the same run
+panel and Slack notice. Approval resumes the original request; rejection, expiry,
+or withdrawn access prevents the action. Autonomous does not require these votes.
+
+Pause the routine to stop current and future investigations. Use **Stop active
+runs** to stop current work while keeping the routine enabled for future
+requests. If the routine is absent or paused, Slack returns private activation
+instructions. Notification delivery remains connected.
+
+## Enable incident investigations in a channel
+
+1. Link your Monoscope account and choose a channel that receives incident alerts.
+2. As a project editor or admin, run `/monoscope incidents on` in that channel.
+3. Follow the returned link to review the channel routine, instructions, and run history.
+4. To allow automatic project changes, explicitly change its policy to **Autonomous**.
+
+Each channel has its own installation and owner. New incident routines start in
+Observe. They investigate recorded alerts automatically and post a short summary
+in the incident thread, with a link to the complete retained result. A recorded
+recovery or explicit resolution triggers a closing report. Missing errors or
+measurements do not establish recovery.
+
+Run `/monoscope incidents off` to pause this channel's incident routine. The
+existing routine controls also pause work, stop active runs, and change policy.
+The worker checks current access during execution and before report delivery.
+Retries reuse retained results and delivery identities. A lost Slack
+acknowledgement is reconciled before another reply can be sent.
+
+## Activate pull request reviews
+
+1. Open **Agents → Routines** in the project.
+2. Add **Production impact review**.
+3. Open the repository settings and enable its automatic pull request reviews.
+4. Choose **Links only** or **Aggregates and links** for evidence sent to GitHub.
+
+Both the routine and repository must permit a review. Each review retains its
+run, instructions, evidence, and artifact in Monoscope. The GitHub comment links
+to that run. Use the repository's review history to retry a review. A retry keeps
+earlier attempts and artifacts.
+
+## Activate issue enrichment
+
+1. Open **Agents → Routines** in the project.
+2. Add **Issue enrichment** to permit automatic issue metadata updates.
+3. Open the routine to change its instructions or pause future work.
+
+Each eligible new issue gets a run in the issue's conversation. The run retains
+its assessment, recommended action, severity, instructions, and result artifact.
+Failed work keeps its attempt. A retry creates another attempt. Duplicate job
+deliveries do not repeat completed work. Pausing the routine prevents later model
+results from changing issue metadata.
+
+## Install the Slack app
+
 The OAuth request includes `assistant:write` alongside the existing scopes. The
 callback stores the scopes returned by Slack. Installations with missing or
 unknown `assistant:write`/`chat:write` grants receive a private reconnect prompt
@@ -18,8 +96,12 @@ not live Agent availability or acceptance.
 [`agent-manifest.json`](agent-manifest.json) is the reviewable app configuration
 template. Replace every `https://YOUR_MONOSCOPE_HOST` with the deployed origin,
 then compare it with the current app manifest before applying it in the selected
-sandbox. It includes `agent_view`, the four suggested prompts, commands, signed
-callback routes, event subscriptions, incoming webhooks, and incident metadata.
+sandbox. It declares `agent_view` without static prompts and includes commands, signed
+callback routes, event subscriptions, and incoming webhooks.
+Static prompts are omitted so the app can update suggestions from project state when
+the Messages tab opens or assistant context changes. Existing apps must also remove
+static prompts in their Slack configuration; Slack rejects dynamic updates while
+static prompts are configured.
 It retains the existing notification scopes. Preserve unrelated live app settings
 when merging the template. The Agent declaration is required in addition to OAuth
 grants; see [Slack's Agent guide](https://docs.slack.dev/ai/developing-agents/).
@@ -28,12 +110,65 @@ Slack documents migration from `assistant_view` to `agent_view` as irreversible.
 This repository change does not apply that migration. Live manifest validation, plan availability, and workspace acceptance
 remain rollout gates. See [the manifest reference](https://docs.slack.dev/reference/app-manifest/).
 
+The [1 November live configuration audit](../reviews/2026-11-01-agent-cross-module-review.md)
+records the existing app's configuration gaps and the remaining acceptance sequence.
+It does not apply the template or establish live branch acceptance.
+
 Opening the Agent's Messages tab also starts personal linking for an unlinked
 user. Repeat opens suppress another prompt while a successfully delivered,
 unconsumed link remains valid in that conversation. After expiry, a new visit
 can issue a new link. Already-linked users and visits to other tabs receive no
 onboarding prompt. App Home visits do not start investigations. A rejected prompt
 leaves the receipt pending; delivery is recorded only after Slack acknowledges it.
+
+## Personal Slack search consent
+
+After linking your identity, use `/monoscope search connect` for a private link
+to Slack's user authorization page. The connection uses the registered
+`/slack/oauth/callback`, a single-use state, and S256 PKCE. The returned workspace
+and Slack user must match the linked account and current project membership.
+This flow does not replace the project's bot credentials or alert destination.
+
+The manifest's user scopes contain read access only. Slack currently allows MCP
+for internal or Marketplace apps; enable MCP in the app's **Agents → Slack MCP
+Server** settings before live acceptance. These repository changes do not apply
+live app settings. See [Slack's MCP requirements](https://docs.slack.dev/ai/slack-mcp-server/).
+
+Use `/monoscope search disconnect` to remove your personal grants and pending
+consent for the current project. Disconnect also invalidates an exchange already
+in flight. Access and refresh tokens use the shared authenticated encryption
+helper. Tokens are unavailable after membership loss or workspace replacement. Expired
+access tokens require a successful refresh before use. Rotating grants retain
+their refresh token and expiry together.
+
+Signed `tokens_revoked` events remove the named users' grants and pending consent
+in that workspace. The receipt and cleanup commit together, so duplicate delivery
+or a delayed worker cannot remove a later reconnection. The same worker recovers a
+failed intake cleanup. The manifest includes the required event subscription.
+
+The credential resolver refreshes rotating tokens before expiry or on their next
+use after expiry. Code exchange and refresh share one OAuth client. Concurrent
+callers share a durable claim; HTTP runs outside database transactions. A definite
+rate limit leaves the refresh token available for retry. An uncertain exchange is
+not replayed. If its access token expires, the user must reconnect. Disconnect,
+membership loss, and workspace replacement prevent an in-flight response from
+restoring access; a later reconnection wins over an older refresh response.
+
+The agent discovers Slack search, channel history, and thread reads through the
+shared tool catalog. Each read uses the linked requester's personal grant and
+checks the provider's current tool schema. Provider write tools are excluded.
+Channel requests can read their own authorized destination; personal workspace
+search requires a personal conversation. Current Slack membership is checked
+before and after restricted reads.
+
+Retained evidence carries its audience into later model turns, saved documents,
+and run history. A private read cannot authorize publication into a shared Slack
+channel or project wiki. Consent, refresh, disconnect, revocation, MCP reads, and
+audience containment have integration coverage. Actual app eligibility, live
+provider schemas, Slack Connect, and controlled workspace acceptance remain
+rollout gates.
+
+## Link a Slack identity
 
 To link a personal account, mention Monoscope or message it directly in Slack.
 An unlinked user receives an ephemeral link addressed to that Slack user. Sign in
@@ -76,13 +211,15 @@ the triggering event, using the documented [reply timestamp boundary](https://do
 Only messages attributed to this app become assistant history. Backfill follows
 all returned cursors and rechecks access before and after each page. A failed or
 incomplete fetch stops the investigation before any model call and leaves the
-receipt pending for retry. Durable tool-message replay remains incomplete.
+receipt pending for retry. The worker stores model and tool checkpoints.
+Retries resume the stored turn and reconcile reserved replies before another publication.
 
 Signed-event investigations set the native session to `processing` before work
 and attempt to return it to `active` on completion or failure, using
 [`agents.sessions.setStatus`](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/).
-A rejected startup status prevents the investigation and retains the pending
-receipt. Failed status cleanup is logged without replaying a completed answer.
+A rejected startup status is logged and the investigation continues without
+native processing state. Failed status cleanup is logged without replaying a
+completed answer.
 Signed `agent_session_stopped` events persist a cancellation cutoff for an existing
 project thread. Only a linked, current project member can stop its investigation.
 Running work checks that cutoff at access boundaries and every half second while
@@ -101,10 +238,12 @@ Events, slash commands, actions, and external-option requests verify the origina
 before decoding. Missing or invalid signatures return 401; an empty signing secret
 makes these endpoints return 503. An empty app ID prevents root capture.
 
-The Agent manifest includes the metadata configuration below. For a metadata-only
-upgrade, merge `incident-metadata.json` into the existing app manifest before enabling incident messages.
-It registers the `monoscope_incident_root` event and its `root_id` field.
-Slack requires metadata schema registration; unregistered metadata can be ignored. See [Slack message metadata](https://docs.slack.dev/messaging/message-metadata/).
+Messages carry `monoscope_incident_root` metadata with the saved root ID.
+Slack does not require registration before sending custom metadata. Optional
+schemas use the top-level `events` manifest field and require org-wide deployment.
+The workspace template omits these declarations. See
+[Slack message metadata](https://docs.slack.dev/messaging/message-metadata/).
+
 
 Configure the Events API callback as `/slack/events` on the application host.
 Subscribe to message events for the selected channels and grant the corresponding history scopes.
@@ -127,12 +266,13 @@ existing incident threads and retain the last verified reading.
 
 ### Investigation progress reconciliation
 
-The Agent manifest registers `monoscope_investigation_progress` with a
-`publication_id` string. Import the updated manifest before testing progress
-reconciliation. The app must receive its own message events with the complete
-metadata payload, just as incident-root reconciliation requires. Verify this in
-the selected sandbox; metadata-only event subscriptions are not handled by this
-path. See [Slack message metadata](https://docs.slack.dev/messaging/message-metadata/).
+Progress messages carry `monoscope_investigation_progress` metadata with a
+`publication_id` string. The app must receive its own message events with the
+complete metadata payload, as incident-root reconciliation requires. Verify this
+in the selected sandbox. This worker handles ordinary message events; it does
+not handle metadata-only event subscriptions. See
+[Slack message metadata](https://docs.slack.dev/messaging/message-metadata/).
+
 
 A progress publication is reserved before sending. If its acknowledgement is
 missing, Monoscope retains the reservation instead of posting another checklist.
@@ -142,7 +282,20 @@ observation supplies the timestamp and refreshes the latest activity for that
 turn, including after the answer has finished. The refresh checks the original
 requester's current access and uses the investigation lock to serialize updates.
 
-Missing observations remain unresolved; no timeout is treated as proof that a
-message was not sent. History-based reconciliation and comprehensive rate-limit
-handling remain acceptance work. This does not yet provide a durable outbox for
-all answer parts or guarantee recovery when the message observation is absent.
+Signed-event investigations store each reply batch and reserve each part before
+publication. The worker also reconciles reserved replies with paged thread
+history. It checks the app and publication ID before it records delivery. A
+missing observation or inaccessible history leaves the reservation pending.
+A timeout does not prove that Slack rejected a message. Check actual scopes,
+metadata delivery, and rate limits in the sandbox before rollout.
+
+Use the message shortcut **Ask Monoscope about this** to investigate a selected
+message in its original thread. For a reply, Monoscope continues the existing
+thread. The shortcut uses the clicking member's linked project and current access;
+the selected author does not grant authority. Message text and blocks are quoted
+as untrusted evidence. Signed deliveries enter the same receipt queue, run,
+checkpoint, and publication path as mentions. Repeating a delivery does not start
+another investigation. Unlinked and revoked users receive private account-link
+guidance. The template declares callback ID `monoscope-investigate-message` on
+the existing `/actions/slack` interactivity endpoint; apply it to the selected app
+before live acceptance.

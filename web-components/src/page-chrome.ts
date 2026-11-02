@@ -108,12 +108,12 @@ onReady(function(){
           // so the detached node and its popper aren't retained until the next hover.
           document.body.addEventListener('htmx:before:swap', () => { clearTimeout(tooltipWarmTimeout); destroyTip(); });
 
-          // Add aria-busy during HTMX requests for screen reader feedback
-          document.body.addEventListener('htmx:before:request', (e: any) => {
-            e.target.setAttribute('aria-busy', 'true');
+          // Failed fetches skip after:request; swaps can detach the source before finalization.
+          document.addEventListener('htmx:before:request', (e: any) => {
+            e.detail.ctx.sourceElement.setAttribute('aria-busy', 'true');
           });
-          document.body.addEventListener('htmx:after:request', (e: any) => {
-            e.target.removeAttribute('aria-busy');
+          document.addEventListener('htmx:finally:request', (e: any) => {
+            e.detail.ctx.sourceElement.removeAttribute('aria-busy');
           });
 
           // Progress bar for user-visible navigation/actions. Initial dashboard
@@ -121,20 +121,19 @@ onReady(function(){
           // shared global indicator eight times in parallel.
           const progressBar = document.getElementById('htmx-progress');
           if (progressBar) {
-            let activeRequests = 0;
+            // Cancelled confirmations finalize without issuing a request.
+            const activeRequests = new Set<object>();
             const isWidgetHydration = (e: any) =>
-              Boolean(e.detail?.elt?.closest?.('[data-widget], [data-chart-widget]'));
-            document.body.addEventListener('htmx:before:request', (e: any) => {
+              Boolean(e.detail.ctx.sourceElement.closest('[data-widget], [data-chart-widget]'));
+            document.addEventListener('htmx:before:request', (e: any) => {
               if (isWidgetHydration(e)) return;
-              activeRequests += 1;
-              if (activeRequests !== 1) return;
+              activeRequests.add(e.detail.ctx);
+              if (activeRequests.size !== 1) return;
               progressBar.classList.remove('htmx-settling');
               progressBar.classList.add('htmx-request');
             });
-            document.body.addEventListener('htmx:after:request', (e: any) => {
-              if (isWidgetHydration(e)) return;
-              activeRequests = Math.max(0, activeRequests - 1);
-              if (activeRequests !== 0) return;
+            document.addEventListener('htmx:finally:request', (e: any) => {
+              if (!activeRequests.delete(e.detail.ctx) || activeRequests.size !== 0) return;
               progressBar.classList.remove('htmx-request');
               progressBar.classList.add('htmx-settling');
             });

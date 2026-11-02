@@ -58,6 +58,15 @@ module Pkg.Git (
   GitHubObjectId (..),
   PullRequestFile (..),
   PullRequestComment (..),
+  Visibility (..),
+  PullState (..),
+  RepositoryPermissions (..),
+  RepositoryAccess (..),
+  PublicationRepository (..),
+  PublicationRef (..),
+  PublicationPullRequest (..),
+  getRepositoryAccess,
+  getPublicationPullRequest,
   getPullRequest,
   getPullRequestFiles,
   listPullRequestComments,
@@ -632,14 +641,56 @@ data PullRequestComment = PullRequestComment
   deriving (AE.FromJSON) via DAE.Snake PullRequestComment
 
 
+data Visibility = Public | Private | Internal
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" Visibility
+
+
+data PullState = Open | Closed
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" PullState
+
+
+newtype RepositoryPermissions = RepositoryPermissions {push :: Bool}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
+
+
+data RepositoryAccess = RepositoryAccess {fullName :: Text, visibility :: Visibility, permissions :: RepositoryPermissions}
+  deriving stock (Generic)
+  deriving (AE.FromJSON) via DAE.Snake RepositoryAccess
+
+
+newtype PublicationRepository = PublicationRepository {fullName :: Text}
+  deriving stock (Generic)
+  deriving (AE.FromJSON) via DAE.Snake PublicationRepository
+
+
+data PublicationRef = PublicationRef {ref :: Text, sha :: Text, repo :: PublicationRepository}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
+
+
+data PublicationPullRequest = PublicationPullRequest {number :: Word64, htmlUrl :: Text, body :: Maybe Text, state :: PullState, draft :: Bool, merged :: Bool, head :: PublicationRef, base :: PublicationRef}
+  deriving stock (Generic)
+  deriving (AE.FromJSON) via DAE.Snake PublicationPullRequest
+
+
+getRepositoryAccess :: W.HTTP :> es => GitConn -> RepoRef -> Eff es (Either Text RepositoryAccess)
+getRepositoryAccess conn repo = githubJson conn repo ""
+
+
+getPublicationPullRequest :: W.HTTP :> es => GitConn -> RepoRef -> Word64 -> Eff es (Either Text PublicationPullRequest)
+getPublicationPullRequest conn repo number = githubJson conn repo ("/pulls/" <> show number)
+
+
 getPullRequest :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text PullRequest)
 getPullRequest conn repo number = githubJson conn repo ("/pulls/" <> show number)
 
 
--- | One bounded page. The caller compares its size with changed_files and
--- reports omitted/binary patches explicitly instead of claiming full coverage.
+-- | Fetch all pages before validating changed-line citations.
 getPullRequestFiles :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestFile])
-getPullRequestFiles conn repo number = githubJson conn repo ("/pulls/" <> show number <> "/files?per_page=100")
+getPullRequestFiles conn repo number = paginate 100 \page -> githubJson conn repo ("/pulls/" <> show number <> "/files?per_page=100&page=" <> show page)
 
 
 listPullRequestComments :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestComment])
@@ -821,7 +872,7 @@ fetchTree conn r prefix = runExceptT do
           sequence <$> forM es \e ->
             if not e.isBlob
               then pure $ Right e
-              else fmap (\blob -> e{sha = Just (computeContentSha blob)}) <$> fetchFile conn pinned e.path
+              else fmap (\blob -> (e :: TreeEntry){sha = Just (computeContentSha blob)}) <$> fetchFile conn pinned e.path
 
 
 -- | The blob at @path@ in @r.ref@ — a branch name or a commit sha, since every host's read

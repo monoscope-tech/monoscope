@@ -37,7 +37,7 @@ module Pages.Issues (
   errorSubscriptionPostH,
   -- AI Chat
   AIChatForm (..),
-  aiChatPostH,
+  aiChatPostHWithTools,
   aiChatHistoryGetH,
   -- Activity
   issueActivityGetH,
@@ -48,10 +48,12 @@ module Pages.Issues (
   -- Shared rendering helpers
   issueCardCompact_,
   aiChatHistoryView_,
+  aiChatWidgets_,
 )
 where
 
 import BackgroundJobs qualified
+import BackgroundJobs.Types qualified as Jobs
 import Control.Exception qualified as Exception
 import Control.Lens (preview, (%~))
 import Data.Aeson qualified as AE
@@ -60,6 +62,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Char (isHexDigit)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.UUID qualified as UUIDEff
 import Data.Generics.Product.Fields qualified as Optics
 import Data.Generics.Sum.Constructors (_Ctor)
 import Data.HashMap.Strict qualified as HM
@@ -83,6 +86,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Deriving.Aeson qualified as DAE
 import Effectful.Concurrent.Async (concurrently)
+import Effectful.Error.Static (throwError)
 import Effectful.Exception (trySync)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -91,7 +95,7 @@ import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
@@ -101,17 +105,15 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (sourceFieldLabel)
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
-import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (User (id))
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
-import Pages.Charts.Charts qualified as Charts
+import Pages.Bots.Utils qualified as Bots
 import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), TraceFrame (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, durationQuery, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Replay qualified as Replay
@@ -125,12 +127,12 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.Mail qualified as Mail
 import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.Parser.Expr (sqlStringLit)
-import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..), FieldStruct (..))
+import Pkg.SchemaLearning.Catalog (FieldStruct (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (minimum1)
-import Servant (Header, Headers, NoContent (..), addHeader)
+import Servant (Header, Headers, NoContent (..), ServerError (errBody), addHeader, err400, err403, err404, err409, err502)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
@@ -404,6 +406,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
     Nothing ->
       addRespHeaders $ PageCtx baseBwconf{pageTitle = "Issue Not Found"} $ IssueNotFound pid
     Just issue -> do
+      requestId <- UUIDId <$> UUIDEff.genUUID
       -- The default window is anchored on the issue's own last activity rather than
       -- on @now@, and is kept narrow. Both halves are load-bearing, and the width is
       -- measured rather than guessed.
@@ -545,7 +548,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       addRespHeaders
         $ PageCtx bwconf
         $ IssueFound
-        $ let view = IssueView{pid, issue, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom, rollupSqlSig = Nothing}
+        $ let view = IssueView{pid, issue, requestId, apiEvidence, traceRef = mTraceRef, selectedAt, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom, rollupSqlSig = Nothing}
            in view{rollupSqlSig = issueRollupSql view <&> \(sql, _) -> Widget.sqlSignature secret pid Nothing (Just sql)}
   where
     -- A lookup that only decides whether an optional panel renders: a throw or a 10s stall
@@ -934,6 +937,7 @@ instance ToHtml IssueDetail where
 data IssueView = IssueView
   { pid :: Projects.ProjectId
   , issue :: Issues.Issue
+  , requestId :: UUIDId "ai_routine_run"
   , apiEvidence :: Maybe ([ApiChanges.AnomalyVM], Maybe Catalog.CatalogEntry)
   , traceRef :: Maybe (Text, UTCTime)
   , selectedAt :: UTCTime
@@ -1047,7 +1051,7 @@ issueDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden rela
         whenJust errM \errL ->
           div_ [hxGet_ $ "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText errL.base.id.unErrorPatternId <> "/group_members", hxTrigger_ "load, issuePatternGroupChanged from:body", hxSwap_ "innerHTML"] pass
         activityPanel_ pid issue.id.toText traceRef
-  aiSidePanel_ pid issue.id
+  aiSidePanel_ pid issue.id requestId
 
 
 -- | Title, culprit, the state line, the Events figure, then the workflow bar — the
@@ -1781,8 +1785,8 @@ aiPanelOpenerAttrs = aiPanelToggleAttrs <> [[__|on click set #ai-panel-toggle's 
 
 -- | Collapsible AI chat, open-state in localStorage and driven by a checkbox +
 -- group-has variants so it survives htmx swaps.
-aiSidePanel_ :: Projects.ProjectId -> Issues.IssueId -> Html ()
-aiSidePanel_ pid issueId = do
+aiSidePanel_ :: Projects.ProjectId -> Issues.IssueId -> UUIDId "ai_routine_run" -> Html ()
+aiSidePanel_ pid issueId requestId = do
   input_
     [ type_ "checkbox"
     , id_ "ai-panel-toggle"
@@ -1831,23 +1835,7 @@ aiSidePanel_ pid issueId = do
       ]
       ""
     div_ [class_ "shrink-0 border-t border-strokeWeak p-3 flex flex-col gap-2"] do
-      form_
-        [ hxPost_ $ baseUrl <> "/ai_chat"
-        , hxTarget_ "#ai-response-container"
-        , hxSwap_ "beforeend"
-        , hxIndicator_ "#ai-chat-loader"
-        , term "hx-on::after:request" "this.reset()"
-        ]
-        $ div_ [class_ "flex items-center gap-2 bg-fillWeaker rounded-lg px-3 py-2 has-[:focus]:ring-1 has-[:focus]:ring-strokeBrand-weak transition-shadow"] do
-          input_
-            [ class_ "flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm"
-            , placeholder_ "Ask about this issue..."
-            , name_ "query"
-            , id_ "ai-chat-input"
-            , autocomplete_ "off"
-            ]
-          span_ [class_ "htmx-indicator", id_ "ai-chat-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin text-iconBrand"
-          button_ [type_ "submit", class_ "p-1.5 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 transition-opacity tap-target cursor-pointer", Aria.label_ "Send message"] $ faSprite_ "arrow-right" "regular" "w-3.5 h-3.5"
+      aiChatForm_ pid issueId requestId []
       div_ [class_ "flex gap-1.5 flex-wrap"] $ forM_ ["What could cause this?", "Show related logs", "Suggest a fix"] \txt ->
         button_
           [ type_ "button"
@@ -1859,6 +1847,31 @@ aiSidePanel_ pid issueId = do
           , [__|on click set #ai-chat-input.value to my @data-q then call #ai-chat-input.form.requestSubmit()|]
           ]
           $ toHtml @Text txt
+
+
+-- | A successful reply replaces this form and gives the next turn a fresh identity.
+aiChatForm_ :: Projects.ProjectId -> Issues.IssueId -> UUIDId "ai_routine_run" -> [Attribute] -> Html ()
+aiChatForm_ pid issueId requestId attributes =
+  form_
+    ( [ id_ "issue-ai-form"
+      , hxPost_ $ "/p/" <> pid.toText <> "/issues/" <> issueId.toText <> "/ai_chat"
+      , hxTarget_ "#ai-response-container"
+      , hxSwap_ "innerHTML"
+      , hxIndicator_ "#ai-chat-loader"
+      ]
+        <> attributes
+    )
+    $ div_ [class_ "flex items-center gap-2 bg-fillWeaker rounded-lg px-3 py-2 has-[:focus]:ring-1 has-[:focus]:ring-strokeBrand-weak transition-shadow"] do
+      input_ [type_ "hidden", name_ "requestId", value_ requestId.toText]
+      input_
+        [ class_ "flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm"
+        , placeholder_ "Ask about this issue..."
+        , name_ "query"
+        , id_ "ai-chat-input"
+        , autocomplete_ "off"
+        ]
+      span_ [class_ "htmx-indicator", id_ "ai-chat-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin text-iconBrand"
+      button_ [type_ "submit", class_ "p-1.5 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 transition-opacity tap-target cursor-pointer", Aria.label_ "Send message"] $ faSprite_ "arrow-right" "regular" "w-3.5 h-3.5"
 
 
 -- | Resolve control; @errState@ is passed separately because the handler renders the
@@ -1993,280 +2006,74 @@ errorSubscriptionPostH pid errUuid form = do
 
 
 -- | Form for AI chat input
-newtype AIChatForm = AIChatForm {query :: Text}
+data AIChatForm = AIChatForm {query :: Text, requestId :: Maybe (UUIDId "ai_routine_run")}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
--- | System prompt for anomaly investigation AI
-issueSystemPrompt :: UTCTime -> Text
-issueSystemPrompt now =
-  unlines
-    [ "You are Monoscope's issue-investigation assistant — an expert debugger embedded in the issue detail page. The user is on-call and trying to understand a specific issue. You have access to its details, errors, stack traces, and trace data, plus tools that fetch live telemetry."
-    , ""
-    , "Tone: precise, technical, calm. Answer like a senior SRE pairing on a debug — direct, no fluff."
-    , ""
-    , "## Current Context"
-    , "CURRENT TIME (UTC): " <> show now
-    , "Use the current time to interpret relative phrases (e.g. \"last 2 hours\" → `{\"since\": \"2H\"}`)."
-    , ""
-    , "## Telemetry Schema"
-    , "<schema>"
-    , Schema.generateSchemaForAI Schema.telemetrySchema
-    , "</schema>"
-    , ""
-    , AI.kqlGuide
-    , ""
-    , AI.outputFormatInstructions
-    , ""
-    , "## How To Investigate"
-    , "1. Identify the likely root cause from the error type, stack trace, and surrounding telemetry."
-    , "2. Use the issue's service / method / path context to narrow down."
-    , "3. Suggest concrete debugging steps or fixes — name files, fields, queries when possible."
-    , ""
-    , "## Tool-Use Policy (overrides the workflow in <output_format>)"
-    , "- Analysis questions (\"What could cause this?\", \"Suggest a fix\") → answer DIRECTLY from the issue context. Do NOT call tools, and do NOT call `run_query`."
-    , "- Chart / visualization requests (\"plot errors over time\", \"show a chart of...\") → build the KQL query and `widgets` config directly from <schema>. Do NOT call `get_schema`, `get_field_values`, or `run_query` — the chat panel renders the chart from the query alone."
-    , "- Call tools ONLY when the answer must contain actual data values from the live store (e.g. \"top 5 services by error count\" where real numbers are required)."
-    , ""
-    , "## Response Format"
-    , "- Lead with a single-sentence summary."
-    , "- Follow with bullets or short paragraphs — never walls of text."
-    , "- The chat panel is ~400px wide, so brevity matters."
-    , "- For chart requests, prioritize a correct KQL query and a data-driven explanation."
-    ]
-
-
 -- | Handle AI chat POST request
 -- Designed to power the AI chat in the anomalies page. The chat thread is loaded via htmx and theres an input which when submitted gets sent here.
-aiChatPostH :: Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
-aiChatPostH pid issueId form = do
-  _ <- Projects.sessionAndProject pid
-  if T.length form.query > 4000
-    then addRespHeaders $ aiChatResponse_ pid (Just form.query) "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
-    else do
-      appCtx <- ask @AuthContext
-      now <- Time.currentTime
-      let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
-      void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
-      issueM <- Issues.selectIssueById pid issueId
-      maybe (respond Nothing convId "Issue not found. Unable to analyze." Nothing Nothing True) (processIssue appCtx now convId) issueM
-  where
-    respond systemPromptM convId response widgets toolCalls includeUserMsg = do
-      when includeUserMsg $ Issues.insertChatMessage pid convId Issues.ChatUser form.query Nothing Nothing
-      Issues.insertChatMessage pid convId Issues.ChatAssistant response (AE.toJSON <$> widgets) (AE.toJSON <$> toolCalls)
-      addRespHeaders $ aiChatResponse_ pid (Just form.query) response widgets toolCalls systemPromptM
-
-    processIssue appCtx now convId issue = do
-      fullSystemPrompt <- buildSystemPromptForIssue pid issue now
-      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads}
-      result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey
-      either
-        (\err -> respond (Just fullSystemPrompt) convId ("I encountered an error while analyzing this issue: " <> err) Nothing Nothing False)
-        (handleChatResult appCtx (Just fullSystemPrompt) convId)
-        result
-
-    handleChatResult appCtx systemPromptM convId chatResult = do
-      AI.ensureConversationTitle (Just appCtx.config) pid convId form.query chatResult.response appCtx.config.openaiSmallModel appCtx.config.openaiApiKey
-      either
-        (\_ -> respond systemPromptM convId chatResult.response Nothing (Just chatResult.toolCalls) False)
-        ( \aiResp ->
-            let ws = guarded (not . null) $ take 10 $ AI.responseWidgets aiResp
-                txt = fromMaybe (bool chatResult.response "Here are the requested visualizations:" $ isJust ws) $ mfilter (not . T.null) aiResp.explanation
-             in respond systemPromptM convId txt ws (Just chatResult.toolCalls) False
-        )
-        (AI.parseAgenticResponse chatResult)
+aiChatPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
+aiChatPostHWithTools projectTools pid issueId form = do
+  (sess, _) <- Projects.sessionAndProject pid
+  unlessM (isJust <$> ProjectMembers.getUserPermission pid sess.user.id) $ throwError err403
+  when (T.length form.query > 4000) $ throwError err400{errBody = "Query too long. Maximum 4000 characters allowed."}
+  issue <- Issues.selectIssueById pid issueId >>= maybe (throwError err404) pure
+  appCtx <- ask @AuthContext
+  now <- Time.currentTime
+  requestId <- maybe (UUIDId <$> UUIDEff.genUUID) pure form.requestId
+  let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
+  unlessM (AI.canReadEvidence (AI.MemberAccess AI.WebSession sess.user.id) pid convId) $ throwError err403
+  retained <- Issues.getRoutineRun pid requestId
+  let browserOnly = case (.source) <$> retained of Just Issues.InteractiveRun{} -> True; _ -> False
+      admit = if browserOnly then Issues.startInteractiveRun else Jobs.startConversation
+  admit pid convId sess.user.id requestId form.query Issues.Observe (Issues.WebIssue issueId) >>= \case
+    Issues.ConflictingRequest -> throwError err409{errBody = "Request ID already belongs to another request"}
+    Issues.AcceptedRequest _ -> pass
+  fullSystemPrompt <- Bots.buildIssuePrompt pid issue now
+  when browserOnly do
+    mode <- fmap AI.DurableRun $ AI.requireRunContext pid $ Issues.InteractiveClaim sess.user.id convId requestId
+    let access = AI.MemberAccess AI.WebSession sess.user.id
+        config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Nothing, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just fullSystemPrompt, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = access, AI.projectTools = projectTools, AI.invocationMode = mode}
+    answer <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey >>= either (\err -> throwError err502{errBody = encodeUtf8 err}) pure
+    void $ AI.completeAgenticResponse config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey answer
+  messages <- Issues.selectChatHistory pid convId
+  runs <- Issues.listConversationRuns pid convId 10
+  nextRequestId <- UUIDId <$> UUIDEff.genUUID
+  addRespHeaders do
+    issueChatHistory_ pid issueId (any ((== Issues.RunRunning) . (.status)) runs) fullSystemPrompt messages
+    aiChatForm_ pid issueId nextRequestId [term "hx-swap-oob" "outerHTML"]
 
 
 -- | Handle AI chat history GET request
 aiChatHistoryGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Html ()))
 aiChatHistoryGetH pid issueId = do
-  _ <- Projects.sessionAndProject pid
+  (session, _) <- Projects.sessionAndProject pid
+  unlessM (AI.canReadEvidence (AI.MemberAccess AI.WebSession session.user.id) pid (UUIDId issueId.unUUIDId)) $ throwError err403
   now <- Time.currentTime
   Issues.selectIssueById pid issueId >>= \case
-    Nothing -> addRespHeaders $ aiChatHistoryView_ pid []
+    Nothing -> addRespHeaders $ aiChatHistoryView_ (pure . href_) pid []
     Just issue -> do
-      systemPrompt <- buildSystemPromptForIssue pid issue now
+      systemPrompt <- Bots.buildIssuePrompt pid issue now
       messages <- Issues.selectChatHistory pid (UUIDId issueId.unUUIDId :: UUIDId "conversation")
-      addRespHeaders do
-        disclosure_ [class_ "my-2 border border-strokeWeak rounded-lg"] "px-2.5 py-1.5 text-xs text-textWeak hover:bg-fillWeaker" (faSprite_ "file-lines" "regular" "w-3 h-3" >> "System Prompt")
-          $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
-          $ toHtml systemPrompt
-        aiChatHistoryView_ pid messages
+      runs <- Issues.listConversationRuns pid (UUIDId issueId.unUUIDId) 10
+      addRespHeaders $ issueChatHistory_ pid issueId (any ((== Issues.RunRunning) . (.status)) runs) systemPrompt messages
 
 
--- | Build complete system prompt for an issue (shared between POST and GET)
-buildSystemPromptForIssue :: Projects.ProjectId -> Issues.Issue -> UTCTime -> ATAuthCtx Text
-buildSystemPromptForIssue pid issue now = do
-  useTf <- useTfReads
-  errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
-  (traceDataM, spans) <- maybe (pure (Nothing, V.empty)) (fetchTrace useTf) errorM
-  alertContextM <- case Issues.issuePayload issue of
-    Just (Issues.QueryAlertP alertData) -> do
-      let twoDaysAgo = addUTCTime (-172800) now
-      monitorM <- runMaybeT do
-        monitorId <- hoistMaybe $ UUID.fromText alertData.queryId
-        MaybeT $ Monitors.queryMonitorById (Monitors.QueryMonitorId monitorId)
-      metricsData <- Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing Nothing []
-      pure $ Just (alertData, monitorM, metricsData)
-    _ -> pure Nothing
-  facetSummaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
-  pure
-    $ unlines
-      [ issueSystemPrompt now
-      , ""
-      , "--- FACET SUMMARY ---"
-      , maybe "" formatFacetSummaryForAI facetSummaryM
-      , ""
-      , "--- ISSUE CONTEXT ---"
-      , buildAIContext issue errorM traceDataM spans alertContextM
-      ]
-  where
-    fetchTrace useTf err =
-      fromMaybe (Nothing, V.empty) <$> runMaybeT do
-        tId <- hoistMaybe err.recentTraceId
-        (trData, spans) <- MaybeT $ Telemetry.getTraceDetails useTf pid tId (Just $ zonedTimeToUTC err.updatedAt) now
-        pure (Just trData, V.fromList spans)
-    buildAIContext iss errM trDataM spans alertContextM =
-      unlines
-        $ [ "## Issue Details"
-          , "- **Title**: " <> iss.title
-          , "- **Type**: " <> show iss.issueType
-          , "- **Severity**: " <> display iss.severity
-          , "- **Service**: " <> Issues.serviceLabel iss.service
-          , "- **Recommended Action**: " <> iss.recommendedAction
-          ]
-        <> catMaybes
-          [ alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
-          , errM <&> \err ->
-              unlines
-                [ ""
-                , "## Error Details"
-                , "- **Error Type**: " <> err.errorType
-                , "- **Message**: " <> err.message
-                , "- **Stack Trace**:"
-                , "```"
-                , err.errorData.stackTrace
-                , "```"
-                , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
-                , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
-                , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
-                ]
-          , trDataM <&> \tr ->
-              unlines
-                [ ""
-                , "## Trace Context"
-                , "- **Trace ID**: " <> tr.traceId
-                , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
-                , "- **Span Count**: " <> show (V.length spans)
-                ]
-          , guard (not $ V.null spans)
-              $> unlines
-                [ ""
-                , "## Span Breakdown"
-                , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
-                    "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
-                ]
-          ]
-    formatCompleteAlertContext alertData monitorM metricsData =
-      unlines
-        $ [ ""
-          , "## Alert Configuration"
-          , ""
-          , "### Query & Thresholds"
-          , "- **Alert Query (KQL)**: `" <> alertData.queryExpression <> "`"
-          , "- **Alert Threshold**: " <> show alertData.thresholdValue <> " (trigger when " <> display alertData.thresholdType <> ")"
-          , "- **Current Value**: " <> show alertData.actualValue
-          , "- **Triggered At**: " <> formatUTC alertData.triggeredAt
-          ]
-        -- Every remaining section is read off the monitor row, so each empties out
-        -- under its own heading when the monitor has been deleted.
-        <> concat
-          [ ["", heading] <> foldMap body monitorM
-          | (heading, body) <-
-              [ ("### Execution Schedule", \m -> ["- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes", "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)", "- **Last Evaluated**: " <> maybe "never" formatUTC m.lastEvaluated])
-              ,
-                ( "### Trigger Conditions"
-                , \m ->
-                    ("- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan)
-                      : catMaybes
-                        [ m.warningThreshold <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
-                        , m.alertRecoveryThreshold <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art
-                        , m.warningRecoveryThreshold <&> \wrt -> "- **Warning Recovery**: Warning clears when value returns to " <> show wrt
-                        ]
-                )
-              ,
-                ( "### Current Status"
-                , \m ->
-                    ("- **Status**: " <> show m.currentStatus <> " (last check: " <> show m.currentValue <> ")")
-                      : catMaybes
-                        [ m.alertLastTriggered <&> \t -> "- **Last Alert Triggered**: " <> formatUTC t
-                        , m.warningLastTriggered <&> \t -> "- **Last Warning Triggered**: " <> formatUTC t
-                        ]
-                )
-              ,
-                ( "### Notification Configuration"
-                , \m ->
-                    [ "- **Alert Title**: " <> m.alertConfig.title
-                    , "- **Severity**: " <> m.alertConfig.severity
-                    , "- **Email Recipients**: " <> if m.alertConfig.emailAll then "All project members" else T.intercalate ", " (V.toList $ fmap CI.original m.alertConfig.emails)
-                    , if V.null m.alertConfig.slackChannels then "" else "- **Slack Channels**: " <> T.intercalate ", " (V.toList m.alertConfig.slackChannels)
-                    ]
-                )
-              ]
-          ]
-        <> catMaybes
-          [ guard (metricsData.rowsCount > 0) $> formatQueryResults metricsData
-          , guard (metricsData.rowsCount == 0 && isNothing monitorM) $> "\n_Note: Monitor record was deleted. Only basic alert data available._"
-          ]
-    formatQueryResults md =
-      let timestampIdx = V.elemIndex "timestamp" md.headers
-          formatRow = V.imap \idx -> \case
-            Just n | Just idx == timestampIdx -> formatUTC $ POSIX.posixSecondsToUTCTime $ realToFrac n
-            Just val -> show val
-            Nothing -> "N/A"
-       in unlines
-            [ ""
-            , "## Alert Query Results"
-            , ""
-            , "Recent data points from the alert query (last " <> show (floor md.rowsCount :: Int) <> " measurements):"
-            , ""
-            , maybe "" formatQueryStats md.stats
-            , ""
-            , "| " <> T.intercalate " | " (V.toList md.headers) <> " |"
-            , "|" <> T.replicate (V.length md.headers) "-------|"
-            , unlines $ V.toList $ flip V.map (V.take 20 md.dataset) \row ->
-                "| " <> T.intercalate " | " (V.toList $ formatRow row) <> " |"
-            , if md.rowsCount > 20 then "... (" <> show (floor md.rowsCount - 20 :: Int) <> " more rows)" else ""
-            ]
-      where
-        formatQueryStats stats =
-          unlines
-            [ "**Statistics:**"
-            , "- Min: " <> show stats.min
-            , "- Max: " <> show stats.max
-            , "- Mean: " <> show stats.mean <> " (average)"
-            , "- Sum: " <> show stats.sum
-            , "- Count: " <> show stats.count <> " data points"
-            ]
-    formatFacetSummaryForAI summary =
-      let FacetData facetMap = summary.facetJson
-          formatField (fieldName, values) =
-            "- "
-              <> fieldName
-              <> ": "
-              <> T.intercalate ", " (map (\fv -> fv.value <> " (" <> show fv.count <> ")") $ take 10 values)
-              <> bool "" ", ..." (length values > 10)
-          topFields = take 30 $ sortOn (Down . sum . map (.count) . snd) $ HM.toList facetMap
-       in unlines
-            $ "Available telemetry fields (top values by frequency):"
-            : map formatField topFields
-              <> ["... and " <> show (HM.size facetMap - 30) <> " more fields" | HM.size facetMap > 30]
+issueChatHistory_ :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> [Issues.AIChatMessage] -> Html ()
+issueChatHistory_ pid issueId running systemPrompt messages =
+  div_
+    ([id_ "issue-ai-results"] <> if running then [hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> issueId.toText <> "/ai_chat/history", hxTrigger_ "every 2s", hxSelect_ "#issue-ai-results", hxSwap_ "outerHTML"] else [])
+    do
+      disclosure_ [class_ "my-2 border border-strokeWeak rounded-lg"] "px-2.5 py-1.5 text-xs text-textWeak hover:bg-fillWeaker" (faSprite_ "file-lines" "regular" "w-3 h-3" >> "System Prompt")
+        $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
+        $ toHtml systemPrompt
+      aiChatHistoryView_ (pure . href_) pid messages
 
 
 -- | Render a single chat response (user question + AI answer)
-aiChatResponse_ :: Projects.ProjectId -> Maybe Text -> Text -> Maybe [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Maybe Text -> Html ()
-aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
+aiChatResponse_ :: (Text -> [Attribute]) -> Projects.ProjectId -> Maybe Text -> Text -> Maybe [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Maybe Text -> Html ()
+aiChatResponse_ artifactLinkAttrs pid userQuery explanation widgetsM toolCallsM systemPromptM =
   div_ [class_ "animate-fade-in py-3 border-b border-strokeWeak last:border-b-0"] do
     -- User question; routine runs answer the conversation's standing task instead
     whenJust userQuery \q -> div_ [class_ "flex items-start gap-2.5 mb-3"] do
@@ -2279,15 +2086,10 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
         div_ [class_ "prose prose-sm text-textStrong max-w-none leading-relaxed"] $ renderMarkdown explanation
         let savedDocs = ordNub [toText k | tc <- fold toolCallsM, tc.name == "save_artifact", Just (AE.String raw) <- [tc.rawData], Right k <- [Issues.mkArtifactKey raw]]
         unless (null savedDocs) $ div_ [class_ "mt-3 flex flex-wrap gap-2"] $ forM_ savedDocs \k ->
-          a_ [href_ $ "?doc=" <> k, class_ "inline-flex items-center gap-1.5 rounded-md border border-strokeWeak px-2 py-1 text-xs font-medium text-textStrong hover:bg-fillHover"] do
+          a_ (class_ "inline-flex items-center gap-1.5 rounded-md border border-strokeWeak px-2 py-1 text-xs font-medium text-textStrong hover:bg-fillHover" : artifactLinkAttrs ("?doc=" <> k)) do
             faSprite_ "file-lines" "regular" "h-3 w-3 text-iconBrand"
             toHtml k
-        whenJust widgetsM \widgets -> do
-          let processedWidgets = maybe widgets (`processWidgetsWithToolData` widgets) toolCallsM
-          -- Model widgets carry no id, and the widget's element ids and hx-target/select derive from it.
-          let fallbackId i = "chat-" <> show (abs $ hash (userQuery, explanation)) <> "-" <> show @Text @Int i
-          div_ [class_ "grid grid-cols-1 gap-3 mt-3"] $ forM_ (zip [0 ..] processedWidgets) \(i, widget) ->
-            div_ [class_ "w-full aspect-[3/1]"] $ Widget.widget_ widget{Widget._projectId = Just pid, Widget.id = widget.id <|> Just (fallbackId i)}
+        whenJust widgetsM $ \widgets -> aiChatWidgets_ pid ("chat-" <> show (abs $ hash (userQuery, explanation)) <> "-") widgets toolCallsM
     -- Collapsed debug info (tool calls + system prompt)
     let toolCalls = fromMaybe [] toolCallsM
     unless (null toolCalls && isNothing systemPromptM)
@@ -2307,6 +2109,14 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
           whenJust (Map.lookup "query" tc.args) $ span_ [class_ "text-xs text-textWeak break-all"] . toHtml . show
         unless (T.null tc.resultPreview) $ div_ [class_ "text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all"] $ toHtml $ "→ " <> tc.resultPreview
     chatAvatar_ bg icon color = div_ [class_ $ "shrink-0 w-6 h-6 rounded-full flex items-center justify-center " <> bg] $ faSprite_ icon "regular" ("w-3 h-3 " <> color)
+
+
+aiChatWidgets_ :: Projects.ProjectId -> Text -> [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Html ()
+aiChatWidgets_ pid prefix widgets toolCallsM =
+  let processedWidgets = maybe widgets (`processWidgetsWithToolData` widgets) toolCallsM
+   in div_ [class_ "grid grid-cols-1 gap-3 mt-3"] $ forM_ (zip [0 ..] processedWidgets) $ \(i, widget) ->
+        div_ [class_ $ "w-full aspect-[3/1] " <> if widget.wType == Widget.WTStat then "min-h-24" else "min-h-48"] $ Widget.widget_ widget{Widget._projectId = Just pid, Widget.id = Just (prefix <> show @Text @Int i)}
+  where
     -- A widget whose query matches a cached run_query tool call renders from that data
     -- rather than re-querying.
     processWidgetsWithToolData :: [AI.ToolCallInfo] -> [Widget.Widget] -> [Widget.Widget]
@@ -2329,7 +2139,7 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
 -- >>> :set -XOverloadedStrings -XTypeApplications
 -- >>> import Data.Aeson qualified as AE
 -- >>> import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
--- >>> import Lucid (renderText, toHtml)
+-- >>> import Lucid (href_, renderText, toHtml)
 -- >>> import Data.Default (def)
 -- >>> import Data.Text.Lazy qualified as TL
 -- >>> import Data.UUID qualified as UUID
@@ -2359,11 +2169,11 @@ unparsablePayload_ = span_ [class_ "text-xs italic text-textWeak"] "details unav
 -- fallback, never a bare @#@:
 --
 -- >>> let turn = [def{Issues.role = Issues.ChatUser, Issues.content = "slow checkouts"}, def{Issues.role = Issues.ChatAssistant, Issues.content = "{\"query\":\"name != null\",\"visualization\":\"table\"}"}]
--- >>> let html = renderText $ aiChatHistoryView_ (UUIDId UUID.nil) turn
+-- >>> let html = renderText $ aiChatHistoryView_ (pure . href_) (UUIDId UUID.nil) turn
 -- >>> ("hx-target=\"#chat-" `TL.isInfixOf` html, "hx-target=\"#\"" `TL.isInfixOf` html)
 -- (True,False)
-aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
-aiChatHistoryView_ pid = render
+aiChatHistoryView_ :: (Text -> [Attribute]) -> Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
+aiChatHistoryView_ artifactLinkAttrs pid = render
   where
     render (u : a : rest) | u.role == Issues.ChatUser && a.role == Issues.ChatAssistant = answer (Just u.content) a >> render rest
     render (a : rest) | a.role == Issues.ChatAssistant = answer Nothing a >> render rest
@@ -2374,16 +2184,18 @@ aiChatHistoryView_ pid = render
       render rest
     render (_ : rest) = render rest
     render [] = pass
-    answer q a = let (explanation, widgets) = parseStoredContent a.content a.widgets in aiChatResponse_ pid q explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
+    answer q a = let (explanation, widgets) = parseStoredContent a.content a.widgets in aiChatResponse_ artifactLinkAttrs pid q explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
     -- Stored content is JSON (code blocks stripped) where the LLM produced it, plain text otherwise.
     parseStoredContent content storedWidgets = case AI.parseLLMResponse content of
       Right aiResp ->
         let widgets = AI.responseWidgets aiResp
             structured = isJust aiResp.query || isJust aiResp.visualization || not (null widgets)
          in ( fromMaybe (bool content "Here are the requested visualizations:" structured) aiResp.explanation
-            , guarded (not . null) widgets <|> parseStoredJSON @[Widget.Widget] storedWidgets
+            , guarded (not . null) widgets <|> parseStoredWidgets storedWidgets
             )
-      Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
+      Left _ -> (content, parseStoredWidgets storedWidgets)
+
+    parseStoredWidgets = fmap (mapMaybe $ fmap Widget.modelWidget . parseMaybe AE.parseJSON) . parseStoredJSON @[AE.Value]
 
 
 -- | Decode a stored JSONB value (anomaly metadata, widget lists) into a typed payload.

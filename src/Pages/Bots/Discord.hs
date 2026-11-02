@@ -20,7 +20,7 @@ import Network.HTTP.Types (statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQuery, withBotThread, withDashboardTemplate)
+import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQueryWithTools, withBotThread, withDashboardTemplate)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.Mail (arr)
@@ -129,8 +129,8 @@ getDiscordChannels token guildId = do
   either (\err -> [] <$ Log.logAttention ("Error decoding discord channels response: " <> toText err) ()) pure $ AE.eitherDecode (r ^. responseBody)
 
 
-discordInteractionsH :: BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
-discordInteractionsH rawBody signatureM timestampM = do
+discordInteractionsH :: Maybe AI.ProjectTools -> BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
+discordInteractionsH projectTools rawBody signatureM timestampM = do
   envCfg <- asks @AuthContext env
   validateSignature envCfg signatureM timestampM rawBody
   interaction <- either (const $ throwError err404{errBody = "Invalid interaction data"}) pure $ AE.eitherDecode (fromStrict rawBody)
@@ -200,7 +200,7 @@ discordInteractionsH rawBody signatureM timestampM = do
       let question = case options of
             Just (InteractionOption{value = AE.String q} : _) -> q
             _ -> ""
-      runBotQuery Discord (followup envCfg interaction . botReplyPayload) envCfg AI.ServiceAccess discordData.projectId question resolveThread
+      void $ runBotQueryWithTools (AI.viewerProjectTools <$> projectTools) AI.InteractiveReadOnly Discord (followup envCfg interaction . botReplyPayload) envCfg AI.ServiceAccess discordData.projectId question resolveThread
 
     -- Interaction response type 4: CHANNEL_MESSAGE_WITH_SOURCE.
     reply d = AE.object ["type" AE..= (4 :: Int), "data" AE..= d]

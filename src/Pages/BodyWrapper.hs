@@ -3,6 +3,7 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..), OnboardingStep (..), stepU
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
 import Data.List (lookup, partition)
 import Data.Text qualified as T
@@ -19,14 +20,16 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem qualified as LogItem
-import Pkg.DeriveUtils (DB, UUIDId, WrappedEnumShow (..), assetUrl, viteAssetFile)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumShow (..), assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
@@ -61,13 +64,14 @@ mkProjectPageCtx = mkPageCtxWithScope False
 mkPageCtxWithScope :: Bool -> Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project, BWConfig)
 mkPageCtxWithScope withScope pid = do
   (sess, project, bw) <- mkAIPageCtx pid
+  viewerPermission <- fromMaybe ProjectMembers.PView <$> ProjectMembers.getSessionPermission pid sess.user.id
   let now = bw.shellNow
   (facetsM, (activationProgressM, conversations)) <-
     concurrently
       (if withScope then SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now else pure Nothing)
       ( concurrently
           (if V.elem "checklist_dismissed" project.onboardingStepsCompleted then pure Nothing else Just <$> activationProgress pid (V.elem (show Integration) project.onboardingStepsCompleted))
-          (Issues.listConversations pid)
+          (Issues.listVisibleConversations pid viewerPermission (Investigations.MemberViewer sess.user.id))
       )
   let options field = V.fromList $ sort [v.value | SchemaCatalog.FacetData m <- (.facetJson) <$> maybeToList facetsM, v <- HM.findWithDefault [] field m, not (T.null v.value)]
   pure (sess, project, bw{activationProgressM, conversations, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True})
@@ -85,7 +89,8 @@ mkAIPageCtx pid = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- EffReader.ask @AuthContext
   now <- Time.currentTime
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, shellNow = now})
+  requestId <- UUIDId <$> UUID.genUUID
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, shellNow = now, composerRequestId = Just requestId})
 
 
 -- | The checklist is a statement of customer value, not of which links someone clicked.
@@ -256,6 +261,7 @@ data BWConfig = BWConfig
   , activationProgressM :: Maybe ActivationProgress
   , conversations :: [Issues.ConversationSummary]
   , activeConversationId :: Maybe (UUIDId "conversation")
+  , composerRequestId :: Maybe (UUIDId "ai_routine_run")
   , shellNow :: UTCTime
   }
   deriving stock (Generic, Show)
@@ -640,6 +646,7 @@ bodyWrapper bcfg child = do
         ("Start", ["⌘/Ctrl", "↵"])
         [id_ "ai-composer-panel", hxPost_ $ "/p/" <> pid.toText <> "/ai", hxSwap_ "none", term "hx-disabled-elt" "find button[type='submit']"]
         do
+          forM_ bcfg.composerRequestId $ \requestId -> input_ [type_ "hidden", name_ "requestId", value_ requestId.toText]
           Components.segmented_ "m-2 grid w-fit grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs" "Conversation type" "mode" "ai-composer-" [("chat", "Chat"), ("routine", "Routine")]
           div_ [class_ "border-b border-base-300 px-3"] do
             textarea_
@@ -651,15 +658,16 @@ bodyWrapper bcfg child = do
               , autofocus_
               , placeholder_ "Describe what you want Monoscope to investigate…"
               , Aria.label_ "Instructions"
-              , class_ "no-focus-ring min-h-24 w-full resize-none bg-transparent py-3 text-sm leading-5 text-textStrong outline-none placeholder:text-textDisabled"
+              , class_ "no-focus-ring min-h-24 w-full resize-none bg-transparent py-3 text-base leading-6 text-textStrong outline-none placeholder:text-textWeak sm:text-sm sm:leading-5"
               ]
               ""
           div_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"] do
             label_ [Lucid.for_ "ai-routine-interval", class_ "text-xs font-medium text-textStrong"] "Run every"
-            select_ [id_ "ai-routine-interval", name_ "intervalMinutes", disabled_ "disabled", term "hx-live:disabled" "!q('#ai-composer-routine').checked", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-xs text-textStrong"] do
+            select_ [id_ "ai-routine-interval", name_ "intervalMinutes", disabled_ "disabled", term "hx-live:disabled" "!q('#ai-composer-routine').checked", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-base text-textStrong sm:text-xs"] do
               option_ [value_ "60", class_ "bg-bgRaised text-textStrong"] "Hour"
               option_ [value_ "1440", selected_ "selected", class_ "bg-bgRaised text-textStrong"] "Day"
               option_ [value_ "10080", class_ "bg-bgRaised text-textStrong"] "Week"
+          p_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:block px-4 py-3 text-xs text-textWeak"] "New routines act automatically within your current role, including requested project changes, knowledge updates, and publications. You can switch to Observe or pause the routine from its conversation."
         do
           span_ [class_ "group-has-[#ai-composer-routine:checked]/dialog:hidden"] "Start chat"
           span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:inline"] "Start routine"
@@ -846,12 +854,12 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             , Components.filterInputAttr_ "#ai-conversation-nav .ai-thread-item"
             ]
         p_ [class_ "hidden px-2 py-2 text-xs text-textWeak", term "hx-live:.hidden" "q('.ai-thread-item:not(.hidden) in #ai-conversation-nav').count > 0"] "No matching conversations"
-      let (routines, chats) = partition (isJust . (.routineInterval)) bcfg.conversations
+      let (routines, chats) = partition (isJust . (.routineKind)) bcfg.conversations
           conversationHref c = "/p/" <> project.id.toText <> "/ai/" <> c.conversationId.toText
           scheduleLabel c
             | isJust c.routineRunningSince = "Running now"
             | not c.routineActive = "Paused"
-            | otherwise = maybe "Waiting to be scheduled" (\t -> "Next " <> toText (formatTime defaultTimeLocale "%-d %b, %H:%M UTC" t)) c.routineNextRunAt
+            | otherwise = maybe (foldMap Issues.routineKindLabel c.routineKind) (\t -> "Next " <> toText (formatTime defaultTimeLocale "%-d %b, %H:%M UTC" t)) c.routineNextRunAt
           relativeTime t =
             let seconds = max 0 $ floor (diffUTCTime bcfg.shellNow t) :: Int
              in if
@@ -896,13 +904,13 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                             call #ai-thread-rename-modal.showModal()|]
                         ]
                         "Rename"
-                    when (c.conversationType == Issues.CTWeb && isNothing c.routineInterval) $ li_ [] $ form_ [class_ "w-full", hxPost_ $ href <> "/routine", hxSwap_ "none", hxConfirm_ "Turn this chat into a daily routine?"] do
+                    when (c.conversationType == Issues.CTWeb && isNothing c.routineKind) $ li_ [] $ form_ [class_ "w-full", hxPost_ $ href <> "/routine", hxSwap_ "none", hxConfirm_ "Turn this chat into a daily routine?"] do
                       input_ [type_ "hidden", name_ "intervalMinutes", value_ "1440"]
                       button_ [type_ "submit", class_ "w-full text-start"] "Make daily routine"
                     li_ [] $ button_ [type_ "button", class_ "text-textError", hxDelete_ href, hxSwap_ "none", hxConfirm_ "Delete this chat and its message history? This cannot be undone."] "Delete chat"
           routineCard c = do
             let isActive = bcfg.activeConversationId == Just c.conversationId
-                cadenceLabel = foldMap Issues.routineCadence c.routineInterval
+                cadenceLabel = foldMap Issues.routineKindLabel c.routineKind
                 statusLabel = scheduleLabel c
                 stateLabel
                   | isJust c.routineRunningSince = "Running"
