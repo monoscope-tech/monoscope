@@ -992,8 +992,12 @@ convertResourceLogsToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projec
 convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
   let projectKey = fromMaybe "" $ getApiKeyAttr (resourceLogs ^. PLF.resource . PRF.attributes)
       projectId =
-        (snd <$> find ((== projectKey) . fst) pids)
+        (snd <$> find (\(k, _) -> k == projectKey && k /= "") pids)
           <|> (Projects.projectIdFromText =<< (V.!? 0) (getLogAttributeValue "at-project-id" (V.singleton resourceLogs)))
+          -- Fall back to the batch's project only when it is unambiguous (a
+          -- single project). Picking V.head of a multi-project batch silently
+          -- mis-attributes logs to the wrong project (cross-tenant leak).
+          <|> (case V.toList pids of [(_, sole)] -> Just sole; _ -> Nothing)
    in maybe [] (\pid -> forKnownProject projectCaches pid $ convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs) projectId
 
 

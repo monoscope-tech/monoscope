@@ -53,7 +53,7 @@ The strongest existing flow tests include these files:
 - `Lifecycle/LogPatternIncidentSpec.hs`: ingest, detect, notify, acknowledge, suppress, and resume.
 - `BackgroundJobs/NotificationsSpec.hs`: notification selection, limits, grouping, and acknowledgements.
 - `BackgroundJobs/DashboardAutoProvisionSpec.hs`: metric ingest and automatic dashboard provisioning.
-- `Opentelemetry/GrpcIngestionSpec.hs`: authenticated OTLP ingest and customer query results.
+- `Opentelemetry/IngestionSpec.hs`: authenticated OTLP ingest, customer query results, dual-write failures, and Kafka commits.
 - `Pages/DashboardWidgetsSpec.hs`: dashboard widget changes and query behavior.
 - `Web/ApiV1Spec.hs`: API resource lifecycles and real HTTP authentication checks.
 
@@ -80,11 +80,11 @@ Their presence does not prove a complete customer flow.
 | Customer flow | Coverage | Evidence | Gap or next action |
 |---|---|---|---|
 | Create, revoke, and reactivate an API key around ingest | Flow | `Pages/ApiSpec.hs` creates a key through the settings handler, primes it with real OTLP ingest, checks immediate rejection after revoke, and checks immediate acceptance after activation | Keep browser coverage for copying the one-time secret and confirmation dialogs. |
-| Ingest logs, traces, and metrics with supported authentication | Flow | `Opentelemetry/GrpcIngestionSpec.hs` covers resource and header authentication | Keep one table-driven authentication flow. Remove duplicate smoke checks only after comparison. |
+| Ingest logs, traces, and metrics with supported authentication | Flow | `Opentelemetry/IngestionSpec.hs` covers resource and header authentication in one flow | Done. |
 | Reject invalid or missing ingest credentials | Flow | gRPC integration examples cover each signal | If the HTTP OTLP route uses different middleware, check that route. |
 | Search events with filters and pagination | Flow | `Pages/LogExplorer/LogSpec.hs` ingests customer events and checks filters, explicit columns, descendant inclusion, trace deep links, and older/newer pagination without gaps | Consolidate only when the same handler evidence remains explicit. |
 | Surface query syntax and backend failures | Flow | `Pages/LogExplorer/LogSpec.hs` and CLI tests | Keep failure assertions at the handler boundary. |
-| Run aggregate queries for charts and stat widgets | Flow | `Pages/DashboardsSpec.hs` reads one ingested trace as a row table, grouped table, time series, and scalar stat. Metric ingestion and chart queries also run in `GrpcIngestionSpec.hs`. | Keep query-shape assertions together because they guard different decoders. |
+| Run aggregate queries for charts and stat widgets | Flow | `Pages/DashboardsSpec.hs` reads one ingested trace as a row table, grouped table, time series, and scalar stat. Metric ingestion and chart queries also run in `Opentelemetry/IngestionSpec.hs`. | Keep query-shape assertions together because they guard different decoders. |
 | Cache a query without changing its result | Flow | `Pages/LogExplorer/LogSpec.hs` covers hit, partial hit, ordering, and failures | Retain as a focused integration flow. |
 | Discover schema and facets after ingest | Flow | `SchemaLearningSpec.hs`, `SchemaLearningPerfSpec.hs`, and `Pages/LogExplorer/LogSpec.hs` | Add the page flow from a new field to a usable query suggestion. |
 | Use live tail without Kafka | Flow | `Pages/LogExplorer/LogSpec.hs` covers ingest-to-browser transport and degradation | Keep transport details behind the customer-level examples. |
@@ -97,7 +97,7 @@ Their presence does not prove a complete customer flow.
 
 | Customer flow | Coverage | Evidence | Gap or next action |
 |---|---|---|---|
-| Discover endpoints from ingested spans | Flow | `EndpointDiscoverySpec.hs` and `ExtractionWorkerSpec.hs` | Add the page result to one ingest and discovery flow. |
+| Discover endpoints from ingested spans | Flow | `EndpointDiscoverySpec.hs` and `Opentelemetry/IngestionSpec.hs` | Add the page result to one ingest and discovery flow. |
 | Merge endpoint templates without losing issues | Flow | `EndpointDiscoverySpec.hs` checks grouping, cleanup, and idempotency | Retain this focused integration flow. |
 | Create a runtime-error issue from ingest | Flow | `Pages/ErrorPatternsSpec.hs` covers exception ingest, extraction, issue detail, trace drill-down, and project isolation | Retain this ordered lifecycle. |
 | Detect a new log pattern and open an incident | Flow | `Lifecycle/LogPatternIncidentSpec.hs` | This is the model for future lifecycle tests. |

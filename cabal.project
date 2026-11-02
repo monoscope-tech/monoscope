@@ -77,7 +77,7 @@ source-repository-package
 -- Bumping this tag no longer needs a manual audit: runSharedKafkaProducer in
 -- src/Pkg/Queue.hs now spells out every KafkaProducer constructor instead of
 -- using a wildcard, so a newly-added op is a compile error there (and in the
--- mock in KafkaConsumerSpec) rather than a runtime panic in production.
+-- Kafka mock in Opentelemetry.IngestionSpec) rather than a runtime panic in production.
 source-repository-package
   type: git
   location: https://github.com/shinzui/kafka-effectful.git

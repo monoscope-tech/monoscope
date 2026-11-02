@@ -442,7 +442,7 @@ spec = around withTestResources do
         seedTraffic tr key scanPath "200" 40 1
         -- The extraction worker is what turns ingested spans into apis.endpoints
         -- rows and stamped hashes; without draining it there is nothing to prove
-        -- an endpoint with. It needs the TimeFusion flags on, as ExtractionWorkerSpec does.
+        -- an endpoint with. It needs the TimeFusion flags on, as the extraction-worker flow in Opentelemetry.IngestionSpec does.
         drainExtractionWorker tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}, config = tr.trATCtx.config{enableTimefusionWrites = True}}}
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
@@ -502,7 +502,7 @@ spec = around withTestResources do
         seedTraffic tr key path "200" 30 3
         -- The extraction worker is what turns ingested spans into apis.endpoints
         -- rows and stamped hashes; without draining it there is nothing to prove
-        -- an endpoint with. It needs the TimeFusion flags on, as ExtractionWorkerSpec does.
+        -- an endpoint with. It needs the TimeFusion flags on, as the extraction-worker flow in Opentelemetry.IngestionSpec does.
         drainExtractionWorker tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}, config = tr.trATCtx.config{enableTimefusionWrites = True}}}
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         h <- endpointHashFor tr path

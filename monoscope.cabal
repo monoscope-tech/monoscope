@@ -789,13 +789,9 @@ test-suite integration-tests
       EndpointDiscoverySpec
       ErrorFingerprintStabilitySpec
       EvalConformanceSpec
-      ExtractionWorkerSpec
       MinioManagerSpec
       MonitoringSpec
-      Opentelemetry.GrpcIngestionSpec
-      Opentelemetry.StandardOtelSpansSpec
-      Opentelemetry.TimefusionWriteFailureSpec
-      Opentelemetry.TraceSessionPropagationSpec
+      Opentelemetry.IngestionSpec
       Pages.ApiSpec
       Pages.BotsSpec
       Pages.BusinessFlowsSpec
@@ -821,9 +817,7 @@ test-suite integration-tests
       Pages.ServiceMapSpec
       Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
-      Pkg.KafkaConsumerSpec
       Pkg.KqlSeriesSpec
-      ProcessMessageSpec
       ReplaySpec
       SchemaLearningPerfSpec
       SchemaLearningSpec
@@ -1097,13 +1091,9 @@ test-suite test-dev
       EndpointDiscoverySpec
       ErrorFingerprintStabilitySpec
       EvalConformanceSpec
-      ExtractionWorkerSpec
       MinioManagerSpec
       MonitoringSpec
-      Opentelemetry.GrpcIngestionSpec
-      Opentelemetry.StandardOtelSpansSpec
-      Opentelemetry.TimefusionWriteFailureSpec
-      Opentelemetry.TraceSessionPropagationSpec
+      Opentelemetry.IngestionSpec
       Pages.ApiSpec
       Pages.BotsSpec
       Pages.BusinessFlowsSpec
@@ -1129,9 +1119,7 @@ test-suite test-dev
       Pages.ServiceMapSpec
       Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
-      Pkg.KafkaConsumerSpec
       Pkg.KqlSeriesSpec
-      ProcessMessageSpec
       ReplaySpec
       SchemaLearningPerfSpec
       SchemaLearningSpec
