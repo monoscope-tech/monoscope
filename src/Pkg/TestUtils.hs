@@ -40,7 +40,6 @@ module Pkg.TestUtils (
   runAllBackgroundJobs,
   getPendingBackgroundJobs,
   runBackgroundJobsWhere,
-  setBjRunAtInThePast,
   toServantResponse,
   runAuthHandler,
   assertNonMemberDenied,
@@ -1318,12 +1317,6 @@ getBackgroundJobs :: Connection -> IO (V.Vector Job)
 getBackgroundJobs conn = V.fromList <$> PGS.query conn q ()
   where
     q = [sql|SELECT id, created_at, updated_at, run_at, status, payload,last_error, attempts, locked_at, locked_by FROM background_jobs|]
-
-
-setBjRunAtInThePast :: UTCTime -> Connection -> IO ()
-setBjRunAtInThePast now conn = void $ PGS.execute conn q (Only now)
-  where
-    q = [sql|UPDATE background_jobs SET run_at = ?::timestamptz - INTERVAL '1 day' WHERE status = 'pending'|]
 
 
 -- | The loaded body of a deferred response. A shell here means the handler skipped the query
