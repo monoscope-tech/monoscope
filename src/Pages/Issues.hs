@@ -59,7 +59,6 @@ import Control.Lens (preview, (%~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (Pair, Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
-import Data.Char (isHexDigit)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUIDEff
@@ -676,24 +675,6 @@ tryWithin limitM what ctx act =
     Left e -> Nothing <$ Log.logAttention (what <> "_FAILED") (AE.object $ ctx <> ["error" AE..= show @Text e])
 
 
--- | Recover a monitor id from @QueryAlertData.queryId@.
---
--- The writer persists it as a @show@ of the newtype, so every row already in the
--- table reads @QueryMonitorId {unQueryMonitorId = <uuid>}@ rather than a bare
--- UUID. Accept either, so the monitor link works for stored rows without a
--- backfill (changing the writer would also change @targetHash@, which is the
--- alert's dedup identity — see docs/issues-page-redesign.md).
---
--- >>> monitorIdFromStored "QueryMonitorId {unQueryMonitorId = b408c446-c0b3-4542-b099-cca3d55425c0}"
--- Just "b408c446-c0b3-4542-b099-cca3d55425c0"
--- >>> monitorIdFromStored "b408c446-c0b3-4542-b099-cca3d55425c0"
--- Just "b408c446-c0b3-4542-b099-cca3d55425c0"
--- >>> monitorIdFromStored "not-a-monitor"
--- Nothing
-monitorIdFromStored :: Text -> Maybe Text
-monitorIdFromStored = find (isJust . UUID.fromText) . T.split (\c -> not (isHexDigit c || c == '-'))
-
-
 -- | Unescape JSON-ish whitespace/quotes embedded in summary tokens.
 unescSummary :: Text -> Text
 unescSummary = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
@@ -1209,7 +1190,7 @@ issueAggregate_ v@IssueView{..} = do
               [class_ "text-sm text-textWeak"]
               "This value does not meet the recorded threshold. Check the monitor’s warning and recovery settings."
           detailRow_ [("bolt", "text-fillWarning-strong", "Recorded", agoText now d.triggeredAt)]
-          whenJust (monitorIdFromStored d.queryId) \mid_ -> externalLink_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> mid_ <> "/overview"] "View monitor"
+          when (isJust $ UUID.fromText d.queryId) $ externalLink_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> d.queryId <> "/overview"] "View monitor"
     Just (Issues.ApiChangeP d) -> do
       div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-textStrong"] do
         case schemaSubjectFor v of
@@ -2222,7 +2203,7 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
       tabFilters = tabIssueFilters tab
       pageInt = fromMaybe 0 $ readMaybe . toString =<< pageM
       perPage = fromMaybe 25 $ readMaybe . toString =<< perPageM
-      currentSort = fromMaybe "-created_at" sortM
+      currentSort = fromMaybe "-last_seen" sortM
       period = fromMaybe "24h" periodM
       scope = mkScopedQuery pid (Nothing, Nothing) session.environment session.service
       issueFilters =

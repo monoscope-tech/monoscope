@@ -280,6 +280,7 @@ extra-source-files:
     static/migrations/0261_slack_agent_delivery.sql
     static/migrations/0262_legacy_slack_evidence.sql
     static/migrations/0263_native_agent_runs.sql
+    static/migrations/0264_incident_thread_continuity.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs

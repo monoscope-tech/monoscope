@@ -320,6 +320,15 @@ spec = around withTestResources do
     (subscribed, _) <- runTestBackgroundWithNotifications later tr.trLogger tr.trATCtx $ BackgroundJobs.runNotificationSweep later
     length subscribed `shouldBe` 1
 
+    -- Unsubscribed reminders for a recurring error decay: daily in its first week, weekly after, never past 30 days.
+    hash <- dbOne @_ @Text tr [sql|SELECT target_hash FROM apis.issues WHERE id = ?|] (Only issueId)
+    let remindAt t (ageDays, sinceHours) = do
+          dbExec tr [sql|UPDATE apis.error_patterns SET subscribed = FALSE, state = 'ongoing', created_at = ?, last_notified_at = ? WHERE project_id = ? AND hash = ?|] (addUTCTime (-(ageDays * 86400)) t, addUTCTime (-(sinceHours * 3600)) t, testPid, hash)
+          dbExec tr [sql|INSERT INTO apis.error_hourly_stats (project_id, error_id, hour_bucket, event_count, user_count) SELECT project_id, id, date_trunc('hour', ?::timestamptz), 1, 1 FROM apis.error_patterns WHERE project_id = ? AND hash = ? ON CONFLICT DO NOTHING|] (t, testPid, hash)
+          void $ runTestBackgroundWithNotifications t tr.trLogger tr.trATCtx (BackgroundJobs.notifyErrorSubscriptions testPid (V.singleton hash))
+          (== Just t) <$> dbOne @_ @(Maybe UTCTime) tr [sql|SELECT last_notified_at FROM apis.error_patterns WHERE project_id = ? AND hash = ?|] (testPid, hash)
+    zipWithM remindAt [addUTCTime (fromIntegral h * 3600) later | h <- [2 :: Int ..]] [(3, 25), (10, 25), (10, 169), (31, 169)] `shouldReturn` [True, False, True, False]
+
     -- One Warp transport error from different stacks groups to one pattern.
     let warp = "Warp: Client closed connection prematurely"
     ingestTraceWithException tr apiKey "GET /route-a" "InvalidRequest" warp "at Warp.run (Server.hs:42:1)\nat handle (/app/x.hs:7:3)" (addUTCTime (-120) frozenTime)

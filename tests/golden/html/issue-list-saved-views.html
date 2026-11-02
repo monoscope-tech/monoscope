@@ -1,15 +1,15 @@
 <div class="flex items-center gap-1.5">
 <div role="tablist" class="tabs tabs-box tabs-outline flex-nowrap items-center tabs-xs md:tabs-sm" aria-label="Filter" hx-preload="mouseover">
-<a href="/p/<uuid>/issues?sort=-created_at&amp;period=24h&amp;filter=Inbox" class="tab h-auto! whitespace-nowrap tab-active font-semibold text-textStrong" role="tab" aria-selected="true" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<a href="/p/<uuid>/issues?sort=-last_seen&amp;period=24h&amp;filter=Inbox" class="tab h-auto! whitespace-nowrap tab-active font-semibold text-textStrong" role="tab" aria-selected="true" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <span>Inbox</span>
 </a>
-<a href="/p/<uuid>/issues?sort=-created_at&amp;period=24h&amp;filter=Acknowledged" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<a href="/p/<uuid>/issues?sort=-last_seen&amp;period=24h&amp;filter=Acknowledged" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <span>Acknowledged</span>
 </a>
-<a href="/p/<uuid>/issues?sort=-created_at&amp;period=24h&amp;filter=Archived" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<a href="/p/<uuid>/issues?sort=-last_seen&amp;period=24h&amp;filter=Archived" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <span>Archived</span>
 </a>
-<a href="/p/<uuid>/issues?sort=-created_at&amp;period=24h&amp;filter=Spam" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<a href="/p/<uuid>/issues?sort=-last_seen&amp;period=24h&amp;filter=Spam" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <span>Spam</span>
 </a>
 </div>
@@ -22,12 +22,12 @@
 </span>
 <span class="w-px h-4 bg-strokeWeak mx-1">
 </span>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h" class="px-2 py-1 rounded text-xs whitespace-nowrap bg-fillBrand-weak text-textBrand font-medium">All</a>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Errors</a>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=query_alert" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Alerts</a>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=log_pattern&amp;type=log_pattern_rate_change" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Log patterns</a>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=api_change" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">API changes</a>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=feedback" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Feedback</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h" class="px-2 py-1 rounded text-xs whitespace-nowrap bg-fillBrand-weak text-textBrand font-medium">All</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=runtime_exception" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Errors</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=query_alert" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Alerts</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=log_pattern&amp;type=log_pattern_rate_change" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Log patterns</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=api_change" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">API changes</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=feedback" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Feedback</a>
 <button type="button" class="inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer text-textWeak hover:bg-fillWeak hover:text-textStrong" aria-label="Saved views" popovertarget="issue-views-menu" style="anchor-name:--anchor-issue-views-menu">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 384 512">
 <g>
@@ -57,13 +57,13 @@
 <div class="h-px bg-strokeWeak my-1">
 </div>
 <form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/issues/views" data-hx-swap="none">
-<input type="hidden" name="query" value="filter=Inbox&amp;sort=-created_at&amp;period=24h">
+<input type="hidden" name="query" value="filter=Inbox&amp;sort=-last_seen&amp;period=24h">
 <input name="name" required maxlength="100" class="input input-sm flex-1 min-w-0" placeholder="View name" aria-label="View name">
 <button type="submit" class="btn btn-primary btn-sm">Save view</button>
 </form>
 </div>
 </div>
-<div class="w-full table-refresh" id="anomalyListContainer" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h" data-hx-trigger="issuesListChanged from:body" data-hx-target="this" data-hx-swap="outerHTML" data-hx-select="#anomalyListContainer" hx-preload="false">
+<div class="w-full table-refresh" id="anomalyListContainer" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h" data-hx-trigger="issuesListChanged from:body" data-hx-target="this" data-hx-swap="outerHTML" data-hx-select="#anomalyListContainer" hx-preload="false">
 <div class="max-md:px-2 px-4 pt-2 pb-2">
 <div class="w-full mx-auto space-y-2 pb-24" id="anomalyListForm_page">
 <label class="input input-sm flex items-center gap-2 w-full h-9 bg-transparent border-strokeWeak shadow-none">
@@ -165,16 +165,13 @@
 <path d="M13 9.66675L10.3333 12.3334M10.3333 12.3334L7.66667 9.66675M10.3333 12.3334V1.66675M1 4.33341L3.66667 1.66675M3.66667 1.66675L6.33333 4.33341M3.66667 1.66675V12.3334" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 </g>
 </svg>
-<span>Newest</span>
+<span>Recently Active</span>
 </button>
 <div class="dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-72 rounded-md shadow-lg mt-1" id="sortDropdown" popover="auto" style="position-try:flip-block; position-anchor:--anchor-sortDropdown">
-<a class="flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer  text-textBrand " data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;period=24h&amp;sort=-created_at" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML" data-hx-indicator="#sortLoader">
+<a class="flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;period=24h&amp;sort=-created_at" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML" data-hx-indicator="#sortLoader">
 <div class="flex flex-col items-center justify-center px-1">
-<svg class="icon w-4 h-4" width="1em" height="1em" viewBox="0 0 16 16">
-<g>
-<path d="M15.36 1c-5.227 3.956-10.239 9.247-10.239 9.247l-3.612-3.247-1.509 1.537c1.485 1.395 4.924 5.081 6.088 6.463 3.275-5.472 6.679-9.552 9.912-13.284l-0.64-0.716z" />
-</g>
-</svg>
+<div class="w-4 h-4">
+</div>
 </div>
 <div class="grow">
 <span class="block text-sm font-medium">Newest</span>
@@ -201,10 +198,13 @@
 <span class="block text-xs text-textWeak">Most recently updated</span>
 </div>
 </a>
-<a class="flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;period=24h&amp;sort=-last_seen" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML" data-hx-indicator="#sortLoader">
+<a class="flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer  text-textBrand " data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;period=24h&amp;sort=-last_seen" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML" data-hx-indicator="#sortLoader">
 <div class="flex flex-col items-center justify-center px-1">
-<div class="w-4 h-4">
-</div>
+<svg class="icon w-4 h-4" width="1em" height="1em" viewBox="0 0 16 16">
+<g>
+<path d="M15.36 1c-5.227 3.956-10.239 9.247-10.239 9.247l-3.612-3.247-1.509 1.537c1.485 1.395 4.924 5.081 6.088 6.463 3.275-5.472 6.679-9.552 9.912-13.284l-0.64-0.716z" />
+</g>
+</svg>
 </div>
 <div class="grow">
 <span class="block text-sm font-medium">Recently Active</span>
@@ -268,7 +268,7 @@
 <div class="dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-60 rounded-md shadow-lg mt-1" id="filterDropdown" popover="auto" style="position-try:flip-block; position-anchor:--anchor-filterDropdown">
 <div class="flex items-center justify-between px-3 py-2 text-sm font-semibold text-textStrong border-b border-strokeWeak">
 <span>Select Filter</span>
-<button type="button" class="text-xs text-textBrand cursor-pointer flex items-center gap-1" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">Clear all<svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 8 8">
+<button type="button" class="text-xs text-textBrand cursor-pointer flex items-center gap-1" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">Clear all<svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 8 8">
 <g>
 <path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
 </g>
@@ -290,13 +290,13 @@
 <div class="p-1">
 <label class="facet-item flex min-h-7 cursor-pointer items-center justify-between gap-2 rounded px-2 py-1 hover:bg-fillWeak max-md:min-h-9" data-component="facet-option">
 <div class="flex min-w-0 flex-1 items-center gap-2">
-<input type="checkbox" class="checkbox checkbox-xs max-md:checkbox-sm" aria-label="log_pattern" value="log_pattern" name="anomalyListContainer_filter_type" data-hx-trigger="change" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=log_pattern" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">
+<input type="checkbox" class="checkbox checkbox-xs max-md:checkbox-sm" aria-label="log_pattern" value="log_pattern" name="anomalyListContainer_filter_type" data-hx-trigger="change" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=log_pattern" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">
 <span class="facet-value truncate text-xs" data-tippy-content="log_pattern">log_pattern</span>
 </div>
 </label>
 <label class="facet-item flex min-h-7 cursor-pointer items-center justify-between gap-2 rounded px-2 py-1 hover:bg-fillWeak max-md:min-h-9" data-component="facet-option">
 <div class="flex min-w-0 flex-1 items-center gap-2">
-<input type="checkbox" class="checkbox checkbox-xs max-md:checkbox-sm" aria-label="runtime_exception" value="runtime_exception" name="anomalyListContainer_filter_type" data-hx-trigger="change" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">
+<input type="checkbox" class="checkbox checkbox-xs max-md:checkbox-sm" aria-label="runtime_exception" value="runtime_exception" name="anomalyListContainer_filter_type" data-hx-trigger="change" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=runtime_exception" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">
 <span class="facet-value truncate text-xs" data-tippy-content="runtime_exception">runtime_exception</span>
 </div>
 </label>
@@ -319,8 +319,8 @@
 <span class="flex items-center gap-2 min-w-0">
 <span class>Activity</span>
 <span class="inline-flex rounded-md border border-strokeWeak overflow-hidden" role="group" aria-label="Activity window">
-<button class="cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors bg-fillWeak text-textStrong" type="button" aria-label="Show 24h activity" aria-pressed="true" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-swap="outerHTML" data-hx-push-url="true">24h</button>
-<button class="cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors text-textWeak hover:bg-fillWeaker hover:text-textStrong" type="button" aria-label="Show 7d activity" aria-pressed="false" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=7d" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-swap="outerHTML" data-hx-push-url="true">7d</button>
+<button class="cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors bg-fillWeak text-textStrong" type="button" aria-label="Show 24h activity" aria-pressed="true" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-swap="outerHTML" data-hx-push-url="true">24h</button>
+<button class="cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors text-textWeak hover:bg-fillWeaker hover:text-textStrong" type="button" aria-label="Show 7d activity" aria-pressed="false" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=7d" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-swap="outerHTML" data-hx-push-url="true">7d</button>
 </span>
 </span>
 </th>
@@ -466,8 +466,8 @@
 <span class="text-sm text-textWeak mr-2">Items per page</span>
 <div class="flex rounded-md border border-strokeWeak overflow-hidden">
 <button class="cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors bg-fillWeak text-textStrong" type="button">25</button>
-<button class="cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors bg-bgRaised text-textWeak hover:bg-fillWeak" type="button" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;page=0&amp;per_page=50" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">50</button>
-<button class="cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors bg-bgRaised text-textWeak hover:bg-fillWeak" type="button" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;page=0&amp;per_page=100" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">100</button>
+<button class="cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors bg-bgRaised text-textWeak hover:bg-fillWeak" type="button" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;page=0&amp;per_page=50" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">50</button>
+<button class="cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors bg-bgRaised text-textWeak hover:bg-fillWeak" type="button" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;page=0&amp;per_page=100" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">100</button>
 </div>
 </div>
 </div>
@@ -476,16 +476,16 @@
 </div>
 <div class="flex items-center gap-1.5">
 <div role="tablist" class="tabs tabs-box tabs-outline flex-nowrap items-center tabs-xs md:tabs-sm" aria-label="Filter" hx-preload="mouseover">
-<a href="/p/<uuid>/issues?sort=-created_at&amp;period=24h&amp;type=runtime_exception&amp;filter=Inbox" class="tab h-auto! whitespace-nowrap tab-active font-semibold text-textStrong" role="tab" aria-selected="true" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<a href="/p/<uuid>/issues?sort=-last_seen&amp;period=24h&amp;type=runtime_exception&amp;filter=Inbox" class="tab h-auto! whitespace-nowrap tab-active font-semibold text-textStrong" role="tab" aria-selected="true" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <span>Inbox</span>
 </a>
-<a href="/p/<uuid>/issues?sort=-created_at&amp;period=24h&amp;type=runtime_exception&amp;filter=Acknowledged" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<a href="/p/<uuid>/issues?sort=-last_seen&amp;period=24h&amp;type=runtime_exception&amp;filter=Acknowledged" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <span>Acknowledged</span>
 </a>
-<a href="/p/<uuid>/issues?sort=-created_at&amp;period=24h&amp;type=runtime_exception&amp;filter=Archived" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<a href="/p/<uuid>/issues?sort=-last_seen&amp;period=24h&amp;type=runtime_exception&amp;filter=Archived" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <span>Archived</span>
 </a>
-<a href="/p/<uuid>/issues?sort=-created_at&amp;period=24h&amp;type=runtime_exception&amp;filter=Spam" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
+<a href="/p/<uuid>/issues?sort=-last_seen&amp;period=24h&amp;type=runtime_exception&amp;filter=Spam" class="tab h-auto! whitespace-nowrap" role="tab" aria-selected="false" data-hx-boost="true" data-hx-target="#main-content" data-hx-select="#main-content" hx-select-oob="#main-sidenav:outerMorph,#main-navbar:outerMorph" data-hx-swap="outerMorph" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;">
 <span>Spam</span>
 </a>
 </div>
@@ -498,19 +498,18 @@
 </span>
 <span class="w-px h-4 bg-strokeWeak mx-1">
 </span>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">All</a>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception" class="px-2 py-1 rounded text-xs whitespace-nowrap bg-fillBrand-weak text-textBrand font-medium">Errors</a>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=query_alert" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Alerts</a>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=log_pattern&amp;type=log_pattern_rate_change" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Log patterns</a>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=api_change" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">API changes</a>
-<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=feedback" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Feedback</a>
-<button type="button" class="inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer bg-fillBrand-weak ring-1 ring-strokeBrand-weak text-textBrand font-medium" aria-label="Saved views: My errors" popovertarget="issue-views-menu" style="anchor-name:--anchor-issue-views-menu">
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">All</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=runtime_exception" class="px-2 py-1 rounded text-xs whitespace-nowrap bg-fillBrand-weak text-textBrand font-medium">Errors</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=query_alert" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Alerts</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=log_pattern&amp;type=log_pattern_rate_change" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Log patterns</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=api_change" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">API changes</a>
+<a href="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=feedback" class="px-2 py-1 rounded text-xs whitespace-nowrap text-textWeak hover:text-textStrong hover:bg-fillWeaker">Feedback</a>
+<button type="button" class="inline-flex items-center gap-1.5 h-8 px-2 rounded-lg text-sm cursor-pointer text-textWeak hover:bg-fillWeak hover:text-textStrong" aria-label="Saved views" popovertarget="issue-views-menu" style="anchor-name:--anchor-issue-views-menu">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 384 512">
 <g>
-<path d="M0 48V487.7C0 501.1 10.9 512 24.3 512c5 0 9.9-1.5 14-4.4L192 400 345.7 507.6c4.1 2.9 9 4.4 14 4.4c13.4 0 24.3-10.9 24.3-24.3V48c0-26.5-21.5-48-48-48H48C21.5 0 0 21.5 0 48z"/>
+<path d="M0 48C0 21.5 21.5 0 48 0l0 48 0 393.4 130.1-92.9c8.3-6 19.6-6 27.9 0L336 441.4 336 48 48 48 48 0 336 0c26.5 0 48 21.5 48 48l0 440c0 9-5 17.2-13 21.3s-17.6 3.4-24.9-1.8L192 397.5 37.9 507.5c-7.3 5.2-16.9 5.9-24.9 1.8S0 497 0 488L0 48z"/>
 </g>
 </svg>
-<span class="max-w-40 truncate">My errors</span>
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 512 512">
 <g>
 <path d="M239 401c9.4 9.4 24.6 9.4 33.9 0L465 209c9.4-9.4 9.4-24.6 0-33.9s-24.6-9.4-33.9 0l-175 175L81 175c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9L239 401z" fill="currentColor" />
@@ -520,13 +519,8 @@
 <div class="dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5" id="issue-views-menu" popover="auto" style="position-try:flip-block; position-anchor:--anchor-issue-views-menu">
 <p class="px-2 pt-1 pb-0.5 text-xs text-textWeak">Saved views</p>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception">
 <span class="w-3.5 shrink-0">
-<svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 640 640">
-<g>
-<path d="M534 132.5C544.8 140.2 547.2 155.2 539.5 166L275.5 534C271.4 539.7 265 543.4 258 543.9C251 544.4 244 542 239 537L103 401C93.6 391.6 93.6 376.4 103 367.1C112.4 357.8 127.6 357.7 136.9 367.1L253 483L500.5 138C508.2 127.2 523.2 124.8 534 132.5z" />
-</g>
-</svg>
 </span>My errors</a>
 <button type="button" class="btn btn-ghost btn-xs" aria-label="Delete view My errors" data-hx-post="/p/<uuid>/issues/views/<uuid>/delete" data-hx-swap="none">
 <svg class="icon h-3 w-3" width="1em" height="1em" viewBox="0 0 8 8">
@@ -539,13 +533,13 @@
 <div class="h-px bg-strokeWeak my-1">
 </div>
 <form class="flex gap-1.5 p-1" data-hx-post="/p/<uuid>/issues/views" data-hx-swap="none">
-<input type="hidden" name="query" value="filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception">
+<input type="hidden" name="query" value="filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=runtime_exception">
 <input name="name" required maxlength="100" class="input input-sm flex-1 min-w-0" placeholder="View name" aria-label="View name">
 <button type="submit" class="btn btn-primary btn-sm">Save view</button>
 </form>
 </div>
 </div>
-<div class="w-full table-refresh" id="anomalyListContainer" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception" data-hx-trigger="issuesListChanged from:body" data-hx-target="this" data-hx-swap="outerHTML" data-hx-select="#anomalyListContainer" hx-preload="false">
+<div class="w-full table-refresh" id="anomalyListContainer" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=runtime_exception" data-hx-trigger="issuesListChanged from:body" data-hx-target="this" data-hx-swap="outerHTML" data-hx-select="#anomalyListContainer" hx-preload="false">
 <div class="max-md:px-2 px-4 pt-2 pb-2">
 <div class="w-full mx-auto space-y-2 pb-24" id="anomalyListForm_page">
 <label class="input input-sm flex items-center gap-2 w-full h-9 bg-transparent border-strokeWeak shadow-none">
@@ -647,16 +641,13 @@
 <path d="M13 9.66675L10.3333 12.3334M10.3333 12.3334L7.66667 9.66675M10.3333 12.3334V1.66675M1 4.33341L3.66667 1.66675M3.66667 1.66675L6.33333 4.33341M3.66667 1.66675V12.3334" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 </g>
 </svg>
-<span>Newest</span>
+<span>Recently Active</span>
 </button>
 <div class="dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-72 rounded-md shadow-lg mt-1" id="sortDropdown" popover="auto" style="position-try:flip-block; position-anchor:--anchor-sortDropdown">
-<a class="flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer  text-textBrand " data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;period=24h&amp;type=runtime_exception&amp;sort=-created_at" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML" data-hx-indicator="#sortLoader">
+<a class="flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;period=24h&amp;type=runtime_exception&amp;sort=-created_at" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML" data-hx-indicator="#sortLoader">
 <div class="flex flex-col items-center justify-center px-1">
-<svg class="icon w-4 h-4" width="1em" height="1em" viewBox="0 0 16 16">
-<g>
-<path d="M15.36 1c-5.227 3.956-10.239 9.247-10.239 9.247l-3.612-3.247-1.509 1.537c1.485 1.395 4.924 5.081 6.088 6.463 3.275-5.472 6.679-9.552 9.912-13.284l-0.64-0.716z" />
-</g>
-</svg>
+<div class="w-4 h-4">
+</div>
 </div>
 <div class="grow">
 <span class="block text-sm font-medium">Newest</span>
@@ -683,10 +674,13 @@
 <span class="block text-xs text-textWeak">Most recently updated</span>
 </div>
 </a>
-<a class="flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;period=24h&amp;type=runtime_exception&amp;sort=-last_seen" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML" data-hx-indicator="#sortLoader">
+<a class="flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer  text-textBrand " data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;period=24h&amp;type=runtime_exception&amp;sort=-last_seen" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML" data-hx-indicator="#sortLoader">
 <div class="flex flex-col items-center justify-center px-1">
-<div class="w-4 h-4">
-</div>
+<svg class="icon w-4 h-4" width="1em" height="1em" viewBox="0 0 16 16">
+<g>
+<path d="M15.36 1c-5.227 3.956-10.239 9.247-10.239 9.247l-3.612-3.247-1.509 1.537c1.485 1.395 4.924 5.081 6.088 6.463 3.275-5.472 6.679-9.552 9.912-13.284l-0.64-0.716z" />
+</g>
+</svg>
 </div>
 <div class="grow">
 <span class="block text-sm font-medium">Recently Active</span>
@@ -750,7 +744,7 @@
 <div class="dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-60 rounded-md shadow-lg mt-1" id="filterDropdown" popover="auto" style="position-try:flip-block; position-anchor:--anchor-filterDropdown">
 <div class="flex items-center justify-between px-3 py-2 text-sm font-semibold text-textStrong border-b border-strokeWeak">
 <span>Select Filter</span>
-<button type="button" class="text-xs text-textBrand cursor-pointer flex items-center gap-1" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">Clear all<svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 8 8">
+<button type="button" class="text-xs text-textBrand cursor-pointer flex items-center gap-1" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">Clear all<svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 8 8">
 <g>
 <path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
 </g>
@@ -772,13 +766,13 @@
 <div class="p-1">
 <label class="facet-item flex min-h-7 cursor-pointer items-center justify-between gap-2 rounded px-2 py-1 hover:bg-fillWeak max-md:min-h-9" data-component="facet-option">
 <div class="flex min-w-0 flex-1 items-center gap-2">
-<input type="checkbox" class="checkbox checkbox-xs max-md:checkbox-sm" aria-label="log_pattern" value="log_pattern" name="anomalyListContainer_filter_type" data-hx-trigger="change" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception&amp;type=log_pattern" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">
+<input type="checkbox" class="checkbox checkbox-xs max-md:checkbox-sm" aria-label="log_pattern" value="log_pattern" name="anomalyListContainer_filter_type" data-hx-trigger="change" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=runtime_exception&amp;type=log_pattern" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">
 <span class="facet-value truncate text-xs" data-tippy-content="log_pattern">log_pattern</span>
 </div>
 </label>
 <label class="facet-item flex min-h-7 cursor-pointer items-center justify-between gap-2 rounded px-2 py-1 hover:bg-fillWeak max-md:min-h-9" data-component="facet-option">
 <div class="flex min-w-0 flex-1 items-center gap-2">
-<input type="checkbox" class="checkbox checkbox-xs max-md:checkbox-sm" aria-label="runtime_exception" value="runtime_exception" name="anomalyListContainer_filter_type" data-hx-trigger="change" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML" checked>
+<input type="checkbox" class="checkbox checkbox-xs max-md:checkbox-sm" aria-label="runtime_exception" value="runtime_exception" name="anomalyListContainer_filter_type" data-hx-trigger="change" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML" checked>
 <span class="facet-value truncate text-xs" data-tippy-content="runtime_exception">runtime_exception</span>
 </div>
 </label>
@@ -788,7 +782,7 @@
 </div>
 </div>
 </div>
-<button type="button" class="inline-flex items-center gap-1 rounded-md border border-strokeWeak bg-fillWeak px-2 py-0.5 text-xs text-textStrong hover:bg-fillWeaker max-md:whitespace-normal" aria-label="Remove filter Type: runtime_exception" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">
+<button type="button" class="inline-flex items-center gap-1 rounded-md border border-strokeWeak bg-fillWeak px-2 py-0.5 text-xs text-textStrong hover:bg-fillWeaker max-md:whitespace-normal" aria-label="Remove filter Type: runtime_exception" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">
 <span class="text-textWeak">Type:</span>runtime_exception<svg class="icon w-2.5 h-2.5 text-textWeak" width="1em" height="1em" viewBox="0 0 8 8">
 <g>
 <path d="M7 1L1 7M1 1L7 7" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
@@ -808,8 +802,8 @@
 <span class="flex items-center gap-2 min-w-0">
 <span class>Activity</span>
 <span class="inline-flex rounded-md border border-strokeWeak overflow-hidden" role="group" aria-label="Activity window">
-<button class="cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors bg-fillWeak text-textStrong" type="button" aria-label="Show 24h activity" aria-pressed="true" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;type=runtime_exception&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-swap="outerHTML" data-hx-push-url="true">24h</button>
-<button class="cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors text-textWeak hover:bg-fillWeaker hover:text-textStrong" type="button" aria-label="Show 7d activity" aria-pressed="false" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;type=runtime_exception&amp;period=7d" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-swap="outerHTML" data-hx-push-url="true">7d</button>
+<button class="cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors bg-fillWeak text-textStrong" type="button" aria-label="Show 24h activity" aria-pressed="true" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;type=runtime_exception&amp;period=24h" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-swap="outerHTML" data-hx-push-url="true">24h</button>
+<button class="cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors text-textWeak hover:bg-fillWeaker hover:text-textStrong" type="button" aria-label="Show 7d activity" aria-pressed="false" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;type=runtime_exception&amp;period=7d" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-swap="outerHTML" data-hx-push-url="true">7d</button>
 </span>
 </span>
 </th>
@@ -955,8 +949,8 @@
 <span class="text-sm text-textWeak mr-2">Items per page</span>
 <div class="flex rounded-md border border-strokeWeak overflow-hidden">
 <button class="cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors bg-fillWeak text-textStrong" type="button">25</button>
-<button class="cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors bg-bgRaised text-textWeak hover:bg-fillWeak" type="button" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception&amp;page=0&amp;per_page=50" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">50</button>
-<button class="cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors bg-bgRaised text-textWeak hover:bg-fillWeak" type="button" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-created_at&amp;period=24h&amp;type=runtime_exception&amp;page=0&amp;per_page=100" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">100</button>
+<button class="cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors bg-bgRaised text-textWeak hover:bg-fillWeak" type="button" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=runtime_exception&amp;page=0&amp;per_page=50" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">50</button>
+<button class="cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors bg-bgRaised text-textWeak hover:bg-fillWeak" type="button" data-hx-get="/p/<uuid>/issues?filter=Inbox&amp;sort=-last_seen&amp;period=24h&amp;type=runtime_exception&amp;page=0&amp;per_page=100" data-hx-target="#anomalyListContainer" data-hx-select="#anomalyListContainer" data-hx-push-url="true" data-hx-swap="outerHTML">100</button>
 </div>
 </div>
 </div>
