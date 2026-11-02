@@ -547,7 +547,7 @@ spec = do
         fmap (.accessToken) <$> credential beta.id `shouldReturn` Just (Just token)
         runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "empty" "" Nothing) `shouldThrow` (== Keys.EmptySecret)
 
-      it "repositoryConnections_githubCasingDoesNotDuplicateConnectionsOrSyncs" \tr -> do
+      it "repositoryConnections_foldGithubCasingAndKeepNestedNamespaces" \tr -> do
         account <- appAccount tr "team"
         sameAccount <- appAccount tr "TEAM"
         sameAccount.id `shouldBe` account.id
