@@ -79,7 +79,10 @@ spec = describe "Monitoring" do
         _ -> fail "unexpected response"
       -- A healthy monitor once rendered a grey "Normal" badge beside its green dot.
       overview <- renderT <$> call tr (Alerts.unifiedMonitorOverviewH testPid (UUID.toText UUID.nil))
-      goldenParts "monitor-overview-status" $ elementsWith ["badge-success", "Environment: production", "Service: checkout"] overview
+      let unSvg t = case T.breakOn "<svg" t of
+            (a, b) | T.null b -> a
+            (a, b) -> a <> unSvg (T.drop 6 $ snd $ T.breakOn "</svg>" b)
+      goldenParts "monitor-overview-status" $ ordNub $ map unSvg $ elementsWith ["badge-success", "Environment: production", "Service: checkout"] overview
       -- Row actions carry accessible names; each mute popover has a per-layout id.
       list <- renderT <$> call tr (Alerts.unifiedMonitorsGetH testPid Nothing Nothing)
       goldenParts "monitor-row-actions" $ tagsWith ["aria-label=\"Deactivate\"", "aria-label=\"Mute\"", "aria-label=\"Delete\"", "id=\"mute-pop-"] list
@@ -96,8 +99,8 @@ spec = describe "Monitoring" do
       nowTxt <- toText . formatTime defaultTimeLocale "%FT%T%QZ" <$> getCurrentTime
       let msg f = toStrict $ AE.encode $ Unsafe.fromJust $ convert $ f nowTxt
           (m1, m2) = (msg testRequestMsgs.reqMsg1, msg testRequestMsgs.reqMsg2)
-      runTestBg frozenTime tr (processMessages [("m1", m1), ("m2", m1), ("m5", m2)] HashMap.empty) >>= \case
-        Right (ids, _) -> ids `shouldBe` ["m1", "m2", "m5"]
+      runTestBg frozenTime tr (processMessages [("m1", m1), ("m2", m1), ("m4", m1), ("m5", m1), ("m5", m2)] HashMap.empty) >>= \case
+        Right (ids, _) -> ids `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
         Left _ -> expectationFailure "processMessages returned Left WriteFailure"
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
@@ -677,7 +680,7 @@ spec = describe "Monitoring" do
         dbQuery tr [sql|SELECT phase FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, mid) `shouldReturn` [Only ("recovered" :: Text)]
         advanceMinutes tr 2
         resumed <- slack . fst <$> captureNotifs tr runSlackIncidentDeliveries
-        [slackText sd | sd <- resumed, AE.Object obj <- [sd.payload], KM.member "ts" obj] `shouldSatisfy` \case [t] -> "RECOVERED" `T.isInfixOf` t; _ -> False
+        [t | AE.Object obj <- map (.payload) resumed, KM.member "ts" obj, Just (AE.String t) <- [KM.lookup "text" obj]] `shouldSatisfy` \case [t] -> "RECOVERED" `T.isInfixOf` t; _ -> False
         advanceMinutes tr 1
         length . filter (isNothing . (.threadTs)) . slack <$> evaluateMonitor tr mid 84 `shouldReturn` 1
 

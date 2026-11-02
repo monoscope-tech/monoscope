@@ -195,10 +195,10 @@ spec = describe "API v1" do
           runB = toBaseServantResponse tr
           stored mid = runQueryEffect tr (Monitors.queryMonitorById mid) >>= maybe (fail "monitor not stored") pure
           input t q = (def :: ApiT.MonitorInput){ApiT.title = t, ApiT.query = q, ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
-      created <- runB $ ApiH.apiMonitorCreate testPid (input "t1" "status_code == 200" :: ApiT.MonitorInput){ApiT.unit = Just " s ", ApiT.environment = Just "production", ApiT.service = Just "checkout"}
-      (created.alertConfig.title, created.logQuery, created.environment, created.service) `shouldBe` ("t1", "status_code == 200", Just "production", Just "checkout")
+      created <- runB $ ApiH.apiMonitorCreate testPid (input "t1" "status_code == 200 | summarize count()" :: ApiT.MonitorInput){ApiT.unit = Just " s ", ApiT.environment = Just "production", ApiT.service = Just "checkout"}
+      (created.alertConfig.title, created.logQuery, created.environment, created.service) `shouldBe` ("t1", "status_code == 200 | summarize count()", Just "production", Just "checkout")
       -- Scope lives outside the customer's KQL, in the compiled SQL alert evaluation runs.
-      created.logQueryAsSql `shouldContainAll` ["resource___deployment___environment___name = 'production'", "resource___service___name = 'checkout'", "200"]
+      (.logQueryAsSql) <$> stored created.id >>= (`shouldContainAll` ["resource___deployment___environment___name = 'production'", "resource___service___name = 'checkout'", "200"])
       runQueryEffect tr (Monitors.queryMonitorsAll testPid) >>= \all' -> do
         AE.eitherDecode @[Monitors.QueryMonitor] (AE.encode all') `shouldSatisfy` isRight
         map (.id) all' `shouldBe` [created.id]
@@ -232,7 +232,8 @@ spec = describe "API v1" do
       bogus <- replicateM 2 UUIDV4.nextRandom
       missing <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = bogus, ApiT.durationMinutes = Nothing}
       -- SDK wire shape: each failure is {id, error}, not a tuple.
-      (missing.succeeded, map (\f -> (f.id, f.error)) missing.failed) `shouldBe` ([], map (,"not applied") bogus)
+      missing.succeeded `shouldBe` []
+      map (\f -> (f.id, f.error)) missing.failed `shouldMatchList` map (,"not applied") bogus
       runB (ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "nuke", ApiT.ids = [], ApiT.durationMinutes = Nothing}) `shouldThrow` anyException
       runB (ApiH.apiMonitorGet testPid (Monitors.QueryMonitorId UUID.nil)) `shouldThrow` anyException
       NoContent <- runB $ ApiH.apiMonitorDelete testPid created.id
@@ -366,7 +367,9 @@ spec = describe "API v1" do
     it "MCP JSON-RPC: initialize, tools/list, tool results as isError not RPC errors, POST bodies forwarded, notifications null" \tr -> do
       let reg = MCP.allTools apiV1OpenApiSpec
           app = genericServeTWithContext (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider) (apiV1Server tr.trLogger tr.trATCtx tr.trTracerProvider (Authenticated testPid)) Servant.EmptyContext
-          send = toBaseServantResponse tr . MCP.handleJsonRpc reg app testPid
+          via a = toBaseServantResponse tr . MCP.handleJsonRpc reg a testPid
+          -- Protocol and composite-tool paths must never reach the REST app.
+          send = via (error "REST app invoked unexpectedly")
           isError r = r ^? key "result" . key "isError"
       initialized <- send (rpc "initialize" [])
       (isJust (initialized ^? key "result" . key "protocolVersion"), isJust (initialized ^? key "result" . key "serverInfo" . key "name")) `shouldBe` (True, True)
@@ -376,7 +379,7 @@ spec = describe "API v1" do
         [] -> expectationFailure "expected at least one tool"
       -- Composite workflow tools sit alongside the REST tools.
       filter (`notElem` (tools ^.. traverse . key "name" . _String)) ["find_error_patterns", "search_events_nl", "analyze_issue", "get_schema"] `shouldBe` []
-      schema <- send (tool "get_schema" [])
+      schema <- via app (tool "get_schema" [])
       isError schema `shouldBe` Just (AE.Bool False)
       liveSchemaFields (schema ^? key "result" . key "structuredContent") `shouldBe` Right (Map.keys (Schema.deriveSchema ParserExpr.flattenedOtelAttributes).fields)
       patterns <- send (tool "find_error_patterns" ["limit" AE..= (5 :: Int)])
@@ -385,5 +388,5 @@ spec = describe "API v1" do
       map (\r -> (isError r, r ^? key "error")) failures `shouldBe` replicate 3 (Just (AE.Bool True), Nothing)
       send (rpc "notifications/initialized" []) `shouldReturn` AE.Null
       teamHandle <- ("body-test-" <>) . UUID.toText <$> UUIDV4.nextRandom
-      created <- send (tool "create_team" ["body" AE..= AE.object ["name" AE..= teamHandle, "handle" AE..= teamHandle]])
+      created <- via app (tool "create_team" ["body" AE..= AE.object ["name" AE..= teamHandle, "handle" AE..= teamHandle]])
       (isError created, created ^? key "result" . key "structuredContent" . key "summary" . key "handle" . _String) `shouldBe` (Just (AE.Bool False), Just teamHandle)
