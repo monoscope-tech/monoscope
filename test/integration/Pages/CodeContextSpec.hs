@@ -1,3 +1,6 @@
+-- | Repositories end to end: git-host accounts and connections, source context (code mappings
+-- and frame source), the project wiki, deployment evidence, the configuration folder, and
+-- dashboard sync — webhooks, pull/push/export jobs, their leases, and the migrations under them.
 module Pages.CodeContextSpec (spec) where
 
 import BackgroundJobs qualified
@@ -5,7 +8,9 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
 import Data.Base64.Types (extractBase64)
+import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
@@ -17,12 +22,13 @@ import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
+import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (Eff, IOE, (:>))
 import Effectful.Dispatch.Dynamic (interpose, interpret)
+import Effectful.Error.Static (catchError)
 import Hasql.Interpolate qualified as HI
-import Lucid qualified
 import Models.Apis.MonitorDefinitions qualified as MonitorDefinitions
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
@@ -52,7 +58,7 @@ import Pages.Dashboards qualified as DashboardPage
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.Git qualified as Git
 import Pkg.TestUtils
-import Servant (getHeaders, getResponse)
+import Servant (ResponseHeader (..), ServerError (..), getHeaders, getResponse, lookupResponseHeader)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Directory (doesFileExist)
@@ -63,52 +69,101 @@ import System.Types (ATBackgroundCtx)
 import UnliftIO.Async (cancel, concurrently, wait, waitCatch, withAsync)
 import UnliftIO.Exception (bracket, throwIO, try)
 import Web.Routes qualified as Routes
+import "cryptonite" Crypto.Hash.Algorithms (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
-render :: Lucid.Html () -> Text
-render = renderT
+encKeyOf :: TestResources -> ByteString
+encKeyOf tr = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
 
 
--- | Regression: the revision a span reports lives in its /resource/, not its attributes.
---
--- 'revisionFor' was handed the span-attribute lookup, which structurally cannot hold
--- @service.version@ (ProcessMessage writes it to @resource@, and every other reader —
--- 'Telemetry.spanServiceName', the @resource___service___version@ column, the
--- @resource.service.version@ facet — reads it there). So the snippet URL never carried a
--- revision and every frame rendered at the mapping's branch: today's source, silently, which
--- is wrong exactly when someone is debugging an old release. The doctests could not catch it
--- because they pass 'revisionFor' a hand-built lookup; only the wiring was wrong.
-revisionWiringSpec :: Spec
-revisionWiringSpec = describe "stack frame source URL" do
-  let pyStack = "Traceback (most recent call last):\n  File \"/srv/app/checkout.py\", line 88, in charge\n    raise ValueError(x)"
-      lookupOf kvs k = listToMaybe [v | (k', v) <- kvs, k' == k]
-      urlFor spanAttrs resourceAttrs = render $ stackTrace_ testPid (Just "checkout") (lookupOf spanAttrs) (lookupOf resourceAttrs) pyStack
+-- | A dashboard repository on GitHub tracking @main@ without a webhook secret.
+syncOf :: TestResources -> Projects.ProjectId -> Maybe Text -> Text -> Text -> GitSync.GitCreds -> Text -> IO GitSync.GitHubSync
+syncOf tr pid origin owner repo creds prefix =
+  runQueryEffect tr (GitSync.insertGitHubSync (encKeyOf tr) pid Git.GitHub origin owner repo "main" creds Nothing prefix) >>= maybe (fail "repository connection refused") pure
 
-  -- The needle omits the leading @&@ on purpose: Lucid escapes it to @&amp;@ inside an
-  -- attribute, so matching on "&revision=" never fires — which would have made the two
-  -- negative cases below pass whether or not the bug was fixed.
-  it "carries the revision the span's resource reports" do
-    urlFor [] [("service.version", "1c0ffee")] `shouldSatisfy` T.isInfixOf "revision=1c0ffee"
 
-  it "does not mistake a span attribute for the resource's revision" do
-    -- The whole bug: a sha in the wrong map must not be read, or the fix is untested.
-    urlFor [("service.version", "1c0ffee")] [] `shouldNotSatisfy` T.isInfixOf "revision="
+-- | The token-backed @team/dashboards@ connection the sync job specs run against.
+teamDashboards :: TestResources -> IO GitSync.GitHubSync
+teamDashboards tr = syncOf tr testPid Nothing "team" "dashboards" (GitSync.PersonalToken "fixture") ""
 
-  it "omits the revision when the resource reports a version that is not a sha" do
-    urlFor [] [("service.version", "v2.3.1")] `shouldNotSatisfy` T.isInfixOf "revision="
+
+grantOf :: TestResources -> Projects.ProjectId -> Git.GitHost -> Maybe Text -> Text -> Maybe Int64 -> Maybe Text -> IO GitSync.GitHubCredential
+grantOf tr pid host origin account inst token =
+  runQueryEffect tr (GitSync.upsertGitHubCredential (encKeyOf tr) pid host origin account inst token) >>= maybe (fail "credential refused") pure
+
+
+-- | A github.com app-installation account (installation 42) on 'testPid'.
+appAccount :: TestResources -> Text -> IO GitSync.GitHubCredential
+appAccount tr account = grantOf tr testPid Git.GitHub Nothing account (Just 42) Nothing
+
+
+syncById :: TestResources -> GitSync.GitHubSync -> IO GitSync.GitHubSync
+syncById tr sync = runQueryEffect tr (GitSync.getGitSyncById testPid sync.id) >>= maybe (fail "repository connection missing") pure
+
+
+onlySync :: TestResources -> IO (Maybe GitSync.GitHubSync)
+onlySync tr = runQueryEffect tr (GitSync.getGitSyncs testPid) <&> \case [sync] -> Just sync; _ -> Nothing
+
+
+seedDash :: TestResources -> (Dashboards.DashboardVM -> Dashboards.DashboardVM) -> IO Dashboards.DashboardId
+seedDash tr edit = do
+  did <- UUIDId <$> UUID.nextRandom
+  did <$ runQueryEffect tr (Dashboards.insert $ edit $ Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil))
+
+
+-- | A dashboard @sync@ owns at @path@, with a schema to export.
+ownedDash :: TestResources -> GitSync.GitHubSync -> Text -> Text -> IO Dashboards.DashboardId
+ownedDash tr sync title path = seedDash tr \d -> d{Dashboards.title = title, Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just path}
+
+
+dashOf :: TestResources -> Dashboards.DashboardId -> IO (Maybe Dashboards.DashboardVM)
+dashOf tr did = runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid did
+
+
+allDashboards :: TestResources -> IO [Dashboards.DashboardVM]
+allDashboards tr = runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
+
+
+pendingJobs :: TestResources -> IO [BackgroundJobs.BgJobs]
+pendingJobs tr = map snd . V.toList <$> getPendingBackgroundJobs tr.trATCtx
+
+
+-- | Run one background job; @host@ answers for the git host and every request is returned.
+runJob :: TestResources -> (ATBackgroundCtx () -> ATBackgroundCtx ()) -> BackgroundJobs.BgJobs -> IO [(Text, LBS.ByteString)]
+runJob tr host job = fst <$> runTestBgRecordingHTTP frozenTime tr (host $ BackgroundJobs.processBackgroundJob tr.trATCtx job)
+
+
+-- | A fake git host: the first route whose fragment the URL contains answers, else @fallback@.
+gitHost :: (IOE :> es, W.HTTP :> es) => [(Text, LBS.ByteString)] -> LBS.ByteString -> Eff es a -> Eff es a
+gitHost routes fallback = withHTTPResponses \_ endpoint -> pure $ Just $ maybe fallback snd $ find ((`T.isInfixOf` toText endpoint) . fst) routes
+
+
+treeOf :: [(Text, Text)] -> LBS.ByteString
+treeOf entries = AE.encode $ AE.object ["tree" AE..= [AE.object ["path" AE..= path, "sha" AE..= sha, "type" AE..= ("blob" :: Text)] | (path, sha) <- entries]]
+
+
+-- | A contents-API answer carrying @body@.
+blobOf :: Text -> LBS.ByteString
+blobOf body = AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 $ encodeUtf8 body)]
 
 
 withUnavailableRepositoryAPI :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
 withUnavailableRepositoryAPI = interpose @W.HTTP \_ _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Fixture account is unavailable"
 
 
+-- | Answer every GET with @body@ (checking the URL when one is expected); any write fails.
+getOnly :: (IOE :> es, W.HTTP :> es) => Maybe String -> LBS.ByteString -> Eff es a -> Eff es a
+getOnly expected body = interpose @W.HTTP \_ -> \case
+  W.GetWith _ endpoint -> liftIO (traverse_ (endpoint `shouldBe`) expected) $> httpResponse body
+  _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Only repository reads are expected here"
+
+
 -- | Count outbound requests while serving one canned file body.
 --
 -- A PAT credential means no installation-token exchange, so every request the interpreter sees
--- is the blob fetch itself and the count is the thing under test with nothing subtracted.
--- Spelled out rather than wildcarded: every constructor returns the same response type, but
--- GADT refinement only happens on an explicit match. Writes fail loudly — reading a snippet
--- is a GET, and a mutation reaching here means the call path changed shape.
+-- is the blob fetch itself. Spelled out rather than wildcarded: GADT refinement only happens on
+-- an explicit match. Writes fail loudly — reading a snippet is a GET.
 runCountingHTTP :: IOE :> es => IORef Int -> LBS.ByteString -> Eff (W.HTTP ': es) a -> Eff es a
 runCountingHTTP calls body = interpret \_ -> \case
   W.Get _ -> served
@@ -143,57 +198,6 @@ httpResponse body =
     }
 
 
--- | One git-host API call per frame opened is the shape that makes a hot issue a rate-limit
--- stall — and a rate-limited fetch presents as the panel silently not filling in, which reads
--- as "this feature does not work" rather than as a quota. The cache is keyed on
--- @(owner, repo, ref, path)@, so the second view of the same frame must not leave the process.
-snippetCacheSpec :: Spec
-snippetCacheSpec = around withTestResources do
-  describe "Frame source caching" do
-    it "fetches a blob once however many frames ask for it" \tr -> do
-      let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-      _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "checkout-service" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
-      _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout-service") (Just "main") (Just "checkout") Nothing (Just "/srv/app/") (Just "") Nothing)
-
-      calls <- newIORef (0 :: Int)
-      -- GitHub's contents API answers base64; four lines so both line numbers below are in range.
-      let contents = encodeUtf8 @Text @LBS.ByteString $ "{\"content\":\"" <> extractBase64 (B64.encodeBase64 "one\ntwo\nthree\nfour\n") <> "\"}"
-          fetch n = runQueryEffect tr $ runCountingHTTP calls contents $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "/srv/app/checkout.py" n
-
-      first_ <- fetch 2
-      readIORef calls >>= \c -> c `shouldBe` 1
-      -- A DIFFERENT line in the same file: the cache is per blob, not per snippet, so the
-      -- second frame of one stack trace must be free.
-      second_ <- fetch 3
-      readIORef calls >>= \c -> c `shouldBe` 1
-      fmap (.focusLine) first_ `shouldBe` Right 2
-      fmap (.focusLine) second_ `shouldBe` Right 3
-      fmap (.body) second_ `shouldBe` Right ["one", "two", "three", "four"]
-
-
--- | Listing the picker's repositories is a token exchange plus a listing call against the git
--- host, and it sat in front of a settings page that renders in 0.2s otherwise — measured at
--- 1.5s every load. It is cached per credential now.
---
--- Nothing here can reach GitHub, so an uncached render offers the free-text fallback and no
--- options at all. A seeded entry showing up in the markup is therefore proof the cache is what
--- answered, with no request counting needed.
-repoListCacheSpec :: Spec
-repoListCacheSpec = around withTestResources do
-  it "renders the repository picker from the cache instead of calling the git host" \tr -> do
-    let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-    credM <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "acme" (Just 42) Nothing
-    cred <- maybe (fail "expected a credential") pure credM
-
-    uncached <- render . Lucid.toHtml . snd <$> testServant tr (withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid (Just cred.id))
-    uncached `shouldNotSatisfy` T.isInfixOf "sentinel-repo"
-
-    Cache.insert tr.trATCtx.repoListCache cred.id [Git.GitRepo "acme/sentinel-repo" "sentinel-repo" False "trunk"]
-    cached <- snd <$> testServant tr (withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid (Just cred.id))
-    render (Lucid.toHtml cached) `shouldSatisfy` T.isInfixOf "sentinel-repo"
-    cached.content.repositories `shouldBe` Right [Git.GitRepo "acme/sentinel-repo" "sentinel-repo" False "trunk"]
-
-
 configurationProvider :: TestResources -> Text -> ATBackgroundCtx a -> ATBackgroundCtx a
 configurationProvider tr prState = withHTTPResponses \_ endpoint -> do
   syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
@@ -210,22 +214,547 @@ configurationProvider tr prState = withHTTPResponses \_ endpoint -> do
   pure $ Just response
 
 
+-- | Replace the project's one sync row with a fresh connection on @host@, so a webhook has a row to resolve.
+setupSyncOn :: TestResources -> Git.GitHost -> Text -> Text -> Maybe Text -> IO ()
+setupSyncOn tr host owner repo secret = do
+  void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
+  void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid
+    GitSyncPage.GitSyncForm
+      { host = Just host
+      , apiBase = if host == Git.Gitea then Just "https://git.example.com" else Nothing
+      , owner = owner
+      , repo = repo
+      , branch = "main"
+      , accessToken = "tok"
+      , webhookSecret = secret
+      , pathPrefix = Nothing
+      }
+
+
+-- | HMAC-SHA256 hex of a body, the digest three of the four hosts send.
+hmacHexOf :: Text -> ByteString -> Text
+hmacHexOf secret body = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256)
+
+
+-- | The whole routed app, so wiki requests go through auth, routing and forms like a browser's.
+wikiApp :: TestResources -> Wai.Application
+wikiApp tr =
+  genericServeTWithContext
+    (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+    (Routes.server (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
+    (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+
+
+isImport :: BackgroundJobs.BgJobs -> Bool
+isImport = \case BackgroundJobs.GitSyncFromRepo{} -> True; BackgroundJobs.GitSyncRepository{} -> True; _ -> False
+
+
 spec :: Spec
 spec = do
-  revisionWiringSpec
-  snippetCacheSpec
-  repoListCacheSpec
+  -- Regression: the revision a span reports lives in its /resource/, not its attributes. Every
+  -- frame silently rendered today's source while someone debugged an old release; the doctests
+  -- pass 'revisionFor' a hand-built lookup, so only the wiring could be wrong. The needle omits
+  -- the leading @&@: Lucid escapes it inside an attribute, so "&revision=" would never fire.
+  it "stackFrameSourceUrl_carriesOnlyTheResourceShaRevision" do
+    let pyStack = "Traceback (most recent call last):\n  File \"/srv/app/checkout.py\", line 88, in charge\n    raise ValueError(x)"
+        lookupOf kvs k = listToMaybe [v | (k', v) <- kvs, k' == k]
+        urlFor spanAttrs resourceAttrs = renderT $ stackTrace_ testPid (Just "checkout") (lookupOf spanAttrs) (lookupOf resourceAttrs) pyStack
+        version = [("service.version", "1c0ffee")] :: [(Text, Text)]
+    urlFor [] version `shouldSatisfy` T.isInfixOf "revision=1c0ffee"
+    for_ [(version, []), ([], [("service.version", "v2.3.1")] :: [(Text, Text)])] \(spanAttrs, resourceAttrs) -> urlFor spanAttrs resourceAttrs `shouldNotSatisfy` T.isInfixOf "revision="
+
+  it "dashboardFiles_planAgainstThePrefixAndRoundTripYaml" do
+    let entry path sha = GitSync.TreeEntry path True (Just sha) Nothing
+        known = M.fromList . map (\(path, sha) -> (path, (UUIDId UUID.nil, Just sha)))
+        shape = map \case
+          GitSync.SyncCreate p _ -> ("create", p)
+          GitSync.SyncUpdate p _ _ -> ("update", p)
+          GitSync.SyncDelete p _ -> ("delete", p)
+          GitSync.SyncRename p _ _ -> ("rename", p)
+          GitSync.SyncConflict p _ -> ("conflict" :: Text, p)
+    for_
+      ( [ ("dashboards/", [entry "dashboards/new.yaml" "sha1", entry "dashboards/other.yaml" "sha2"], [], [("create", "dashboards/new.yaml"), ("create", "dashboards/other.yaml")])
+        , ("dashboards/", [entry "dashboards/x.yaml" "newsha"], [("x.yaml", "oldsha")], [("update", "dashboards/x.yaml")])
+        , ("dashboards/", [], [("gone.yaml", "sha")], [("delete", "gone.yaml")])
+        , ("dashboards/", [entry "src/main.hs" "s1", entry "dashboards/ok.yaml" "s2"], [], [("create", "dashboards/ok.yaml")])
+        , ("dashboards/", [entry "dashboards/test.yml" "sha"], [], [("create", "dashboards/test.yml")])
+        , ("app/dashboards/", [entry "app/dashboards/x.yaml" "sha", entry "dashboards/y.yaml" "sha2"], [], [("create", "app/dashboards/x.yaml")])
+        ] ::
+          [(Text, [GitSync.TreeEntry], [(Text, Text)], [(Text, Text)])]
+      )
+      \(prefix, entries, db, expected) -> shape (GitSync.buildSyncPlan prefix entries (known db)) `shouldBe` expected
+    (.title) <$> GitSync.yamlToDashboard "title: Minimal\nwidgets: []\n" `shouldBe` Right (Just "Minimal")
+    ((,) <$> (.title) <*> (.tags)) <$> GitSync.yamlToDashboard "title: Test\ntags:\n  - prod\nwidgets: []\n" `shouldBe` Right (Just "Test", Just ["prod"])
+    (.title) <$> GitSync.yamlToDashboard (GitSync.dashboardToYaml (def :: Dashboards.Dashboard){Dashboards.title = Just "My Dash", Dashboards.tags = Just (["a", "b"] :: [Text])}) `shouldBe` Right (Just "My Dash")
+    map (\prefix -> GitSync.getDashboardsPath def{GitSync.pathPrefix = prefix}) ["", "myapp"] `shouldBe` ["dashboards/", "myapp/dashboards/"]
+
   around withTestResources do
+    describe "Repository connections" do
+      it "githubAppInstall_bindsOnlyAVerifiedSessionAttemptForTheAccountOwner" \tr -> do
+        let configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppId = "123", githubClientId = "fixture-client", githubClientSecret = "fixture-secret"}}}
+            session = (getResponse tr.trSessAndHeader).persistentSession.id
+            provider :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
+            provider = interpose @W.HTTP \_ -> \case
+              W.PostWith _ "https://github.com/login/oauth/access_token" _ -> pure $ httpResponse "{\"access_token\":\"private-user-token\"}"
+              W.GetWith _ "https://api.github.com/user/installations?per_page=100&page=1" -> pure $ httpResponse "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}"
+              W.GetWith _ "https://api.github.com/user" -> pure $ httpResponse "{\"login\":\"team\"}"
+              _ -> liftIO $ expectationFailure "Unexpected authorization request" >> throwIO (InvalidUrlException "https://git.invalid" "Unexpected authorization request")
+        -- The callback binds only the session's own attempt, never a forged state or a replayed nonce.
+        forged <- call configured $ withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ testPid.toText <> ":code") Nothing
+        renderT forged `shouldSatisfy` T.isInfixOf "missing, expired, or already used"
+        runQueryEffect tr (GitSync.getGitHubCredentials testPid) >>= (`shouldSatisfy` null)
+        (installState, authorizePage) <- runAuthHandler configured do
+          initialState <- GitSync.createInstallationAttempt session (GitSync.InstallationAttempt testPid GitSync.InstallCode GitSync.InstallApp)
+          response <- withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ UUID.toText initialState) Nothing
+          pure (initialState, getResponse response)
+        renderT authorizePage `shouldSatisfy` T.isInfixOf "https://github.com/login/oauth/authorize?client_id=fixture-client"
+        runQueryEffect tr (GitSync.consumeInstallationAttempt session installState) `shouldReturn` Nothing
+        Just (HI.OneColumn nonce) <- runQueryEffect tr $ Hasql.interpOne @(HI.OneColumn UUID.UUID) [HI.sql| SELECT id FROM projects.github_installation_attempts WHERE project_id = #{testPid} AND session_id = #{session} AND installation_id = 42 |]
+        nonce `shouldNotBe` installState
+        verified <- renderT <$> call configured (provider $ GitSyncPage.githubAppCallbackH (Just 999999) Nothing (Just $ UUID.toText nonce) (Just "private-code"))
+        verified `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/repositories/connect")
+        for_ ["private-user-token", "private-code", "fixture-secret"] \secret -> verified `shouldNotSatisfy` T.isInfixOf secret
+        [bound] <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
+        bound.installationId `shouldBe` Just 42
+        replay <- call configured $ withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ UUID.toText nonce) (Just "private-code")
+        renderT replay `shouldSatisfy` T.isInfixOf "missing, expired, or already used"
+        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
+
+        -- installationAuthorization_requiresTheGitHubAccountOwner: only the account itself, or an
+        -- active org admin (found on any membership page), may bind an installation.
+        owned <- createTestProject tr "Installation owner"
+        let authorize installations memberships =
+              runTestBgRecordingHTTP frozenTime tr
+                $ withHTTPResponses (\_ endpoint -> pure $ Just $ if endpoint == "https://github.com/login/oauth/access_token" then "{\"access_token\":\"fixture-user-token\"}" else if endpoint == "https://api.github.com/user" then "{\"login\":\"team\"}" else if "https://api.github.com/user/memberships/orgs?" `T.isPrefixOf` toText endpoint then memberships else installations)
+                $ GitSync.authorizeGitHubInstallation (encKeyOf tr) owned "123" "fixture-client" "fixture-secret" "fixture-code" "http://localhost:8081/github/callback" 42
+        (_, denied) <- authorize "{\"installations\":[{\"id\":43,\"account\":{\"login\":\"foreign\"}}]}" "[]"
+        denied `shouldBe` Left GitSync.InstallationOwnershipRequired
+        runQueryEffect tr (GitSync.getGitHubCredentials owned) >>= (`shouldSatisfy` null)
+        (_, collaborator) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"foreign\",\"type\":\"User\"}}]}" "[]"
+        collaborator `shouldBe` Left GitSync.InstallationOwnershipRequired
+        let organization = "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"Organization\"}}]}"
+        for_ ([("member", "active", False), ("admin", "pending", False), ("admin", "active", True)] :: [(Text, Text, Bool)]) \(role, membershipState, allowed) -> do
+          let memberships = AE.encode ([AE.object ["state" AE..= membershipState, "role" AE..= role, "organization" AE..= AE.object ["login" AE..= ("team" :: Text)]]] :: [AE.Value])
+          (_, result) <- authorize organization memberships
+          result `shouldBe` if allowed then Right () else Left GitSync.InstallationOwnershipRequired
+        (requests, personal) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}" "[]"
+        personal `shouldBe` Right ()
+        map fst requests `shouldBe` ["https://github.com/login/oauth/access_token", "https://api.github.com/user/installations?per_page=100&page=1", "https://api.github.com/user"]
+        let firstPage = AE.encode $ replicate 100 $ AE.object ["state" AE..= ("active" :: Text), "role" AE..= ("member" :: Text)]
+            ownerPage = "[{\"state\":\"active\",\"role\":\"admin\",\"organization\":{\"login\":\"Team\"}}]"
+            paging _ endpoint = pure $ Just $ if endpoint == "https://github.com/login/oauth/access_token" then "{\"access_token\":\"fixture-user-token\"}" else if "user/installations?" `T.isInfixOf` toText endpoint then "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"Team\",\"type\":\"Organization\"}}]}" else if "page=2" `T.isSuffixOf` toText endpoint then ownerPage else firstPage
+        (paged, admin) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses paging $ GitSync.authorizeGitHubInstallation (encKeyOf tr) owned "123" "fixture-client" "fixture-secret" "fixture-code" "https://monoscope.test/github/callback" 42
+        admin `shouldBe` Right ()
+        map fst paged `shouldSatisfy` elem "https://api.github.com/user/memberships/orgs?per_page=100&page=2"
+        [account] <- runQueryEffect tr $ GitSync.getGitHubCredentials owned
+        (account.account, account.installationId, account.accessToken) `shouldBe` ("team", Just 42, Nothing)
+        runQueryEffect tr (GitSync.getGitSyncs owned) >>= (`shouldSatisfy` null)
+
+        -- installationSelection_rejectsAnInstallationWithoutAProjectGrant
+        let isolated = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppPrivateKey = ""}}}
+        status <- runAuthHandler isolated $ catchError @ServerError (GitSyncPage.githubAppSelectRepoH testPid (GitSyncPage.RepoSelectForm ["foreign/private"] "main" Nothing 424242) $> 200) (\_ err -> pure err.errHTTPCode)
+        status `shouldBe` 403
+        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
+
+        -- installationAttempt_isSessionBoundSingleUseAndExpires, and expired attempts are swept.
+        let attempt = GitSync.InstallationAttempt testPid GitSync.InstallCode (GitSync.AuthorizeApp 42)
+        fresh <- runTestBg frozenTime tr $ GitSync.createInstallationAttempt session attempt
+        stranger <- Projects.PersistentSessionId <$> UUID.nextRandom
+        runQueryEffect tr (GitSync.consumeInstallationAttempt stranger fresh) `shouldReturn` Nothing
+        runQueryEffect tr (GitSync.consumeInstallationAttempt session fresh) `shouldReturn` Just attempt
+        runQueryEffect tr (GitSync.consumeInstallationAttempt session fresh) `shouldReturn` Nothing
+        expired <- runTestBg frozenTime tr $ GitSync.createInstallationAttempt session attempt
+        runTestBg (addUTCTime 901 frozenTime) tr (GitSync.consumeInstallationAttempt session expired) `shouldReturn` Nothing
+        void $ runTestBg (addUTCTime 901 frozenTime) tr $ GitSync.createInstallationAttempt session attempt
+        dbQuery tr "SELECT EXISTS (SELECT 1 FROM projects.github_installation_attempts WHERE id = ?)" (Only expired) `shouldReturn` [Only False]
+
+      -- Membership is checked per handler, not by the router, and none of these checked it: any
+      -- signed-in user could connect, replace or disconnect another project's repository, bind a
+      -- GitHub installation to it, or add and delete its mappings.
+      it "repositories_nonMember_cannotMutate" \tr -> do
+        victim <- createTestProject tr "victim"
+        void $ syncOf tr victim Nothing "acme" "monoscope-config" (GitSync.PersonalToken "ghp_test") ""
+        let mappingForm repo prefix = PageCodeContext.CodeMappingForm (Just repo) (Just "main") Nothing Nothing (Just prefix) (Just "") Nothing
+            syncForm = GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = "attacker", repo = "evil", branch = "main", accessToken = "ghp_x", webhookSecret = Nothing, pathPrefix = Nothing}
+            mappingIds = map (.id) <$> runQueryEffect tr (CodeContext.getCodeMappings victim)
+            syncState = map (\s -> (s.owner, s.repo, s.installationId)) <$> runQueryEffect tr (GitSync.getGitSyncs victim)
+        _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH victim (mappingForm "checkout-service" "/srv/app/")
+        seeded <- mappingIds
+        length seeded `shouldBe` 1
+        syncs <- syncState
+        assertNonMemberDenied tr victim $ GitSyncPage.gitSyncSettingsPostH victim syncForm
+        assertNonMemberDenied tr victim $ GitSyncPage.gitSyncSettingsDeleteH victim
+        assertNonMemberDenied tr victim $ GitSyncPage.githubAppSelectRepoH victim (GitSyncPage.RepoSelectForm ["attacker/evil"] "main" Nothing 42)
+        assertNonMemberDenied tr victim $ GitSyncPage.githubAppInstallH victim Nothing
+        assertNonMemberDenied tr victim $ PageCodeContext.codeMappingsPostH victim (mappingForm "attacker-repo" "/evil/")
+        forM_ seeded $ assertNonMemberDenied tr victim . PageCodeContext.codeMappingsDeleteH victim
+        -- @state@ is a session-bound nonce, so a project id in it is no grant at all.
+        _ <- testServant tr $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just victim.toText) Nothing
+        syncState `shouldReturn` syncs
+        mappingIds `shouldReturn` seeded
+
+      it "repositoryTokenConnection_checksAccessOnEveryHostWithoutEnablingSyncAndRequiresExplicitReplacement" \tr -> do
+        let form = PageCodeContext.RepositoryTokenForm Git.GitHub Nothing "team/checkout" "fixture-token" Nothing
+            metadata = getOnly (Just "https://api.github.com/repos/team/checkout") "{\"full_name\":\"team/checkout\",\"private\":true,\"default_branch\":\"trunk\"}"
+        rejected <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryTokenPostH testPid form
+        rejected.content.connectionError `shouldSatisfy` isJust
+        rejected.content.repoFullName `shouldBe` "team/checkout"
+        renderT rejected.content `shouldNotSatisfy` T.isInfixOf "fixture-token"
+        incomplete <- call tr $ getOnly Nothing "{\"full_name\":\"\"}" $ PageCodeContext.repositoryTokenPostH testPid form
+        incomplete.content.connectionError `shouldSatisfy` isJust
+        runQueryEffect tr (GitSync.getGitHubCredentials testPid) >>= (`shouldSatisfy` null)
+        connections <- replicateM 2 $ testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form
+        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
+        for_ connections \(response, page) -> do
+          page.content.connectionError `shouldSatisfy` isNothing
+          getHeaders response `shouldSatisfy` elem ("HX-Redirect", encodeUtf8 ("/p/" <> testPid.toText <> "/repositories/" <> repository.id.toText))
+        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
+        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
+        [account] <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
+        let savedToken = runQueryEffect tr (GitSync.getGitHubCredential (encKeyOf tr) testPid account.id) <&> (>>= (.accessToken))
+            concurrentSave existing = runQueryEffect tr $ GitSync.saveTokenCredential (encKeyOf tr) testPid Git.GitHub Nothing "team" "concurrent-token" existing
+        savedToken `shouldReturn` Just "fixture-token"
+        concurrentSave Nothing >>= (`shouldSatisfy` isNothing)
+        savedToken `shouldReturn` Just "fixture-token"
+        conflict <- call tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.accessToken = "replacement-token"}
+        conflict.content.connectionError `shouldSatisfy` isJust
+        savedToken `shouldReturn` Just "fixture-token"
+        _ <- testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.accessToken = "replacement-token", PageCodeContext.replaceToken = Just True}
+        savedToken `shouldReturn` Just "replacement-token"
+        concurrentSave (Just account) >>= (`shouldSatisfy` isNothing)
+        savedToken `shouldReturn` Just "replacement-token"
+        source <- call tr $ metadata $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing
+        renderT source `shouldSatisfy` T.isInfixOf "value=\"trunk\""
+        picker <- call tr $ getOnly (Just "https://api.github.com/user/repos?per_page=100&page=1") "[{\"full_name\":\"team/checkout\",\"private\":true,\"default_branch\":\"trunk\"}]" $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
+        picker.content.repositories `shouldBe` Right [Git.GitRepo "team/checkout" "checkout" True "trunk"]
+        -- An app installation is never downgraded to a token, by a concurrent save or the form.
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.git_credentials SET installation_id = 42, access_token = NULL WHERE id = #{account.id} |]
+        concurrentSave (Just account) >>= (`shouldSatisfy` isNothing)
+        appDenied <- call tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.replaceToken = Just True}
+        appDenied.content.connectionError `shouldSatisfy` isJust
+        Just app <- runQueryEffect tr $ GitSync.getGitHubCredential (encKeyOf tr) testPid account.id
+        app.installationId `shouldBe` Just 42
+        -- GitLab namespaces, Gitea and Bitbucket read their own metadata shapes.
+        for_
+          ([(Git.GitLab, Nothing, "team/platform/checkout", "{\"path_with_namespace\":\"team/platform/checkout\",\"visibility\":\"private\",\"default_branch\":\"stable\"}"), (Git.Gitea, Just "https://git.example.com", "team/checkout", "{\"full_name\":\"team/checkout\",\"private\":true,\"default_branch\":\"stable\"}"), (Git.Bitbucket, Nothing, "team/checkout", "{\"full_name\":\"team/checkout\",\"is_private\":true,\"mainbranch\":{\"name\":\"stable\"}}")] :: [(Git.GitHost, Maybe Text, Text, LBS.ByteString)])
+          \(host, origin, name, body) -> do
+            _ <- testServant tr $ getOnly Nothing body $ PageCodeContext.repositoryTokenPostH testPid (PageCodeContext.RepositoryTokenForm host origin name "fixture-token" Nothing)
+            hosted <- runQueryEffect tr (GitSync.getRepositories testPid) >>= maybe (fail "Expected repository for this Git host") pure . find ((== host) . (.host))
+            (hosted.owner, hosted.repo) `shouldBe` Git.splitFullName name
+            hostedSource <- call tr $ getOnly Nothing body $ PageCodeContext.repositorySourceGetH testPid hosted.id Nothing Nothing
+            renderT hostedSource `shouldSatisfy` T.isInfixOf "value=\"stable\""
+        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
+
+      it "repositorySettings_readOnlyMembersSeeMappingsWithoutEditControlsOrProviderRequests" \tr -> do
+        account <- appAccount tr "team"
+        runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" "checkout" "main") (Just "checkout") "/app/" "src"
+        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
+        dbExec tr "UPDATE projects.project_members SET permission = 'view' WHERE project_id = ?" (Only testPid)
+        details <- renderT . (.content) <$> call tr (PageCodeContext.repositoryGetH testPid repository.id)
+        details `shouldSatisfy` T.isInfixOf "View source context"
+        details `shouldNotSatisfy` T.isInfixOf "Configure source context"
+        let noProvider = interpose @W.HTTP \_ _ -> liftIO $ expectationFailure "Read-only repository settings must not contact the provider" >> throwIO (InvalidUrlException "https://git.invalid" "Unexpected provider call")
+        for_ [PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing, PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing, PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing] \handler -> do
+          html <- renderT <$> call tr (noProvider handler)
+          html `shouldSatisfy` T.isInfixOf "team/checkout"
+          html `shouldNotSatisfy` T.isInfixOf "name=\"credentialId\""
+          for_ ["Unlink", "Link repository", "Save review settings", "Install GitHub App", "Connect with token"] \control -> html `shouldNotSatisfy` T.isInfixOf control
+
+      it "credentialEncryption_usesFreshNoncesAuthenticatesCiphertextAndReadsLegacyTokens" \tr -> do
+        let encKey = BS.replicate 32 7
+            token = "same-provider-token"
+            credential cid = runQueryEffect tr $ GitSync.getGitHubCredential encKey testPid cid
+        Just alpha <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "alpha" Nothing (Just token)
+        Just beta <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "beta" Nothing (Just token)
+        alpha.accessToken `shouldNotBe` beta.accessToken
+        for_ [alpha, beta] \c -> fmap (.accessToken) <$> credential c.id `shouldReturn` Just (Just token)
+        encoded <- maybe (fail "Missing encrypted credential") pure alpha.accessToken
+        body <- maybe (fail "Missing authenticated envelope") pure $ T.stripPrefix "v1:" encoded
+        bytes <- either (fail . toString) pure $ B64.decodeBase64Untyped $ encodeUtf8 body
+        let corrupt = "v1:" <> extractBase64 (B64.encodeBase64 $ BS.map (`xor` 1) bytes)
+            legacy = extractBase64 $ B64.encodeBase64 $ Keys.encryptAPIKey encKey $ encodeUtf8 token
+        for_ [(corrupt, alpha.id), (legacy, beta.id)] $ dbExec tr "UPDATE projects.git_credentials SET access_token = ? WHERE id = ?"
+        credential alpha.id >>= (`shouldSatisfy` isNothing)
+        fmap (.accessToken) <$> credential beta.id `shouldReturn` Just (Just token)
+        runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "empty" "" Nothing) `shouldThrow` (== Keys.EmptySecret)
+
+      it "repositoryConnections_githubCasingDoesNotDuplicateConnectionsOrSyncs" \tr -> do
+        account <- appAccount tr "team"
+        sameAccount <- appAccount tr "TEAM"
+        sameAccount.id `shouldBe` account.id
+        for_ (["Team/Checkout", "team/checkout"] :: [Text]) \name -> do
+          Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo name "checkout" True "main"]
+          void $ testServant tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (PageCodeContext.RepositoryConnectForm [name])
+        map (\r -> (r.owner, r.repo)) <$> runQueryEffect tr (GitSync.getRepositories testPid) `shouldReturn` [("team", "checkout")]
+        for_ ([("Team", "Checkout"), ("team", "checkout")] :: [(Text, Text)]) \(owner, repo) ->
+          void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch = "main", accessToken = "fixture-token", webhookSecret = Just "fixture-secret", pathPrefix = Nothing}
+        syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
+        map (\s -> (s.owner, s.repo)) syncs `shouldBe` [("team", "checkout")]
+        map (.id) <$> runQueryEffect tr (GitSync.getGitSyncsByRepo Git.GitHub "TEAM" "CHECKOUT") `shouldReturn` map (.id) syncs
+        runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "TEAM" "CHECKOUT" "main") (Just "checkout") "/app/" "src"
+        map (\m -> (m.owner, m.repo)) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` [("team", "checkout")]
+        -- Only GitHub folds case; other hosts keep both spellings.
+        gitlab <- grantOf tr testPid Git.GitLab Nothing "Team" Nothing (Just "fixture")
+        for_ (["Team/Checkout", "team/checkout"] :: [Text]) \name -> void $ runQueryEffect tr $ GitSync.connectRepository testPid gitlab.id (Git.GitRepo name "checkout" True "main")
+        allRepositories <- runQueryEffect tr $ GitSync.getRepositories testPid
+        sort [(r.owner, r.repo) | r <- allRepositories, r.host == Git.GitLab] `shouldBe` [("Team", "Checkout"), ("team", "checkout")]
+
+      it "repositoryPicker_connectsCodebasesWithoutEnablingCapabilitiesAndRejectsUnavailableSelections" \tr -> do
+        let repositories = [Git.GitRepo "team/checkout" "checkout" True "trunk", Git.GitRepo "team/catalog" "catalog" False "main"]
+            connectForm = PageCodeContext.RepositoryConnectForm
+        account <- appAccount tr "team"
+        Cache.insert tr.trATCtx.repoListCache account.id repositories
+        picker <- call tr $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
+        picker.content.repositories `shouldBe` Right repositories
+        rejected <- call tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (connectForm ["team/checkout", "foreign/private"])
+        rejected.content.selected `shouldBe` ["team/checkout", "foreign/private"]
+        rejected.content.connectionError `shouldSatisfy` isJust
+        runQueryEffect tr (GitSync.getRepositories testPid) >>= (`shouldSatisfy` null)
+        replicateM_ 2 do
+          (response, _) <- testServant tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (connectForm ["team/checkout", "team/catalog", "team/checkout"])
+          getHeaders response `shouldSatisfy` elem ("HX-Redirect", encodeUtf8 ("/p/" <> testPid.toText <> "/repositories"))
+        connected <- runQueryEffect tr $ GitSync.getRepositories testPid
+        map (\r -> (r.repo, r.credentialId)) connected `shouldBe` [("catalog", Just account.id), ("checkout", Just account.id)]
+        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
+        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
+        otherPid <- createTestProject tr "Other picker account"
+        foreignAccount <- grantOf tr otherPid Git.GitHub Nothing "foreign" (Just 43) Nothing
+        Cache.insert tr.trATCtx.repoListCache foreignAccount.id repositories
+        runQueryEffect tr (GitSync.connectRepository testPid foreignAccount.id (Git.GitRepo "foreign/private" "private" True "main")) >>= (`shouldSatisfy` isNothing)
+        denied <- call tr $ PageCodeContext.repositoryConnectPostH testPid (Just foreignAccount.id) (connectForm ["team/catalog"])
+        denied.content.connectionError `shouldSatisfy` isJust
+        runQueryEffect tr (GitSync.getRepositories otherPid) >>= (`shouldSatisfy` null)
+        Cache.insert tr.trATCtx.repoListCache account.id []
+        emptyPicker <- call tr $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
+        emptyPicker.content.repositories `shouldBe` Right []
+        renderT emptyPicker.content `shouldSatisfy` T.isInfixOf "No repositories are available"
+        Cache.delete tr.trATCtx.repoListCache account.id
+        failed <- call tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppPrivateKey = ""}}} $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
+        failed.content.repositories `shouldSatisfy` isLeft
+        for_ ["Could not load repositories", "Retry"] \label -> renderT failed.content `shouldSatisfy` T.isInfixOf label
+        Cache.lookup tr.trATCtx.repoListCache account.id `shouldReturn` Nothing
+        dbExec tr "DELETE FROM projects.git_credentials WHERE project_id = ? AND id = ?" (testPid, account.id)
+        map (.credentialId) <$> runQueryEffect tr (GitSync.getRepositories testPid) `shouldReturn` [Nothing, Nothing]
+
+      -- Listing the picker's repositories (a token exchange plus a listing call) made a 0.2s page
+      -- take 1.5s on every load. Nothing here reaches GitHub, so a seeded entry rendering at all
+      -- proves the per-credential cache answered.
+      it "renders the repository picker from the cache instead of calling the git host" \tr -> do
+        cred <- grantOf tr testPid Git.GitHub Nothing "acme" (Just 42) Nothing
+        uncached <- renderT . snd <$> testServant tr (withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid (Just cred.id))
+        uncached `shouldNotSatisfy` T.isInfixOf "sentinel-repo"
+        Cache.insert tr.trATCtx.repoListCache cred.id [Git.GitRepo "acme/sentinel-repo" "sentinel-repo" False "trunk"]
+        cached <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid (Just cred.id)
+        renderT cached `shouldSatisfy` T.isInfixOf "sentinel-repo"
+        cached.content.repositories `shouldBe` Right [Git.GitRepo "acme/sentinel-repo" "sentinel-repo" False "trunk"]
+
+      it "sourceRepositoryPicker_preservesTheSelectedNamespaceInsteadOfUsingTheAccountName" \tr -> do
+        account <- grantOf tr testPid Git.GitLab (Just "https://git.example.com") "team" Nothing (Just "fixture")
+        Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team/platform/checkout" "checkout" True "trunk"]
+        picker <- call tr $ PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing
+        renderT picker `shouldSatisfy` T.isInfixOf "value=\"team/platform/checkout\""
+        _ <- testServant tr $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "team/platform/checkout") (Just "trunk") (Just "checkout") Nothing Nothing Nothing (Just account.id))
+        map (\m -> (m.owner, m.repo)) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` [("team/platform", "checkout")]
+
+      it "repositoryIdentity_keepsTheSameNamesOnDifferentServersIndependent" \tr -> do
+        let origins = [Nothing, Just "https://git.example.com"] :: [Maybe Text]
+            apiBases xs = sort (map (.apiBase) xs)
+        for_ origins \origin -> grantOf tr testPid Git.GitHub origin "team" Nothing (Just "fixture")
+        apiBases <$> runQueryEffect tr (GitSync.getGitHubCredentials testPid) `shouldReturn` origins
+        -- repositoryConnection_keepsIdenticalNamesOnDifferentServersIndependent, from a fresh project.
+        formed <- createTestProject tr "Same names on two servers"
+        for_ origins $ testServant tr . GitSyncPage.gitSyncSettingsPostH formed . \origin -> GitSyncPage.GitSyncForm (Just Git.GitHub) origin "team" "dashboards" "main" "fixture" Nothing Nothing
+        apiBases <$> runQueryEffect tr (GitSync.getGitSyncs formed) `shouldReturn` origins
+        apiBases <$> runQueryEffect tr (GitSync.getGitHubCredentials formed) `shouldReturn` origins
+        overview <- call tr $ PageCodeContext.repositoriesGetH formed Nothing Nothing
+        T.count "team/dashboards" (renderT overview) `shouldBe` 2
+        -- repositoryPicker_doesNotTreatAnEnterpriseRepositoryAsItsPublicGitHubCounterpart
+        picked <- createTestProject tr "Enterprise picker"
+        account <- grantOf tr picked Git.GitHub Nothing "team" (Just 42) Nothing
+        Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team/dashboards" "dashboards" True "main"]
+        void $ syncOf tr picked (Just "https://git.example.com") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
+        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH picked $ GitSyncPage.RepoSelectForm ["team/dashboards"] "main" Nothing 42
+        apiBases <$> runQueryEffect tr (GitSync.getGitSyncs picked) `shouldReturn` origins
+
+      it "repositoryConnection_reportsUnreadableTokensWithoutChangingTheFailedOperation" \tr -> do
+        sync <- teamDashboards tr
+        dbExec tr "UPDATE projects.git_sync SET access_token = 'invalid-base64' WHERE id = ?" (Only sync.id)
+        runQueryEffect tr (GitSync.getGitSyncsDecrypted (encKeyOf tr) testPid) >>= (`shouldSatisfy` null)
+        (.lastError) <$> syncById tr sync >>= (`shouldSatisfy` isJust)
+        did <- UUIDId <$> UUID.nextRandom
+        void $ runQueryEffect tr $ GitSync.recordSyncError sync.id (GitSync.ExportDashboard did) "Export failed"
+        _ <- testServant tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
+        (fmap (.operation) . (.lastError)) <$> syncById tr sync `shouldReturn` Just (GitSync.ExportDashboard did)
+
+      it "repositoryPicker_connectsSeveralRepositoriesAndPreservesExistingConfiguration" \tr -> do
+        account <- grantOf tr testPid Git.GitHub Nothing "team-a" (Just 42) Nothing
+        Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team-a/dashboards" "dashboards" True "main", Git.GitRepo "team-b/dashboards" "dashboards" True "main"]
+        let selection = GitSyncPage.RepoSelectForm ["team-a/dashboards", "team-b/dashboards", "team-a/dashboards"] "trunk" (Just "observability") 42
+        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH testPid selection
+        syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
+        sort [(s.owner, s.repo, s.branch, s.pathPrefix) | s <- syncs] `shouldBe` [("team-a", "dashboards", "trunk", "observability"), ("team-b", "dashboards", "trunk", "observability")]
+        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH testPid selection{GitSyncPage.branch = "different", GitSyncPage.pathPrefix = Just "other"}
+        unchanged <- runQueryEffect tr $ GitSync.getGitSyncs testPid
+        sort [(s.id, s.branch, s.pathPrefix) | s <- unchanged] `shouldBe` sort [(s.id, s.branch, s.pathPrefix) | s <- syncs]
+
+      it "repositoryAccounts_requireAnExplicitChoiceAndOfferEveryGrant" \tr -> do
+        -- repositoryAccounts_offerBothGrantsEvenWhenOneAlsoSyncsDashboards
+        void $ syncOf tr testPid Nothing "zzz-ours" "monoscope-config" (GitSync.PersonalToken "ghp_test") ""
+        for_ ["aaa-stray", "zzz-ours"] \name -> grantOf tr testPid Git.GitHub Nothing name (Just 222) Nothing >>= \c -> Cache.insert tr.trATCtx.repoListCache c.id []
+        accounts <- forM ["team-a", "team-b"] \name -> do
+          credential <- appAccount tr name
+          credential <$ Cache.insert tr.trATCtx.repoListCache credential.id []
+        page <- renderT . (.content) <$> call tr (withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid Nothing)
+        for_ (["zzz-ours", "aaa-stray", "team-a", "team-b", "Choose an account"] :: [Text]) \label -> page `shouldSatisfy` T.isInfixOf label
+        -- The newest grant is never picked for you.
+        let mapping cred = testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout") (Just "main") ((.account) <$> cred) Nothing Nothing Nothing ((.id) <$> cred))
+        _ <- mapping Nothing
+        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
+        for_ accounts \account -> do
+          editor <- renderT <$> call tr (PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) (Just "/srv/app/main.py"))
+          editor `shouldSatisfy` T.isInfixOf ("name=\"credentialId\" value=\"" <> account.id.toText <> "\"")
+          editor `shouldSatisfy` T.isInfixOf "value=\"/srv/app/main.py\""
+          void $ mapping (Just account)
+        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
+        sort [(m.owner, m.credentialId) | m <- mappings] `shouldBe` sort [(a.account, a.id) | a <- accounts]
+        otherPid <- createTestProject tr "Other account project"
+        void $ mapping . Just =<< grantOf tr otherPid Git.GitHub Nothing "foreign" (Just 42) Nothing
+        length <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` 2
+
+    describe "Source context" do
+      -- One git-host call per frame opened turns a hot issue into a rate-limit stall that reads as
+      -- "the panel never fills". The cache is per blob, so a second frame of one file is free.
+      it "fetches a blob once however many frames ask for it" \tr -> do
+        void $ syncOf tr testPid Nothing "acme" "checkout-service" (GitSync.PersonalToken "ghp_test") ""
+        _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout-service") (Just "main") (Just "checkout") Nothing (Just "/srv/app/") (Just "") Nothing)
+        calls <- newIORef (0 :: Int)
+        let fetch n = runQueryEffect tr $ runCountingHTTP calls (blobOf "one\ntwo\nthree\nfour\n") $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "/srv/app/checkout.py" n
+        first_ <- fetch 2
+        readIORef calls `shouldReturn` 1
+        second_ <- fetch 3
+        readIORef calls `shouldReturn` 1
+        fmap (.focusLine) first_ `shouldBe` Right 2
+        fmap (.focusLine) second_ `shouldBe` Right 3
+        fmap (.body) second_ `shouldBe` Right ["one", "two", "three", "four"]
+
+      it "sourceContextPages_guideAnUnconfiguredProjectFromFrameToMapping" \tr -> do
+        connection <- call tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
+        renderT connection.content `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/connect/token\"")
+        -- Without a credential there is nothing to read repos through, so the page points at the
+        -- control that fixes that rather than a form whose every submission is discarded.
+        mappings <- renderT <$> call tr (PageCodeContext.codeMappingsGetH testPid Nothing)
+        for_ ["href=\"/p/" <> testPid.toText <> "/repositories\"", "href=\"/p/" <> testPid.toText <> "/repositories/connect\"", "Pull requests", "Repositories", "Connect repositories"] \part -> mappings `shouldSatisfy` T.isInfixOf part
+        mappings `shouldNotSatisfy` T.isInfixOf "Link repository"
+        -- An unresolvable frame explains which of the two problems it has instead of failing the panel.
+        unmapped <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
+        renderT unmapped `shouldSatisfy` T.isInfixOf "No linked repository covers /srv/app/checkout.py"
+        noLine <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") Nothing Nothing Nothing
+        renderT noLine `shouldSatisfy` T.isInfixOf "no file and line"
+        -- Once an account exists, the unmapped frame's path is carried into the mapping form.
+        void $ syncOf tr testPid Nothing "acme" "monoscope-config" (GitSync.PersonalToken "ghp_test") ""
+        linkable <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
+        renderT linkable `shouldSatisfy` T.isInfixOf "repositories?sample=%2Fsrv%2Fapp%2Fcheckout.py"
+        form <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsGetH testPid (Just "/srv/app/checkout.py")
+        renderT form `shouldSatisfy` T.isInfixOf "sample=%2Fsrv%2Fapp%2Fcheckout.py"
+
+      it "maps several services onto several repos, and resolves each frame to its own" \tr -> do
+        -- The config-sync repo is the project's monoscope YAML, not where the services live.
+        void $ syncOf tr testPid Nothing "acme" "monoscope-config" (GitSync.PersonalToken "ghp_test") ""
+        let add repo svc prefix root = testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just repo) (Just "main") svc Nothing (Just prefix) (Just root) Nothing)
+        _ <- add "checkout-service" (Just "checkout") "/srv/app/" "src"
+        added <- renderT . snd <$> add "billing-service" (Just "billing") "/opt/billing/" ""
+        -- The account came from the config-sync installation; the row says what it covers in frame-path terms.
+        for_ ["acme/checkout-service", "acme/billing-service", "frames under /srv/app/"] \part -> added `shouldSatisfy` T.isInfixOf part
+        added `shouldNotSatisfy` T.isInfixOf "monoscope-config"
+        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
+        sort (map (.repo) mappings) `shouldBe` ["billing-service", "checkout-service"]
+        -- Each service's frame goes to its own repo; a frame no mapping claims resolves to nothing,
+        -- since a snippet from the wrong repo is worse than none.
+        let repoFor svc path = first (.repo) <$> CodeContext.resolveRepoPath mappings (Just svc) path
+        repoFor "checkout" "/srv/app/services/checkout.py" `shouldBe` Just ("checkout-service", "src/services/checkout.py")
+        repoFor "billing" "/opt/billing/invoice.rb" `shouldBe` Just ("billing-service", "invoice.rb")
+        repoFor "search" "/srv/search/index.go" `shouldBe` Nothing
+        cm <- maybe (fail "expected two mappings") pure $ listToMaybe mappings
+        afterDelete <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsDeleteH testPid cm.id
+        renderT afterDelete `shouldNotSatisfy` T.isInfixOf (cm.owner <> "/" <> cm.repo)
+        length <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` 1
+
+      it "sourceContext_disableRetainsServiceLinksAndDoesNotDisableReviews" \tr -> do
+        account <- appAccount tr "team"
+        runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" "checkout" "main") (Just "checkout") "" ""
+        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
+        _ <- testServant tr $ PageCodeContext.repositorySourceEnabledPostH testPid repository.id (PageCodeContext.SourceContextForm False)
+        map (.service) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` [Just "checkout"]
+        runQueryEffect tr (W.runHTTPWreq $ withUnavailableRepositoryAPI $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "main.py" 1) `shouldReturn` Left (CodeContext.NoMapping "main.py")
+        runQueryEffect tr $ ImpactReviews.receiveEvent (ImpactReviews.PullRequestEvent "team" "checkout" 42 1 (T.replicate 40 "a") frozenTime True)
+        length <$> runQueryEffect tr (ImpactReviews.latestRuns testPid) `shouldReturn` 1
+
+      it "repositoryOverview_listsEveryRepositoryOnceWithoutCallingTheProvider" \tr -> do
+        -- repositoryConfiguration_usesTheSingleListInsteadOfDuplicateConnectionForms
+        team <- appAccount tr "team"
+        Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid team.id (Git.GitRepo "team/checkout" "checkout" True "main")
+        listed <- renderT <$> call tr (withUnavailableRepositoryAPI $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing)
+        for_ ["/repositories/" <> repository.id.toText, "Source context"] \part -> listed `shouldSatisfy` T.isInfixOf part
+        for_ ["Connect a dashboard repository", "Link repository", ">Configuration<"] \label -> listed `shouldNotSatisfy` T.isInfixOf label
+        -- Service and dashboard repositories share the list; serviceMappings_keepMultipleRepositoriesForTheSameServiceAndPath.
+        acme <- grantOf tr testPid Git.GitHub Nothing "acme" (Just 42) Nothing
+        for_ ["checkout-service", "shared"] \repo -> runQueryEffect tr $ CodeContext.insertCodeMapping testPid acme.id (Git.RepoRef "acme" repo "main") (Just "checkout") "/srv/app/" ""
+        sort . map (.repo) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` ["checkout-service", "shared"]
+        void $ syncOf tr testPid Nothing "acme" "dashboards" (GitSync.AppInstallation 42) ""
+        overview <- renderT <$> call tr (withUnavailableRepositoryAPI $ PageCodeContext.repositoriesGetH testPid Nothing Nothing)
+        for_ (["acme/checkout-service", "checkout", "acme/dashboards", "Awaiting first sync", "Production impact reviews"] :: [Text]) \label -> overview `shouldSatisfy` T.isInfixOf label
+        reviews <- call tr $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.PullRequests) Nothing
+        renderT reviews `shouldSatisfy` T.isInfixOf "No pull requests reviewed yet"
+
+      it "serviceRepositories_showOnlyApplicableOriginsAndExplainMissingLinksWithoutOfferingViewerEdits" \tr -> do
+        let service = "team/api & jobs"
+        account <- grantOf tr testPid Git.GitHub Nothing "acme" (Just 42) Nothing
+        enterprise <- grantOf tr testPid Git.GitHub (Just "https://git.example.com") "acme" (Just 43) Nothing
+        forM_ ([(account.id, "checkout-service", Just service, "/srv/"), (account.id, "shared-source", Nothing, "/shared/"), (account.id, "payments", Just "billing", "/payments/"), (enterprise.id, "checkout-service", Just "billing", "/enterprise/")] :: [(GitSync.GitHubCredentialId, Text, Maybe Text, Text)]) \(cid, repo, svc, prefix) ->
+          runQueryEffect tr $ CodeContext.insertCodeMapping testPid cid (Git.RepoRef "acme" repo "main") svc prefix ""
+        void $ syncOf tr testPid Nothing "acme" "dashboards" (GitSync.AppInstallation 42) ""
+        repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
+        html <- renderT <$> call tr (withUnavailableRepositoryAPI $ PageCodeContext.serviceRepositoriesGetH testPid service)
+        forM_ repositories \repository ->
+          T.isInfixOf ("/repositories/" <> repository.id.toText <> "\"") html `shouldBe` (isNothing repository.apiBase && repository.repo `elem` ["checkout-service", "shared-source"])
+        for_ ["All services", "team/api &amp; jobs", "Source mappings that apply to this service, including mappings for all services."] \part -> html `shouldSatisfy` T.isInfixOf part
+        html `shouldNotSatisfy` T.isInfixOf "id=\"repository-nav\""
+        dbExec tr "DELETE FROM projects.code_mappings WHERE project_id = ?" (Only testPid)
+        unlinked <- renderT <$> call tr (PageCodeContext.serviceRepositoriesGetH testPid service)
+        for_ ["No repositories linked to this service", "Choose a repository"] \part -> unlinked `shouldSatisfy` T.isInfixOf part
+        dbExec tr "UPDATE projects.project_members SET permission = 'view' WHERE project_id = ?" (Only testPid)
+        dbExec tr "DELETE FROM projects.repositories WHERE project_id = ?" (Only testPid)
+        forM_ [PageCodeContext.serviceRepositoriesGetH testPid service, PageCodeContext.repositoriesGetH testPid Nothing Nothing] \handler -> do
+          readonly <- renderT <$> call tr handler
+          for_ ["Add repositories", "Choose a repository", "Connect repositories"] \control -> readonly `shouldNotSatisfy` T.isInfixOf control
+          readonly `shouldSatisfy` T.isInfixOf "Ask a project editor"
+
+      it "repositorySourceSetup_preservesIdentityAccountAndBranchAndScopesItsMutations" \tr -> do
+        account <- appAccount tr "team"
+        Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team/checkout" "checkout" True "trunk", Git.GitRepo "team/catalog" "catalog" True "main"]
+        Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/checkout" "checkout" True "trunk")
+        runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" "catalog" "main") (Just "catalog") "/catalog/" ""
+        html <- renderT <$> call tr (PageCodeContext.repositorySourceGetH testPid repository.id Nothing (Just "/app/main.py"))
+        for_ ["value=\"team/checkout\"", "value=\"trunk\"", "value=\"/app/main.py\"", "name=\"credentialId\" value=\"" <> account.id.toText <> "\""] \value -> html `shouldSatisfy` T.isInfixOf value
+        html `shouldNotSatisfy` T.isInfixOf "Unlink team/catalog"
+        -- A forged owner/repo in the form cannot retarget the repository the route names.
+        _ <- testServant tr $ PageCodeContext.repositorySourcePostH testPid repository.id (PageCodeContext.CodeMappingForm (Just "foreign/private") (Just "release") (Just "checkout") Nothing (Just "/app/") Nothing Nothing)
+        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
+        map (\m -> (m.owner, m.repo, m.ref, m.credentialId)) (filter ((== Just "checkout") . (.service)) mappings) `shouldBe` [("team", "checkout", "release", account.id)]
+        _ <- testServant tr $ PageCodeContext.repositoryReviewsPostH testPid repository.id (ImpactReviews.ReviewSettings "foreign" "private" False False)
+        settings <- runQueryEffect tr $ ImpactReviews.repositorySettings testPid
+        map (\s -> (s.owner, s.repo, s.enabled)) settings `shouldMatchList` [("team", "checkout", False), ("team", "catalog", True)]
+        for_ (filter ((== "checkout") . (.repo)) mappings) \mapping -> void $ testServant tr $ PageCodeContext.repositorySourceDeleteH testPid repository.id mapping.id
+        map (.repo) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` ["catalog"]
+
     describe "Project wiki" do
       it "shares a project wiki with immutable revisions, conflict-safe edits and project permissions" \tr -> do
         let user = (getResponse tr.trSessAndHeader :: Projects.Session).user.id
             page = UUIDId $ UUID.fromWords 50 0 0 1 :: Memory.PageId
-            app =
-              genericServeTWithContext
-                (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-                (Routes.server (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
-                (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+            duplicate = UUIDId $ UUID.fromWords 50 0 0 2 :: Memory.PageId
+            app = wikiApp tr
             base pid = "/p/" <> pid.toText <> "/memories"
+            wiki path = "/p/" <> testPid.toText <> "/wiki" <> path
             authorization = ("Authorization", "Bearer " <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId)
             request method path fields =
               WT.runSession
@@ -235,21 +764,25 @@ spec = do
                       (fromStrict $ BS.intercalate "&" [key <> "=" <> urlEncode True (encodeUtf8 value) | (key, value) <- fields])
                 )
                 app
+            visit path = request H.methodGet path []
+            post pageId version path title body = request H.methodPost (base testPid) [("pageId", pageId), ("version", version), ("path", path), ("title", title), ("body", body)]
             save pid expected title body = request H.methodPost (base pid) [("pageId", page.toText), ("version", show @Text expected), ("path", "runbooks/retries"), ("title", title), ("body", body)]
             html = decodeUtf8 @Text . (.simpleBody)
+            status r = H.statusCode r.simpleStatus
+            has r = traverse_ \part -> html r `shouldSatisfy` T.isInfixOf part
+            lacks r = traverse_ \part -> html r `shouldNotSatisfy` T.isInfixOf part
+            revisions = length <$> runQueryEffect tr (Memory.pageHistory testPid page)
         created <- save testPid (0 :: Word32) "Retry behavior" "Keep retry tokens. <script>alert('wiki')</script>"
-        H.statusCode created.simpleStatus `shouldBe` 200
-        html created `shouldSatisfy` T.isInfixOf "Keep retry tokens."
-        html created `shouldNotSatisfy` T.isInfixOf "<script>alert('wiki')</script>"
-        nested <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/retries") []
-        H.statusCode nested.simpleStatus `shouldBe` 200
-        html nested `shouldSatisfy` T.isInfixOf "runbooks"
-        html nested `shouldNotSatisfy` T.isInfixOf "<wiki-editor"
-        html nested `shouldSatisfy` T.isInfixOf "/wiki/runbooks/retries?edit=true"
-        editing <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/retries?edit=true") []
-        html editing `shouldSatisfy` T.isInfixOf "<wiki-editor"
-        html editing `shouldSatisfy` T.isInfixOf "form=\"wiki-form\""
-        html nested `shouldSatisfy` T.isInfixOf "/wiki/runbooks/retries"
+        status created `shouldBe` 200
+        has created ["Keep retry tokens."]
+        lacks created ["<script>alert('wiki')</script>"]
+        nested <- visit $ wiki "/runbooks/retries"
+        status nested `shouldBe` 200
+        has nested ["runbooks", "/wiki/runbooks/retries?edit=true", "/wiki/runbooks/retries"]
+        lacks nested ["<wiki-editor"]
+        editing <- visit $ wiki "/runbooks/retries?edit=true"
+        has editing ["<wiki-editor", "form=\"wiki-form\""]
+        -- Markdown renders, and no link, image or raw HTML can carry script or a form.
         for_
           ( zip
               [4 ..]
@@ -266,128 +799,97 @@ spec = do
           \(n, (body, rendered)) -> do
             let formatted = UUIDId $ UUID.fromWords 50 0 0 n :: Memory.PageId
                 path = "formatting/page-" <> show @Text n
-            saved <- request H.methodPost (base testPid) [("pageId", formatted.toText), ("version", "0"), ("path", path), ("title", "Formatted note"), ("body", body)]
-            H.statusCode saved.simpleStatus `shouldBe` 200
-            readBack <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/" <> path) []
-            H.statusCode readBack.simpleStatus `shouldBe` 200
-            for_ rendered \part -> T.isInfixOf part (html readBack) `shouldBe` True
+            saved <- post formatted.toText "0" path "Formatted note" body
+            status saved `shouldBe` 200
+            readBack <- visit $ wiki $ "/" <> path
+            status readBack `shouldBe` 200
+            has readBack rendered
             T.toLower (html readBack) `shouldNotSatisfy` T.isInfixOf "href=\"javascript:alert"
-            html readBack `shouldNotSatisfy` T.isInfixOf "src=\"data:text/html"
-            html readBack `shouldNotSatisfy` T.isInfixOf "<script>alert('wiki')</script>"
-            T.isInfixOf "href=\"script\"" (html readBack) `shouldBe` False
-            T.isInfixOf "id=\"wiki-injection\"" (html readBack) `shouldBe` False
+            lacks readBack ["src=\"data:text/html", "<script>alert('wiki')</script>", "href=\"script\"", "id=\"wiki-injection\""]
             map (Memory.memoryText . (.document.body)) <$> runQueryEffect tr (Memory.pageHistory testPid formatted) `shouldReturn` [body]
-        for_ ["runbooks%2Fretries", "runbooks/%252e%252e/private", "runbooks/%2e%2e/private"] \path -> do
-          encoded <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/" <> path) []
-          H.statusCode encoded.simpleStatus `shouldBe` 404
-        let duplicate = UUIDId $ UUID.fromWords 50 0 0 2 :: Memory.PageId
-        collision <- request H.methodPost (base testPid) [("pageId", duplicate.toText), ("version", "0"), ("path", "runbooks/retries"), ("title", "Conflicting path"), ("body", "Preserve this draft")]
-        html collision `shouldSatisfy` T.isInfixOf "already uses this path"
-        html collision `shouldSatisfy` T.isInfixOf "Preserve this draft"
+        for_ ["runbooks%2Fretries", "runbooks/%252e%252e/private", "runbooks/%2e%2e/private"] \path -> status <$> visit (wiki $ "/" <> path) `shouldReturn` 404
+        -- A path collision or an invalid path keeps the draft and writes nothing.
+        collision <- post duplicate.toText "0" "runbooks/retries" "Conflicting path" "Preserve this draft"
+        has collision ["already uses this path", "Preserve this draft"]
         runQueryEffect tr (Memory.pageHistory testPid duplicate) `shouldReturn` []
         for_ ["../private", "runbooks//retries", "runbooks/%2f", "runbooks/."] \path -> do
-          invalidPath <- request H.methodPost (base testPid) [("pageId", page.toText), ("version", "1"), ("path", path), ("title", "Invalid path"), ("body", "Unsaved path draft")]
-          html invalidPath `shouldSatisfy` T.isInfixOf "Use a relative path"
-          html invalidPath `shouldSatisfy` T.isInfixOf "Unsaved path draft"
+          invalidPath <- post page.toText "1" path "Invalid path" "Unsaved path draft"
+          has invalidPath ["Use a relative path", "Unsaved path draft"]
         let legacyPage = UUIDId $ UUID.fromWords 50 0 0 3 :: Memory.PageId
         dbExec tr "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, ?::uuid, 1, document, author FROM projects.memory_revisions WHERE project_id = ? AND page_id = ? AND version = 1" (legacyPage, testPid, page)
-        legacyPath <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/" <> legacyPage.toText) []
-        H.statusCode legacyPath.simpleStatus `shouldBe` 200
+        status <$> visit (wiki $ "/" <> legacyPage.toText) `shouldReturn` 200
         firstHistory <- runQueryEffect tr $ Memory.pageHistory testPid page
-        map (.version) firstHistory `shouldBe` [1]
-        map (.author) firstHistory `shouldBe` [Memory.Member user]
+        map (\r -> (r.version, r.author)) firstHistory `shouldBe` [(1, Memory.Member user)]
+        -- Concurrent edits from one revision: exactly one wins, and history is immutable.
         (firstEdit, secondEdit) <- concurrently (save testPid 1 "Retry behavior" "First concurrent edit") (save testPid 1 "Retry behavior" "Second concurrent edit")
         length (filter (T.isInfixOf "This page changed" . html) [firstEdit, secondEdit]) `shouldBe` 1
         history <- runQueryEffect tr $ Memory.pageHistory testPid page
         map (.version) history `shouldBe` [2, 1]
         map (.document) (drop 1 history) `shouldBe` map (.document) firstHistory
-        index <- request H.methodGet (base testPid) []
-        html index `shouldSatisfy` T.isInfixOf "Retry behavior"
-        viewed <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
-        html viewed `shouldSatisfy` T.isInfixOf "Revision history"
-        html viewed `shouldSatisfy` T.isInfixOf "Keep retry tokens. &lt;script&gt;"
-        T.isInfixOf "href=\"script\"" (html viewed) `shouldBe` False
+        visit (base testPid) >>= (`has` ["Retry behavior"])
+        viewed <- visit $ base testPid <> "?page=" <> page.toText
+        has viewed ["Revision history", "Keep retry tokens. &lt;script&gt;"]
+        lacks viewed ["href=\"script\""]
         typedWiki <- call tr $ PageCodeContext.memoryGetH testPid $ Just page
-        typedWiki.content.form.version `shouldBe` 2
-        typedWiki.content.canEdit `shouldBe` True
+        (typedWiki.content.form.version, typedWiki.content.canEdit) `shouldBe` (2, True)
         stale <- save testPid 1 "Preserved draft" "Stale edit must not advance its expected revision"
-        html stale `shouldSatisfy` T.isInfixOf "Preserved draft"
-        html stale `shouldSatisfy` T.isInfixOf "name=\"version\" value=\"1\""
-        wikiTab <- request H.methodGet ("/p/" <> testPid.toText <> "/repositories?tab=wiki") []
-        H.statusCode wikiTab.simpleStatus `shouldBe` 200
-        html wikiTab `shouldSatisfy` T.isInfixOf "Retry behavior"
+        has stale ["Preserved draft", "name=\"version\" value=\"1\""]
+        wikiTab <- visit $ "/p/" <> testPid.toText <> "/repositories?tab=wiki"
+        status wikiTab `shouldBe` 200
+        has wikiTab ["Retry behavior"]
         invalid <- save testPid 2 " " "Invalid title draft"
-        html invalid `shouldSatisfy` T.isInfixOf "Invalid title draft"
-        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
+        has invalid ["Invalid title draft"]
+        revisions `shouldReturn` 2
         for_ [(T.replicate 121 "x", "Oversized title"), ("Blank body", " "), ("Oversized body", T.replicate 16001 "x"), ("Invalid body", "bad\NULbody")] \(title, body) -> do
           rejected <- save testPid 2 title body
-          H.statusCode rejected.simpleStatus `shouldBe` 200
-          html rejected `shouldSatisfy` T.isInfixOf "characters without null bytes"
-          length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
+          status rejected `shouldBe` 200
+          has rejected ["characters without null bytes"]
+          revisions `shouldReturn` 2
+        -- Other projects, viewers, anonymous visitors and the public demo cannot read or write it.
         other <- createTestProject tr "Isolated memory project"
-        hidden <- request H.methodGet (base other <> "?page=" <> page.toText) []
-        H.statusCode hidden.simpleStatus `shouldBe` 404
+        status <$> visit (base other <> "?page=" <> page.toText) `shouldReturn` 404
         runQueryEffect tr (Memory.pageHistory other page) `shouldReturn` []
         dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PView, testPid, user)
-        readOnly <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
-        H.statusCode readOnly.simpleStatus `shouldBe` 200
-        html readOnly `shouldNotSatisfy` T.isInfixOf "Save page"
-        viewerMissing <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/unwritten") []
-        H.statusCode viewerMissing.simpleStatus `shouldBe` 404
-        refused <- save testPid 2 "Retry behavior" "Viewer must not write"
-        H.statusCode refused.simpleStatus `shouldBe` 403
-        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
-        anonymous <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ base testPid) app
-        H.statusCode anonymous.simpleStatus `shouldSatisfy` (`elem` [302, 401, 403, 404])
-        demo <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ "/p/" <> testPid.toText <> "/repositories") app
-        html demo `shouldNotSatisfy` T.isInfixOf "Project wiki"
-        demoWiki <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ base testPid) app
-        H.statusCode demoWiki.simpleStatus `shouldBe` 404
+        readOnly <- visit $ base testPid <> "?page=" <> page.toText
+        status readOnly `shouldBe` 200
+        lacks readOnly ["Save page"]
+        status <$> visit (wiki "/runbooks/unwritten") `shouldReturn` 404
+        status <$> save testPid 2 "Retry behavior" "Viewer must not write" `shouldReturn` 403
+        revisions `shouldReturn` 2
+        let anonymous path = WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 path) app
+        anonymous ("/p/" <> testPid.toText <> "/repositories") >>= (`lacks` ["Project wiki"])
+        status <$> anonymous (base testPid) `shouldReturn` 404
         dbExec tr "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
-        otherPage <- request H.methodPost (base testPid) [("pageId", duplicate.toText), ("version", "0"), ("path", "services/other"), ("title", "Other page"), ("body", "Other notes")]
-        H.statusCode otherPage.simpleStatus `shouldBe` 200
-        blockedRename <- request H.methodPost (base testPid) [("pageId", page.toText), ("version", "2"), ("path", "services/other"), ("title", "Blocked rename"), ("body", "Unsaved rename draft")]
-        html blockedRename `shouldSatisfy` T.isInfixOf "already uses this path"
-        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
-        renamed <- request H.methodPost (base testPid) [("pageId", page.toText), ("version", "2"), ("path", "services/retries"), ("title", "Retry behavior"), ("body", "Renamed page body")]
-        html renamed `shouldSatisfy` T.isInfixOf "/wiki/services/retries"
-        moved <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/services/retries") []
-        H.statusCode moved.simpleStatus `shouldBe` 200
-        oldPath <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/retries") []
-        H.statusCode oldPath.simpleStatus `shouldBe` 200
-        html oldPath `shouldSatisfy` T.isInfixOf "id=\"wiki-form\""
-        html oldPath `shouldSatisfy` T.isInfixOf "value=\"runbooks/retries\""
-        derived <- request H.methodPost (base testPid) [("pageId", UUID.toText (UUID.fromWords 50 0 0 99)), ("version", "0"), ("path", "runbooks/"), ("title", "Restart the Consumer"), ("body", "Steps")]
-        html derived `shouldSatisfy` T.isInfixOf "/wiki/runbooks/restart-the-consumer"
-        folderNew <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki?folder=runbooks") []
-        html folderNew `shouldSatisfy` T.isInfixOf "value=\"runbooks/\""
-        linking <- request H.methodPost (base testPid) [("pageId", duplicate.toText), ("version", "1"), ("path", "services/other"), ("title", "Other page"), ("body", "See [[services/retries|retry notes]] and [[javascript:alert(1)]].")]
-        html linking `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/wiki/services/retries\"")
-        html linking `shouldSatisfy` T.isInfixOf ">retry notes</a>"
+        -- Renames: blocked onto a used path, followed by the old path, derived from the title in a folder.
+        status <$> post duplicate.toText "0" "services/other" "Other page" "Other notes" `shouldReturn` 200
+        post page.toText "2" "services/other" "Blocked rename" "Unsaved rename draft" >>= (`has` ["already uses this path"])
+        revisions `shouldReturn` 2
+        post page.toText "2" "services/retries" "Retry behavior" "Renamed page body" >>= (`has` ["/wiki/services/retries"])
+        status <$> visit (wiki "/services/retries") `shouldReturn` 200
+        oldPath <- visit $ wiki "/runbooks/retries"
+        status oldPath `shouldBe` 200
+        has oldPath ["id=\"wiki-form\"", "value=\"runbooks/retries\""]
+        post (UUID.toText (UUID.fromWords 50 0 0 99)) "0" "runbooks/" "Restart the Consumer" "Steps" >>= (`has` ["/wiki/runbooks/restart-the-consumer"])
+        visit (wiki "?folder=runbooks") >>= (`has` ["value=\"runbooks/\""])
+        -- Wiki links resolve within the project, never to a script, and are traced back and searchable.
+        linking <- post duplicate.toText "1" "services/other" "Other page" "See [[services/retries|retry notes]] and [[javascript:alert(1)]]."
+        has linking ["href=\"/p/" <> testPid.toText <> "/wiki/services/retries\"", ">retry notes</a>"]
         T.toLower (html linking) `shouldNotSatisfy` T.isInfixOf "href=\"javascript"
-        html linking `shouldNotSatisfy` T.isInfixOf "/wiki/javascript"
-        linked <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/services/retries") []
-        html linked `shouldSatisfy` T.isInfixOf "Linked from"
-        html linked `shouldSatisfy` T.isInfixOf "/wiki/services/other"
-        searched <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki?q=RETRY%20NOTES") []
-        html searched `shouldSatisfy` T.isInfixOf "/wiki/services/other"
-        html searched `shouldNotSatisfy` T.isInfixOf "/wiki/services/retries"
-        changes <- request H.methodGet (base testPid <> "?page=" <> duplicate.toText) []
-        html changes `shouldSatisfy` T.isInfixOf "Changes from revision 1"
-        html changes `shouldSatisfy` T.isInfixOf "- Other notes"
-        html changes `shouldSatisfy` T.isInfixOf "+ See [[services/retries|retry notes]]"
-        legacy <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
-        H.statusCode legacy.simpleStatus `shouldBe` 200
-        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 3
+        lacks linking ["/wiki/javascript"]
+        visit (wiki "/services/retries") >>= (`has` ["Linked from", "/wiki/services/other"])
+        searched <- visit $ wiki "?q=RETRY%20NOTES"
+        has searched ["/wiki/services/other"]
+        lacks searched ["/wiki/services/retries"]
+        visit (base testPid <> "?page=" <> duplicate.toText) >>= (`has` ["Changes from revision 1", "- Other notes", "+ See [[services/retries|retry notes]]"])
+        status <$> visit (base testPid <> "?page=" <> page.toText) `shouldReturn` 200
+        revisions `shouldReturn` 3
+        -- Listings and history are capped.
         dbExec tr "INSERT INTO projects.memory_pages (project_id, page_id, path) SELECT project_id, md5(page_id::text || n::text)::uuid, md5(page_id::text || n::text) FROM projects.memory_revisions CROSS JOIN generate_series(1, 100) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
         dbExec tr "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, md5(page_id::text || n::text)::uuid, 1, document, author FROM projects.memory_revisions CROSS JOIN generate_series(1, 100) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
         dbExec tr "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, page_id, n, document, author FROM projects.memory_revisions CROSS JOIN generate_series(4, 102) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
-        capped <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
-        html capped `shouldSatisfy` T.isInfixOf "More pages"
-        later <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki?after=f") []
-        html later `shouldSatisfy` T.isInfixOf "/wiki/services/retries"
-        html capped `shouldSatisfy` T.isInfixOf "Showing the 100 most recent revisions"
-        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 100
+        visit (base testPid <> "?page=" <> page.toText) >>= (`has` ["More pages", "Showing the 100 most recent revisions"])
+        visit (wiki "?after=f") >>= (`has` ["/wiki/services/retries"])
+        revisions `shouldReturn` 100
 
       it "wiki_saveAndNavigate_doesNotNestHtmxTargets" \tr -> do
         available <- doesFileExist "e2e/node_modules/playwright/index.mjs"
@@ -396,18 +898,15 @@ spec = do
         probe <- readProcessStdout_ $ setEnv environment $ proc "node" ["test/fixtures/wiki-browser.mjs", "--probe"]
         browser <- either fail pure $ AE.eitherDecode @Bool probe
         unless browser $ pendingWith "Install the repository Playwright browser to run the wiki browser regression"
-        let app =
-              genericServeTWithContext
-                (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-                (Routes.server (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
-                (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
-            token = UUID.toString (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId
-        Warp.testWithApplication (pure app) \port -> do
+        let token = UUID.toString (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId
+        Warp.testWithApplication (pure $ wikiApp tr) \port -> do
           output <- readProcessStdout_ $ setEnv (("MONOSCOPE_TEST_BEARER", token) : environment) $ proc "node" ["test/fixtures/wiki-browser.mjs", "http://127.0.0.1:" <> show port <> "/p/" <> toString testPid.toText <> "/memories"]
           value <- either fail pure $ AE.eitherDecode @AE.Value output
-          AET.parseEither (AE.withObject "Browser result" (AE..: "targets")) value `shouldBe` Right ([1, 1, 1] :: [Int])
-          AET.parseEither (AE.withObject "Browser result" (AE..: "fields")) value `shouldBe` Right (["", "", ""] :: [Text])
-          AET.parseEither (AE.withObject "Browser result" (AE..: "urls")) value `shouldBe` Right (["/p/" <> testPid.toText <> "/wiki/runbooks/retries", "/p/" <> testPid.toText <> "/wiki"] :: [Text])
+          let field :: AE.FromJSON a => AE.Key -> Either String a
+              field name = AET.parseEither (AE.withObject "Browser result" (AE..: name)) value
+          field "targets" `shouldBe` Right ([1, 1, 1] :: [Int])
+          field "fields" `shouldBe` Right (["", "", ""] :: [Text])
+          field "urls" `shouldBe` Right (["/p/" <> testPid.toText <> "/wiki/runbooks/retries", "/p/" <> testPid.toText <> "/wiki"] :: [Text])
           pages <- runQueryEffect tr $ Memory.latestPages testPid
           map (Memory.memoryText . (.document.body)) pages `shouldBe` ["**Keep caller retry tokens.**\n\n[Runbook][ref]\n\n[ref]: https://monoscope.tech\n"]
 
@@ -427,7 +926,7 @@ spec = do
             status reportedState at = AE.object ["state" AE..= (reportedState :: Text), "created_at" AE..= (at :: Text)]
             statusRows = [status "success" "2025-01-01T00:05:00Z", status "pending" "2025-01-01T00:02:00Z"] :: [AE.Value]
             repoUrl = "https://api.github.com/repos/acme/checkout-service"
-        Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "acme" Nothing (Just "ghp_deployment_fixture")
+        credential <- grantOf tr testPid Git.GitHub Nothing "acme" Nothing (Just "ghp_deployment_fixture")
         runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "acme" "checkout-service" "main") (Just "checkout") "/srv/app/" ""
         linked <- runQueryEffect tr $ CodeContext.getLinkedRepositories testPid (Just "checkout")
         mapping <- case linked.entries of
@@ -447,588 +946,135 @@ spec = do
                   _ -> AE.toJSON $ take statusCount $ cycle statusRows
           (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ CodeContext.fetchDeployments cfg testPid mapping (Just "production")
           length requests `shouldBe` 1 + min 5 count
-          case result of
-            Right page -> do
-              length page.entries `shouldBe` min 5 count
-              page.limitReached `shouldBe` (count >= 5)
-              case page.entries of
-                firstEntry : secondEntry : _ -> do
-                  firstEntry.deployment.revision `shouldBe` revision
-                  case firstEntry.statuses of
-                    Right reported -> do
-                      map (.state) reported.entries `shouldBe` take (min 10 statusCount) (cycle [Git.DSSuccess, Git.DSPending])
-                      reported.limitReached `shouldBe` (statusCount >= 10)
-                      all ((> firstEntry.deployment.createdAt) . (.createdAt)) reported.entries `shouldBe` True
-                    Left err -> fail $ show err
-                  secondEntry.statuses `shouldSatisfy` isLeft
-                _ -> fail "Expected at least two deployments"
-            Left err -> fail $ show err
+          page <- either (fail . show) pure result
+          length page.entries `shouldBe` min 5 count
+          page.limitReached `shouldBe` (count >= 5)
+          case page.entries of
+            firstEntry : secondEntry : _ -> do
+              firstEntry.deployment.revision `shouldBe` revision
+              reported <- either (fail . show) pure firstEntry.statuses
+              map (.state) reported.entries `shouldBe` take (min 10 statusCount) (cycle [Git.DSSuccess, Git.DSPending])
+              reported.limitReached `shouldBe` (statusCount >= 10)
+              all ((> firstEntry.deployment.createdAt) . (.createdAt)) reported.entries `shouldBe` True
+              secondEntry.statuses `shouldSatisfy` isLeft
+            _ -> fail "Expected at least two deployments"
 
-    describe "Source code settings (code mappings)" do
-      it "githubCallback_verifiesTheSessionAttemptAndIgnoresForgedOrReplayedInstallationIds" \tr -> do
-        let configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppId = "123", githubClientId = "fixture-client", githubClientSecret = "fixture-secret"}}}
-            session = (getResponse tr.trSessAndHeader).persistentSession.id
-            provider :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
-            provider = interpose @W.HTTP \_ -> \case
-              W.PostWith _ "https://github.com/login/oauth/access_token" _ -> pure $ httpResponse "{\"access_token\":\"private-user-token\"}"
-              W.GetWith _ "https://api.github.com/user/installations?per_page=100&page=1" -> pure $ httpResponse "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}"
-              W.GetWith _ "https://api.github.com/user" -> pure $ httpResponse "{\"login\":\"team\"}"
-              _ -> liftIO $ expectationFailure "Unexpected authorization request" >> throwIO (InvalidUrlException "https://git.invalid" "Unexpected authorization request")
-        forged <- call configured $ withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ testPid.toText <> ":code") Nothing
-        render forged `shouldSatisfy` T.isInfixOf "missing, expired, or already used"
-        runQueryEffect tr (GitSync.getGitHubCredentials testPid) >>= (`shouldSatisfy` null)
-        (installState, authorize) <- runAuthHandler configured do
-          initialState <- GitSync.createInstallationAttempt session (GitSync.InstallationAttempt testPid GitSync.InstallCode GitSync.InstallApp)
-          response <- withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ UUID.toText initialState) Nothing
-          pure (initialState, getResponse response)
-        render authorize `shouldSatisfy` T.isInfixOf "https://github.com/login/oauth/authorize?client_id=fixture-client"
-        runQueryEffect tr (GitSync.consumeInstallationAttempt session installState) `shouldReturn` Nothing
-        Just (HI.OneColumn nonce) <- runQueryEffect tr $ Hasql.interpOne @(HI.OneColumn UUID.UUID) [HI.sql| SELECT id FROM projects.github_installation_attempts WHERE project_id = #{testPid} AND session_id = #{session} AND installation_id = 42 |]
-        nonce `shouldNotBe` installState
-        verified <- call configured $ provider $ GitSyncPage.githubAppCallbackH (Just 999999) Nothing (Just $ UUID.toText nonce) (Just "private-code")
-        let html = render verified
-        html `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/repositories/connect")
-        for_ ["private-user-token", "private-code", "fixture-secret"] \secret -> html `shouldNotSatisfy` T.isInfixOf secret
-        [account] <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
-        account.installationId `shouldBe` Just 42
-        replay <- call configured $ withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ UUID.toText nonce) (Just "private-code")
-        render replay `shouldSatisfy` T.isInfixOf "missing, expired, or already used"
-        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
-
-      it "repositoryTokenConnection_checksAccessWithoutEnablingSyncAndRequiresExplicitReplacement" \tr -> do
-        let form = PageCodeContext.RepositoryTokenForm Git.GitHub Nothing "team/checkout" "fixture-token" Nothing
-            metadata :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
-            metadata = interpose @W.HTTP \_ -> \case
-              W.GetWith _ endpoint -> do
-                liftIO $ endpoint `shouldBe` "https://api.github.com/repos/team/checkout"
-                pure $ httpResponse "{\"full_name\":\"team/checkout\",\"private\":true,\"default_branch\":\"trunk\"}"
-              _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Token connection must only read repository metadata"
-            encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        rejected <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryTokenPostH testPid form
-        rejected.content.connectionError `shouldSatisfy` isJust
-        rejected.content.repoFullName `shouldBe` "team/checkout"
-        render (Lucid.toHtml rejected.content) `shouldNotSatisfy` T.isInfixOf "fixture-token"
-        incomplete <- call tr $ interpose @W.HTTP (\_ -> \case W.GetWith _ _ -> pure $ httpResponse "{\"full_name\":\"\"}"; _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Unexpected request") $ PageCodeContext.repositoryTokenPostH testPid form
-        incomplete.content.connectionError `shouldSatisfy` isJust
-        runQueryEffect tr (GitSync.getGitHubCredentials testPid) >>= (`shouldSatisfy` null)
-        connections <- replicateM 2 $ testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form
-        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
-        for_ connections \(response, page) -> do
-          page.content.connectionError `shouldSatisfy` isNothing
-          getHeaders response `shouldSatisfy` elem ("HX-Redirect", encodeUtf8 ("/p/" <> testPid.toText <> "/repositories/" <> repository.id.toText))
-        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
-        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
-        [account] <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
-        let savedToken = runQueryEffect tr (GitSync.getGitHubCredential encKey testPid account.id) <&> (>>= (.accessToken))
-        savedToken `shouldReturn` Just "fixture-token"
-        runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "team" "concurrent-token" Nothing) >>= (`shouldSatisfy` isNothing)
-        savedToken `shouldReturn` Just "fixture-token"
-        conflict <- call tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.accessToken = "replacement-token"}
-        conflict.content.connectionError `shouldSatisfy` isJust
-        savedToken `shouldReturn` Just "fixture-token"
-        _ <- testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.accessToken = "replacement-token", PageCodeContext.replaceToken = Just True}
-        savedToken `shouldReturn` Just "replacement-token"
-        runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "team" "concurrent-token" (Just account)) >>= (`shouldSatisfy` isNothing)
-        savedToken `shouldReturn` Just "replacement-token"
-        source <- call tr $ metadata $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing
-        render source `shouldSatisfy` T.isInfixOf "value=\"trunk\""
-        picker <-
-          call tr
-            $ interpose @W.HTTP
-              ( \_ -> \case
-                  W.GetWith _ endpoint -> do
-                    liftIO $ endpoint `shouldBe` "https://api.github.com/user/repos?per_page=100&page=1"
-                    pure $ httpResponse "[{\"full_name\":\"team/checkout\",\"private\":true,\"default_branch\":\"trunk\"}]"
-                  _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Token repository picker must only GET"
-              )
-            $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
-        picker.content.repositories `shouldBe` Right [Git.GitRepo "team/checkout" "checkout" True "trunk"]
-        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.git_credentials SET installation_id = 42, access_token = NULL WHERE id = #{account.id} |]
-        runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "team" "concurrent-token" (Just account)) >>= (`shouldSatisfy` isNothing)
-        appDenied <- call tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.replaceToken = Just True}
-        appDenied.content.connectionError `shouldSatisfy` isJust
-        Just app <- runQueryEffect tr $ GitSync.getGitHubCredential encKey testPid account.id
-        app.installationId `shouldBe` Just 42
-
-      it "repositoryTokenConnection_supportsGitLabNamespacesGiteaAndBitbucketMetadata" \tr -> do
-        for_
-          ([(Git.GitLab, Nothing, "team/platform/checkout", "{\"path_with_namespace\":\"team/platform/checkout\",\"visibility\":\"private\",\"default_branch\":\"stable\"}"), (Git.Gitea, Just "https://git.example.com", "team/checkout", "{\"full_name\":\"team/checkout\",\"private\":true,\"default_branch\":\"stable\"}"), (Git.Bitbucket, Nothing, "team/checkout", "{\"full_name\":\"team/checkout\",\"is_private\":true,\"mainbranch\":{\"name\":\"stable\"}}")] :: [(Git.GitHost, Maybe Text, Text, LBS.ByteString)])
-          \(host, origin, name, body) -> do
-            let metadata :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
-                metadata = interpose @W.HTTP \_ -> \case W.GetWith _ _ -> pure $ httpResponse body; _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Token connection must only read metadata"
-            _ <- testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid (PageCodeContext.RepositoryTokenForm host origin name "fixture-token" Nothing)
-            repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
-            repository <- maybe (fail "Expected repository for this Git host") pure $ find ((== host) . (.host)) repositories
-            (repository.owner, repository.repo) `shouldBe` Git.splitFullName name
-            source <- call tr $ metadata $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing
-            render source `shouldSatisfy` T.isInfixOf "value=\"stable\""
-        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
-
-      it "repositorySettings_readOnlyMembersSeeMappingsWithoutEditControlsOrProviderRequests" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            uid = (getResponse tr.trSessAndHeader).user.id
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
-        runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" "checkout" "main") (Just "checkout") "/app/" "src"
-        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
-        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid} |]
-        details <- call tr $ PageCodeContext.repositoryGetH testPid repository.id
-        render (Lucid.toHtml details.content) `shouldSatisfy` T.isInfixOf "View source context"
-        render (Lucid.toHtml details.content) `shouldNotSatisfy` T.isInfixOf "Configure source context"
-        let noProvider = interpose @W.HTTP \_ _ -> liftIO $ expectationFailure "Read-only repository settings must not contact the provider" >> throwIO (InvalidUrlException "https://git.invalid" "Unexpected provider call")
-        for_ [PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing, PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing, PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing] \handler -> do
-          page <- call tr $ noProvider handler
-          let html = render page
-          html `shouldSatisfy` T.isInfixOf "team/checkout"
-          html `shouldNotSatisfy` T.isInfixOf "name=\"credentialId\""
-          for_ ["Unlink", "Link repository", "Save review settings", "Install GitHub App", "Connect with token"] \control -> html `shouldNotSatisfy` T.isInfixOf control
-
-      it "credentialEncryption_usesFreshNoncesAuthenticatesCiphertextAndReadsLegacyTokens" \tr -> do
-        let encKey = BS.replicate 32 7
-            token = "same-provider-token"
-        Just alpha <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "alpha" Nothing (Just token)
-        Just beta <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "beta" Nothing (Just token)
-        let firstToken = alpha.accessToken :: Maybe Text
-            secondToken = beta.accessToken :: Maybe Text
-        firstToken `shouldNotBe` secondToken
-        for_ [alpha, beta] \credential -> do
-          recovered <- runQueryEffect tr $ GitSync.getGitHubCredential encKey testPid credential.id
-          fmap (.accessToken) recovered `shouldBe` Just (Just token)
-        encoded <- maybe (fail "Missing encrypted credential") pure firstToken
-        body <- maybe (fail "Missing authenticated envelope") pure $ T.stripPrefix "v1:" encoded
-        bytes <- either (fail . toString) pure $ B64.decodeBase64Untyped $ encodeUtf8 body
-        let corrupt = "v1:" <> extractBase64 (B64.encodeBase64 $ BS.map (`xor` 1) bytes)
-            legacy = extractBase64 $ B64.encodeBase64 $ Keys.encryptAPIKey encKey $ encodeUtf8 token
-        withResource tr.trPool \conn -> do
-          void $ PG.execute conn "UPDATE projects.git_credentials SET access_token = ? WHERE id = ?" (corrupt, alpha.id)
-          void $ PG.execute conn "UPDATE projects.git_credentials SET access_token = ? WHERE id = ?" (legacy, beta.id)
-        runQueryEffect tr (GitSync.getGitHubCredential encKey testPid alpha.id) >>= (`shouldSatisfy` isNothing)
-        old <- runQueryEffect tr $ GitSync.getGitHubCredential encKey testPid beta.id
-        fmap (.accessToken) old `shouldBe` Just (Just token)
-        runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "empty" "" Nothing) `shouldThrow` (== Keys.EmptySecret)
-
-      it "repositoryConnections_githubCasingDoesNotDuplicateConnectionsOrSyncs" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
-        Just sameAccount <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "TEAM" (Just 42) Nothing
-        sameAccount.id `shouldBe` account.id
-        for_ (["Team/Checkout", "team/checkout"] :: [Text]) \name -> do
-          Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo name "checkout" True "main"]
-          void $ testServant tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (PageCodeContext.RepositoryConnectForm [name])
-        repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
-        map (\r -> (r.owner, r.repo)) repositories `shouldBe` [("team", "checkout")]
-        for_ ([("Team", "Checkout"), ("team", "checkout")] :: [(Text, Text)]) \(owner, repo) ->
-          void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch = "main", accessToken = "fixture-token", webhookSecret = Just "fixture-secret", pathPrefix = Nothing}
-        syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
-        map (\s -> (s.owner, s.repo)) syncs `shouldBe` [("team", "checkout")]
-        matching <- runQueryEffect tr $ GitSync.getGitSyncsByRepo Git.GitHub "TEAM" "CHECKOUT"
-        map (.id) matching `shouldBe` map (.id) syncs
-        runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "TEAM" "CHECKOUT" "main") (Just "checkout") "/app/" "src"
-        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
-        map (\m -> (m.owner, m.repo)) mappings `shouldBe` [("team", "checkout")]
-        Just gitlab <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitLab Nothing "Team" Nothing (Just "fixture")
-        for_ (["Team/Checkout", "team/checkout"] :: [Text]) \name -> void $ runQueryEffect tr $ GitSync.connectRepository testPid gitlab.id (Git.GitRepo name "checkout" True "main")
-        allRepositories <- runQueryEffect tr $ GitSync.getRepositories testPid
-        sort [(r.owner, r.repo) | r <- allRepositories, r.host == Git.GitLab] `shouldBe` [("Team", "Checkout"), ("team", "checkout")]
-
-      it "githubIdentityMigration_mergesCaseAliasesWithoutDeletingLocalDashboards" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
-        Just alias <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "other" Nothing (Just "fixture")
-        for_ ([(account.id, "team"), (alias.id, "other")] :: [(GitSync.GitHubCredentialId, Text)]) \(cid, owner) ->
-          runQueryEffect tr $ CodeContext.insertCodeMapping testPid cid (Git.RepoRef owner "checkout" "main") (Just owner) ("/" <> owner <> "/") "src"
-        syncs <- forM (["team", "other"] :: [Text]) \owner -> do
-          Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing owner "checkout" "main" (GitSync.AppInstallation 42) Nothing ""
-          did <- UUIDId <$> UUID.nextRandom
-          void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = owner, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml", Dashboards.fileSha = Just "blob"}
-          pure sync
-        migration <- Query <$> readFileBS "static/migrations/0223_github_repository_identity.sql"
-        withResource tr.trPool \conn -> PG.withTransaction conn do
-          void $ PG.execute_ conn "ALTER TABLE projects.git_credentials DROP CONSTRAINT git_credentials_canonical_account; ALTER TABLE projects.repositories DROP CONSTRAINT repositories_canonical_name; ALTER TABLE projects.git_sync DROP CONSTRAINT git_sync_canonical_name; DROP FUNCTION projects.git_identity_name(TEXT, TEXT)"
-          void $ PG.execute conn "UPDATE projects.git_credentials SET account = 'TEAM' WHERE id = ?" (PG.Only alias.id)
-          void $ PG.execute conn "UPDATE projects.repositories SET owner = 'TEAM', repo = 'CHECKOUT' WHERE project_id = ? AND owner = 'other'" (PG.Only testPid)
-          void $ PG.execute conn "UPDATE projects.git_sync SET owner = 'TEAM', repo = 'CHECKOUT' WHERE project_id = ? AND owner = 'other'" (PG.Only testPid)
-          void $ PG.execute conn "UPDATE projects.code_mappings SET owner = 'TEAM', repo = 'CHECKOUT' WHERE credential_id = ?" (PG.Only alias.id)
-          void $ PG.execute_ conn migration
-        accounts <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
-        map (.id) accounts `shouldBe` [account.id]
-        repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
-        map (\r -> (r.owner, r.repo, r.credentialId)) repositories `shouldBe` [("team", "checkout", Just account.id)]
-        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
-        map (\m -> (m.owner, m.repo, m.credentialId)) mappings `shouldBe` replicate 2 ("team", "checkout", account.id)
-        remaining <- runQueryEffect tr $ GitSync.getGitSyncs testPid
-        length remaining `shouldBe` 1
-        retained <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
-        sort (map (.title) retained) `shouldBe` ["other", "team"]
-        length (filter (isJust . (.gitSyncId)) retained) `shouldBe` 1
-        mapMaybe (.gitSyncId) retained `shouldSatisfy` all (`elem` map (.id) syncs)
-
-      it "repositoryPicker_connectsCodebasesWithoutEnablingCapabilitiesAndRejectsUnavailableSelections" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            repositories = [Git.GitRepo "team/checkout" "checkout" True "trunk", Git.GitRepo "team/catalog" "catalog" False "main"]
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
-        Cache.insert tr.trATCtx.repoListCache account.id repositories
-        picker <- call tr $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
-        picker.content.repositories `shouldBe` Right repositories
-        rejected <- call tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (PageCodeContext.RepositoryConnectForm ["team/checkout", "foreign/private"])
-        rejected.content.selected `shouldBe` ["team/checkout", "foreign/private"]
-        rejected.content.connectionError `shouldSatisfy` isJust
-        runQueryEffect tr (GitSync.getRepositories testPid) >>= (`shouldSatisfy` null)
-        replicateM_ 2 do
-          (response, _) <- testServant tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (PageCodeContext.RepositoryConnectForm ["team/checkout", "team/catalog", "team/checkout"])
-          getHeaders response `shouldSatisfy` elem ("HX-Redirect", encodeUtf8 ("/p/" <> testPid.toText <> "/repositories"))
-        connected <- runQueryEffect tr $ GitSync.getRepositories testPid
-        map (.repo) connected `shouldBe` ["catalog", "checkout"]
-        map (.credentialId) connected `shouldBe` [Just account.id, Just account.id]
-        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
-        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
-        otherPid <- createTestProject tr "Other picker account"
-        Just foreignAccount <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey otherPid Git.GitHub Nothing "foreign" (Just 43) Nothing
-        Cache.insert tr.trATCtx.repoListCache foreignAccount.id repositories
-        runQueryEffect tr (GitSync.connectRepository testPid foreignAccount.id (Git.GitRepo "foreign/private" "private" True "main")) >>= (`shouldSatisfy` isNothing)
-        denied <- call tr $ PageCodeContext.repositoryConnectPostH testPid (Just foreignAccount.id) (PageCodeContext.RepositoryConnectForm ["team/catalog"])
-        denied.content.connectionError `shouldSatisfy` isJust
-        runQueryEffect tr (GitSync.getRepositories otherPid) >>= (`shouldSatisfy` null)
-        Cache.insert tr.trATCtx.repoListCache account.id []
-        emptyPicker <- call tr $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
-        emptyPicker.content.repositories `shouldBe` Right []
-        render (Lucid.toHtml emptyPicker.content) `shouldSatisfy` T.isInfixOf "No repositories are available"
-        Cache.delete tr.trATCtx.repoListCache account.id
-        let unavailable = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppPrivateKey = ""}}}
-        failed <- call unavailable $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
-        failed.content.repositories `shouldSatisfy` isLeft
-        render (Lucid.toHtml failed.content) `shouldSatisfy` T.isInfixOf "Could not load repositories"
-        render (Lucid.toHtml failed.content) `shouldSatisfy` T.isInfixOf "Retry"
-        Cache.lookup tr.trATCtx.repoListCache account.id `shouldReturn` Nothing
-        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| DELETE FROM projects.git_credentials WHERE project_id = #{testPid} AND id = #{account.id} |]
-        retained <- runQueryEffect tr $ GitSync.getRepositories testPid
-        map (.credentialId) retained `shouldBe` [Nothing, Nothing]
-
-      it "repositoryFeatures_areDiscoverableOutsideNotificationSettings" \tr -> do
-        connection <- call tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
-        render (Lucid.toHtml connection.content) `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/connect/token\"")
-        html <- call tr $ PageCodeContext.codeMappingsGetH testPid Nothing
-        let out = render html
-        out `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories\"")
-        out `shouldSatisfy` T.isInfixOf "Pull requests"
-        out `shouldSatisfy` T.isInfixOf "Repositories"
-
-      it "sourceRepositoryPicker_preservesTheSelectedNamespaceInsteadOfUsingTheAccountName" \tr -> do
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitLab (Just "https://git.example.com") "team" Nothing (Just "fixture")
-        Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team/platform/checkout" "checkout" True "trunk"]
-        picker <- call tr $ PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing
-        render picker `shouldSatisfy` T.isInfixOf "value=\"team/platform/checkout\""
-        _ <- testServant tr $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "team/platform/checkout") (Just "trunk") (Just "checkout") Nothing Nothing Nothing (Just account.id))
-        [mapping] <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
-        (mapping.owner, mapping.repo) `shouldBe` ("team/platform", "checkout")
-
-      it "repositoryConfiguration_usesTheSingleListInsteadOfDuplicateConnectionForms" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
-        Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/checkout" "checkout" True "main")
-        legacy <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing
-        let html = render legacy
-        html `shouldSatisfy` T.isInfixOf ("/repositories/" <> repository.id.toText)
-        for_ ["Connect a dashboard repository", "Link repository", ">Configuration<"] \label -> html `shouldNotSatisfy` T.isInfixOf label
-        html `shouldSatisfy` T.isInfixOf "Source context"
-
+    describe "Repository details" do
       it "repositoryAnalysis_transientFailureAfterSetupDoesNotRestoreRemovedServiceLinks" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" Nothing (Just "fixture")
+        account <- grantOf tr testPid Git.GitHub Nothing "team" Nothing (Just "fixture")
         Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/checkout" "checkout" True "main")
-        dbExec tr "INSERT INTO apis.schema_summary (project_id, doc) VALUES (?, '{\"fields\":{},\"services\":[\"checkout\",\"billing\"],\"top_values_by_field\":{}}')" (PG.Only testPid)
-        let analyze = BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.AnalyzeRepository testPid repository.id)
-            provider = withHTTPResponses \_ endpoint -> pure $ Just if "/commits/" `T.isInfixOf` toText endpoint then "{\"sha\":\"head\"}" else if "/git/trees/" `T.isInfixOf` toText endpoint then "{\"tree\":[{\"path\":\"config/monitors\",\"type\":\"tree\",\"sha\":\"folder\"}]}" else "{\"full_name\":\"team/checkout\",\"name\":\"checkout\",\"private\":true,\"default_branch\":\"main\"}"
-        void $ runTestBgRecordingHTTP frozenTime tr $ withUnavailableRepositoryAPI analyze
+        dbExec tr "INSERT INTO apis.schema_summary (project_id, doc) VALUES (?, '{\"fields\":{},\"services\":[\"checkout\",\"billing\"],\"top_values_by_field\":{}}')" (Only testPid)
+        let analyze host = void $ runJob tr host (BackgroundJobs.AnalyzeRepository testPid repository.id)
+            provider :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
+            provider = gitHost [("/commits/", "{\"sha\":\"head\"}"), ("/git/trees/", "{\"tree\":[{\"path\":\"config/monitors\",\"type\":\"tree\",\"sha\":\"folder\"}]}")] "{\"full_name\":\"team/checkout\",\"name\":\"checkout\",\"private\":true,\"default_branch\":\"main\"}"
+        analyze withUnavailableRepositoryAPI
         Just failed <- runQueryEffect tr $ GitSync.getRepositoryAnalysis testPid repository.id
         failed.error `shouldSatisfy` isJust
-        void $ runTestBgRecordingHTTP frozenTime tr $ provider analyze
+        analyze provider
         mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
         map (.service) mappings `shouldBe` [Just "checkout"]
         [sync] <- runQueryEffect tr $ GitSync.getGitSyncs testPid
         (sync.branch, sync.pathPrefix, sync.syncEnabled) `shouldBe` ("main", "config", True)
+        -- What the user turned off stays off when a later analysis succeeds.
         _ <- testServant tr $ PageCodeContext.repositorySourceEnabledPostH testPid repository.id (PageCodeContext.SourceContextForm False)
         void $ runQueryEffect tr $ GitSync.pauseGitSync testPid sync.id
-        for_ mappings $ \mapping -> runQueryEffect tr $ CodeContext.deleteCodeMapping testPid mapping.id
-        void $ runTestBgRecordingHTTP frozenTime tr $ withUnavailableRepositoryAPI analyze
-        void $ runTestBgRecordingHTTP frozenTime tr $ provider analyze
+        for_ mappings \mapping -> runQueryEffect tr $ CodeContext.deleteCodeMapping testPid mapping.id
+        analyze withUnavailableRepositoryAPI
+        analyze provider
         Just current <- runQueryEffect tr $ GitSync.getRepository testPid repository.id
         current.sourceEnabled `shouldBe` False
-        Just paused <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        paused.syncEnabled `shouldBe` False
-        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \rows -> length rows `shouldBe` 0
+        (.syncEnabled) <$> syncById tr sync `shouldReturn` False
+        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
+        -- An ambiguous layout enables nothing.
         Just ambiguous <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/other" "other" True "main")
         let ambiguousProvider = withHTTPResponses \_ endpoint -> pure $ if "/git/trees/" `T.isInfixOf` toText endpoint then Just "{\"tree\":[{\"path\":\"a/dashboards\",\"type\":\"tree\",\"sha\":\"a\"},{\"path\":\"b/monitors\",\"type\":\"tree\",\"sha\":\"b\"}]}" else Nothing
-        void $ runTestBgRecordingHTTP frozenTime tr $ provider $ ambiguousProvider $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.AnalyzeRepository testPid ambiguous.id)
-        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= \rows -> length rows `shouldBe` 1
-        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \rows -> length rows `shouldBe` 0
-
-      it "configurationFolder_roundTripsAllMonitorDefinitionsAndPreservesRuntimeState" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "checkout" "main" (GitSync.AppInstallation 42) Nothing ""
-        let query = def{MonitorDefinitions.title = "Errors", MonitorDefinitions.query = "status_code >= 500 | summarize count()", MonitorDefinitions.alertThreshold = 5, MonitorDefinitions.timeWindowMins = 5, MonitorDefinitions.checkIntervalMins = 1}
-            definitions = [RepositorySync.QueryDefinition query, RepositorySync.UptimeDefinitionConfig $ RepositorySync.UptimeDefinition "Site" "https://example.com" 60 200 True, RepositorySync.CronDefinitionConfig $ RepositorySync.CronDefinition "daily-job" "Daily job" 3600 60]
-        for_ definitions \definition -> do
-          localId <- UUID.nextRandom
-          let kind = RepositorySync.definitionKind definition
-              path = "monitors/" <> T.toLower (show kind) <> ".yaml"
-          runQueryEffect tr $ RepositorySync.registerResource testPid sync.id kind localId path
-          [resource] <- filter ((== localId) . (.localId)) <$> runQueryEffect tr (RepositorySync.resources testPid sync.id)
-          runQueryEffect tr (RepositorySync.importDefinition resource Nothing $ Just definition) `shouldReturn` Right ()
-          Just actual <- runQueryEffect tr $ RepositorySync.localDefinition resource
-          let encoded = RepositorySync.encodeDefinition actual
-          fmap AE.toJSON (RepositorySync.decodeDefinition path encoded) `shouldBe` Right (AE.toJSON actual)
-          withResource tr.trPool \conn -> case kind of
-            RepositorySync.Query -> void $ PG.execute conn "UPDATE monitors.query_monitors SET current_status = 'alerting', current_value = 17, muted_until = now() + interval '1 hour' WHERE id = ?" (PG.Only localId)
-            RepositorySync.Uptime -> void $ PG.execute conn "UPDATE apis.prometheus_scrape_configs SET last_status = 'down', consecutive_failures = 7 WHERE id = ?" (PG.Only localId)
-            RepositorySync.Cron -> void $ PG.execute conn "UPDATE apis.cron_monitors SET last_status = 'error', last_checkin_at = now() WHERE id = ?" (PG.Only localId)
-            RepositorySync.Dashboard -> pure ()
-          runtimeBefore <- runQueryEffect tr $ RepositorySync.resourceSnapshot resource
-          [freshResource] <- filter ((== localId) . (.localId)) <$> runQueryEffect tr (RepositorySync.resources testPid sync.id)
-          runQueryEffect tr (RepositorySync.importDefinition freshResource runtimeBefore $ Just actual) `shouldReturn` Right ()
-          runtimeAfter <- runQueryEffect tr $ RepositorySync.resourceSnapshot resource
-          let runtimeKeys = ["current_status", "current_value", "muted_until", "last_status", "consecutive_failures", "last_checkin_at"]
-              runtime = fmap $ \case AE.Object row -> KM.filterWithKey (\key _ -> key `elem` runtimeKeys) row; _ -> KM.empty
-          runtime runtimeAfter `shouldBe` runtime runtimeBefore
-          when (kind == RepositorySync.Query) do
-            [beforeDelete] <- filter ((== localId) . (.localId)) <$> runQueryEffect tr (RepositorySync.resources testPid sync.id)
-            runQueryEffect tr (RepositorySync.importDefinition beforeDelete runtimeAfter Nothing) `shouldReturn` Right ()
-            [deleted] <- filter ((== localId) . (.localId)) <$> runQueryEffect tr (RepositorySync.resources testPid sync.id)
-            observed <- runQueryEffect tr $ RepositorySync.resourceSnapshot deleted
-            runQueryEffect tr (RepositorySync.importDefinition deleted observed $ Just actual) `shouldReturn` Right ()
-            fmap (fmap AE.toJSON) (runQueryEffect tr $ RepositorySync.localDefinition deleted) `shouldReturn` Just (AE.toJSON actual)
-
-      it "configurationImport_doesNotOverwriteAnEditMadeAfterItsSnapshot" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "checkout" "main" (GitSync.AppInstallation 42) Nothing ""
-        localId <- UUID.nextRandom
-        runQueryEffect tr $ RepositorySync.registerResource testPid sync.id RepositorySync.Cron localId "monitors/cron.yaml"
-        [resource] <- runQueryEffect tr $ RepositorySync.resources testPid sync.id
-        let original = RepositorySync.CronDefinitionConfig $ RepositorySync.CronDefinition "job" "Original" 3600 60
-        runQueryEffect tr (RepositorySync.importDefinition resource Nothing $ Just original) `shouldReturn` Right ()
-        [freshResource] <- runQueryEffect tr $ RepositorySync.resources testPid sync.id
-        observed <- runQueryEffect tr $ RepositorySync.resourceSnapshot freshResource
-        dbExec tr "UPDATE apis.cron_monitors SET name = 'Local edit' WHERE id = ?" (PG.Only localId)
-        result <- runQueryEffect tr $ RepositorySync.importDefinition freshResource observed (Just original)
-        result `shouldSatisfy` isLeft
-        Just current <- runQueryEffect tr $ RepositorySync.localDefinition resource
-        AE.toJSON current `shouldNotBe` AE.toJSON original
-        -- Deletion uses the same compare-and-update guard.
-        runQueryEffect tr (RepositorySync.importDefinition freshResource observed Nothing) `shouldReturn` result
-        fmap (fmap AE.toJSON) (runQueryEffect tr $ RepositorySync.localDefinition resource) `shouldReturn` Just (AE.toJSON current)
-
-      it "configurationFolderChange_preservesLocalResourcesAndProposesThemAtTheNewPath" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "checkout" "main" (GitSync.AppInstallation 42) Nothing "old"
-        localId <- UUID.nextRandom
-        runQueryEffect tr $ RepositorySync.registerResource testPid sync.id RepositorySync.Cron localId "old/monitors/job.yaml"
-        [resource] <- runQueryEffect tr $ RepositorySync.resources testPid sync.id
-        let definition = RepositorySync.CronDefinitionConfig $ RepositorySync.CronDefinition "job" "Job" 60 60
-        runQueryEffect tr (RepositorySync.importDefinition resource Nothing $ Just definition) `shouldReturn` Right ()
-        void $ runQueryEffect tr $ GitSync.updateGitHubSync encKey sync.id "team" "checkout" "main" Nothing (Just "new")
-        [moved] <- runQueryEffect tr $ RepositorySync.resources testPid sync.id
-        moved.filePath `shouldBe` "new/monitors/job.yaml"
-        moved.localBaseline `shouldBe` Nothing
-        fmap (fmap AE.toJSON) (runQueryEffect tr $ RepositorySync.localDefinition moved) `shouldReturn` Just (AE.toJSON definition)
-
-      it "configurationImport_reportsDuplicateCronSlugsWithoutAbortingOtherResources" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "checkout" "main" (GitSync.AppInstallation 42) Nothing ""
-        for_ (["first", "second", "third"] :: [Text]) \name -> do
-          localId <- UUID.nextRandom
-          runQueryEffect tr $ RepositorySync.registerResource testPid sync.id RepositorySync.Cron localId ("monitors/" <> name <> ".yaml")
-          [resource] <- filter ((== localId) . (.localId)) <$> runQueryEffect tr (RepositorySync.resources testPid sync.id)
-          result <- runQueryEffect tr $ RepositorySync.importDefinition resource Nothing (Just $ RepositorySync.CronDefinitionConfig $ RepositorySync.CronDefinition (if name == "second" then "first" else name) name 60 60)
-          if name == "second" then result `shouldSatisfy` isLeft else result `shouldBe` Right ()
-
-      it "serviceMappings_keepMultipleRepositoriesForTheSameServiceAndPath" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
-        for_ ["checkout", "shared"] \name -> runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" name "main") (Just "checkout") "" ""
-        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
-        sort (map (.repo) mappings) `shouldBe` ["checkout", "shared"]
-
-      it "sourceContext_disableRetainsServiceLinksAndDoesNotDisableReviews" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
-        runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" "checkout" "main") (Just "checkout") "" ""
-        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
-        _ <- testServant tr $ PageCodeContext.repositorySourceEnabledPostH testPid repository.id (PageCodeContext.SourceContextForm False)
-        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \mappings -> map (.service) mappings `shouldBe` [Just "checkout"]
-        result <- runQueryEffect tr $ W.runHTTPWreq $ withUnavailableRepositoryAPI $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "main.py" 1
-        result `shouldBe` Left (CodeContext.NoMapping "main.py")
-        runQueryEffect tr $ ImpactReviews.receiveEvent (ImpactReviews.PullRequestEvent "team" "checkout" 42 1 (T.replicate 40 "a") frozenTime True)
-        runQueryEffect tr (ImpactReviews.latestRuns testPid) >>= \runs -> length runs `shouldBe` 1
-
-      it "repositoryOverview_includesServiceAndDashboardRepositoriesWithoutCallingTheProvider" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "acme" (Just 42) Nothing
-        runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "acme" "checkout-service" "main") (Just "checkout") "/srv/app/" ""
-        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
-        html <- call tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
-        let out = render html
-        for_ (["acme/checkout-service", "checkout", "acme/dashboards", "Awaiting first sync", "Production impact reviews"] :: [Text]) \label ->
-          T.isInfixOf label out `shouldBe` True
-        reviews <- call tr $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.PullRequests) Nothing
-        T.isInfixOf "No pull requests reviewed yet" (render reviews) `shouldBe` True
-
-      it "serviceRepositories_showOnlyApplicableOriginsAndExplainMissingLinksWithoutOfferingViewerEdits" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            service = "team/api & jobs"
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "acme" (Just 42) Nothing
-        Just enterprise <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub (Just "https://git.example.com") "acme" (Just 43) Nothing
-        forM_ ([(account.id, "checkout-service", Just service, "/srv/"), (account.id, "shared-source", Nothing, "/shared/"), (account.id, "payments", Just "billing", "/payments/"), (enterprise.id, "checkout-service", Just "billing", "/enterprise/")] :: [(GitSync.GitHubCredentialId, Text, Maybe Text, Text)]) \(cid, repo, svc, prefix) ->
-          runQueryEffect tr $ CodeContext.insertCodeMapping testPid cid (Git.RepoRef "acme" repo "main") svc prefix ""
-        void $ runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
-        repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
-        scoped <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.serviceRepositoriesGetH testPid service
-        let html = render scoped
-        forM_ repositories \repository ->
-          T.isInfixOf ("/repositories/" <> repository.id.toText <> "\"") html `shouldBe` (isNothing repository.apiBase && repository.repo `elem` ["checkout-service", "shared-source"])
-        html `shouldSatisfy` T.isInfixOf "All services"
-        html `shouldSatisfy` T.isInfixOf "team/api &amp; jobs"
-        html `shouldSatisfy` T.isInfixOf "Source mappings that apply to this service, including mappings for all services."
-        html `shouldNotSatisfy` T.isInfixOf "id=\"repository-nav\""
-        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| DELETE FROM projects.code_mappings WHERE project_id = #{testPid} |]
-        unlinkedPage <- call tr $ PageCodeContext.serviceRepositoriesGetH testPid service
-        render unlinkedPage `shouldSatisfy` T.isInfixOf "No repositories linked to this service"
-        render unlinkedPage `shouldSatisfy` T.isInfixOf "Choose a repository"
-        let uid = (getResponse tr.trSessAndHeader).user.id
-        runQueryEffect tr do
-          Hasql.interpExecute_ [HI.sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid} |]
-          Hasql.interpExecute_ [HI.sql| DELETE FROM projects.repositories WHERE project_id = #{testPid} |]
-        forM_ [PageCodeContext.serviceRepositoriesGetH testPid service, PageCodeContext.repositoriesGetH testPid Nothing Nothing] \handler -> do
-          readonly <- call tr handler
-          render readonly `shouldNotSatisfy` T.isInfixOf "Add repositories"
-          render readonly `shouldNotSatisfy` T.isInfixOf "Choose a repository"
-          render readonly `shouldNotSatisfy` T.isInfixOf "Connect repositories"
-          render readonly `shouldSatisfy` T.isInfixOf "Ask a project editor"
-
-      it "repositorySync_acceptsIndependentRepositoriesForDifferentTeams" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            connect owner = runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing owner "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
-        Just syncA <- connect "team-a"
-        Just syncB <- connect "team-b"
-        syncA.id `shouldNotBe` syncB.id
-        html <- call tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
-        for_ (["team-a/dashboards", "team-b/dashboards"] :: [Text]) \repo ->
-          T.isInfixOf repo (render html) `shouldBe` True
-
-      it "repositoryAccounts_requireAnExplicitChoiceInsteadOfUsingTheNewestGrant" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        accounts <- forM ["team-a", "team-b"] \account -> do
-          Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing account (Just 42) Nothing
-          Cache.insert tr.trATCtx.repoListCache credential.id []
-          pure credential
-        html <- call tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
-        render (Lucid.toHtml html.content) `shouldSatisfy` T.isInfixOf "Choose an account"
-        _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout") (Just "main") Nothing Nothing Nothing Nothing Nothing)
+        void $ runJob tr (provider . ambiguousProvider) (BackgroundJobs.AnalyzeRepository testPid ambiguous.id)
+        length <$> runQueryEffect tr (GitSync.getGitSyncs testPid) `shouldReturn` 1
         runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
-        for_ accounts \account -> do
-          editor <- call tr $ PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) (Just "/srv/app/main.py")
-          T.isInfixOf ("name=\"credentialId\" value=\"" <> account.id.toText <> "\"") (render editor) `shouldBe` True
-          T.isInfixOf "value=\"/srv/app/main.py\"" (render editor) `shouldBe` True
-          _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout") (Just "main") (Just account.account) Nothing Nothing Nothing (Just account.id))
-          pass
-        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
-        sort [(m.owner, m.credentialId) | m <- mappings] `shouldBe` sort [(a.account, a.id) | a <- accounts]
-        otherPid <- createTestProject tr "Other account project"
-        Just foreignAccount <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey otherPid Git.GitHub Nothing "foreign" (Just 42) Nothing
-        _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout") (Just "main") (Just "foreign") Nothing Nothing Nothing (Just foreignAccount.id))
-        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \rows -> length rows `shouldBe` 2
 
       it "repositoryConnection_missingReviewRunnerIsNotReadyAndRetainsDetails" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "fixture", githubAppId = "fixture", githubAppPrivateKey = "fixture", impactReviewAgent = Just "test/fixtures/impact-review-agent.mjs"}}}
-        Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
+        let configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "fixture", githubAppId = "fixture", githubAppPrivateKey = "fixture", impactReviewAgent = Just "test/fixtures/impact-review-agent.mjs"}}}
+            withConfig f r = r{trATCtx = r.trATCtx{config = f r.trATCtx.config}}
+            withoutAgent = withConfig (\c -> c{impactReviewAgent = Nothing}) configured
+        credential <- appAccount tr "team"
         runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "team" "checkout" "main") (Just "checkout") "/app/" "src"
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "checkout" "main" (GitSync.AppInstallation 42) Nothing "ops"
+        sync <- syncOf tr testPid Nothing "team" "checkout" (GitSync.AppInstallation 42) "ops"
         [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
+        let readiness r = (.content.reviewReadiness) <$> call r (PageCodeContext.repositoryGetH testPid repository.id)
         details <- call configured $ PageCodeContext.repositoryGetH testPid repository.id
-        render (Lucid.toHtml details.content) `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/" <> repository.id.toText <> "/source\"")
+        renderT details.content `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/" <> repository.id.toText <> "/source\"")
         map (.service) details.content.mappings `shouldBe` [Just "checkout"]
         fmap (.id) details.content.dashboardSync `shouldBe` Just sync.id
-        details.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsRoutine -> True; _ -> False
+        readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewNeedsRoutine -> True; _ -> False)
         void $ testServant configured $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
-        (_, activated) <- testServant configured $ PageCodeContext.repositoryGetH testPid repository.id
-        activated.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False
-        let withoutAgent = configured{trATCtx = configured.trATCtx{config = configured.trATCtx.config{impactReviewAgent = Nothing}}}
-        (_, noRunner) <- testServant withoutAgent $ PageCodeContext.repositoryGetH testPid repository.id
-        render (Lucid.toHtml noRunner.content) `shouldNotSatisfy` T.isInfixOf "Ready for pull requests"
-        render (Lucid.toHtml noRunner.content) `shouldSatisfy` T.isInfixOf "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
-        let incomplete = configured{trATCtx = configured.trATCtx{config = configured.trATCtx.config{githubAppPrivateKey = ""}}}
-        unavailable <- call incomplete $ PageCodeContext.repositoryGetH testPid repository.id
-        unavailable.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsServer -> True; _ -> False
+        readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False)
+        noRunner <- renderT . (.content) <$> call withoutAgent (PageCodeContext.repositoryGetH testPid repository.id)
+        noRunner `shouldNotSatisfy` T.isInfixOf "Ready for pull requests"
+        noRunner `shouldSatisfy` T.isInfixOf "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
+        readiness (withConfig (\c -> c{githubAppPrivateKey = ""}) configured) >>= (`shouldSatisfy` \case PageCodeContext.ReviewNeedsServer -> True; _ -> False)
         runQueryEffect tr $ ImpactReviews.updateSettings testPid (ImpactReviews.ReviewSettings "team" "checkout" False False)
-        disabled <- call withoutAgent $ PageCodeContext.repositoryGetH testPid repository.id
-        disabled.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewDisabled -> True; _ -> False
+        readiness withoutAgent >>= (`shouldSatisfy` \case PageCodeContext.ReviewDisabled -> True; _ -> False)
         for_ details.content.mappings \mapping -> runQueryEffect tr $ CodeContext.deleteCodeMapping testPid mapping.id
         void $ runQueryEffect tr $ GitSync.deleteGitHubSync sync.id
-        [retained] <- runQueryEffect tr $ GitSync.getRepositories testPid
-        retained.id `shouldBe` repository.id
+        map (.id) <$> runQueryEffect tr (GitSync.getRepositories testPid) `shouldReturn` [repository.id]
         disconnected <- call configured $ PageCodeContext.repositoryGetH testPid repository.id
         disconnected.content.mappings `shouldSatisfy` null
         disconnected.content.dashboardSync `shouldSatisfy` isNothing
         disconnected.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsService -> True; _ -> False
         otherPid <- createTestProject tr "Other repository details"
         runQueryEffect tr (GitSync.getRepository otherPid repository.id) >>= (`shouldSatisfy` isNothing)
-        Just reconnected <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "checkout" "main" (GitSync.AppInstallation 42) Nothing ""
-        void $ runQueryEffect tr $ GitSync.updateGitHubSync encKey reconnected.id "team" "dashboards" "main" Nothing Nothing
-        runQueryEffect tr (GitSync.getRepositories testPid) >>= \rows -> map (.repo) rows `shouldBe` ["checkout", "dashboards"]
+        reconnected <- syncOf tr testPid Nothing "team" "checkout" (GitSync.AppInstallation 42) ""
+        void $ runQueryEffect tr $ GitSync.updateGitHubSync (encKeyOf tr) reconnected.id "team" "dashboards" "main" Nothing Nothing
+        map (.repo) <$> runQueryEffect tr (GitSync.getRepositories testPid) `shouldReturn` ["checkout", "dashboards"]
 
       it "repositoryRemoval_keepsLocalDashboardsAndHistoryWithoutRemovingOtherOriginsOrSharedAccounts" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
         for_ ([Nothing, Just "https://git.example.com"] :: [Maybe Text]) \origin -> do
-          Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub origin "team" (Just 42) Nothing
+          account <- grantOf tr testPid Git.GitHub origin "team" (Just 42) Nothing
           runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" "checkout" "main") (Just $ fromMaybe "public" origin) "/app/" "src"
-          Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub origin "team" "checkout" "main" (GitSync.PersonalToken "fixture") Nothing "ops"
-          did <- UUIDId <$> UUID.nextRandom
-          void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Local overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml", Dashboards.fileSha = Just "provider-version"}
-        repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
-        repository <- maybe (fail "public repository missing") pure $ find (isNothing . (.apiBase)) repositories
-        runQueryEffect tr $ ImpactReviews.receiveEvent (ImpactReviews.PullRequestEvent "team" "checkout" 42 1 (T.replicate 40 "a") frozenTime True)
-        history <- runQueryEffect tr $ ImpactReviews.latestRuns testPid
+          sync <- syncOf tr testPid origin "team" "checkout" (GitSync.PersonalToken "fixture") "ops"
+          void $ seedDash tr \d -> d{Dashboards.title = "Local overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml", Dashboards.fileSha = Just "provider-version"}
+        repository <- runQueryEffect tr (GitSync.getRepositories testPid) >>= maybe (fail "public repository missing") pure . find (isNothing . (.apiBase))
+        let review n sha = runQueryEffect tr $ ImpactReviews.receiveEvent (ImpactReviews.PullRequestEvent "team" "checkout" 42 n (T.replicate 40 sha) frozenTime True)
+            runIds = map (.id) <$> runQueryEffect tr (ImpactReviews.latestRuns testPid)
+        review 1 "a"
+        history <- runIds
         length history `shouldBe` 1
         otherPid <- createTestProject tr "Other repository removal"
         runQueryEffect tr (GitSync.removeRepository otherPid repository.id) `shouldReturn` Left GitSync.ConnectionMissing
         (removed, _) <- testServant tr $ PageCodeContext.repositoryDeleteH testPid repository.id
         getHeaders removed `shouldContain` [("HX-Redirect", encodeUtf8 $ "/p/" <> testPid.toText <> "/repositories")]
-        remaining <- runQueryEffect tr $ GitSync.getRepositories testPid
-        map (.apiBase) remaining `shouldBe` [Just "https://git.example.com"]
-        syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
-        map (.apiBase) syncs `shouldBe` [Just "https://git.example.com"]
-        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
-        map (.service) mappings `shouldBe` [Just "https://git.example.com"]
-        accounts <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
-        length accounts `shouldBe` 2
+        map (.apiBase) <$> runQueryEffect tr (GitSync.getRepositories testPid) `shouldReturn` [Just "https://git.example.com"]
+        map (.apiBase) <$> runQueryEffect tr (GitSync.getGitSyncs testPid) `shouldReturn` [Just "https://git.example.com"]
+        map (.service) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` [Just "https://git.example.com"]
+        length <$> runQueryEffect tr (GitSync.getGitHubCredentials testPid) `shouldReturn` 2
         dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Desc Dashboards.DSUpdatedAt
         length dashboards `shouldBe` 2
         [(d.title, d.filePath, d.fileSha) | d <- dashboards, isNothing d.gitSyncId] `shouldBe` [("Local overview", Nothing, Nothing)]
         length (filter (isJust . (.gitSyncId)) dashboards) `shouldBe` 1
-        runQueryEffect tr (ImpactReviews.latestRuns testPid) >>= \runs -> map (.id) runs `shouldBe` map (.id) history
-        runQueryEffect tr (Hasql.interpOne @(Bool, Bool) [HI.sql| SELECT enabled, include_evidence FROM projects.pr_review_settings WHERE project_id = #{testPid} AND owner = 'team' AND repo = 'checkout' |]) `shouldReturn` Just (False, False)
+        runIds `shouldReturn` history
+        dbQuery tr "SELECT enabled, include_evidence FROM projects.pr_review_settings WHERE project_id = ? AND owner = 'team' AND repo = 'checkout'" (Only testPid) `shouldReturn` [(False, False)]
         runQueryEffect tr (GitSync.removeRepository testPid repository.id) `shouldReturn` Left GitSync.ConnectionMissing
-        runQueryEffect tr $ ImpactReviews.receiveEvent (ImpactReviews.PullRequestEvent "team" "checkout" 42 2 (T.replicate 40 "b") frozenTime True)
-        runQueryEffect tr (ImpactReviews.latestRuns testPid) >>= \runs -> map (.id) runs `shouldBe` map (.id) history
+        review 2 "b"
+        runIds `shouldReturn` history
+        -- The detached dashboard is never pushed again.
         localDashboard <- maybe (fail "local dashboard missing") pure $ find (isNothing . (.gitSyncId)) dashboards
-        jobs <- getPendingBackgroundJobs tr.trATCtx
+        jobs <- pendingJobs tr
         runAuthHandler tr $ GitSyncPage.queueGitSyncPush testPid localDashboard.id
-        length <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` length jobs
+        length <$> pendingJobs tr `shouldReturn` length jobs
         (requests, _) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"content\":{\"sha\":\"written-blob\"},\"commit\":{\"sha\":\"written-head\"}}") do
           BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushDashboard testPid localDashboard.id.unUUIDId)
           BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushAllDashboards testPid)
         map fst requests `shouldSatisfy` (not . any (T.isInfixOf "local-overview.yaml"))
-        Just stillLocal <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid localDashboard.id
-        stillLocal.gitSyncId `shouldBe` Nothing
+        fmap (.gitSyncId) <$> dashOf tr localDashboard.id `shouldReturn` Just Nothing
 
       it "repositoryDashboardSetup_reusesItsAccountAndQueuesOnlyItsInitialPull" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "fixture", githubAppId = "fixture", githubAppPrivateKey = "fixture"}}}
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
+        let configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "fixture", githubAppId = "fixture", githubAppPrivateKey = "fixture"}}}
+        account <- appAccount tr "team"
         let repo = Git.GitRepo "team/checkout" "checkout" True "trunk"
         Cache.insert tr.trATCtx.repoListCache account.id [repo]
         Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id repo
         initial <- call configured $ GitSyncPage.repositoryDashboardGetH testPid repository.id
-        initial.content.form.branch `shouldBe` "trunk"
-        initial.content.form.credentialId `shouldBe` Just account.id
+        (initial.content.form.branch, initial.content.form.credentialId) `shouldBe` ("trunk", Just account.id)
         initial.content.sync `shouldSatisfy` isNothing
         let selection = GitSyncPage.RepositoryDashboardForm (Just account.id) "trunk" (Just "/ops/")
         missingConfig <- call tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = ""}}} $ GitSyncPage.repositoryDashboardPostH testPid repository.id selection
@@ -1039,353 +1085,361 @@ spec = do
         sync <- maybe (fail "Expected dashboard sync") pure connected.content.sync
         (sync.owner, sync.repo, sync.branch, sync.pathPrefix, sync.installationId, sync.webhookSecret) `shouldBe` ("team", "checkout", "trunk", "ops", Just 42, Just "fixture")
         _ <- testServant configured $ GitSyncPage.repositoryDashboardPostH testPid repository.id selection{GitSyncPage.branch = "different"}
-        [unchanged] <- runQueryEffect tr $ GitSync.getGitSyncs testPid
-        unchanged.branch `shouldBe` "trunk"
-        jobs <- getPendingBackgroundJobs tr.trATCtx
-        length [() | (_, BackgroundJobs.GitSyncRepository project sid) <- toList jobs, project == testPid, sid == sync.id] `shouldBe` 1
+        map (.branch) <$> runQueryEffect tr (GitSync.getGitSyncs testPid) `shouldReturn` ["trunk"]
+        jobs <- pendingJobs tr
+        length [() | BackgroundJobs.GitSyncRepository project sid <- jobs, project == testPid, sid == sync.id] `shouldBe` 1
         otherPid <- createTestProject tr "Foreign dashboard account"
-        Just foreignAccount <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey otherPid Git.GitHub Nothing "foreign" (Just 43) Nothing
+        foreignAccount <- grantOf tr otherPid Git.GitHub Nothing "foreign" (Just 43) Nothing
         runQueryEffect tr (GitSync.enableRepositoryDashboardSync testPid repository.id foreignAccount.id "main" "" Nothing) >>= (`shouldSatisfy` isNothing)
-        Just tokenAccount <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitLab (Just "https://git.example.com") "team" Nothing (Just "fixture-token")
+        -- A token repository detects its default branch and gets a generated webhook secret.
+        tokenAccount <- grantOf tr testPid Git.GitLab (Just "https://git.example.com") "team" Nothing (Just "fixture-token")
         Just tokenRepo <- runQueryEffect tr $ GitSync.connectRepository testPid tokenAccount.id (Git.GitRepo "team/catalog" "catalog" True "main")
         unavailableBranch <- call tr $ withUnavailableRepositoryAPI $ GitSyncPage.repositoryDashboardPostH testPid tokenRepo.id (GitSyncPage.RepositoryDashboardForm (Just tokenAccount.id) "" (Just "ops"))
         unavailableBranch.content.setupError `shouldSatisfy` isJust
         unavailableBranch.content.sync `shouldSatisfy` isNothing
-        tokenSetup <-
-          call tr
-            $ interpose @W.HTTP (\_ -> \case W.GetWith _ _ -> pure $ httpResponse "{\"default_branch\":\"stable\"}"; _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Branch detection must only GET repository metadata")
-            $ GitSyncPage.repositoryDashboardPostH testPid tokenRepo.id (GitSyncPage.RepositoryDashboardForm (Just tokenAccount.id) "" Nothing)
+        tokenSetup <- call tr $ getOnly Nothing "{\"default_branch\":\"stable\"}" $ GitSyncPage.repositoryDashboardPostH testPid tokenRepo.id (GitSyncPage.RepositoryDashboardForm (Just tokenAccount.id) "" Nothing)
         tokenSync <- maybe (fail "Expected token dashboard sync") pure tokenSetup.content.sync
         tokenSync.branch `shouldBe` "stable"
         tokenSync.webhookSecret `shouldSatisfy` isJust
-        decrypted <- runQueryEffect tr $ GitSync.getGitSyncsDecrypted encKey testPid
+        decrypted <- runQueryEffect tr $ GitSync.getGitSyncsDecrypted (encKeyOf tr) testPid
         map (.accessToken) (filter ((== tokenSync.id) . (.id)) decrypted) `shouldBe` [Just "fixture-token"]
-        render (Lucid.toHtml tokenSetup.content) `shouldSatisfy` T.isInfixOf "Webhook secret"
+        renderT tokenSetup.content `shouldSatisfy` T.isInfixOf "Webhook secret"
 
-      it "repositorySourceSetup_preservesIdentityAccountAndBranchAndScopesItsMutations" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            repos = [Git.GitRepo "team/checkout" "checkout" True "trunk", Git.GitRepo "team/catalog" "catalog" True "main"]
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
-        Cache.insert tr.trATCtx.repoListCache account.id repos
-        Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/checkout" "checkout" True "trunk")
-        runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" "catalog" "main") (Just "catalog") "/catalog/" ""
-        source <- call tr $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing (Just "/app/main.py")
-        let html = render source
-        for_ ["value=\"team/checkout\"", "value=\"trunk\"", "value=\"/app/main.py\"", "name=\"credentialId\" value=\"" <> account.id.toText <> "\""] \value -> html `shouldSatisfy` T.isInfixOf value
-        html `shouldNotSatisfy` T.isInfixOf "Unlink team/catalog"
-        _ <- testServant tr $ PageCodeContext.repositorySourcePostH testPid repository.id (PageCodeContext.CodeMappingForm (Just "foreign/private") (Just "release") (Just "checkout") Nothing (Just "/app/") Nothing Nothing)
-        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
-        map (\m -> (m.owner, m.repo, m.ref, m.credentialId)) (filter ((== Just "checkout") . (.service)) mappings) `shouldBe` [("team", "checkout", "release", account.id)]
-        _ <- testServant tr $ PageCodeContext.repositoryReviewsPostH testPid repository.id (ImpactReviews.ReviewSettings "foreign" "private" False False)
-        settings <- runQueryEffect tr $ ImpactReviews.repositorySettings testPid
-        map (\s -> (s.owner, s.repo, s.enabled)) settings `shouldMatchList` [("team", "checkout", False), ("team", "catalog", True)]
-        for_ (filter ((== "checkout") . (.repo)) mappings) \mapping -> void $ testServant tr $ PageCodeContext.repositorySourceDeleteH testPid repository.id mapping.id
-        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \remaining -> map (.repo) remaining `shouldBe` ["catalog"]
+    describe "Configuration folder" do
+      it "configurationFolder_roundTripsDefinitionsWithoutClobberingRuntimeStateOrLaterEdits" \tr -> do
+        sync <- syncOf tr testPid Nothing "team" "checkout" (GitSync.AppInstallation 42) ""
+        let register pid sid kind path = do
+              localId <- UUID.nextRandom
+              runQueryEffect tr $ RepositorySync.registerResource pid sid kind localId path
+              pure localId
+            resourceIn pid sid localId = runQueryEffect tr (RepositorySync.resources pid sid) >>= maybe (fail "resource missing") pure . find ((== localId) . (.localId))
+            resource = resourceIn testPid sync.id
+            importDef r observed definition = runQueryEffect tr $ RepositorySync.importDefinition r observed definition
+            localOf r = fmap AE.toJSON <$> runQueryEffect tr (RepositorySync.localDefinition r)
+            snapshot r = runQueryEffect tr $ RepositorySync.resourceSnapshot r
+            cron slug name = RepositorySync.CronDefinitionConfig $ RepositorySync.CronDefinition slug name 60 60
+            query = def{MonitorDefinitions.title = "Errors", MonitorDefinitions.query = "status_code >= 500 | summarize count()", MonitorDefinitions.alertThreshold = 5, MonitorDefinitions.timeWindowMins = 5, MonitorDefinitions.checkIntervalMins = 1}
+            runtimeKeys = ["current_status", "current_value", "muted_until", "last_status", "consecutive_failures", "last_checkin_at"]
+            runtime = fmap \case AE.Object row -> KM.filterWithKey (\key _ -> key `elem` runtimeKeys) row; _ -> KM.empty
+        -- Every definition kind round-trips, and a re-import keeps monitor runtime state.
+        for_ [RepositorySync.QueryDefinition query, RepositorySync.UptimeDefinitionConfig $ RepositorySync.UptimeDefinition "Site" "https://example.com" 60 200 True, RepositorySync.CronDefinitionConfig $ RepositorySync.CronDefinition "daily-job" "Daily job" 3600 60] \definition -> do
+          let kind = RepositorySync.definitionKind definition
+              path = "monitors/" <> T.toLower (show kind) <> ".yaml"
+          localId <- register testPid sync.id kind path
+          created <- resource localId
+          importDef created Nothing (Just definition) `shouldReturn` Right ()
+          Just actual <- runQueryEffect tr $ RepositorySync.localDefinition created
+          fmap AE.toJSON (RepositorySync.decodeDefinition path $ RepositorySync.encodeDefinition actual) `shouldBe` Right (AE.toJSON actual)
+          case kind of
+            RepositorySync.Query -> dbExec tr "UPDATE monitors.query_monitors SET current_status = 'alerting', current_value = 17, muted_until = now() + interval '1 hour' WHERE id = ?" (Only localId)
+            RepositorySync.Uptime -> dbExec tr "UPDATE apis.prometheus_scrape_configs SET last_status = 'down', consecutive_failures = 7 WHERE id = ?" (Only localId)
+            RepositorySync.Cron -> dbExec tr "UPDATE apis.cron_monitors SET last_status = 'error', last_checkin_at = now() WHERE id = ?" (Only localId)
+            RepositorySync.Dashboard -> pass
+          runtimeBefore <- snapshot created
+          fresh <- resource localId
+          importDef fresh runtimeBefore (Just actual) `shouldReturn` Right ()
+          runtimeAfter <- snapshot created
+          runtime runtimeAfter `shouldBe` runtime runtimeBefore
+          when (kind == RepositorySync.Query) do
+            beforeDelete <- resource localId
+            importDef beforeDelete runtimeAfter Nothing `shouldReturn` Right ()
+            deleted <- resource localId
+            observed <- snapshot deleted
+            importDef deleted observed (Just actual) `shouldReturn` Right ()
+            localOf deleted `shouldReturn` Just (AE.toJSON actual)
+        -- configurationImport_doesNotOverwriteAnEditMadeAfterItsSnapshot (nor deletes it).
+        edited <- register testPid sync.id RepositorySync.Cron "monitors/job.yaml"
+        let original = RepositorySync.CronDefinitionConfig $ RepositorySync.CronDefinition "job" "Original" 3600 60
+        resource edited >>= \r -> importDef r Nothing (Just original) `shouldReturn` Right ()
+        stale <- resource edited
+        observed <- snapshot stale
+        dbExec tr "UPDATE apis.cron_monitors SET name = 'Local edit' WHERE id = ?" (Only edited)
+        result <- importDef stale observed (Just original)
+        result `shouldSatisfy` isLeft
+        Just current <- localOf stale
+        current `shouldNotBe` AE.toJSON original
+        importDef stale observed Nothing `shouldReturn` result
+        localOf stale `shouldReturn` Just current
+        -- configurationImport_reportsDuplicateCronSlugsWithoutAbortingOtherResources
+        for_ (["first", "second", "third"] :: [Text]) \name -> do
+          r <- resource =<< register testPid sync.id RepositorySync.Cron ("monitors/" <> name <> ".yaml")
+          outcome <- importDef r Nothing (Just $ cron (if name == "second" then "first" else name) name)
+          if name == "second" then outcome `shouldSatisfy` isLeft else outcome `shouldBe` Right ()
+        -- configurationFolderChange_preservesLocalResourcesAndProposesThemAtTheNewPath (moves every resource, so its own project).
+        moving <- createTestProject tr "Configuration folder move"
+        movingSync <- syncOf tr moving Nothing "team" "checkout" (GitSync.AppInstallation 42) "old"
+        jobId <- register moving movingSync.id RepositorySync.Cron "old/monitors/job.yaml"
+        resourceIn moving movingSync.id jobId >>= \r -> importDef r Nothing (Just $ cron "job" "Job") `shouldReturn` Right ()
+        void $ runQueryEffect tr $ GitSync.updateGitHubSync (encKeyOf tr) movingSync.id "team" "checkout" "main" Nothing (Just "new")
+        moved <- resourceIn moving movingSync.id jobId
+        (moved.filePath, moved.localBaseline) `shouldBe` ("new/monitors/job.yaml", Nothing)
+        localOf moved `shouldReturn` Just (AE.toJSON $ cron "job" "Job")
 
-      it "repositoryCredentials_keepTheSameAccountOnDifferentServersIndependent" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        for_ ([Nothing, Just "https://git.example.com"] :: [Maybe Text]) \origin ->
-          runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub origin "team" Nothing (Just "fixture")
-        credentials <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
-        sort (map (.apiBase) credentials) `shouldBe` [Nothing, Just "https://git.example.com"]
+    describe "Dashboard sync" do
+      it "tokenConnection_rejectsMissingTokenAndQueuesOnlyFirstImport" \tr -> do
+        let form owner repo branch token prefix = GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
+        for_ ["", " "] \token -> do
+          (headers, _) <- testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing)
+          case lookupResponseHeader @"HX-Trigger" headers of
+            Header value -> value `shouldSatisfy` T.isInfixOf "Enter an access token."
+            _ -> expectationFailure "Missing token error was not shown"
+          runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
+          pendingJobs tr >>= (`shouldSatisfy` null)
+        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
+        sync <- onlySync tr >>= maybe (fail "Git connection was not created") pure
+        (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)
+        let imports = filter isImport <$> pendingJobs tr
+        imports >>= \jobs -> [(pid, sid) | BackgroundJobs.GitSyncRepository pid sid <- jobs] `shouldBe` [(testPid, sync.id)]
+        -- The update path wrote every field but the folder, so an edit to "Folder in repo" vanished
+        -- on save while the page redrew as if it had stuck. An empty token keeps the stored one.
+        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "updated" "updated-repo" "dev" "" (Just "monoscope"))
+        updated <- onlySync tr >>= maybe (fail "Git connection disappeared after update") pure
+        (updated.owner, updated.repo, updated.branch, updated.pathPrefix) `shouldBe` ("updated", "updated-repo", "dev", "monoscope")
+        updated.accessToken `shouldBe` sync.accessToken
+        length <$> imports `shouldReturn` 1
+        void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
+        onlySync tr >>= (`shouldSatisfy` isNothing)
 
-      it "repositoryConnection_keepsIdenticalNamesOnDifferentServersIndependent" \tr -> do
-        let form origin = GitSyncPage.GitSyncForm (Just Git.GitHub) origin "team" "dashboards" "main" "fixture" Nothing Nothing
-        for_ ([Nothing, Just "https://git.example.com"] :: [Maybe Text]) $ testServant tr . GitSyncPage.gitSyncSettingsPostH testPid . form
-        syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
-        sort (map (.apiBase) syncs) `shouldBe` [Nothing, Just "https://git.example.com"]
-        credentials <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
-        sort (map (.apiBase) credentials) `shouldBe` [Nothing, Just "https://git.example.com"]
-        overview <- call tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
-        T.count "team/dashboards" (render overview) `shouldBe` 2
-
-      it "repositoryConnection_reportsUnreadableTokensWithoutChangingTheFailedOperation" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        _ <- runQueryEffect tr $ Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET access_token = 'invalid-base64' WHERE id = #{sync.id} |]
-        decrypted <- runQueryEffect tr $ GitSync.getGitSyncsDecrypted (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid
-        length decrypted `shouldBe` 0
-        Just failed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        failed.lastError `shouldSatisfy` isJust
-        did <- UUIDId <$> UUID.nextRandom
-        void $ runQueryEffect tr $ GitSync.recordSyncError sync.id (GitSync.ExportDashboard did) "Export failed"
-        _ <- testServant tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
-        Just stillFailed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        (stillFailed.lastError <&> (.operation)) `shouldBe` Just (GitSync.ExportDashboard did)
-
-      it "repositoryPicker_doesNotTreatAnEnterpriseRepositoryAsItsPublicGitHubCounterpart" \tr -> do
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" (Just 42) Nothing
-        Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team/dashboards" "dashboards" True "main"]
-        _ <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub (Just "https://git.example.com") "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH testPid $ GitSyncPage.RepoSelectForm ["team/dashboards"] "main" Nothing 42
-        syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
-        sort (map (.apiBase) syncs) `shouldBe` [Nothing, Just "https://git.example.com"]
-
-      it "repositoryOwnership_isolatesIdenticalPathsAndRetainsDashboardsOnDisconnect" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            connect owner = runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing owner "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
-            create = do
-              did <- UUIDId <$> UUID.nextRandom
-              runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Overview"}
-        Just syncA <- connect "team-a"
-        Just syncB <- connect "team-b"
+      it "repositoryOwnership_isolatesIdenticalPathsQueuesOnlyAssignedPushesAndRetainsDashboardsOnDisconnect" \tr -> do
+        let connect owner = syncOf tr testPid Nothing owner "dashboards" (GitSync.AppInstallation 42) ""
+            assign did sync = runQueryEffect tr $ GitSync.assignDashboardRepository testPid did sync.id
+            queuePush = runAuthHandler tr . GitSyncPage.queueGitSyncPush testPid
+            pushesOf did = pendingJobs tr <&> \jobs -> length [() | BackgroundJobs.GitSyncPushDashboard project d <- jobs, project == testPid, d == did.unwrap]
+        -- repositorySync_acceptsIndependentRepositoriesForDifferentTeams
+        syncA <- connect "team-a"
+        syncB <- connect "team-b"
+        syncA.id `shouldNotBe` syncB.id
         (selection, _) <- testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
         getHeaders selection `shouldSatisfy` elem ("HX-Redirect", encodeUtf8 ("/p/" <> testPid.toText <> "/repositories"))
         length <$> runQueryEffect tr (GitSync.getGitSyncs testPid) `shouldReturn` 2
-        dashA <- create
-        dashB <- create
-        conflict <- create
-        runQueryEffect tr (GitSync.assignDashboardRepository testPid dashA.id syncA.id) `shouldReturn` Right ()
-        runQueryEffect tr (GitSync.assignDashboardRepository testPid dashB.id syncB.id) `shouldReturn` Right ()
-        runQueryEffect tr (GitSync.assignDashboardRepository testPid dashA.id syncB.id) `shouldReturn` Left (GitSync.OwnedByRepository syncA.id)
-        runQueryEffect tr (GitSync.assignDashboardRepository testPid conflict.id syncA.id) `shouldReturn` Left (GitSync.FileOwnedByDashboard dashA.id)
+        [dashA, dashB, conflict] <- replicateM 3 $ seedDash tr \d -> d{Dashboards.title = "Overview"}
+        -- queuesPushOnlyAfterDashboardRepositoryIsChosen
+        queuePush dashB
+        pushesOf dashB `shouldReturn` 0
+        assign dashA syncA `shouldReturn` Right ()
+        assign dashB syncB `shouldReturn` Right ()
+        assign dashA syncB `shouldReturn` Left (GitSync.OwnedByRepository syncA.id)
+        assign conflict syncA `shouldReturn` Left (GitSync.FileOwnedByDashboard dashA)
         otherPid <- createTestProject tr "Other repository project"
-        runQueryEffect tr (GitSync.assignDashboardRepository otherPid dashA.id syncA.id) `shouldReturn` Left GitSync.RepositoryMissing
-        _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashA.id "overview.yaml" "sha-a"
-        _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashB.id "overview.yaml" "sha-b"
-        stateA <- runQueryEffect tr $ GitSync.getRepositoryDashboardState testPid syncA.id
-        stateB <- runQueryEffect tr $ GitSync.getRepositoryDashboardState testPid syncB.id
-        M.toList stateA `shouldBe` [("overview.yaml", (dashA.id, Just "sha-a"))]
-        M.toList stateB `shouldBe` [("overview.yaml", (dashB.id, Just "sha-b"))]
-        runAuthHandler tr $ GitSyncPage.queueGitSyncPush testPid dashB.id
-        jobs <- getPendingBackgroundJobs tr.trATCtx
-        jobs
-          `shouldSatisfy` any
-            ( \(_, job) -> case job of
-                BackgroundJobs.GitSyncPushDashboard project did -> project == testPid && did == dashB.id.unwrap
-                _ -> False
-            )
+        runQueryEffect tr (GitSync.assignDashboardRepository otherPid dashA syncA.id) `shouldReturn` Left GitSync.RepositoryMissing
+        _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashA "overview.yaml" "sha-a"
+        _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashB "overview.yaml" "sha-b"
+        fmap (\d -> (d.filePath, d.fileSha)) <$> dashOf tr dashA `shouldReturn` Just (Just "overview.yaml", Just "sha-a")
+        M.toList <$> runQueryEffect tr (GitSync.getRepositoryDashboardState testPid syncA.id) `shouldReturn` [("overview.yaml", (dashA, Just "sha-a"))]
+        M.toList <$> runQueryEffect tr (GitSync.getRepositoryDashboardState testPid syncB.id) `shouldReturn` [("overview.yaml", (dashB, Just "sha-b"))]
+        queuePush dashB
+        pushesOf dashB `shouldReturn` 1
+        -- A paused repository queues no push.
+        void $ testServant tr $ GitSyncPage.gitSyncRepositoryPauseH testPid syncB.id
+        dbExec tr "DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'" ()
+        queuePush dashB
+        pushesOf dashB `shouldReturn` 0
         _ <- testServant tr $ GitSyncPage.gitSyncRepositoryDeleteH testPid syncA.id
-        Just retained <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid dashA.id
-        (retained.title, retained.gitSyncId, retained.filePath, retained.fileSha) `shouldBe` ("Overview", Nothing, Nothing, Nothing)
-        Just untouched <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid dashB.id
-        (untouched.gitSyncId, untouched.fileSha) `shouldBe` (Just syncB.id, Just "sha-b")
-        overview <- call tr $ PageCodeContext.repositoriesGetH testPid Nothing Nothing
-        for_ (["team-a/dashboards", "team-b/dashboards"] :: [Text]) \repo ->
-          T.isInfixOf repo (render overview) `shouldBe` True
-
-      it "repositoryMigration_normalizesLegacyPathsAndRetainsCollidingDashboards" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing "ops"
-        dashboards <- forM (zip [1 :: Int ..] ["overview.yaml", "dashboards/overview.yaml", "ops/dashboards/overview.yaml"]) \(n, path) -> do
-          did <- UUIDId <$> UUID.nextRandom
-          runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Retained overview", Dashboards.updatedAt = addUTCTime (fromIntegral n) frozenTime, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just path, Dashboards.fileSha = Just "blob"}
-        migration <- Query <$> readFileBS "static/migrations/0216_repository_relative_paths.sql"
-        dbExec tr migration ()
-        retained <- forM dashboards \dash -> runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid dash.id
-        map (fmap (\d -> (d.title, d.gitSyncId, d.filePath, d.fileSha))) retained
-          `shouldBe` [ Just ("Retained overview", Nothing, Nothing, Nothing)
-                     , Just ("Retained overview", Nothing, Nothing, Nothing)
-                     , Just ("Retained overview", Just sync.id, Just "overview.yaml", Just "blob")
-                     ]
+        fmap (\d -> (d.title, d.gitSyncId, d.filePath, d.fileSha)) <$> dashOf tr dashA `shouldReturn` Just ("Overview", Nothing, Nothing, Nothing)
+        fmap (\d -> (d.gitSyncId, d.fileSha)) <$> dashOf tr dashB `shouldReturn` Just (Just syncB.id, Just "sha-b")
+        overview <- renderT <$> call tr (PageCodeContext.repositoriesGetH testPid Nothing Nothing)
+        for_ (["team-a/dashboards", "team-b/dashboards"] :: [Text]) \repo -> overview `shouldSatisfy` T.isInfixOf repo
 
       it "dashboardRepositoryAssignment_usesTheChosenRepositoryAndKeepsConflictsLocal" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            connect project owner = runQueryEffect tr $ GitSync.insertGitHubSync encKey project Git.GitHub Nothing owner "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
-            create = do
-              did <- UUIDId <$> UUID.nextRandom
-              runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Overview", Dashboards.baseTemplate = Just "redis.yaml", Dashboards.fileSha = Just "local-checksum"}
-        Just syncA <- connect testPid "team-a"
-        Just syncB <- connect testPid "team-b"
+        let connect project owner = syncOf tr project Nothing owner "dashboards" (GitSync.AppInstallation 42) ""
+            create = seedDash tr \d -> d{Dashboards.title = "Overview", Dashboards.baseTemplate = Just "redis.yaml", Dashboards.fileSha = Just "local-checksum"}
+            assign did sync = (.content) <$> call tr (GitSyncPage.dashboardRepositoryPostH testPid did (GitSyncPage.DashboardRepositoryForm sync.id))
+        syncA <- connect testPid "team-a"
+        syncB <- connect testPid "team-b"
         dash <- create
-        initial <- call tr $ GitSyncPage.dashboardRepositoryGetH testPid dash.id
+        initial <- call tr $ GitSyncPage.dashboardRepositoryGetH testPid dash
         length initial.content.repositories `shouldBe` 2
-        assigned <- call tr $ GitSyncPage.dashboardRepositoryPostH testPid dash.id (GitSyncPage.DashboardRepositoryForm syncB.id)
-        let owned = assigned.content.dashboard
+        owned <- (.dashboard) <$> assign dash syncB
         (owned.gitSyncId, owned.filePath, owned.fileSha, isJust owned.schema) `shouldBe` (Just syncB.id, Just "overview.yaml", Nothing, True)
         (owned.schema >>= (.file)) `shouldBe` Just "redis.yaml"
-        jobs <- getPendingBackgroundJobs tr.trATCtx
-        jobs
-          `shouldSatisfy` any
-            ( \(_, job) -> case job of
-                BackgroundJobs.GitSyncPushDashboard project did -> project == testPid && did == dash.id.unwrap
-                _ -> False
-            )
-        reassigned <- call tr $ GitSyncPage.dashboardRepositoryPostH testPid dash.id (GitSyncPage.DashboardRepositoryForm syncA.id)
-        reassigned.content.assignmentError `shouldBe` Just (GitSync.OwnedByRepository syncB.id)
+        jobs <- pendingJobs tr
+        jobs `shouldSatisfy` any \case BackgroundJobs.GitSyncPushDashboard project did -> project == testPid && did == dash.unwrap; _ -> False
+        (.assignmentError) <$> assign dash syncA `shouldReturn` Just (GitSync.OwnedByRepository syncB.id)
         other <- create
-        conflict <- call tr $ GitSyncPage.dashboardRepositoryPostH testPid other.id (GitSyncPage.DashboardRepositoryForm syncB.id)
-        conflict.content.assignmentError `shouldBe` Just (GitSync.FileOwnedByDashboard dash.id)
-        conflict.content.dashboard.gitSyncId `shouldBe` Nothing
+        conflict <- assign other syncB
+        conflict.assignmentError `shouldBe` Just (GitSync.FileOwnedByDashboard dash)
+        conflict.dashboard.gitSyncId `shouldBe` Nothing
         otherPid <- createTestProject tr "Other repository owner"
-        Just foreignRepo <- connect otherPid "foreign"
-        foreignResult <- call tr $ GitSyncPage.dashboardRepositoryPostH testPid other.id (GitSyncPage.DashboardRepositoryForm foreignRepo.id)
-        foreignResult.content.assignmentError `shouldBe` Just GitSync.RepositoryMissing
+        foreignRepo <- connect otherPid "foreign"
+        (.assignmentError) <$> assign other foreignRepo `shouldReturn` Just GitSync.RepositoryMissing
+
+      -- A delivery queues an import only when its signature verifies against the row's own secret,
+      -- the route's host matches the row's, and the push is to the tracked branch.
+      it "webhooks_queueImportsOnlyForVerifiedPushesToTheTrackedRow" \tr -> do
+        let pushBody owner repo = toStrict $ AE.encode $ AE.object ["push" AE..= AE.object ["changes" AE..= ([AE.object ["new" AE..= AE.object ["name" AE..= ("main" :: Text)]]] :: [AE.Value])], "ref" AE..= ("refs/heads/main" :: Text), "repository" AE..= AE.object ["full_name" AE..= (owner <> "/" <> repo :: Text)]]
+            signed secret body = Just $ "sha256=" <> hmacHexOf secret body
+            deliver host ev sig body = do
+              dbExec tr "DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'" ()
+              void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH host Git.WebhookReq{event = Just ev, signature = sig, gitlabToken = Nothing, gitlabWebhookId = Nothing, gitlabTimestamp = Nothing, body}
+              length . filter isImport <$> pendingJobs tr
+            announced = (>>= (.announcedRevision)) <$> onlySync tr
+        setupSyncOn tr Git.GitHub "webhook-owner" "webhook-repo" (Just "s3cret")
+        let body = pushBody "webhook-owner" "webhook-repo"
+            other = pushBody "unknown" "repo"
+        -- Forged (wrong secret) or unsigned deliveries to a row holding a secret queue nothing.
+        deliver Git.GitHub "push" (Just "sha256=deadbeef") body `shouldReturn` 0
+        deliver Git.GitHub "push" Nothing body `shouldReturn` 0
+        deliver Git.GitHub "push" (signed "s3cret" body) body >>= (`shouldSatisfy` (>= 1))
+        -- Non-push events and untracked repos are ignored.
+        deliver Git.GitHub "ping" (signed "s3cret" body) body `shouldReturn` 0
+        deliver Git.GitHub "push" (signed "s3cret" other) other `shouldReturn` 0
+        -- A push records the head it announced: a fetch answered from an older view must not read
+        -- as "no change" and complete having done nothing (3 of 5 demo-project pushes were lost so).
+        let announcing = toStrict $ AE.encode $ AE.object ["ref" AE..= ("refs/heads/main" :: Text), "repository" AE..= AE.object ["full_name" AE..= ("webhook-owner/webhook-repo" :: Text)], "after" AE..= ("f00dcafe" :: Text)]
+        void $ deliver Git.GitHub "push" (signed "s3cret" announcing) announcing
+        announced `shouldReturn` Just "f00dcafe"
+        -- The announcement outlives a pull that did not reach it, or the retry it licenses is
+        -- cleared by the very fetch that failed to satisfy it.
+        setupSyncOn tr Git.GitHub "ann-owner" "ann-repo" (Just "s3cret")
+        Just sync <- onlySync tr
+        _ <- runQueryEffect tr $ GitSync.setAnnouncedRevision sync.id "newhead"
+        _ <- runQueryEffect tr $ GitSync.recordImportSuccess sync.id "oldhead"
+        announced `shouldReturn` Just "newhead"
+        _ <- runQueryEffect tr $ GitSync.recordImportSuccess sync.id "newhead"
+        settled <- onlySync tr
+        (settled >>= (.announcedRevision), settled >>= (.lastRevision)) `shouldBe` (Nothing, Just "newhead")
+        -- Each host verifies in its own dialect: Gitea sends the bare hex digest, Bitbucket prefixes it.
+        forM_ [(Git.Gitea, "push" :: Text), (Git.Bitbucket, "repo:push")] \(host, ev) -> do
+          setupSyncOn tr host "acme" "config" (Just "s3cret")
+          let hosted = pushBody "acme" "config"
+          deliver host ev (Just $ (if host == Git.Bitbucket then "sha256=" else "") <> hmacHexOf "s3cret" hosted) hosted >>= (`shouldSatisfy` (>= 1))
+        -- importsOnlyTheTargetBranchAndIgnoresTheAutomatedPRBranch
+        setupSyncOn tr Git.GitHub "branch-filter-owner" "config" (Just "s3cret")
+        for_ (["monoscope-dashboards", "feature/user-pr"] :: [Text]) \branch -> do
+          let branchPush = toStrict $ AE.encode $ AE.object ["repository" AE..= AE.object ["full_name" AE..= ("branch-filter-owner/config" :: Text)], "ref" AE..= ("refs/heads/" <> branch)]
+          deliver Git.GitHub "push" (signed "s3cret" branchPush) branchPush `shouldReturn` 0
+        let tracked = pushBody "branch-filter-owner" "config"
+        deliver Git.GitHub "push" (signed "s3cret" tracked) tracked `shouldReturn` 1
+        -- The same owner/repo on another host is another project's repository: a Gitea-signed
+        -- delivery on the Gitea route matches no GitLab row.
+        setupSyncOn tr Git.GitLab "acme" "config" (Just "gl-secret")
+        let collision = pushBody "acme" "config"
+        deliver Git.Gitea "push" (Just $ hmacHexOf "gl-secret" collision) collision `shouldReturn` 0
 
       it "repositoryEdits_updateOneConfigurationPRWithoutWritingToTheTargetBranch" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        did <- UUIDId <$> UUID.nextRandom
-        void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml"}
-        let push = BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
-        (firstRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ configurationProvider tr "open" push
-        Just firstSync <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        firstSync.pullRequestNumber `shouldBe` Just 17
+        sync <- teamDashboards tr
+        did <- seedDash tr \d -> d{Dashboards.title = "Overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml"}
+        let push prState = runJob tr (configurationProvider tr prState) (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
+        firstRequests <- push "open"
+        (.pullRequestNumber) <$> syncById tr sync `shouldReturn` Just 17
         void $ testServant tr $ DashboardPage.dashboardRenamePatchH testPid did (DashboardPage.DashboardRenameForm "Updated overview" Nothing)
-        (secondRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ configurationProvider tr "open" push
-        Just updatedSync <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        updatedSync.pullRequestNumber `shouldBe` Just 17
+        secondRequests <- push "open"
+        (.pullRequestNumber) <$> syncById tr sync `shouldReturn` Just 17
         length [() | (url, _) <- firstRequests <> secondRequests, "/pulls" `T.isSuffixOf` url] `shouldBe` 1
-        let writes = [(url, body) | (url, body) <- firstRequests <> secondRequests, not (LBS.null body)]
-        writes `shouldSatisfy` any (T.isInfixOf "/git/trees" . fst)
-        writes `shouldSatisfy` any (T.isInfixOf "/git/refs/heads/monoscope-dashboards" . fst)
-        writes `shouldNotSatisfy` any (T.isInfixOf "/git/refs/heads/main" . fst)
-        writes `shouldNotSatisfy` any (T.isInfixOf "/contents/" . fst)
-        Just localDashboard <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid did
-        localDashboard.title `shouldBe` "Updated overview"
-        void $ runTestBgRecordingHTTP frozenTime tr $ configurationProvider tr "closed" push
-        Just paused <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        paused.exportPaused `shouldBe` True
-        (fmap (.title) <$> runQueryEffect tr (Dashboards.getDashboardByProjectId testPid did)) `shouldReturn` Just "Updated overview"
+        let writes = map fst $ filter (not . LBS.null . snd) $ firstRequests <> secondRequests
+        writes `shouldSatisfy` any (T.isInfixOf "/git/trees")
+        writes `shouldSatisfy` any (T.isInfixOf "/git/refs/heads/monoscope-dashboards")
+        writes `shouldNotSatisfy` any (T.isInfixOf "/git/refs/heads/main")
+        writes `shouldNotSatisfy` any (T.isInfixOf "/contents/")
+        fmap (.title) <$> dashOf tr did `shouldReturn` Just "Updated overview"
+        -- A closed proposal pauses export and keeps the local edit.
+        void $ push "closed"
+        (.exportPaused) <$> syncById tr sync `shouldReturn` True
+        fmap (.title) <$> dashOf tr did `shouldReturn` Just "Updated overview"
 
       it "repositoryExport_doesNotProposeEditsAgainstAnUnreconciledTargetRevision" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        did <- UUIDId <$> UUID.nextRandom
-        void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Local", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "local.yaml"}
+        sync <- teamDashboards tr
+        did <- ownedDash tr sync "Local" "local.yaml"
         calls <- newIORef (0 :: Int)
         let advancing = withHTTPResponses \_ endpoint ->
               if "/commits/main" `T.isInfixOf` toText endpoint
-                then do
-                  number <- atomicModifyIORef' calls (\n -> (n + 1, n))
-                  pure $ Just $ if number == 0 then "{\"sha\":\"head\",\"commit\":{\"tree\":{\"sha\":\"tree\"}}}" else "{\"sha\":\"new-head\",\"commit\":{\"tree\":{\"sha\":\"new-tree\"}}}"
+                then atomicModifyIORef' calls (\n -> (n + 1, n)) <&> \n -> Just $ if n == 0 then "{\"sha\":\"head\",\"commit\":{\"tree\":{\"sha\":\"tree\"}}}" else "{\"sha\":\"new-head\",\"commit\":{\"tree\":{\"sha\":\"new-tree\"}}}"
                 else pure Nothing
-        (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ configurationProvider tr "open" $ advancing $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
+        requests <- runJob tr (configurationProvider tr "open" . advancing) (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
         requests `shouldNotSatisfy` any (\(url, body) -> not (LBS.null body) && "/git/trees" `T.isSuffixOf` url)
-        Just failed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        failed.lastError `shouldSatisfy` isJust
-        (fmap (.title) <$> runQueryEffect tr (Dashboards.getDashboardByProjectId testPid did)) `shouldReturn` Just "Local"
+        (.lastError) <$> syncById tr sync >>= (`shouldSatisfy` isJust)
+        fmap (.title) <$> dashOf tr did `shouldReturn` Just "Local"
 
       it "repositoryRevertedAddition_removesTheStaleFileFromItsOpenPR" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        did <- UUIDId <$> UUID.nextRandom
-        void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Temporary", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "temporary.yaml"}
-        let push = BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
-            reconcile = BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
-        void $ runTestBgRecordingHTTP frozenTime tr $ configurationProvider tr "open" push
+        sync <- teamDashboards tr
+        did <- ownedDash tr sync "Temporary" "temporary.yaml"
+        void $ runJob tr (configurationProvider tr "open") (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
         void $ runQueryEffect tr $ Dashboards.deleteDashboardsByIds testPid (fromList [did])
-        (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ configurationProvider tr "open" reconcile
+        requests <- runJob tr (configurationProvider tr "open") (BackgroundJobs.GitSyncRepository testPid sync.id)
         let trees = [body | (url, body) <- requests, "/git/trees" `T.isSuffixOf` url]
         length trees `shouldBe` 1
         trees `shouldSatisfy` all (T.isInfixOf "\"tree\":[]" . decodeUtf8 . LBS.toStrict)
 
-      it "repositoryPush_doesNotAdvanceThePullCursorPastOtherRemoteDashboards" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub (Just "https://127.0.0.1:1") "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        did <- UUIDId <$> UUID.nextRandom
-        _ <- runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Local", Dashboards.schema = Just def, Dashboards.filePath = Just "local.yaml"}
-        runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
-        let transport = withHTTPResponses \_ endpoint ->
-              pure
-                $ Just
-                $ if "remote.yaml" `T.isInfixOf` toText endpoint
-                  then AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 "title: Remote\nwidgets: []\n")]
-                  else
-                    if "/contents/" `T.isInfixOf` toText endpoint
-                      then "{\"content\":{\"sha\":\"local-blob\"}}"
-                      else
-                        if "/git/trees/" `T.isInfixOf` toText endpoint
-                          then "{\"tree\":[{\"path\":\"dashboards/local.yaml\",\"sha\":\"local-blob\",\"type\":\"blob\"},{\"path\":\"dashboards/remote.yaml\",\"sha\":\"remote-blob\",\"type\":\"blob\"}]}"
-                          else "{\"sha\":\"head\"}"
-        _ <- runTestBgRecordingHTTP frozenTime tr $ transport do
-          BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
-          BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
-        gitState <- runQueryEffect tr $ GitSync.getRepositoryDashboardState testPid sync.id
-        M.keys gitState `shouldBe` ["local.yaml", "remote.yaml"]
+      it "repositoryExportFailure_retriesTheSharedSnapshotAndRetainsActiveLocalChanges" \tr -> do
+        sync <- teamDashboards tr
+        did <- ownedDash tr sync "Local change" "local.yaml"
+        let job = BackgroundJobs.GitSyncPushDashboard testPid did.unwrap
+        void $ runJob tr (gitHost [("/git/trees/", "{\"tree\":[]}")] "{\"sha\":\"head\"}") job
+        (.lastError) <$> syncById tr sync `shouldReturn` Just (GitSync.SyncFailure GitSync.ExportDashboards "GitHub did not return the target tree.")
+        retried <- call tr $ GitSyncPage.gitSyncRepositoryRetryH testPid sync.id
+        renderT retried `shouldSatisfy` T.isInfixOf "Retry export"
+        queued <- pendingJobs tr
+        [sid | BackgroundJobs.GitSyncPushRepository pid sid <- queued, pid == testPid] `shouldBe` [sync.id]
+        void $ runJob tr (configurationProvider tr "open") job
+        ((,) <$> (.pullRequestNumber) <*> (.lastError)) <$> syncById tr sync `shouldReturn` (Just 17, Nothing)
+        fmap (.title) <$> dashOf tr did `shouldReturn` Just "Local change"
 
-      it "repositoryPicker_connectsSeveralRepositoriesAndPreservesExistingConfiguration" \tr -> do
-        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team-a" (Just 42) Nothing
-        Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team-a/dashboards" "dashboards" True "main", Git.GitRepo "team-b/dashboards" "dashboards" True "main"]
-        let selection = GitSyncPage.RepoSelectForm ["team-a/dashboards", "team-b/dashboards", "team-a/dashboards"] "trunk" (Just "observability") 42
-        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH testPid selection
-        syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
-        sort [(s.owner, s.repo, s.branch, s.pathPrefix) | s <- syncs] `shouldBe` [("team-a", "dashboards", "trunk", "observability"), ("team-b", "dashboards", "trunk", "observability")]
-        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH testPid selection{GitSyncPage.branch = "different", GitSyncPage.pathPrefix = Just "other"}
-        unchanged <- runQueryEffect tr $ GitSync.getGitSyncs testPid
-        sort [(s.id, s.branch, s.pathPrefix) | s <- unchanged] `shouldBe` sort [(s.id, s.branch, s.pathPrefix) | s <- syncs]
+      it "repositoryPush_doesNotAdvanceThePullCursorPastOtherRemoteDashboards" \tr -> do
+        sync <- syncOf tr testPid (Just "https://127.0.0.1:1") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
+        did <- seedDash tr \d -> d{Dashboards.title = "Local", Dashboards.schema = Just def, Dashboards.filePath = Just "local.yaml"}
+        runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
+        let transport :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
+            transport = gitHost [("remote.yaml", blobOf "title: Remote\nwidgets: []\n"), ("/contents/", "{\"content\":{\"sha\":\"local-blob\"}}"), ("/git/trees/", treeOf [("dashboards/local.yaml", "local-blob"), ("dashboards/remote.yaml", "remote-blob")])] "{\"sha\":\"head\"}"
+        for_ [BackgroundJobs.GitSyncPushDashboard testPid did.unwrap, BackgroundJobs.GitSyncRepository testPid sync.id] $ runJob tr transport
+        M.keys <$> runQueryEffect tr (GitSync.getRepositoryDashboardState testPid sync.id) `shouldReturn` ["local.yaml", "remote.yaml"]
 
       it "repositoryPull_preservesAnAssignedDashboardBeforeFirstPushAndReportsRemotePathConflicts" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub (Just "https://127.0.0.1:1") "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        did <- UUIDId <$> UUID.nextRandom
-        _ <- runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Local overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml"}
-        let pull :: Text -> LBS.ByteString -> IO ([(Text, LBS.ByteString)], ())
-            pull revision tree = runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ endpoint -> pure $ Just $ if "/git/trees/" `T.isInfixOf` toText endpoint then tree else if "/contents/" `T.isInfixOf` toText endpoint then AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 "title: Remote overview\nwidgets: []\n")] else AE.encode $ AE.object ["sha" AE..= revision]) $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
-        _ <- pull "before-first-push" "{\"tree\":[]}"
-        Just awaiting <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid did
-        (awaiting.title, awaiting.fileSha) `shouldBe` ("Local overview", Nothing)
-        outcome <- try @_ @SomeException $ pull "remote-conflict" "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"remote-blob\",\"type\":\"blob\"}]}"
+        sync <- syncOf tr testPid (Just "https://127.0.0.1:1") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
+        did <- ownedDash tr sync "Local overview" "overview.yaml"
+        let pull revision tree = runJob tr (gitHost [("/git/trees/", tree), ("/contents/", blobOf "title: Remote overview\nwidgets: []\n")] (AE.encode $ AE.object ["sha" AE..= (revision :: Text)])) (BackgroundJobs.GitSyncRepository testPid sync.id)
+            remote = treeOf [("dashboards/overview.yaml", "remote-blob")]
+        _ <- pull "before-first-push" (treeOf [])
+        fmap (\d -> (d.title, d.fileSha)) <$> dashOf tr did `shouldReturn` Just ("Local overview", Nothing)
+        outcome <- try @_ @SomeException $ pull "remote-conflict" remote
         whenLeft_ outcome $ expectationFailure . ("Pull must report a first-push conflict rather than attempt a duplicate insert: " <>) . show
-        Just conflicted <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        conflicted.lastRevision `shouldBe` Just "remote-conflict"
+        (.lastRevision) <$> syncById tr sync `shouldReturn` Just "remote-conflict"
         conflicts <- runQueryEffect tr $ RepositorySync.resources testPid sync.id
-        conflicts `shouldSatisfy` any (.conflicted)
-        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
-        status <- call tr $ PageCodeContext.repositoryGetH testPid repository.id
-        let html = render $ Lucid.toHtml status.content
-        html `shouldSatisfy` T.isInfixOf "Both versions changed"
-        html `shouldSatisfy` T.isInfixOf "Keep Monoscope"
-        html `shouldSatisfy` T.isInfixOf "Compare versions"
-        html `shouldSatisfy` T.isInfixOf "Active in Monoscope"
         conflict <- maybe (fail "Expected the dashboard conflict") pure $ find (.conflicted) conflicts
+        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
+        status <- renderT . (.content) <$> call tr (PageCodeContext.repositoryGetH testPid repository.id)
+        for_ ["Both versions changed", "Keep Monoscope", "Compare versions", "Active in Monoscope"] \part -> status `shouldSatisfy` T.isInfixOf part
         void $ testServant tr $ PageCodeContext.repositoryConflictPostH testPid repository.id conflict.id (PageCodeContext.ConflictForm False)
-        void $ pull "remote-conflict" "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"remote-blob\",\"type\":\"blob\"}]}"
-        Just retained <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid did
-        retained.title `shouldBe` "Local overview"
-        resolved <- runQueryEffect tr $ RepositorySync.resources testPid sync.id
-        resolved `shouldSatisfy` all (not . (.conflicted))
-
-      it "repositorySyncFailureMigration_preservesLegacyErrorsAsImportFailures" \tr -> do
-        let connect owner = runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing owner "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        Just failed <- connect "failed"
-        Just healthy <- connect "healthy"
-        withResource tr.trPool \conn -> do
-          void $ PG.execute_ conn "ALTER TABLE projects.git_sync ALTER COLUMN last_error TYPE TEXT USING last_error->>'message'"
-          void $ PG.execute conn "UPDATE projects.git_sync SET last_error = 'Legacy provider failure' WHERE id = ?" (PG.Only failed.id)
-        migration <- Query <$> readFileBS "static/migrations/0222_repository_sync_failures.sql"
-        dbExec tr migration ()
-        Just migrated <- runQueryEffect tr $ GitSync.getGitSyncById testPid failed.id
-        migrated.lastError `shouldBe` Just (GitSync.SyncFailure GitSync.ImportDashboards "Legacy provider failure")
-        Just unchanged <- runQueryEffect tr $ GitSync.getGitSyncById testPid healthy.id
-        unchanged.lastError `shouldBe` Nothing
-
-      it "repositoryExportFailure_retriesTheSharedSnapshotAndRetainsActiveLocalChanges" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        did <- UUIDId <$> UUID.nextRandom
-        void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Local change", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "local.yaml"}
-        let job = BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
-            failedExport = withHTTPResponses \_ endpoint -> pure $ Just $ if "/git/trees/" `T.isInfixOf` toText endpoint then "{\"tree\":[]}" else "{\"sha\":\"head\"}"
-        void $ runTestBgRecordingHTTP frozenTime tr $ failedExport job
-        Just failed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        failed.lastError `shouldBe` Just (GitSync.SyncFailure GitSync.ExportDashboards "GitHub did not return the target tree.")
-        retried <- call tr $ GitSyncPage.gitSyncRepositoryRetryH testPid sync.id
-        render retried `shouldSatisfy` T.isInfixOf "Retry export"
-        queued <- getPendingBackgroundJobs tr.trATCtx
-        [sid | (_, BackgroundJobs.GitSyncPushRepository pid sid) <- toList queued, pid == testPid] `shouldBe` [sync.id]
-        void $ runTestBgRecordingHTTP frozenTime tr $ configurationProvider tr "open" job
-        Just recovered <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        (recovered.pullRequestNumber, recovered.lastError) `shouldBe` (Just 17, Nothing)
-        fmap (.title) <$> runQueryEffect tr (Dashboards.getDashboardByProjectId testPid did) `shouldReturn` Just "Local change"
+        void $ pull "remote-conflict" remote
+        fmap (.title) <$> dashOf tr did `shouldReturn` Just "Local overview"
+        runQueryEffect tr (RepositorySync.resources testPid sync.id) >>= (`shouldSatisfy` all (not . (.conflicted)))
 
       it "repositoryPull_keepsTheTreeContentAndCursorAtOneCommitWhenTheBranchMoves" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
+        sync <- teamDashboards tr
         let transport = withHTTPResponses \_ endpoint -> do
               let path = toText endpoint
-                  pinned = "first-commit" `T.isInfixOf` path
-              pure
-                $ Just
-                $ if "/commits/" `T.isInfixOf` path
-                  then "{\"sha\":\"first-commit\"}"
-                  else
-                    if "/git/trees/" `T.isInfixOf` path
-                      then "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"first-blob\",\"type\":\"blob\"}]}"
-                      else AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 (if pinned then "title: Original overview\nwidgets: []\n" else "title: Later overview\nwidgets: []\n"))]
-        (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ transport $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
-        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
-        map (\d -> (d.title, d.fileSha)) dashboards `shouldBe` [("Original overview", Just "first-blob")]
+              pure $ Just $ if "/commits/" `T.isInfixOf` path then "{\"sha\":\"first-commit\"}" else if "/git/trees/" `T.isInfixOf` path then treeOf [("dashboards/overview.yaml", "first-blob")] else blobOf (if "first-commit" `T.isInfixOf` path then "title: Original overview\nwidgets: []\n" else "title: Later overview\nwidgets: []\n")
+        requests <- runJob tr transport (BackgroundJobs.GitSyncRepository testPid sync.id)
+        map (\d -> (d.title, d.fileSha)) <$> allDashboards tr `shouldReturn` [("Original overview", Just "first-blob")]
         map fst requests `shouldBe` map ("https://api.github.com/repos/team/dashboards" <>) ["/commits/main", "/git/trees/first-commit?recursive=1", "/contents/dashboards/overview.yaml?ref=first-commit"]
-        Just completed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        completed.lastRevision `shouldBe` Just "first-commit"
+        (.lastRevision) <$> syncById tr sync `shouldReturn` Just "first-commit"
 
+      it "repositoryPull_renamesAnOwnedDashboardWithoutLosingItsIdentity" \tr -> do
+        sync <- syncOf tr testPid (Just "https://127.0.0.1:1") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
+        did <- seedDash tr \d -> d{Dashboards.title = "Overview", Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "old.yaml", Dashboards.fileSha = Just "same-content"}
+        requests <- runJob tr (gitHost [("/git/trees/", treeOf [("dashboards/new.yaml", "same-content")])] "{\"sha\":\"new-head\"}") (BackgroundJobs.GitSyncRepository testPid sync.id)
+        length requests `shouldBe` 3
+        fmap (\d -> (d.filePath, d.fileSha)) <$> dashOf tr did `shouldReturn` Just (Just "new.yaml", Just "same-content")
+
+      it "repositoryPull_reportsInvalidYamlAndRetriesTheSameRevisionAfterCorrection" \tr -> do
+        sync <- syncOf tr testPid (Just "https://127.0.0.1:1") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
+        deleted <- seedDash tr \d -> d{Dashboards.title = "Removed", Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "removed.yaml", Dashboards.fileSha = Just "old"}
+        let pull yaml = runJob tr (gitHost [("/git/trees/", treeOf [("dashboards/overview.yaml", "blob"), ("dashboards/valid.yaml", "valid")]), ("valid.yaml", blobOf "title: Valid\nwidgets: []\n"), ("/contents/", blobOf yaml)] "{\"sha\":\"head\"}") (BackgroundJobs.GitSyncRepository testPid sync.id)
+            fileKeys = M.keys <$> runQueryEffect tr (GitSync.getRepositoryDashboardState testPid sync.id)
+        _ <- pull "title: [invalid"
+        failed <- syncById tr sync
+        dashOf tr deleted >>= (`shouldSatisfy` isNothing)
+        fileKeys `shouldReturn` ["valid.yaml"]
+        failed.lastRevision `shouldBe` Nothing
+        failed.lastError `shouldSatisfy` maybe False (T.isInfixOf "overview.yaml" . (.message))
+        _ <- pull "title: Recovered\nwidgets: []\n"
+        ((,) <$> (.lastRevision) <*> (.lastError)) <$> syncById tr sync `shouldReturn` (Just "head", Nothing)
+        fileKeys `shouldReturn` ["overview.yaml", "valid.yaml"]
+
+    describe "Sync workers and leases" do
       it "repositoryWorkers_deferOverlappingImportsWithoutDuplicatingDashboards" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        Just other <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "another-team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        did <- UUIDId <$> UUID.nextRandom
-        void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Local overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "local.yaml"}
+        sync <- teamDashboards tr
+        other <- syncOf tr testPid Nothing "another-team" "dashboards" (GitSync.PersonalToken "fixture") ""
+        did <- ownedDash tr sync "Local overview" "local.yaml"
         fetching <- newEmptyMVar
         release <- newEmptyMVar
         let job = BackgroundJobs.GitSyncRepository testPid sync.id
@@ -1394,31 +1448,28 @@ spec = do
               if "/contents/" `T.isInfixOf` path
                 then do
                   when blocked $ putMVar fetching () >> takeMVar release
-                  pure $ Just $ AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 "title: Imported overview\nwidgets: []\n")]
-                else pure $ Just $ if "/git/trees/" `T.isInfixOf` path then "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"blob\",\"type\":\"blob\"}]}" else "{\"sha\":\"head\"}"
-        withAsync (runTestBgRecordingHTTP frozenTime tr $ provider True $ BackgroundJobs.processBackgroundJob tr.trATCtx job) \worker -> do
+                  pure $ Just $ blobOf "title: Imported overview\nwidgets: []\n"
+                else pure $ Just $ if "/git/trees/" `T.isInfixOf` path then treeOf [("dashboards/overview.yaml", "blob")] else "{\"sha\":\"head\"}"
+        withAsync (runJob tr (provider True) job) \worker -> do
           timeout 5000000 (takeMVar fetching) `shouldReturn` Just ()
           for_ [job, BackgroundJobs.GitSyncPushDashboard testPid did.unUUIDId, BackgroundJobs.GitSyncPushAllDashboards testPid] \overlap -> do
-            outcome <- try @_ @SomeException $ runTestBgRecordingHTTP frozenTime tr $ provider False $ BackgroundJobs.processBackgroundJob tr.trATCtx overlap
+            outcome <- try @_ @SomeException $ runJob tr (provider False) overlap
             outcome `shouldSatisfy` isLeft
-          jobs <- getPendingBackgroundJobs tr.trATCtx
-          jobs `shouldSatisfy` null
-          (independent, ()) <- runTestBgRecordingHTTP frozenTime tr $ provider False $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid other.id)
+          pendingJobs tr >>= (`shouldSatisfy` null)
+          independent <- runJob tr (provider False) (BackgroundJobs.GitSyncRepository testPid other.id)
           length independent `shouldBe` 3
           putMVar release ()
           void $ wait worker
-        (_, ()) <- runTestBgRecordingHTTP frozenTime tr $ provider False $ BackgroundJobs.processBackgroundJob tr.trATCtx job
-        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
-        map (\d -> (d.title, d.gitSyncId)) dashboards `shouldMatchList` [("Imported overview", Just sync.id), ("Imported overview", Just other.id), ("Local overview", Just sync.id)]
-        Just completed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
+        void $ runJob tr (provider False) job
+        map (\d -> (d.title, d.gitSyncId)) <$> allDashboards tr >>= (`shouldMatchList` [("Imported overview", Just sync.id), ("Imported overview", Just other.id), ("Local overview", Just sync.id)])
+        completed <- syncById tr sync
         completed.lastRevision `shouldBe` Just "head"
         completed.lastError `shouldBe` Just (GitSync.SyncFailure GitSync.ExportDashboards "GitHub did not return the target tree.")
 
       it "repositoryRemoval_waitsForActiveImportsAndExportsWithoutDetachingTheirDashboards" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
+        sync <- teamDashboards tr
         [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
-        did <- UUIDId <$> UUID.nextRandom
-        void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Local overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "local.yaml", Dashboards.fileSha = Just "blob-local"}
+        did <- seedDash tr \d -> d{Dashboards.title = "Local overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "local.yaml", Dashboards.fileSha = Just "blob-local"}
         for_ [BackgroundJobs.GitSyncRepository testPid sync.id, BackgroundJobs.GitSyncPushDashboard testPid did.unUUIDId] \job -> do
           fetching <- newEmptyMVar
           release <- newEmptyMVar
@@ -1427,84 +1478,61 @@ spec = do
                 let path = toText endpoint
                 if "/contents/" `T.isInfixOf` path
                   then do
-                    shouldBlock <- atomicModifyIORef' blockedOnce (\blocked -> (True, not blocked))
-                    when shouldBlock $ putMVar fetching () >> takeMVar release
-                    pure $ Just $ if "/local.yaml" `T.isInfixOf` path then "{\"content\":{\"sha\":\"written-blob\"}}" else AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 "title: Imported overview\nwidgets: []\n")]
-                  else pure $ Just $ if "/git/trees/" `T.isInfixOf` path then "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"blob\",\"type\":\"blob\"},{\"path\":\"dashboards/local.yaml\",\"sha\":\"blob-local\",\"type\":\"blob\"}]}" else "{\"sha\":\"head\"}"
-          withAsync (runTestBgRecordingHTTP frozenTime tr $ provider $ BackgroundJobs.processBackgroundJob tr.trATCtx job) \worker -> do
+                    shouldBlock <- atomicModifyIORef' blockedOnce (True,)
+                    unless shouldBlock $ putMVar fetching () >> takeMVar release
+                    pure $ Just $ if "/local.yaml" `T.isInfixOf` path then "{\"content\":{\"sha\":\"written-blob\"}}" else blobOf "title: Imported overview\nwidgets: []\n"
+                  else pure $ Just $ if "/git/trees/" `T.isInfixOf` path then treeOf [("dashboards/overview.yaml", "blob"), ("dashboards/local.yaml", "blob-local")] else "{\"sha\":\"head\"}"
+          withAsync (runJob tr provider job) \worker -> do
             timeout 5000000 (takeMVar fetching) `shouldReturn` Just ()
             refused <- call tr $ PageCodeContext.repositoryDeleteH testPid repository.id
-            render refused `shouldSatisfy` T.isInfixOf "A sync is running"
+            renderT refused `shouldSatisfy` T.isInfixOf "A sync is running"
             runQueryEffect tr (GitSync.getRepository testPid repository.id) >>= (`shouldSatisfy` isJust)
             disconnected <- call tr $ GitSyncPage.gitSyncRepositoryDeleteH testPid sync.id
-            render disconnected `shouldSatisfy` T.isInfixOf "A dashboard sync is running"
-            Just retained <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid did
-            retained.gitSyncId `shouldBe` Just sync.id
+            renderT disconnected `shouldSatisfy` T.isInfixOf "A dashboard sync is running"
+            fmap (.gitSyncId) <$> dashOf tr did `shouldReturn` Just (Just sync.id)
             putMVar release ()
             void $ wait worker
+        -- An expired lease no longer blocks removal.
         bracket
           (runTestBg (addUTCTime (-181) frozenTime) tr (GitSync.claimSyncLease sync.id) >>= maybe (fail "Expected a free repository lease") pure)
-          (\lease -> runQueryEffect tr $ GitSync.releaseSyncLease lease)
+          (\claimed -> runQueryEffect tr $ GitSync.releaseSyncLease claimed)
           \_ -> do
             advanceTestTime tr 181
             runQueryEffect tr (GitSync.removeRepository testPid repository.id) `shouldReturn` Right ()
-        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
-        map (\d -> (d.title, d.gitSyncId, d.filePath, d.fileSha)) dashboards `shouldMatchList` [("Imported overview", Nothing, Nothing, Nothing), ("Local overview", Nothing, Nothing, Nothing)]
-        (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
-        requests `shouldBe` []
+        map (\d -> (d.title, d.gitSyncId, d.filePath, d.fileSha)) <$> allDashboards tr >>= (`shouldMatchList` [("Imported overview", Nothing, Nothing, Nothing), ("Local overview", Nothing, Nothing, Nothing)])
+        runJob tr id (BackgroundJobs.GitSyncRepository testPid sync.id) `shouldReturn` []
 
       it "repositoryWorkers_releaseCancelledClaimsAndCannotReleaseANewerLease" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
+        sync <- teamDashboards tr
         fetching <- newEmptyMVar
         release <- newEmptyMVar
         let blocked = withHTTPResponses \_ _ -> putMVar fetching () >> takeMVar release $> Nothing
             acquire time = runTestBg time tr (GitSync.claimSyncLease sync.id) >>= maybe (fail "Expected a free repository lease") pure
-            relinquish lease = runQueryEffect tr $ GitSync.releaseSyncLease lease
-        withAsync (runTestBgRecordingHTTP frozenTime tr $ blocked $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)) \worker -> do
+            relinquish claimed = runQueryEffect tr $ GitSync.releaseSyncLease claimed
+        withAsync (runJob tr blocked (BackgroundJobs.GitSyncRepository testPid sync.id)) \worker -> do
           timeout 5000000 (takeMVar fetching) `shouldReturn` Just ()
           cancel worker
           waitCatch worker >>= (`shouldSatisfy` isLeft)
-        runQueryEffect tr (Hasql.interpOne @(HI.OneColumn Int) [HI.sql| SELECT count(*) FROM projects.repository_sync_leases WHERE sync_id = #{sync.id} |]) `shouldReturn` Just (HI.OneColumn 0)
+        dbQuery tr "SELECT count(*) FROM projects.repository_sync_leases WHERE sync_id = ?" (Only sync.id) `shouldReturn` [Only (0 :: Int)]
         bracket (acquire frozenTime) relinquish \old ->
           bracket (acquire $ addUTCTime 181 frozenTime) relinquish \_ -> do
             relinquish old
             runTestBg (addUTCTime 181 frozenTime) tr (GitSync.claimSyncLease sync.id) `shouldReturn` Nothing
         bracket (acquire $ addUTCTime 181 frozenTime) relinquish (const pass)
 
-      it "repositoryPull_renamesAnOwnedDashboardWithoutLosingItsIdentity" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub (Just "https://127.0.0.1:1") "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        did <- UUIDId <$> UUID.nextRandom
-        _ <- runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Overview", Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "old.yaml", Dashboards.fileSha = Just "same-content"}
-        let transport = withHTTPResponses \_ endpoint ->
-              pure
-                $ Just
-                $ if "/git/trees/" `T.isInfixOf` toText endpoint
-                  then "{\"tree\":[{\"path\":\"dashboards/new.yaml\",\"sha\":\"same-content\",\"type\":\"blob\"}]}"
-                  else "{\"sha\":\"new-head\"}"
-        (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ transport $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
-        length requests `shouldBe` 3
-        Just renamed <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid did
-        (renamed.filePath, renamed.fileSha) `shouldBe` (Just "new.yaml", Just "same-content")
-
       it "repositoryWorkers_leaveContentionToTheQueuesBoundedRetryPolicy" \tr -> do
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
+        sync <- teamDashboards tr
         Just lease <- runTestBg frozenTime tr $ GitSync.claimSyncLease sync.id
         bracket (pure lease) (\claimed -> runQueryEffect tr $ GitSync.releaseSyncLease claimed) \_ -> do
           job <- withResource tr.trATCtx.jobsPool \conn -> Jobs.createJob conn "background_jobs" (BackgroundJobs.GitSyncRepository testPid sync.id)
           threads <- newIORef M.empty
-          let runner queued = do
-                payload <- Jobs.throwParsePayload queued
-                void $ runTestBgRecordingHTTP frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx payload
-              config = mkConfig (\_ _ -> pass) "background_jobs" tr.trATCtx.jobsPool (Jobs.MaxConcurrentJobs 1) runner id
-              env = Jobs.RunnerEnv config threads
+          let runner queued = Jobs.throwParsePayload queued >>= void . runTestBgRecordingHTTP frozenTime tr . BackgroundJobs.processBackgroundJob tr.trATCtx
+              env = Jobs.RunnerEnv (mkConfig (\_ _ -> pass) "background_jobs" tr.trATCtx.jobsPool (Jobs.MaxConcurrentJobs 1) runner id) threads
           for_ [1 .. 10] \attempt -> do
             withResource tr.trATCtx.jobsPool \conn -> void $ PG.execute conn "UPDATE background_jobs SET run_at = ? WHERE id = ?" (frozenTime, job.jobId)
             Just worker <- runReaderT (Jobs.pollRunJob "repository-retry-test" Nothing) env
             void $ waitCatch worker
-            stored <- withResource tr.trATCtx.jobsPool \conn -> Jobs.findJobByIdIO conn "background_jobs" job.jobId
-            stored `shouldSatisfy` isJust
-            retried <- maybe (fail "Retry replaced the original job") pure stored
+            retried <- withResource tr.trATCtx.jobsPool (\conn -> Jobs.findJobByIdIO conn "background_jobs" job.jobId) >>= maybe (fail "Retry replaced the original job") pure
             (retried.jobAttempts, retried.jobStatus) `shouldBe` (attempt, if attempt == 10 then Jobs.Failed else Jobs.Retry)
             retried.jobLastError `shouldSatisfy` maybe False (T.isInfixOf "SyncLeaseUnavailable" . decodeUtf8 . LBS.toStrict . AE.encode)
             withResource tr.trATCtx.jobsPool (\conn -> PG.query_ conn "SELECT count(*) FROM background_jobs" :: IO [PG.Only Int]) `shouldReturn` [PG.Only 1]
@@ -1512,146 +1540,59 @@ spec = do
       it "repositoryBulkExport_claimsOneLeasePerRepository" \tr -> do
         leases <- newIORef ([] :: [(Text, UUID.UUID)])
         for_ ["one", "two"] \repo -> do
-          Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" repo "main" (GitSync.PersonalToken "fixture") Nothing ""
-          for_ ["a.yaml", "b.yaml"] \path -> do
-            did <- UUIDId <$> UUID.nextRandom
-            void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = path, Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just path}
+          sync <- syncOf tr testPid Nothing "team" repo (GitSync.PersonalToken "fixture") ""
+          for_ ["a.yaml", "b.yaml"] \path -> ownedDash tr sync path path
         let provider = withHTTPResponses \_ endpoint -> do
               owners <- runQueryEffect tr $ Hasql.interp @[(Text, UUID.UUID)] [HI.sql| SELECT s.repo, l.owner FROM projects.repository_sync_leases l JOIN projects.git_sync s ON s.id = l.sync_id |]
               modifyIORef' leases (<> owners)
               pure $ Just $ if "/contents/" `T.isInfixOf` toText endpoint then "{\"content\":{\"sha\":\"written\"}}" else "{\"sha\":\"head\"}"
-        (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ provider $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushAllDashboards testPid)
-        length requests `shouldBe` 6
-        owners <- readIORef leases
-        length (ordNub owners) `shouldBe` 2
+        length <$> runJob tr provider (BackgroundJobs.GitSyncPushAllDashboards testPid) `shouldReturn` 6
+        length . ordNub <$> readIORef leases `shouldReturn` 2
 
-      it "repositoryPull_reportsInvalidYamlAndRetriesTheSameRevisionAfterCorrection" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub (Just "https://127.0.0.1:1") "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
-        deleted <- UUIDId <$> UUID.nextRandom
-        void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM deleted testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Removed", Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "removed.yaml", Dashboards.fileSha = Just "old"}
-        let pull yaml =
-              runTestBgRecordingHTTP frozenTime tr
-                $ withHTTPResponses
-                  ( \_ endpoint ->
-                      pure
-                        $ Just
-                        $ if "/git/trees/" `T.isInfixOf` toText endpoint
-                          then "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"blob\",\"type\":\"blob\"},{\"path\":\"dashboards/valid.yaml\",\"sha\":\"valid\",\"type\":\"blob\"}]}"
-                          else
-                            if "/contents/" `T.isInfixOf` toText endpoint
-                              then AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 (if "valid.yaml" `T.isInfixOf` toText endpoint then "title: Valid\nwidgets: []\n" else yaml))]
-                              else "{\"sha\":\"head\"}"
-                  )
-                $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
-        _ <- pull "title: [invalid"
-        Just failed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        runQueryEffect tr (Dashboards.getDashboardByProjectId testPid deleted) >>= (`shouldSatisfy` isNothing)
-        partial <- runQueryEffect tr $ GitSync.getRepositoryDashboardState testPid sync.id
-        M.keys partial `shouldBe` ["valid.yaml"]
-        failed.lastRevision `shouldBe` Nothing
-        failed.lastError `shouldSatisfy` maybe False (T.isInfixOf "overview.yaml" . (.message))
-        _ <- pull "title: Recovered\nwidgets: []\n"
-        Just recovered <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
-        (recovered.lastRevision, recovered.lastError) `shouldBe` (Just "head", Nothing)
-        dashboards <- runQueryEffect tr $ GitSync.getRepositoryDashboardState testPid sync.id
-        M.keys dashboards `shouldBe` ["overview.yaml", "valid.yaml"]
+    describe "Migrations" do
+      it "githubIdentityMigration_mergesCaseAliasesWithoutDeletingLocalDashboards" \tr -> do
+        account <- appAccount tr "team"
+        alias <- grantOf tr testPid Git.GitHub Nothing "other" Nothing (Just "fixture")
+        for_ ([(account.id, "team"), (alias.id, "other")] :: [(GitSync.GitHubCredentialId, Text)]) \(cid, owner) ->
+          runQueryEffect tr $ CodeContext.insertCodeMapping testPid cid (Git.RepoRef owner "checkout" "main") (Just owner) ("/" <> owner <> "/") "src"
+        syncs <- forM (["team", "other"] :: [Text]) \owner -> do
+          sync <- syncOf tr testPid Nothing owner "checkout" (GitSync.AppInstallation 42) ""
+          sync <$ seedDash tr \d -> d{Dashboards.title = owner, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml", Dashboards.fileSha = Just "blob"}
+        migration <- Query <$> readFileBS "static/migrations/0223_github_repository_identity.sql"
+        -- Recreate the pre-migration case aliases the canonical-name constraints now forbid.
+        withResource tr.trPool \conn -> PG.withTransaction conn do
+          void $ PG.execute_ conn "ALTER TABLE projects.git_credentials DROP CONSTRAINT git_credentials_canonical_account; ALTER TABLE projects.repositories DROP CONSTRAINT repositories_canonical_name; ALTER TABLE projects.git_sync DROP CONSTRAINT git_sync_canonical_name; DROP FUNCTION projects.git_identity_name(TEXT, TEXT)"
+          void $ PG.execute conn "UPDATE projects.git_credentials SET account = 'TEAM' WHERE id = ?" (PG.Only alias.id)
+          void $ PG.execute conn "UPDATE projects.repositories SET owner = 'TEAM', repo = 'CHECKOUT' WHERE project_id = ? AND owner = 'other'" (PG.Only testPid)
+          void $ PG.execute conn "UPDATE projects.git_sync SET owner = 'TEAM', repo = 'CHECKOUT' WHERE project_id = ? AND owner = 'other'" (PG.Only testPid)
+          void $ PG.execute conn "UPDATE projects.code_mappings SET owner = 'TEAM', repo = 'CHECKOUT' WHERE credential_id = ?" (PG.Only alias.id)
+          void $ PG.execute_ conn migration
+        map (.id) <$> runQueryEffect tr (GitSync.getGitHubCredentials testPid) `shouldReturn` [account.id]
+        map (\r -> (r.owner, r.repo, r.credentialId)) <$> runQueryEffect tr (GitSync.getRepositories testPid) `shouldReturn` [("team", "checkout", Just account.id)]
+        map (\m -> (m.owner, m.repo, m.credentialId)) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` replicate 2 ("team", "checkout", account.id)
+        length <$> runQueryEffect tr (GitSync.getGitSyncs testPid) `shouldReturn` 1
+        retained <- allDashboards tr
+        sort (map (.title) retained) `shouldBe` ["other", "team"]
+        length (filter (isJust . (.gitSyncId)) retained) `shouldBe` 1
+        mapMaybe (.gitSyncId) retained `shouldSatisfy` all (`elem` map (.id) syncs)
 
-      -- Without a credential there is nothing to read repos through, so the page must point at
-      -- the control that fixes that rather than offer a form whose every submission is discarded.
-      it "asks for an account connection before it asks for a mapping" \tr -> do
-        html <- call tr $ PageCodeContext.codeMappingsGetH testPid Nothing
-        let out = render html
-        out `shouldSatisfy` T.isInfixOf "Connect repositories"
-        out `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/connect\"")
-        out `shouldNotSatisfy` T.isInfixOf "Link repository"
+      it "repositoryMigration_normalizesLegacyPathsAndRetainsCollidingDashboards" \tr -> do
+        sync <- syncOf tr testPid Nothing "team" "dashboards" (GitSync.AppInstallation 42) "ops"
+        dashboards <- forM (zip [1 :: Int ..] ["overview.yaml", "dashboards/overview.yaml", "ops/dashboards/overview.yaml"]) \(n, path) ->
+          seedDash tr \d -> d{Dashboards.title = "Retained overview", Dashboards.updatedAt = addUTCTime (fromIntegral n) frozenTime, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just path, Dashboards.fileSha = Just "blob"}
+        migration <- Query <$> readFileBS "static/migrations/0216_repository_relative_paths.sql"
+        dbExec tr migration ()
+        retained <- traverse (dashOf tr) dashboards
+        map (fmap (\d -> (d.title, d.gitSyncId, d.filePath, d.fileSha))) retained
+          `shouldBe` [Just ("Retained overview", Nothing, Nothing, Nothing), Just ("Retained overview", Nothing, Nothing, Nothing), Just ("Retained overview", Just sync.id, Just "overview.yaml", Just "blob")]
 
-      it "maps several services onto several repos, and resolves each frame to its own" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        -- The config-sync repo. It is the project's monoscope YAML, NOT where the services live —
-        -- the whole point of 0124 is that these are different repositories.
-        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "monoscope-config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
-
-        let add repo svc prefix root =
-              testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just repo) (Just "main") svc Nothing (Just prefix) (Just root) Nothing)
-        _ <- add "checkout-service" (Just "checkout") "/srv/app/" "src"
-        (_, added) <- add "billing-service" (Just "billing") "/opt/billing/" ""
-
-        -- The account came from the installation already granted for config sync; the repos did
-        -- not, and neither is the config repo.
-        let out = render added
-        out `shouldSatisfy` T.isInfixOf "acme/checkout-service"
-        out `shouldSatisfy` T.isInfixOf "acme/billing-service"
-        out `shouldNotSatisfy` T.isInfixOf "monoscope-config"
-        -- The row has to say what the mapping covers in frame-path terms, not print the four
-        -- columns it is stored as.
-        out `shouldSatisfy` T.isInfixOf "frames under /srv/app/"
-
-        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
-        sort (map (.repo) mappings) `shouldBe` ["billing-service", "checkout-service"]
-
-        -- The rewrite is the whole feature, and it must send each service's frame to its own
-        -- repo rather than to whichever mapping sorted first.
-        let repoFor svc path = (\(cm, p) -> (cm.repo, p)) <$> CodeContext.resolveRepoPath mappings (Just svc) path
-        repoFor "checkout" "/srv/app/services/checkout.py" `shouldBe` Just ("checkout-service", "src/services/checkout.py")
-        repoFor "billing" "/opt/billing/invoice.rb" `shouldBe` Just ("billing-service", "invoice.rb")
-        -- A service whose frames no mapping claims resolves to nothing rather than to the other
-        -- service's repo — a snippet from the wrong repo is worse than no snippet.
-        repoFor "search" "/srv/search/index.go" `shouldBe` Nothing
-
-        case mappings of
-          (cm : _) -> do
-            afterDelete <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsDeleteH testPid cm.id
-            render afterDelete `shouldNotSatisfy` T.isInfixOf (cm.owner <> "/" <> cm.repo)
-            runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \ms -> length ms `shouldBe` 1
-          [] -> expectationFailure "expected two mappings, got none"
-
-      it "repositoryAccounts_offerBothGrantsEvenWhenOneAlsoSyncsDashboards" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "zzz-ours" "monoscope-config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
-        for_ ["aaa-stray", "zzz-ours"] \account -> do
-          Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing account (Just 222) Nothing
-          Cache.insert tr.trATCtx.repoListCache credential.id []
-        accountPage <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid Nothing
-        let out = render $ Lucid.toHtml accountPage.content
-        for_ (["zzz-ours", "aaa-stray", "Choose an account"] :: [Text]) \label ->
-          T.isInfixOf label out `shouldBe` True
-
-      -- A frame that no mapping covers is exactly when someone needs the mapping form, and
-      -- the one thing they cannot be expected to retype is the path they were just looking at.
-      it "carries the unmapped frame's path into the form" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "monoscope-config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
-
-        unmapped <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
-        render unmapped `shouldSatisfy` T.isInfixOf "repositories?sample=%2Fsrv%2Fapp%2Fcheckout.py"
-
-        form <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsGetH testPid (Just "/srv/app/checkout.py")
-        render form `shouldSatisfy` T.isInfixOf "sample=%2Fsrv%2Fapp%2Fcheckout.py"
-
-      -- Membership is checked per handler, not by the router, and these two never checked it:
-      -- any signed-in user could add or delete another project's mappings by its id.
-      it "codeMappings_nonMember_cannotMutate" \tr -> do
-        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            form repo prefix = PageCodeContext.CodeMappingForm (Just repo) (Just "main") Nothing Nothing (Just prefix) (Just "") Nothing
-        victim <- createTestProject tr "victim"
-        let mappingIds = map (.id) <$> runQueryEffect tr (CodeContext.getCodeMappings victim)
-        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey victim Git.GitHub Nothing "acme" "monoscope-config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
-        _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH victim (form "checkout-service" "/srv/app/")
-        seeded <- mappingIds
-        length seeded `shouldBe` 1
-
-        assertNonMemberDenied tr victim $ PageCodeContext.codeMappingsPostH victim (form "attacker-repo" "/evil/")
-        forM_ seeded $ assertNonMemberDenied tr victim . PageCodeContext.codeMappingsDeleteH victim
-        mappingIds >>= (`shouldBe` seeded)
-
-    describe "Frame source endpoint (codeContextH)" do
-      -- A project that never configured a mapping opens an error panel like anyone else. It
-      -- must see a sentence, not a failure it did not cause — and the sentence has to say
-      -- which of the two possible problems it is.
-      it "explains an unresolvable frame instead of failing the panel" \tr -> do
-        unmapped <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
-        render unmapped `shouldSatisfy` T.isInfixOf "No linked repository covers /srv/app/checkout.py"
-
-        noLine <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") Nothing Nothing Nothing
-        render noLine `shouldSatisfy` T.isInfixOf "no file and line"
+      it "repositorySyncFailureMigration_preservesLegacyErrorsAsImportFailures" \tr -> do
+        let connect owner = syncOf tr testPid Nothing owner "dashboards" (GitSync.PersonalToken "fixture") ""
+        failed <- connect "failed"
+        healthy <- connect "healthy"
+        dbExec tr "ALTER TABLE projects.git_sync ALTER COLUMN last_error TYPE TEXT USING last_error->>'message'" ()
+        dbExec tr "UPDATE projects.git_sync SET last_error = 'Legacy provider failure' WHERE id = ?" (Only failed.id)
+        migration <- Query <$> readFileBS "static/migrations/0222_repository_sync_failures.sql"
+        dbExec tr migration ()
+        (.lastError) <$> syncById tr failed `shouldReturn` Just (GitSync.SyncFailure GitSync.ImportDashboards "Legacy provider failure")
+        (.lastError) <$> syncById tr healthy `shouldReturn` Nothing
