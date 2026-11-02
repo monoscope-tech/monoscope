@@ -81,6 +81,18 @@ getTab :: TestResources -> DashboardModel.DashboardId -> Text -> Maybe Text -> [
 getTab tr dashId slug hx params = call tr (Dashboards.dashboardTabGetH testPid dashId slug Nothing Nothing Nothing (Just "24H") hx params)
 
 
+tabsContent :: Maybe Text
+tabsContent = Just "div#dashboard-tabs-content"
+
+
+tagsWith :: [Text] -> Text -> [Text]
+tagsWith markers = map (T.takeWhile (/= '>')) . elementsWith markers
+
+
+goldenParts :: FilePath -> [Text] -> Expectation
+goldenParts name = goldenHtml name . toHtmlRaw @Text . unlines
+
+
 partialHtml :: NavigationResponse a -> IO (Html ())
 partialHtml = \case
   NavigationPartial _ fragment -> pure fragment
@@ -197,7 +209,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     V.null bw.serviceOptions `shouldBe` True
     -- Every drag persists through this form; htmx swallows a transport error and a throw out of
     -- hx-vals (a stale bundle), so it must surface both instead of losing the layout silently.
-    goldenHtml "dashboard-widget-order-form" $ toHtmlRaw @Text $ T.takeWhile (/= '>') $ snd $ T.breakOn "id=\"widget-order-trigger\"" $ renderT page
+    goldenParts "dashboard-widget-order-form" $ tagsWith ["id=\"widget-order-trigger\""] $ renderT page
     addWidgets tr dashId $ [(widgetOf Widget.WTTimeseries ("w" <> show i)){Widget.layout = Nothing} | i <- [1 .. 5 :: Int]] <> [widgetOf wt (show wt) | wt <- allWidgetTypes]
     added <- storedWidgets tr dashId
     map (show @Text . (.wType)) added `shouldBe` replicate 5 "WTTimeseries" <> map show allWidgetTypes
@@ -285,8 +297,12 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         groupW = (widgetOf Widget.WTGroup "Group"){Widget.id = Just "group-1", Widget.children = Just [(widgetOf Widget.WTStat "Child"){Widget.id = Just "child-1"}]}
         widthless = (widgetOf Widget.WTTimeseries "Widthless"){Widget.layout = Nothing}
         scalarMonitor = (widgetOf Widget.WTTimeseries "Query Results"){Widget.query = Just "metrics | where metric_name == \"timefusion.mem_buffer.oldest_bucket_age_seconds\" | summarize max(value)"}
-    renderT (Widget.widget_ sqlWidget) `shouldSatisfy` T.isInfixOf "SELECT &#39;&lt;script&gt;&#39;"
-    goldenHtml "dashboard-widgets" $ traverse_ Widget.widget_ $ canvas <> [chart{Widget.id = Just "requests-chart"}, sqlWidget, metricCard, standalone, groupW, widthless, scalarMonitor]
+        html = renderT . Widget.widget_
+        gridTags = tagsWith ["class=\"grid-stack"] . html
+    html sqlWidget `shouldSatisfy` T.isInfixOf "SELECT &#39;&lt;script&gt;&#39;"
+    -- A naked widget (expanded viewer, shared link) is on no grid, so carries no grid chrome.
+    gridTags standalone `shouldBe` []
+    goldenParts "dashboard-widgets" $ foldMap gridTags (canvas <> [groupW, widthless]) <> [html chart{Widget.id = Just "requests-chart"}] <> elementsWith ["aria-label=\"Expand widget\"", "query-preview language"] (html sqlWidget)
     (\w -> (w.layout >>= (.w), w.layout >>= (.h))) <$> Widget.normalizeWidgetLayouts [metricCard] `shouldBe` [(Just 2, Just 3)]
 
     let column = def :: Widget.TableColumn
@@ -330,7 +346,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     other <- createTestProject tr "Other saved views"
     let form = either (fail . toString) pure . urlDecodeAsForm @Dashboards.DashboardViewForm
         views = fmap (V.toList . (.savedViews) . fst) . runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
-        save name browser = void $ testServant tr $ Dashboards.dashboardViewPostH testPid did (Dashboards.DashboardViewForm name [("var-browser", Just browser)])
+        save name service = void $ testServant tr $ Dashboards.dashboardViewPostH testPid did (Dashboards.DashboardViewForm name [("var-service", Just service)])
+        swapParts = elementsWith ["id=\"dashboard-variables\"", "id=\"dashboard-views-menu\""] . renderT
         status action = runAuthHandler tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         saveIn pid name = Dashboards.dashboardViewPostH pid did (Dashboards.DashboardViewForm name [])
     -- Arbitrary variables, window and tab are kept without freezing the template into the row.
@@ -342,19 +359,12 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     traverse status [saveIn testPid "  ", saveIn testPid (T.replicate 101 "x"), saveIn other "Wrong project", Dashboards.dashboardViewDeleteH other did "Missing" []] `shouldReturn` ([400, 400, 404, 404] :: [Int])
     assertNonMemberDenied tr other (saveIn other "Denied")
     assertNonMemberDenied tr other (Dashboards.dashboardViewDeleteH other did "Denied" [])
-    let names = ["View " <> show i | i <- [1 .. 8 :: Int]]
-    mapConcurrently_ (`save` "Safari") names
-    map (.name) <$> views >>= (`shouldMatchList` names)
-    mapConcurrently_ (save "View 1") ["Chrome", "Firefox"]
-    updated <- views
-    map (.name) updated `shouldMatchList` names
-    [Map.lookup "browser" v.variables | v <- updated, v.name == "View 1"] `shouldSatisfy` (`elem` ([[Just "Chrome"], [Just "Firefox"]] :: [[Maybe Text]]))
 
     -- Configured views and tab-scoped variables on any dashboard; a saved view of the same
     -- name overrides the configured one until it is deleted.
     _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid did $ Dashboards.YamlForm "title: Shared views\nwidgets: []\nvariables:\n  - {key: service, title: Service, type: values, options: [[api]]}\n  - {key: region, title: Region, type: values, options: [[eu]]}\nviews:\n  - {name: Europe API, variables: {service: api, region: eu}}\ntabs:\n  - {name: Overview, variables: [service], widgets: []}\n  - {name: Errors, variables: [service, region], widgets: []}\n"
-    overview <- partialHtml =<< getTab tr did "overview" (Just "div#dashboard-tabs-content") []
-    errorsTab <- getTab tr did "errors" (Just "div#dashboard-tabs-content") []
+    overview <- partialHtml =<< getTab tr did "overview" tabsContent []
+    errorsTab <- getTab tr did "errors" tabsContent []
     let Dashboards.DashboardGet _ _ dash _ _ = tabDashboard errorsTab
         tabVars name = map (.key) $ DashboardModel.variablesForTab dash (find ((== name) . (.name)) (fold dash.tabs))
     (tabVars "Overview", tabVars "Errors") `shouldBe` (["service"], ["service", "region"])
@@ -363,20 +373,30 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     views >>= (`shouldBe` [Map.fromList [("service", "worker"), ("region", "us")]]) . \vs -> [v.variables | v <- vs, v.name == "US worker"]
     overridden <- call tr $ Dashboards.dashboardViewPostH testPid did worker{Dashboards.name = "Europe API"}
     revealed <- call tr $ Dashboards.dashboardViewDeleteH testPid did "Europe API" worker.params
-    reloaded <- partialHtml =<< getTab tr did "overview" (Just "div#dashboard-tabs-content") [("since", Just "24H")]
+    reloaded <- partialHtml =<< getTab tr did "overview" tabsContent [("since", Just "24H")]
     let root slug = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/" <> slug
     linkParams (root "overview") (renderT reloaded) `shouldSatisfy` any (\ps -> lookup "var-service" ps == Just "worker" && lookup "var-region" ps == Just "us" && lookup "since" ps == Just "24H")
     errorsHtml <- partialHtml errorsTab
 
+    -- Concurrent saves keep the other views and replace the same name once.
+    let names = ["View " <> show i | i <- [1 .. 8 :: Int]]
+    mapConcurrently_ (`save` "api") names
+    map (.name) <$> views >>= (`shouldMatchList` ("US worker" : names))
+    mapConcurrently_ (save "View 1") ["worker", "billing"]
+    updated <- views
+    map (.name) updated `shouldMatchList` ("US worker" : names)
+    [Map.lookup "service" v.variables | v <- updated, v.name == "View 1"] `shouldSatisfy` (`elem` ([[Just "worker"], [Just "billing"]] :: [[Maybe Text]]))
+
     -- Service Overview scopes its filters per tab, and each tab can restore all services.
     ovId <- newDashboard tr "_overview.yaml" "Overview views"
-    for_ ([("overview", ["service", "resource"]), ("service", ["service", "resource"]), ("logs", ["service"]), ("databases", ["database"]), ("infra", [])] :: [(Text, [Text])]) \(slug, keys) -> do
+    ovBars <- forM ([("overview", ["service", "resource"]), ("service", ["service", "resource"]), ("logs", ["service"]), ("databases", ["database"]), ("infra", [])] :: [(Text, [Text])]) \(slug, keys) -> do
       tab <- getTab tr ovId slug Nothing [("var-service", Just "api"), ("var-database", Just "postgresql")]
       let Dashboards.DashboardGet _ _ ov _ _ = tabDashboard tab
       (slug, map (.key) $ DashboardModel.variablesForTab ov (find ((== slug) . slugify . (.name)) (fold ov.tabs))) `shouldBe` (slug, keys)
       linkParams ("/p/" <> testPid.toText <> "/dashboards/" <> ovId.toText <> "/tab/" <> slug) (renderT tab) `shouldSatisfy` any (\ps -> lookup "var-service" ps == Just "" && lookup "var-database" ps == Just "")
+      pure $ tagsWith ["id=\"dash-vars-toggle\"", "class=\"dash-variable-input"] (renderT tab)
     ovSaved <- call tr . Dashboards.dashboardViewPostH testPid ovId =<< form "name=API&var-service=api&since=7D&activeTabSlug=logs"
-    goldenHtml "dashboard-saved-views" do saved; deleted; overview; errorsHtml; overridden; revealed; reloaded; ovSaved
+    goldenParts "dashboard-saved-views" $ map renderT [saved, deleted] <> swapParts overview <> swapParts errorsHtml <> map renderT [overridden, revealed] <> swapParts reloaded <> [renderT ovSaved] <> fold ovBars
 
   it "migrations repair legacy warning thresholds and move RUM segments into saved views" \tr -> do
     let migrate file = withResource tr.trPool \conn -> void . PG.execute_ conn . Query =<< readFileBS file
@@ -408,7 +428,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     [(w.alertThreshold, w.warningThreshold, w.unit) | w <- take 1 stored] `shouldBe` [(Just 10, Just 7, Just "requests/s")]
     editors <- forM [(w, tab) | (w, tabs) <- zip (mapMaybe (.id) stored) [[Nothing, Just "alerts"], [Nothing], [Nothing]], tab <- tabs] \(wid, tab) ->
       call tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid tab
-    goldenHtml "dashboard-widget-editor" $ sequence_ (newEditor : editors)
+    -- Per editor: tab radios, actions, seeded widget type, step order, thresholds, monitor form.
+    goldenParts "dashboard-widget-editor" $ foldMap (elementsWith ["-drawer-tab\"", "type=\"submit\" form=\"", "Add widget and monitor", "var widgetJSON", "widget-preview-heading", "Configure query", "Name your widget", "Widget name", "class=\"group/thresholds", "name=\"alertThreshold\"", "empty-state"] . renderT) (newEditor : editors)
 
   it "raw-SQL widgets decode any column type, stream what JSON returns, and route by store" \tr -> do
     -- One uncast column failed the whole widget with `Incompatible {errSQLType = "int4"}`.
@@ -565,11 +586,12 @@ spec = around withTestResources $ describe "Dashboard widgets" do
 
     -- A fixed window expires so late telemetry can replace it; an omitted range reuses the live one.
     reset
-    initial <- windowed (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") "expiry"
+    let fixed = windowed (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") "expiry"
+    initial <- fixed
     advanceTestTime tr 59
-    fresh <- windowed (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") "expiry"
+    fresh <- fixed
     advanceTestTime tr 2
-    expired <- windowed (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") "expiry"
+    expired <- fixed
     (initial, fresh, expired) `shouldBe` (Just 0, Just 0, Just 1)
     advanceTestTime tr 601
     runQueryEffect tr QueryCache.cleanupExpiredCache `shouldReturn` 1
@@ -696,7 +718,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         routelift = endpoint True "integrations.routelift.com" "POST"
     runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ V.fromList [routelift "literal-route" "/v1/deliveries/estimate/v2", routelift "template-route" "/v1/deliveries/{id}", endpoint True "" "POST" "hostless-route" "/health", routelift "faa041ff" "/v1/deliveries/estimate/v2", endpoint False "dellyman.com" "GET" "ba3431d5" "/orders"]
     let tabParams slug since hx ps = call tr (Dashboards.dashboardTabGetH testPid dashId slug Nothing Nothing Nothing since hx ps) <&> \r -> let Dashboards.DashboardGet _ _ _ _ params = tabDashboard r in params
-        filters ps = tabParams "overview" (Just "24H") (Just "div#dashboard-tabs-content") ps <&> \params -> (join $ lookup "const-endpointFilter" params, join $ lookup "const-endpointFilter-kql" params)
+        filters ps = tabParams "overview" (Just "24H") tabsContent ps <&> \params -> (join $ lookup "const-endpointFilter" params, join $ lookup "const-endpointFilter-kql" params)
         routeliftHash hash = filters [("var-host", Just "integrations.routelift.com"), ("var-endpointHash", Just hash)]
         literal = (Just "attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND (attributes___http___route IN ('/v1/deliveries/estimate/v2') OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN ('/v1/deliveries/estimate/v2')))", Just "attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND (attributes.http.route in (\"/v1/deliveries/estimate/v2\") or (isempty(attributes.http.route) and attributes.url.path in (\"/v1/deliveries/estimate/v2\")))")
     -- A literal route falls back to its path; a templated one keeps its hash.
@@ -722,8 +744,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     prefilled (renderedWidgets gated) `shouldBe` []
     -- Successive pickers stay inside the dashboard fragment; the dependent Endpoint input keeps
     -- its `{{var-host}}` template so a new domain re-fetches its own endpoints.
-    domainPicker <- partialHtml =<< getTab tr dashId "overview" (Just "div#dashboard-tabs-content") []
-    endpointPicker <- partialHtml =<< getTab tr dashId "overview" (Just "div#dashboard-tabs-content") [("var-endpointHash", Just ""), ("var-host", Just "dellyman.com")]
+    domainPicker <- partialHtml =<< getTab tr dashId "overview" tabsContent []
+    endpointPicker <- partialHtml =<< getTab tr dashId "overview" tabsContent [("var-endpointHash", Just ""), ("var-host", Just "dellyman.com")]
     -- A full load keeps the server prefill; a swap already has a painted page, so ships skeletons
     -- (lazyWidget strips `eager` too, which renderStatContent reads as "data is here").
     let selected = [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
@@ -731,12 +753,16 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     full <- getTab tr dashId "overview" Nothing selected
     eagerOnes (renderedWidgets $ tabDashboard full) `shouldSatisfy` not . null
     T.count "id=\"log_details_container\"" (renderT full) `shouldBe` 1
-    swapped <- getTab tr dashId "overview" (Just "div#dashboard-tabs-content") selected
+    swapped <- getTab tr dashId "overview" tabsContent selected
     renderedWidgets (tabDashboard swapped) `shouldSatisfy` not . null
     eagerOnes (renderedWidgets $ tabDashboard swapped) `shouldBe` []
     -- A tab navigation is the shared fragment contract, reflecting URL values into the variables bar.
-    errorsTab <- partialHtml =<< getTab tr dashId "errors" (Just "div#dashboard-tabs-content") selected
-    goldenHtml "dashboard-endpoint-tabs" do toHtml gated; domainPicker; endpointPicker; errorsTab; toHtmlRaw (fold $ mapWidget >>= (.html))
+    errorsTab <- partialHtml =<< getTab tr dashId "errors" tabsContent selected
+    goldenParts "dashboard-endpoint-tabs" $
+      foldMap (elementsWith ["id=\"dashboard-tabs-content\"", "name=\"endpointHash\""] . renderT) [domainPicker, endpointPicker]
+        <> tagsWith ["swap-oob=", "id=\"dashboard-tabs-content\"", "class=\"dash-variable-input"] (renderT errorsTab)
+        <> elementsWith ["tab-active\""] (renderT errorsTab)
+        <> [toStrict $ fold $ mapWidget >>= (.html)]
 
     -- Shipbubble 2026-10-19: 17 MySQL errors in 1.4M queries showed as "0.00%", and the
     -- Databases tab had no way to read the error itself.
