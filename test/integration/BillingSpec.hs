@@ -253,6 +253,13 @@ spec = around withTestResources do
     map fst replaced `shouldContain` [stripeApi "subscriptions/sub_test123"]
     (.subId) <$> project `shouldReturn` Just "sub_new"
 
+    -- An unsigned, malformed, wrong-secret, stale or tampered event changes nothing and calls no one.
+    now <- getTestTime tr.trTestClock
+    let unpaidEvent = stripeEvent "customer.subscription.updated" (sub "unpaid" "si_new")
+        secret = tr.trATCtx.env.stripeWebhookSecret
+    for_ @[] [Nothing, Just "garbage", Just (stripeSig "whsec_wrong" now unpaidEvent), Just (stripeSig secret (addUTCTime (-301) now) unpaidEvent), Just (stripeSig secret now "{}")] \h ->
+      stripeDeliver tr noFixture h unpaidEvent `shouldReturn` ([], 400)
+    (,) <$> plan <*> ((.subId) <$> project) `shouldReturn` ("GraduatedPricing", Just "sub_new")
     -- Dunning ending at `unpaid` keeps the subscription; paying anywhere flips it back to
     -- `active`, and only customer.subscription.updated says so.
     _ <- stripeWebhook tr noFixture "customer.subscription.updated" (sub "unpaid" "si_new")
@@ -346,7 +353,14 @@ spec = around withTestResources do
     -- A Lemon Squeezy project keeps the locally-derived cycle, with no Stripe call made for it.
     (billingReqs, d) <- billing
     (billingReqs, d.cycleEnd, (.total) <$> d.currentInvoice) `shouldBe` ([], Nothing, Nothing)
-    webhook "subscription_cancelled"
+    -- Enforced, an unsigned, malformed or wrong-secret event is refused and changes nothing.
+    let enforced = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.lsWebhookSigEnforce = True}}}
+        cancel = toStrict $ AE.encode $ lsEvent "subscription_cancelled" pid
+        lsSig key = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 @Text @ByteString key) cancel :: HMAC.HMAC SHA256)
+        deliver h = runAsBaseRecordingHTTP enforced $ catchError @ServantS.ServerError (Settings.webhookPostH h cancel $> 200) (\_ err -> pure err.errHTTPCode)
+    for_ @[] [Nothing, Just "not-hex", Just (lsSig "wrong-secret")] \h -> deliver h `shouldReturn` ([], 400 :: Int)
+    plan `shouldReturn` "Test Plan"
+    deliver (Just $ lsSig tr.trATCtx.env.lemonSqueezyWebhookSecret) `shouldReturn` ([], 200)
     plan `shouldReturn` "Free"
     (_, cancelled) <- billing
     notice <- banner
@@ -568,18 +582,33 @@ stripeCheckoutCompleted tr pid newSub metadata = do
   pure requests
 
 
--- | Deliver a signed Stripe event of @eventType@ wrapping @obj@, answering Stripe calls from
--- @responses@ (invoice reads default to open); returns the outgoing requests and HTTP status.
+-- | Deliver a Stripe event of @eventType@ wrapping @obj@, signed now with the configured secret.
 stripeWebhook :: TestResources -> (Options -> String -> IO (Maybe LByteString)) -> Text -> AE.Value -> IO ([(Text, LByteString)], Int)
 stripeWebhook tr responses eventType obj = do
+  now <- getTestTime tr.trTestClock
+  let body = stripeEvent eventType obj
+  stripeDeliver tr responses (Just $ stripeSig tr.trATCtx.env.stripeWebhookSecret now body) body
+
+
+-- | POST @body@ with the Stripe-Signature header @sigHeader@, answering Stripe calls from
+-- @responses@ (invoice reads default to open); returns the outgoing requests and HTTP status.
+stripeDeliver :: TestResources -> (Options -> String -> IO (Maybe LByteString)) -> Maybe Text -> ByteString -> IO ([(Text, LByteString)], Int)
+stripeDeliver tr responses sigHeader body = do
   let appCtx = tr.trATCtx
       isolated = tr{trATCtx = appCtx{Config.config = appCtx.config{Config.smtpHost = "127.0.0.1", Config.smtpPort = 1, Config.smtpUsername = "", Config.smtpPassword = "", Config.postmarkToken = ""}}}
-  now <- getTestTime tr.trTestClock
-  let body = toStrict $ AE.encode $ AE.object ["type" AE..= eventType, "data" AE..= AE.object ["object" AE..= obj]]
-      ts = show @Text @Integer $ round $ utcTimeToPOSIXSeconds now
-      mac = HMAC.hmac (encodeUtf8 @Text @ByteString appCtx.env.stripeWebhookSecret) (encodeUtf8 @Text @ByteString ts <> "." <> body) :: HMAC.HMAC SHA256
-      sigHeader = "t=" <> ts <> ",v1=" <> decodeUtf8 (B16.encode $ BA.convert mac)
-  runAsBaseRecordingHTTP isolated $ catchError @ServantS.ServerError (withHTTPResponses (\opts url -> (<|> ("{\"status\":\"open\"}" <$ guard (stripeApi "invoices/" `T.isPrefixOf` toText url))) <$> responses opts url) (Settings.stripeWebhookPostH (Just sigHeader) body) $> 200) (\_ err -> pure err.errHTTPCode)
+  runAsBaseRecordingHTTP isolated $ catchError @ServantS.ServerError (withHTTPResponses (\opts url -> (<|> ("{\"status\":\"open\"}" <$ guard (stripeApi "invoices/" `T.isPrefixOf` toText url))) <$> responses opts url) (Settings.stripeWebhookPostH sigHeader body) $> 200) (\_ err -> pure err.errHTTPCode)
+
+
+stripeEvent :: Text -> AE.Value -> ByteString
+stripeEvent eventType obj = toStrict $ AE.encode $ AE.object ["type" AE..= eventType, "data" AE..= AE.object ["object" AE..= obj]]
+
+
+-- | @t=<epoch>,v1=<hmac>@ over @"<t>.<body>"@, signed with @secret@ at @at@.
+stripeSig :: Text -> UTCTime -> ByteString -> Text
+stripeSig secret at body = "t=" <> ts <> ",v1=" <> decodeUtf8 (B16.encode $ BA.convert mac)
+  where
+    ts = show @Text @Integer $ round $ utcTimeToPOSIXSeconds at
+    mac = HMAC.hmac (encodeUtf8 @Text @ByteString secret) (encodeUtf8 @Text @ByteString ts <> "." <> body) :: HMAC.HMAC SHA256
 
 
 lsEvent :: Text -> Projects.ProjectId -> Settings.WebhookData
