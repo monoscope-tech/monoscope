@@ -44,4 +44,5 @@ main = do
           , ("BackgroundJobs.ReportUsage", 2)
           , ("EndpointDiscovery", 7)
           , ("Pages.Endpoints.ApiCatalog", 0)
+          , ("Opentelemetry.Ingestion", 6)
           ]

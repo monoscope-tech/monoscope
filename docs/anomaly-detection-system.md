@@ -147,7 +147,7 @@ Hashes are hierarchical to enable efficient lookups:
 ## Testing Considerations
 
 ### Current Test Coverage
-- `ProcessMessageSpec` - Basic message processing
+- `Opentelemetry.IngestionSpec` - Message processing and ingestion
 - `AnomalyListSpec` - UI rendering (currently disabled)
 - Integration tests for entity extraction
 
