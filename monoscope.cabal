@@ -914,6 +914,7 @@ test-suite integration-tests
     , monoscope-cli
     , monoscope-shared
     , odd-jobs
+    , openai
     , openapi3
     , optparse-applicative
     , pg-entity
