@@ -85,14 +85,6 @@ tabsContent :: Maybe Text
 tabsContent = Just "div#dashboard-tabs-content"
 
 
-tagsWith :: [Text] -> Text -> [Text]
-tagsWith markers = map (T.takeWhile (/= '>')) . elementsWith markers
-
-
-goldenParts :: FilePath -> [Text] -> Expectation
-goldenParts name = goldenHtml name . toHtmlRaw @Text . unlines
-
-
 partialHtml :: NavigationResponse a -> IO (Html ())
 partialHtml = \case
   NavigationPartial _ fragment -> pure fragment

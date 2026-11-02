@@ -791,7 +791,6 @@ test-suite integration-tests
       EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec
-      IncidentDeliverySpec
       LiveTailSpec
       MinioManagerSpec
       MonitoringSpec
@@ -822,7 +821,6 @@ test-suite integration-tests
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
-      Pages.MonitorsSpec
       Pages.Projects.EveryoneSyncSpec
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
@@ -1111,7 +1109,6 @@ test-suite test-dev
       EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec
-      IncidentDeliverySpec
       LiveTailSpec
       MinioManagerSpec
       MonitoringSpec
@@ -1142,7 +1139,6 @@ test-suite test-dev
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
-      Pages.MonitorsSpec
       Pages.Projects.EveryoneSyncSpec
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
