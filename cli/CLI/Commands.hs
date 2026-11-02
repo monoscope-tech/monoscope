@@ -1063,7 +1063,7 @@ runMetricsQuery cfg opts mode = do
   validateDurationOrDie "--since" opts.since
   let params = metricsParams opts.expression opts.since opts.from opts.to
   withAPIResult cfg "/api/v1/metrics" params $ \val ->
-    withMetricsData val (renderJSON val) $ \md -> do
+    withMetricsData val (renderJSON val >> whenJust opts.assert (const $ dieWith "--assert could not be evaluated: the response is not a metrics result (rerun with --debug for the decode error)")) $ \md -> do
       renderWith mode val (renderMetricsTable md)
       whenJust opts.assert $ checkAssertion md
 

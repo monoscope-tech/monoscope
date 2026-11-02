@@ -4,7 +4,7 @@
 module CLI.Main (cliMain, parserInfo, run, GlobalOpts (..)) where
 
 import Relude
-import System.IO (isEOF)
+import System.IO (hSetEncoding, isEOF, utf8)
 
 import CLI.Commands hiding (value)
 import CLI.Config (CLIConfig (..), resolveConfig)
@@ -973,6 +973,8 @@ runCLI = runEff . runHTTPWreq . runEnvironment . runFileSystem . runIngestion . 
 cliMain :: Version -> IO ()
 cliMain v = do
   hSetBuffering stdout LineBuffering
+  -- Help and messages contain `—`/`→`; under a C/POSIX locale GHC would fail encoding them.
+  mapM_ (`hSetEncoding` utf8) [stdout, stderr]
   (global, parsedCommand) <- execParser (parserInfo v)
   -- Make --debug equivalent to MONOSCOPE_DEBUG=1 so 'CLI.Core.printDebug'
   -- (which only sees the env) lights up either way. setEnv is process-global
