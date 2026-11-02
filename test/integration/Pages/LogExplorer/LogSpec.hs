@@ -103,17 +103,19 @@ spec = do
         facets m = renderT $ Log.renderFacets Catalog.FacetSummary{id = UUID.nil, projectId = testPid.toText, tableName = "otel_logs_and_spans", facetJson = Catalog.FacetData m}
         sidebar = facets $ HM.fromList [("attributes.http.request.method", [Catalog.FacetValue "GET" 3]), ("resource.service.name", [Catalog.FacetValue "checkout-svc" 5]), ("level", [Catalog.FacetValue "INFO" 7])]
         overflow = facets $ HM.singleton "resource.service.name" [Catalog.FacetValue ("service-" <> show n) 1 | n <- [1 .. 6 :: Int]]
+        library = renderT $ LogQueryBox.queryLibraryContent_ (V.singleton qli) V.empty
     -- Library items hand raw KQL to handleAddQuery (a JSON.parse threw on every click). Facet
     -- clicks go through window.queryEditorCall: Monaco loads lazily, so calling the element
     -- directly threw "not a function". Overflow values arrive as a fragment once More is opened.
     goldenParts "log-explorer-fragments"
       . ordNub
       $ elementsWith [">Alerting</span>"] (renderT $ LogItem.expandedItemView testPid alert Nothing Nothing)
-      <> tagsWith ["dataset.query", "aria-label=\"Edit query title\"", "aria-label=\"Delete query\"", "aria-label=\"Show all team queries\""] (renderT $ LogQueryBox.queryLibraryContent_ (V.singleton qli) V.empty)
+      <> tagsWith ["dataset.query", "aria-label=\"Edit query title\"", "aria-label=\"Delete query\"", "aria-label=\"Show all team queries\""] library
       <> tagsWith ["data-field=\"", "facets?group=", "queryEditorCall(", "data-component=\"facet-option\""] sidebar
       <> elementsWith ["no values in window", "Common Filters"] sidebar
       <> tagsWith ["data-value=\"service-"] overflow
       <> elementsWith ["+ More ("] overflow
+    (T.isInfixOf "JSON.parse" library, T.isInfixOf "getElementById(" sidebar, T.isInfixOf "service-6" overflow) `shouldBe` (False, False, False)
     filter (\p -> not (S.member p PE.flattenedOtelAttributes || S.member p PE.topLevelOtelColumns)) (map (.path) Log.facetDefs) `shouldBe` []
 
   it "live tail matching: service, environment and kind gates, fan-out, free text" \_ -> do
@@ -133,7 +135,7 @@ spec = do
           , -- Free text matches like the explorer: span status messages, sequences tolerate punctuation, terms AND.
             ([mkSubScoped (30 + n) (LT.AllSignals Nothing) ["id"] Nothing q | (n, q) <- zip [0 ..] ["\"deadlock\"", "\"lock wait\"", "\"order\" \"saved\"", "\"deadlock\" \"saved\""]], [rec' "error" "ER_LOCK_DEADLOCK", (spanRecord "checkout" "prod" "error" :: Telemetry.OtelLogsAndSpans){Telemetry.status_message = Just "Deadlock found when trying to get lock"}, rec' "error" "Lock-wait timeout", rec' "info" "order saved"], [["<table>", "<table>"], ["<table>"], ["<table>"], []])
           ]
-    forM_ cases \(subs, recs, expected) -> (map (map bodyOf . fst) <$> delivered 100 subs recs) `shouldReturn` expected
+    forM_ cases \(subs, recs, expected) -> ((\r -> (map (map bodyOf . fst) r, sum (map snd r))) <$> delivered 100 subs recs) `shouldReturn` (expected, 0)
     -- Nobody tailing: the batch is never walked, which makes the hook safe on the ingest hot path.
     hub <- LT.newHub
     rt <- runtimeWith hub []
@@ -277,15 +279,15 @@ spec = do
       -- bucket advertised its routing timestamp and pruned unflushed rows (fixed in bf3abc8).
       ingest [msgAt (.reqMsg1) s | s <- [-3600, -7200, -10800]] `shouldReturn` Right 3
       everything <- eventually (fetch (span' (-259200) 86400)) ((>= 205) . V.length . (.logsData))
-      (V.length everything.logsData, everything.cols) `shouldBe` (205, defaultCols)
-      everything.count `shouldSatisfy` (>= 205)
+      (V.length everything.logsData, everything.count, everything.cols) `shouldBe` (205, 205, defaultCols)
       -- Detail and trace routes capture this cell as UTCTime; TF once echoed the to_char format.
       filter (isNothing . (iso8601ParseM @Maybe @UTCTime . toString <=< str "timestamp")) (cells everything) `shouldBe` []
       -- The stamped URLs target the data endpoint the web component consumes, not the page shell.
       (everything.nextUrl, everything.resetLogsUrl, everything.recentUrl) `shouldSatisfy` \(n, r, c) -> "/log_explorer/data" `T.isInfixOf` n && r /= "" && c /= ""
-      (V.length . (.logsData) <$> eventually (fetch (span' (-9000) (-5400))) ((>= 1) . V.length . (.logsData))) `shouldReturn` 1
-      [hour, day] <- forM ["1H", "24H"] \s -> (.count) <$> fetch def{Log.since = Just s}
-      (hour >= 200, day > hour, day < 205) `shouldBe` (True, True, True)
+      let sized (r :: Log.LogResult) = (r.count, V.length r.logsData)
+      (sized <$> fetch (span' (-9000) (-5400))) `shouldReturn` (1, 1)
+      -- `since` is inclusive: 1H holds the -1h row, 24H the -1d row, and nothing older.
+      forM ["1H", "24H"] (\s -> sized <$> fetch def{Log.since = Just s}) `shouldReturn` [(201, 201), (204, 204) :: (Int, Int)]
       filtered <- fetch (span' (-60) 60){Log.query = Just "status_code == \"200\""}
       (filtered.count, V.length filtered.logsData) `shouldSatisfy` \(c, n) -> c > 0 && n > 0
       ((.cols) <$> fetch (span' (-60) 60){Log.cols = Just "id,timestamp,name,duration"}) `shouldReturn` ["id", "timestamp", "name", "duration", "service", "summary", "latency_breakdown"]
@@ -319,7 +321,6 @@ spec = do
       pid <- createTestProject tr "explorer-search"
       apiKey <- createTestAPIKey tr pid "search-key"
       let fetch = explorerRows tr pid
-          hexId = T.replace "-" "" . UUID.toText <$> nextRandom
           spanWith name attrs res = do
             (trId, sid) <- (,) <$> hexId <*> hexId
             ingestSpanReq tr $ mkSpanRequest trId sid Nothing name [] Nothing attrs (mkResource apiKey res) frozenTime
@@ -371,8 +372,8 @@ spec = do
       _ <- spanWith "GET /replay-gate" [mkAttr "session.id" (UUID.toText sessionId)] []
       let sessionTags = do
             rs <- logTable tr pid Nothing Nothing
-            pure (any ((== Just "GET /replay-gate") . str "span_name") rs, [t | r <- rs, Just (AE.Array els) <- [HM.lookup "summary" r], AE.String t <- V.toList els, "session;" `T.isPrefixOf` t])
-      eventually sessionTags fst `shouldReturn` (True, [])
+            pure (length (filter ((== Just "GET /replay-gate") . str "span_name") rs), [t | r <- rs, Just (AE.Array els) <- [HM.lookup "summary" r], AE.String t <- V.toList els, "session;" `T.isPrefixOf` t])
+      eventually sessionTags ((== 1) . fst) `shouldReturn` (1, [])
       dbExec tr [sql| INSERT INTO projects.replay_sessions (session_id, project_id) VALUES (?, ?) |] (sessionId, pid)
       (snd <$> sessionTags) >>= (`shouldSatisfy` any (T.isSuffixOf (UUID.toText sessionId)))
 
@@ -390,7 +391,7 @@ spec = do
           ingestSet set i ts = nextRandom >>= \t -> nextRandom >>= \s -> ingestSpanLinked tr apiKey (UUID.toText t) (UUID.toText s) Nothing (set <> ".row." <> show i) [("page.set", set)] ts
           fetchSet set lim cur dir = explorerRows tr pid def{Log.query = Just ("attributes.page.set == \"" <> set <> "\"" <> lim), Log.cursor = cur, Log.direction = dir, Log.from = stamp (-60), Log.to = stamp 0}
           -- Response order, never re-sorted: the display contract is what is under test.
-          idx r = mapMaybe (readMaybe . toString . T.takeWhileEnd (/= '.') <=< str "span_name") (cells r) :: [Int]
+          idx r = map (fromMaybe (-1) . (readMaybe . toString . T.takeWhileEnd (/= '.') <=< str "span_name")) (cells r) :: [Int]
       forM_ [1 .. 5] \i -> ingestSet "older" i (ago i)
       forM_ [1 .. 6] \i -> ingestSet "newer" i (ago (10 - i))
       p1 <- eventually (fetchSet "older" " | limit 2" Nothing Nothing) ((== [1, 2]) . idx)
@@ -455,7 +456,8 @@ spec = do
       [plain, chart, line, traced] <- forM ([(Nothing, Nothing), (Nothing, Just "timeseries"), (Nothing, Just "timeseries_line"), (Just "774115aaa715abf80d93fc629c2269a4/?timestamp=2026-07-15T18:59:16.952128Z", Nothing)] :: [(Maybe Text, Maybe Text)]) \(ref, viz) -> explorerPage tr testPid Nothing ref viz
       -- HTMX swaps only #main-content, so a preload in <head> was discarded on navigation; chart
       -- modes and trace links hide the list, so preloading its rows ran a query nobody saw.
-      map (any (T.isInfixOf "window.logDataPromise") . elementsWith ["id=\"main-content\""]) [plain, chart, line, traced] `shouldBe` [True, False, False, False]
+      (any (T.isInfixOf "window.logDataPromise") (elementsWith ["id=\"main-content\""] plain), map (T.isInfixOf "window.logDataPromise") [chart, line, traced], T.count "id=\"log_details_container\"" plain)
+        `shouldBe` (True, [False, False, False], 1)
       alertForm <- renderT <$> call tr (Log.alertFormH testPid Nothing)
       -- The detail container replaces an in-flight request (htmx's default queue dropped the new
       -- click and froze the loader); the viz container reads its type from the mutable
@@ -473,8 +475,7 @@ spec = do
 
     it "detail panel: TimeFusion and Postgres reads, lazy tabs, identity pills, SDK bodies anchored on the request" \tr -> do
       apiKey <- createTestAPIKey tr testPid "detail-key"
-      let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
-          b64 = B64T.extractBase64 . B64.encodeBase64 . encodeUtf8 @Text
+      let b64 = B64T.extractBase64 . B64.encodeBase64 . encodeUtf8 @Text
       (trId, rootSid, sdkSid) <- (,,) <$> hexId <*> hexId <*> hexId
       ingestSpanLinked tr apiKey trId rootSid Nothing "GET /api/orders" [("http.request.method", "GET"), ("http.route", "/api/orders"), ("session.id", "sess-9f2"), ("user.id", "usr-4471"), ("user.email", "ada@example.com"), ("tenant.id", "acme-eu"), ("workspace.id", "ws-12")] frozenTime
       ingestSpanLinked tr apiKey trId sdkSid (Just rootSid) "apitoolkit-http-span" [("http.request.body", b64 "{\"item\":\"apple\"}"), ("http.response.body", b64 "{\"ok\":true}"), ("http.request.method", "GET")] (addUTCTime 0.01 frozenTime)
@@ -516,7 +517,7 @@ spec = do
       -- Hidden tabs fetch their panel on first reveal, so the first response stays small, and the
       -- request body is inlined once (in copy-as-curl), never twice.
       T.length initial `shouldSatisfy` (< 50_000)
-      (T.count "apple" reqTab, "apple" `T.isInfixOf` reqBody) `shouldBe` (1, True)
+      (T.count "apple" reqTab, "apple" `T.isInfixOf` reqBody, filter (T.isInfixOf "intersect once") [rawTab, reqBody]) `shouldBe` (1, True, [])
       -- Every session, user and tenant field is a filter pill (only user.email used to show);
       -- waterfall rows are keyboard-reachable buttons.
       goldenParts "log-explorer-detail"
@@ -617,19 +618,18 @@ spec = do
     it "chart cache: hits and partial merges equal fresh reads; streams populate it and replay it without telemetry" \tr -> do
       key <- createTestAPIKey tr testPid "chart-cache-key"
       let countQ = "summarize count(*) by bin_auto(timestamp)"
-          ingestAt prefix offsets = forM_ offsets (\(i :: Int) -> ingestLog tr key (prefix <> show i) (addUTCTime (fromIntegral i) baseTime)) >> void (runAllBackgroundJobs frozenTime tr.trATCtx)
           fresh q from to = clearCache tr >> queryMetrics tr q from to
       clearAllTestData tr
-      ingestAt "log " [0, 60 .. 1140]
+      ingestAt tr key "log " [0, 60 .. 1140]
       miss <- queryMetrics tr countQ (timeAt (-1800)) (timeAt 1800)
       hit <- queryMetrics tr countQ (timeAt (-1800)) (timeAt 1800)
       refetched <- fresh countQ (timeAt (-1800)) (timeAt 1800)
       (V.length miss.dataset > 0, sameResult miss hit, sameResult miss refetched) `shouldBe` (True, True, True)
       -- A partial hit fetches only the delta and merges in timestamp order.
       clearAllTestData tr
-      ingestAt "first " [-600, -540 .. -60]
+      ingestAt tr key "first " [-600, -540 .. -60]
       _ <- queryMetrics tr countQ (timeAt (-900)) (timeAt 0)
-      ingestAt "second " [0, 60 .. 540]
+      ingestAt tr key "second " [0, 60 .. 540]
       merged <- queryMetrics tr countQ (timeAt (-900)) (timeAt 900)
       (sameResult merged <$> fresh countQ (timeAt (-900)) (timeAt 900)) `shouldReturn` True
       let stamps = V.mapMaybe (join . V.headM) merged.dataset
@@ -650,10 +650,9 @@ spec = do
 
       -- The stream matches the whole query, fills the cache, then serves one frame with telemetry gone.
       clearAllTestData tr
-      forM_ [17, 3599, 3600, 86400, 172800, 259200] \offset -> ingestLog tr key ("boundary " <> show offset) (addUTCTime (fromIntegral offset) baseTime)
-      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      ingestAt tr key "boundary " [17, 3599, 3600, 86400, 172800, 259200]
       let hourly = "summarize count(*) by bin(timestamp, 1h)"
-          stream q from to = runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) (Just q) Nothing Nothing (Just from) (Just to) (Just "spans") Nothing []) >>= streamFrames >>= either fail pure
+          stream q = streamChart tr Hasql.SqlPostgres (Just q) Nothing
           final :: [AE.Value] -> IO Charts.MetricsData
           final frames = case viaNonEmpty last frames of
             Just (AE.Object o) | AEKM.lookup "type" o == Just "complete", Just (AE.Success md) <- AE.fromJSON <$> AEKM.lookup "data" o -> pure md
@@ -670,8 +669,7 @@ spec = do
       (length cached, cachedMd.dataset, cachedMd.rowsCount) `shouldBe` (1, expected.dataset, expected.rowsCount)
       -- One query's rows arrive in one burst: framing it as partials redrew every chart three times.
       clearAllTestData tr
-      forM_ [60, 1200, 2400, 3500] \offset -> ingestLog tr key ("event " <> show offset) (addUTCTime (fromIntegral offset) baseTime)
-      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      ingestAt tr key "event " [60, 1200, 2400, 3500]
       clearCache tr
       single <- stream "summarize count(*) by bin(timestamp, 10m)" (timeAt 0) (timeAt 3600)
       [k | AE.Object o <- single, Just k <- [AEKM.lookup "type" o], Just (AE.Object d) <- [AEKM.lookup "data" o], Just (AE.Array ds) <- [AEKM.lookup "dataset" d], not (null ds)] `shouldBe` [AE.String "complete"]
@@ -685,10 +683,10 @@ spec = do
           unscoped = runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just countQ) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
       clearAllTestData tr
       ((\r -> (r.error, V.length r.dataset)) <$> queryMetrics tr "totally_made_up_column == \"x\" | summarize count(*) by bin_auto(timestamp)" (timeAt (-1800)) (timeAt 1800)) `shouldReturn` (Just "Unknown field \"totally_made_up_column\"", 0)
-      ((.error) <$> withoutTelemetryTable tr (queryMetrics tr countQ (timeAt (-1800)) (timeAt 1800))) >>= (`shouldSatisfy` isJust)
+      ((.error) <$> withoutTelemetryTable tr (queryMetrics tr countQ (timeAt (-1800)) (timeAt 1800))) `shouldReturn` Just "Table not found"
       dbOne @_ @Int tr [sql|SELECT count(*)::int FROM query_cache WHERE project_id = ?|] (Only testPid) `shouldReturn` 0
       key <- seedCache tr countQ times
-      ((.error) <$> withoutTelemetryTable tr unscoped) >>= (`shouldSatisfy` isJust)
+      ((.error) <$> withoutTelemetryTable tr unscoped) `shouldReturn` Just "Table not found"
       cachedToFor tr key `shouldReturn` Just t1
       -- A delta that succeeds with no rows is not a failure: the watermark advances.
       _ <- unscoped
@@ -728,17 +726,17 @@ spec = do
 
       clearAllTestData tr
       key <- createTestAPIKey tr testPid "closed-chart-connection"
-      ingestLog tr key "one event" (addUTCTime 3600 baseTime)
-      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      ingestAt tr key "event " [3600]
       let createPool = newPool $ setNumStripes (Just 1) $ defaultPoolConfig (PG.connectPostgreSQL tr.trConnStr) PG.close 1800 3
       E.bracket createPool destroyAllResources \pool -> withResource pool \active -> do
         withResource pool \idleA -> withResource pool \idleB -> forM_ [idleA, idleB] \conn -> do
           [Only backend] <- PG.query_ conn "SELECT pg_backend_pid()" :: IO [Only Int]
           dbQuery @_ @(Only Bool) tr "SELECT pg_terminate_backend(?, 5000)" (Only backend)
-        frames <- runQueryEffect tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}} (Charts.queryMetricsStream (Just Hasql.SqlTimefusion) (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin(timestamp, 1h)") Nothing Nothing (Just $ timeAt 0) (Just $ timeAt 259200) (Just "spans") Nothing []) >>= streamFrames >>= either fail pure
+        frames <- streamChart tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}} Hasql.SqlTimefusion (Just "summarize count(*) by bin(timestamp, 1h)") Nothing (timeAt 0) (timeAt 259200)
         (case viaNonEmpty last frames of Just (AE.Object o) -> (AEKM.lookup "type" o, AEKM.lookup "data" o >>= \case AE.Object f -> AEKM.lookup "rows_count" f; _ -> Nothing); _ -> (Nothing, Nothing)) `shouldBe` (Just "complete", Just (AE.Number 1))
         PG.query_ active "SELECT 1" `shouldReturn` [Only (1 :: Int)]
-      slow <- runQueryEffect tr (Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM pg_sleep(6)") Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []) >>= streamFrames >>= either fail pure
+      -- 6s outlasts the stream's 5s keep-alive, so a partial frame must precede completion.
+      slow <- streamChart tr Hasql.SqlPostgres Nothing (Just "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM pg_sleep(6)") (timeAt 0) (timeAt 3600)
       let kind = \case AE.Object o -> AEKM.lookup "type" o; _ -> Nothing
       (kind <$> listToMaybe slow, kind <$> viaNonEmpty last slow) `shouldBe` (Just (Just "partial"), Just (Just "complete"))
 
@@ -927,6 +925,19 @@ baseTime = read "2025-01-01 00:00:00 UTC"
 
 timeAt :: Int -> Text
 timeAt s = toText $ iso8601Show $ addUTCTime (fromIntegral s) baseTime
+
+
+-- | Logs at 'baseTime' plus each offset, then the background jobs.
+ingestAt :: TestResources -> Text -> Text -> [Int] -> IO ()
+ingestAt tr key prefix offsets = forM_ offsets (\i -> ingestLog tr key (prefix <> show i) (addUTCTime (fromIntegral i) baseTime)) >> void (runAllBackgroundJobs frozenTime tr.trATCtx)
+
+
+streamChart :: TestResources -> Hasql.SqlSource -> Maybe Text -> Maybe Text -> Text -> Text -> IO [AE.Value]
+streamChart tr src q rawSql from to = runQueryEffect tr (Charts.queryMetricsStream (Just src) (Just Charts.DTMetric) (Just testPid) q rawSql Nothing (Just from) (Just to) (Just "spans") Nothing []) >>= streamFrames >>= either fail pure
+
+
+hexId :: IO Text
+hexId = T.replace "-" "" . UUID.toText <$> nextRandom
 
 
 queryMetrics :: TestResources -> Text -> Text -> Text -> IO Charts.MetricsData
