@@ -827,7 +827,6 @@ test-suite integration-tests
       Pages.CodeContextSpec
       Pages.DashboardWidgetsSpec
       Pages.ErrorPatternsSpec
-      Pages.GitSyncSpec
       Pages.ImpactReviewsSpec
       Pages.InfrastructureSpec
       Pages.IssuesSpec
@@ -1125,7 +1124,6 @@ test-suite test-dev
       Pages.CodeContextSpec
       Pages.DashboardWidgetsSpec
       Pages.ErrorPatternsSpec
-      Pages.GitSyncSpec
       Pages.ImpactReviewsSpec
       Pages.InfrastructureSpec
       Pages.IssuesSpec
@@ -1405,7 +1403,6 @@ test-suite unit-tests
       Pages.BodyWrapperSpec
       Pages.OnboardingSpec
       Pkg.DrainSpec
-      Pkg.GitSpec
       Pkg.IngestBudgetSpec
       Pkg.KafkaMetricsSpec
       Pkg.ParserSpec
@@ -1459,7 +1456,6 @@ test-suite unit-tests
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , http-api-data
-    , http-client
     , http-types
     , langchain-hs
     , lens

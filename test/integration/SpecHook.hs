@@ -20,8 +20,8 @@ import Test.Hspec (Spec, sequential)
 -- `make test-shards` / the CI workflows): N processes, each its own RTS running a
 -- disjoint shard SEQUENTIALLY, so there's no shared pool lifecycle to race.
 --
--- DO NOT strip the `sequential $` wrappers in the spec files (GitSyncSpec,
--- MonitoringSpec, DashboardsSpec, ErrorPatternsSpec, …): they encode which specs share
+-- DO NOT strip the `sequential $` wrappers in the spec files (MonitoringSpec,
+-- DashboardsSpec, ErrorPatternsSpec, …): they encode which specs share
 -- state across examples, so process shards keep each such spec whole on one shard.
 hook :: Spec -> Spec
 hook = sequential

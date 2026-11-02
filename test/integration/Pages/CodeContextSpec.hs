@@ -25,7 +25,7 @@ import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Types (Query (..))
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpose, interpret)
 import Effectful.Error.Static (catchError)
 import Hasql.Interpolate qualified as HI
@@ -39,12 +39,10 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RepositorySync qualified as RepositorySync
-import Network.HTTP.Client (HttpException (InvalidUrlException))
-import Network.HTTP.Client.Internal (Response (..), ResponseClose (..), createCookieJar, defaultRequest)
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), defaultRequest)
+import Network.HTTP.Client.Internal (Response (..))
 import Network.HTTP.Types qualified as H
-import Network.HTTP.Types.Status (Status (..))
 import Network.HTTP.Types.URI (urlEncode)
-import Network.HTTP.Types.Version (http11)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Test qualified as WT
@@ -155,47 +153,34 @@ withUnavailableRepositoryAPI = interpose @W.HTTP \_ _ -> liftIO $ throwIO $ Inva
 -- | Answer every GET with @body@ (checking the URL when one is expected); any write fails.
 getOnly :: (IOE :> es, W.HTTP :> es) => Maybe String -> LBS.ByteString -> Eff es a -> Eff es a
 getOnly expected body = interpose @W.HTTP \_ -> \case
-  W.GetWith _ endpoint -> liftIO (traverse_ (endpoint `shouldBe`) expected) $> httpResponse body
+  W.GetWith _ endpoint -> liftIO (traverse_ (endpoint `shouldBe`) expected) $> mockResponse body
   _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Only repository reads are expected here"
 
 
--- | Count outbound requests while serving one canned file body.
---
--- A PAT credential means no installation-token exchange, so every request the interpreter sees
--- is the blob fetch itself. Spelled out rather than wildcarded: GADT refinement only happens on
--- an explicit match. Writes fail loudly — reading a snippet is a GET.
-runCountingHTTP :: IOE :> es => IORef Int -> LBS.ByteString -> Eff (W.HTTP ': es) a -> Eff es a
-runCountingHTTP calls body = interpret \_ -> \case
-  W.Get _ -> served
-  W.GetWith _ _ -> served
-  W.Delete _ -> served
-  W.DeleteWith _ _ -> served
-  W.Post{} -> wrote "POST"
-  W.PostWith{} -> wrote "POST"
-  W.Put{} -> wrote "PUT"
-  W.PutWith{} -> wrote "PUT"
-  W.Patch{} -> wrote "PATCH"
-  W.PatchWith{} -> wrote "PATCH"
-  where
-    wrote :: Text -> a
-    wrote verb = error $ "fetchSnippet must not " <> verb <> " — the snippet path is read-only"
-    served = do
-      liftIO $ modifyIORef' calls (+ 1)
-      pure $ httpResponse body
-
-
-httpResponse :: LBS.ByteString -> Response LBS.ByteString
-httpResponse body =
-  Response
-    { responseStatus = Status 200 "OK"
-    , responseVersion = http11
-    , responseHeaders = []
-    , responseBody = body
-    , responseCookieJar = createCookieJar []
-    , responseClose' = ResponseClose pass
-    , responseOriginalRequest = defaultRequest
-    , responseEarlyHints = []
-    }
+-- | Run one "Pkg.Git" operation against canned vendor replies, returning its result and each
+-- request's method and URL. A route answers when every fragment is in the URL, a trailing @$@
+-- anchoring it to the end: @page=1@ is in @page=11@, and a folder prefixes its files.
+onHost :: Git.GitHost -> Maybe Text -> [([Text], LBS.ByteString)] -> (Git.GitConn -> Eff '[W.HTTP, IOE] a) -> IO (a, [(Text, Text)])
+onHost host origin routes act = do
+  seen <- newIORef []
+  conn <- either (fail . toString) pure $ Git.mkGitConn host origin "tok"
+  let matches url fragment = maybe (fragment `T.isInfixOf` url) (`T.isSuffixOf` url) (T.stripSuffix "$" fragment)
+      reply method endpoint = liftIO do
+        modifyIORef' seen ((method, toText endpoint) :)
+        pure $ mockResponse $ maybe "{}" snd $ find (all (matches $ toText endpoint) . fst) routes
+  result <-
+    runEff $ act conn & interpret \_ -> \case
+      W.Get endpoint -> reply "GET" endpoint
+      W.GetWith _ endpoint -> reply "GET" endpoint
+      W.Post endpoint _ -> reply "POST" endpoint
+      W.PostWith _ endpoint _ -> reply "POST" endpoint
+      W.Put endpoint _ -> reply "PUT" endpoint
+      W.PutWith _ endpoint _ -> reply "PUT" endpoint
+      W.Patch endpoint _ -> reply "PATCH" endpoint
+      W.PatchWith _ endpoint _ -> reply "PATCH" endpoint
+      W.Delete endpoint -> reply "DELETE" endpoint
+      W.DeleteWith _ endpoint -> reply "DELETE" endpoint
+  (result,) . reverse <$> readIORef seen
 
 
 configurationProvider :: TestResources -> Text -> ATBackgroundCtx a -> ATBackgroundCtx a
@@ -288,6 +273,90 @@ spec = do
     (.title) <$> GitSync.yamlToDashboard (GitSync.dashboardToYaml (def :: Dashboards.Dashboard){Dashboards.title = Just "My Dash", Dashboards.tags = Just (["a", "b"] :: [Text])}) `shouldBe` Right (Just "My Dash")
     map (\prefix -> GitSync.getDashboardsPath def{GitSync.pathPrefix = prefix}) ["", "myapp"] `shouldBe` ["dashboards/", "myapp/dashboards/"]
 
+  -- "Pkg.Git" against each vendor: the URL every host is asked for, and what we make of its answer.
+  -- Fixtures were captured from the live public APIs on 2026-08-12 and trimmed to the decoded
+  -- fields (refresh by curling e.g. api.github.com/repos/octocat/Hello-World/git/trees/master).
+  describe "Git host contracts" do
+    let acme = Git.RepoRef "acme" "api" "main"
+        gitea = Just "https://git.acme.dev"
+        ghCommit = "{\"sha\":\"c1\"}"
+        commitOf = \case Git.GitLab -> "[{\"id\":\"c1\",\"short_id\":\"c1\",\"title\":\"Add latest changes\"}]"; Git.Bitbucket -> "{\"values\":[{\"type\":\"commit\",\"hash\":\"c1\"}]}"; _ -> ghCommit
+        bbTree = "{\"values\":[{\"path\":\"dashboards/a.yaml\",\"type\":\"commit_file\",\"size\":49}]}"
+        repos n = AE.encode $ AE.object ["repositories" AE..= replicate n (AE.object ["full_name" AE..= ("acme/r" :: Text), "default_branch" AE..= ("main" :: Text)])]
+    it "reads files and pinned trees, and writes, in each host's own dialect" do
+      for_
+        ( [ (Git.GitHub, Nothing, "https://api.github.com/repos/acme/api/contents/dashboards/a.yaml?ref=main")
+          , (Git.Gitea, gitea, "https://git.acme.dev/api/v1/repos/acme/api/contents/dashboards/a.yaml?ref=main")
+          , (Git.GitLab, Nothing, "https://gitlab.com/api/v4/projects/acme%2Fapi/repository/files/dashboards%2Fa.yaml/raw?ref=main")
+          , (Git.Bitbucket, Nothing, "https://api.bitbucket.org/2.0/repositories/acme/api/src/main/dashboards/a.yaml")
+          ] ::
+            [(Git.GitHost, Maybe Text, Text)]
+        )
+        \(host, origin, url) -> onHost host origin [(["contents"], "{\"content\":\"aGVsbG8K\"}"), (["/raw"], "hello\n"), (["/src/"], "hello\n")] (\c -> Git.fetchFile c acme "dashboards/a.yaml") `shouldReturn` (Right "hello\n", [("GET", url)])
+      -- A tree is listed at the commit the branch resolved to. GitLab names the blob hash @id@, Gitea
+      -- adds @mode@, and Bitbucket names none, so it is hashed from content under the prefix only.
+      for_
+        ( [ (Git.GitHub, Nothing, "git/trees", "{\"sha\":\"7fd1a60b\",\"truncated\":false,\"tree\":[{\"path\":\"dashboards/a.yaml\",\"type\":\"blob\",\"sha\":\"b1\",\"size\":13}]}", "b1")
+          , (Git.Gitea, gitea, "git/trees", "{\"sha\":\"075d94cc\",\"tree\":[{\"path\":\"dashboards/a.yaml\",\"mode\":\"100755\",\"type\":\"blob\",\"size\":918,\"sha\":\"b1\"}]}", "b1")
+          , (Git.GitLab, Nothing, "repository/tree", "[{\"id\":\"b1\",\"name\":\"a.yaml\",\"type\":\"blob\",\"path\":\"dashboards/a.yaml\",\"mode\":\"100644\"}]", "b1")
+          , (Git.Bitbucket, Nothing, "max_depth", bbTree, Git.computeContentSha "hello\n")
+          ] ::
+            [(Git.GitHost, Maybe Text, Text, LBS.ByteString, Text)]
+        )
+        \(host, origin, treeRoute, tree, sha) -> do
+          (result, requests) <- onHost host origin [(["commits"], commitOf host), ([treeRoute], tree), (["/src/c1/dashboards/a.yaml$"], "hello\n")] \c -> Git.fetchTree c acme "dashboards/"
+          second (map (.sha)) <$> result `shouldBe` Right ("c1", [Just sha])
+          let urls = map snd requests
+          length urls `shouldBe` if host == Git.Bitbucket then 3 else 2
+          take 1 urls `shouldSatisfy` all (T.isInfixOf "main")
+          drop 1 urls `shouldSatisfy` all (T.isInfixOf "c1")
+      -- An unscoped listing would cost a read per file in the repository, so its shas stay unknown.
+      (unscoped, unscopedRequests) <- onHost Git.Bitbucket Nothing [(["max_depth"], bbTree), (["/commits/"], commitOf Git.Bitbucket)] \c -> Git.fetchTree c acme ""
+      second (map (.sha)) <$> unscoped `shouldBe` Right ("c1", [Nothing])
+      map snd unscopedRequests `shouldNotSatisfy` any (T.isInfixOf "a.yaml")
+      -- GitLab creates with POST and updates with PUT; a host answering a write without a sha gets git's own.
+      for_ ([(Git.GitLab, Nothing, "POST", Git.computeContentSha "hello\n"), (Git.GitLab, Just "b1", "PUT", Git.computeContentSha "hello\n"), (Git.Bitbucket, Nothing, "POST", Git.computeContentSha "hello\n"), (Git.GitHub, Nothing, "PUT", "server-sha")] :: [(Git.GitHost, Maybe Text, Text, Text)]) \(host, existing, method, sha) -> do
+        (written, requests) <- onHost host Nothing [(["repository/files"], "{}"), (["contents"], "{\"content\":{\"sha\":\"server-sha\"}}"), (["commits"], commitOf host), (["/src"], "")] \c -> Git.pushFile c acme "dashboards/a.yaml" "hello\n" existing "msg"
+        fst <$> written `shouldBe` Right sha
+        map fst requests `shouldContain` [method]
+
+    -- An empty or partial listing reads as "delete every dashboard" on the sync path, so every failure
+    -- is an error. Canned replies never throw, so statuses are checked through 'Git.formatHttpError'.
+    it "pages fully, and reports truncated, failed and malformed replies as errors" do
+      fmap length . fst <$> onHost Git.GitHub Nothing [(["page=1$"], repos 100), (["page=2$"], repos 1)] Git.listRepos `shouldReturn` Right 101
+      fst <$> onHost Git.GitHub Nothing [(["installation/repositories"], repos 100)] Git.listRepos >>= either (`shouldSatisfy` T.isInfixOf "refusing to continue with a partial list") (const $ expectationFailure "expected a page-limit error")
+      fst <$> onHost Git.GitHub Nothing [(["git/trees"], "{\"sha\":\"t1\",\"truncated\":true,\"tree\":[]}"), (["/commits/"], ghCommit)] (\c -> Git.fetchTree c acme "dashboards/") `shouldReturn` Left "Repository listing was truncated by the host; it is too large to sync."
+      for_ [Git.GitHub, Git.GitLab, Git.Bitbucket] \host -> fst <$> onHost host Nothing [] (\c -> Git.fetchTree c acme "dashboards/") >>= (`shouldSatisfy` isLeft)
+      fst <$> onHost Git.GitHub Nothing [(["contents"], "not json at all")] (\c -> Git.fetchFile c acme "a.yaml") >>= (`shouldSatisfy` isLeft)
+      -- A default branch is a nicety: connecting falls back to main rather than failing.
+      fst <$> onHost Git.GitHub Nothing [] (`Git.defaultBranchOf` acme) `shouldReturn` "main"
+      fst <$> onHost Git.Bitbucket Nothing [(["repositories/acme/api"], "{\"mainbranch\":{\"name\":\"trunk\"}}")] (`Git.defaultBranchOf` acme) `shouldReturn` "trunk"
+      -- GitHub rate-limits as 403; a timeout or a bad URL has no status to name.
+      map (\code -> Git.formatHttpError $ HttpExceptionRequest defaultRequest $ StatusCodeException ((mockResponse "" $> ()){responseStatus = H.mkStatus code ""}) "") [429, 403, 404, 500] `shouldBe` ["HTTP 429", "HTTP 403", "HTTP 404", "HTTP 500"]
+      Git.formatHttpError (HttpExceptionRequest defaultRequest ResponseTimeout) `shouldSatisfy` T.isInfixOf "request failed"
+      Git.formatHttpError (InvalidUrlException "http://[" "bad host") `shouldSatisfy` T.isInfixOf "invalid URL"
+
+  -- Opt-in, never in CI: proves our URLs and decoders against a live vendor, which canned replies
+  -- cannot. It writes monoscope-smoke/probe.yaml, so point it at a scratch repository. Set
+  -- GIT_SMOKE_HOST (github|gitlab|bitbucket|gitea), GIT_SMOKE_TOKEN, GIT_SMOKE_OWNER, GIT_SMOKE_REPO,
+  -- and optionally GIT_SMOKE_ORIGIN (required for Gitea) and GIT_SMOKE_BRANCH (default main).
+  smoke <-
+    runIO $ traverse (fmap (fmap toText) . lookupEnv) ["GIT_SMOKE_HOST", "GIT_SMOKE_TOKEN", "GIT_SMOKE_OWNER", "GIT_SMOKE_REPO", "GIT_SMOKE_ORIGIN", "GIT_SMOKE_BRANCH"] <&> \case
+      [Just host, Just token, Just owner, Just repo, origin, branch] -> (,Git.RepoRef owner repo (fromMaybe "main" branch)) <$> (Git.parseHostSlug host >>= \h -> rightToMaybe (Git.mkGitConn h origin token))
+      _ -> Nothing
+  it "live git host: lists repositories, names a default branch, and round-trips a write at the sha it reported" case smoke of
+    Nothing -> pendingWith "set GIT_SMOKE_HOST, GIT_SMOKE_TOKEN, GIT_SMOKE_OWNER and GIT_SMOKE_REPO to run"
+    Just (conn, ref) -> do
+      let live = runEff . W.runHTTPWreq
+          path = "monoscope-smoke/probe.yaml"
+      live (Git.listTokenRepos conn) >>= (`shouldSatisfy` isRight)
+      live (Git.defaultBranchOf conn ref) >>= (`shouldSatisfy` not . T.null)
+      (sha, _) <- live (Git.pushFile conn ref path "title: monoscope smoke probe\n" Nothing "monoscope smoke test") >>= either (fail . toString) pure
+      -- A sha a fresh listing does not report is a phantom change on the next pull.
+      (_, entries) <- live (Git.fetchTree conn ref "monoscope-smoke/") >>= either (fail . toString) pure
+      ((.sha) <$> find ((== path) . (.path)) entries) `shouldBe` Just (Just sha)
+      live (Git.fetchFile conn ref path) `shouldReturn` Right "title: monoscope smoke probe\n"
+
   around withTestResources do
     describe "Repository connections" do
       it "githubAppInstall_bindsOnlyAVerifiedSessionAttemptForTheAccountOwner" \tr -> do
@@ -295,9 +364,9 @@ spec = do
             session = (getResponse tr.trSessAndHeader).persistentSession.id
             provider :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
             provider = interpose @W.HTTP \_ -> \case
-              W.PostWith _ "https://github.com/login/oauth/access_token" _ -> pure $ httpResponse "{\"access_token\":\"private-user-token\"}"
-              W.GetWith _ "https://api.github.com/user/installations?per_page=100&page=1" -> pure $ httpResponse "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}"
-              W.GetWith _ "https://api.github.com/user" -> pure $ httpResponse "{\"login\":\"team\"}"
+              W.PostWith _ "https://github.com/login/oauth/access_token" _ -> pure $ mockResponse "{\"access_token\":\"private-user-token\"}"
+              W.GetWith _ "https://api.github.com/user/installations?per_page=100&page=1" -> pure $ mockResponse "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}"
+              W.GetWith _ "https://api.github.com/user" -> pure $ mockResponse "{\"login\":\"team\"}"
               _ -> liftIO $ expectationFailure "Unexpected authorization request" >> throwIO (InvalidUrlException "https://git.invalid" "Unexpected authorization request")
         -- The callback binds only the session's own attempt, never a forged state or a replayed nonce.
         forged <- call configured $ withUnavailableRepositoryAPI $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just $ testPid.toText <> ":code") Nothing
@@ -478,7 +547,7 @@ spec = do
         fmap (.accessToken) <$> credential beta.id `shouldReturn` Just (Just token)
         runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "empty" "" Nothing) `shouldThrow` (== Keys.EmptySecret)
 
-      it "repositoryConnections_githubCasingDoesNotDuplicateConnectionsOrSyncs" \tr -> do
+      it "repositoryConnections_foldGithubCasingAndKeepNestedNamespaces" \tr -> do
         account <- appAccount tr "team"
         sameAccount <- appAccount tr "TEAM"
         sameAccount.id `shouldBe` account.id
@@ -498,13 +567,20 @@ spec = do
         for_ (["Team/Checkout", "team/checkout"] :: [Text]) \name -> void $ runQueryEffect tr $ GitSync.connectRepository testPid gitlab.id (Git.GitRepo name "checkout" True "main")
         allRepositories <- runQueryEffect tr $ GitSync.getRepositories testPid
         sort [(r.owner, r.repo) | r <- allRepositories, r.host == Git.GitLab] `shouldBe` [("Team", "Checkout"), ("team", "checkout")]
+        -- A nested namespace is kept as the owner instead of being replaced by the account name.
+        Cache.insert tr.trATCtx.repoListCache gitlab.id [Git.GitRepo "team/platform/checkout" "checkout" True "trunk"]
+        renderT <$> call tr (PageCodeContext.codeMappingsEditorGetH testPid (Just gitlab.id) Nothing) >>= (`shouldSatisfy` T.isInfixOf "value=\"team/platform/checkout\"")
+        _ <- testServant tr $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "team/platform/checkout") (Just "trunk") (Just "checkout") Nothing Nothing Nothing (Just gitlab.id))
+        map (\m -> (m.owner, m.repo)) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldMatchList` [("team", "checkout"), ("team/platform", "checkout")])
 
       it "repositoryPicker_connectsCodebasesWithoutEnablingCapabilitiesAndRejectsUnavailableSelections" \tr -> do
         let repositories = [Git.GitRepo "team/checkout" "checkout" True "trunk", Git.GitRepo "team/catalog" "catalog" False "main"]
             connectForm = PageCodeContext.RepositoryConnectForm
         account <- appAccount tr "team"
         Cache.insert tr.trATCtx.repoListCache account.id repositories
-        picker <- call tr $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
+        -- Listing through the host (a token exchange plus a listing) made a 0.2s page take 1.5s;
+        -- with the host unavailable, a listing at all proves the per-account cache answered.
+        picker <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
         picker.content.repositories `shouldBe` Right repositories
         rejected <- call tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (connectForm ["team/checkout", "foreign/private"])
         rejected.content.selected `shouldBe` ["team/checkout", "foreign/private"]
@@ -535,26 +611,6 @@ spec = do
         Cache.lookup tr.trATCtx.repoListCache account.id `shouldReturn` Nothing
         dbExec tr "DELETE FROM projects.git_credentials WHERE project_id = ? AND id = ?" (testPid, account.id)
         map (.credentialId) <$> runQueryEffect tr (GitSync.getRepositories testPid) `shouldReturn` [Nothing, Nothing]
-
-      -- Listing the picker's repositories (a token exchange plus a listing call) made a 0.2s page
-      -- take 1.5s on every load. Nothing here reaches GitHub, so a seeded entry rendering at all
-      -- proves the per-credential cache answered.
-      it "renders the repository picker from the cache instead of calling the git host" \tr -> do
-        cred <- grantOf tr testPid Git.GitHub Nothing "acme" (Just 42) Nothing
-        uncached <- renderT . snd <$> testServant tr (withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid (Just cred.id))
-        uncached `shouldNotSatisfy` T.isInfixOf "sentinel-repo"
-        Cache.insert tr.trATCtx.repoListCache cred.id [Git.GitRepo "acme/sentinel-repo" "sentinel-repo" False "trunk"]
-        cached <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid (Just cred.id)
-        renderT cached `shouldSatisfy` T.isInfixOf "sentinel-repo"
-        cached.content.repositories `shouldBe` Right [Git.GitRepo "acme/sentinel-repo" "sentinel-repo" False "trunk"]
-
-      it "sourceRepositoryPicker_preservesTheSelectedNamespaceInsteadOfUsingTheAccountName" \tr -> do
-        account <- grantOf tr testPid Git.GitLab (Just "https://git.example.com") "team" Nothing (Just "fixture")
-        Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team/platform/checkout" "checkout" True "trunk"]
-        picker <- call tr $ PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing
-        renderT picker `shouldSatisfy` T.isInfixOf "value=\"team/platform/checkout\""
-        _ <- testServant tr $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "team/platform/checkout") (Just "trunk") (Just "checkout") Nothing Nothing Nothing (Just account.id))
-        map (\m -> (m.owner, m.repo)) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) `shouldReturn` [("team/platform", "checkout")]
 
       it "repositoryIdentity_keepsTheSameNamesOnDifferentServersIndependent" \tr -> do
         let origins = [Nothing, Just "https://git.example.com"] :: [Maybe Text]
@@ -627,12 +683,12 @@ spec = do
       it "fetches a blob once however many frames ask for it" \tr -> do
         void $ syncOf tr testPid Nothing "acme" "checkout-service" (GitSync.PersonalToken "ghp_test") ""
         _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout-service") (Just "main") (Just "checkout") Nothing (Just "/srv/app/") (Just "") Nothing)
-        calls <- newIORef (0 :: Int)
-        let fetch n = runQueryEffect tr $ runCountingHTTP calls (blobOf "one\ntwo\nthree\nfour\n") $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "/srv/app/checkout.py" n
-        first_ <- fetch 2
-        readIORef calls `shouldReturn` 1
-        second_ <- fetch 3
-        readIORef calls `shouldReturn` 1
+        -- A PAT needs no token exchange, so the one request is the blob read, and a read is a bodiless GET.
+        let fetch n = runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just $ blobOf "one\ntwo\nthree\nfour\n") $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "/srv/app/checkout.py" n
+        (firstRequests, first_) <- fetch 2
+        map snd firstRequests `shouldBe` [""]
+        (secondRequests, second_) <- fetch 3
+        secondRequests `shouldBe` []
         fmap (.focusLine) first_ `shouldBe` Right 2
         fmap (.focusLine) second_ `shouldBe` Right 3
         fmap (.body) second_ `shouldBe` Right ["one", "two", "three", "four"]
@@ -1316,12 +1372,28 @@ spec = do
         let collision = pushBody "acme" "config"
         deliver Git.Gitea "push" (Just $ hmacHexOf "gl-secret" collision) collision `shouldReturn` 0
 
-      it "repositoryEdits_updateOneConfigurationPRWithoutWritingToTheTargetBranch" \tr -> do
+      it "repositoryExport_retriesFailuresAndUpdatesOneConfigurationPRWithoutWritingToTheTargetBranch" \tr -> do
         sync <- teamDashboards tr
-        did <- seedDash tr \d -> d{Dashboards.title = "Overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml"}
-        let push prState = runJob tr (configurationProvider tr prState) (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
+        did <- ownedDash tr sync "Overview" "overview.yaml"
+        let export provider = runJob tr provider (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
+            push = export . configurationProvider tr
+            title = fmap (.title) <$> dashOf tr did
+        -- A target branch that moves mid-export is not proposed against, and the edit stays.
+        calls <- newIORef (0 :: Int)
+        let advancing = withHTTPResponses \_ endpoint ->
+              if "/commits/main" `T.isInfixOf` toText endpoint
+                then atomicModifyIORef' calls (\n -> (n + 1, n)) <&> \n -> Just $ if n == 0 then "{\"sha\":\"head\",\"commit\":{\"tree\":{\"sha\":\"tree\"}}}" else "{\"sha\":\"new-head\",\"commit\":{\"tree\":{\"sha\":\"new-tree\"}}}"
+                else pure Nothing
+        export (configurationProvider tr "open" . advancing) >>= (`shouldNotSatisfy` any (\(url, body) -> not (LBS.null body) && "/git/trees" `T.isSuffixOf` url))
+        (.lastError) <$> syncById tr sync >>= (`shouldSatisfy` isJust)
+        title `shouldReturn` Just "Overview"
+        void $ export $ gitHost [("/git/trees/", "{\"tree\":[]}")] "{\"sha\":\"head\"}"
+        (.lastError) <$> syncById tr sync `shouldReturn` Just (GitSync.SyncFailure GitSync.ExportDashboards "GitHub did not return the target tree.")
+        retried <- call tr $ GitSyncPage.gitSyncRepositoryRetryH testPid sync.id
+        renderT retried `shouldSatisfy` T.isInfixOf "Retry export"
+        pendingJobs tr >>= \queued -> [sid | BackgroundJobs.GitSyncPushRepository pid sid <- queued, pid == testPid] `shouldBe` [sync.id]
         firstRequests <- push "open"
-        (.pullRequestNumber) <$> syncById tr sync `shouldReturn` Just 17
+        ((,) <$> (.pullRequestNumber) <*> (.lastError)) <$> syncById tr sync `shouldReturn` (Just 17, Nothing)
         void $ testServant tr $ DashboardPage.dashboardRenamePatchH testPid did (DashboardPage.DashboardRenameForm "Updated overview" Nothing)
         secondRequests <- push "open"
         (.pullRequestNumber) <$> syncById tr sync `shouldReturn` Just 17
@@ -1331,24 +1403,11 @@ spec = do
         writes `shouldSatisfy` any (T.isInfixOf "/git/refs/heads/monoscope-dashboards")
         writes `shouldNotSatisfy` any (T.isInfixOf "/git/refs/heads/main")
         writes `shouldNotSatisfy` any (T.isInfixOf "/contents/")
-        fmap (.title) <$> dashOf tr did `shouldReturn` Just "Updated overview"
+        title `shouldReturn` Just "Updated overview"
         -- A closed proposal pauses export and keeps the local edit.
         void $ push "closed"
         (.exportPaused) <$> syncById tr sync `shouldReturn` True
-        fmap (.title) <$> dashOf tr did `shouldReturn` Just "Updated overview"
-
-      it "repositoryExport_doesNotProposeEditsAgainstAnUnreconciledTargetRevision" \tr -> do
-        sync <- teamDashboards tr
-        did <- ownedDash tr sync "Local" "local.yaml"
-        calls <- newIORef (0 :: Int)
-        let advancing = withHTTPResponses \_ endpoint ->
-              if "/commits/main" `T.isInfixOf` toText endpoint
-                then atomicModifyIORef' calls (\n -> (n + 1, n)) <&> \n -> Just $ if n == 0 then "{\"sha\":\"head\",\"commit\":{\"tree\":{\"sha\":\"tree\"}}}" else "{\"sha\":\"new-head\",\"commit\":{\"tree\":{\"sha\":\"new-tree\"}}}"
-                else pure Nothing
-        requests <- runJob tr (configurationProvider tr "open" . advancing) (BackgroundJobs.GitSyncPushDashboard testPid did.unwrap)
-        requests `shouldNotSatisfy` any (\(url, body) -> not (LBS.null body) && "/git/trees" `T.isSuffixOf` url)
-        (.lastError) <$> syncById tr sync >>= (`shouldSatisfy` isJust)
-        fmap (.title) <$> dashOf tr did `shouldReturn` Just "Local"
+        title `shouldReturn` Just "Updated overview"
 
       it "repositoryRevertedAddition_removesTheStaleFileFromItsOpenPR" \tr -> do
         sync <- teamDashboards tr
@@ -1359,20 +1418,6 @@ spec = do
         let trees = [body | (url, body) <- requests, "/git/trees" `T.isSuffixOf` url]
         length trees `shouldBe` 1
         trees `shouldSatisfy` all (T.isInfixOf "\"tree\":[]" . decodeUtf8 . LBS.toStrict)
-
-      it "repositoryExportFailure_retriesTheSharedSnapshotAndRetainsActiveLocalChanges" \tr -> do
-        sync <- teamDashboards tr
-        did <- ownedDash tr sync "Local change" "local.yaml"
-        let job = BackgroundJobs.GitSyncPushDashboard testPid did.unwrap
-        void $ runJob tr (gitHost [("/git/trees/", "{\"tree\":[]}")] "{\"sha\":\"head\"}") job
-        (.lastError) <$> syncById tr sync `shouldReturn` Just (GitSync.SyncFailure GitSync.ExportDashboards "GitHub did not return the target tree.")
-        retried <- call tr $ GitSyncPage.gitSyncRepositoryRetryH testPid sync.id
-        renderT retried `shouldSatisfy` T.isInfixOf "Retry export"
-        queued <- pendingJobs tr
-        [sid | BackgroundJobs.GitSyncPushRepository pid sid <- queued, pid == testPid] `shouldBe` [sync.id]
-        void $ runJob tr (configurationProvider tr "open") job
-        ((,) <$> (.pullRequestNumber) <*> (.lastError)) <$> syncById tr sync `shouldReturn` (Just 17, Nothing)
-        fmap (.title) <$> dashOf tr did `shouldReturn` Just "Local change"
 
       it "repositoryPush_doesNotAdvanceThePullCursorPastOtherRemoteDashboards" \tr -> do
         sync <- syncOf tr testPid (Just "https://127.0.0.1:1") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
