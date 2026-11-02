@@ -135,7 +135,7 @@ spec = around withTestResources do
     let configured = tr{trATCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.convertkitApiKey = "test-key"}}}
     (_, (pricingHeaders, _)) <- testServantWithNotifications configured $ interpose @HTTP (\_ _ -> throwIO $ userError "conversion service unavailable") $ CreateProject.pricingUpdateH pid def{CreateProject.isOnboarding = Just True}
     redirect pricingHeaders `shouldBe` Header ("/p/" <> pid.toText <> "/")
-    project <- runQueryEffect tr (Projects.projectById pid) >>= maybe (fail "project missing") pure
+    project <- projectOf tr pid
     (project.paymentPlan, sort (V.toList project.onboardingStepsCompleted)) `shouldBe` ("Free", ["Info", "Integration", "NotifChannel", "Pricing", "Survey", "created_monitor", "explored_logs"])
     landing <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] pid []
     lookupResponseHeader @"Location" landing `shouldSatisfy` \case Header l -> ("/p/" <> pid.toText <> "/dashboards/") `T.isPrefixOf` l; _ -> False
@@ -155,7 +155,7 @@ spec = around withTestResources do
 
     -- A rejected replacement keeps the saved connection and what was typed; Remove clears it.
     let saved = Projects.ProjectS3Bucket "fixture-access" "fixture-secret" "us-east-1" "fixture-bucket" ""
-        bucketOf = runQueryEffect tr (Projects.projectById pid) <&> (>>= fmap (.bucket) . (.s3Bucket))
+        bucketOf = fmap (.bucket) . (.s3Bucket) <$> projectOf tr pid
         storageContent = elementsWith ["id=\"storage-connection-content\""]
     _ <- runQueryEffect tr $ Projects.updateProjectS3Bucket pid (Just saved)
     rejected <- call tr $ Settings.brings3PostH pid saved{Projects.bucket = "INVALID_bucket", Projects.secretKey = "replacement-secret"}
@@ -178,7 +178,7 @@ spec = around withTestResources do
     -- Save once skipped the membership check: anyone signed in could repoint another project's archive.
     victim <- createTestProject tr "victim"
     assertNonMemberDenied tr victim $ Settings.brings3PostH victim (realS3Form tr)
-    fmap (isNothing . (.s3Bucket)) <$> runQueryEffect tr (Projects.projectById victim) `shouldReturn` Just True
+    isNothing . (.s3Bucket) <$> projectOf tr victim `shouldReturn` True
 
     -- A super admin outside the project's memberships gets a notice above everything else.
     noticeOf pid tr "super-admin-banner" `shouldReturn` []
@@ -203,20 +203,18 @@ spec = around withTestResources do
       renderT savedPage `shouldSatisfy` T.isInfixOf s3Form.bucket
       removed <- call tr $ Settings.brings3RemoveH pid
       map (T.isInfixOf ">Connected<") (status connected <> status savedPage <> status removed) `shouldBe` [True, True, False]
-      fmap (isNothing . (.s3Bucket)) <$> runQueryEffect tr (Projects.projectById pid) `shouldReturn` Just True
+      isNothing . (.s3Bucket) <$> projectOf tr pid `shouldReturn` True
 
   it "a Stripe subscription: one trial per human, Stripe's cycle, replacement, dunning, lapse, reactivation and deletion" \tr0 -> do
     (tr, pid) <- onboarded tr0
     let uid = (getResponse tr.trSessAndHeader).user.id
-        project = runQueryEffect tr (Projects.projectById pid) >>= maybe (fail "project missing") pure
+        project = projectOf tr pid
         plan = (.paymentPlan) <$> project
-        billing = do
-          s <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
-          call tr{trSessAndHeader = s} (Settings.manageBillingGetH pid) <&> \(Settings.BillingGet (PageCtx _ d)) -> d
+        billing = fresh tr >>= \t -> call t (Settings.manageBillingGetH pid) <&> \(Settings.BillingGet (PageCtx _ d)) -> d
         stripeAs pl subId = void $ runQueryEffect tr $ Projects.updateStripeProjectBilling pid (Projects.PlanName pl) (Projects.SubId subId) (Projects.SubItemId "si_test") (Projects.CustomerId "cus_test")
         checkoutWith fixture = do
-          s <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
-          runAsBaseRecordingHTTP tr $ catchError @ServantS.ServerError (withHTTPResponses fixture (atAuthToBase s $ CreateProject.stripeCheckoutInitH pid (CreateProject.StripeCheckoutForm "GraduatedPricing")) $> 200) (\_ err -> pure err.errHTTPCode)
+          t <- fresh tr
+          runAsBaseRecordingHTTP tr $ catchError @ServantS.ServerError (withHTTPResponses fixture (atAuthToBase t.trSessAndHeader $ CreateProject.stripeCheckoutInitH pid (CreateProject.StripeCheckoutForm "GraduatedPricing")) $> 200) (\_ err -> pure err.errHTTPCode)
         checkoutForm fixture keys = do
           (reqs, status) <- checkoutWith fixture
           status `shouldBe` (200 :: Int)
@@ -317,8 +315,8 @@ spec = around withTestResources do
     plan `shouldReturn` "GraduatedPricing"
 
     -- Choosing Free once cleared sub_id but left the Stripe sub billing.
-    s <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
-    (freeReqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase s $ CreateProject.pricingUpdateH pid def
+    t <- fresh tr
+    (freeReqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase t.trSessAndHeader $ CreateProject.pricingUpdateH pid def
     map fst freeReqs `shouldContain` [stripeApi "subscriptions/sub_new"]
     plan `shouldReturn` "Free"
     -- Deleting a project left its subscription live, billing a project nobody could see; and
@@ -333,11 +331,11 @@ spec = around withTestResources do
     let webhook event = do
           (reqs, _) <- runAsBaseRecordingHTTP tr $ Settings.webhookPostH Nothing $ toStrict $ AE.encode $ lsEvent event pid
           reqs `shouldBe` []
-        plan = dbOne @_ @Text tr [sql|SELECT payment_plan FROM projects.projects WHERE id = ?|] (Only pid)
+        plan = (.paymentPlan) <$> projectOf tr pid
         banner = noticeOf pid tr "billing-downgrade-banner"
         billing = do
-          s <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
-          (reqs, Settings.BillingGet (PageCtx _ d)) <- second getResponse <$> runAsBaseRecordingHTTP tr (atAuthToBase s $ Settings.manageBillingGetH pid)
+          t <- fresh tr
+          (reqs, Settings.BillingGet (PageCtx _ d)) <- second getResponse <$> runAsBaseRecordingHTTP tr (atAuthToBase t.trSessAndHeader $ Settings.manageBillingGetH pid)
           pure (reqs, d)
     -- The plan is the product bought, not a fixed tier name.
     webhook "subscription_created"
@@ -531,14 +529,16 @@ onboarded :: TestResources -> IO (TestResources, Projects.ProjectId)
 onboarded tr = do
   Header location <- lookupResponseHeader @"Location" <$> runAuthHandler tr CreateProject.projectOnboardingH
   pid <- maybe (fail $ "no project id in " <> toString location) (pure . UUIDId) $ UUID.fromText $ T.takeWhile (/= '/') $ T.drop 3 location
-  session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
-  pure (tr{trSessAndHeader = session}, pid)
+  (,pid) <$> fresh tr
+
+
+-- | @tr@ with its session refreshed, so it sees projects created or changed since.
+fresh :: TestResources -> IO TestResources
+fresh tr = refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader <&> \s -> tr{trSessAndHeader = s}
 
 
 settingsHtml :: TestResources -> Projects.ProjectId -> IO Text
-settingsHtml tr pid = do
-  session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
-  renderT <$> call tr{trSessAndHeader = session} (CreateProject.projectSettingsGetH pid)
+settingsHtml tr pid = fresh tr >>= \t -> renderT <$> call t (CreateProject.projectSettingsGetH pid)
 
 
 -- | The project notice with this id on the settings page, if shown.

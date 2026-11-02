@@ -1551,6 +1551,8 @@ projectMeterConfig p subItemIds =
 -- Left NoStripeCustomer
 -- >>> resolveMeterTarget (ProjectMeterConfig NoBillingProvider Nothing Nothing mempty) Events
 -- Left ProviderUnusable
+-- >>> resolveMeterTarget (ProjectMeterConfig LemonSqueezyProvider Nothing Nothing mempty) SessionReplays
+-- Left NoSubscriptionItem
 resolveMeterTarget :: ProjectMeterConfig -> MeterKind -> Either DormantReason MeterTarget
 resolveMeterTarget cfg kind = case cfg.provider of
   NoBillingProvider -> Left ProviderUnusable

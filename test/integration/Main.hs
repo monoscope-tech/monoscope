@@ -41,7 +41,7 @@ main = do
         balanced =
           [ ("Pages.LogExplorer.Log", 9)
           , ("Pages.Bots", 5)
-          , ("Billing", 2)
+          , ("Billing", 4)
           , ("Endpoints", 7)
           , ("Opentelemetry.Ingestion", 6)
           ]

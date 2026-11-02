@@ -56,8 +56,7 @@ spec = around withTestResources do
         listed = call tr (Reports.reportsGetH testPid Nothing Nothing Nothing)
     Reports.ReportsGetMain (PageCtx _ (initialPid, _, _)) <- listed
     initialPid `shouldBe` testPid
-    initial <- runTestBg frozenTime tr $ Projects.projectById testPid
-    ((.dailyNotif) <$> initial, (.weeklyNotif) <$> initial) `shouldBe` (Just False, Just True)
+    ((.dailyNotif) &&& (.weeklyNotif)) <$> projectOf tr testPid `shouldReturn` (False, True)
     void $ testServant tr $ Reports.reportsPostH testPid Projects.RTDaily
     void $ testServant tr $ Reports.reportsPostH testPid Projects.RTWeekly
     dbExec tr [sql|UPDATE projects.teams SET discord_channels = ARRAY['daily-reports'], disabled_channels = '{}' WHERE project_id = ? AND handle = 'everyone'|] (Only testPid)
@@ -93,7 +92,7 @@ spec = around withTestResources do
     (reportType, dateLabel /= "") `shouldBe` ("daily", True)
     emailHtml `shouldContainAll` ["Daily system report", "Services", "Infrastructure"]
     -- Weekly emails were dated in the SERVER's timezone, so a UTC+13 customer saw the wrong week.
-    project <- maybe (fail "test project missing") pure =<< runTestBg frozenTime tr (Projects.projectById testPid)
+    project <- projectOf tr testPid
     let elevenAmUTC = UTCTime (fromGregorian 2025 1 1) (11 * 3600)
     (tzDateLabel, tzSubject, _) <- runTestBg frozenTime tr $ Reports.renderWeeklyEmail Projects.RTWeekly "p/x/reports" project{Projects.timeZone = "Pacific/Auckland"} "Ada" elevenAmUTC elevenAmUTC False (Email.HistoricalEvidence Email.HistoricalReportEvidence{totalEvents = 0, totalErrors = 0, anomalies = V.empty, performance = V.empty, slowQueries = V.empty})
     (tzDateLabel, tzSubject /= "") `shouldBe` ("2025-01-02", True)
@@ -173,7 +172,7 @@ spec = around withTestResources do
   it "report links open the Log Explorer on exactly the service, endpoint and database rows they summarise" \tr ->
     for_ @[] [(Just "api\" & team", Just "prod\" & team", "api\" & team"), (Nothing, Nothing, ""), (Nothing, Just "production", "api.example.com"), (Just "api", Nothing, "")] \(service, environment, host) -> do
       pid <- createTestProject tr "report-links"
-      project <- maybe (fail "test project missing") pure =<< runTestBg frozenTime tr (Projects.projectById pid)
+      project <- projectOf tr pid
       let start = addUTCTime (-60) frozenTime
           cfg = (defSqlQueryCfg pid frozenTime Nothing Nothing){targetsTimefusion = True}
       dbExec
@@ -213,7 +212,7 @@ spec = around withTestResources do
         retainedComponents.finalSqlQuery `shouldBe` components.finalSqlQuery
 
   it "report snapshots persist whole, the live preview is claimed once, and emails bound their details" \tr -> do
-    project <- maybe (fail "test project missing") pure =<< runTestBg frozenTime tr (Projects.projectById testPid)
+    project <- projectOf tr testPid
     emptySnapshot <- runTestBg frozenTime tr $ Reports.collectSystemReport testPid (addUTCTime (-(7 * 86400)) frozenTime) frozenTime
     let stats n = Report.ServiceStats (Just $ "service-" <> show n) (Just "production") 10 1 0 10 1 10 (Just 125)
         snapshot =
@@ -292,14 +291,16 @@ spec = around withTestResources do
     void $ runAllBackgroundJobs frozenTime tr.trATCtx
     let clearNotified = dbExec tr [sql|UPDATE apis.error_patterns SET last_notified_at = NULL WHERE project_id = ?|] (Only testPid)
         sweep = clearNotified >> fst <$> captureNotifs tr (BackgroundJobs.sweepErrorSubscriptions testPid)
-        alerted = sweep >>= (`shouldSatisfy` (not . null))
+        delivered = sort . map (\case EmailNotification e -> e.receiver; SlackNotification{} -> "slack"; n -> show n) <$> sweep
+        alerted = delivered `shouldReturn` ["hello@monoscope.tech", "slack", "test@monoscope.tech"]
     -- The orphan state seen in prod (last_notified_at NULL) is swept, and stamped so the next tick doesn't double-fire.
     alerted
     dbOne @_ @Int tr [sql|SELECT COUNT(*)::INT FROM apis.error_patterns WHERE project_id = ? AND last_notified_at IS NOT NULL|] (Only testPid) `shouldReturn` 1
     saveAlertToggle tr (\form v -> form{ProjectPages.errorAlerts = v}) False
     sweep `shouldReturn` []
     saveAlertToggle tr (\form v -> form{ProjectPages.errorAlerts = v}) True
-    alerted
+    -- Inside the incident that alert opened, a re-sweep is a reminder: Slack only, no new emails.
+    delivered `shouldReturn` ["slack"]
 
     -- An acknowledgement silences the issue for exactly its window, then hands it back with a trail.
     issueId <- dbOne @_ @Issues.IssueId tr [sql|SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'runtime_exception'|] (Only testPid)
