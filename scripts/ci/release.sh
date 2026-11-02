@@ -39,31 +39,50 @@ build() {
   [ "$sha" = "$(git rev-parse HEAD)" ] || die "requested revision does not match checkout"
   [ -z "$(git status --porcelain)" ] || die "working tree is dirty"
   tree=$(git rev-parse 'HEAD^{tree}')
-  deps="ghcr.io/monoscope-tech/monoscope-deps@$(registry_digest ghcr.io/monoscope-tech/monoscope-deps:latest)"
-  runtime="debian@$(registry_digest debian:12-slim)"
-  fingerprint=$(printf 'monoscope-image-v1\nlinux/amd64\n%s\n%s\n%s\n' "$tree" "$deps" "$runtime" | sha256)
-  if digest=$(registry_digest "$IMAGE:inputs-$fingerprint"); then
-    echo "Reusing $IMAGE@$digest for tree $tree" >&2
-    # Alias the merge SHA without modifying the image's build revision/provenance.
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    digest=$(registry_digest "$IMAGE:$sha") || digest=$(registry_digest "$IMAGE:tree-$tree") ||
+      die "production image is missing; generate it locally on the Mac before updating the pull request"
+    fingerprint=$(docker buildx imagetools inspect "$IMAGE@$digest" --format '{{json .Image}}' | node -e '
+      let input = "";
+      process.stdin.on("data", chunk => input += chunk);
+      process.stdin.on("end", () => {
+        const image = JSON.parse(input), labels = image.config?.Labels ?? {};
+        if (image.os !== "linux" || image.architecture !== "amd64") throw Error("image platform must be linux/amd64");
+        if (labels["io.monoscope.source-tree"] !== process.argv[1]) throw Error("image source tree does not match checkout");
+        const fingerprint = labels["io.monoscope.build-inputs"];
+        if (!/^[a-f0-9]{64}$/.test(fingerprint ?? "")) throw Error("image build provenance is missing");
+        console.log(fingerprint);
+      });
+    ' "$tree") || die "cannot verify production image"
     docker buildx imagetools create --prefer-index=false -t "$IMAGE:$sha" "$IMAGE@$digest"
   else
-    require_local_builder
-    metadata=$(mktemp -t monoscope-image.XXXXXX)
-    trap 'rm -f "$metadata"' EXIT
-    set -- --builder "$MONOSCOPE_BUILDER"
-    git archive "$sha" | docker buildx build "$@" --platform linux/amd64 -f Dockerfile \
-      --build-arg "DEPS_IMAGE=$deps" --build-arg "RUNTIME_IMAGE=$runtime" \
-      --build-arg "GIT_HASH=$sha" --build-arg "GIT_COMMIT_DATE=$(git show -s --format=%cI HEAD)" \
-      --label "org.opencontainers.image.revision=$sha" \
-      --label "org.opencontainers.image.source=https://github.com/monoscope-tech/monoscope" \
-      --label "io.monoscope.builder=${GITHUB_ACTOR:-$(git config user.name)}" \
-      --label "io.monoscope.source-tree=$tree" --label "io.monoscope.build-inputs=$fingerprint" \
-      --cache-from "type=registry,ref=$IMAGE:buildcache" \
-      --metadata-file "$metadata" --provenance=false --push \
-      -t "$IMAGE:inputs-$fingerprint" -t "$IMAGE:$sha" -
-    digest=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))["containerimage.digest"].toString()' "$metadata")
-    rm -f "$metadata"
-    trap - EXIT
+    deps=${MONOSCOPE_DEPS_IMAGE:-"ghcr.io/monoscope-tech/monoscope-deps@$(registry_digest ghcr.io/monoscope-tech/monoscope-deps:latest)"}
+    [[ "$deps" =~ ^ghcr\.io/monoscope-tech/monoscope-deps@sha256:[a-f0-9]{64}$ ]] || die "MONOSCOPE_DEPS_IMAGE must name an immutable monoscope-deps digest"
+    runtime="debian@$(registry_digest debian:12-slim)"
+    fingerprint=$(printf 'monoscope-image-v1\nlinux/amd64\n%s\n%s\n%s\n' "$tree" "$deps" "$runtime" | sha256)
+    if digest=$(registry_digest "$IMAGE:inputs-$fingerprint"); then
+      echo "Reusing $IMAGE@$digest for tree $tree" >&2
+      # Alias the merge SHA without modifying the image's build revision/provenance.
+      docker buildx imagetools create --prefer-index=false -t "$IMAGE:$sha" -t "$IMAGE:tree-$tree" "$IMAGE@$digest"
+    else
+      require_local_builder
+      metadata=$(mktemp -t monoscope-image.XXXXXX)
+      trap 'rm -f "$metadata"' EXIT
+      set -- --builder "$MONOSCOPE_BUILDER"
+      git archive "$sha" | docker buildx build "$@" --platform linux/amd64 -f Dockerfile \
+        --build-arg "DEPS_IMAGE=$deps" --build-arg "RUNTIME_IMAGE=$runtime" \
+        --build-arg "GIT_HASH=$sha" --build-arg "GIT_COMMIT_DATE=$(git show -s --format=%cI HEAD)" \
+        --label "org.opencontainers.image.revision=$sha" \
+        --label "org.opencontainers.image.source=https://github.com/monoscope-tech/monoscope" \
+        --label "io.monoscope.builder=${GITHUB_ACTOR:-$(git config user.name)}" \
+        --label "io.monoscope.source-tree=$tree" --label "io.monoscope.build-inputs=$fingerprint" \
+        --cache-from "type=registry,ref=$IMAGE:buildcache" \
+        --metadata-file "$metadata" --provenance=false --push \
+        -t "$IMAGE:inputs-$fingerprint" -t "$IMAGE:$sha" -t "$IMAGE:tree-$tree" -
+      digest=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))["containerimage.digest"].toString()' "$metadata")
+      rm -f "$metadata"
+      trap - EXIT
+    fi
   fi
   output digest "$digest"
   output fingerprint "$fingerprint"

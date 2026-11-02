@@ -29,7 +29,7 @@ beforeEach(() => {
   repo = join(root, 'repo');
   mkdirSync(join(repo, 'scripts/ci'), { recursive: true });
   copyFileSync(script, join(repo, 'scripts/ci/release.sh'));
-  env = { ...process.env, REGISTRY: join(root, 'registry.json'), CALLS: join(root, 'calls'), CI_ROOT: repo, GITHUB_OUTPUT: join(root, 'outputs'), DOCKER_CONTEXT: 'orbstack', MONOSCOPE_BUILDER: 'monoscope-local-amd64', GITHUB_ACTIONS: '', BUILD_HOST: '' };
+  env = { ...process.env, REGISTRY: join(root, 'registry.json'), CALLS: join(root, 'calls'), CI_ROOT: repo, GITHUB_OUTPUT: join(root, 'outputs'), DOCKER_CONTEXT: 'orbstack', MONOSCOPE_BUILDER: 'monoscope-local-amd64', GITHUB_ACTIONS: '', BUILD_HOST: '', MONOSCOPE_DEPS_IMAGE: '' };
   git('init', '-q');
   git('config', 'user.email', 'test@example.com');
   git('config', 'user.name', 'test');
@@ -63,22 +63,25 @@ else if (is('buildx', 'create')) fs.writeFileSync(process.env.CALLS + '-builder'
 else if (is('manifest', 'inspect')) process.exit(args[2] in state ? 0 : 1);
 else if (is('buildx', 'imagetools', 'inspect')) {
   const ref = args[3];
-  const digest = ref === 'ghcr.io/monoscope-tech/monoscope-deps:latest' ? state.deps ?? 'sha256:' + 'a'.repeat(64)
+  const digest = ref.includes('@sha256:') ? ref.split('@')[1] : ref === 'ghcr.io/monoscope-tech/monoscope-deps:latest' ? state.deps ?? 'sha256:' + 'a'.repeat(64)
     : ref === 'debian:12-slim' ? 'sha256:' + 'b'.repeat(64) : state[ref];
   if (!digest) {
     if (process.env.FAIL_LOOKUP) console.error('registry unavailable');
     process.exit(1);
   }
-  console.log(args[args.indexOf('--format') + 1] === '{{.Manifest.Digest}}' ? digest : JSON.stringify({ digest }));
+  const format = args[args.indexOf('--format') + 1];
+  console.log(format === '{{.Manifest.Digest}}' ? digest : JSON.stringify(format === '{{json .Image}}' ? state.config : { digest }));
 } else if (is('buildx', 'build')) {
   fs.writeFileSync(process.env.CALLS + '-context.tar', fs.readFileSync(0));
   if (process.env.FAIL_BUILD) process.exit(2);
   const digest = 'sha256:' + 'c'.repeat(64);
   args.forEach((arg, i) => { if (arg === '-t') state[args[i + 1]] = digest; });
+  const labels = Object.fromEntries(args.flatMap((arg, i) => arg === '--label' ? [args[i + 1].split('=')] : []));
+  state.config = { os: 'linux', architecture: 'amd64', config: { Labels: labels } };
   fs.writeFileSync(path, JSON.stringify(state));
   if (args.includes('--metadata-file')) fs.writeFileSync(args[args.indexOf('--metadata-file') + 1], JSON.stringify({ 'containerimage.digest': digest }));
 } else if (is('buildx', 'imagetools', 'create')) {
-  state[args[args.indexOf('-t') + 1]] = args.at(-1).split('@')[1];
+  args.forEach((arg, i) => { if (arg === '-t') state[args[i + 1]] = args.at(-1).split('@')[1]; });
   fs.writeFileSync(path, JSON.stringify(state));
 } else process.exit(1);
 `, { mode: 0o755 });
@@ -221,6 +224,8 @@ test('legacy BUILD_HOST is rejected before any SSH or Docker operation', () => {
 test('CI can reuse a locally built image without generating another', () => {
   release(['build']);
   git('commit', '--allow-empty', '-qm', 'merge metadata');
+  writeFileSync(env.REGISTRY, JSON.stringify({ ...registry(), deps: `sha256:${'d'.repeat(64)}` }));
+  const lookupStart = calls().length;
   env.GITHUB_ACTIONS = 'true';
   env.TEST_PLATFORM = 'Linux';
   env.DOCKER_CONTEXT = 'default';
@@ -228,6 +233,36 @@ test('CI can reuse a locally built image without generating another', () => {
   release(['build']);
   assert.equal(builds().length, 1);
   assert.equal(registry()[`${image}:${git('rev-parse', 'HEAD')}`], digest);
+  assert.ok(!calls().slice(lookupStart).some(args => args.includes('ghcr.io/monoscope-tech/monoscope-deps:latest') || args.includes('debian:12-slim')));
+});
+
+for (const [name, change] of [
+  ['different source tree', config => { config.config.Labels['io.monoscope.source-tree'] = 'wrong'; }],
+  ['wrong platform', config => { config.architecture = 'arm64'; }],
+  ['missing provenance', config => { delete config.config.Labels['io.monoscope.build-inputs']; }],
+]) {
+  test(`CI rejects a completed image with ${name}`, () => {
+    release(['build']);
+    const state = registry();
+    change(state.config);
+    writeFileSync(env.REGISTRY, JSON.stringify(state));
+    env.GITHUB_ACTIONS = 'true';
+    const result = release(['build'], false);
+    assert.match(result.stderr, /source tree|platform|provenance/);
+    assert.equal(builds().length, 1);
+  });
+}
+
+test('local builds can pin an immutable dependency image across tag changes', () => {
+  env.MONOSCOPE_DEPS_IMAGE = `ghcr.io/monoscope-tech/monoscope-deps@sha256:${'e'.repeat(64)}`;
+  release(['build']);
+  writeFileSync(env.REGISTRY, JSON.stringify({ ...registry(), deps: `sha256:${'f'.repeat(64)}` }));
+  release(['build']);
+  assert.equal(builds().length, 1);
+  assert.ok(builds()[0].includes(`DEPS_IMAGE=${env.MONOSCOPE_DEPS_IMAGE}`));
+  assert.ok(!calls().some(args => args.includes('ghcr.io/monoscope-tech/monoscope-deps:latest')));
+  env.MONOSCOPE_DEPS_IMAGE = 'ghcr.io/monoscope-tech/monoscope-deps:latest';
+  assert.match(release(['build'], false).stderr, /immutable/);
 });
 
 test('requested revision must match checkout', () => {
