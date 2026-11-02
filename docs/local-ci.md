@@ -290,7 +290,12 @@ Registry pulls and pushes transfer artifacts. They do not move compilation to an
 
 `ci-signoff` runs checks and an image build. Report their progress separately.
 The image fingerprint includes immutable dependency and runtime image digests.
-A changed base digest can require another image, even with unchanged application code.
+Local builds resolve base tags once and include their digests in the fingerprint.
+To resume a build with the same dependency base, set `MONOSCOPE_DEPS_IMAGE` to
+`ghcr.io/monoscope-tech/monoscope-deps@sha256:<digest>`. Mutable tags are rejected.
+CI consumes the completed commit image or its source-tree alias. It verifies
+Linux AMD64 and the source-tree label before reuse. Changes to floating base
+tags do not invalidate that completed artifact during a merge.
 Use `make ci-status` for a status check instead of another signoff run.
 
 The production Dockerfile locks its application compiler cache during each build
@@ -319,9 +324,11 @@ the server.
 
 `make deploy-image` uses the same `scripts/ci/release.sh` recipe as the PR and
 master image jobs. It requires a clean tree and registry access. It publishes
-an immutable digest, a content-input tag, and a commit-SHA alias without moving
-`latest`. Master reuses that artifact when its source tree and pinned bases
-match. Image labels preserve who built it and from which revision.
+an immutable digest, a content-input tag, and commit-SHA and source-tree aliases
+without moving `latest`. Master reuses that artifact when its source tree matches.
+Image labels preserve who built it and from which revision.
+A rebuild can move the source-tree alias to a new digest for the same tree.
+CI resolves that alias once, then verifies and uses the immutable digest.
 
 ## Knobs
 
