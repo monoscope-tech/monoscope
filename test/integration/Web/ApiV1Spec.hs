@@ -7,7 +7,10 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPRecord)
+import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPRecord, withGoldenCache)
+import System.Environment (setEnv, unsetEnv)
+import System.IO.Temp (withSystemTempDirectory)
+import UnliftIO.Exception (bracket_)
 import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
@@ -104,6 +107,11 @@ liveSchemaFields = maybe (Left "structuredContent missing") (fmap (Map.keys . (.
 
 spec :: Spec
 spec = describe "API v1" do
+  -- Only UPDATE_GOLDEN=true records; "false" used to re-record (and overwrite) every golden.
+  it "updateGoldenFalse_readsGoldenInsteadOfRecordingLive" do
+    withSystemTempDirectory "golden" \dir -> bracket_ (setEnv "UPDATE_GOLDEN" "false") (unsetEnv "UPDATE_GOLDEN") do
+      writeFileLBS (dir <> "/x.json") (AE.encode ("cached" :: Text))
+      withGoldenCache dir "x.json" (const "undecodable") (id @Text) (pure ("live", "live")) `shouldReturn` "cached"
   it "OpenAPI spec, telemetry schema and MCP registry form the CLI/agent contract" do
     let specJson = AE.toJSON apiV1OpenApiSpec
         at p = foldlM (\v k -> v ^? key (AEK.fromText k)) specJson (T.splitOn "." p)

@@ -12,6 +12,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.Ki qualified as Ki
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static (asks)
+import Effectful.Time qualified as Time
 import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards (Dashboard (..))
@@ -20,7 +21,7 @@ import Network.HTTP.Types (statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQueryWithTools, withBotThread, withDashboardTemplate)
+import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, freshWebhookTimestamp, installedResponse, parseInstallState, runBotQueryWithTools, withBotThread, withDashboardTemplate)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.Mail (arr)
@@ -132,7 +133,8 @@ getDiscordChannels token guildId = do
 discordInteractionsH :: Maybe AI.ProjectTools -> BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
 discordInteractionsH projectTools rawBody signatureM timestampM = do
   envCfg <- asks @AuthContext env
-  validateSignature envCfg signatureM timestampM rawBody
+  now <- Time.currentTime
+  validateSignature envCfg signatureM (guarded (freshWebhookTimestamp now . decodeUtf8) =<< timestampM) rawBody
   interaction <- either (const $ throwError err404{errBody = "Invalid interaction data"}) pure $ AE.eitherDecode (fromStrict rawBody)
   Log.logTrace ("Discord interaction received" :: Text) $ AE.object ["type" AE..= show interaction.interaction_type, "guild_id" AE..= interaction.guild_id, "channel_id" AE..= interaction.channel_id, "data" AE..= interaction.data_i]
 

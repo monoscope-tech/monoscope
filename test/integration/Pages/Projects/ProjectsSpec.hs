@@ -3,7 +3,7 @@
 module Pages.Projects.ProjectsSpec (spec) where
 
 import BackgroundJobs qualified
-import Control.Exception (evaluate, try)
+import Control.Exception (try)
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
@@ -192,11 +192,12 @@ spec = around withTestResources do
 
     -- Invite, re-role, list, remove and re-add.
     roleOf "example@gmail.com" <$> save ["example@gmail.com"] [PAdmin] `shouldReturn` Just PAdmin
-    roleOf "example@gmail.com" <$> save ["example@gmail.com"] [PView] `shouldReturn` Just PView
-    Pages.ManageMembersGet (PageCtx _ (_, listed, _, _, _)) <- call tr $ Pages.manageMembersGetH testPid
-    map (.email) (V.toList listed) `shouldMatchList` ["test@monoscope.tech", "example@gmail.com"]
+    -- reinviteRemovedAdmin_asViewer_staysViewer: reactivating the old row kept its admin role.
     map (.email) <$> save [] [] >>= (`shouldNotContain` ["example@gmail.com"])
     roleOf "example@gmail.com" <$> save ["example@gmail.com"] [PView] `shouldReturn` Just PView
+    roleOf "example@gmail.com" <$> save ["example@gmail.com"] [PEdit] `shouldReturn` Just PEdit
+    Pages.ManageMembersGet (PageCtx _ (_, listed, _, _, _)) <- call tr $ Pages.manageMembersGetH testPid
+    map (.email) (V.toList listed) `shouldMatchList` ["test@monoscope.tech", "example@gmail.com"]
 
     -- Viewers and editors see no member controls and cannot re-role, invite or remove.
     Just guardMember <- find ((== "permission-guard@example.com") . (.email)) <$> save ["test@monoscope.tech", "permission-guard@example.com"] [PAdmin, PView]
@@ -221,6 +222,19 @@ spec = around withTestResources do
     first' <- runQueryEffect tr $ Projects.createEmptyUser "race@example.com"
     first' `shouldSatisfy` isJust
     runQueryEffect tr (Projects.createEmptyUser "race@example.com") `shouldReturn` first'
+
+  it "freeTierOwner_earliestMemberRemoved_nextActiveMemberOwns" \tr -> do
+    dbExec tr [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = ?|] (Only testPid)
+    heir <- runQueryEffect tr (Projects.createEmptyUser "heir@example.com") >>= maybe (fail "user not created") pure
+    void $ runQueryEffect tr $ ProjectMembers.insertProjectMembers [ProjectMembers.CreateProjectMembers testPid heir PView]
+    dbExec tr [sql|UPDATE projects.project_members SET active = FALSE, deleted_at = now() WHERE project_id = ? AND user_id <> ?|] (testPid, heir)
+    let owns = do
+          runQueryEffect tr (ProjectMembers.getUserPermission testPid heir) `shouldReturn` Just PView
+          map (.id) <$> runQueryEffect tr (Projects.selectProjectsForUser heir) >>= (`shouldContain` [testPid])
+          runQueryEffect tr (Projects.restrictedFreeProjectTitles heir) `shouldReturn` []
+    owns
+    runQueryEffect tr $ ProjectMembers.deactivateNonOwnerMembers testPid
+    owns
 
   it "@everyone notify_emails follow member changes yet stay the single source of who is paged" \tr -> do
     [alice, bob] <- forM @[] ["Alice@Example.com", "bob@example.com"] \email -> do
@@ -251,11 +265,10 @@ spec = around withTestResources do
 
   it "notification channels: a test send per channel with history, trend fallback, team routing, report, disabled gating" \tr -> do
     -- History rows are stamped on the wall clock, so the 60s test-send rate limit (read on the
-    -- test clock) needs a clean slate; the response is forced so a rejection fails the step.
+    -- test clock) needs a clean slate.
     let send ty ch teamM = do
           dbExec tr [sql|DELETE FROM apis.notification_test_history WHERE project_id = ?|] (Only testPid)
-          (ns, (h, _)) <- testServantWithNotifications tr (Settings.notificationsTestPostH testPid (TestForm ty ch teamM))
-          ns <$ evaluate h
+          fst <$> testServantWithNotifications tr (Settings.notificationsTestPostH testPid (TestForm ty ch teamM))
         history = (.tests) <$> call tr (Settings.notificationsTestHistoryGetH testPid)
         slackTo ns = [d.channelId | SlackNotification d <- ns]
         pagerdutyKey = "a1b2c3d4e5f67890abcdef1234567890"
@@ -274,6 +287,9 @@ spec = around withTestResources do
       setup
       send issueType channel Nothing >>= verify
       map (\h -> (h.status, h.issueType, h.channel)) <$> history `shouldReturn` [(TSSent, issueType, channel)]
+    -- testServantWithNotifications_handlerError_propagates: a rejected send (here the rate limit)
+    -- returned no notifications instead of failing, so assertions on them passed vacuously.
+    isLeft <$> try @SomeException (testServantWithNotifications tr (Settings.notificationsTestPostH testPid (TestForm "runtime_exception" TCEmail Nothing))) `shouldReturn` True
 
     -- An unavailable runtime trend says so, and stays Slack-valid.
     let alert = Mail.RuntimeErrorAlert{issueId = "issue-trend-fallback", issueTitle = "Upstream timeout", errorData = (def :: ErrorPatterns.ATError){ErrorPatterns.hash = "slack-trend-fallback", ErrorPatterns.errorType = "UpstreamTimeout", ErrorPatterns.message = "The upstream request timed out"}, runtimeAlertType = Mail.NewRuntimeError, chartUrl = Nothing, occurrenceText = Nothing, firstSeenText = Nothing, ongoingFor = Nothing}

@@ -22,6 +22,7 @@ module Models.Projects.Projects (
   usersByProjectId,
   projectEmailRecipients,
   accessibleMembership,
+  freeTierOwner,
   usersByIds,
   selectProjectsForUser,
   restrictedFreeProjectTitles,
@@ -696,12 +697,21 @@ newProjectsSince :: DB es => UTCTime -> Eff es [Project]
 newProjectsSince since = EHasql.interp [HI.sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= #{since}::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|]
 
 
+-- | The user who keeps access on the free tier: the earliest current membership of the
+-- project @pid@. Removed rows never own it, else removing the first member locks everyone out.
+freeTierOwner :: HI.Sql -> HI.Sql
+freeTierOwner pid =
+  [HI.sql|(SELECT user_id FROM projects.project_members WHERE project_id = |]
+    <> pid
+    <> [HI.sql| AND active AND deleted_at IS NULL ORDER BY created_at, id LIMIT 1)|]
+
+
 -- | Membership queries alias the member as @pm@ and project as @p@.
 accessibleMembership :: HI.Sql
 accessibleMembership =
-  [HI.sql| AND pm.active AND pm.deleted_at IS NULL
-    AND (lower(p.payment_plan) <> 'free' OR pm.user_id = (
-      SELECT user_id FROM projects.project_members WHERE project_id = p.id ORDER BY created_at, id LIMIT 1)) |]
+  [HI.sql| AND pm.active AND pm.deleted_at IS NULL AND (lower(p.payment_plan) <> 'free' OR pm.user_id = |]
+    <> freeTierOwner "p.id"
+    <> ")"
 
 
 selectProjectsForUser :: (DB es, Time :> es) => UserId -> Eff es [ProjectListItem]
@@ -729,12 +739,12 @@ selectProjectsForUser uid = do
 restrictedFreeProjectTitles :: DB es => UserId -> Eff es [Text]
 restrictedFreeProjectTitles uid =
   EHasql.interp
-    [HI.sql| SELECT p.title FROM projects.projects p
+    $ [HI.sql| SELECT p.title FROM projects.projects p
       JOIN projects.project_members pm ON pm.project_id = p.id
       WHERE pm.user_id = #{uid} AND pm.deleted_at IS NULL AND p.deleted_at IS NULL
-        AND lower(p.payment_plan) = 'free' AND pm.user_id <> (
-          SELECT user_id FROM projects.project_members WHERE project_id = p.id ORDER BY created_at, id LIMIT 1)
-      ORDER BY p.updated_at DESC |]
+        AND lower(p.payment_plan) = 'free' AND pm.user_id <> |]
+    <> freeTierOwner "p.id"
+    <> [HI.sql| ORDER BY p.updated_at DESC |]
 
 
 usersByProjectId :: DB es => ProjectId -> Eff es [User]
