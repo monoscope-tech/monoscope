@@ -56,6 +56,8 @@ The migration concern requires an explicit exception: production had applied 21 
 | Early suspension | A knowledge callback could suspend before checkout without graceful child shutdown. | The outer exchange also uses the existing stop action; inner shutdown still precedes VM release. |
 | CI shard gate | A passing test name containing “Interrupted” caused a false failure. | The gate checks complete shard summaries and process exits. Regression cases still reject real interruptions and shutdown failures. |
 
+A later lost-store regression records a model call, returns no native context, and observes an unwanted executor entry (expected zero, actual one). The shared native PR/fix guard now checks the existing usage records before creating another attempt. A separate `NativeSessionLost` constructor retains recovery guidance instead of blind-retry text. The job lifecycle then passes with zero executor entries, one original attempt and no completed result. Its fake interpreter now captures typed fix context; the wiki retry requires the original attempt ID. This refinement still requires the expanded run and final release gate.
+
 No fix adds a parallel executor, weaker effect row, warning suppression, or authorization bypass.
 The final Weeder pass also removed two lookup helpers orphaned by this branch's table-renderer replacement.
 
