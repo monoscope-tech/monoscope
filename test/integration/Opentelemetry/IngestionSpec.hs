@@ -177,8 +177,7 @@ spec = do
       otherKey <- createTestAPIKey tr other "other-key"
       for_ (zip3 keys ["Log from key 1", "Log from key 2", "Log from key 3"] ["GET /api/users", "POST /api/posts", "DELETE /api/comments"]) \(key, body, name) ->
         ingestLog tr key body frozenTime >> ingestTrace tr key name frozenTime
-      -- Header-only logs authenticate but are stored nowhere yet: unlike spans,
-      -- convertResourceLogsToOtelLogs has no sole-resolved-key fallback. Not counted below.
+      -- Header-only records carry no resource key; they land in the header key's project.
       ingestLogWithHeader tr k1 "Log via header auth" frozenTime
       ingestTraceWithHeader tr k1 "GET /api/header-auth" frozenTime
       -- Resource and header keys are both resolved; the record follows its resource key.
@@ -195,14 +194,14 @@ spec = do
       logRows <- queryLogs tr pid (Just "kind == \"log\"")
       traces <- queryLogs tr pid (Just "kind != \"log\"")
       everything <- queryLogs tr pid Nothing
-      (logRows.error, V.length logRows.logsData, V.length traces.logsData, V.length everything.logsData) `shouldBe` (Nothing, 10, 4, 14)
+      (logRows.error, V.length logRows.logsData, V.length traces.logsData, V.length everything.logsData) `shouldBe` (Nothing, 11, 4, 15)
       dbOne tr [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND kind = 'log' AND level IS NOT NULL AND status_code IS DISTINCT FROM level |] (Only pid) `shouldReturn` (0 :: Int)
-      forM [pid, other] (\p -> dbOne tr [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND body::text LIKE '%Dual auth log%' |] (Only p)) `shouldReturn` [1 :: Int, 0]
+      forM [(p, b) | p <- [pid, other], b <- ["%Dual auth log%", "%Log via header auth%" :: Text]] (dbOne tr [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND body::text LIKE ? |]) `shouldReturn` [1 :: Int, 1, 0, 0]
       -- Ids are minted upstream of bulkInsertOtelLogsAndSpansTF: a call site that skips
       -- mintOtelLogIds collides distinct rows or lands the nil UUID. (Repeated log content
       -- shares an id by design; timestamp is the other dedup key.)
       ids <- map fromOnly <$> dbQuery @_ @(Only Text) tr [sql| SELECT id::text FROM otel_logs_and_spans WHERE project_id = ? AND body::text IS DISTINCT FROM '"Log entry"' |] (Only pid)
-      (length ids, length (ordNub ids), UUID.toText UUID.nil `elem` ids) `shouldBe` (8, 8, False)
+      (length ids, length (ordNub ids), UUID.toText UUID.nil `elem` ids) `shouldBe` (9, 9, False)
       -- A backend query failure surfaces as LogResult.error, not an empty "no events" table.
       failed <- queryLogs tr pid (Just "notarealcolumn_xyz == \"x\"")
       failed.error `shouldSatisfy` isJust
