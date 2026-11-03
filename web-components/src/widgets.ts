@@ -622,6 +622,9 @@ type ChartPrefetch = { url: string; response: Promise<ChartDataResponse | null>;
 const chartDataPrefetch = new Map<string, ChartPrefetch>();
 const streamUrl = (url: string) => url.replace('/chart_data?', '/chart_data/stream?');
 class ChartSessionError extends Error {}
+// The user's own query rejected (unknown field, syntax) or a lapsed session: shown in the
+// chart banner, never console.error'd — the browser SDK files those as critical exceptions.
+export const isUnexpectedChartError = (e: unknown) => !(e instanceof ChartQueryError || e instanceof ChartSessionError);
 // /chart_data intermittently answers 401 while the page's session is fine (server-side
 // lookup, cause unknown); reloading on each one looped the page every ~2s. One re-fetch
 // after a second confirms it, shared by every chart that hit it at the same time.
@@ -826,7 +829,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   } catch (e) {
     clearTimeout(partialTimer);
     if (signal.aborted || isStale()) return;
-    console.error('Failed to fetch new data:', e);
+    if (isUnexpectedChartError(e)) console.error('Failed to fetch new data:', e);
     if (e instanceof ChartSessionError) reportFailure(e.message, async () => window.location.reload());
     else reportFailure(e instanceof ChartQueryError ? e.message : "Couldn't load this chart. Retry to fetch it again.");
   } finally {

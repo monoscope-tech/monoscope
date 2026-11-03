@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { beginChartFetch } from '../src/widgets';
+import { beginChartFetch, ChartQueryError, isUnexpectedChartError } from '../src/widgets';
 
 // Regression: dashboard widgets showed the "Query execution failed" overlay on
 // top of freshly rendered bars. A failed /chart_data response arriving AFTER a
@@ -25,4 +25,13 @@ describe('beginChartFetch', () => {
     beginChartFetch('chartY'); // bumping another chart must not stale chartX
     expect(isStaleX()).toBe(false);
   });
+});
+
+// A typo in the user's KQL ("Unknown field \"npdy\"") was console.error'd and filed as a
+// critical runtime exception; only failures the user did not cause should report.
+describe('isUnexpectedChartError', () => {
+  test.each([
+    [new ChartQueryError('Unknown field "npdy". Did you mean "body"?'), false],
+    [new Error('widget request failed: 503 Service Unavailable'), true],
+  ])('%s → %s', (error, expected) => expect(isUnexpectedChartError(error)).toBe(expected));
 });
