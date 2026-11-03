@@ -85,6 +85,7 @@ library
     Pkg.Parser.Eval
     Pkg.Parser.Expr
     Pkg.Parser.Stats
+    Web.Operations
     Web.Wire
 
   build-depends:
@@ -124,6 +125,7 @@ library
     , scientific
     , template-haskell
     , text
+    , text-metrics
     , casing
     , text-builder-linear
     , text-display

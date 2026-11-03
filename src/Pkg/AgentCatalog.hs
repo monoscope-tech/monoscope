@@ -17,6 +17,7 @@ module Pkg.AgentCatalog (
   disclosurePermission,
   actionName,
   apiOperations,
+  accessPolicy,
   LocalOperation (..),
   localPolicy,
   operationName,
@@ -36,10 +37,13 @@ import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Map.Strict qualified as Map
 import Langchain.LLM.Core qualified as LLM
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Network.HTTP.Types (renderStdMethod)
 import Pkg.AgentOperation qualified as Operation
-import Pkg.DeriveUtils (WrappedEnumSC (..), encodeEnumSC)
+import Pkg.DeriveUtils (WrappedEnumSC (..), constructorName, encodeEnumSC)
 import Relude
+import Text.Casing (quietSnake)
 import Web.HttpApiData (FromHttpApiData)
+import Web.Operations qualified as Operations
 
 
 -- $setup
@@ -59,17 +63,17 @@ data Tool operation = Tool
   deriving stock (Functor)
 
 
-data SlackRead = SearchPublic | SearchPersonal | ReadChannel | ReadThread
+data SlackRead = SearchPublic | SearchPublicAndPrivate | ReadChannel | ReadThread
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Show)
   deriving anyclass (AE.ToJSON)
 
 
+-- | Tool names on Slack's MCP server.
+--
+-- >>> map slackReadName [minBound .. maxBound]
+-- ["slack_search_public","slack_search_public_and_private","slack_read_channel","slack_read_thread"]
 slackReadName :: SlackRead -> Text
-slackReadName = \case
-  SearchPublic -> "slack_search_public"
-  SearchPersonal -> "slack_search_public_and_private"
-  ReadChannel -> "slack_read_channel"
-  ReadThread -> "slack_read_thread"
+slackReadName = ("slack_" <>) . toText . encodeEnumSC @""
 
 
 slackReads :: Map Text SlackRead
@@ -78,7 +82,7 @@ slackReads = Map.fromList [(slackReadName operation, operation) | operation <- [
 
 slackReadPolicy :: SlackRead -> AgentPolicy
 slackReadPolicy = \case
-  (SearchPublic; SearchPersonal; ReadChannel; ReadThread) -> ReadOnly ProjectMembers.PView
+  (SearchPublic; SearchPublicAndPrivate; ReadChannel; ReadThread) -> ReadOnly ProjectMembers.PView
 
 
 -- | The Agent adapter must deny operations without a policy. The registry
@@ -161,14 +165,10 @@ requiresAutonomy = \case
   (ProjectMemoryWrite; ProjectWrite; ExternalPublication; Administration{}) -> True
 
 
+-- | >>> map actionName [ReadOnly ProjectMembers.PView, Administration ProjectMembers.PAdmin]
+-- ["ReadOnly","Administration"]
 actionName :: AgentPolicy -> Text
-actionName = \case
-  ReadOnly{} -> "ReadOnly"
-  ConversationWrite -> "ConversationWrite"
-  ProjectMemoryWrite -> "ProjectMemoryWrite"
-  ProjectWrite -> "ProjectWrite"
-  ExternalPublication -> "ExternalPublication"
-  Administration{} -> "Administration"
+actionName = toText . constructorName
 
 
 -- | Mutation permission does not make ordinary project results private.
@@ -183,104 +183,19 @@ disclosurePermission = \case
   (ConversationWrite; ProjectMemoryWrite; ProjectWrite; ExternalPublication) -> ProjectMembers.PView
 
 
--- | Canonical API names and agent policy. Unclassified routes retain a fallback
--- MCP name but remain unavailable to the agent until explicitly classified.
-apiOperations :: Map (ByteString, Text) (Text, Maybe AgentPolicy)
-apiOperations =
-  Map.fromList
-    [ (("GET", "/ingestion-key"), adminRead "get_ingestion_key")
-    , (("GET", "/events"), view "list_events")
-    , (("GET", "/events/{event_id}/time/{timestamp}"), view "get_event_context")
-    , (("POST", "/events/query"), view "search_events")
-    , (("GET", "/metrics"), view "query_metrics")
-    , (("GET", "/metrics/catalog"), view "list_metrics")
-    , (("GET", "/schema"), view "get_schema")
-    , (("GET", "/facets"), view "list_facets")
-    , (("POST", "/rrweb"), ("submit_rrweb_event", Nothing))
-    , -- Monitors
-      (("GET", "/monitors"), view "list_monitors")
-    , (("POST", "/monitors"), edit "create_monitor")
-    , (("GET", "/monitors/{monitor_id}"), view "get_monitor")
-    , (("GET", "/monitors/{monitor_id}/yaml"), view "get_monitor_yaml")
-    , (("POST", "/monitors/apply"), edit "apply_monitor")
-    , (("PUT", "/monitors/{monitor_id}"), edit "update_monitor")
-    , (("PATCH", "/monitors/{monitor_id}"), edit "patch_monitor")
-    , (("DELETE", "/monitors/{monitor_id}"), admin "delete_monitor")
-    , (("POST", "/monitors/{monitor_id}/mute"), edit "mute_monitor")
-    , (("POST", "/monitors/{monitor_id}/unmute"), edit "unmute_monitor")
-    , (("POST", "/monitors/{monitor_id}/resolve"), edit "resolve_monitor")
-    , (("POST", "/monitors/{monitor_id}/toggle_active"), edit "toggle_monitor_active")
-    , (("POST", "/monitors/bulk"), admin "bulk_monitors")
-    , -- Dashboards
-      (("GET", "/dashboards"), view "list_dashboards")
-    , (("POST", "/dashboards"), edit "create_dashboard")
-    , (("POST", "/dashboards/apply"), edit "apply_dashboard")
-    , (("GET", "/dashboards/{dashboard_id}"), view "get_dashboard")
-    , (("GET", "/dashboards/{dashboard_id}/data"), view "get_dashboard_data")
-    , (("PUT", "/dashboards/{dashboard_id}"), edit "update_dashboard")
-    , (("PATCH", "/dashboards/{dashboard_id}"), edit "patch_dashboard")
-    , (("DELETE", "/dashboards/{dashboard_id}"), admin "delete_dashboard")
-    , (("POST", "/dashboards/{dashboard_id}/duplicate"), edit "duplicate_dashboard")
-    , (("POST", "/dashboards/{dashboard_id}/star"), edit "star_dashboard")
-    , (("DELETE", "/dashboards/{dashboard_id}/star"), edit "unstar_dashboard")
-    , (("GET", "/dashboards/{dashboard_id}/yaml"), view "get_dashboard_yaml")
-    , (("PUT", "/dashboards/{dashboard_id}/widgets"), edit "upsert_dashboard_widget")
-    , (("DELETE", "/dashboards/{dashboard_id}/widgets/{widget_id}"), admin "delete_dashboard_widget")
-    , (("PATCH", "/dashboards/{dashboard_id}/widgets/order"), edit "reorder_dashboard_widgets")
-    , (("POST", "/dashboards/bulk"), admin "bulk_dashboards")
-    , -- API keys
-      (("GET", "/api_keys"), adminRead "list_api_keys")
-    , (("POST", "/api_keys"), privateAdmin "create_api_key")
-    , (("GET", "/api_keys/{key_id}"), adminRead "get_api_key")
-    , (("DELETE", "/api_keys/{key_id}"), privateAdmin "delete_api_key")
-    , (("POST", "/api_keys/{key_id}/activate"), privateAdmin "activate_api_key")
-    , (("POST", "/api_keys/{key_id}/deactivate"), privateAdmin "deactivate_api_key")
-    , -- /me + project
-      (("GET", "/me"), view "whoami")
-    , (("GET", "/project"), view "get_project")
-    , (("PATCH", "/project"), admin "patch_project")
-    , -- Endpoints
-      (("GET", "/endpoints"), view "list_endpoints")
-    , (("GET", "/endpoints/{endpoint_id}"), view "get_endpoint")
-    , -- Log patterns
-      (("GET", "/log_patterns"), view "list_log_patterns")
-    , (("GET", "/log_patterns/{pattern_id}"), view "get_log_pattern")
-    , (("POST", "/log_patterns/{pattern_id}/ack"), edit "ack_log_pattern")
-    , (("POST", "/log_patterns/bulk"), edit "bulk_log_patterns")
-    , -- Issues
-      (("GET", "/issues"), view "list_issues")
-    , (("GET", "/issues/{issue_id}"), view "get_issue")
-    , (("POST", "/issues/{issue_id}/ack"), edit "ack_issue")
-    , (("POST", "/issues/{issue_id}/unack"), edit "unack_issue")
-    , (("POST", "/issues/{issue_id}/archive"), edit "archive_issue")
-    , (("POST", "/issues/{issue_id}/unarchive"), edit "unarchive_issue")
-    , (("POST", "/issues/bulk"), edit "bulk_issues")
-    , -- Incidents
-      (("GET", "/incidents"), view "list_incidents")
-    , (("GET", "/incidents/{incident_id}"), view "get_incident")
-    , -- Teams
-      (("GET", "/teams"), view "list_teams")
-    , (("POST", "/teams"), admin "create_team")
-    , (("GET", "/teams/{team_id}"), view "get_team")
-    , (("PUT", "/teams/{team_id}"), admin "update_team")
-    , (("PATCH", "/teams/{team_id}"), admin "patch_team")
-    , (("DELETE", "/teams/{team_id}"), admin "delete_team")
-    , (("POST", "/teams/bulk"), admin "bulk_teams")
-    , -- Members
-      (("GET", "/members"), view "list_members")
-    , (("POST", "/members"), admin "add_member")
-    , (("GET", "/members/{user_id}"), view "get_member")
-    , (("PATCH", "/members/{user_id}"), admin "patch_member")
-    , (("DELETE", "/members/{user_id}"), admin "remove_member")
-    , -- Misc
-      (("POST", "/share"), admin "create_share_link")
-    ]
-  where
-    view name = (name, Just $ ReadOnly ProjectMembers.PView)
-    adminRead name = (name, Just $ ReadOnly ProjectMembers.PAdmin)
-    edit name = (name, Just ProjectWrite)
-    admin name = (name, Just $ Administration ProjectMembers.PView)
-    privateAdmin name = (name, Just $ Administration ProjectMembers.PAdmin)
+-- | Published operations by route. Unclassified routes retain a fallback MCP
+-- name but remain unavailable to the agent until explicitly classified.
+apiOperations :: Map (ByteString, Text) Operations.Operation
+apiOperations = Map.fromList [((renderStdMethod (Operations.stdMethod operation.method), operation.path), operation) | operation <- Operations.operations]
+
+
+accessPolicy :: Operations.Access -> AgentPolicy
+accessPolicy = \case
+  Operations.View -> ReadOnly ProjectMembers.PView
+  Operations.AdminView -> ReadOnly ProjectMembers.PAdmin
+  Operations.Edit -> ProjectWrite
+  Operations.Admin -> Administration ProjectMembers.PView
+  Operations.PrivateAdmin -> Administration ProjectMembers.PAdmin
 
 
 data LocalOperation
@@ -326,8 +241,7 @@ operationName :: Operation.OperationCall -> Text
 operationName = \case
   Operation.ModelCall call -> LLM.toolFunctionName $ LLM.toolCallFunction call
   Operation.NativeCall (Operation.WriteWiki _) -> toText $ encodeEnumSC @"" WriteProjectMemory
-  Operation.NativeCall Operation.PublishPullRequestComment{} -> "publish_pull_request_comment"
-  Operation.NativeCall Operation.EnrichIssue{} -> "enrich_issue"
+  Operation.NativeCall native -> toText $ quietSnake $ constructorName native
 
 
 nativePolicy :: Operation.NativeOperation -> AgentPolicy
@@ -369,14 +283,7 @@ localTools = Map.fromList [(tool.name, tool) | operation <- [minBound .. maxBoun
         name = toText $ encodeEnumSC @"" operation
         readTool = definition True
         optionalReadTool = definition False
-        definition :: Bool -> Text -> [(Text, Text, Text)] -> Tool LocalOperation
-        definition firstRequired description props =
-          fromSchema
-            description
-            ( AE.object
-                $ ["type" AE..= ("object" :: Text), "properties" AE..= AE.object [AK.fromText key' AE..= AE.object ["type" AE..= kind, "description" AE..= detail] | (key', kind, detail) <- props]]
-                <> ["required" AE..= map (\(key', _, _) -> key') (take 1 props) | firstRequired && not (null props)]
-            )
+        definition firstRequired description props = fromSchema description (propsSchema props [key' | firstRequired, (key', _, _) <- take 1 props])
         fromSchema description schema = Tool name description schema (Just $ localPolicy operation) operation
         memoryTool capability =
           let tool = Policy.toolDefinition Policy.Advisory capability
@@ -387,39 +294,13 @@ data CompositeOperation = FindErrorPatterns | SearchEventsNL | AnalyzeIssue
 
 
 compositeTools :: [Tool CompositeOperation]
-compositeTools = [findErrorPatterns, searchEventsNL, analyzeIssue]
+compositeTools =
+  [ composite "find_error_patterns" "Top established log patterns ranked by current-hour event count. Use to answer 'what is blowing up right now' without crafting a query." [("limit", "integer", "Max patterns to return (default 20).")] [] FindErrorPatterns
+  , composite "search_events_nl" "Translate a natural-language description (e.g. 'failed payments in the last hour for service checkout') into a KQL query for the events index. Returns the suggested query, time range and an explanation; call search_events with the query to execute." [("input", "string", "The natural-language description of what to find."), ("timezone", "string", "IANA timezone name for relative time interpretation (optional, e.g. 'America/Los_Angeles').")] ["input"] SearchEventsNL
+  , composite "analyze_issue" "Fetch an issue by id and return both the issue payload and an LLM-generated diagnosis (probable cause, key signals, suggested next steps). Costs one LLM call." [("issue_id", "string", "UUID of the issue to analyze.")] ["issue_id"] AnalyzeIssue
+  ]
   where
-    composite name description schema = Tool name description schema (Just $ ReadOnly ProjectMembers.PView)
-    findErrorPatterns =
-      composite
-        "find_error_patterns"
-        "Top established log patterns ranked by current-hour event count. Use to answer 'what is blowing up right now' without crafting a query."
-        (objSchema [("limit", intProp "Max patterns to return (default 20).")] [])
-        FindErrorPatterns
-    searchEventsNL =
-      composite
-        "search_events_nl"
-        "Translate a natural-language description (e.g. 'failed payments in the last hour for service checkout') into a KQL query for the events index. Returns the suggested query, time range and an explanation; call search_events with the query to execute."
-        ( objSchema
-            [ ("input", strProp "The natural-language description of what to find.")
-            , ("timezone", strProp "IANA timezone name for relative time interpretation (optional, e.g. 'America/Los_Angeles').")
-            ]
-            ["input"]
-        )
-        SearchEventsNL
-    analyzeIssue =
-      composite
-        "analyze_issue"
-        "Fetch an issue by id and return both the issue payload and an LLM-generated diagnosis (probable cause, key signals, suggested next steps). Costs one LLM call."
-        (objSchema [("issue_id", strProp "UUID of the issue to analyze.")] ["issue_id"])
-        AnalyzeIssue
-
-    objSchema :: [(Text, AE.Value)] -> [Text] -> AE.Value
-    objSchema props = schemaObject (KM.fromList [(AK.fromText k, v) | (k, v) <- props])
-
-    strProp, intProp :: Text -> AE.Value
-    strProp d = AE.object ["type" AE..= ("string" :: Text), "description" AE..= d]
-    intProp d = AE.object ["type" AE..= ("integer" :: Text), "description" AE..= d]
+    composite name description props required = Tool name description (propsSchema props required) (Just $ ReadOnly ProjectMembers.PView)
 
 
 policyForCall :: Operation.OperationCall -> Maybe AgentPolicy
@@ -429,11 +310,16 @@ policyForCall = \case
 
 
 policiesByName :: Map Text (Maybe AgentPolicy)
-policiesByName = Map.fromList (Map.elems apiOperations) <> Map.map (.agentPolicy) localTools <> Map.fromList [(tool.name, tool.agentPolicy) | tool <- compositeTools] <> Map.map (Just . slackReadPolicy) slackReads
+policiesByName = Map.fromList [(operation.name, accessPolicy <$> operation.access) | operation <- Operations.operations] <> Map.map (.agentPolicy) localTools <> Map.fromList [(tool.name, tool.agentPolicy) | tool <- compositeTools] <> Map.map (Just . slackReadPolicy) slackReads
+
+
+-- | Input schema from @(name, JSON type, description)@ properties.
+propsSchema :: [(Text, Text, Text)] -> [Text] -> AE.Value
+propsSchema props = schemaObject (KM.fromList [(AK.fromText name, AE.object ["type" AE..= kind, "description" AE..= detail]) | (name, kind, detail) <- props])
 
 
 -- | Shared @{type: object, properties, required}@ JSON-Schema shape used by
--- both OpenAPI-derived and composite tool input schemas.
+-- both OpenAPI-derived and native tool input schemas.
 schemaObject :: AE.Object -> [Text] -> AE.Value
 schemaObject props requireds =
   AE.object

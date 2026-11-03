@@ -2,11 +2,12 @@
 
 module Pages.Charts.Charts (queryMetrics, queryProjectMetrics, queryMetricsStream, ChartStream, streamQuery_, MetricsData (..), MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
-import Control.Concurrent (threadDelay, threadWaitRead)
+import Control.Concurrent (threadWaitRead)
 import Control.Concurrent.STM qualified as STM
 import Control.Exception qualified as E
 import Control.Exception.Annotated (checkpoint, try)
 import Control.Monad (foldM)
+import Control.Retry qualified as Retry
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.ByteString qualified as BS
@@ -559,17 +560,7 @@ isPoolExhaustion msg = any (`T.isInfixOf` msg) ["Resources exhausted", "Not enou
 -- so no RNG dependency) — the widgets of one dashboard render arrive together
 -- and must not retry in lockstep.
 retryOnPoolExhaustion :: IO (Either SomePostgreSqlException a) -> IO (Either SomePostgreSqlException a)
-retryOnPoolExhaustion act = go (0 :: Int)
-  where
-    go n =
-      act >>= \case
-        Left e
-          | n < 2
-          , isPoolExhaustion . toText $ displayException e -> do
-              jitter <- (`mod` 100_000) . fromIntegral <$> getMonotonicTimeNSec
-              threadDelay $ 200_000 * (n + 1) + jitter
-              go (n + 1)
-        result -> pure result
+retryOnPoolExhaustion act = Retry.retrying (Retry.fullJitterBackoff 200_000 <> Retry.limitRetries 2) (const $ pure . either (isPoolExhaustion . toText . displayException) (const False)) (const act)
 
 
 metricsPool :: AuthContext -> Maybe SqlSource -> Pool Connection

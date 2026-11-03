@@ -46,6 +46,8 @@ import Data.Effectful.Wreq qualified as W
 -- IORef is re-exported from Relude (including atomicModifyIORef').
 -- Don't import Data.IORef directly — Relude's atomicModifyIORef' lifts into
 -- MonadIO and our import would shadow it.
+
+import Control.Retry qualified as Retry
 import Data.Text qualified as T
 import Data.Text.IO qualified
 import Data.Yaml qualified as Yaml
@@ -61,8 +63,6 @@ import Network.Wreq qualified as Wreq
 import Pkg.CLIFormat (colWidths, formatRow)
 import System.Console.ANSI qualified as ANSI
 import System.IO.Unsafe (unsafePerformIO)
-import System.Random qualified as Random
-import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catch)
 import Web.Wire qualified as Wire
 
@@ -299,23 +299,11 @@ apiGet cfg path params = do
 -- small jittered backoff (250–750 ms) keeps the retry cheap and avoids
 -- thundering-herd on shared CF edges.
 withRetry :: (Environment :> es, IOE :> es) => Int -> Eff es (Either APIError a) -> Eff es (Either APIError a)
-withRetry n act = go n
+withRetry n act = Retry.retrying (Retry.fullJitterBackoff 500_000 <> Retry.limitRetries n) (const retryable) (const act)
   where
-    transient code = code `elem` [502, 503, 504, 522, 524]
-    go remaining = do
-      r <- act
-      case r of
-        Right v -> pure (Right v)
-        Left e
-          | remaining > 0
-          , transient e.statusCode || isTransientMessage e.message -> do
-              jitter <- liftIO $ Random.randomRIO (250_000, 750_000 :: Int)
-              liftIO $ threadDelay jitter
-              printDebug $ "retrying after transient error: " <> e.message
-              go (remaining - 1)
-          | otherwise -> pure (Left e)
-    isTransientMessage msg =
-      "ResponseTimeout" `T.isInfixOf` msg || "ResponseBodyTooShort" `T.isInfixOf` msg
+    retryable = \case
+      Left e | e.statusCode `elem` [502, 503, 504, 522, 524] || any (`T.isInfixOf` e.message) ["ResponseTimeout", "ResponseBodyTooShort"] -> printDebug ("retrying after transient error: " <> e.message) $> True
+      _ -> pure False
 
 
 -- | Explicit @forall@ pins the type-variable order at @es, a@ so call sites

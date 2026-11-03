@@ -1,13 +1,10 @@
--- | Terminal chart rendering: braille line/area plots, block bar charts,
--- sparklines and stat tiles.
+-- | Terminal chart rendering: braille line plots (via granite), block bar
+-- charts, sparklines and stat tiles.
 --
 -- Everything here is pure @[Text]@ in, @[Text]@ out (one entry per terminal
 -- row) so charts compose — 'CLI.Dashboard' lays several of them side by side
--- into a grid — and so they can be asserted on in tests without a TTY.
---
--- Resolution comes from Unicode braille: one character cell carries a 2×4
--- pixel grid, so a 60×12 chart is really a 120×48 plot. Colour is opt-in via
--- 'colorful' so a piped/redirected stdout stays clean.
+-- into a grid — and so they can be asserted on in tests without a TTY. Colour
+-- is opt-in via 'colorful' so a piped/redirected stdout stays clean.
 module CLI.Chart (
   -- * Series
   Series (..),
@@ -40,13 +37,12 @@ module CLI.Chart (
 
 import Relude
 
-import Data.Bits (bit, (.|.))
-import Data.IntMap.Strict qualified as IntMap
 import Data.Ord (clamp)
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (defaultTimeLocale, formatTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
+import Granite qualified as G
 import Pages.Charts.Types (MetricsData (..))
 import System.Console.ANSI qualified as ANSI
 
@@ -124,46 +120,43 @@ isTimeColumn :: Text -> Bool
 isTimeColumn h = T.toLower h `elem` ["timestamp", "created_at", "time", "bucket", "_timestamp"]
 
 
--- | Full timeseries chart: y-axis with nice ticks, braille plot area, x-axis
--- time labels and a colour legend.
+-- | Full timeseries chart: y-axis ticks, braille plot area, x-axis time
+-- labels and, for two or more series, a colour legend.
 renderTimeseries :: ChartOpts -> [Series] -> [Text]
 renderTimeseries opts allSeries
-  | null pts = [dim opts.colorful $ T.center opts.width ' ' "no data in range"]
-  | otherwise = body <> [axisLine, xLabels] <> legend
+  | null ys = [dim opts.colorful $ T.center opts.width ' ' "no data in range"]
+  | otherwise = map (if opts.colorful then id else stripAnsi) $ filter (not . T.null) $ lines $ G.lineGraph [(s.name, [(x, y) | (x, Just y) <- s.points]) | s <- series] plot
   where
     series = take (length palette) allSeries
-    pts = [(x, y) | s <- series, (x, Just y) <- s.points]
-    (xLo, xHi) = rangeOf (map fst pts)
-    dataHi = fromMaybe (snd (rangeOf (map snd pts))) opts.yMax
+    (xs, ys) = unzip [(x, y) | s <- series, (x, Just y) <- s.points]
+    (xLo, xHi) = rangeOf xs
+    fmtX = if opts.timeAxis then formatTimeLabel (xHi - xLo) else formatValue ""
     -- Anchoring at zero is what makes two stacked widgets comparable at a
     -- glance; a floating baseline exaggerates noise into a cliff.
-    yLo = min 0 (fst (rangeOf (map snd pts)))
-    ticks = niceTicks yLo dataHi (max 2 (opts.height `div` 3))
-    -- Stretch the axis to the topmost tick so the labelled rows land on evenly
-    -- spaced lines instead of drifting with the data's exact maximum.
-    yHi = foldl' max dataHi ticks
-    labels = [formatValue opts.unit t | t <- ticks]
-    gutter = foldl' max 1 (map T.length labels)
-    plotW = max 8 (opts.width - gutter - 2)
-    canvas = foldl' (drawSeries plotW opts.height (xLo, xHi) (yLo, yHi)) mempty (zip [0 ..] series)
-    body = zipWith row (rowLabels ticks) (canvasRows opts.colorful plotW opts.height canvas)
-    row lbl cells = T.justifyRight gutter ' ' lbl <> dim opts.colorful " │" <> cells
-    -- One label per tick, placed on the row the tick's value lands on.
-    rowLabels ts =
-      [ maybe "" (formatValue opts.unit) (find (\t -> tickRow t == r) ts)
-      | r <- [0 .. opts.height - 1]
-      ]
-      where
-        tickRow t = clamp (0, opts.height - 1) $ opts.height - 1 - round (frac yLo yHi t * fromIntegral (opts.height - 1))
-    axisLine = T.replicate gutter " " <> dim opts.colorful (" └" <> T.replicate plotW "─")
-    xLabels = T.replicate (gutter + 2) " " <> dim opts.colorful (spread plotW (map fmtX [xLo, (xLo + xHi) / 2, xHi]))
-    fmtX = if opts.timeAxis then formatTimeLabel (xHi - xLo) else formatValue ""
-    legend
-      | not opts.showLegend || length series < 2 = []
-      | otherwise =
-          [ T.replicate (gutter + 2) " "
-              <> T.intercalate "  " [colorize opts.colorful (seriesColor i) "●" <> " " <> s.name | (i, s) <- zip [0 ..] series]
-          ]
+    yLo = min 0 (foldl' min 0 ys)
+    yHi = max (yLo + 1e-9) (fromMaybe (foldl' max yLo ys) opts.yMax)
+    -- Round the axis top up to a 1/2/2.5/5 step so evenly spaced ticks land on round values.
+    raw = (yHi - yLo) / fromIntegral (max 2 (opts.height `div` 3))
+    mag = 10 ** fromIntegral (floor (logBase 10 raw) :: Int)
+    step = mag * fromMaybe 10 (find (>= raw / mag) [1, 2, 2.5, 5])
+    ticks = ceiling ((yHi - yLo) / step - 1e-9) :: Int
+    yTop = yLo + step * fromIntegral ticks
+    gutter = 1 + foldl' max 1 [T.length (formatValue opts.unit (yLo + step * fromIntegral i)) | i <- [0 .. ticks]]
+    plot =
+      G.defPlot
+        { -- The last x label starts one column before the final tick, overhanging the plot.
+          G.widthChars = max 8 (opts.width - gutter - T.length (fmtX xHi))
+        , G.heightChars = opts.height
+        , G.leftMargin = gutter
+        , G.titleMargin = 0
+        , G.xBounds = if xHi > xLo then (Just xLo, Just xHi) else (Nothing, Nothing)
+        , G.yBounds = (Just yLo, Just yTop)
+        , G.yNumTicks = ticks + 1
+        , G.legendPos = if opts.showLegend && length series > 1 then G.LegendBottom else G.LegendNone
+        , G.colorPalette = [G.Cyan, G.Yellow, G.Magenta, G.Green, G.Blue, G.White, G.Red]
+        , G.xFormatter = \_ _ -> fmtX
+        , G.yFormatter = \_ _ -> formatValue opts.unit
+        }
 
 
 -- | Horizontal bars for categorical results (@… | summarize count() by service@).
@@ -185,16 +178,10 @@ renderBars opts rows
         <> colorize opts.colorful (seriesColor i) (bar barW (v / hi))
         <> " "
         <> T.justifyRight valW ' ' (formatValue opts.unit v)
-
-
--- | Fractional-width bar built from the eighth-block characters, so a bar can
--- end mid-cell instead of snapping to whole columns.
-bar :: Int -> Double -> Text
-bar w f = T.replicate full "█" <> partial
-  where
-    eighths = round (clamp (0, 1) f * fromIntegral (w * 8)) :: Int
-    (full, rest) = eighths `divMod` 8
-    partial = if rest == 0 then "" else one (chr (0x2590 - rest))
+    -- Eighth-block characters let a bar end mid-cell instead of snapping to whole columns.
+    bar w f =
+      let (full, rest) = (round (clamp (0, 1) f * fromIntegral (w * 8)) :: Int) `divMod` 8
+       in T.replicate full "█" <> (if rest == 0 then "" else one (chr (0x2590 - rest)))
 
 
 -- | Single-value tile: the number, its unit, and an inline sparkline of how it
@@ -210,77 +197,19 @@ renderStat opts label valM series =
 
 
 -- | Compact single-row plot. Downsamples to at most @w@ buckets by averaging,
--- so a 2000-point series still reads correctly at 40 columns.
+-- so a 2000-point series still reads correctly at 40 columns. A flat series
+-- draws a centred line.
 sparkline :: Int -> [Double] -> Text
 sparkline w ys
   | null ys || w < 1 = ""
-  | otherwise = toText [T.index blocks (level y) | y <- buckets]
+  | otherwise = toText [T.index " ▁▂▃▄▅▆▇█" (level y) | y <- buckets]
   where
-    blocks = " ▁▂▃▄▅▆▇█"
-    buckets = map avg (chunkInto w ys)
+    n = length ys
+    buckets
+      | n <= w = ys
+      | otherwise = [let c = take (max 1 (n `div` w)) (drop (i * n `div` w) ys) in sum c / fromIntegral (length c) | i <- [0 .. w - 1]]
     (lo, hi) = rangeOf buckets
-    level y = clamp (0, 8) $ round (frac lo hi y * 8)
-
-
--- Canvas ---------------------------------------------------------------------
-
--- | Sparse braille canvas keyed by @row * width + col@; each cell holds the
--- set dot bits plus the series that last wrote to it (which decides colour).
-type Canvas = IntMap (Word8, Int)
-
-
--- | Braille dot bit for a sub-cell, following the U+28xx layout (dots 1-3 and
--- 4-6 down the two columns, dots 7-8 on the bottom row).
-dotBit :: Int -> Int -> Word8
-dotBit dx dy
-  | dy == 3 = if dx == 0 then 0x40 else 0x80
-  | otherwise = bit (dy + 3 * dx)
-
-
-plot :: Int -> Int -> Int -> Int -> Int -> Canvas -> Canvas
-plot w h px py sIdx
-  | px < 0 || py < 0 || px >= w * 2 || py >= h * 4 = id
-  | otherwise = IntMap.insertWith merge ((py `div` 4) * w + px `div` 2) (dotBit (px `mod` 2) (py `mod` 4), sIdx)
-  where
-    merge (newBits, s) (oldBits, _) = (newBits .|. oldBits, s)
-
-
-drawSeries :: Int -> Int -> (Double, Double) -> (Double, Double) -> Canvas -> (Int, Series) -> Canvas
-drawSeries w h (xLo, xHi) (yLo, yHi) c0 (sIdx, s) = foldl' segment c0 (zip pixels (drop 1 pixels))
-  where
-    pixels = [(toPx xLo xHi (w * 2) x, (h * 4 - 1) - toPx yLo yHi (h * 4) y) | (x, Just y) <- s.points]
-    -- Gaps are already absent from `pixels`, so a segment can span a hole: a
-    -- dropped bin shouldn't split the line when the series is otherwise
-    -- continuous.
-    segment c ((x0, y0), (x1, y1)) = foldl' (\acc (x, y) -> plot w h x y sIdx acc) c (bresenham x0 y0 x1 y1)
-
-
-toPx :: Double -> Double -> Int -> Double -> Int
-toPx lo hi n v = clamp (0, n - 1) $ round (frac lo hi v * fromIntegral (n - 1))
-
-
-bresenham :: Int -> Int -> Int -> Int -> [(Int, Int)]
-bresenham x0 y0 x1 y1 = go x0 y0 (dx + dy)
-  where
-    dx = abs (x1 - x0)
-    dy = negate (abs (y1 - y0))
-    sx = if x0 < x1 then 1 else -1
-    sy = if y0 < y1 then 1 else -1
-    go x y err
-      | x == x1 && y == y1 = [(x, y)]
-      | otherwise =
-          (x, y)
-            : let (x', err') = if 2 * err >= dy && x /= x1 then (x + sx, err + dy) else (x, err)
-                  (y', err'') = if 2 * err <= dx && y /= y1 then (y + sy, err' + dx) else (y, err')
-               in go x' y' err''
-
-
-canvasRows :: Bool -> Int -> Int -> Canvas -> [Text]
-canvasRows color w h canvas = [T.concat [cell (r * w + c) | c <- [0 .. w - 1]] | r <- [0 .. h - 1]]
-  where
-    cell k = case IntMap.lookup k canvas of
-      Nothing -> " "
-      Just (bits, s) -> colorize color (seriesColor s) (one (chr (0x2800 + fromIntegral bits)))
+    level y = if hi - lo < 1e-12 then 4 else clamp (0, 8) (round ((y - lo) / (hi - lo) * 8))
 
 
 -- Formatting -----------------------------------------------------------------
@@ -312,16 +241,12 @@ formatValue u v = case u of
 -- | Clock label for an epoch-millisecond x value, at a precision that suits the
 -- visible window: seconds under 10 minutes, date once the window passes 2 days.
 formatTimeLabel :: Double -> Double -> Text
-formatTimeLabel spanMs ms = toText (formatTime defaultTimeLocale fmt (msToUTC ms))
+formatTimeLabel spanMs ms = toText (formatTime defaultTimeLocale fmt (posixSecondsToUTCTime (realToFrac (ms / 1000))))
   where
     fmt
       | spanMs <= 600_000 = "%H:%M:%S"
       | spanMs <= 172_800_000 = "%H:%M"
       | otherwise = "%m-%d %H:%M"
-
-
-msToUTC :: Double -> UTCTime
-msToUTC ms = posixSecondsToUTCTime (realToFrac (ms / 1000))
 
 
 seriesColor :: Int -> ANSI.Color
@@ -352,62 +277,9 @@ bold True t = toText (ANSI.setSGRCode [ANSI.SetConsoleIntensity ANSI.BoldIntensi
 
 -- Small numeric helpers ------------------------------------------------------
 
--- | Where @v@ sits in @[lo, hi]@, as 0..1. A degenerate range maps to the
--- middle rather than blowing up, so a flat series draws a centred line.
-frac :: Double -> Double -> Double -> Double
-frac lo hi v
-  | hi - lo < 1e-12 = 0.5
-  | otherwise = clamp (0, 1) ((v - lo) / (hi - lo))
-
-
 rangeOf :: [Double] -> (Double, Double)
 rangeOf [] = (0, 1)
 rangeOf (x : xs) = (foldl' min x xs, foldl' max x xs)
-
-
--- | Human-friendly axis ticks: round the step to 1/2/5 × a power of ten and
--- walk from the first multiple at or above @lo@.
---
--- >>> niceTicks 0 100 4
--- [0.0,25.0,50.0,75.0,100.0]
--- >>> niceTicks 0 7 3
--- [0.0,2.5,5.0,7.5]
-niceTicks :: Double -> Double -> Int -> [Double]
-niceTicks lo hi n
-  | hi - lo < 1e-12 = [lo]
-  | otherwise = takeWhile (<= hi + step / 2) [start + fromIntegral i * step | i <- [0 :: Int ..]]
-  where
-    raw = (hi - lo) / fromIntegral (max 1 n)
-    mag = 10 ** fromIntegral (floor (logBase 10 raw) :: Int)
-    step = mag * fromMaybe 10 (find (>= raw / mag) [1, 2, 2.5, 5])
-    start = fromIntegral (ceiling (lo / step) :: Integer) * step
-
-
--- | Place labels across @w@ columns: first flush left, last flush right, the
--- rest evenly spaced. Overlapping labels are dropped rather than truncated.
-spread :: Int -> [Text] -> Text
-spread w ls = foldl' place (T.replicate w " ") (zip (positions (length ls)) ls)
-  where
-    positions k = [round (fromIntegral i / fromIntegral (max 1 (k - 1)) * fromIntegral (w - 1) :: Double) | i <- [0 .. k - 1]]
-    place acc (p, l) =
-      let at = clamp (0, max 0 (w - T.length l)) (p - if p >= w - 1 then T.length l - 1 else 0)
-       in if T.any (/= ' ') (T.take (T.length l + 1) (T.drop at acc))
-            then acc
-            else T.take at acc <> l <> T.drop (at + T.length l) acc
-
-
-chunkInto :: Int -> [a] -> [[a]]
-chunkInto n xs
-  | len <= n = map one xs
-  | otherwise = [slice i | i <- [0 .. n - 1]]
-  where
-    len = length xs
-    slice i = take (max 1 (len `div` n)) (drop (i * len `div` n) xs)
-
-
-avg :: [Double] -> Double
-avg [] = 0
-avg xs = sum xs / fromIntegral (length xs)
 
 
 ellipsize :: Int -> Text -> Text

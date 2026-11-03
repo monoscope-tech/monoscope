@@ -39,7 +39,6 @@ import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Git qualified as Git
 import Pkg.Parser.Expr qualified as ParserExpr
-import CLI.Resource qualified as Resource
 import Data.Set qualified as S
 import Pages.Dashboards qualified as DashPage
 import Pkg.AI qualified as AI
@@ -56,6 +55,7 @@ import Web.Auth (resolveApiKeyProject)
 import Web.MCP qualified as MCP
 import Web.Routes (apiV1OpenApiSpec, apiV1Server)
 import Web.Routes qualified as Routes
+import Web.Operations qualified as Operations (Cli (..), Operation (..), listingOf, operations, pathParams)
 import Web.Wire qualified as Wire
 
 
@@ -439,7 +439,7 @@ spec = describe "API v1" do
       direct <- toBaseServantResponse tr $ ApiH.apiProjectGet testPid
       result ^? key "structuredContent" `shouldBe` Just (AE.toJSON direct)
 
-    it "catalog covers every published operation once and shares the CLI resource routes" $ \_tr -> do
+    it "catalog covers every published operation once" $ \_tr -> do
       let documented =
             S.fromList
               [ (H.renderStdMethod method, AEK.toText path)
@@ -450,13 +450,15 @@ spec = describe "API v1" do
               , (H.renderStdMethod method, AEK.toText path) /= (H.methodPost, "/mcp")
               ]
           exposed = S.fromList [(binding.method, binding.path) | tool <- Map.elems reg, MCP.ViaOpenApi binding <- [tool.dispatch]]
-          names = map (fst . snd) (Map.toList Catalog.apiOperations) <> map (.name) Catalog.compositeTools <> map (.name) (Map.elems Catalog.localTools)
+          names = map (.name) (Map.elems Catalog.apiOperations) <> map (.name) Catalog.compositeTools <> map (.name) (Map.elems Catalog.localTools)
       exposed `shouldBe` documented
       Map.keysSet Catalog.apiOperations `shouldBe` documented
       length names `shouldBe` S.size (S.fromList names)
+      let cliPaths = [c.command | o <- Operations.operations, c <- o.cli]
+      length cliPaths `shouldBe` S.size (S.fromList cliPaths)
+      -- Every CLI command with an id parameter has a listing to pick that id from.
+      [o.name | o <- Operations.operations, not (null o.cli || null (Operations.pathParams o.path)), isNothing (Operations.listingOf (T.takeWhile (/= '/') (T.drop 1 o.path)))] `shouldBe` []
       Map.size Catalog.localTools `shouldBe` length [minBound .. maxBound :: Catalog.LocalOperation]
-      for_ [Resource.Monitors, Resource.Dashboards, Resource.ApiKeys, Resource.Teams, Resource.Members, Resource.Issues, Resource.Incidents, Resource.Endpoints, Resource.LogPatterns] \kind ->
-        ((H.methodGet,) <$> T.stripPrefix "/api/v1" (Resource.resourcePath kind)) `shouldSatisfy` maybe False (`S.member` documented)
 
     it "requires an explicit Agent policy or exclusion for every MCP operation" $ \_tr -> do
       let policies = Map.mapMaybe (.agentPolicy) reg

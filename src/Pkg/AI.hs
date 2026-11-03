@@ -81,10 +81,8 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Lens (key, values, _Bool, _Number, _Object, _String)
 import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.ByteString.Lazy qualified as BSL
-import Data.Cache qualified as Cache
 import Data.Char (isAlphaNum, isHexDigit)
 import Data.Default (def)
-import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID (UUIDEff, genUUID)
@@ -100,8 +98,6 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception qualified as Exception
-import Effectful.Labeled (Labeled)
-import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -145,7 +141,6 @@ import Pkg.SlackOAuth qualified as SlackOAuth
 import Pkg.SlackRateLimit qualified as SlackRateLimit
 import Relude
 import System.Config qualified as Config
-import System.Tracing (Tracing)
 import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (throwIO, withException)
 import Utils (encodeText, hostPath, nonEmptyT, unwrapJsonPrimValue)
@@ -824,10 +819,6 @@ getTextArg :: Text -> Map.Map Text AE.Value -> Maybe Text
 getTextArg k args = Map.lookup k args >>= (^? _String)
 
 
-getLimitArg :: Int -> Int -> Map.Map Text AE.Value -> Int
-getLimitArg maxVal defVal args = min maxVal $ maybe defVal round $ Map.lookup "limit" args >>= (^? _Number)
-
-
 -- | Result rows with every cell rendered as plain text.
 textRows :: V.Vector (V.Vector AE.Value) -> [[Text]]
 textRows = map (map (unwrapJsonPrimValue True) . V.toList) . V.toList
@@ -964,7 +955,7 @@ runSlackEvidence config tool operation proposed = do
         unlessM (lift $ currentSlackGrant settings subject grant) $ Except.throwError $ SlackCredentialFailure Integrations.SlackNotConnected
         pure link
       (SlackMCP.ReadThread, SlackMCP.ReadRejected) -> pure Nothing
-      ((SlackMCP.SearchPublic, _); (SlackMCP.SearchPersonal, _); (SlackMCP.ReadChannel, _)) -> pure Nothing
+      ((SlackMCP.SearchPublic, _); (SlackMCP.SearchPublicAndPrivate, _); (SlackMCP.ReadChannel, _)) -> pure Nothing
     pure SlackEvidence{subject, operation, arguments, result, source}
   pure $ case outcome of
     Left failure -> ToolResult (slackEvidenceMessage failure) Nothing
@@ -972,7 +963,7 @@ runSlackEvidence config tool operation proposed = do
       let citation = case (evidence.operation, evidence.source) of
             (SlackMCP.ReadThread, Just (SlackPermalink url)) -> "\n\nVerified source thread: " <> url <> "\nCite this link verbatim; do not construct Slack URLs."
             (SlackMCP.ReadThread, Nothing) -> "\n\nNo verified source link is available. Do not invent a Slack URL."
-            ((SlackMCP.SearchPublic, _); (SlackMCP.SearchPersonal, _); (SlackMCP.ReadChannel, _)) -> ""
+            ((SlackMCP.SearchPublic, _); (SlackMCP.SearchPublicAndPrivate, _); (SlackMCP.ReadChannel, _)) -> ""
        in ToolResult ((case evidence.result.outcome of SlackMCP.ReadSucceeded -> ""; SlackMCP.ReadRejected -> "Slack evidence read failed:\n") <> T.intercalate "\n\n" evidence.result.content <> citation) (Just $ AE.toJSON evidence)
   where
     threadPermalink grant arguments = maybe (pure Nothing) (uncurry fetch) do
@@ -1667,25 +1658,19 @@ executeToolAt cursor config tc = do
             $ ["name" AE..= tool.name, "description" AE..= tool.description, "input_schema" AE..= tool.inputSchema, "agent_recovery" AE..= recovery tool]
             <> maybe [] (\policy -> ["minimum_permission" AE..= MCP.minimumPermission policy, "evidence_permission" AE..= Catalog.disclosurePermission policy, "action" AE..= MCP.actionName policy]) tool.agentPolicy
       ListProjectMemory -> EffectfulOperation $ case parseEither Memory.parsePageQuery $ AE.toJSON args of
-        Left err -> pure $ noRaw $ toolError "list_project_memory" ("invalid 'query': " <> toText err) args
+        Left err -> pure $ failed ("invalid 'query': " <> toText err)
         Right query -> noRaw . encodeText . map Memory.summarize <$> Memory.discoverPages config.projectId query
-      ReadProjectMemory -> EffectfulOperation $ noRaw <$> readMemory args
+      ReadProjectMemory -> EffectfulOperation $ case getTextArg "pageId" args >>= idFromText of
+        Nothing -> pure $ failed "invalid or missing 'pageId'"
+        Just pageId -> noRaw . maybe "Wiki page not found in the authorized project." memoryResult . viaNonEmpty head <$> Memory.pageHistory config.projectId pageId
       WriteProjectMemory -> AtomicOperation $ noRaw <$> writeMemory args
       GetInvestigationHistory -> EffectfulOperation $ noRaw <$> slackThread "Investigation history requires an authorized Slack investigation." \run -> encodeText <$> Investigations.recentEvents config.projectId run.teamId run.channelId run.threadTs
       GetIncidentContext -> EffectfulOperation $ noRaw <$> slackThread "Incident context requires an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackInvestigationContext config.projectId run.teamId run.channelId run.threadTs
       GetRelatedIncidents -> EffectfulOperation $ noRaw <$> slackThread "Related incidents require an authorized Slack investigation." \run -> maybe "No incident is bound to this Slack thread." encodeText <$> Incidents.slackRelatedIncidents config.projectId run.teamId run.channelId run.threadTs
       GetLinkedRepositories -> EffectfulOperation $ noRaw . encodeText <$> CodeContext.getLinkedRepositories config.projectId (getTextArg "service" args)
-      GetDeployments ->
-        EffectfulOperation
-          $ noRaw
-          <$> case config.sourceConfig of
-            Just cfg ->
-              withArg "get_deployments" "mapping_id" args
-                $ maybe
-                  (pure "Invalid repository mapping ID.")
-                  (\mappingId -> encodeText <$> CodeContext.fetchDeployments cfg config.projectId mappingId (getTextArg "environment" args))
-                . idFromText
-            _ -> pure "Deployment evidence is unavailable for this conversation."
+      GetDeployments -> EffectfulOperation case config.sourceConfig of
+        Just cfg -> required "mapping_id" $ maybe (pure $ noRaw "Invalid repository mapping ID.") (\mappingId -> noRaw . encodeText <$> CodeContext.fetchDeployments cfg config.projectId mappingId (getTextArg "environment" args)) . idFromText
+        _ -> pure $ noRaw "Deployment evidence is unavailable for this conversation."
       ListRunbooks ->
         EffectfulOperation
           $ noRaw
@@ -1698,18 +1683,40 @@ executeToolAt cursor config tc = do
           <$> case (config.sourceConfig, parseMaybe AE.parseJSON $ AE.toJSON args) of
             (Just cfg, Just query) -> encodeText <$> CodeContext.readRunbook cfg config.projectId query
             _ -> pure "Runbook reads require a repository mapping ID, full commit hash and document path."
-      GetCodeContext -> EffectfulOperation $ noRaw <$> executeGetCodeContext config args
-      GetFieldValues -> EffectfulOperation $ noRaw <$> executeGetFieldValues config args
-      GetServices -> EffectfulOperation $ noRaw <$> executeGetServices config
-      CountQuery -> EffectfulOperation $ noRaw <$> executeCountQuery config args
-      SampleLogs -> EffectfulOperation $ noRaw <$> executeSampleLogs config args
-      GetFacets -> EffectfulOperation $ pure $ noRaw $ executeGetFacets config
-      RunQuery -> EffectfulOperation $ executeRunQuery config args
-      RunSqlQuery -> EffectfulOperation $ noRaw <$> executeSqlQuery config args
+      -- Source reads use only project-linked credentials; no caller-supplied repository URL or token is accepted.
+      GetCodeContext -> EffectfulOperation case config.sourceConfig of
+        Just cfg -> required "path" \path -> required "revision" \revision ->
+          if T.length revision `notElem` [40, 64] || not (T.all isHexDigit revision)
+            then pure $ noRaw "Source evidence requires a full commit hash. Find the deployed revision in telemetry or ask the engineer."
+            else case traverse (parseMaybe AE.parseJSON) (Map.lookup "line" args) of
+              Just lineM
+                | let line = fromMaybe 1 lineM
+                , line > 0 ->
+                    CodeContext.fetchSourceEvidence Nothing cfg config.projectId (getTextArg "service" args) (Just revision) path line
+                      <&> noRaw
+                      . either CodeContext.snippetErrorMessage \evidence ->
+                        let source = evidence.snippet
+                         in encodeText $ AE.object ["evidence" AE..= evidence{CodeContext.snippet = source{CodeContext.body = map (T.take 1000) source.body}}, "sourceLinesTruncated" AE..= any ((> 1000) . T.length) source.body]
+              _ -> pure $ noRaw "Source line must be a positive integer."
+        _ -> pure $ noRaw "Source evidence is unavailable for this conversation."
+      GetFieldValues -> EffectfulOperation $ required "field" \field -> kql ("| summarize count() by " <> field <> " | sort by count_ desc | take " <> show (limit config.limits.maxFieldValues config.limits.defaultFieldLimit)) [] \(results, _, _) -> noRaw ("Values for '" <> field <> "': " <> formatSummarizeResults results)
+      GetServices -> EffectfulOperation $ kql ("| summarize count() by resource.service.name | sort by count_ desc | take " <> show config.limits.maxServices) [] \(results, _, _) -> noRaw ("Available services: " <> formatSummarizeResults results)
+      CountQuery -> EffectfulOperation $ required "query" \query -> kql query [] \(_, _, count) -> noRaw ("Query '" <> query <> "' matches " <> show count <> " entries")
+      SampleLogs -> EffectfulOperation $ required "query" \query -> kql (withTake (limit config.limits.maxSampleLogs config.limits.defaultSampleLimit) query) ["level", "name", "resource.service.name", "body"] \(results, _, _) -> noRaw ("Sample logs:\n" <> formatSampleLogs config.limits.maxBodyPreview results)
+      GetFacets -> EffectfulOperation $ pure $ noRaw case foldMap (facetLines \(FacetValue v c) -> "\"" <> v <> "\" (" <> show c <> ")") config.facetContext of
+        [] -> "No facet data available"
+        ls -> "Facet data:\n" <> T.intercalate "\n" ls
+      RunQuery -> EffectfulOperation $ required "query" \query ->
+        kql (withTake (limit config.limits.maxQueryResults config.limits.maxDisplayRows) query) [] \(results, headers, count) ->
+          ToolResult (formatQueryResults config.limits.maxDisplayRows results count) (Just $ AE.object ["headers" AE..= headers, "data" AE..= results, "count" AE..= count])
+      RunSqlQuery -> EffectfulOperation $ required "query" \query ->
+        noRaw
+          . either (\err -> "SQL Error: " <> err <> "\nNote: KQL queries (run_query) are preferred when possible.") (\results -> formatQueryResults config.limits.maxDisplayRows results (V.length results))
+          <$> executeSecuredQuery config.useTimefusion config.projectId (SecuredSql SqlTimefusion query) (limit config.limits.maxQueryResults config.limits.maxDisplayRows)
       -- A successful save carries its key as rawData, so renderers need not parse the message.
       SaveArtifact -> AtomicOperation $ inConversation \convId -> either (pure . noRaw) Relude.id do
-        key' <- maybeToRight (toolError "save_artifact" "missing 'key'" args) (getTextArg "key" args) >>= Issues.mkArtifactKey
-        body <- maybeToRight (toolError "save_artifact" "missing 'content'" args) (getTextArg "content" args)
+        key' <- maybeToRight (failure "missing 'key'") (getTextArg "key" args) >>= Issues.mkArtifactKey
+        body <- maybeToRight (failure "missing 'content'") (getTextArg "content" args)
         when (T.length body > 100_000) $ Left "content must be at most 100000 characters per write."
         write <- maybe (Right Issues.ArtifactReplace) (first (const "mode must be replace or append.") . parseEither AE.parseJSON) (Map.lookup "mode" args)
         pure
@@ -1739,6 +1746,20 @@ executeToolAt cursor config tc = do
                       pure $ ToolResult result $ Just $ AE.object ["channel" AE..= slack.channelId, "response" AE..= body]
                   )
         _ -> pure $ noRaw "Slack message must contain between 1 and 4000 characters."
+      where
+        failure msg = "Error in " <> toText (encodeEnumSC @"" operation) <> ": " <> msg <> " (received: " <> show (Map.keys args) <> ")"
+        failed = noRaw . failure
+        required k f = maybe (pure $ failed ("missing '" <> k <> "'")) f (getTextArg k args)
+        limit maxVal defVal = min maxVal $ maybe defVal round $ Map.lookup "limit" args >>= (^? _Number)
+        withTake lim q = if "| take" `T.isInfixOf` q then q else q <> " | take " <> show lim
+        kql query cols render = case parseQueryToAST query of
+          Left parseErr -> pure $ noRaw ("Error: Query parse failed - " <> show parseErr)
+          Right queryAST -> do
+            now <- Time.currentTime
+            let timeRange = case config.timeRange of
+                  (Nothing, Nothing) -> (Just $ addUTCTime (-3600) now, Just now)
+                  configured -> configured
+            either (\err -> noRaw ("Error: Query execution failed - " <> err)) render <$> selectLogTable config.useTimefusion config.projectId queryAST query Nothing timeRange cols Nothing Nothing Nothing Nothing
     recovery tool = case tool.agentPolicy of
       Just MCP.ReadOnly{} -> ReplayReads
       (Nothing; Just MCP.ConversationWrite; Just MCP.ProjectMemoryWrite; Just MCP.ProjectWrite; Just MCP.ExternalPublication; Just MCP.Administration{}) -> case tool.dispatch of
@@ -1754,9 +1775,6 @@ executeToolAt cursor config tc = do
     maxReadChars = 40_000
     inConversation :: Applicative m => (UUIDId "conversation" -> m ToolResult) -> m ToolResult
     inConversation f = maybe (pure $ ToolResult "Documents are only available in Monoscope conversations." Nothing) f $ documentConversation config
-    readMemory arguments = case getTextArg "pageId" arguments >>= idFromText of
-      Nothing -> pure $ toolError "read_project_memory" "invalid or missing 'pageId'" arguments
-      Just pageId -> maybe "Wiki page not found in the authorized project." memoryResult . viaNonEmpty head <$> Memory.pageHistory config.projectId pageId
     writeMemory arguments = case (invocationContext config.invocationMode, parseMaybe (AE.parseJSON @Memory.Edit) $ AE.toJSON arguments) of
       (Just context, Just edit) -> either memoryError memoryResult <$> Memory.writeRunPageTx config.projectId context.id edit
       _ -> pure "Wiki writes require a durable run, pageId, version and bounded document."
@@ -1777,126 +1795,3 @@ executeToolAt cursor config tc = do
           formatted = if null content then encodeText $ fromMaybe value (value ^? key "structuredContent") else T.intercalate "\n" content
           failure = "Tool failed: " <$ guard (value ^? key "isError" . _Bool == Just True)
       pure $ ToolResult (fromMaybe "" failure <> formatted) (Just value)
-
-
--- | Source reads retain the tool loop's before/after access checks and use only
--- project-linked credentials. No caller-supplied repository URL or token is accepted.
-executeGetCodeContext :: (DB es, IOE :> es, Log :> es, W.HTTP :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-executeGetCodeContext config args = case config.sourceConfig of
-  Just cfg -> withArg "get_code_context" "path" args \path ->
-    withArg "get_code_context" "revision" args \revision ->
-      if T.length revision `notElem` [40, 64] || not (T.all isHexDigit revision)
-        then pure "Source evidence requires a full commit hash. Find the deployed revision in telemetry or ask the engineer."
-        else case traverse (parseMaybe AE.parseJSON) (Map.lookup "line" args) of
-          Just lineM
-            | let line = fromMaybe 1 lineM
-            , line > 0 ->
-                do
-                  -- Each agent read checks the repository grant remotely; do not
-                  -- serve source cached under another credential or git host.
-                  cache <- liftIO $ Cache.newCache Nothing
-                  CodeContext.fetchSourceEvidence cache cfg config.projectId (getTextArg "service" args) (Just revision) path line
-                    <&> either
-                      CodeContext.snippetErrorMessage
-                      ( \evidence ->
-                          let source = evidence.snippet
-                              clipped = any ((> 1000) . T.length) source.body
-                           in encodeText
-                                $ AE.object
-                                  [ "evidence" AE..= evidence{CodeContext.snippet = source{CodeContext.body = map (T.take 1000) source.body}}
-                                  , "sourceLinesTruncated" AE..= clipped
-                                  ]
-                      )
-          _ -> pure "Source line must be a positive integer."
-  _ -> pure "Source evidence is unavailable for this conversation."
-
-
--- * Tool Execution
-
-
-toolError :: Text -> Text -> Map.Map Text AE.Value -> Text
-toolError tool msg args = "Error in " <> tool <> ": " <> msg <> " (received: " <> show (Map.keys args) <> ")"
-
-
--- | Run the continuation on a required text argument, or report it missing
-withArg :: Applicative f => Text -> Text -> Map.Map Text AE.Value -> (Text -> f Text) -> f Text
-withArg tool k args f = maybe (pure $ toolError tool ("missing '" <> k <> "'") args) f (getTextArg k args)
-
-
--- | KQL tool whose raw results are never surfaced to the caller
-runKqlText :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text) -> Eff es Text
-runKqlText config kqlQuery cols f = (.formatted) <$> runKqlWithRawData config kqlQuery cols ((,AE.Null) . f)
-
-
-withTake :: Int -> Text -> Text
-withTake lim q = if "| take" `T.isInfixOf` q then q else q <> " | take " <> show lim
-
-
-executeGetFieldValues :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-executeGetFieldValues config args = withArg "get_field_values" "field" args \field ->
-  runKqlText
-    config
-    ("| summarize count() by " <> field <> " | sort by count_ desc | take " <> show (getLimitArg config.limits.maxFieldValues config.limits.defaultFieldLimit args))
-    []
-    \(results, _, _) -> "Values for '" <> field <> "': " <> formatSummarizeResults results
-
-
-executeGetServices :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Eff es Text
-executeGetServices config =
-  runKqlText
-    config
-    ("| summarize count() by resource.service.name | sort by count_ desc | take " <> show config.limits.maxServices)
-    []
-    \(results, _, _) -> "Available services: " <> formatSummarizeResults results
-
-
-executeCountQuery :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-executeCountQuery config args = withArg "count_query" "query" args \kqlQuery ->
-  runKqlText config kqlQuery [] \(_, _, count) -> "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
-
-
-executeSampleLogs :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-executeSampleLogs config args = withArg "sample_logs" "query" args \kqlQuery ->
-  runKqlText
-    config
-    (withTake (getLimitArg config.limits.maxSampleLogs config.limits.defaultSampleLimit args) kqlQuery)
-    ["level", "name", "resource.service.name", "body"]
-    \(results, _, _) -> "Sample logs:\n" <> formatSampleLogs config.limits.maxBodyPreview results
-
-
-executeGetFacets :: AgenticConfig -> Text
-executeGetFacets config = case foldMap (facetLines \(FacetValue v c) -> "\"" <> v <> "\" (" <> show c <> ")") config.facetContext of
-  [] -> "No facet data available"
-  ls -> "Facet data:\n" <> T.intercalate "\n" ls
-
-
-runKqlWithRawData :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> (Text, AE.Value)) -> Eff es ToolResult
-runKqlWithRawData config kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
-  Left parseErr -> pure $ ToolResult ("Error: Query parse failed - " <> show parseErr) Nothing
-  Right queryAST -> do
-    now <- Time.currentTime
-    let timeRange = case config.timeRange of
-          (Nothing, Nothing) -> (Just $ addUTCTime (-3600) now, Just now)
-          configured -> configured
-    resultE <- selectLogTable config.useTimefusion config.projectId queryAST kqlQuery Nothing timeRange cols Nothing Nothing Nothing Nothing
-    pure $ case resultE of
-      Left err -> ToolResult ("Error: Query execution failed - " <> err) Nothing
-      Right res -> let (txt, raw) = formatResult res in ToolResult txt (Just raw)
-
-
-executeRunQuery :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es ToolResult
-executeRunQuery config args = case getTextArg "query" args of
-  Just query ->
-    runKqlWithRawData config (withTake (getLimitArg config.limits.maxQueryResults config.limits.maxDisplayRows args) query) [] \(results, headers, count) ->
-      ( formatQueryResults config.limits.maxDisplayRows results count
-      , AE.object ["headers" AE..= headers, "data" AE..= results, "count" AE..= count]
-      )
-  _ -> pure $ ToolResult (toolError "run_query" "missing 'query'" args) Nothing
-
-
-executeSqlQuery :: (DB es, Labeled "timefusion" Hasql :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-executeSqlQuery config args = withArg "run_sql_query" "query" args \query ->
-  executeSecuredQuery config.useTimefusion config.projectId (SecuredSql SqlTimefusion query) (getLimitArg config.limits.maxQueryResults config.limits.maxDisplayRows args)
-    <&> either
-      (\err -> "SQL Error: " <> err <> "\nNote: KQL queries (run_query) are preferred when possible.")
-      (\results -> formatQueryResults config.limits.maxDisplayRows results (V.length results))

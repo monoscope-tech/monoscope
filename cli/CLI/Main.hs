@@ -4,14 +4,16 @@
 module CLI.Main (cliMain, parserInfo, run, GlobalOpts (..)) where
 
 import Relude
+import Relude.Extra.Tuple (toSnd)
 import System.IO (hSetEncoding, isEOF, utf8)
 
 import CLI.Commands hiding (value)
 import CLI.Config (CLIConfig (..), resolveConfig)
-import CLI.Core (Ingestion, OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode, dieWith, renderAPIError, runIngestion, setOutputMode)
+import CLI.Core (Ingestion, OutputMode (..), apiGetJson, detectOutputMode, dieWith, runIngestion, setOutputMode)
 import CLI.Resource qualified as Resource
 import CLI.UI (Picker, runPicker)
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.AgentWorkspace.Guest qualified as Guest
@@ -28,6 +30,7 @@ import Models.Telemetry.Schema qualified as Schema
 import Options.Applicative
 import Options.Applicative.Help.Pretty (pretty, vsep)
 import System.Environment (setEnv)
+import Web.Operations qualified as Op
 
 
 data GlobalOpts = GlobalOpts
@@ -45,18 +48,8 @@ data Command
   | MetricsCmd MetricsCommand
   | ServicesCmd ServicesCommand
   | ConfigCmd ConfigCommand
-  | MonitorsCmd MonitorsCommand
-  | DashboardsCmd DashboardsCommand
-  | ApiKeysCmd ApiKeysCommand
-  | ShareLinkCmd ShareLinkCommand
-  | MeCmd
-  | ProjectCmd ProjectCommand
-  | IssuesCmd IssuesCommand
-  | IncidentsCmd IncidentsCommand
-  | EndpointsCmd EndpointsCommand
-  | LogPatternsCmd LogPatternsCommand
-  | TeamsCmd TeamsCommand
-  | MembersCmd MembersCommand
+  | ApiCmd Resource.ApiCall
+  | DashRenderCmd DashboardRenderOpts
   | SchemaCmd SchemaOpts
   | FacetsCmd FacetsOpts
   | CompletionCmd Text
@@ -72,63 +65,6 @@ data Command
   | WorkspacePruneCmd FilePath Workspace.PruneOptions
   | WorkspaceLeaseCmd FilePath Workspace.Options
   | RegressionCmd FilePath Workspace.RegressionOptions
-
-
-data ProjectCommand
-  = ProjGet
-  | ProjPatch FilePath
-  deriving stock (Show)
-
-
-data IssuesCommand
-  = IssueList {status, issueType, service :: Maybe Text, page, perPage :: Maybe Int}
-  | IssueGet (Maybe Text)
-  | IssueAck (Maybe Text) (Maybe Int)
-  | IssueUnack (Maybe Text)
-  | IssueArchive (Maybe Text)
-  | IssueUnarchive (Maybe Text)
-  | IssueBulk Text [Text] (Maybe Int)
-  deriving stock (Show)
-
-
-data IncidentsCommand
-  = IncidentList {phase :: Maybe Text, limit :: Maybe Int}
-  | IncidentGet (Maybe Text)
-  deriving stock (Show)
-
-
-data EndpointsCommand
-  = EndList {search :: Maybe Text, outgoing :: Maybe Bool, page, perPage :: Maybe Int}
-  | EndGet (Maybe Text)
-  deriving stock (Show)
-
-
-data LogPatternsCommand
-  = LPList {page, perPage :: Maybe Int}
-  | LPGet (Maybe Int64)
-  | LPAck (Maybe Int64)
-  | LPBulk Text [Int64]
-  deriving stock (Show)
-
-
-data TeamsCommand
-  = TeamList
-  | TeamGet (Maybe Text)
-  | TeamCreate FilePath
-  | TeamUpdate (Maybe Text) FilePath
-  | TeamPatch (Maybe Text) FilePath
-  | TeamDelete (Maybe Text)
-  | TeamBulk Text [Text]
-  deriving stock (Show)
-
-
-data MembersCommand
-  = MemberList
-  | MemberGet (Maybe Text)
-  | MemberAdd {email, userId, permission :: Maybe Text}
-  | MemberPatch (Maybe Text) Text -- userId, permission
-  | MemberRemove (Maybe Text)
-  deriving stock (Show)
 
 
 data EventsCommand
@@ -181,59 +117,6 @@ data FacetsOpts = FacetsOpts
   deriving stock (Show)
 
 
--- | Plan A resource commands. 'id' is a UUID text.
-data MonitorsCommand
-  = MonList
-  | MonGet (Maybe Text)
-  | MonCreate FilePath
-  | MonUpdate (Maybe Text) FilePath
-  | MonPatch (Maybe Text) FilePath
-  | MonApply FilePath
-  | MonYaml (Maybe Text)
-  | MonDelete (Maybe Text)
-  | MonMute (Maybe Text) (Maybe Int)
-  | MonUnmute (Maybe Text)
-  | MonResolve (Maybe Text)
-  | MonToggle (Maybe Text)
-  | MonBulk Text [Text] (Maybe Int)
-  deriving stock (Show)
-
-
-data DashboardsCommand
-  = DashList
-  | DashGet (Maybe Text)
-  | DashCreate FilePath
-  | DashUpdate (Maybe Text) FilePath
-  | DashPatch (Maybe Text) FilePath
-  | DashDelete (Maybe Text)
-  | DashStar (Maybe Text)
-  | DashUnstar (Maybe Text)
-  | DashDuplicate (Maybe Text)
-  | DashYaml (Maybe Text)
-  | DashApply FilePath
-  | DashBulk Text [Text]
-  | DashWidgetUpsert (Maybe Text) FilePath
-  | DashWidgetDelete (Maybe Text) Text
-  | DashWidgetsReorder (Maybe Text) (Maybe Text) FilePath
-  | DashRender DashboardRenderOpts
-  deriving stock (Show)
-
-
-data ApiKeysCommand
-  = KeyList
-  | KeyGet (Maybe Text)
-  | KeyCreate Text -- title
-  | KeyActivate (Maybe Text)
-  | KeyDeactivate (Maybe Text)
-  | KeyDelete (Maybe Text)
-  deriving stock (Show)
-
-
-data ShareLinkCommand
-  = ShareLinkCreate Text Text (Maybe Text) -- eventId, createdAt, eventType
-  deriving stock (Show)
-
-
 -- | Output is picked from three mutually-exclusive flags. Precedence when more
 -- than one is set: @--json > --yaml > --table@. With none set, output is
 -- auto-detected from stdout: TTY → table, pipe/redirect → JSON. This replaces
@@ -279,18 +162,6 @@ commandParser =
           , cmd "open" (OpenCmd <$> openParser) (progDesc "Open (or print) the web UI link for a resource" <> examplesFooter openExamples)
           , cmd "services" (ServicesCmd <$> servicesParser) (progDesc "List services")
           , cmd "config" (ConfigCmd <$> configParser) (progDesc "Manage configuration")
-          , cmd "monitors" (MonitorsCmd <$> monitorsParser) (progDesc "Manage alert monitors")
-          , cmd "dashboards" (DashboardsCmd <$> dashboardsParser) (progDesc "Manage dashboards")
-          , cmd "api-keys" (ApiKeysCmd <$> apiKeysParser) (progDesc "Manage API keys")
-          , cmd "share-link" (ShareLinkCmd <$> shareLinkParser) (progDesc "Create time-limited share links")
-          , cmd "me" (pure MeCmd) (progDesc "Show current project identity")
-          , cmd "project" (ProjectCmd <$> projectParser) (progDesc "Show or patch the current project")
-          , cmd "issues" (IssuesCmd <$> issuesParser) (progDesc "List and triage issues")
-          , cmd "incidents" (IncidentsCmd <$> incidentsParser) (progDesc "Browse incident episodes")
-          , cmd "endpoints" (EndpointsCmd <$> endpointsParser) (progDesc "Browse the API endpoint catalog")
-          , cmd "log-patterns" (LogPatternsCmd <$> logPatternsParser) (progDesc "Triage log patterns")
-          , cmd "teams" (TeamsCmd <$> teamsParser) (progDesc "Manage teams")
-          , cmd "members" (MembersCmd <$> membersParser) (progDesc "Manage project members")
           , cmd "schema" (SchemaCmd <$> schemaParser) (progDesc "Fetch telemetry schema")
           , cmd "facets" (FacetsCmd <$> facetsParser) (progDesc "Discover popular field values (top-N per faceted field)" <> examplesFooter facetsExamples)
           , cmd "completion" (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish")) (progDesc "Emit shell completion script")
@@ -298,6 +169,7 @@ commandParser =
           , cmd "telemetrygen" (TelemetryGenCmd <$> telemetryGenParser) (progDesc "Generate synthetic telemetry (traces/logs/metrics)" <> examplesFooter telemetryGenExamples)
           , cmd "send-event" (SendEventCmd <$> sendEventParser) (progDesc "Send a real event (log/trace/error) from a script or CI" <> examplesFooter sendEventExamples)
           ]
+          <> commandTree ((["dashboards", "render"], DashRenderCmd <$> dashRenderParser, progDesc "Draw a dashboard in the terminal" <> examplesFooter dashRenderExamples) : apiLeaves)
       )
   where
     workspaceParser =
@@ -558,70 +430,78 @@ idValueArgs valueName =
     <*> optional (strArgument (metavar (toString valueName)))
 
 
-idFileArgs :: Parser (Maybe Text, FilePath)
-idFileArgs = second toString <$> idValueArgs "FILE"
+-- | Every catalogued CLI entry as a leaf: path params after the first and
+-- positional args share the positional slots, flags parse per their kind.
+apiLeaves :: [([Text], Parser Command, InfoMod Command)]
+apiLeaves =
+  [ (toList c.command, ApiCmd <$> call, progDesc (toString o.summary))
+  | o <- Op.operations
+  , c <- o.cli
+  , let params = Op.pathParams o.path
+        slots = [Left n | n <- drop 1 params] <> [Right p | Op.Pos p <- c.args]
+        positionals = case (params, slots) of
+          (_ : _, [s]) -> second pure <$> idValueArgs (metaOf s)
+          (_ : _, ss) -> (,) <$> idArg <*> traverse strArg ss
+          ([], ss) -> (Nothing,) <$> traverse strArg ss
+        call =
+          (\(ident, vs) opts -> Resource.ApiCall o c.listing ident [v | (Left _, v) <- zip slots vs] ([positional p v | (Right p, v) <- zip slots vs] <> catMaybes opts))
+            <$> positionals
+            <*> traverse optionParser [opt | Op.Opt opt <- c.args]
+  ]
+  where
+    metaOf = either T.toUpper (.meta)
+    strArg s = strArgument (metavar (toString (metaOf s)) <> foldMap (help . toString . (.help)) (rightToMaybe s))
+    positional p v = case p.target of
+      Op.BodyText k -> Resource.BodyField (AK.fromText k) (AE.String v)
+      Op.BodyFile -> Resource.BodyFrom (toString v)
+      Op.ApplyFiles -> Resource.ApplyFrom (toString v)
+    optionParser opt =
+      let mods :: HasName f => Mod f x
+          mods = foldMap (\n -> maybe (long (toString n)) (short . fst) (guard (T.length n == 1) *> T.uncons n)) opt.names <> help (toString opt.help)
+          valued :: Mod OptionFields x
+          valued = mods <> metavar (toString opt.meta)
+          ids f = eitherReader (traverse f . T.splitOn "," . toText)
+          -- Query-string and JSON-body forms of one parsed value; the wire picks one.
+          parsed = case opt.kind of
+            Op.Str -> toSnd AE.String <$> strOption valued
+            Op.Int -> (\n -> (show n, AE.toJSON n)) <$> option (auto @Int64) valued
+            Op.Ids -> (\xs -> (T.intercalate "," xs, AE.toJSON xs)) <$> option (ids Right) valued
+            Op.IntIds -> (\xs -> (T.intercalate "," (map show xs), AE.toJSON xs)) <$> option (ids (maybeToRight "expected integer ids" . readMaybe @Int64 . toString)) valued
+            Op.Switch -> ("true", AE.Bool True) <$ flag' () mods
+          input (q, j) = case opt.wire of
+            Op.Query k -> Resource.QueryParam k q
+            Op.Body k -> Resource.BodyField (AK.fromText k) j
+          need = case opt.need of
+            Op.Required -> id
+            Op.Optional -> (<|> pure Nothing)
+       in need (Just . input <$> parsed)
 
 
-fileArg :: Parser FilePath
-fileArg = strArgument (metavar "FILE" <> help "Path to YAML or JSON file")
-
-
-idsOpt :: Parser [Text]
-idsOpt = T.splitOn "," <$> strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated UUIDs")
-
-
-monitorsParser :: Parser MonitorsCommand
-monitorsParser =
-  subparser
-    $ mconcat
-      [ cmd "list" (pure MonList) (progDesc "List monitors")
-      , cmd "get" (MonGet <$> idArg) (progDesc "Get a single monitor")
-      , cmd "create" (MonCreate <$> fileArg) (progDesc "Create monitor from YAML/JSON file")
-      , cmd "update" (uncurry MonUpdate <$> idFileArgs) (progDesc "Replace (PUT) monitor from file")
-      , cmd "patch" (uncurry MonPatch <$> idFileArgs) (progDesc "Patch monitor fields from file")
-      , cmd "apply" (MonApply <$> strArgument (metavar "PATH" <> help "YAML/JSON file or directory")) (progDesc "Upsert monitor(s) from file or directory")
-      , cmd "yaml" (MonYaml <$> idArg) (progDesc "Dump monitor as applyable YAML")
-      , cmd "delete" (MonDelete <$> idArg) (progDesc "Delete a monitor")
-      , cmd "mute" (MonMute <$> idArg <*> optional (option auto (long "for" <> metavar "MINUTES"))) (progDesc "Mute a monitor")
-      , cmd "unmute" (MonUnmute <$> idArg) (progDesc "Unmute a monitor")
-      , cmd "resolve" (MonResolve <$> idArg) (progDesc "Resolve a monitor")
-      , cmd "toggle-active" (MonToggle <$> idArg) (progDesc "Toggle active state")
-      , cmd
-          "bulk"
-          ( MonBulk
-              <$> strArgument (metavar "ACTION" <> help "delete|activate|deactivate|mute|unmute|resolve")
-              <*> idsOpt
-              <*> optional (option auto (long "duration" <> metavar "MINUTES" <> help "For mute action"))
-          )
-          (progDesc "Run bulk action over multiple monitors")
-      ]
-
-
-dashboardsParser :: Parser DashboardsCommand
-dashboardsParser =
-  subparser
-    $ mconcat
-      [ cmd "list" (pure DashList) (progDesc "List dashboards")
-      , cmd "get" (DashGet <$> idArg) (progDesc "Get a single dashboard")
-      , cmd "create" (DashCreate <$> fileArg) (progDesc "Create dashboard from YAML/JSON file")
-      , cmd "update" (uncurry DashUpdate <$> idFileArgs) (progDesc "Replace (PUT) dashboard from file")
-      , cmd "patch" (uncurry DashPatch <$> idFileArgs) (progDesc "Patch dashboard fields from file")
-      , cmd "delete" (DashDelete <$> idArg) (progDesc "Delete a dashboard")
-      , cmd "star" (DashStar <$> idArg) (progDesc "Star a dashboard")
-      , cmd "unstar" (DashUnstar <$> idArg) (progDesc "Unstar a dashboard")
-      , cmd "duplicate" (DashDuplicate <$> idArg) (progDesc "Duplicate dashboard")
-      , cmd "yaml" (DashYaml <$> idArg) (progDesc "Dump dashboard as YAML")
-      , cmd "apply" (DashApply <$> strArgument (metavar "PATH" <> help "YAML/JSON file or directory")) (progDesc "Upsert dashboard(s) from file or directory")
-      , cmd
-          "bulk"
-          ( DashBulk
-              <$> strArgument (metavar "ACTION" <> help "delete")
-              <*> idsOpt
-          )
-          (progDesc "Run bulk action over multiple dashboards")
-      , cmd "widget" widgetParser (progDesc "Widget-level operations")
-      , cmd "render" (DashRender <$> dashRenderParser) (progDesc "Draw a dashboard in the terminal" <> examplesFooter dashRenderExamples)
-      ]
+-- | Nest leaves sharing a leading word under one subcommand, in first-seen order.
+commandTree :: [([Text], Parser a, InfoMod a)] -> Mod CommandFields a
+commandTree leaves =
+  mconcat
+    [ case [(rest, p, m) | (w' : rest, p, m) <- leaves, w' == w] of
+        [([], p, m)] -> cmd (toString w) p m
+        grouped -> cmd (toString w) (subparser (commandTree grouped)) (progDesc (toString (Map.findWithDefault w w groupDescriptions)))
+    | w <- ordNub [w | (w : _, _, _) <- leaves]
+    ]
+  where
+    groupDescriptions =
+      Map.fromList
+        [ ("monitors", "Manage alert monitors")
+        , ("dashboards", "Manage dashboards")
+        , ("widget", "Widget-level operations")
+        , ("api-keys", "Manage API keys")
+        , ("share-link", "Create time-limited share links")
+        , ("project", "Show or patch the current project")
+        , ("issues", "List and triage issues")
+        , ("incidents", "Browse incident episodes")
+        , ("endpoints", "Browse the API endpoint catalog")
+        , ("log-patterns", "Triage log patterns")
+        , ("teams", "Manage teams")
+        , ("members", "Manage project members")
+        ]
 
 
 dashRenderParser :: Parser DashboardRenderOpts
@@ -702,211 +582,6 @@ chartExamples =
   , ""
   , "Without --type: a query binned by time draws a line chart, anything else bars."
   ]
-
-
-widgetParser :: Parser DashboardsCommand
-widgetParser =
-  subparser
-    $ mconcat
-      [ cmd
-          "upsert"
-          ( uncurry DashWidgetUpsert
-              <$> idFileArgs
-          )
-          (progDesc "Insert or update a widget on a dashboard")
-      , cmd
-          "delete"
-          ( uncurry DashWidgetDelete
-              <$> idValueArgs "WIDGET_ID"
-          )
-          (progDesc "Delete a widget from a dashboard")
-      , cmd
-          "reorder"
-          ( (\(did, path) tab -> DashWidgetsReorder did tab path)
-              <$> idFileArgs
-              <*> optional (strOption (long "tab" <> metavar "TAB"))
-          )
-          (progDesc "Reorder widgets via {id: {x,y,w,h}} JSON/YAML")
-      ]
-
-
-apiKeysParser :: Parser ApiKeysCommand
-apiKeysParser =
-  subparser
-    $ mconcat
-      [ cmd "list" (pure KeyList) (progDesc "List API keys")
-      , cmd "get" (KeyGet <$> idArg) (progDesc "Get API key")
-      , cmd "create" (KeyCreate <$> strArgument (metavar "TITLE")) (progDesc "Create API key; prints plaintext once")
-      , cmd "activate" (KeyActivate <$> idArg) (progDesc "Activate an API key")
-      , cmd "deactivate" (KeyDeactivate <$> idArg) (progDesc "Deactivate an API key (soft)")
-      , cmd "revoke" (KeyDeactivate <$> idArg) (progDesc "Deprecated alias for deactivate")
-      , cmd "delete" (KeyDelete <$> idArg) (progDesc "Delete an API key")
-      ]
-
-
-shareLinkParser :: Parser ShareLinkCommand
-shareLinkParser =
-  subparser
-    $ cmd
-      "create"
-      ( ShareLinkCreate
-          <$> strOption (long "event-id" <> metavar "UUID" <> help "Event ID")
-          <*> strOption (long "created-at" <> metavar "ISO8601" <> help "Event created-at timestamp")
-          <*> optional (strOption (long "type" <> metavar "TYPE" <> help "request|log|span (default: request)"))
-      )
-      (progDesc "Create a 48h share link for a stored event")
-
-
-projectParser :: Parser ProjectCommand
-projectParser =
-  subparser
-    $ mconcat
-      [ cmd "get" (pure ProjGet) (progDesc "Show the current project")
-      , cmd "patch" (ProjPatch <$> fileArg) (progDesc "PATCH project fields from a YAML/JSON file")
-      ]
-
-
--- | Page + per-page parser. @--limit@ is accepted as an alias for @--per-page@
--- (D1) so the CLI is consistent across listings — every listing now accepts
--- @--limit N@.
-pageOpts :: Parser (Maybe Int, Maybe Int)
-pageOpts =
-  (,)
-    <$> optional (option auto (long "page" <> metavar "N" <> help "Page number (0-based, default: 0)"))
-    <*> optional
-      ( option
-          auto
-          ( long "limit"
-              <> long "per-page"
-              <> short 'n'
-              <> metavar "N"
-              <> help "Items per page (alias: --per-page)"
-          )
-      )
-
-
--- | Serialise page/per_page into query-string pairs.
-pageParams :: Maybe Int -> Maybe Int -> [(Text, Text)]
-pageParams pM ppM = catMaybes [("page",) . show <$> pM, ("per_page",) . show <$> ppM]
-
-
-issuesParser :: Parser IssuesCommand
-issuesParser =
-  subparser
-    $ mconcat
-      [ cmd
-          "list"
-          ( (\(page, perPage) status issueType service -> IssueList{..})
-              <$> pageOpts
-              <*> optional (strOption (long "status" <> metavar "STATUS" <> help "open|acknowledged|archived|all"))
-              <*> optional (strOption (long "type" <> metavar "TYPE" <> help "Filter by issue_type"))
-              <*> optional (strOption (long "service" <> metavar "SERVICE" <> help "Filter by service"))
-          )
-          (progDesc "List issues")
-      , cmd "get" (IssueGet <$> idArg) (progDesc "Get issue by ID")
-      , cmd "ack" (IssueAck <$> idArg <*> optional (option auto (long "for" <> metavar "MINUTES" <> help "Pause notifications for N minutes (default: until it regresses)"))) (progDesc "Acknowledge issue \x2014 pauses its notifications")
-      , cmd "unack" (IssueUnack <$> idArg) (progDesc "Un-acknowledge issue")
-      , cmd "archive" (IssueArchive <$> idArg) (progDesc "Archive issue")
-      , cmd "unarchive" (IssueUnarchive <$> idArg) (progDesc "Unarchive issue")
-      , cmd "bulk" (IssueBulk <$> strArgument (metavar "ACTION" <> help "acknowledge|unack|archive|unarchive") <*> idsOpt <*> optional (option auto (long "for" <> metavar "MINUTES" <> help "For acknowledge: pause notifications for N minutes"))) (progDesc "Bulk acknowledge/archive issues")
-      ]
-
-
-incidentsParser :: Parser IncidentsCommand
-incidentsParser =
-  subparser
-    $ mconcat
-      [ cmd "list" (IncidentList <$> optional (strOption (long "phase" <> metavar "PHASE" <> help "active|recovered|resolved")) <*> optional (option auto (long "limit" <> short 'n' <> metavar "N" <> help "Maximum incidents (default: 20)"))) (progDesc "List recent incidents")
-      , cmd "get" (IncidentGet <$> idArg) (progDesc "Get incident by ID")
-      ]
-
-
-endpointsParser :: Parser EndpointsCommand
-endpointsParser =
-  subparser
-    $ mconcat
-      [ cmd
-          "list"
-          ( (\(page, perPage) search outgoing -> EndList{..})
-              <$> pageOpts
-              <*> optional (strOption (long "search" <> metavar "TEXT" <> help "Substring filter"))
-              <*> optional (switch (long "outgoing" <> help "Only outgoing endpoints"))
-          )
-          (progDesc "List endpoints")
-      , cmd "get" (EndGet <$> idArg) (progDesc "Get endpoint by ID")
-      ]
-
-
-int64Arg :: Parser Int64
-int64Arg = argument auto (metavar "ID" <> help "Pattern ID (integer)")
-
-
-int64IdsOpt :: Parser [Int64]
-int64IdsOpt =
-  mapMaybe (readMaybe . toString)
-    . T.splitOn ","
-    <$> strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated pattern IDs")
-
-
-logPatternsParser :: Parser LogPatternsCommand
-logPatternsParser =
-  subparser
-    $ mconcat
-      [ cmd "list" (uncurry LPList <$> pageOpts) (progDesc "List log patterns")
-      , cmd "get" (LPGet <$> optional int64Arg) (progDesc "Get log pattern by ID")
-      , cmd "ack" (LPAck <$> optional int64Arg) (progDesc "Acknowledge log pattern")
-      , cmd
-          "bulk"
-          ( LPBulk
-              <$> strArgument (metavar "ACTION" <> help "ack|ignore")
-              <*> int64IdsOpt
-          )
-          (progDesc "Run bulk action over multiple log patterns")
-      ]
-
-
-teamsParser :: Parser TeamsCommand
-teamsParser =
-  subparser
-    $ mconcat
-      [ cmd "list" (pure TeamList) (progDesc "List teams")
-      , cmd "get" (TeamGet <$> idArg) (progDesc "Get a team by ID")
-      , cmd "create" (TeamCreate <$> fileArg) (progDesc "Create team from YAML/JSON file")
-      , cmd "update" (uncurry TeamUpdate <$> idFileArgs) (progDesc "Replace (PUT) team from file")
-      , cmd "patch" (uncurry TeamPatch <$> idFileArgs) (progDesc "Patch team fields from file")
-      , cmd "delete" (TeamDelete <$> idArg) (progDesc "Delete a team")
-      , cmd
-          "bulk"
-          ( TeamBulk
-              <$> strArgument (metavar "ACTION" <> help "delete")
-              <*> idsOpt
-          )
-          (progDesc "Run bulk action over multiple teams")
-      ]
-
-
-membersParser :: Parser MembersCommand
-membersParser =
-  subparser
-    $ mconcat
-      [ cmd "list" (pure MemberList) (progDesc "List project members")
-      , cmd "get" (MemberGet <$> idArg) (progDesc "Get a member by user ID")
-      , cmd
-          "add"
-          ( (\email userId permission -> MemberAdd{..})
-              <$> optional (strOption (long "email" <> metavar "EMAIL" <> help "Email (creates user if missing)"))
-              <*> optional (strOption (long "user-id" <> metavar "UUID" <> help "Existing user ID"))
-              <*> optional (strOption (long "permission" <> metavar "PERM" <> help "view|edit|admin (default: view)"))
-          )
-          (progDesc "Add a project member (by email or user ID)")
-      , cmd
-          "patch"
-          ( uncurry MemberPatch
-              <$> idValueArgs "PERMISSION"
-          )
-          (progDesc "Change a member's permission")
-      , cmd "remove" (MemberRemove <$> idArg) (progDesc "Remove a project member")
-      ]
 
 
 sendEventParser :: Parser SendEventOpts
@@ -1018,115 +693,8 @@ run version global = \case
   ConfigCmd (CGet opts) -> do
     mode <- resolveMode global
     runConfigGet opts mode
-  MonitorsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    MonList -> Resource.runList cfg Resource.Monitors [] mode
-    MonGet requestedId -> Resource.selectResourceId cfg Resource.Monitors mode requestedId >>= \i -> Resource.runGet cfg Resource.Monitors i mode
-    MonCreate path -> Resource.runFromFile cfg Resource.POST (Resource.resourcePath Resource.Monitors) [] path mode
-    MonUpdate requestedId path -> Resource.selectResourceId cfg Resource.Monitors mode requestedId >>= \i -> Resource.runFromFile cfg Resource.PUT (Resource.resourceIdPath Resource.Monitors i) [] path mode
-    MonPatch requestedId path -> Resource.selectResourceId cfg Resource.Monitors mode requestedId >>= \i -> Resource.runFromFile cfg Resource.PATCH (Resource.resourceIdPath Resource.Monitors i) [] path mode
-    MonApply path -> Resource.runApplyResource cfg Resource.Monitors path mode
-    MonYaml requestedId -> Resource.selectResourceId cfg Resource.Monitors mode requestedId >>= \i -> Resource.runYamlDump cfg Resource.Monitors i
-    MonDelete requestedId -> Resource.selectResourceId cfg Resource.Monitors mode requestedId >>= \i -> Resource.runDelete cfg Resource.Monitors i
-    MonMute requestedId minsM -> Resource.selectResourceId cfg Resource.Monitors mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.Monitors i "mute" (foldMap (\m -> [("duration_minutes", show m)]) minsM) mode
-    MonUnmute requestedId -> Resource.selectResourceId cfg Resource.Monitors mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.Monitors i "unmute" [] mode
-    MonResolve requestedId -> Resource.selectResourceId cfg Resource.Monitors mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.Monitors i "resolve" [] mode
-    MonToggle requestedId -> Resource.selectResourceId cfg Resource.Monitors mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.Monitors i "toggle_active" [] mode
-    MonBulk act ids durM -> Resource.runBulk cfg Resource.Monitors act ids durM mode
-  DashboardsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    DashList -> Resource.runList cfg Resource.Dashboards [] mode
-    DashGet requestedId -> Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \i -> Resource.runGet cfg Resource.Dashboards i mode
-    DashCreate path -> Resource.runFromFile cfg Resource.POST (Resource.resourcePath Resource.Dashboards) [] path mode
-    DashUpdate requestedId path -> Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \i -> Resource.runFromFile cfg Resource.PUT (Resource.resourceIdPath Resource.Dashboards i) [] path mode
-    DashPatch requestedId path -> Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \i -> Resource.runFromFile cfg Resource.PATCH (Resource.resourceIdPath Resource.Dashboards i) [] path mode
-    DashDelete requestedId -> Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \i -> Resource.runDelete cfg Resource.Dashboards i
-    DashStar requestedId -> Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.Dashboards i "star" [] mode
-    -- unstar is DELETE /star (Routes.dashboardUnstar), not a POST lifecycle
-    -- verb, so it can't go through runLifecycle.
-    DashUnstar requestedId ->
-      Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \i ->
-        Resource.withResult (apiDelete cfg ("/api/v1/dashboards/" <> i <> "/star")) renderAPIError $ \() ->
-          putTextLn $ "/api/v1/dashboards/" <> i <> "/star unstarred"
-    DashDuplicate requestedId -> Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.Dashboards i "duplicate" [] mode
-    DashYaml requestedId -> Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \i -> Resource.runYamlDump cfg Resource.Dashboards i
-    DashApply path -> Resource.runApplyResource cfg Resource.Dashboards path mode
-    DashBulk act ids -> Resource.runBulk cfg Resource.Dashboards act ids Nothing mode
-    DashWidgetUpsert requestedId path -> Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \did -> Resource.runFromFile cfg Resource.PUT ("/api/v1/dashboards/" <> did <> "/widgets") [] path mode
-    DashWidgetDelete requestedId wid ->
-      Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \did ->
-        Resource.withResult (apiDelete cfg ("/api/v1/dashboards/" <> did <> "/widgets/" <> wid)) renderAPIError $ \() ->
-          putTextLn $ "/api/v1/dashboards/" <> did <> "/widgets/" <> wid <> " deleted"
-    DashRender ropts -> runDashboardRender cfg ropts mode
-    DashWidgetsReorder requestedId tabM path ->
-      Resource.selectResourceId cfg Resource.Dashboards mode requestedId >>= \did ->
-        Resource.runFromFile cfg Resource.PATCH ("/api/v1/dashboards/" <> did <> "/widgets/order") (foldMap (\t -> [("tab", t)]) tabM) path mode
-  ApiKeysCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    KeyList -> Resource.runList cfg Resource.ApiKeys [] mode
-    KeyGet requestedId -> Resource.selectResourceId cfg Resource.ApiKeys mode requestedId >>= \i -> Resource.runGet cfg Resource.ApiKeys i mode
-    KeyCreate title ->
-      Resource.runAPI mode $ apiPostJson @_ @_ @AE.Value cfg "/api/v1/api_keys" [] (AE.object ["title" AE..= title])
-    KeyActivate requestedId -> Resource.selectResourceId cfg Resource.ApiKeys mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.ApiKeys i "activate" [] mode
-    KeyDeactivate requestedId -> Resource.selectResourceId cfg Resource.ApiKeys mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.ApiKeys i "deactivate" [] mode
-    KeyDelete requestedId -> Resource.selectResourceId cfg Resource.ApiKeys mode requestedId >>= \i -> Resource.runDelete cfg Resource.ApiKeys i
-  ShareLinkCmd (ShareLinkCreate eid createdAt typeM) -> withCfgMode global $ \cfg mode ->
-    Resource.runAPI mode
-      $ apiPostJson @_ @_ @AE.Value cfg "/api/v1/share" []
-      $ AE.object
-        [ "event_id" AE..= eid
-        , "event_created_at" AE..= createdAt
-        , "event_type" AE..= typeM
-        ]
-  MeCmd -> withCfgMode global $ \cfg mode ->
-    Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/me" [])
-  ProjectCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    ProjGet -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/project" [])
-    ProjPatch path -> Resource.runFromFile cfg Resource.PATCH "/api/v1/project" [] path mode
-  IssuesCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    IssueList{..} ->
-      Resource.runList cfg Resource.Issues (catMaybes [("status",) <$> status, ("type",) <$> issueType, ("service",) <$> service] <> pageParams page perPage) mode
-    IssueGet requestedId -> Resource.selectResourceId cfg Resource.Issues mode requestedId >>= \i -> Resource.runGet cfg Resource.Issues i mode
-    IssueAck requestedId minsM -> Resource.selectResourceId cfg Resource.Issues mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.Issues i "ack" (foldMap (\m -> [("duration_minutes", show m)]) minsM) mode
-    IssueUnack requestedId -> Resource.selectResourceId cfg Resource.Issues mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.Issues i "unack" [] mode
-    IssueArchive requestedId -> Resource.selectResourceId cfg Resource.Issues mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.Issues i "archive" [] mode
-    IssueUnarchive requestedId -> Resource.selectResourceId cfg Resource.Issues mode requestedId >>= \i -> Resource.runLifecycle cfg Resource.Issues i "unarchive" [] mode
-    IssueBulk act ids minsM ->
-      Resource.writeJson cfg Resource.POST "/api/v1/issues/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids, "duration_minutes" AE..= minsM]) mode
-  IncidentsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    IncidentList{..} -> Resource.runList cfg Resource.Incidents (catMaybes [("phase",) <$> phase, ("limit",) . show <$> limit]) mode
-    IncidentGet requestedId -> Resource.selectResourceId cfg Resource.Incidents mode requestedId >>= \i -> Resource.runGet cfg Resource.Incidents i mode
-  EndpointsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    EndList{..} ->
-      Resource.runList cfg Resource.Endpoints (catMaybes [("search",) <$> search, ("outgoing",) . bool "false" "true" <$> outgoing] <> pageParams page perPage) mode
-    EndGet requestedId -> Resource.selectResourceId cfg Resource.Endpoints mode requestedId >>= \i -> Resource.runGet cfg Resource.Endpoints i mode
-  LogPatternsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    LPList{..} -> Resource.runList cfg Resource.LogPatterns (pageParams page perPage) mode
-    LPGet i -> Resource.selectResourceId cfg Resource.LogPatterns mode (show <$> i) >>= \rid -> Resource.runGet cfg Resource.LogPatterns rid mode
-    LPAck i -> Resource.selectResourceId cfg Resource.LogPatterns mode (show <$> i) >>= \rid -> Resource.runLifecycle cfg Resource.LogPatterns rid "ack" [] mode
-    LPBulk act ids ->
-      Resource.writeJson cfg Resource.POST "/api/v1/log_patterns/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
-  TeamsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    TeamList -> Resource.runList cfg Resource.Teams [] mode
-    TeamGet requestedId -> Resource.selectResourceId cfg Resource.Teams mode requestedId >>= \i -> Resource.runGet cfg Resource.Teams i mode
-    TeamCreate path -> Resource.runFromFile cfg Resource.POST (Resource.resourcePath Resource.Teams) [] path mode
-    TeamUpdate requestedId path -> Resource.selectResourceId cfg Resource.Teams mode requestedId >>= \i -> Resource.runFromFile cfg Resource.PUT (Resource.resourceIdPath Resource.Teams i) [] path mode
-    TeamPatch requestedId path -> Resource.selectResourceId cfg Resource.Teams mode requestedId >>= \i -> Resource.runFromFile cfg Resource.PATCH (Resource.resourceIdPath Resource.Teams i) [] path mode
-    TeamDelete requestedId -> Resource.selectResourceId cfg Resource.Teams mode requestedId >>= \i -> Resource.runDelete cfg Resource.Teams i
-    TeamBulk act ids -> Resource.runBulk cfg Resource.Teams act ids Nothing mode
-  MembersCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    MemberList -> Resource.runList cfg Resource.Members [] mode
-    MemberGet requestedId -> Resource.selectResourceId cfg Resource.Members mode requestedId >>= \i -> Resource.runGet cfg Resource.Members i mode
-    MemberAdd{..} ->
-      let body =
-            AE.object
-              $ catMaybes
-                [ ("email" AE..=) <$> email
-                , ("user_id" AE..=) <$> userId
-                , ("permission" AE..=) <$> permission
-                ]
-       in Resource.writeJson cfg Resource.POST (Resource.resourcePath Resource.Members) [] body mode
-    MemberPatch requestedId perm ->
-      Resource.selectResourceId cfg Resource.Members mode requestedId >>= \uid ->
-        Resource.writeJson cfg Resource.PATCH (Resource.resourceIdPath Resource.Members uid) [] (AE.object ["permission" AE..= perm]) mode
-    MemberRemove requestedId -> Resource.selectResourceId cfg Resource.Members mode requestedId >>= \uid -> Resource.runDelete cfg Resource.Members uid
+  ApiCmd call -> withCfgMode global $ \cfg mode -> Resource.runCall cfg mode call
+  DashRenderCmd ropts -> withCfgMode global $ \cfg mode -> runDashboardRender cfg ropts mode
   SchemaCmd schemaOpts -> withCfgMode global $ \cfg mode ->
     Resource.runAPI mode (filterSchema schemaOpts <<$>> apiGetJson @_ @Schema.Schema cfg "/api/v1/schema" [])
   FacetsCmd facetsOpts -> withCfgMode global $ \cfg mode -> do

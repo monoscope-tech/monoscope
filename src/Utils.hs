@@ -63,7 +63,6 @@ module Utils (
   levelFillColor,
   replaceAllFormats,
   truncateHour,
-  prettyTimeShort,
   formatOffset,
   navTabAttrs,
   dashboardContentNavAttrs,
@@ -115,7 +114,7 @@ import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
 import Data.Time (addUTCTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Calendar (fromGregorian, toGregorian)
-import Data.Time.Clock (UTCTime (..), diffUTCTime, secondsToDiffTime)
+import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (FormatTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
@@ -1469,17 +1468,6 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
 
 truncateHour :: UTCTime -> UTCTime
 truncateHour (UTCTime day dt) = UTCTime day (secondsToDiffTime $ floor dt `div` 3600 * 3600)
-
-
-prettyTimeShort :: UTCTime -> UTCTime -> Text
-prettyTimeShort now t =
-  let s = max 0 $ floor (diffUTCTime now t) :: Int
-   in if
-        | s < 60 -> T.show s <> " sec ago"
-        | s < 3600 -> T.show (s `div` 60) <> " min ago"
-        | s < 86400 -> let h = s `div` 3600 in T.show h <> bool " hrs" " hr" (h == 1) <> " ago"
-        | s < 604800 -> let d = s `div` 86400 in T.show d <> bool " days" " day" (d == 1) <> " ago"
-        | otherwise -> let w = s `div` 604800 in T.show w <> bool " wks" " wk" (w == 1) <> " ago"
 
 
 -- | Forward-progress offset between two epoch-ms timestamps: @"+0s"@, @"+5s"@, @"+1m 23s"@, @"+2h 5m"@.

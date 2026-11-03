@@ -493,12 +493,13 @@ fetchSnippet
   -> Text
   -> Int
   -> Eff es (Either SnippetError Snippet)
-fetchSnippet blobCache cfg pid svc revM path lineNo = fmap (.snippet) <$> fetchSourceEvidence blobCache cfg pid svc revM path lineNo
+fetchSnippet blobCache cfg pid svc revM path lineNo = fmap (.snippet) <$> fetchSourceEvidence (Just blobCache) cfg pid svc revM path lineNo
 
 
 fetchSourceEvidence
   :: (DB es, IOE :> es, Log :> es, W.HTTP :> es)
-  => Cache Config.CodeBlobKey ByteString
+  => Maybe (Cache Config.CodeBlobKey ByteString)
+  -- ^ 'Nothing' always fetches under the current grant, never serving a blob another credential cached.
   -> Config.EnvConfig
   -> ProjectId
   -> Maybe Text
@@ -517,14 +518,14 @@ fetchSourceEvidence blobCache cfg pid svc revM path lineNo = runExceptT do
       located = cm.owner <> "/" <> cm.repo <> "/" <> repoPath <> " at " <> repoRef.ref
   (cred, conn) <- ExceptT $ mappingConnection cfg pid cm
   let blobKey = (cm.owner, cm.repo, repoRef.ref, repoPath)
-  cached <- liftIO $ Cache.lookup blobCache blobKey
+  cached <- liftIO $ join <$> traverse (`Cache.lookup` blobKey) blobCache
   blob <- case cached of
     Just b -> pure b
     Nothing -> do
       -- Only a success is stored: caching a failure would keep a transient 502 or a
       -- just-revoked token on screen for the whole TTL.
       b <- ExceptT $ first (ReadFailed located) <$> Git.fetchFile conn repoRef repoPath
-      liftIO $ Cache.insert blobCache blobKey b
+      liftIO $ for_ blobCache \c -> Cache.insert c blobKey b
       pure b
   (\s -> SourceEvidence cred.host cred.apiBase (cm.owner <> "/" <> cm.repo) repoRef.ref s{path = repoPath})
     <$> hoistEither (maybeToRight (LineOutOfRange repoPath lineNo repoRef.ref) $ sliceAround 5 lineNo (lines (decodeUtf8 blob)))

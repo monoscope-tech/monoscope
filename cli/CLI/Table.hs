@@ -44,6 +44,8 @@ import Data.Text qualified as T
 import Effectful
 import System.Console.ANSI qualified as ANSI
 import System.IO (hIsTerminalDevice)
+import Text.Layout.Table (LineStyle (SingleLine), center, column, columnHeaderTableS, expand, expandUntil, fullH, headerColumn, left, noAlign, right, rowsG, simpleTableStyleSpec, singleCutMark, tableLines, unicodeTableStyleFromSpec, withRoundCorners)
+import Text.Layout.Table.Cell.Formatted qualified as F
 
 
 -- | What a cell means semantically. The renderer maps this to SGR codes;
@@ -94,17 +96,14 @@ data RichTableOpts = RichTableOpts
   -- ^ Per-column alignment. Shorter than the column count → remaining
   -- columns default to 'AlignLeft'.
   , maxWidth :: Maybe Int
-  -- ^ Hard cap on total width. When 'Nothing' we query the terminal.
-  , wrapRightmost :: Bool
-  -- ^ When True, the last column absorbs the slack and overflowing rows are
-  -- truncated with @…@. Default True — this is what makes long titles in
-  -- @issues list@ readable instead of forcing a horizontal scroll.
+  -- ^ Hard cap on total width. When 'Nothing' we query the terminal. The
+  -- widest column (usually a title) is truncated with @…@ to fit.
   }
   deriving stock (Show)
 
 
 defaultRichTableOpts :: RichTableOpts
-defaultRichTableOpts = RichTableOpts{alignments = [], maxWidth = Nothing, wrapRightmost = True}
+defaultRichTableOpts = RichTableOpts{alignments = [], maxWidth = Nothing}
 
 
 -- | Render with explicit knobs.
@@ -115,23 +114,21 @@ defaultRichTableOpts = RichTableOpts{alignments = [], maxWidth = Nothing, wrapRi
 -- - In table mode but a non-TTY stdout (e.g. @--table | cat@), ANSI is
 --   still emitted because the user explicitly asked for the table view.
 renderRichTableWith :: IOE :> es => RichTableOpts -> [Text] -> [[Cell]] -> Eff es ()
-renderRichTableWith opts headers rows = do
-  mode <- getOutputMode
-  case mode of
-    OutputJSON -> pass
-    OutputYAML -> pass
-    OutputTable -> do
-      ansi <- not <$> isJsonOutput
-      termW <- liftIO termWidth
-      let cap = fromMaybe termW opts.maxWidth
-          aligns = zipWith const (opts.alignments <> repeat AlignLeft) headers
-          (widths, normalized) = layout opts.wrapRightmost cap headers rows
-      liftIO $ putTextLn (border ("╭", "┬", "╮") widths)
-      liftIO $ putTextLn (renderHeaderRow ansi aligns widths headers)
-      liftIO $ putTextLn (border ("├", "┼", "┤") widths)
-      forM_ normalized $ \r ->
-        liftIO $ putTextLn (renderRow ansi aligns widths r)
-      liftIO $ putTextLn (border ("╰", "┴", "╯") widths)
+renderRichTableWith opts headers rows = whenM ((== OutputTable) <$> getOutputMode) do
+  ansi <- not <$> isJsonOutput
+  cap <- maybe (liftIO termWidth) pure opts.maxWidth
+  let natural = [foldl' max (T.length h) [T.length (snd c) | Just c <- map (!!? i) rows] | (i, h) <- zip [0 ..] headers]
+      widest = maybe 0 fst (viaNonEmpty head (sortWith (Down . snd) (zip [0 :: Int ..] natural)))
+      -- The widest column absorbs the overflow (│ x │ y │ costs 3n + 1 columns of chrome).
+      fitW = max 8 (cap - 3 * length headers - 1 - sum natural + fromMaybe 0 (natural !!? widest))
+      positions = [case a of AlignLeft -> left; AlignRight -> right; AlignCenter -> center | a <- zipWith const (opts.alignments <> repeat AlignLeft) headers]
+      cut = singleCutMark "…"
+      spec i p = column (if i == widest then expandUntil fitW else expand) p noAlign cut
+      sgr codes t = (if ansi && not (null codes) then \x -> F.formatted (ANSI.setSGRCode codes) x (ANSI.setSGRCode [ANSI.Reset]) else id) (F.plain t)
+      style = withRoundCorners (unicodeTableStyleFromSpec (simpleTableStyleSpec SingleLine SingleLine))
+      header = fullH [headerColumn p (Just cut) | p <- positions] [sgr [ANSI.SetConsoleIntensity ANSI.BoldIntensity] (T.toUpper h) | h <- headers]
+      table = columnHeaderTableS (zipWith spec [0 ..] positions) style header [rowsG [[sgr (sgrFor sty) t | (sty, t) <- r] | r <- rows]]
+  liftIO $ mapM_ (putStrLn . toString) (tableLines table)
 
 
 -- | One line of muted text, intended for "… N more — use --limit / --cursor"
@@ -146,107 +143,7 @@ paginationFooter msg = do
     ANSI.setSGR [ANSI.Reset]
 
 
--- Layout
-
--- | Decide per-column widths and (possibly) truncate the rightmost column to
--- fit the terminal cap. The header counts toward the natural width so single
--- short rows don't squeeze the title to nothing.
-layout :: Bool -> Int -> [Text] -> [[Cell]] -> ([Int], [[Cell]])
-layout wrapRight cap headers rows =
-  let cellText = snd
-      n = length headers
-      natural =
-        [ foldr max (T.length h) [T.length (cellText c) | r <- rows, Just c <- [r !!? i]]
-        | (i, h) <- zip [0 ..] headers
-        ]
-      -- Account for chrome: │ data │ data │ → 3 + (3 * n-1) = 3n separators
-      chromeW = 3 * n + 1
-      total = sum natural + chromeW
-   in if not wrapRight || total <= cap || null natural
-        then (natural, rows)
-        else
-          let slack = total - cap
-              widthLast = max 8 (fromMaybe 0 (viaNonEmpty last natural) - slack)
-              widths = fromMaybe [] (viaNonEmpty init natural) <> [widthLast]
-              truncRow r = case nonEmpty r of
-                Nothing -> r
-                Just ne ->
-                  let (sty, t) = last ne
-                      rest = fromMaybe [] (viaNonEmpty init r)
-                   in rest <> [(sty, truncateCell widthLast t)]
-           in (widths, map truncRow rows)
-
-
-truncateCell :: Int -> Text -> Text
-truncateCell w t
-  | T.length t <= w = t
-  | w <= 1 = T.take w t
-  | otherwise = T.take (w - 1) t <> "…"
-
-
--- Relude already exports `!!?`; use it directly above.
-
--- Borders
-
-border :: (Text, Text, Text) -> [Int] -> Text
-border (l, j, r) ws = l <> T.intercalate j [T.replicate (w + 2) "─" | w <- ws] <> r
-
-
--- Rows
-
-renderHeaderRow :: Bool -> [Align] -> [Int] -> [Text] -> Text
-renderHeaderRow ansi aligns widths headers =
-  let cells = zip3 aligns widths (map T.toUpper headers)
-      formatted = [pad a w t | (a, w, t) <- cells]
-      joined = T.intercalate (sepStyled ansi) (map (boldStyled ansi) formatted)
-   in "│ " <> joined <> " │"
-
-
-renderRow :: Bool -> [Align] -> [Int] -> [Cell] -> Text
-renderRow ansi aligns widths row =
-  let triples = zip3 aligns widths row
-      formatted = [styled ansi sty (pad a w t) | (a, w, (sty, t)) <- triples]
-   in "│ " <> T.intercalate (sepStyled ansi) formatted <> " │"
-
-
-sepStyled :: Bool -> Text
-sepStyled _ansi = " │ "
-
-
-pad :: Align -> Int -> Text -> Text
-pad a w t =
-  let n = T.length t
-      gap = max 0 (w - n)
-   in case a of
-        AlignLeft -> t <> T.replicate gap " "
-        AlignRight -> T.replicate gap " " <> t
-        AlignCenter ->
-          let lpad = gap `div` 2
-              rpad = gap - lpad
-           in T.replicate lpad " " <> t <> T.replicate rpad " "
-
-
 -- Styling
-
-boldStyled :: Bool -> Text -> Text
-boldStyled True t = sgr ANSI.BoldIntensity Nothing <> t <> reset
-  where
-    sgr i _ = toText (ANSI.setSGRCode [ANSI.SetConsoleIntensity i])
-boldStyled False t = t
-
-
-reset :: Text
-reset = toText (ANSI.setSGRCode [ANSI.Reset])
-
-
-styled :: Bool -> CellStyle -> Text -> Text
-styled False _ t = t
-styled True s t = wrap (sgrFor s) t
-  where
-    wrap codes x
-      | null codes = x
-      | otherwise = toText (ANSI.setSGRCode codes) <> x <> reset
-
 
 sgrFor :: CellStyle -> [ANSI.SGR]
 sgrFor = \case

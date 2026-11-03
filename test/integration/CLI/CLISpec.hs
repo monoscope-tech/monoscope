@@ -322,7 +322,7 @@ spec = around withCliResources $ describe "CLI" do
     [did] <- dashboardIds
     cliOk tr ["--table", "dashboards", "list"] >>= (`shouldContainAll` ["Lifecycle dashboard", did])
     let chooseDashboard title choices = do
-          (title, map fst choices) `shouldBe` ("Select Dashboards", [did])
+          (title, map fst choices) `shouldBe` ("Select dashboards", [did])
           map snd choices `shouldSatisfy` any (T.isInfixOf "Lifecycle dashboard")
           pure (Just did)
     (pickEc, picked) <- runCLILifecyclePicking tr chooseDashboard ["--table", "dashboards", "get"]

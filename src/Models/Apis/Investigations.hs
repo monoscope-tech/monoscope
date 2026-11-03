@@ -1176,11 +1176,8 @@ data Task = Task {task_id :: Text, title :: Text, status :: TaskStatus}
 
 
 data StreamFrame = StreamFrame {title :: Text, tasks :: NonEmpty Task}
-  deriving stock (Eq, Show)
-
-
-instance AE.ToJSON StreamFrame where
-  toJSON frame = AE.object ["title" AE..= frame.title, "tasks" AE..= frame.tasks]
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.ToJSON) via JSON.CustomJSON '[] StreamFrame
 
 
 instance AE.FromJSON StreamFrame where
@@ -1214,10 +1211,6 @@ instance AE.FromJSON StreamFrame where
 -- True
 -- >>> AE.eitherDecode @StreamFrame "{\"title\":\"Investigating\",\"tasks\":[]}"
 -- Left "Error in $: A Slack stream frame needs a task"
--- >>> AET.parseEither (AE.genericParseJSON AE.defaultOptions :: AE.Value -> AET.Parser StreamFrame) (AE.object ["title" AE..= ("" :: Text), "tasks" AE..= ([task] :: [Task])])
--- ...
--- ...No instance for...Generic StreamFrame...
--- ...
 mkStreamFrame :: Text -> [Task] -> Either Text StreamFrame
 mkStreamFrame title tasks = do
   when (T.null $ T.strip title) $ Left "A Slack stream frame needs a title"

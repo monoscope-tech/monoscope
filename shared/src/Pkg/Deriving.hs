@@ -12,6 +12,7 @@ module Pkg.Deriving (
   KnownMaybeSymbol (..),
   SnakeSchema (..),
   WrappedEnumSC (..),
+  constructorName,
   decodeEnumSC,
   encodeEnumSC,
   escapeRegex,
@@ -33,7 +34,7 @@ import Data.Text.Lazy qualified as TL
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import GHC.Generics (Rep)
+import GHC.Generics (C, Constructor (conName), D, M1 (..), Rep, from, (:+:) (..))
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Language.Haskell.TH.Syntax qualified as TH
@@ -98,6 +99,33 @@ splitQualType :: Text -> (Maybe Text, Text)
 splitQualType qn = case T.break (== '.') qn of
   (sch, dotTyp) | Just typ <- T.stripPrefix "." dotTyp -> (Just sch, typ)
   _ -> (Nothing, qn)
+
+
+-- | Constructor name, including for constructors with fields (which 'encodeEnumSC''s 'show' would print).
+--
+-- >>> constructorName (Just 'x')
+-- "Just"
+constructorName :: (GConstructorName (Rep a), Generic a) => a -> String
+constructorName = gconstructorName . from
+
+
+type GConstructorName :: (Type -> Type) -> Constraint
+class GConstructorName f where
+  gconstructorName :: f p -> String
+
+
+instance GConstructorName f => GConstructorName (M1 D d f) where
+  gconstructorName (M1 x) = gconstructorName x
+
+
+instance (GConstructorName f, GConstructorName g) => GConstructorName (f :+: g) where
+  gconstructorName = \case
+    L1 x -> gconstructorName x
+    R1 x -> gconstructorName x
+
+
+instance Constructor c => GConstructorName (M1 C c f) where
+  gconstructorName = conName
 
 
 encodeEnumSC :: forall prefix a. (KnownSymbol prefix, Show a) => a -> String

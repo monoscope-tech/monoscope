@@ -57,6 +57,7 @@ import System.Types (ATBaseCtx)
 import UnliftIO qualified
 import Utils (encodeText, toUriStr)
 import Web.ApiHandlers qualified as ApiH
+import Web.Operations (Operation (..))
 
 
 -- | Bump on each MCP spec version we test against.
@@ -192,10 +193,10 @@ allTools spec nlSearch =
 openApiTool :: OpenApi -> Text -> ByteString -> OA.Operation -> Tool Dispatch
 openApiTool spec p m op =
   Tool
-    { name = maybe derivedName fst operation
-    , description = fromMaybe (decodeUtf8 m <> " " <> p) ((op ^. OA.summary) <|> (op ^. OA.description))
+    { name = maybe derivedName (.name) operation
+    , description = fromMaybe (decodeUtf8 m <> " " <> p) ((op ^. OA.summary) <|> (op ^. OA.description) <|> fmap (.summary) operation)
     , inputSchema = withDefinitions $ schemaObject (maybe id (KM.insert "body") bodySchema $ KM.fromList [(AK.fromText (q ^. OA.name), paramSchemaJson q) | q <- params]) requireds
-    , agentPolicy = operation >>= snd
+    , agentPolicy = Catalog.accessPolicy <$> (operation >>= (.access))
     , dispatch = ViaOpenApi OpenApiBinding{method = m, path = p, pathParams = namesIn OA.ParamPath, queryParams = namesIn OA.ParamQuery, bodyRequired = bodyReq}
     }
   where

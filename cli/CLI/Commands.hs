@@ -67,8 +67,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Lens qualified as AL
-import Data.ByteString qualified as BS
-import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isHexDigit)
+import Data.Char (isHexDigit)
 import Data.Default (def)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.HashMap.Strict qualified as HM
@@ -85,7 +84,7 @@ import Effectful
 import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
 import Effectful.FileSystem (FileSystem)
-import Numeric (showHex)
+import Network.HTTP.Types qualified as HT
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx
 import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
@@ -1323,10 +1322,7 @@ uiPath pid target argM sinceM =
 -- >>> urlEncode "trace_id==\"a b\""
 -- "trace_id%3D%3D%22a%20b%22"
 urlEncode :: Text -> Text
-urlEncode = T.concatMap \c ->
-  if isAsciiUpper c || isAsciiLower c || isDigit c || c `elem` ("-_.~" :: [Char])
-    then one c
-    else T.concat ["%" <> T.justifyRight 2 '0' (T.toUpper (toText (showHex b ""))) | b <- BS.unpack (encodeUtf8 (one c :: Text))]
+urlEncode = decodeUtf8 . HT.urlEncode True . encodeUtf8
 
 
 data OpenOpts = OpenOpts
@@ -1381,7 +1377,7 @@ runDashboardRender :: (Environment :> es, HTTP :> es, IOE :> es, Picker :> es) =
 runDashboardRender cfg opts mode = do
   validateDurationOrDie "--watch" opts.watch
   validateDurationOrDie "--since" opts.since
-  dashboardId <- CLIResource.selectResourceId cfg CLIResource.Dashboards mode opts.dashboardId
+  dashboardId <- CLIResource.selectResourceId cfg "dashboards" mode opts.dashboardId
   let params =
         catMaybes
           [ ("tab",) <$> opts.tab

@@ -17,6 +17,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
+import Data.Text.Metrics (levenshtein)
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
@@ -1027,22 +1028,8 @@ suggestFieldRoot u root =
       | otherwise = toList (acceptedFieldRoots u)
     rank c
       | T.isPrefixOf c root || T.isPrefixOf root c = Just (0 :: Int, T.length c)
-      | d <- editDistance root c, d <= 2 = Just (d, T.length c)
+      | d <- levenshtein root c, d <= 2 = Just (d, T.length c)
       | otherwise = Nothing
-
-
--- | Levenshtein distance, capped implicitly by the caller's threshold. Small
--- enough not to warrant a dependency for the one place it is used.
---
--- >>> map (editDistance "kind") ["kind", "kinds", "kimd", "duration"]
--- [0,1,1,7]
-editDistance :: T.Text -> T.Text -> Int
-editDistance a b = fromMaybe 0 (viaNonEmpty last (foldl' step [0 .. T.length a] (toString b)))
-  where
-    step row@(prev : rest) c = scanl' next (prev + 1) (zip3 (toString a) row rest)
-      where
-        next left (ca, diag, up) = min (min (left + 1) (up + 1)) (if ca == c then diag else diag + 1)
-    step [] _ = []
 
 
 -- | Map user-facing output field names (SELECT aliases) to their real DB column names.

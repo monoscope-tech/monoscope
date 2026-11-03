@@ -69,7 +69,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPa
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, tagInput_, untilLabel)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), agoText, detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
 import Pages.Settings (safeScrapeUrl)
 import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
@@ -84,7 +84,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (FormWithOptional (..), encodeText, faSprite_, formatWithCommas, popoverPanel_, popoverTrigger_, prettyTimeShort, toUriStr)
+import Utils (FormWithOptional (..), encodeText, faSprite_, formatWithCommas, popoverPanel_, popoverTrigger_, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -462,7 +462,7 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
               [ col "Name" renderNameCol & withAttrs [class_ "min-w-0"]
               , col "Teams" (\i -> forM_ i.teamHandles $ span_ [class_ "badge badge-sm badge-neutral mr-1"] . toHtml) & withAttrs [class_ "w-48 max-md:hidden"]
               , col "Schedule" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ toHtml i.schedule) & withAttrs [class_ "w-28 max-md:hidden"]
-              , col "Last Run" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ maybe "Never" (toHtml . prettyTimeShort i.now) i.lastRun) & withAttrs [class_ "w-28 max-md:hidden"]
+              , col "Last Run" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ maybe "Never" (toHtml . agoText i.now) i.lastRun) & withAttrs [class_ "w-28 max-md:hidden"]
               , col "Threshold" thresholdCol & withAttrs [class_ "w-40 max-md:hidden"]
               ]
           , rows = allItems
@@ -549,7 +549,7 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
           div_ [class_ "flex items-center gap-x-1.5 gap-y-0.5 text-xs text-textWeak flex-wrap min-w-0"] do
             span_ [class_ "tabular-nums"] $ toHtml item.schedule
             span_ [class_ "text-textWeak/40"] "\xb7"
-            span_ [class_ "tabular-nums"] $ maybe "Never run" (toHtml . prettyTimeShort item.now) item.lastRun
+            span_ [class_ "tabular-nums"] $ maybe "Never run" (toHtml . agoText item.now) item.lastRun
             when (item.alertThreshold > 0) do
               span_ [class_ "text-textWeak/40"] "\xb7"
               span_ [class_ "tabular-nums text-iconError bg-fillError-weak rounded-full px-1.5 py-px text-2xs"] $ toHtml $ formatWithCommas item.alertThreshold <> " " <> Display.display item.triggerDirection

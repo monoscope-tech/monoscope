@@ -101,19 +101,22 @@ library
     , effectful-core
     , extra
     , filepath
+    , granite                       >=0.7 && <0.8
     , hs-opentelemetry-api
     , hs-opentelemetry-sdk
     , hs-opentelemetry-exporter-in-memory
     , hs-opentelemetry-exporter-otlp
     , http-client
     , http-client-tls
+    , http-types
     , lens
     , lens-aeson
     , monoscope-shared
     , optparse-applicative
     , process
-    , random
     , relude                        >=1.2.0.0
+    , retry
+    , table-layout                  >=1.0 && <1.1
     , text
     , time
     , unix

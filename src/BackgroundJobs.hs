@@ -11,6 +11,7 @@ import Control.Exception qualified as CE
 import Control.Lens (view, (.~), (?~), (^.), (^?), _1, _3)
 import Control.Monad.Except (throwError)
 import Control.Monad.Extra (whileM)
+import Control.Retry qualified as Retry
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
 import Data.Aeson.QQ (aesonQQ)
@@ -1421,19 +1422,11 @@ runParkingReplay authCtx cap = do
 -- | Retry a Hasql action on deadlock up to 2 times with 50ms/100ms backoff.
 -- Non-deadlock exceptions are re-thrown.
 retryOnDeadlock :: (IOE :> es, Log :> es) => Text -> Eff es a -> Eff es a
-retryOnDeadlock label = go 2
-  where
-    go 0 action = action
-    go n action =
-      tryAny action >>= \case
-        Right r -> pure r
-        Left e
-          | Just he <- fromException @Hasql.HasqlException e
-          , Hasql.isDeadlockError he -> do
-              Log.logAttention (label <> " deadlock, retrying") (show @Text e)
-              liftIO $ threadDelay (50000 * (3 - n)) -- 50ms, 100ms backoff
-              go (n - 1) action
-        Left e -> throwIO e
+retryOnDeadlock label action =
+  Retry.recovering
+    (Retry.exponentialBackoff 50_000 <> Retry.limitRetries 2)
+    [Retry.logRetries (pure . Hasql.isDeadlockError) \retrying e _ -> when retrying $ Log.logAttention (label <> " deadlock, retrying") (show @Text e)]
+    (const action)
 
 
 -- | Run hourly scheduled tasks for all projects
