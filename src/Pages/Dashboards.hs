@@ -534,11 +534,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           if (dashboardSettledSent) return;
           const page = document.getElementById('dashboardPage');
           const url = page?.dataset.settledUrl;
-          if (!url) return;
+          // Past the server's 10-minute bound (a backgrounded tab) the sample measures
+          // idleness, not settling, and only earns a 400.
+          const durationMs = Math.round(performance.now() - dashboardStartedAt);
+          if (!url || durationMs > 600000) return;
           dashboardSettledSent = true;
           const body = JSON.stringify({
             navigation,
-            duration_ms: Math.round(performance.now() - dashboardStartedAt),
+            duration_ms: durationMs,
             response_bytes: Math.max(0, Math.round(responseBytes || 0))
           });
           fetch(url, { method: 'POST', credentials: 'same-origin', keepalive: true, headers: {'Content-Type': 'application/json'}, body }).catch(() => {});
