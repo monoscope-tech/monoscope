@@ -16,6 +16,7 @@ import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID4
+import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Hasql.Interpolate qualified as HI
 import Log.Backend.LogList qualified as LogList
@@ -274,9 +275,56 @@ spec = around withCliResources $ describe "CLI" do
     replicateM_ 2 $ cliOk tr ["--json", "monitors", "apply", yamlPath]
     [mid] <- monitorIds
     cliOk tr ["--table", "monitors", "list"] >>= (`shouldContainAll` ["Lifecycle error-rate alert", mid])
-    cliOk tr ["monitors", "yaml", toString mid] >>= writeFileText dumpPath
+    writeFileText yamlPath
+      $ unlines
+        [ "title: Lifecycle error-rate alert"
+        , "severity: critical"
+        , "condition:"
+        , "  query: 'severity.severity_text == \"error\"'"
+        , "  alert_threshold: 20"
+        , "  warning_threshold: 10"
+        , "  trigger_less_than: false"
+        , "  alert_recovery_threshold: 15"
+        , "evaluation:"
+        , "  check_interval_mins: 2"
+        , "  time_window_mins: 10"
+        , "  threshold_sustained_for_mins: 3"
+        , "notify:"
+        , "  email_all: true"
+        , "  emails: [ops@example.com]"
+        , "  slack_channels: [\"#alerts\"]"
+        , "  subject: Error rate elevated"
+        , "  message: Check the error logs."
+        , "  notify_after_mins: 30"
+        , "  stop_after_count: 4"
+        ]
+    updated <- cliJson tr ["monitors", "apply", yamlPath]
+    updated ^? key "id" . _String `shouldBe` Just mid
+    updated ^? key "alert_threshold" . _Number `shouldBe` Just 20
+    updated ^? key "threshold_sustained_for_mins" . _Number `shouldBe` Just 3
+    updated ^? key "alert_config" . key "email_all" `shouldBe` Just (AE.Bool True)
+    updated ^? key "alert_config" . key "emails" `shouldBe` Just (AE.toJSON (["ops@example.com"] :: [Text]))
+    updated ^? key "alert_config" . key "slack_channels" `shouldBe` Just (AE.toJSON (["#alerts"] :: [Text]))
+    dumped <- cliOk tr ["monitors", "yaml", toString mid]
+    dumped `shouldSatisfy` T.isPrefixOf "title:"
+    document <- either (fail . show) pure $ Yaml.decodeEither' @AE.Value (encodeUtf8 dumped)
+    document ^? key "condition" . key "alert_threshold" . _Number `shouldBe` Just 20
+    document ^? key "evaluation" . key "check_interval_mins" . _Number `shouldBe` Just 2
+    document ^? key "notify" . key "stop_after_count" . _Number `shouldBe` Just 4
+    document ^? key "condition" . key "warning_recovery_threshold" `shouldBe` Nothing
+    document ^? key "visualization_type" `shouldBe` Nothing
+    writeFileText dumpPath dumped
     void $ cliOk tr ["--json", "monitors", "apply", dumpPath]
     monitorIds `shouldReturn` [mid]
+    reapplied <- cliJson tr ["monitors", "get", toString mid]
+    for_ ["log_query", "alert_threshold", "warning_threshold", "alert_recovery_threshold", "warning_recovery_threshold", "trigger_less_than", "check_interval_mins", "time_window_mins", "threshold_sustained_for_mins", "alert_config", "renotify_interval_mins", "stop_after_count"] \field ->
+      reapplied ^? key field `shouldBe` updated ^? key field
+    Just documentObject <- pure $ document ^? _Object
+    writeFileText yamlPath (decodeUtf8 $ AE.encode $ AE.Object $ KM.delete "notify" documentObject)
+    quiet <- cliJson tr ["monitors", "apply", yamlPath]
+    quiet ^? key "id" . _String `shouldBe` Just mid
+    quiet ^? key "alert_config" . key "email_all" `shouldBe` Just (AE.Bool False)
+    for_ ["emails", "slack_channels"] \field -> quiet ^? key "alert_config" . key field `shouldBe` Just (AE.toJSON ([] :: [Text]))
     forM_ [["mute", toString mid, "--for", "30"], ["unmute", toString mid], ["delete", toString mid]] \args -> cliOk tr ("--json" : "monitors" : args)
     monitorIds `shouldReturn` []
 

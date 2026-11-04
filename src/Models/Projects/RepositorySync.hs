@@ -41,7 +41,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction.Sessions qualified as TxS
-import Models.Apis.MonitorDefinitions (MonitorInput (..), compileAlertSql, monitorFromInput, monitorToInput)
+import Models.Apis.MonitorDefinitions (MonitorInput (..), compileAlertSql, monitorConfig, monitorFromInput, monitorToInput)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Dashboards qualified as Dashboards
@@ -49,6 +49,7 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as Members
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.MonitorConfig (encodeMonitorConfig)
 import Relude hiding (local)
 import System.Types (DB)
 import Web.HttpApiData (FromHttpApiData (..))
@@ -209,7 +210,7 @@ decodeDefinition path body
 encodeDefinition :: Definition -> ByteString
 encodeDefinition = \case
   DashboardDefinition schema -> Yaml.encode schema
-  QueryDefinition input -> Yaml.encode input
+  QueryDefinition input -> encodeMonitorConfig (monitorConfig input)
   value@UptimeDefinitionConfig{} -> Yaml.encode value
   value@CronDefinitionConfig{} -> Yaml.encode value
 
