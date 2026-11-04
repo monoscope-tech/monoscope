@@ -674,19 +674,10 @@ routineInstallPostH pid form = do
   (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   case find ((== form.templateKey) . (.key)) Issues.routineTemplates of
     Nothing -> reject "Unknown routine template."
-    Just template -> do
-      existing <- find ((== Just template.key) . (.templateKey)) <$> Issues.listConversations pid
-      case existing of
-        Just conversation -> do
-          authorizeConversation pid conversation.conversationId
-          redirectToThread pid conversation.conversationId
-        Nothing -> do
-          convId <- UUIDId <$> UUID.genUUID
-          void $ Issues.getOrCreateConversation pid convId Issues.CTWeb (AE.object ["routine_template" AE..= template.key])
-          Issues.renameConversation pid convId template.title
-          Issues.insertChatMessage pid convId Issues.ChatUser template.prompt Nothing Nothing
-          enqueue $ Issues.installRoutineTemplate sess.user.id pid convId project.timeZone template
-          redirectToThread pid convId
+    Just template ->
+      Issues.ensureRoutineTemplate sess.user.id pid project.timeZone template >>= \case
+        Left convId -> authorizeConversation pid convId >> redirectToThread pid convId
+        Right (convId, scheduled) -> enqueue (pure scheduled) >> redirectToThread pid convId
 
 
 startThreadPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))

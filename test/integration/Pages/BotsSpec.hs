@@ -413,6 +413,9 @@ spec = around withTestResources do
         void $ runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode oauth) $ atAuthToBase tr.trSessAndHeader $ SlackPage.linkProjectGetH (Just "code") (Just upgradeState.toText)
         updated <- toBaseServantResponse tr $ Slack.getProjectSlackData testPid
         fmap (\sd -> (Slack.slackAgentScopesGranted sd, sd.scopes, sd.webhookUrl)) updated `shouldBe` Just (granted, Just $ fromList $ map T.strip $ T.splitOn "," scope, Just "https://hooks.slack.com/services/test")
+      -- Connecting Slack enables the Slack routine; reconnecting does not add another.
+      slackRoutines <- filter ((== Just "slack-investigation") . (.templateKey)) <$> runQueryEffect tr (Issues.listConversations testPid)
+      map (.routineActive) slackRoutines `shouldBe` [True]
 
     it "ingress: verifies original bytes and replay age before decoding, rolls back unqueued receipts, and deduplicates deliveries" \tr -> do
       let status resources = toBaseServantResponse resources . statusOf
