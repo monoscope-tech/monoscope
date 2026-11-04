@@ -127,7 +127,7 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Apis.MonitorDefinitions (compileAlertSql, monitorFromInput, monitorToInput)
+import Models.Apis.MonitorDefinitions (compileAlertSql, monitorConfig, monitorFromInput, monitorToInput)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Apis.ShareEvents qualified as ShareEvents
@@ -144,6 +144,7 @@ import Pages.Replay qualified as Replay
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..))
+import Pkg.MonitorConfig (MonitorConfig)
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.SchemaLearning.Catalog qualified as Fields
 import Relude hiding (ask, id)
@@ -229,8 +230,8 @@ data ApiV1Routes mode = ApiV1Routes
   , monitorGet :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Get '[JSON] Monitors.QueryMonitor
   , monitorCreate :: mode :- "monitors" :> ReqBody '[JSON] MonitorInput :> Post '[JSON] Monitors.QueryMonitor
   , monitorApply :: mode :- "monitors" :> "apply" :> ReqBody '[JSON] MonitorInput :> Post '[JSON] Monitors.QueryMonitor
-  , monitorYaml :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] MonitorInput
-  -- ^ /yaml returns the applyable MonitorInput as JSON (same for dashboards);
+  , monitorYaml :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] MonitorConfig
+  -- ^ /yaml returns the applyable configuration as JSON (same for dashboards);
   -- the CLI renders it as YAML client-side via runYamlDump.
   , monitorUpdate :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] MonitorInput :> Put '[JSON] Monitors.QueryMonitor
   , monitorPatch :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] MonitorPatch :> Patch '[JSON] Monitors.QueryMonitor
@@ -592,10 +593,10 @@ apiMonitorApply pid inp =
 
 -- | Inverse of 'monitorFromInput': dump a monitor as the applyable input
 -- shape, so `monitors yaml ID > m.yaml && monitors apply m.yaml` round-trips.
-apiMonitorYaml :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx MonitorInput
+apiMonitorYaml :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx MonitorConfig
 apiMonitorYaml pid mid = do
   m <- apiMonitorGet pid mid
-  pure $ monitorToInput m
+  pure $ monitorConfig $ monitorToInput m
 
 
 -- | PATCH — merge fields into existing monitor.

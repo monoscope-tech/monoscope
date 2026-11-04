@@ -80,6 +80,7 @@ library
     Data.Effectful.AgentWorkspace
     Data.Effectful.AgentWorkspace.Guest
     Pkg.CLIFormat
+    Pkg.MonitorConfig
     Pkg.Deriving
     Pkg.GitCommand
     Pkg.Parser.Eval
@@ -89,6 +90,7 @@ library
     Web.Wire
 
   build-depends:
+    , yaml
     , aeson
     , base                  >=4.7 && <5
     , cryptonite

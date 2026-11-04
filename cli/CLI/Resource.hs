@@ -24,6 +24,7 @@ import Data.Yaml qualified as Yaml
 import Effectful
 import Effectful.Environment (Environment)
 import Effectful.FileSystem (FileSystem, doesDirectoryExist, doesFileExist, listDirectory)
+import Pkg.MonitorConfig (MonitorConfig, encodeMonitorConfig)
 import System.FilePath (takeExtension, (</>))
 import Web.Operations qualified as Op
 import Web.Wire (Paged (..))
@@ -51,6 +52,7 @@ runCall cfg mode call = do
     (_, p : _) -> runApplyResource cfg url p mode
     (Op.GET, _)
       | Just l <- call.listing -> runList cfg l url query mode
+      | "/monitors/" `T.isPrefixOf` o.path, "/yaml" `T.isSuffixOf` o.path -> withResult (apiGetJson @_ @MonitorConfig cfg url []) renderAPIError (liftIO . putBSLn . encodeMonitorConfig)
       | "/yaml" `T.isSuffixOf` o.path -> withResult (apiGetJson @_ @AE.Value cfg url []) renderAPIError (liftIO . putBSLn . Yaml.encode)
       | otherwise -> runAPI mode (apiGetJson @_ @AE.Value cfg url query)
     (Op.DELETE, _) -> withResult (apiDelete cfg url) renderAPIError \() -> putTextLn (url <> " deleted")
