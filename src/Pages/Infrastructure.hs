@@ -37,8 +37,7 @@ import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), 
 import Pages.Containers (deferUrl, infraSnapshot, infraUrl, infrastructureBW, matchesAny, matchesFilter, mkWindow, pctText)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
-import Pkg.Components.Facets qualified as Facets
-import Pkg.Components.Table (Features (..), SelectControl (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, inventoryTable, selectControl_, withAttrs)
+import Pkg.Components.Table (Features (..), SelectControl (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, inventoryTable, selectControl_, sidebar_, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (WrappedEnumSC (..))
@@ -197,7 +196,7 @@ hostsTable pid window url filters grouping hosts allHosts =
                   { icon = "server"
                   , title = "No hosts reporting"
                   , description = "Enable the OpenTelemetry hostmetrics receiver or Kubernetes node telemetry to populate this inventory."
-                  , action = ESLink "https://monoscope.tech/docs/sdks/infrastructure/" "Host monitoring guide"
+                  , action = ESLink "https://monoscopehq.com/docs/sdks/infrastructure/" "Host monitoring guide"
                   }
           }
     }
@@ -285,7 +284,7 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         summaryFacts
       when (availableSignals > 0 && availableSignals < 4) $ callout_ WarningBadge Nothing do
         "Some host metrics are missing from this time range. Available signals remain visible below. "
-        a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "font-medium text-textBrand hover:underline"] "Set up host metrics"
+        a_ [href_ "https://monoscopehq.com/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "font-medium text-textBrand hover:underline"] "Set up host metrics"
     detailSection_ [id_ "host-logs"] "Recent logs" (a_ ([href_ logExplorerUrl, class_ "btn btn-xs max-sm:hidden"] <> navTabAttrs) "View logs in Explorer") do
       p_ [class_ "text-xs text-textWeak"] "Latest events reported by this host."
       div_ [class_ "flex flex-col max-h-64 overflow-auto rounded-lg border border-strokeWeak bg-bgBase max-sm:hidden"] $ Log.virtualTable pid (Just logDataUrl) Nothing
@@ -300,7 +299,7 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
               { icon = Just "chart-line"
               , action = ESCustom $ div_ [class_ "flex flex-wrap justify-center gap-2"] do
                   button_ ([type_ "button", class_ "btn btn-sm max-sm:h-11"] <> drawerLoadAttrs_ (hostDetailUrl pid window{TimePicker.fromQuery = Nothing, TimePicker.toQuery = Nothing, TimePicker.sinceQuery = Just "1H"} host.name)) "Try last 1 hour"
-                  a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary max-sm:h-11"] "Set up host metrics"
+                  a_ [href_ "https://monoscopehq.com/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary max-sm:h-11"] "Set up host metrics"
               }
             "No host metrics in this time range"
             ("This host reported no CPU, memory, filesystem, or load samples in the final " <> Containers.freshnessLabel window <> " of the range. Check that the collector's hostmetrics receiver is enabled.")
@@ -407,7 +406,7 @@ imagesTable pid window url runtimeM registryM images allImages =
                   [ countedFilter "Runtime" "runtime" runtimeM (map Containers.runtimeLabel . (.runtimes)) allImages
                   , countedFilter "Registry" "registry" registryM (one . (.registry)) allImages
                   ]
-          , zeroState = Just $ ZeroState "layer-group" "No container images reporting" "Images appear when container telemetry includes container.image.name." (ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Container setup guide")
+          , zeroState = Just $ ZeroState "layer-group" "No container images reporting" "Images appear when container telemetry includes container.image.name." (ESLink "https://monoscopehq.com/docs/sdks/infrastructure/kubernetes" "Container setup guide")
           , resultSummary = Just $ "Showing " <> show (V.length images) <> " of " <> show (V.length allImages) <> " images"
           , exportName = Just "container-images"
           }
@@ -582,7 +581,7 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
                   , countedFilter "Namespace" "namespace" namespaceM (maybeToList . (.namespace)) allRows
                   , countedFilter "Status" "status" statusM (one . kubeStatusLabel . (.status)) allRows
                   ]
-          , zeroState = Just $ ZeroState "cube" "No Kubernetes resources reporting" "Enable kubeletstats and k8s_cluster receivers to populate pods, workloads, and nodes." (ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Kubernetes setup guide")
+          , zeroState = Just $ ZeroState "cube" "No Kubernetes resources reporting" "Enable kubeletstats and k8s_cluster receivers to populate pods, workloads, and nodes." (ESLink "https://monoscopehq.com/docs/sdks/infrastructure/kubernetes" "Kubernetes setup guide")
           }
     }
   where
@@ -692,7 +691,7 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
       legend "bg-fillError-strong" "Above 85%"
       legend "bg-fillNeutral-strong" "No data"
   div_ [class_ "flex items-start gap-4 p-4 max-lg:flex-col"] do
-    Facets.sidebar_
+    sidebar_
       . facetsConfig
       $ facetActions
         mapUrl
@@ -706,7 +705,7 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
         then
           div_ [class_ "m-auto"]
             $ emptyState_
-              def{icon = Just "server", action = ESLink "https://monoscope.tech/docs/sdks/infrastructure/" "Set up host monitoring"}
+              def{icon = Just "server", action = ESLink "https://monoscopehq.com/docs/sdks/infrastructure/" "Set up host monitoring"}
               "No hosts reporting"
               "Enable host metrics or Kubernetes node telemetry to populate the map."
         else div_ [class_ "flex flex-wrap items-start gap-4"] $ forM_ page.groups \(label, hosts) ->

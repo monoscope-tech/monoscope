@@ -23,7 +23,7 @@ import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Data.Yaml.Pretty qualified as YamlP
-import Pkg.SchemaLearning.Catalog qualified as Catalog
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude
 
 
@@ -68,7 +68,7 @@ pathTokens = go 0 [] . filter (not . T.null) . T.splitOn "."
 
 
 -- | One field's evidence: its structure, sampled values, and value counts.
-type Evidence = (Catalog.FieldStruct, Maybe Catalog.Examples, Maybe Catalog.TopK)
+type Evidence = (SchemaLearning.FieldStruct, Maybe SchemaLearning.Examples, Maybe SchemaLearning.TopK)
 
 
 data SNode = SNode {leaf :: Maybe Evidence, kids :: Map Text (Int, SNode)}
@@ -83,13 +83,13 @@ emptyNode = SNode Nothing mempty
 -- "anything" — correct for an endpoint we have never seen a body on.
 --
 -- >>> import Data.Aeson (encode)
--- >>> let s ts = (Catalog.FieldStruct (HS.fromList ts) mempty Catalog.FCResponseBody False, Nothing, Nothing)
--- >>> encode $ jsonSchema [("items[*].id", s [Catalog.FTNumber])]
+-- >>> let s ts = (SchemaLearning.FieldStruct (HS.fromList ts) mempty SchemaLearning.FCResponseBody False, Nothing, Nothing)
+-- >>> encode $ jsonSchema [("items[*].id", s [SchemaLearning.FTNumber])]
 -- "{\"properties\":{\"items\":{\"items\":{\"properties\":{\"id\":{\"type\":\"number\"}},\"type\":\"object\"},\"type\":\"array\"}},\"type\":\"object\"}"
 --
 -- The bare root path is the document itself, not a property named @""@:
 --
--- >>> encode $ jsonSchema [("", s [Catalog.FTString])]
+-- >>> encode $ jsonSchema [("", s [SchemaLearning.FTString])]
 -- "{\"type\":\"string\"}"
 jsonSchema :: [(Text, Evidence)] -> AE.Value
 jsonSchema fields = wrapArray rootDepth (render tree)
@@ -120,9 +120,9 @@ mergeObjectShape :: Maybe Evidence -> AE.Value -> AE.Value
 mergeObjectShape Nothing objectShape = objectShape
 mergeObjectShape (Just (fs, exs, tk)) objectShape
   | HS.null nonObjectTypes = objectShape
-  | otherwise = AE.object ["anyOf" .= ([objectShape, leafSchema (fs{Catalog.types = nonObjectTypes}, exs, tk)] :: [AE.Value])]
+  | otherwise = AE.object ["anyOf" .= ([objectShape, leafSchema (fs{SchemaLearning.types = nonObjectTypes}, exs, tk)] :: [AE.Value])]
   where
-    nonObjectTypes = HS.delete Catalog.FTObject fs.types
+    nonObjectTypes = HS.delete SchemaLearning.FTObject fs.types
 
 
 wrapArray :: Int -> AE.Value -> AE.Value
@@ -138,8 +138,8 @@ leafSchema (fs, exs, tk) =
     <> maybe [] (\f -> ["format" .= f]) singleFormat
     <> [("x-monoscope-observed-formats" :: AEK.Key) .= sort (HS.toList fs.formats) | not (HS.null fs.formats)]
     <> [("enum" :: AEK.Key) .= sort (HM.keys top) | fs.isEnum, top <- [maybe mempty (.top) tk], not (HM.null top)]
-    <> maybe [] (\e -> ["example" .= e]) (exs >>= (\(Catalog.Examples vs) -> viaNonEmpty head (toList vs)))
-    <> [("examples" :: AEK.Key) .= vs | Just (Catalog.Examples vs) <- [exs], not (V.null vs)]
+    <> maybe [] (\e -> ["example" .= e]) (exs >>= (\(SchemaLearning.Examples vs) -> viaNonEmpty head (toList vs)))
+    <> [("examples" :: AEK.Key) .= vs | Just (SchemaLearning.Examples vs) <- [exs], not (V.null vs)]
   where
     -- JSON Schema's @format@ is a single assertion/annotation. When traffic
     -- has shown several formats, retaining one would assert a false contract;
@@ -153,17 +153,17 @@ leafSchema (fs, exs, tk) =
       ts -> ["type" .= ts]
 
 
--- | OTel/catalog value kind → JSON Schema type. 'Catalog.FTUnknown' has no
+-- | OTel/catalog value kind → JSON Schema type. 'SchemaLearning.FTUnknown' has no
 -- honest mapping, so it contributes nothing rather than lying with @string@.
-jsonType :: Catalog.FieldTypes -> Maybe Text
+jsonType :: SchemaLearning.FieldTypes -> Maybe Text
 jsonType = \case
-  Catalog.FTString -> Just "string"
-  Catalog.FTNumber -> Just "number"
-  Catalog.FTBool -> Just "boolean"
-  Catalog.FTObject -> Just "object"
-  Catalog.FTList -> Just "array"
-  Catalog.FTNull -> Just "null"
-  Catalog.FTUnknown -> Nothing
+  SchemaLearning.FTString -> Just "string"
+  SchemaLearning.FTNumber -> Just "number"
+  SchemaLearning.FTBool -> Just "boolean"
+  SchemaLearning.FTObject -> Just "object"
+  SchemaLearning.FTList -> Just "array"
+  SchemaLearning.FTNull -> Just "null"
+  SchemaLearning.FTUnknown -> Nothing
 
 
 -- | Catalog format hints are brace-wrapped pattern names (@{uuid}@). Translate
@@ -240,7 +240,7 @@ pathTemplate known raw = (T.intercalate "/" named, catMaybes vars)
 -- host, or a whole project. Servers come from the entries rather than the
 -- caller, so a project-wide document lists every host it observed instead of
 -- claiming one.
-buildSpec :: Text -> [(Text, Catalog.CatalogEntry)] -> AE.Value
+buildSpec :: Text -> [(Text, SchemaLearning.CatalogEntry)] -> AE.Value
 buildSpec title entries =
   AE.object
     $ [ "openapi" .= ("3.1.0" :: Text)
@@ -267,8 +267,8 @@ buildSpec title entries =
 -- | One catalog entry → @(path, method, operation, component schemas)@.
 -- Non-HTTP entries (span identities) carry no method/path and are skipped.
 operation
-  :: (Catalog.CatalogEntry -> Maybe Text)
-  -> (Text, Catalog.CatalogEntry)
+  :: (SchemaLearning.CatalogEntry -> Maybe Text)
+  -> (Text, SchemaLearning.CatalogEntry)
   -> Maybe (Text, AEK.Key, AE.Value, [(AEK.Key, AE.Value)])
 operation tagOf (hash, e) = do
   method <- T.toLower <$> e.scope.method
@@ -276,10 +276,10 @@ operation tagOf (hash, e) = do
   let byCat c = [(k, (v, HM.lookup k e.valuesDelta, HM.lookup k e.counts)) | (k, v) <- HM.toList e.template.fields, v.category == c]
       -- Learned paths are occasionally relative or empty (a span with no route
       -- attribute); OpenAPI requires every path to start with "/".
-      (path, pathVars) = first (("/" <>) . T.dropWhile (== '/')) $ pathTemplate (map fst (byCat Catalog.FCPathParam)) rawPath
-      reqFields = byCat Catalog.FCRequestBody
-      respFields = byCat Catalog.FCResponseBody
-      respHeaderFields = byCat Catalog.FCResponseHeader
+      (path, pathVars) = first (("/" <>) . T.dropWhile (== '/')) $ pathTemplate (map fst (byCat SchemaLearning.FCPathParam)) rawPath
+      reqFields = byCat SchemaLearning.FCRequestBody
+      respFields = byCat SchemaLearning.FCResponseBody
+      respHeaderFields = byCat SchemaLearning.FCResponseHeader
       respKey = AEK.fromText (hash <> "Response")
       statuses = if null e.scope.statusCodes then ["default"] else map show (sort $ toList e.scope.statusCodes)
       jsonContent schema = AE.object ["application/json" .= AE.object ["schema" .= schema]]
@@ -312,7 +312,7 @@ operation tagOf (hash, e) = do
                   , "lastSeen" .= e.lastSeen
                   ]
             ]
-          <> [("parameters" :: AEK.Key) .= ps | ps <- [pathParams pathVars (byCat Catalog.FCPathParam) <> params "query" (byCat Catalog.FCQueryParam) <> params "header" (byCat Catalog.FCRequestHeader)], not (null ps)]
+          <> [("parameters" :: AEK.Key) .= ps | ps <- [pathParams pathVars (byCat SchemaLearning.FCPathParam) <> params "query" (byCat SchemaLearning.FCQueryParam) <> params "header" (byCat SchemaLearning.FCRequestHeader)], not (null ps)]
           <> [("requestBody" :: AEK.Key) .= body | not (null reqFields)]
   pure (path, AEK.fromText method, op, [(respKey, jsonSchema respFields) | not (null respFields)])
 

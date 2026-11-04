@@ -36,7 +36,7 @@ import Data.Aeson qualified as AE
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.CodeReview qualified as CodeReview
-import Data.Effectful.Hasql (Hasql, runHasqlPool)
+import Data.Effectful.Hasql (Hasql, TestClock, runHasqlPool, runHasqlPoolSynced, runMutableTime)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.Sleep (Sleep, runNoSleep, runSleep)
@@ -58,7 +58,6 @@ import Log qualified
 import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (DB)
-import Pkg.TestClock (TestClock, runHasqlPoolSynced, runMutableTime)
 import Relude
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
 import Servant qualified
@@ -197,7 +196,7 @@ effToServantHandler env logger tp app =
 -- The 'TestClock' drives the 'Time' effect and is shared across handler
 -- invocations so tests can advance time between calls.
 effToServantHandlerTest :: TestClock -> IORef [UUID.UUID] -> AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
-effToServantHandlerTest = effToServantHandlerTestHTTP (runHTTPGolden "./tests/golden/")
+effToServantHandlerTest = effToServantHandlerTestHTTP (runHTTPGolden "./test/golden/")
 
 
 -- | 'effToServantHandlerTest' with a caller-chosen HTTP interpreter, e.g.
@@ -206,7 +205,7 @@ effToServantHandlerTestHTTP :: (forall x hes. IOE :> hes => Eff (HTTP ': hes) x 
 effToServantHandlerTestHTTP http clock uuidRef env logger tp app =
   app
     & Artifacts.runAgentArtifactsTest (const $ Left Artifacts.StorageUnavailable) (\_ _ -> Left Artifacts.ArtifactUnavailable)
-    & ELLM.runLLMGolden "./tests/golden/"
+    & ELLM.runLLMGolden "./test/golden/"
     & Effectful.Reader.Static.runReader env
     & runStaticUUIDRef uuidRef
     & runNoSleep

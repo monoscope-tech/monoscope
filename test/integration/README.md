@@ -42,15 +42,15 @@ Golden files cache real API responses to make tests:
 
 ### Golden File Locations
 
-- HTTP responses: `tests/golden/*.json` (URL-based filenames)
-- Bot responses: `tests/golden/bots/{discord,slack,whatsapp}/*.json`
-- LLM responses: `tests/golden/agentic_*.json` (hash-based filenames)
+- HTTP responses: `test/golden/*.json` (URL-based filenames)
+- Bot responses: `test/golden/bots/{discord,slack,whatsapp}/*.json`
+- LLM responses: `test/golden/agentic_*.json` (hash-based filenames)
 
 ### Missing Golden Files
 
 If you see errors like:
 ```
-Golden file not found: tests/golden/https___api.twilio.com_...json
+Golden file not found: test/golden/https___api.twilio.com_...json
 Run tests with UPDATE_GOLDEN=true to create it
 ```
 

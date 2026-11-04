@@ -305,7 +305,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           , pageTitle = "Explorer"
           , menuItem = Just "Explorer"
           , navTabs = Just $ explorerNavTabs_ pid "Metrics"
-          , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/metrics/"
+          , docsLink = Just "https://monoscopehq.com/docs/dashboard/dashboard-pages/metrics/"
           , pageActions = Just $ TimePicker.liveDataControls_ Nothing currentRange Nothing TimePicker.RefreshOnly
           }
   groups <- if appendM == Just True then pure [] else Telemetry.getMetricGroups pid
@@ -724,7 +724,7 @@ chartsPage pid metricList inactive filters activeCount nextUrl =
           then Components.emptyState_ def{icon = Just "filter", action = ESCustom $ a_ ([class_ "btn btn-sm w-max mx-auto", href_ $ metricPageUrl pid "charts" (clearedFilters filters)] <> navTabAttrs) "Clear filters"} "No metrics match these filters" ""
           else
             div_ [class_ "w-full flex items-center justify-center h-96"]
-              $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
+              $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscopehq.com/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
       else do
         when (V.null metricList) $ div_ [class_ "text-textWeak text-sm py-4"] "No metrics received in the last 7 days."
         unless (V.null inactive) $ inactiveMetricsList pid filters.source inactive
@@ -943,7 +943,7 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
             def
               { Table.search = Nothing
               , Table.treeConfig = Just Table.TreeConfig{rowLevel = (.level), rowPath = (.fullPath), isGroupRow = (.isGroup)}
-              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = if hasMetricFilters filters then "Try another search or clear the filters." else "Metrics will appear here once your application starts sending telemetry data.", action = if hasMetricFilters filters then Table.ESLink (metricPageUrl pid "datapoints" (clearedFilters filters)) "Clear filters" else Table.ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"}
+              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = if hasMetricFilters filters then "Try another search or clear the filters." else "Metrics will appear here once your application starts sending telemetry data.", action = if hasMetricFilters filters then Table.ESLink (metricPageUrl pid "datapoints" (clearedFilters filters)) "Clear filters" else Table.ESLink "https://monoscopehq.com/docs/sdks/" "View SDK setup guides"}
               }
         }
     let total = V.length allRows

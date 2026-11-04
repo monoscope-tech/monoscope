@@ -31,12 +31,19 @@ module Models.Apis.SchemaCatalog (
   enqueueAnomalyJobs,
   existingEndpointHashes,
   -- Re-exports for reader migration.
-  Catalog.FacetData (..),
-  Catalog.FacetValue (..),
-  Catalog.FacetSummary (..),
+  SchemaLearning.FacetData (..),
+  SchemaLearning.FacetValue (..),
+  SchemaLearning.FacetSummary (..),
+
+  -- * Flush worker
+  FlushResult (..),
+  flushDirty,
+  runSchemaFlusher,
+  buildAnomalyRows,
 )
 where
 
+import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
@@ -49,24 +56,27 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Exception (trySync)
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.ApiChanges (AnomalyTypes, FieldEvidence)
+import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..))
-import Pkg.SchemaLearning.Catalog qualified as Catalog
+import Pkg.SchemaLearning (CatalogEntry, SchemaKey, SchemaShardState, SummaryDoc (..), TopK)
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude
-import Utils (scrubNulValue)
+import Utils (scrubNulValue, toXXHash)
 
 
 -- ---------------------------------------------------------------------------
 -- Row shapes for inserts/lookups.
 
 -- | One row in @apis.schema_template@. Templates are immutable once written:
--- any structural change mints a new 'Catalog.templateHash'.
+-- any structural change mints a new 'SchemaLearning.templateHash'.
 data TemplateRow = TemplateRow
   { templateHash :: !Text
-  , keyKind :: !Catalog.KeyKind
-  , fields :: !(HM.HashMap Text Catalog.FieldStruct)
+  , keyKind :: !SchemaLearning.KeyKind
+  , fields :: !(HM.HashMap Text SchemaLearning.FieldStruct)
   , lastSeenAt :: !UTCTime
   }
   deriving stock (Eq, Generic, Show)
@@ -77,12 +87,12 @@ data TemplateRow = TemplateRow
 -- pointer to the shared template row.
 data CatalogRow = CatalogRow
   { projectId :: !Projects.ProjectId
-  , keyKind :: !Catalog.KeyKind
+  , keyKind :: !SchemaLearning.KeyKind
   , keyHash :: !Text
   , templateHash :: !Text
-  , scope :: !Catalog.Scope
-  , valuesDelta :: !(HM.HashMap Text Catalog.Examples)
-  , counts :: !(HM.HashMap Text Catalog.TopK)
+  , scope :: !SchemaLearning.Scope
+  , valuesDelta :: !(HM.HashMap Text SchemaLearning.Examples)
+  , counts :: !(HM.HashMap Text SchemaLearning.TopK)
   , sampleCount :: !Word64
   , firstSeen :: !UTCTime
   , lastSeen :: !UTCTime
@@ -172,13 +182,13 @@ upsertCatalogRows rows =
 -- | Decoded result of a join across @apis.schema_catalog@ ⨝ @apis.schema_template@.
 data CatalogReadRow = CatalogReadRow
   { projectId :: UUID
-  , keyKind :: Catalog.KeyKind
+  , keyKind :: SchemaLearning.KeyKind
   , keyHash :: Text
   , templateHash :: Text
-  , scope :: HI.AsJsonb Catalog.Scope
-  , templateFields :: HI.AsJsonb (HM.HashMap Text Catalog.FieldStruct)
-  , valuesDelta :: HI.AsJsonb (HM.HashMap Text Catalog.Examples)
-  , counts :: HI.AsJsonb (HM.HashMap Text Catalog.TopK)
+  , scope :: HI.AsJsonb SchemaLearning.Scope
+  , templateFields :: HI.AsJsonb (HM.HashMap Text SchemaLearning.FieldStruct)
+  , valuesDelta :: HI.AsJsonb (HM.HashMap Text SchemaLearning.Examples)
+  , counts :: HI.AsJsonb (HM.HashMap Text SchemaLearning.TopK)
   , sampleCount :: Int64
   , firstSeen :: UTCTime
   , lastSeen :: UTCTime
@@ -187,11 +197,11 @@ data CatalogReadRow = CatalogReadRow
   deriving anyclass (HI.DecodeRow)
 
 
-readRowToEntry :: CatalogReadRow -> Catalog.CatalogEntry
+readRowToEntry :: CatalogReadRow -> SchemaLearning.CatalogEntry
 readRowToEntry r =
-  Catalog.CatalogEntry
+  SchemaLearning.CatalogEntry
     { scope = coerce r.scope
-    , template = Catalog.Template r.keyKind (coerce r.templateFields)
+    , template = SchemaLearning.Template r.keyKind (coerce r.templateFields)
     , valuesDelta = coerce r.valuesDelta
     , counts = coerce r.counts
     , sampleCount = fromIntegral r.sampleCount
@@ -207,7 +217,7 @@ readRowToEntry r =
 getByKeysBatch
   :: DB es
   => V.Vector (Projects.ProjectId, Text)
-  -> Eff es (HM.HashMap (Projects.ProjectId, Text) Catalog.CatalogEntry)
+  -> Eff es (HM.HashMap (Projects.ProjectId, Text) SchemaLearning.CatalogEntry)
 getByKeysBatch pairs
   | V.null pairs = pure HM.empty
   | otherwise = do
@@ -239,7 +249,7 @@ endpointCatalog
   -> Maybe Text
   -> Maybe Text
   -> Int
-  -> Eff es (V.Vector (Text, Catalog.CatalogEntry))
+  -> Eff es (V.Vector (Text, SchemaLearning.CatalogEntry))
 endpointCatalog pid hostM kindM keyHashM limit = do
   rows :: [CatalogReadRow] <-
     Hasql.interp
@@ -261,7 +271,7 @@ endpointCatalog pid hostM kindM keyHashM limit = do
 -- ---------------------------------------------------------------------------
 -- Summary doc.
 
-newtype SummaryRow = SummaryRow {doc :: HI.AsJsonb Catalog.SummaryDoc}
+newtype SummaryRow = SummaryRow {doc :: HI.AsJsonb SchemaLearning.SummaryDoc}
   deriving stock (Generic)
   deriving anyclass (HI.DecodeRow)
 
@@ -270,7 +280,7 @@ newtype SummaryRow = SummaryRow {doc :: HI.AsJsonb Catalog.SummaryDoc}
 -- @fields@/@top_values_by_field@ to those bare keys in SQL: the full doc runs to
 -- megabytes (7k+ fields), and page shells only need a handful of them. The lateral
 -- detoasts each sub-object once instead of once per key lookup.
-getSummary :: DB es => Maybe (V.Vector Text) -> Projects.ProjectId -> Eff es (Maybe Catalog.SummaryDoc)
+getSummary :: DB es => Maybe (V.Vector Text) -> Projects.ProjectId -> Eff es (Maybe SchemaLearning.SummaryDoc)
 getSummary keysM pid =
   fmap (\(SummaryRow (HI.AsJsonb d)) -> d) <$> Hasql.interpOne case keysM of
     Nothing -> [HI.sql| SELECT doc FROM apis.schema_summary WHERE project_id = #{pid} |]
@@ -294,7 +304,7 @@ getSummary keysM pid =
 -- forever). 'scrubNulValue' strips NULs throughout the doc; if the sanitised
 -- batch still fails, we fall back to per-row inserts so a single hostile
 -- project can't block the rest.
-upsertSummary :: DB es => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
+upsertSummary :: DB es => V.Vector (Projects.ProjectId, SchemaLearning.SummaryDoc) -> Eff es ()
 upsertSummary rows0 = unless (V.null rows0) $ do
   let rows = V.map (second asScrubbedJsonb) rows0
   whenLeftM_ (trySync (batch rows)) \_ -> V.forM_ rows (void . trySync . batch . V.singleton)
@@ -342,7 +352,7 @@ getFacetSummary
   -> Text
   -> UTCTime
   -> UTCTime
-  -> Eff es (Maybe Catalog.FacetSummary)
+  -> Eff es (Maybe SchemaLearning.FacetSummary)
 getFacetSummary pathsM pid tableName _from _to =
   fmap (toFacetSummary pid tableName) <$> getSummary (facetBareKeys <$> pathsM) pid
 
@@ -355,8 +365,8 @@ facetBareKeys :: [Text] -> V.Vector Text
 facetBareKeys paths = V.fromList $ ordNub [k | p <- paths, cat <- universe, Just k <- [T.stripPrefix (categoryPrefix cat) p]]
 
 
--- | Adapter: convert a 'Catalog.SummaryDoc' into the legacy
--- 'Catalog.FacetSummary' shape so existing callers (AI prompt, query editor)
+-- | Adapter: convert a 'SchemaLearning.SummaryDoc' into the legacy
+-- 'SchemaLearning.FacetSummary' shape so existing callers (AI prompt, query editor)
 -- don't need to change. The @tableName@ argument is ignored — schema is now
 -- unified per project.
 --
@@ -366,17 +376,17 @@ facetBareKeys paths = V.fromList $ ordNub [k | p <- paths, cat <- universe, Just
 -- scan), we prefix each path with its field category: attributes → @attributes.@,
 -- resource → @resource.@, event → @events.@, body/header/param walks get their
 -- standard OTel prefixes. Result keys line up with what users type in KQL.
-toFacetSummary :: Projects.ProjectId -> Text -> Catalog.SummaryDoc -> Catalog.FacetSummary
+toFacetSummary :: Projects.ProjectId -> Text -> SchemaLearning.SummaryDoc -> SchemaLearning.FacetSummary
 toFacetSummary pid tableName doc =
-  Catalog.FacetSummary
+  SchemaLearning.FacetSummary
     { id = UUID.nil -- summary is not row-identified; legacy callers don't depend on this
     , projectId = pid.toText
     , tableName = tableName
     , facetJson =
-        Catalog.FacetData
+        SchemaLearning.FacetData
           $ HM.fromList
-            [ ( categoryPrefix (maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)) <> path
-              , sortOn (Down . (.count)) [Catalog.FacetValue v (fromIntegral n :: Int) | (v, n) <- HM.toList tk.top]
+            [ ( categoryPrefix (maybe SchemaLearning.FCAttribute (.category) (HM.lookup path doc.fields)) <> path
+              , sortOn (Down . (.count)) [SchemaLearning.FacetValue v (fromIntegral n :: Int) | (v, n) <- HM.toList tk.top]
               )
             | (path, tk) <- HM.toList doc.topValuesByField
             ]
@@ -389,18 +399,18 @@ toFacetSummary pid tableName doc =
 -- full shape including request/response body keys. So
 -- @body.request.*@ / @body.response.*@ keys are intentionally emitted
 -- here even though they're unreachable from the sidebar.
-categoryPrefix :: Catalog.FieldCategoryEnum -> Text
+categoryPrefix :: SchemaLearning.FieldCategoryEnum -> Text
 categoryPrefix = \case
-  Catalog.FCAttribute -> "attributes."
-  Catalog.FCResource -> "resource."
-  Catalog.FCEvent -> "events."
-  Catalog.FCRequestHeader -> "attributes.http.request.header."
-  Catalog.FCResponseHeader -> "attributes.http.response.header."
-  Catalog.FCQueryParam -> "attributes.url.query."
-  Catalog.FCPathParam -> "attributes.url.path_param."
-  Catalog.FCRequestBody -> "body.request."
-  Catalog.FCResponseBody -> "body.response."
-  Catalog.FCTopLevel -> "" -- bare flat column (e.g. "level", "name", "severity.severity_text")
+  SchemaLearning.FCAttribute -> "attributes."
+  SchemaLearning.FCResource -> "resource."
+  SchemaLearning.FCEvent -> "events."
+  SchemaLearning.FCRequestHeader -> "attributes.http.request.header."
+  SchemaLearning.FCResponseHeader -> "attributes.http.response.header."
+  SchemaLearning.FCQueryParam -> "attributes.url.query."
+  SchemaLearning.FCPathParam -> "attributes.url.path_param."
+  SchemaLearning.FCRequestBody -> "body.request."
+  SchemaLearning.FCResponseBody -> "body.response."
+  SchemaLearning.FCTopLevel -> "" -- bare flat column (e.g. "level", "name", "severity.severity_text")
 
 
 -- ---------------------------------------------------------------------------
@@ -435,7 +445,7 @@ data AnomalyInsertRow = AnomalyInsertRow
   , host :: !(Maybe Text)
   , urlPath :: !(Maybe Text)
   , fieldEvidence :: !(V.Vector FieldEvidence)
-  , delta :: !Catalog.ShapeDelta
+  , delta :: !SchemaLearning.ShapeDelta
   -- ^ only non-empty on shape anomalies
   }
   deriving stock (Eq, Generic, Show)
@@ -546,3 +556,273 @@ enqueueAnomalyJobs rows = do
         )
         WHERE NOT EXISTS (SELECT 1 FROM upd)
       |]
+
+
+-- Periodic flush worker for the schema-learning catalog.
+--
+-- Once per shard, every 'flushIntervalSecs', the worker:
+--
+--   1. Atomically takes the dirty subset (a single 'atomicModifyIORef'').
+--   2. Splits dirty entries into 'TemplateRow's (instance-wide, dedup'd by
+--      'SchemaLearning.templateHash') and 'CatalogRow's (per-project pointers).
+--   3. Upserts templates first, then catalog rows, then re-derives the
+--      per-project summary doc.
+--   4. Diffs each dirty entry against its prior catalog row (one batched
+--      lookup) and inserts endpoint/shape/field/format anomalies into
+--      @apis.anomalies@ + a deduped @NewAnomaly@ background job. Replaces
+--      the legacy @new_anomaly_proc@ trigger fan-out.
+--   5. Hands the newly-acknowledged template hashes back to the shard so
+--      subsequent flushes can short-circuit unchanged-template upserts.
+
+-- | Summary stats from one flush pass — useful for telemetry / log lines.
+data FlushResult = FlushResult
+  { templatesWritten :: !Int
+  , catalogRowsWritten :: !Int
+  , summariesUpdated :: !Int
+  , dirtyKeys :: !Int
+  , anomaliesEmitted :: !Int
+  -- ^ rows actually inserted into apis.anomalies (post-dedup)
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- | One flush pass over a single shard. Pure-Eff except for the
+-- 'atomicModifyIORef'' inside 'SchemaLearning.takeDirty'.
+--
+-- Order matters: we diff against the prior catalog row /before/ upserting
+-- so we don't see our own write back as the "prior". Anomaly inserts race-
+-- safely on the @(project_id, target_hash)@ unique index.
+flushDirty
+  :: (DB es, IOE :> es, Time.Time :> es)
+  => IORef SchemaShardState
+  -> Eff es FlushResult
+flushDirty ref = do
+  dirty <- liftIO $ SchemaLearning.takeDirty ref
+  if V.null dirty
+    then pure FlushResult{templatesWritten = 0, catalogRowsWritten = 0, summariesUpdated = 0, dirtyKeys = 0, anomaliesEmitted = 0}
+    else do
+      now <- Time.currentTime
+      -- 1. Anomaly diff (must precede upserts so we don't see our own write
+      -- back as the prior). Priors come from the in-process snapshot;
+      -- cold-start keys fall through to a 'getByKeysBatch' round trip.
+      (priorEntries, priorSummaryHashes) <- liftIO $ SchemaLearning.snapshotForFlush ref
+      let inMemoryPriors =
+            HM.fromList
+              [ ((k.projectId, k.keyHash), e)
+              | (k, _) <- V.toList dirty
+              , Just e <- [HM.lookup k priorEntries]
+              ]
+          unknownKeys = V.filter (\(k, _) -> not (HM.member k priorEntries)) dirty
+      dbPriors <-
+        if V.null unknownKeys
+          then pure HM.empty
+          else getByKeysBatch (V.map (\(k, _) -> (k.projectId, k.keyHash)) unknownKeys)
+      let priors = HM.union inMemoryPriors dbPriors
+          anomalyRows = buildAnomalyRows priors dirty
+      anomaliesN <- insertAnomalies anomalyRows
+      enqueueAnomalyJobs anomalyRows
+      -- 2. Upserts.
+      let templateRows = dedupTemplates $ V.map (templateRowOf now . snd) dirty
+          catalogRows = V.map (uncurry catalogRowOf) dirty
+          touchedProjects = HS.fromList [k.projectId | (k, _) <- V.toList dirty]
+      upsertTemplates templateRows
+      upsertCatalogRows catalogRows
+      -- Snapshot the shard's entries after our upserts so the summary fold
+      -- sees the freshly-merged catalog state without reading it back from
+      -- Postgres. Slightly newer than the dirty set (concurrent writers may
+      -- have added more keys), which is fine — the map only grows.
+      entries <- liftIO $ (.entries) <$> readIORef ref
+      (summariesN, newSummaryHashes) <- regenerateSummaries touchedProjects entries priorSummaryHashes
+      let newTemplateHashes = HS.fromList $ V.toList $ V.map (.templateHash) templateRows
+      liftIO $ SchemaLearning.pruneEvicted ref HS.empty newTemplateHashes
+      liftIO $ SchemaLearning.commitFlushedSnapshot ref dirty newSummaryHashes
+      pure
+        FlushResult
+          { templatesWritten = V.length templateRows
+          , catalogRowsWritten = V.length catalogRows
+          , summariesUpdated = summariesN
+          , dirtyKeys = V.length dirty
+          , anomaliesEmitted = fromIntegral anomaliesN
+          }
+
+
+-- | Build the anomaly insert rows for a dirty batch. Pure so it can be
+-- doctested independently of the DB.
+buildAnomalyRows
+  :: HM.HashMap (Projects.ProjectId, Text) CatalogEntry
+  -> V.Vector (SchemaKey, CatalogEntry)
+  -> V.Vector AnomalyInsertRow
+buildAnomalyRows priors dirty =
+  V.fromList
+    [ AnomalyInsertRow
+        { projectId = k.projectId
+        , anomalyType
+        , targetHash = pa.targetHash
+        , method = e.scope.method
+        , host = e.scope.host
+        , urlPath = e.scope.urlPath
+        , delta
+        , fieldEvidence =
+            V.fromList
+              [ ApiChanges.FieldEvidence path (prior >>= ApiChanges.fieldSnapshot path) after
+              | path <- delta.newFields <> delta.modifiedFields
+              , Just after <- [ApiChanges.fieldSnapshot path e]
+              ]
+        }
+    | (k, e) <- V.toList dirty
+    , let prior = HM.lookup (k.projectId, k.keyHash) priors
+    , pa <- SchemaLearning.diffAnomalies k.keyHash prior e
+    , let (anomalyType, delta) = kindLabel pa.kind
+    ]
+  where
+    noDelta = SchemaLearning.ShapeDelta [] []
+    kindLabel = \case
+      SchemaLearning.AKEndpoint -> (ApiChanges.ATEndpoint, noDelta)
+      SchemaLearning.AKShape d -> (ApiChanges.ATShape, d)
+      SchemaLearning.AKField -> (ApiChanges.ATField, noDelta)
+      SchemaLearning.AKFormat -> (ApiChanges.ATFormat, noDelta)
+
+
+templateRowOf :: UTCTime -> CatalogEntry -> TemplateRow
+templateRowOf now e =
+  TemplateRow
+    { templateHash = SchemaLearning.templateHash e.template
+    , keyKind = e.template.keyKind
+    , fields = e.template.fields
+    , lastSeenAt = now
+    }
+
+
+catalogRowOf :: SchemaKey -> CatalogEntry -> CatalogRow
+catalogRowOf k e =
+  CatalogRow
+    { projectId = k.projectId
+    , keyKind = e.template.keyKind
+    , keyHash = k.keyHash
+    , templateHash = SchemaLearning.templateHash e.template
+    , scope = e.scope
+    , valuesDelta = e.valuesDelta
+    , counts = e.counts
+    , sampleCount = e.sampleCount
+    , firstSeen = e.firstSeen
+    , lastSeen = e.lastSeen
+    }
+
+
+dedupTemplates :: V.Vector TemplateRow -> V.Vector TemplateRow
+dedupTemplates = V.fromList . HM.elems . V.foldl' step HM.empty
+  where
+    step acc r = HM.insert r.templateHash r acc
+
+
+-- | Re-derive @apis.schema_summary.doc@ for each project that had at least
+-- one dirty key this pass.
+--
+-- The fold uses the live in-memory shard slice (caller passes
+-- 'SchemaShardState.entries'), so the bulk refresh costs O(dirty projects ×
+-- avg entries-per-project) of pure work plus exactly two round-trips: one
+-- @SELECT@ to find which touched projects were summarised within the
+-- staleness window, one batched @UPSERT@. No per-project catalog read; no
+-- per-project upsert.
+regenerateSummaries
+  :: DB es
+  => HS.HashSet Projects.ProjectId
+  -> HM.HashMap SchemaKey CatalogEntry
+  -> HM.HashMap Projects.ProjectId Text
+  -- ^ Per-replica content-hash gate; skips unchanged-doc rewrites.
+  -> Eff es (Int, HM.HashMap Projects.ProjectId Text)
+regenerateSummaries projects entriesMap priorHashes = do
+  -- 'freshSummaryProjects' gates cross-replica races (30 s window in PG);
+  -- 'priorHashes' gates per-replica unchanged docs. Both are load-bearing.
+  let touched = V.fromList (HS.toList projects)
+  fresh <- freshSummaryProjects touched
+  let staleSet = HS.difference projects fresh
+      byProject :: HM.HashMap Projects.ProjectId (V.Vector CatalogEntry)
+      byProject =
+        V.fromList
+          <$> HM.fromListWith
+            (<>)
+            [(k.projectId, [e]) | (k, e) <- HM.toList entriesMap, HS.member k.projectId staleSet]
+      candidates =
+        [ (pid, doc, summaryDocHash doc)
+        | pid <- HS.toList staleSet
+        , Just es <- [HM.lookup pid byProject]
+        , let doc = summariseEntries es
+        ]
+      changed =
+        [ (pid, doc, h)
+        | (pid, doc, h) <- candidates
+        , HM.lookup pid priorHashes /= Just h
+        ]
+      writeRows = V.fromList [(pid, doc) | (pid, doc, _) <- changed]
+      newHashes = HM.fromList [(pid, h) | (pid, _, h) <- changed]
+  upsertSummary writeRows
+  pure (V.length writeRows, newHashes)
+
+
+-- | Stable content hash of a 'SummaryDoc' for the skip-unchanged gate.
+-- Uses the canonical-ish aeson encoding — the same encoding the upsert
+-- would serialise to JSONB, so equal hash ⇔ equal persisted bytes.
+summaryDocHash :: SummaryDoc -> Text
+summaryDocHash = toXXHash . decodeUtf8 . AE.encode
+
+
+-- | Project-scoped roll-up of catalog entries into a 'SummaryDoc'.
+-- Aggregates field structures across keys (a field appearing in multiple
+-- keys with different types unions them) and reduces top-K counts.
+summariseEntries :: V.Vector CatalogEntry -> SummaryDoc
+summariseEntries entries =
+  let fieldsAcc =
+        V.foldl' mergeFields HM.empty
+          $ V.map ((.template.fields)) entries
+      svcs = V.fromList . ordNub . mapMaybe (.scope.service) $ V.toList entries
+      topVals :: HashMap Text TopK
+      topVals = V.foldl' mergeCounts HM.empty (V.map (.counts) entries)
+   in SummaryDoc{fields = fieldsAcc, services = svcs, topValuesByField = topVals}
+  where
+    mergeFields = HM.unionWith mergeStruct
+    mergeStruct a b =
+      a
+        { SchemaLearning.types = a.types <> b.types
+        , SchemaLearning.formats = a.formats <> b.formats
+        , SchemaLearning.isEnum = a.isEnum || b.isEnum
+        }
+    mergeCounts :: HashMap Text TopK -> HashMap Text TopK -> HashMap Text TopK
+    mergeCounts = HM.unionWith addTopK
+    addTopK a b =
+      SchemaLearning.TopK
+        { SchemaLearning.distinct = a.distinct + b.distinct
+        , SchemaLearning.top = HM.unionWith (+) a.top b.top
+        }
+
+
+-- ---------------------------------------------------------------------------
+-- Long-running fiber.
+
+-- | Sleep + flush. Iterates each shard sequentially per tick — flushes are
+-- cheap (one round-trip per shard) so parallel scoping isn't worth the
+-- complexity. Caller injects the per-tick effect runner so this module
+-- stays free of @AuthContext@ / logging plumbing.
+runSchemaFlusher
+  :: Int
+  -- ^ flushIntervalSecs
+  -> [IORef SchemaShardState]
+  -- ^ one ref per shard
+  -> (IORef SchemaShardState -> IO FlushResult)
+  -- ^ caller-supplied per-shard runner — typically wraps 'flushDirty' in an
+  -- effect runner (Hasql + logging + tracing).
+  -> IO Void
+runSchemaFlusher intervalSecs refs flushOne = forever do
+  threadDelay (intervalSecs * 1_000_000)
+  forM_ refs \ref -> do
+    -- `flushOne` MUST catch its own exceptions: if it ever lets one escape,
+    -- this fiber dies, the dirty set stops draining, and `entries` grows
+    -- unboundedly → heap OOM.
+    void $ flushOne ref
+    -- Bound the in-memory shard state: LRU-evict per-project keys past
+    -- 'maxKeysPerProject' and drop the 'knownTemplates' short-circuit if it
+    -- grew past its cap. Without this the entries map grows unboundedly with
+    -- every distinct (project, keyHash) the shard has ever seen and eventually
+    -- exhausts the heap.
+    atomicModifyIORef'_ ref (SchemaLearning.evictLRU SchemaLearning.defaultPolicy)

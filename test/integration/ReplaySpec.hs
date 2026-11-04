@@ -15,7 +15,7 @@ import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import GHC.Conc (getAllocationCounter, setAllocationCounter)
 import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, releaseMergeLease, replayObjectPrefix, replayPostH, replaySessionGetH, sessionFileKeys, splitReplayPayload)
-import Pkg.ErrorMetrics (wireTypeErrorsRef)
+import Pkg.Metrics (wireTypeErrorsRef)
 import Pkg.TestUtils
 import System.Mem (performGC)
 

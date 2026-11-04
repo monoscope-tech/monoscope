@@ -424,10 +424,8 @@ library
       Pages.Telemetry
       Pkg.AdConversions
       Pkg.AgentCatalog
-      Pkg.AgentOperation
       Pkg.AI
       Pkg.AssetManifestFingerprint
-      Pkg.Components.Facets
       Pkg.Components.LogQueryBox
       Pkg.Components.ServiceMap
       Pkg.Components.Table
@@ -437,11 +435,8 @@ library
       Pkg.Drain
       Pkg.EmailTemplates
       Pkg.ErrorFingerprint
-      Pkg.ErrorMetrics
       Pkg.ExtractionWorker
       Pkg.Git
-      Pkg.Icons
-      Pkg.Icons.TH
       Pkg.ImpactReview
       Pkg.IngestBudget
       Pkg.LiveTail
@@ -450,23 +445,12 @@ library
       Pkg.Minio
       Pkg.OpenApi
       Pkg.Parser
-      Pkg.PatternMerge
       Pkg.Prometheus
       Pkg.QueryCache
       Pkg.Queue
-      Pkg.Rum
-      Pkg.Sampling
-      Pkg.SchemaLearning.Catalog
-      Pkg.SchemaLearning.Hot
-      Pkg.SchemaLearning.Worker
-      Pkg.SlackMCP
-      Pkg.SlackOAuth
-      Pkg.SlackRateLimit
-      Pkg.StackTrace
-      Pkg.TestClock
+      Pkg.SchemaLearning
+      Pkg.Slack
       Pkg.TestUtils
-      Pkg.TraceSessionCache
-      Pkg.UUID
       ProcessMessage
       Start
       System.Config
@@ -1051,10 +1035,8 @@ test-suite test-dev
       Pages.Telemetry
       Pkg.AdConversions
       Pkg.AgentCatalog
-      Pkg.AgentOperation
       Pkg.AI
       Pkg.AssetManifestFingerprint
-      Pkg.Components.Facets
       Pkg.Components.LogQueryBox
       Pkg.Components.ServiceMap
       Pkg.Components.Table
@@ -1064,11 +1046,8 @@ test-suite test-dev
       Pkg.Drain
       Pkg.EmailTemplates
       Pkg.ErrorFingerprint
-      Pkg.ErrorMetrics
       Pkg.ExtractionWorker
       Pkg.Git
-      Pkg.Icons
-      Pkg.Icons.TH
       Pkg.ImpactReview
       Pkg.IngestBudget
       Pkg.LiveTail
@@ -1077,23 +1056,12 @@ test-suite test-dev
       Pkg.Minio
       Pkg.OpenApi
       Pkg.Parser
-      Pkg.PatternMerge
       Pkg.Prometheus
       Pkg.QueryCache
       Pkg.Queue
-      Pkg.Rum
-      Pkg.Sampling
-      Pkg.SchemaLearning.Catalog
-      Pkg.SchemaLearning.Hot
-      Pkg.SchemaLearning.Worker
-      Pkg.SlackMCP
-      Pkg.SlackOAuth
-      Pkg.SlackRateLimit
-      Pkg.StackTrace
-      Pkg.TestClock
+      Pkg.SchemaLearning
+      Pkg.Slack
       Pkg.TestUtils
-      Pkg.TraceSessionCache
-      Pkg.UUID
       ProcessMessage
       Start
       System.Config

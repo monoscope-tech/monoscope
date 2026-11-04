@@ -1,5 +1,6 @@
-#!/bin/bash
-set -euo pipefail
+#!/bin/sh
+# POSIX sh: docs pipe this into `sh`, which is dash on Debian/Ubuntu.
+set -eu
 
 REPO="monoscope-tech/monoscope"
 INSTALL_DIR="${MONOSCOPE_INSTALL_DIR:-$HOME/.local/bin}"
@@ -45,23 +46,19 @@ cleanup() { [ -z "$tmpdir" ] || rm -rf "$tmpdir"; }
 trap cleanup EXIT
 
 main() {
-  local platform version current_version archive_name download_url checksum_url force=0
+  local platform version="" current_version archive_name download_url checksum_url force=0
 
-  # Parse args: optional --force flag and optional version positional arg
-  local pos_args=()
   for arg in "$@"; do
     case "$arg" in
       --force|-f) force=1 ;;
-      *) pos_args+=("$arg") ;;
+      *) [ -n "$version" ] || version="$arg" ;;
     esac
   done
 
   platform="$(detect_platform)"
   info "Detected platform: ${platform}"
 
-  if [ "${#pos_args[@]}" -gt 0 ]; then
-    version="${pos_args[0]}"
-  else
+  if [ -z "$version" ]; then
     info "Fetching latest release..."
     version="$(get_latest_version)"
   fi

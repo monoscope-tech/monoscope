@@ -68,8 +68,7 @@ import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Mail (arr, mrkdwn, slackHeader, slackImage, slackSection)
-import Pkg.SlackOAuth qualified as OAuth
-import Pkg.SlackRateLimit qualified as RateLimit
+import Pkg.Slack qualified as Slack
 import PyF
 import Relude hiding (ask, asks)
 import Servant.API (Header)
@@ -233,7 +232,7 @@ linkProjectGetH slack_code stateM = do
     linkEvidence :: Integrations.SlackEvidenceConsent -> Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
     linkEvidence consent code = do
       envCfg <- asks @AuthContext (.config)
-      response <- RateLimit.withRateLimits consent.teamId $ OAuth.exchangeUserToken envCfg.slackClientId envCfg.slackClientSecret $ OAuth.ExchangeUserCode $ OAuth.SlackUserCode code envCfg.slackRedirectUri $ Integrations.slackPKCEVerifier consent.verifier
+      response <- Slack.withRateLimits consent.teamId $ Slack.exchangeUserToken envCfg.slackClientId envCfg.slackClientSecret $ Slack.ExchangeUserCode $ Slack.SlackUserCode code envCfg.slackRedirectUri $ Integrations.slackPKCEVerifier consent.verifier
       grant <- either (const $ throwError err400{errBody = "Slack search access could not be connected. Start a new connection and approve read access for your linked Slack account."}) pure response
       saved <- Integrations.saveSlackEvidenceGrant (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) consent grant
       case saved of
@@ -949,7 +948,7 @@ processSlackEvent = processSlackEventWithTools Nothing
 
 processSlackEventWithTools :: Maybe AI.ProjectTools -> UUIDId "slack_event" -> ATBackgroundCtx ()
 processSlackEventWithTools projectTools receiptId =
-  runReceipt `catches` [Handler \(RateLimit.SlackRateLimited retryAt) -> defer retryAt, Handler \SlackWorkerBusy -> retryAfter 1, Handler \SlackPublicationPending -> retryAfter 60, Handler \(AI.AgentAwaitingReview identifier expiresAt) -> deferReview identifier expiresAt]
+  runReceipt `catches` [Handler \(Slack.SlackRateLimited retryAt) -> defer retryAt, Handler \SlackWorkerBusy -> retryAfter 1, Handler \SlackPublicationPending -> retryAfter 60, Handler \(AI.AgentAwaitingReview identifier expiresAt) -> deferReview identifier expiresAt]
   where
     retryAfter seconds = slackRetryTime seconds >>= defer
     defer = scheduleSlackJob (Hasql.queryTx @[UUIDId "slack_event"] [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL FOR UPDATE|]) (BgJobs.ProcessSlackEvent receiptId)
@@ -976,7 +975,7 @@ processSlackEventWithTools projectTools receiptId =
         UrlVerification _ -> throwIO $ ErrorCall "Stored Slack event is not a callback"
         EventCallback{team_id, event_id, event} -> do
           kind <- either (throwIO . ErrorCall) pure $ AE.parseEither (classifySlackEvent team_id) event
-          let process = RateLimit.withRateLimits team_id do
+          let process = Slack.withRateLimits team_id do
                 stillPending <- Hasql.interpOne @(HI.OneColumn Bool) [HI.sql|SELECT TRUE FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
                 when (isJust stillPending) do
                   envCfg <- asks env
@@ -1401,14 +1400,14 @@ resetSlackSession projectId userId receiptId = do
           MessageShortcut human -> pure human
           (AgentSessionStopped{}; AgentSessionTitleChanged{}; AppContextChanged{}; AppHomeOpened{}; BotMessage; MessageEdit; AssistantSession{}; TokensRevoked{}; UnknownEvent{}) -> throwIO $ ErrorCall "Slack session reset requires a human message"
         let thread = fromMaybe message.ts message.thread_ts
-        withInvestigationLock team_id message.channel thread $ RateLimit.withRateLimits team_id do
+        withInvestigationLock team_id message.channel thread $ Slack.withRateLimits team_id do
           AI.requireAgentAccess (AI.SlackAccess team_id message.user userId) projectId
           connection <- getProjectSlackData projectId >>= maybe (throwIO AI.AgentAccessDenied) pure
           unless (connection.teamId == team_id) $ throwIO AI.AgentAccessDenied
           setSessionStatus connection.botToken message.channel thread Active Nothing
           clearQueuedSlackJob job
-  for_ (leftToMaybe outcome) $ \err -> case fromException @RateLimit.SlackRateLimited err of
-    Just (RateLimit.SlackRateLimited retryAt) -> defer retryAt
+  for_ (leftToMaybe outcome) $ \err -> case fromException @Slack.SlackRateLimited err of
+    Just (Slack.SlackRateLimited retryAt) -> defer retryAt
     Nothing | isJust (fromException @SlackWorkerBusy err) -> retry
     Nothing | isJust (fromException @AI.AgentAccessDenied err) -> do
       Log.logAttention "Slack session reset stopped because requester access was revoked" $ AE.object ["receipt_id" AE..= receiptId]
@@ -1432,7 +1431,7 @@ refreshSlackProgress publicationId = do
       $ Investigations.loadProgressRefresh publicationId
       >>= traverse_ \(target, publication) ->
         withInvestigationLock target.teamId target.channelId target.threadTs
-          $ RateLimit.withRateLimits target.teamId case publication.delivery of
+          $ Slack.withRateLimits target.teamId case publication.delivery of
             Investigations.StreamDelivery checkpoint -> do
               snapshot <- loadProgressSnapshot target
               for_ snapshot $ updateProgressStream envCfg target publicationId checkpoint True
@@ -1440,8 +1439,8 @@ refreshSlackProgress publicationId = do
               recovered <- maybe (reconcileProgressHistory target publicationId) (pure . Just) $ Investigations.progressTimestamp publication
               maybe (retryAfter 60) (refreshObservedProgress envCfg.hostUrl target) recovered
   for_ (leftToMaybe outcome) $ \err ->
-    case fromException @RateLimit.SlackRateLimited err of
-      Just (RateLimit.SlackRateLimited retryAt) -> scheduleProgressRefresh publicationId retryAt
+    case fromException @Slack.SlackRateLimited err of
+      Just (Slack.SlackRateLimited retryAt) -> scheduleProgressRefresh publicationId retryAt
       Nothing | isJust (fromException @SlackWorkerBusy err) -> retryAfter 1
       Nothing
         | isJust (fromException @AI.AgentAccessDenied err) ->
@@ -1532,7 +1531,7 @@ readPublicationHistory slackData method publicationId params cursor matching = d
         throwIO SlackPublicationPending
   response <- tryAny $ getWith (defaults & authHeader "Bearer" slackData.botToken & Wreq.params .~ params) (toString $ "https://slack.com/api/" <> method)
   case response of
-    Left err -> maybe (pending "History transport failed") throwIO (fromException @RateLimit.SlackRateLimited err)
+    Left err -> maybe (pending "History transport failed") throwIO (fromException @Slack.SlackRateLimited err)
     Right received -> case AE.decode @(SlackThreadedMessageResponse SlackPublishedMessage) (received ^. responseBody) of
       Just page
         | statusIsSuccessful (received ^. Wreq.responseStatus)
@@ -1590,7 +1589,7 @@ reconcileIncidentDeliveries = do
             guard $ message.thread_ts == Just (Incidents.slackTimestampText root) && message.ts /= Incidents.slackTimestampText root
             publicationTimestamp appId "monoscope_incident_delivery" "delivery_id" search.id message
           retry = Incidents.saveIncidentSearchCursor search
-      outcome <- tryAny $ RateLimit.withRateLimits search.teamId do
+      outcome <- tryAny $ Slack.withRateLimits search.teamId do
         slackData <- installation
         page <- readPublicationHistory slackData method search.id params search.cursor (fmap dupe . matching)
         void installation
@@ -1602,7 +1601,7 @@ reconcileIncidentDeliveries = do
       for_ (leftToMaybe outcome) $ \err -> do
         let reason = toText $ displayException err
         Log.logAttention "Slack incident delivery history remains pending" $ AE.object ["root_id" AE..= search.rootId, "delivery_id" AE..= search.id, "reason" AE..= reason]
-        retry (Incidents.SearchStalled reason) $ maybe (addUTCTime 60 now) (\(RateLimit.SlackRateLimited at) -> at) $ fromException @RateLimit.SlackRateLimited err
+        retry (Incidents.SearchStalled reason) $ maybe (addUTCTime 60 now) (\(Slack.SlackRateLimited at) -> at) $ fromException @Slack.SlackRateLimited err
 
 
 newtype SlackBotProfile = SlackBotProfile {app_id :: Maybe Text}
@@ -1801,7 +1800,7 @@ sendProgressStream connection target publicationId request footer = case request
       AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
       response <- tryAny $ requestSlackApi connection.botToken method body
       case response of
-        Left err -> maybe uncertain (\limited -> reject >> throwIO limited) $ fromException @RateLimit.SlackRateLimited err
+        Left err -> maybe uncertain (\limited -> reject >> throwIO limited) $ fromException @Slack.SlackRateLimited err
         Right received -> case AE.decode @SlackMessageAck (received ^. responseBody) of
           Just ack
             | statusIsSuccessful (received ^. Wreq.responseStatus)
@@ -1868,7 +1867,7 @@ publishReservedMessage eventType token publicationId content release confirm = d
           $ AE.object ["metadata" AE..= AE.object ["event_type" AE..= eventType, "event_payload" AE..= AE.object ["publication_id" AE..= publicationId]]]
   response <- tryAny $ requestSlackApi token "chat.postMessage" body
   case response of
-    Left err -> maybe (pending "Transport failed") (\limited -> release >> throwIO limited) (fromException @RateLimit.SlackRateLimited err)
+    Left err -> maybe (pending "Transport failed") (\limited -> release >> throwIO limited) (fromException @Slack.SlackRateLimited err)
     Right received -> case AE.decode @SlackMessageAck (received ^. responseBody) of
       Just ack
         | statusIsSuccessful (received ^. Wreq.responseStatus)

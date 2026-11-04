@@ -70,7 +70,6 @@ module Pkg.AI (
   ensureConversationTitle,
   prepareRunAnswer,
   callRoutineLLM,
-  stripCodeBlock,
 ) where
 
 import Control.Lens ((%~), (.~), (^.), (^..), (^?))
@@ -83,6 +82,7 @@ import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Char (isAlphaNum, isHexDigit)
 import Data.Default (def)
+import Data.Effectful.CodeReview.Types (AgentAwaitingReview (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID (UUIDEff, genUUID)
@@ -129,16 +129,12 @@ import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
 import Pkg.AgentCatalog (LocalOperation (..))
 import Pkg.AgentCatalog qualified as Catalog
-import Pkg.AgentOperation (AgentAwaitingReview (..))
-import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.TimePicker (TimePicker)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC, idFromText)
 import Pkg.Parser (parseQueryToAST)
-import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
-import Pkg.SlackMCP qualified as SlackMCP
-import Pkg.SlackOAuth qualified as SlackOAuth
-import Pkg.SlackRateLimit qualified as SlackRateLimit
+import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
+import Pkg.Slack qualified as Slack
 import Relude
 import System.Config qualified as Config
 import System.Types (DB, ProjectToolCtx)
@@ -206,7 +202,7 @@ getNormalTupleResponse response =
 -- Right Nothing
 parseLLMResponse :: Text -> Either Text LLMResponse
 parseLLMResponse response =
-  let cleaned = fixTrailingCommas $ stripCodeBlock response
+  let cleaned = fixTrailingCommas $ ELLM.stripCodeBlock response
       valM = AE.decodeStrict' @AE.Value (encodeUtf8 cleaned)
       -- Partial decode: tolerates missing/invalid widgets and time_range fields
       partial =
@@ -237,7 +233,7 @@ parseAgenticResponse (AgenticChatResult{response, toolCalls = tcs}) = do
 -- malformed metadata reports conservatively rather than hiding a real result.
 agenticResponseHasFindings :: AgenticChatResult -> Bool
 agenticResponseHasFindings answer =
-  fromMaybe True $ AE.decodeStrict' @AE.Value (encodeUtf8 $ fixTrailingCommas $ stripCodeBlock answer.response) >>= (^? key "has_findings" . _Bool)
+  fromMaybe True $ AE.decodeStrict' @AE.Value (encodeUtf8 $ fixTrailingCommas $ ELLM.stripCodeBlock answer.response) >>= (^? key "has_findings" . _Bool)
 
 
 -- | One widget shape for every chat surface. Older answers emitted a top-level
@@ -679,7 +675,7 @@ data AgenticConfig = AgenticConfig
   , useTimefusion :: Bool -- Route raw-SQL reads to TimeFusion (mirrors env.enableTimefusionReads)
   , invocationMode :: InvocationMode
   , projectTools :: Maybe ProjectTools
-  , slackEvidence :: Either SlackEvidenceFailure (Map.Map Text (Catalog.Tool SlackMCP.SlackRead))
+  , slackEvidence :: Either SlackEvidenceFailure (Map.Map Text (Catalog.Tool Slack.SlackRead))
   }
 
 
@@ -864,7 +860,7 @@ formatFacetContext = foldMap \summary -> case facetLines (\(FacetValue v _) -> "
 -- * Capability catalog
 
 
-data AgentOperation = ProjectOperation ProjectTools | LocalOperation LocalOperation | SlackEvidenceOperation SlackMCP.SlackRead
+data AgentOperation = ProjectOperation ProjectTools | LocalOperation LocalOperation | SlackEvidenceOperation Slack.SlackRead
 
 
 -- | Every dispatcher uses the same descriptor. API tools win on name collisions,
@@ -876,7 +872,7 @@ agentCatalog config =
     <> either (const mempty) (Map.map $ fmap SlackEvidenceOperation) config.slackEvidence
 
 
-data SlackEvidenceFailure = SlackRequesterRequired | SlackCredentialFailure Integrations.SlackCredentialFailure | SlackProviderFailure SlackMCP.Failure | SlackProviderCoolingDown UTCTime | SlackAudienceUnavailable | SlackSearchRequiresPersonalScope | SlackSchemaUnsupported | SlackReadArgumentsInvalid
+data SlackEvidenceFailure = SlackRequesterRequired | SlackCredentialFailure Integrations.SlackCredentialFailure | SlackProviderFailure Slack.Failure | SlackProviderCoolingDown UTCTime | SlackAudienceUnavailable | SlackSearchRequiresPersonalScope | SlackSchemaUnsupported | SlackReadArgumentsInvalid
   deriving stock (Show)
 
 
@@ -884,15 +880,15 @@ newtype SlackPermalink = SlackPermalink Text
   deriving newtype (AE.ToJSON)
 
 
-data SlackEvidence = SlackEvidence {subject :: Integrations.SlackEvidenceSubject, operation :: SlackMCP.SlackRead, arguments :: Map.Map Text AE.Value, result :: SlackMCP.ReadResult, source :: Maybe SlackPermalink}
+data SlackEvidence = SlackEvidence {subject :: Integrations.SlackEvidenceSubject, operation :: Slack.SlackRead, arguments :: Map.Map Text AE.Value, result :: Slack.ReadResult, source :: Maybe SlackPermalink}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
 
-slackGrant :: (DB es, Time.Time :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Eff es (Either SlackEvidenceFailure (Config.EnvConfig, Integrations.SlackEvidenceSubject, SlackOAuth.SlackUserGrant))
+slackGrant :: (DB es, Time.Time :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Eff es (Either SlackEvidenceFailure (Config.EnvConfig, Integrations.SlackEvidenceSubject, Slack.SlackUserGrant))
 slackGrant config = runExceptT do
   settings <- Except.liftEither $ maybeToRight SlackRequesterRequired config.sourceConfig
-  when (T.null $ T.strip settings.slackAppId) $ Except.throwError $ SlackProviderFailure SlackMCP.ClientNotConfigured
+  when (T.null $ T.strip settings.slackAppId) $ Except.throwError $ SlackProviderFailure Slack.ClientNotConfigured
   subject <- case config.access of
     SlackInvestigationAccess run -> pure $ Integrations.SlackEvidenceSubject config.projectId run.userId run.teamId run.slackUserId
     SlackAccess team user member -> pure $ Integrations.SlackEvidenceSubject config.projectId member team user
@@ -905,13 +901,13 @@ slackGrant config = runExceptT do
   pure (settings, subject, grant)
 
 
-currentSlackGrant :: (DB es, Time.Time :> es) => Config.EnvConfig -> Integrations.SlackEvidenceSubject -> SlackOAuth.SlackUserGrant -> Eff es Bool
+currentSlackGrant :: (DB es, Time.Time :> es) => Config.EnvConfig -> Integrations.SlackEvidenceSubject -> Slack.SlackUserGrant -> Eff es Bool
 currentSlackGrant settings subject grant = do
   current <- Integrations.getSlackEvidenceGrant (encodeUtf8 settings.apiKeyEncryptionSecretKey) subject.projectId subject.userId subject.teamId subject.slackUserId
   pure $ maybe False ((== grant.accessToken) . (.accessToken)) current
 
 
-runSlackEvidence :: (DB es, IOE :> es, Time.Time :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Catalog.Tool AgentOperation -> SlackMCP.SlackRead -> Map.Map Text AE.Value -> Eff es ToolResult
+runSlackEvidence :: (DB es, IOE :> es, Time.Time :> es, UUIDEff :> es, W.HTTP :> es) => AgenticConfig -> Catalog.Tool AgentOperation -> Slack.SlackRead -> Map.Map Text AE.Value -> Eff es ToolResult
 runSlackEvidence config tool operation proposed = do
   outcome <- runExceptT do
     (settings, subject, grant) <- ExceptT $ slackGrant config
@@ -926,7 +922,7 @@ runSlackEvidence config tool operation proposed = do
         own <- lift $ Integrations.slackDirectMessageOwner config.projectId subject.userId subject.teamId subject.slackUserId channelId
         unless own $ Except.throwError SlackAudienceUnavailable
         pure (Investigations.PersonalAudience subject.userId, proposed)
-      (_, Just channelId) | operation `elem` ([SlackMCP.ReadChannel, SlackMCP.ReadThread] :: [SlackMCP.SlackRead]) -> do
+      (_, Just channelId) | operation `elem` ([Slack.ReadChannel, Slack.ReadThread] :: [Slack.SlackRead]) -> do
         channel <- Except.liftEither $ first (const SlackAudienceUnavailable) $ Integrations.slackChannel subject.teamId channelId
         member <- lift $ Integrations.slackChannelMember config.projectId subject.userId channel
         unless member $ Except.throwError SlackAudienceUnavailable
@@ -947,24 +943,24 @@ runSlackEvidence config tool operation proposed = do
     unless retained $ Except.throwError SlackAudienceUnavailable
     lift $ void $ requireConfigAccess config
     let remote = Catalog.Tool tool.name tool.description tool.inputSchema tool.agentPolicy operation
-    result <- ExceptT $ first SlackProviderFailure <$> SlackRateLimit.withRateLimits subject.teamId (SlackMCP.readEvidence settings.slackAppId grant remote arguments)
+    result <- ExceptT $ first SlackProviderFailure <$> Slack.withRateLimits subject.teamId (Slack.readEvidence settings.slackAppId grant remote arguments)
     unlessM (lift $ currentSlackGrant settings subject grant) $ Except.throwError $ SlackCredentialFailure Integrations.SlackNotConnected
     source <- case (operation, result.outcome) of
-      (SlackMCP.ReadThread, SlackMCP.ReadSucceeded) -> do
+      (Slack.ReadThread, Slack.ReadSucceeded) -> do
         link <- threadPermalink grant arguments
         unlessM (lift $ currentSlackGrant settings subject grant) $ Except.throwError $ SlackCredentialFailure Integrations.SlackNotConnected
         pure link
-      (SlackMCP.ReadThread, SlackMCP.ReadRejected) -> pure Nothing
-      ((SlackMCP.SearchPublic, _); (SlackMCP.SearchPublicAndPrivate, _); (SlackMCP.ReadChannel, _)) -> pure Nothing
+      (Slack.ReadThread, Slack.ReadRejected) -> pure Nothing
+      ((Slack.SearchPublic, _); (Slack.SearchPublicAndPrivate, _); (Slack.ReadChannel, _)) -> pure Nothing
     pure SlackEvidence{subject, operation, arguments, result, source}
   pure $ case outcome of
     Left failure -> ToolResult (slackEvidenceMessage failure) Nothing
     Right evidence ->
       let citation = case (evidence.operation, evidence.source) of
-            (SlackMCP.ReadThread, Just (SlackPermalink url)) -> "\n\nVerified source thread: " <> url <> "\nCite this link verbatim; do not construct Slack URLs."
-            (SlackMCP.ReadThread, Nothing) -> "\n\nNo verified source link is available. Do not invent a Slack URL."
-            ((SlackMCP.SearchPublic, _); (SlackMCP.SearchPublicAndPrivate, _); (SlackMCP.ReadChannel, _)) -> ""
-       in ToolResult ((case evidence.result.outcome of SlackMCP.ReadSucceeded -> ""; SlackMCP.ReadRejected -> "Slack evidence read failed:\n") <> T.intercalate "\n\n" evidence.result.content <> citation) (Just $ AE.toJSON evidence)
+            (Slack.ReadThread, Just (SlackPermalink url)) -> "\n\nVerified source thread: " <> url <> "\nCite this link verbatim; do not construct Slack URLs."
+            (Slack.ReadThread, Nothing) -> "\n\nNo verified source link is available. Do not invent a Slack URL."
+            ((Slack.SearchPublic, _); (Slack.SearchPublicAndPrivate, _); (Slack.ReadChannel, _)) -> ""
+       in ToolResult ((case evidence.result.outcome of Slack.ReadSucceeded -> ""; Slack.ReadRejected -> "Slack evidence read failed:\n") <> T.intercalate "\n\n" evidence.result.content <> citation) (Just $ AE.toJSON evidence)
   where
     threadPermalink grant arguments = maybe (pure Nothing) (uncurry fetch) do
       channel <- getTextArg "channel_id" arguments >>= rightToMaybe . Integrations.slackChannel grant.teamId
@@ -973,15 +969,15 @@ runSlackEvidence config tool operation proposed = do
       where
         fetch channel timestamp =
           Except.mapExceptT
-            ( Exception.handle (\(SlackRateLimit.SlackRateLimited _) -> pure $ Right Nothing)
-                . Exception.handle (\(failure :: SlackRateLimit.SlackHttpFailure) -> pure $ if statusCode (SlackRateLimit.slackHttpStatus failure) == 401 then Left (SlackProviderFailure SlackMCP.CredentialsRejected) else Right Nothing)
+            ( Exception.handle (\(Slack.SlackRateLimited _) -> pure $ Right Nothing)
+                . Exception.handle (\(failure :: Slack.SlackHttpFailure) -> pure $ if statusCode (Slack.slackHttpStatus failure) == 401 then Left (SlackProviderFailure Slack.CredentialsRejected) else Right Nothing)
                 . Exception.handle (\(_ :: HttpException) -> pure $ Right Nothing)
             )
             do
               let options = W.defaults & W.header "Authorization" .~ [encodeUtf8 $ "Bearer " <> grant.accessToken] & Wreq.param "channel" .~ [channel.channelId] & Wreq.param "message_ts" .~ [Incidents.slackTimestampText timestamp] & Wreq.redirects .~ 0
-              response <- lift $ SlackRateLimit.withRateLimits grant.teamId $ W.getWith options "https://slack.com/api/chat.getPermalink"
+              response <- lift $ Slack.withRateLimits grant.teamId $ W.getWith options "https://slack.com/api/chat.getPermalink"
               let payload = AE.decode @AE.Value $ response ^. W.responseBody
-              when (maybe False (`elem` (["invalid_auth", "token_revoked", "account_inactive", "not_authed"] :: [Text])) (payload >>= (^? key "error" . _String))) $ Except.throwError $ SlackProviderFailure SlackMCP.CredentialsRejected
+              when (maybe False (`elem` (["invalid_auth", "token_revoked", "account_inactive", "not_authed"] :: [Text])) (payload >>= (^? key "error" . _String))) $ Except.throwError $ SlackProviderFailure Slack.CredentialsRejected
               pure do
                 guard $ statusIsSuccessful $ response ^. Wreq.responseStatus
                 body <- payload
@@ -1007,9 +1003,9 @@ slackEvidenceMessage = \case
   SlackCredentialFailure Integrations.SlackRefreshUncertain -> "Reconnect your Slack account; its previous refresh could not be confirmed."
   SlackCredentialFailure Integrations.SlackRefreshRevoked -> "Slack revoked this connection. Reconnect your Slack account."
   SlackCredentialFailure Integrations.SlackRefreshStorageFailure{} -> "This Slack connection could not be opened. Reconnect your account."
-  SlackProviderFailure SlackMCP.ClientNotConfigured -> "Slack evidence is not configured for this installation."
-  SlackProviderFailure SlackMCP.CredentialsRejected -> "Slack rejected this connection. Reconnect your Slack account."
-  SlackProviderFailure SlackMCP.AccessRejected -> "Slack denied this app access. Check the workspace's app approval and MCP configuration."
+  SlackProviderFailure Slack.ClientNotConfigured -> "Slack evidence is not configured for this installation."
+  SlackProviderFailure Slack.CredentialsRejected -> "Slack rejected this connection. Reconnect your Slack account."
+  SlackProviderFailure Slack.AccessRejected -> "Slack denied this app access. Check the workspace's app approval and MCP configuration."
   SlackProviderFailure _ -> "Slack evidence is temporarily unavailable. Try again later."
   SlackProviderCoolingDown{} -> "Slack evidence is rate limited. Other project tools remain available."
   SlackAudienceUnavailable -> "Slack evidence requires your private conversation or verified current-channel access."
@@ -1098,23 +1094,6 @@ buildSystemPrompt config now =
             DurableRun{} -> []
       actionsSection = bool "" "\nEXTERNAL ACTIONS\nUse action tools only when the user or the routine's defining conversation explicitly requests that action. Report the tool result accurately.\n" $ Issues.permitsActions (invocationPolicy config.invocationMode)
    in basePrompt <> timezoneSection <> facetSection <> customSection <> slackSection <> projectSection <> investigationSection <> documentsSection <> actionsSection
-
-
--- | Strip markdown code blocks from LLM responses
---
--- >>> stripCodeBlock "```json\n{\"key\": \"value\"}\n```"
--- "{\"key\": \"value\"}"
--- >>> stripCodeBlock "```\n{\"key\": \"value\"}\n```"
--- "{\"key\": \"value\"}"
--- >>> stripCodeBlock "{\"key\": \"value\"}"
--- "{\"key\": \"value\"}"
-stripCodeBlock :: Text -> Text
-stripCodeBlock t
-  | "```json" `T.isPrefixOf` stripped = T.strip $ T.dropWhileEnd (== '`') $ T.drop 7 stripped
-  | "```" `T.isPrefixOf` stripped = T.strip $ T.dropWhileEnd (== '`') $ T.drop 3 stripped
-  | otherwise = stripped
-  where
-    stripped = T.strip t
 
 
 runAgenticQuery :: ProjectToolCtx es => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
@@ -1227,12 +1206,12 @@ runAgenticChatWithHistory suppliedConfig requestedInput model apiKey = do
   where
     loadSlackEvidence config = do
       result <-
-        Exception.handle (\(SlackRateLimit.SlackRateLimited deadline) -> pure $ Left $ SlackProviderCoolingDown deadline)
+        Exception.handle (\(Slack.SlackRateLimited deadline) -> pure $ Left $ SlackProviderCoolingDown deadline)
           $ slackGrant config
           >>= \case
             Left failure -> pure $ Left failure
             Right (settings, subject, grant) -> do
-              catalog <- first SlackProviderFailure <$> SlackRateLimit.withRateLimits subject.teamId (SlackMCP.discoverReads settings.slackAppId grant)
+              catalog <- first SlackProviderFailure <$> Slack.withRateLimits subject.teamId (Slack.discoverReads settings.slackAppId grant)
               current <- currentSlackGrant settings subject grant
               pure $ if current then catalog else Left (SlackCredentialFailure Integrations.SlackNotConnected)
       pure config{slackEvidence = result}
@@ -1435,7 +1414,7 @@ data ToolRecovery = ReplayReads | AtomicInRun | RetainInRun | ReconcileInRun
 data OperationExecution es result
   = EffectfulOperation (Eff es result)
   | AtomicOperation (Tx.Transaction result)
-  | ReconcilableOperation (OperationExecution es result) (Operation.OperationCall -> Eff es (Maybe result))
+  | ReconcilableOperation (OperationExecution es result) (Catalog.OperationCall -> Eff es (Maybe result))
   deriving stock (Functor)
 
 
@@ -1447,8 +1426,8 @@ data AgentOperationUncertain = AgentOperationUncertain (UUIDId "agent_operation"
 executeNativeOperation
   :: (DB es, IOE :> es, Time.Time :> es, W.HTTP :> es)
   => Issues.RunContext
-  -> Operation.NativeOperation
-  -> (Operation.NativeOperation -> OperationExecution es (Either Text AE.Value))
+  -> Catalog.NativeOperation
+  -> (Catalog.NativeOperation -> OperationExecution es (Either Text AE.Value))
   -> Eff es (Either Text AE.Value)
 executeNativeOperation context proposed perform =
   authorizeRunOperation context (Catalog.nativePolicy proposed) >>= \case
@@ -1462,7 +1441,7 @@ executeNativeOperation context proposed perform =
         Left denial -> pure $ Left $ toolDenialMessage denial
         Right snapshot -> do
           let response result = ToolResult (either Relude.id (const "Response saved.") result) $ Just $ AE.toJSON result
-          recordedOperation (MemberAccess ProjectMember context.requestedBy) context cursor (Operation.NativeCall frozen) snapshot (authorizeRunOperation context $ Catalog.nativePolicy frozen) (response <$> perform frozen) >>= \case
+          recordedOperation (MemberAccess ProjectMember context.requestedBy) context cursor (Catalog.NativeCall frozen) snapshot (authorizeRunOperation context $ Catalog.nativePolicy frozen) (response <$> perform frozen) >>= \case
             Investigations.RefusedResult _ reason -> do
               void $ Investigations.commitProgress (Just cursor) Nothing Investigations.NativeReady Nothing
               pure $ Left $ Investigations.reviewRefusalMessage reason
@@ -1475,30 +1454,30 @@ executeNativeOperation context proposed perform =
                 Nothing -> throwIO Investigations.OperationResponseInvalid
   where
     validateScope operation = case (context.source, operation) of
-      (Issues.TriggeredRun (Issues.PullRequestReview review), Operation.WriteWiki write) -> do
+      (Issues.TriggeredRun (Issues.PullRequestReview review), Catalog.WriteWiki write) -> do
         permitted <-
           Hasql.interpOne @(HI.OneColumn Bool)
             [HI.sql|SELECT TRUE FROM projects.pr_review_attempts
           WHERE id = #{write.attemptId} AND project_id = #{context.projectId} AND run_id = #{review}|]
         unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
-      (Issues.FixRun fixId, Operation.WriteWiki write) -> do
+      (Issues.FixRun fixId, Catalog.WriteWiki write) -> do
         permitted <-
           Hasql.interpOne @(HI.OneColumn Bool)
             [HI.sql|SELECT TRUE FROM projects.pr_review_attempts WHERE id = #{write.attemptId} AND project_id = #{context.projectId} AND fix_run_id = #{fixId}|]
         unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
-      (Issues.TriggeredRun (Issues.PullRequestReview review), Operation.PublishPullRequestComment comment) -> do
+      (Issues.TriggeredRun (Issues.PullRequestReview review), Catalog.PublishPullRequestComment comment) -> do
         permitted <-
           Hasql.interpOne @(HI.OneColumn Bool)
             [HI.sql|SELECT TRUE FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
           WHERE r.id = #{review} AND r.id = #{comment.reviewId} AND t.project_id = #{context.projectId}|]
         unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
-      (Issues.TriggeredRun (Issues.IssueEnrichment issue), Operation.EnrichIssue enrichment) -> do
+      (Issues.TriggeredRun (Issues.IssueEnrichment issue), Catalog.EnrichIssue enrichment) -> do
         permitted <- Hasql.interpOne @(HI.OneColumn Bool) [HI.sql|SELECT TRUE FROM apis.issues WHERE project_id = #{context.projectId} AND id = #{issue} AND id = #{enrichment.enhancement.issueId}|]
         unless (isJust permitted) $ throwIO Investigations.OperationScopeMismatch
-      ((Issues.ScheduledRun, _); (Issues.InteractiveRun{}, _); (Issues.ConversationRun{}, _); (Issues.FixRun{}, Operation.PublishPullRequestComment{}); (Issues.FixRun{}, Operation.EnrichIssue{}); (Issues.TriggeredRun Issues.PullRequestReview{}, Operation.EnrichIssue{}); (Issues.TriggeredRun Issues.IssueEnrichment{}, Operation.WriteWiki{}); (Issues.TriggeredRun Issues.IssueEnrichment{}, Operation.PublishPullRequestComment{}); (Issues.TriggeredRun Issues.SlackMessage{}, _); (Issues.TriggeredRun Issues.SlackCommand{}, _); (Issues.TriggeredRun Issues.IncidentEvent{}, _)) -> throwIO Investigations.OperationScopeMismatch
+      ((Issues.ScheduledRun, _); (Issues.InteractiveRun{}, _); (Issues.ConversationRun{}, _); (Issues.FixRun{}, Catalog.PublishPullRequestComment{}); (Issues.FixRun{}, Catalog.EnrichIssue{}); (Issues.TriggeredRun Issues.PullRequestReview{}, Catalog.EnrichIssue{}); (Issues.TriggeredRun Issues.IssueEnrichment{}, Catalog.WriteWiki{}); (Issues.TriggeredRun Issues.IssueEnrichment{}, Catalog.PublishPullRequestComment{}); (Issues.TriggeredRun Issues.SlackMessage{}, _); (Issues.TriggeredRun Issues.SlackCommand{}, _); (Issues.TriggeredRun Issues.IncidentEvent{}, _)) -> throwIO Investigations.OperationScopeMismatch
 
 
-recordedOperation :: (DB es, IOE :> es, Time.Time :> es) => AgentAccess -> Issues.RunContext -> Investigations.CheckpointCursor -> Operation.OperationCall -> OperationPolicy -> Eff es (Either ToolDenial OperationPolicy) -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
+recordedOperation :: (DB es, IOE :> es, Time.Time :> es) => AgentAccess -> Issues.RunContext -> Investigations.CheckpointCursor -> Catalog.OperationCall -> OperationPolicy -> Eff es (Either ToolDenial OperationPolicy) -> OperationExecution es ToolResult -> Eff es Investigations.OperationResult
 recordedOperation access context cursor call snapshot reauthorize execution = do
   requirement <- for (Issues.reviewApprover snapshot.execution snapshot.capability) $ \approver -> do
     now <- Time.currentTime
@@ -1520,7 +1499,7 @@ recordedOperation access context cursor call snapshot reauthorize execution = do
               Just result -> do
                 current <- reauthorize >>= either (const $ throwIO AgentAccessDenied) pure
                 Investigations.completeOperation claim result
-                if Operation.sameOperation original call
+                if Catalog.sameOperation original call
                   then pure $ Investigations.RecordedResult result
                   else recordedOperation access context cursor call current reauthorize execution
     -- Recheck after locking the run: authority can change after the earlier snapshot.
@@ -1614,7 +1593,7 @@ executeToolAt cursor config tc = do
     Nothing
       | Map.member funcName Catalog.slackReads
       , Left failure <- config.slackEvidence -> case failure of
-          SlackProviderCoolingDown deadline -> throwIO $ SlackRateLimit.SlackRateLimited deadline
+          SlackProviderCoolingDown deadline -> throwIO $ Slack.SlackRateLimited deadline
           (SlackRequesterRequired; SlackCredentialFailure{}; SlackProviderFailure{}; SlackAudienceUnavailable; SlackSearchRequiresPersonalScope; SlackSchemaUnsupported; SlackReadArgumentsInvalid) -> pure $ Investigations.RecordedResult $ noRaw $ slackEvidenceMessage failure
     Nothing -> pure $ Investigations.RecordedResult $ noRaw $ "Unknown tool: " <> funcName
     Just tool -> case tool.agentPolicy of
@@ -1634,7 +1613,7 @@ executeToolAt cursor config tc = do
     recorded snapshot execution = case snapshot.capability of
       MCP.ReadOnly{} -> Investigations.RecordedResult <$> perform execution
       (MCP.ConversationWrite; MCP.ProjectMemoryWrite; MCP.ProjectWrite; MCP.ExternalPublication; MCP.Administration{}) -> case (cursor, invocationContext config.invocationMode) of
-        (Just position, Just context) -> recordedOperation config.access context position (Operation.ModelCall tc) snapshot (requireConfigAccess config >>= \fresh -> authorizeOperation config fresh snapshot.capability) execution
+        (Just position, Just context) -> recordedOperation config.access context position (Catalog.ModelCall tc) snapshot (requireConfigAccess config >>= \fresh -> authorizeOperation config fresh snapshot.capability) execution
         _ -> pure $ Investigations.RecordedResult $ noRaw "This change requires a durable checkpoint."
     perform = \case
       EffectfulOperation action -> action
@@ -1656,7 +1635,7 @@ executeToolAt cursor config tc = do
         Just tool ->
           AE.object
             $ ["name" AE..= tool.name, "description" AE..= tool.description, "input_schema" AE..= tool.inputSchema, "agent_recovery" AE..= recovery tool]
-            <> maybe [] (\policy -> ["minimum_permission" AE..= MCP.minimumPermission policy, "evidence_permission" AE..= Catalog.disclosurePermission policy, "action" AE..= MCP.actionName policy]) tool.agentPolicy
+            <> maybe [] (\policy -> ["minimum_permission" AE..= MCP.minimumPermission policy, "evidence_permission" AE..= Catalog.disclosurePermission policy, "action" AE..= Catalog.actionName policy]) tool.agentPolicy
       ListProjectMemory -> EffectfulOperation $ case parseEither Memory.parsePageQuery $ AE.toJSON args of
         Left err -> pure $ failed ("invalid 'query': " <> toText err)
         Right query -> noRaw . encodeText . map Memory.summarize <$> Memory.discoverPages config.projectId query

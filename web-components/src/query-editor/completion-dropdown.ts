@@ -60,7 +60,7 @@ export const completionChrome = ViewPlugin.fromClass(class {
         keys.append(text);
       }
       const guide = document.createElement('a');
-      guide.href = 'https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/';
+      guide.href = 'https://monoscopehq.com/docs/dashboard/dashboard-pages/api-log-explorer/';
       guide.target = '_blank';
       guide.rel = 'noopener';
       guide.textContent = 'Syntax guide ↗';

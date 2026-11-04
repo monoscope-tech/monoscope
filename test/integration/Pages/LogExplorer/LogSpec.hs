@@ -51,9 +51,7 @@ import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.Parser.Expr qualified as PE
 import Pkg.Parser.Stats (Sources (..))
 import Pkg.QueryCache qualified as QC
-import Pkg.SchemaLearning.Catalog qualified as Catalog
-import Pkg.SchemaLearning.Hot qualified as Hot
-import Pkg.SchemaLearning.Worker qualified as Worker
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import ProcessMessage qualified
@@ -101,9 +99,9 @@ spec = do
     -- The alert header read status_message, which mkSystemLog never sets: an empty success badge.
     let alert = (Telemetry.mkSystemLog testPid "monitor.alert.triggered" Telemetry.SLError "CPU: alerting" (Map.fromList [("monitor.status", AE.String "alerting")]) Nothing frozenTime :: Telemetry.OtelLogsAndSpans){Telemetry.kind = Just "alert"}
         qli = Projects.QueryLibItem{id = UUIDId UUID.nil, projectId = testPid, createdAt = frozenTime, updatedAt = frozenTime, userId = Projects.UserId UUID.nil, queryType = Projects.QLTSaved, queryText = "status_code == \"500\"", queryAst = AE.Null, title = Just "errors", byMe = True}
-        facets m = renderT $ Log.renderFacets Catalog.FacetSummary{id = UUID.nil, projectId = testPid.toText, tableName = "otel_logs_and_spans", facetJson = Catalog.FacetData m}
-        sidebar = facets $ HM.fromList [("attributes.http.request.method", [Catalog.FacetValue "GET" 3]), ("resource.service.name", [Catalog.FacetValue "checkout-svc" 5]), ("level", [Catalog.FacetValue "INFO" 7])]
-        overflow = facets $ HM.singleton "resource.service.name" [Catalog.FacetValue ("service-" <> show n) 1 | n <- [1 .. 6 :: Int]]
+        facets m = renderT $ Log.renderFacets SchemaLearning.FacetSummary{id = UUID.nil, projectId = testPid.toText, tableName = "otel_logs_and_spans", facetJson = SchemaLearning.FacetData m}
+        sidebar = facets $ HM.fromList [("attributes.http.request.method", [SchemaLearning.FacetValue "GET" 3]), ("resource.service.name", [SchemaLearning.FacetValue "checkout-svc" 5]), ("level", [SchemaLearning.FacetValue "INFO" 7])]
+        overflow = facets $ HM.singleton "resource.service.name" [SchemaLearning.FacetValue ("service-" <> show n) 1 | n <- [1 .. 6 :: Int]]
         library = renderT $ LogQueryBox.queryLibraryContent_ (V.singleton qli) V.empty
     -- Library items hand raw KQL to handleAddQuery (a JSON.parse threw on every click). Facet
     -- clicks go through window.queryEditorCall: Monaco loads lazily, so calling the element
@@ -575,9 +573,9 @@ spec = do
 
     it "facets: seeded summaries, real-span flushes, narrowed reads, bulk refresh, API wire shape" \tr -> do
       let unknown = mkPid 9999
-          facetMap = maybe HM.empty (\s -> let Catalog.FacetData m = s.facetJson in m)
+          facetMap = maybe HM.empty (\s -> let SchemaLearning.FacetData m = s.facetJson in m)
           summaryOf paths p = facetMap <$> runHasqlEffect tr (SC.getFacetSummary paths p "otel_logs_and_spans" frozenTime frozenTime)
-          flush p obs = newIORef Hot.emptySchemaShardState >>= \ref -> Hot.observeSpans ref Hot.defaultPolicy p (V.fromList obs) >> void (runHasqlEffect tr (Worker.flushDirty ref))
+          flush p obs = newIORef SchemaLearning.emptySchemaShardState >>= \ref -> SchemaLearning.observeSpans ref SchemaLearning.defaultPolicy p (V.fromList obs) >> void (runHasqlEffect tr (SC.flushDirty ref))
           values k = map (.value) . fold . HM.lookup k
       resetSchemaLearning tr [testPid, unknown]
       (isNothing <$> runHasqlEffect tr (SC.getFacetSummary Nothing unknown "otel_logs_and_spans" frozenTime frozenTime)) `shouldReturn` True
@@ -610,9 +608,9 @@ spec = do
       resetSchemaLearning tr (projs <> (freshP : staleP))
       seedSummary tr freshP
       updated <- forM [projs, freshP : staleP] \ps -> do
-        ref <- newIORef Hot.emptySchemaShardState
-        forM_ ps \p -> Hot.observeSpans ref Hot.defaultPolicy p (V.singleton (richObs p "GET" False))
-        (.summariesUpdated) <$> runHasqlEffect tr (Worker.flushDirty ref)
+        ref <- newIORef SchemaLearning.emptySchemaShardState
+        forM_ ps \p -> SchemaLearning.observeSpans ref SchemaLearning.defaultPolicy p (V.singleton (richObs p "GET" False))
+        (.summariesUpdated) <$> runHasqlEffect tr (SC.flushDirty ref)
       updated `shouldBe` [5, 2]
       (all isJust <$> mapM (\p -> runHasqlEffect tr (SC.getSummary Nothing p)) (projs <> staleP)) `shouldReturn` True
 
@@ -888,12 +886,12 @@ mkPid n = UUIDId (UUID.fromWords 0 0 0 (fromIntegral n))
 seedSummary :: TestResources -> Projects.ProjectId -> IO ()
 seedSummary tr p = runHasqlEffect tr $ SC.upsertSummary (V.singleton (p, doc))
   where
-    fld cat = Catalog.FieldStruct mempty mempty cat False
+    fld cat = SchemaLearning.FieldStruct mempty mempty cat False
     doc =
-      Catalog.SummaryDoc
-        { fields = HM.fromList [("http.request.method", fld Catalog.FCAttribute), ("db.operation.name", fld Catalog.FCAttribute), ("url.path", fld Catalog.FCAttribute), ("service.name", fld Catalog.FCResource)]
+      SchemaLearning.SummaryDoc
+        { fields = HM.fromList [("http.request.method", fld SchemaLearning.FCAttribute), ("db.operation.name", fld SchemaLearning.FCAttribute), ("url.path", fld SchemaLearning.FCAttribute), ("service.name", fld SchemaLearning.FCResource)]
         , services = V.singleton "checkout-svc"
-        , topValuesByField = HM.fromList [("http.request.method", Catalog.TopK 2 (HM.fromList [("GET", 5), ("POST", 3)])), ("db.operation.name", Catalog.TopK 1 (HM.singleton "SELECT" 7)), ("url.path", Catalog.TopK 1 (HM.singleton "/orders" 5)), ("service.name", Catalog.TopK 1 (HM.singleton "checkout-svc" 8))]
+        , topValuesByField = HM.fromList [("http.request.method", SchemaLearning.TopK 2 (HM.fromList [("GET", 5), ("POST", 3)])), ("db.operation.name", SchemaLearning.TopK 1 (HM.singleton "SELECT" 7)), ("url.path", SchemaLearning.TopK 1 (HM.singleton "/orders" 5)), ("service.name", SchemaLearning.TopK 1 (HM.singleton "checkout-svc" 8))]
         }
 
 
@@ -913,7 +911,7 @@ otelRow pid name attrs res =
 
 -- | A canonical HTTP span through the real 'extractObservation' walker; @logCols@ also fills
 -- the log-level columns the top-level walk reads.
-richObs :: Projects.ProjectId -> Text -> Bool -> Hot.ObservationInput
+richObs :: Projects.ProjectId -> Text -> Bool -> SchemaLearning.ObservationInput
 richObs p method logCols =
   ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier
     (otelRow p (method <> " /orders") (Map.fromList attrs) (Map.singleton "service.name" (AE.String "checkout-svc")) :: Telemetry.OtelLogsAndSpans)

@@ -119,10 +119,9 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, binDensityFor, browserKql, constantToKQLList, constantToSQLList, defSqlQueryCfg, fillQueryTemplate, fixedUTCTime, mkScopedQuery, parseQueryToComponents, variablePresetsKQL)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, audienceFilters, audienceKql, binDensityFor, browserKql, constantToKQLList, constantToSQLList, defSqlQueryCfg, fillQueryTemplate, fixedUTCTime, mkScopedQuery, parseQueryToComponents, variablePresetsKQL)
 import Pkg.Parser.Expr (sqlStringLit)
-import Pkg.Rum qualified
-import Pkg.SchemaLearning.Catalog qualified as Catalog
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude hiding (ask)
 import Servant (NoContent (..), ServerError, err302, err400, err404, errBody, errHeaders)
 import Servant.API (Header)
@@ -901,7 +900,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
   facetOpts <- case variable.facetField of
     Just field -> do
       docM <- SchemaCatalog.getSummary Nothing pid
-      pure $ docM >>= \(d :: Catalog.SummaryDoc) -> HM.lookup field d.topValuesByField <&> \tk -> map (one . fst) $ sortWith (Down . snd) $ HM.toList tk.top
+      pure $ docM >>= \(d :: SchemaLearning.SummaryDoc) -> HM.lookup field d.topValuesByField <&> \tk -> map (one . fst) $ sortWith (Down . snd) $ HM.toList tk.top
     Nothing -> pure Nothing
   -- The rendered input carries its statement so the client can re-fetch options when a
   -- parent variable changes. Handing it the *substituted* statement froze the parent's
@@ -1393,7 +1392,7 @@ dashboardBWConf bw pid dashId title tabM currentRange freeTierStatus =
     , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
         TimePicker.liveDataControls_ Nothing currentRange Nothing TimePicker.RefreshOnly
         dashboardActions_
-    , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
+    , docsLink = Just "https://monoscopehq.com/docs/dashboard/dashboard-pages/dashboard/"
     }
   where
     tabSlugM = fst <$> tabM
@@ -2466,7 +2465,7 @@ rumRedirectH pid segments params = case (filter (not . T.null) segments, param "
   where
     param k = join $ lookup k params
     dashboard = entrypointRedirectGetH "rum.yaml" "Real User Monitoring" ["rum", "browser", "frontend", "web-vitals"] pid params
-    query = T.intercalate " and " $ filter (not . T.null) [maybe browserKql (("attributes.session.id == " <>) . kqlQuoted) (param "session"), Pkg.Rum.audienceKql $ Pkg.Rum.audienceFilters params]
+    query = T.intercalate " and " $ filter (not . T.null) [maybe browserKql (("attributes.session.id == " <>) . kqlQuoted) (param "session"), audienceKql $ audienceFilters params]
     sessions = pure $ addHeader (timeScopedUrl ("/p/" <> pid.toText <> "/log_explorer") [("viz_type", "sessions"), ("query", query)] (param "from") (param "to") (param "since")) NoContent
 
 

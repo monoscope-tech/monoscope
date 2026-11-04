@@ -372,4 +372,4 @@ Increase Docker memory allocation:
 
 - 💬 [Discord](https://discord.gg/monoscope) - Chat with users and contributors
 - 🐛 [Issues](https://github.com/monoscope-tech/monoscope/issues) - Report bugs
-- 📝 [Blog](https://blog.monoscope.tech) - Tutorials and case studies
+- 📝 [Blog](https://monoscopehq.com/blog) - Tutorials and case studies

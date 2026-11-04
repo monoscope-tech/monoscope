@@ -1,4 +1,6 @@
 module Utils (
+  Icon (..),
+  lookupIcon,
   queryStringFrom,
   classifyUserAgent,
   sinceWindows,
@@ -134,8 +136,8 @@ import Network.HTTP.Types (urlEncode)
 import Network.HTTP.Types.URI qualified as URI
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showFFloat, showHex)
-import Pkg.Icons qualified as Icons
-import Pkg.Sampling qualified as Sampling
+import Pkg.DeriveUtils (embedIconEntries)
+import Pkg.IngestBudget qualified as IngestBudget
 import Relude hiding (notElem)
 import Relude.Extra.Tuple (toSnd)
 import Servant hiding ((:>))
@@ -346,7 +348,7 @@ copyToClipboardAttr_ valueExpr msg = term "hx-on:click" $ "navigator.clipboard.w
 -- the symbol id (e.g. "bucket"). Adding a symbol to either source sheet causes
 -- this module to be recompiled via 'qAddDependentFile'.
 faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
-faSprite_ mIcon faType classes = case Icons.lookupIcon faType mIcon of
+faSprite_ mIcon faType classes = case lookupIcon faType mIcon of
   Nothing -> svg_ baseAttributes pass
   Just icon ->
     svg_ (baseAttributes <> [term "viewBox" icon.viewBox])
@@ -389,7 +391,7 @@ faSymbolDefs_ :: Monad m => [(Text, Text)] -> HtmlT m ()
 faSymbolDefs_ icons =
   svg_ [term "aria-hidden" "true", style_ "display:none"]
     $ forM_ icons \(name, faType) ->
-      whenJust (Icons.lookupIcon faType name) \icon ->
+      whenJust (lookupIcon faType name) \icon ->
         term "symbol" [id_ (faSymbolId name faType), term "viewBox" icon.viewBox]
           $ Svg.g_ (map (uncurry term) icon.attributes)
           $ toHtmlRaw icon.body
@@ -723,7 +725,7 @@ freeTierUsageBanner pid = \case
 -- [FreeTierOk,FreeTierOk,FreeTierOk,FreeTierSampled 4 100,FreeTierExceeded 120 100]
 freeTierUsageStatus :: Int -> (Int, Int) -> FreeTierStatus
 freeTierUsageStatus limit (seen, kept)
-  | kept >= Sampling.hardCap limit = FreeTierExceeded kept limit
+  | kept >= IngestBudget.hardCap limit = FreeTierExceeded kept limit
   | oneIn >= 2 = FreeTierSampled oneIn limit
   | otherwise = FreeTierOk
   where
@@ -2054,3 +2056,39 @@ classifyUserAgent ua = (browser, os, device)
       | has "iPad" || (has "Android" && not (has "Mobile")) = "Tablet"
       | has "Mobile" || has "iPhone" = "Mobile"
       | otherwise = "Desktop"
+
+
+data Icon = Icon
+  { viewBox :: Text
+  , attributes :: [(Text, Text)]
+  , body :: Text
+  }
+  deriving stock (Eq, Show)
+
+
+lookupIcon :: Text -> Text -> Maybe Icon
+lookupIcon kind name = HM.lookup (kind, name) iconTable
+
+
+iconTable :: HM.HashMap (Text, Text) Icon
+iconTable = HM.fromList $ map fromEmbedded embeddedIcons
+  where
+    fromEmbedded (kind, name, viewBox, attrs, body) =
+      ( (toText kind, toText name)
+      , Icon
+          { viewBox = toText viewBox
+          , attributes = map (bimap toText toText) attrs
+          , body = toText body
+          }
+      )
+
+
+embeddedIcons :: [(String, String, String, [(String, String)], String)]
+embeddedIcons =
+  -- Sprite files are compile-time inputs. `RELOAD_ASSETS` watches them in
+  -- development, so an added symbol refreshes this table before the page does.
+  $( embedIconEntries
+       [ ("regular", "static/public/assets/svgs/fa-sprites/regular.svg")
+       , ("solid", "static/public/assets/svgs/fa-sprites/solid.svg")
+       ]
+   )

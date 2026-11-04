@@ -5,11 +5,12 @@
 module EndpointsSpec (spec) where
 
 import BackgroundJobs qualified
-import Control.Lens ((^?))
+import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Lens (key, _Array, _Object, _String)
 import Data.Effectful.Notify (EmailData (..), Notification (..))
+import Data.Generics.Product.Fields (field)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.Map.Strict qualified as Map
@@ -22,6 +23,7 @@ import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Simple qualified as SimplePG
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
@@ -29,9 +31,7 @@ import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (AesonText (..), assetUrl)
 import Pkg.OpenApi qualified as OpenApi
-import Pkg.SchemaLearning.Catalog qualified as Catalog
-import Pkg.SchemaLearning.Hot qualified as Hot
-import Pkg.SchemaLearning.Worker qualified as Worker
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Pkg.TestUtils
 import ProcessMessage qualified
 import Relude.Unsafe qualified as Unsafe
@@ -171,12 +171,12 @@ spec = around withTestResources do
     let other = UUIDId (UUID.fromWords 1 1 1 1)
         tainted = UUIDId (UUID.fromWords 2 2 2 2)
         clean = UUIDId (UUID.fromWords 3 3 3 3)
-        flush shard = runHasqlEffect tr (Worker.flushDirty shard)
+        flush shard = runHasqlEffect tr (SchemaCatalog.flushDirty shard)
         jobs = dbOne @_ @Int tr [sql| SELECT count(*)::int FROM background_jobs WHERE payload->>'tag' = 'NewAnomaly' AND payload->>'projectId' = ?::text |] (Only testPid)
-        users = observation testPid "GET" "/users" 200 . map (\(p, v) -> ("request.body.user." <> p, v, Nothing, Catalog.FCRequestBody))
+        users = observation testPid "GET" "/users" 200 . map (\(p, v) -> ("request.body.user." <> p, v, Nothing, SchemaLearning.FCRequestBody))
     resetSchemaLearning tr [testPid, other, tainted, clean]
-    ref <- newIORef Hot.emptySchemaShardState
-    let observeFlush pid obs = Hot.observeSpans ref Hot.defaultPolicy pid (V.fromList obs) >> flush ref
+    ref <- newIORef SchemaLearning.emptySchemaShardState
+    let observeFlush pid obs = SchemaLearning.observeSpans ref SchemaLearning.defaultPolicy pid (V.fromList obs) >> flush ref
         idEmail = users [("id", AE.String "abc"), ("email", AE.String "x@y")]
     r1 <- observeFlush testPid [idEmail]
     (r1.dirtyKeys, r1.catalogRowsWritten, r1.anomaliesEmitted, r1.summariesUpdated) `shouldBe` (1, 1, 6, 1)
@@ -185,7 +185,7 @@ spec = around withTestResources do
     -- Priors come from the flushed in-memory snapshot, and an entry diffed against itself emits nothing.
     st <- readIORef ref
     [(k, e)] <- pure $ HM.toList st.flushedEntries
-    V.length (Worker.buildAnomalyRows (one ((k.projectId, k.keyHash), e)) (V.singleton (k, e))) `shouldBe` 0
+    V.length (SchemaCatalog.buildAnomalyRows (one ((k.projectId, k.keyHash), e)) (V.singleton (k, e))) `shouldBe` 0
     -- identical re-observation: no new anomalies, queued jobs coalesce; an empty flush skips the summary
     (.anomaliesEmitted) <$> observeFlush testPid [idEmail] `shouldReturn` 0
     jobs `shouldReturn` 4
@@ -199,8 +199,8 @@ spec = around withTestResources do
 
     -- A 404 keeps its catalog row but announces no endpoint; a later matched response does,
     -- once. 201 observations pass the full-learning threshold so field sampling can't decide it.
-    let matched = observation other "GET" "/users" 200 [("response.body.message", AE.String "missing", Nothing, Catalog.FCResponseBody)]
-        missing = matched{Hot.scope = matched.scope{Catalog.statusCodes = V.singleton 404}}
+    let matched = observation other "GET" "/users" 200 [("response.body.message", AE.String "missing", Nothing, SchemaLearning.FCResponseBody)]
+        missing = matched & field @"scope" .~ matched.scope{SchemaLearning.statusCodes = V.singleton 404}
     (.catalogRowsWritten) <$> observeFlush other (replicate 201 missing) `shouldReturn` 1
     anomalyCounts tr other `shouldReturn` (0, 1, 1, 1)
     void $ observeFlush other [matched]
@@ -210,9 +210,9 @@ spec = around withTestResources do
     -- 2026-05-31: a NUL byte in a field path or value 22P05-poisoned the template and summary
     -- batches for every project in them, and the retry loop OOM'd monoscope at 14 GB.
     -- Fresh projects on a fresh shard, so both summaries are first writes.
-    nulShard <- newIORef Hot.emptySchemaShardState
-    Hot.observeSpans nulShard Hot.defaultPolicy tainted $ V.singleton $ observation tainted "GET" "/k8s" 200 [("resource.container.image\NULname", AE.String "ghcr.io/foo/bar\NULextra", Nothing, Catalog.FCResource)]
-    Hot.observeSpans nulShard Hot.defaultPolicy clean $ V.singleton $ observation clean "GET" "/ok" 200 [("k", AE.String "hello", Nothing, Catalog.FCRequestBody)]
+    nulShard <- newIORef SchemaLearning.emptySchemaShardState
+    SchemaLearning.observeSpans nulShard SchemaLearning.defaultPolicy tainted $ V.singleton $ observation tainted "GET" "/k8s" 200 [("resource.container.image\NULname", AE.String "ghcr.io/foo/bar\NULextra", Nothing, SchemaLearning.FCResource)]
+    SchemaLearning.observeSpans nulShard SchemaLearning.defaultPolicy clean $ V.singleton $ observation clean "GET" "/ok" 200 [("k", AE.String "hello", Nothing, SchemaLearning.FCRequestBody)]
     nul <- flush nulShard
     (nul.catalogRowsWritten, nul.summariesUpdated) `shouldBe` (2, 2)
     dbOne @_ @Int tr [sql| SELECT count(*)::int FROM apis.schema_template t JOIN apis.schema_catalog c USING (template_hash) WHERE c.project_id = ? |] (Only tainted)
@@ -221,20 +221,20 @@ spec = around withTestResources do
   -- The OOMs that disabled schema learning in prod: a dead byte budget, a walk run for every
   -- span regardless of the sample gate, and an uncapped field set per entry.
   it "a schema shard stays inside its byte, key and field budgets and stops walking past the learning threshold" \_ -> do
-    let observed policy obs = newIORef Hot.emptySchemaShardState >>= \ref -> Hot.observeSpans ref policy testPid (V.fromList obs) >> readIORef ref
-        cap = Hot.defaultPolicy.maxBytesPerShard
-    st <- observed Hot.defaultPolicy $ map (ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier . serverSpan) [0 .. 9_999]
+    let observed policy obs = newIORef SchemaLearning.emptySchemaShardState >>= \ref -> SchemaLearning.observeSpans ref policy testPid (V.fromList obs) >> readIORef ref
+        cap = SchemaLearning.defaultPolicy.maxBytesPerShard
+    st <- observed SchemaLearning.defaultPolicy $ map (ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier . serverSpan) [0 .. 9_999]
     st.bytesEstimate `shouldSatisfy` (< cap + cap `div` 10)
     HM.size st.entries `shouldBe` 50
-    wide <- observed Hot.defaultPolicy{Hot.maxFieldsPerEntry = 100} [observation testPid "GET" "/wide" 200 [("vendor.huge." <> show k, AE.String "x", Nothing, Catalog.FCAttribute) | k <- [1 .. 5_000 :: Int]]]
+    wide <- observed SchemaLearning.defaultPolicy{SchemaLearning.maxFieldsPerEntry = 100} [observation testPid "GET" "/wide" 200 [("vendor.huge." <> show k, AE.String "x", Nothing, SchemaLearning.FCAttribute) | k <- [1 .. 5_000 :: Int]]]
     map (HM.size . (.template.fields)) (HM.elems wide.entries) `shouldBe` [100]
     -- Past the threshold, separate batches on a known key only bump sampleCount: the walk
     -- thunk is never forced, so no new field lands.
-    ref <- newIORef Hot.emptySchemaShardState
+    ref <- newIORef SchemaLearning.emptySchemaShardState
     for_ @[] [0 .. 499 :: Int] \i ->
-      Hot.observeSpans ref Hot.defaultPolicy{Hot.learnFullThreshold = 1, Hot.learnSampleEveryN = 1_000_000} testPid
+      SchemaLearning.observeSpans ref SchemaLearning.defaultPolicy{SchemaLearning.learnFullThreshold = 1, SchemaLearning.learnSampleEveryN = 1_000_000} testPid
         $ V.singleton
-        $ observation testPid "GET" "/sampled" 200 [("path-" <> show i, AE.Null, Nothing, Catalog.FCAttribute)]
+        $ observation testPid "GET" "/sampled" 200 [("path-" <> show i, AE.Null, Nothing, SchemaLearning.FCAttribute)]
     map (\e -> (HM.size e.template.fields, e.sampleCount)) . HM.elems . (.entries) <$> readIORef ref `shouldReturn` [(1, 500)]
 
   it "the catalog lists ingested endpoints per host, files their issues, filters them, and archives hosts" \tr -> do
@@ -375,8 +375,8 @@ spec = around withTestResources do
   -- reads breaks this.
   it "the learned OpenAPI document covers every learned location, scopes to an endpoint or project, and backs the docs page" \tr -> do
     -- A primitive that evolved into an object is a union, not a discarded primitive.
-    let stringField formats = Catalog.FieldStruct (HS.singleton Catalog.FTString) formats Catalog.FCRequestBody False
-        evidence fs values = (fs, Just (Catalog.Examples $ V.fromList values), Nothing)
+    let stringField formats = SchemaLearning.FieldStruct (HS.singleton SchemaLearning.FTString) formats SchemaLearning.FCRequestBody False
+        evidence fs values = (fs, Just (SchemaLearning.Examples $ V.fromList values), Nothing)
         metadata =
           fromMaybe AE.Null
             $ OpenApi.jsonSchema
@@ -395,20 +395,20 @@ spec = around withTestResources do
     let path = "/v1/stores/:store_id/orders"
         opHash = Endpoints.hashEndpoint testPid.toText host "POST" path
         leaves =
-          [ ("store_id", AE.String "st_123", Just "{uuid}", Catalog.FCPathParam)
-          , ("page[*]", AE.String "2", Just "{integer}", Catalog.FCQueryParam)
-          , ("x-api-key", AE.String "k", Nothing, Catalog.FCRequestHeader)
-          , ("content-type", AE.String "application/json", Nothing, Catalog.FCResponseHeader)
-          , ("customer.email", AE.String "a@b.co", Just "{email}", Catalog.FCRequestBody)
-          , ("items[*].sku", AE.String "TK-1", Nothing, Catalog.FCRequestBody)
-          , ("items[*].qty", AE.Number 2, Nothing, Catalog.FCRequestBody)
-          , ("[*].order_id", AE.String "SB-1", Nothing, Catalog.FCResponseBody)
+          [ ("store_id", AE.String "st_123", Just "{uuid}", SchemaLearning.FCPathParam)
+          , ("page[*]", AE.String "2", Just "{integer}", SchemaLearning.FCQueryParam)
+          , ("x-api-key", AE.String "k", Nothing, SchemaLearning.FCRequestHeader)
+          , ("content-type", AE.String "application/json", Nothing, SchemaLearning.FCResponseHeader)
+          , ("customer.email", AE.String "a@b.co", Just "{email}", SchemaLearning.FCRequestBody)
+          , ("items[*].sku", AE.String "TK-1", Nothing, SchemaLearning.FCRequestBody)
+          , ("items[*].qty", AE.Number 2, Nothing, SchemaLearning.FCRequestBody)
+          , ("[*].order_id", AE.String "SB-1", Nothing, SchemaLearning.FCResponseBody)
           ]
         fetch hostM endpointM = snd <$> testServant tr (ApiCatalog.apiSpecJsonH testPid hostM (Just "Incoming") endpointM)
     resetSchemaLearning tr [testPid]
-    ref <- newIORef Hot.emptySchemaShardState
-    Hot.observeSpans ref Hot.defaultPolicy testPid (V.replicate 201 (observation testPid "POST" path 201 leaves))
-    void $ runHasqlEffect tr (Worker.flushDirty ref)
+    ref <- newIORef SchemaLearning.emptySchemaShardState
+    SchemaLearning.observeSpans ref SchemaLearning.defaultPolicy testPid (V.replicate 201 (observation testPid "POST" path 201 leaves))
+    void $ runHasqlEffect tr (SchemaCatalog.flushDirty ref)
     doc <- fetch (Just host) Nothing
     doc ^? key "openapi" . _String `shouldBe` Just "3.1.0"
     -- ':store_id' is a framework spelling; OpenAPI needs '{store_id}'.
@@ -484,12 +484,12 @@ endpointRows t = sort [(e.urlPath, e.endpointHash) | ApiCatalog.EnpReqStatsVM _ 
 
 -- | One observed HTTP span on api.example.com: @leaves@ are the (path, value, format,
 -- category) the leaf walker would emit.
-observation :: Projects.ProjectId -> Text -> Text -> Int -> [(Text, AE.Value, Maybe Text, Catalog.FieldCategoryEnum)] -> Hot.ObservationInput
+observation :: Projects.ProjectId -> Text -> Text -> Int -> [(Text, AE.Value, Maybe Text, SchemaLearning.FieldCategoryEnum)] -> SchemaLearning.ObservationInput
 observation pid method path status leaves =
-  Hot.ObservationInput
-    { keyKind = Catalog.HttpEndpoint
+  SchemaLearning.ObservationInput
+    { keyKind = SchemaLearning.HttpEndpoint
     , keyHash = Endpoints.hashEndpoint pid.toText host method path
-    , scope = Catalog.Scope{Catalog.service = Just "orders-api", Catalog.spanName = Just (method <> " " <> path), Catalog.kind = Just "server", Catalog.host = Just host, Catalog.method = Just method, Catalog.urlPath = Just path, Catalog.statusCodes = V.singleton status}
+    , scope = SchemaLearning.Scope{SchemaLearning.service = Just "orders-api", SchemaLearning.spanName = Just (method <> " " <> path), SchemaLearning.kind = Just "server", SchemaLearning.host = Just host, SchemaLearning.method = Just method, SchemaLearning.urlPath = Just path, SchemaLearning.statusCodes = V.singleton status}
     , walk = \_ -> [(p, V.singleton (v, f), c) | (p, v, f, c) <- leaves]
     , timestamp = frozenTime
     }

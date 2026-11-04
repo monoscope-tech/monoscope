@@ -39,7 +39,7 @@ import Network.HTTP.Client (Manager)
 import Network.Minio (MinioErr (..), ServiceErr (..))
 import Network.Minio qualified as Minio
 import OddJobs.Job (createJob)
-import Pkg.ErrorMetrics qualified as Metrics
+import Pkg.Metrics qualified as Metrics
 import Pkg.Minio qualified as Storage
 import Pkg.Queue (chunksByBytes, publishJSONToKafka, runSharedProducer)
 import Relude

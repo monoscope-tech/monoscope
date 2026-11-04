@@ -137,7 +137,6 @@ import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pkg.AgentCatalog (ReviewApprover (..))
 import Pkg.AgentCatalog qualified as Catalog
-import Pkg.AgentOperation qualified as Operation
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
 import System.Types (DB)
@@ -170,7 +169,7 @@ data ToolResult = ToolResult {formatted :: Text, rawData :: Maybe AE.Value}
 
 
 -- | The proposal is immutable. Its policy is a typed caller-supplied audit snapshot.
-data OperationProposal policy = OperationProposal {call :: Operation.OperationCall, policy :: policy}
+data OperationProposal policy = OperationProposal {call :: Catalog.OperationCall, policy :: policy}
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson (OperationProposal policy)
@@ -184,7 +183,7 @@ operationId :: OperationClaim -> UUIDId "agent_operation"
 operationId (OperationClaim identifier) = identifier
 
 
-data OperationResult = RecordedResult ToolResult | UncertainResult OperationClaim Operation.OperationCall (UUIDId "ai_routine_run") | WaitingResult (UUIDId "agent_operation") ReviewRequest | RefusedResult (UUIDId "agent_operation") ReviewRefusal
+data OperationResult = RecordedResult ToolResult | UncertainResult OperationClaim Catalog.OperationCall (UUIDId "ai_routine_run") | WaitingResult (UUIDId "agent_operation") ReviewRequest | RefusedResult (UUIDId "agent_operation") ReviewRefusal
   deriving stock (Show)
 
 
@@ -193,7 +192,7 @@ data OperationDecision
   | RefuseOperation (UUIDId "agent_operation") ReviewRefusal
   | ExecuteOperation OperationClaim
   | RetainedOperation ToolResult
-  | ReconcileOperation OperationClaim Operation.OperationCall (UUIDId "ai_routine_run")
+  | ReconcileOperation OperationClaim Catalog.OperationCall (UUIDId "ai_routine_run")
   deriving stock (Show)
 
 
@@ -610,7 +609,7 @@ data Checkpoint
   | ToolsPending Step LLM.Message [(LLM.ToolCall, ToolResult)] [LLM.ToolCall]
   | AnswerReady AgenticChatResult
   | LegacyUncertain AgenticChatResult Checkpoint
-  | NativePending Operation.NativeOperation
+  | NativePending Catalog.NativeOperation
   | NativeReady
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -704,19 +703,19 @@ beginOperationTx now lease cursor proposal review = runExceptT do
   when (null checkpoints) $ hoistEither $ Left OperationStepMoved
   unless
     ( case checkpoints of
-        [HI.OneColumn (ToolsPending _ _ _ (expected : _))] -> Operation.ModelCall expected == proposal.call
-        [HI.OneColumn (NativePending expected)] -> Operation.NativeCall expected == proposal.call
+        [HI.OneColumn (ToolsPending _ _ _ (expected : _))] -> Catalog.ModelCall expected == proposal.call
+        [HI.OneColumn (NativePending expected)] -> Catalog.NativeCall expected == proposal.call
         _ -> False
     )
     $ hoistEither
     $ Left OperationProposalChanged
   let matchingCall = case proposal.call of
-        Operation.ModelCall call -> [HI.sql|operation.proposal->'call'->'function' = #{Aeson $ LLM.toolCallFunction call}|]
-        Operation.NativeCall (Operation.WriteWiki write) ->
+        Catalog.ModelCall call -> [HI.sql|operation.proposal->'call'->'function' = #{Aeson $ LLM.toolCallFunction call}|]
+        Catalog.NativeCall (Catalog.WriteWiki write) ->
           [HI.sql|operation.proposal #>> '{call,contents,tag}' = 'WriteWiki'
           AND operation.proposal #> '{call,contents,contents,edit}' = #{Aeson write.edit}|]
-        Operation.NativeCall operation@(Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) ->
-          [HI.sql|operation.proposal->'call' = #{Aeson $ Operation.NativeCall operation}|]
+        Catalog.NativeCall operation@(Catalog.PublishPullRequestComment{}; Catalog.EnrichIssue{}) ->
+          [HI.sql|operation.proposal->'call' = #{Aeson $ Catalog.NativeCall operation}|]
   prior <-
     lift
       $ Hasql.queryTx @[OperationEntry policy]
@@ -729,7 +728,7 @@ beginOperationTx now lease cursor proposal review = runExceptT do
     Just entry -> do
       unless (entry.proposal.call == proposal.call) $ hoistEither $ Left OperationProposalChanged
       reuse entry
-    Nothing -> case find unresolved prior <|> find (Operation.sameOperation proposal.call . (.call) . (.proposal)) prior of
+    Nothing -> case find unresolved prior <|> find (Catalog.sameOperation proposal.call . (.call) . (.proposal)) prior of
       Just entry -> reuse entry
       Nothing -> do
         let outcome = maybe OperationRunning (const OperationUnstarted) review
@@ -921,7 +920,7 @@ startCheckpoint :: DB es => Turn -> Checkpoint -> Eff es SavedCheckpoint
 startCheckpoint = startCheckpointFor . SlackCheckpoint
 
 
-prepareNativeOperation :: DB es => RunTurn -> Operation.NativeOperation -> Eff es (CheckpointCursor, Operation.NativeOperation)
+prepareNativeOperation :: DB es => RunTurn -> Catalog.NativeOperation -> Eff es (CheckpointCursor, Catalog.NativeOperation)
 prepareNativeOperation turn proposed = do
   let target = RunCheckpoint turn
   saved <- loadCheckpointFor target >>= maybe (startCheckpointFor target $ NativePending proposed) pure
@@ -976,7 +975,7 @@ adoptSlackCheckpoint lease turn policy = do
           ToolsPending step message completed (call : pending) -> do
             let capability = fromMaybe (Catalog.Administration ProjectMembers.PAdmin) $ join $ Map.lookup (LLM.toolFunctionName call.toolCallFunction) Catalog.policiesByName
                 uncertain identifier run =
-                  let result = operationResponse turn.projectId $ UncertainResult (OperationClaim identifier) (Operation.ModelCall call) run
+                  let result = operationResponse turn.projectId $ UncertainResult (OperationClaim identifier) (Catalog.ModelCall call) run
                    in LegacyUncertain (AgenticChatResult result.formatted $ step.toolCalls <> map (uncurry mkToolCallInfo) completed <> [mkToolCallInfo call result]) original.checkpoint
             case capability of
               Catalog.ReadOnly{} -> pure original.checkpoint
@@ -988,7 +987,7 @@ adoptSlackCheckpoint lease turn policy = do
                     <> [HI.sql| AND operation.id = #{operationIdentity $ CheckpointCursor (SlackCheckpoint turn) original.revision} FOR UPDATE OF operation|]
                 case prior of
                   entry : _ -> do
-                    unless (entry.proposal.call == Operation.ModelCall call) $ hoistEither $ Left CheckpointAccessDenied
+                    unless (entry.proposal.call == Catalog.ModelCall call) $ hoistEither $ Left CheckpointAccessDenied
                     pure $ case entry.outcome of
                       OperationReturned result -> ToolsPending step message (completed <> [(call, result)]) pending
                       OperationUnstarted -> original.checkpoint
@@ -996,7 +995,7 @@ adoptSlackCheckpoint lease turn policy = do
                       (OperationRunning; OperationUnknown) -> uncertain entry.id entry.runId
                   [] -> do
                     let identifier = operationIdentity cursor
-                        proposal = OperationProposal (Operation.ModelCall call) $ policy capability
+                        proposal = OperationProposal (Catalog.ModelCall call) $ policy capability
                     lift
                       $ Hasql.executeTx
                         [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome)
@@ -1595,7 +1594,7 @@ classifyLegacyEvidence project selected = do
       AnswerReady answer -> map (.name) answer.toolCalls
       ModelPending step -> map (.name) step.toolCalls
       ToolsPending step _ completed pending -> map (.name) step.toolCalls <> map (LLM.toolFunctionName . LLM.toolCallFunction) (map fst completed <> pending)
-      NativePending operation -> [Catalog.operationName $ Operation.NativeCall operation]
+      NativePending operation -> [Catalog.operationName $ Catalog.NativeCall operation]
       NativeReady -> []
       LegacyUncertain _ original -> checkpointNames original
 

@@ -107,7 +107,7 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                         { icon = "empty-set"
                         , title = "No " <> currentTabT <> " Requests Monitored."
                         , description = "Once you integrate an SDK, your " <> T.toLower currentTabT <> " requests appear here automatically."
-                        , action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"
+                        , action = ESLink "https://monoscopehq.com/docs/sdks/" "View SDK setup guides"
                         }
                 }
           }
@@ -360,7 +360,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
                         { icon = "empty-set"
                         , title = "Waiting for events"
                         , description = "Once you integrate an SDK, your endpoints appear here automatically."
-                        , action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"
+                        , action = ESLink "https://monoscopehq.com/docs/sdks/" "View SDK setup guides"
                         }
                 , header = Just $ div_ [class_ "mb-2"] $ maybe "Endpoints" (\h -> span_ [] "Endpoints for: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)) hostM
                 }

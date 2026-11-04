@@ -43,6 +43,7 @@ import Data.Set qualified as S
 import Pages.Dashboards qualified as DashPage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
+import Pkg.MonitorConfig (MonitorCondition (unit), MonitorConfig (condition, environment, service))
 import Pkg.TestUtils
 import Servant (NoContent (..))
 import Servant qualified
@@ -73,7 +74,7 @@ request app method path headers body = WT.runSession (WT.srequest (WT.SRequest (
 
 
 getPath :: TestResources -> ByteString -> H.RequestHeaders -> IO WT.SResponse
-getPath tr path headers = request (topAppWithHTTP (runHTTPGolden "./tests/golden/") tr) H.methodGet path headers ""
+getPath tr path headers = request (topAppWithHTTP (runHTTPGolden "./test/golden/") tr) H.methodGet path headers ""
 
 
 status :: WT.SResponse -> Int
@@ -139,7 +140,7 @@ spec = describe "API v1" do
     it "HTTP auth: API keys gate /api/v1 and MCP, the demo project is open, secrets are never echoed or cached" \tr -> do
       apiKey <- createTestAPIKey tr testPid "ingestion-key-auth"
       runQueryEffect tr (traverse (`resolveApiKeyProject` Nothing) ([apiKey, "invalid-key", ""] :: [Text])) `shouldReturn` [Just testPid, Nothing, Nothing]
-      let app = topAppWithHTTP (runHTTPGolden "./tests/golden/") tr
+      let app = topAppWithHTTP (runHTTPGolden "./test/golden/") tr
           widgetBody extra = AE.encode $ case AE.toJSON ((def :: Widget.Widget){Widget.warningThreshold = Just 7}) of
             AE.Object fields -> AE.Object $ fields <> foldMap (\field -> AEKM.singleton field (AE.toJSON (7 :: Double))) extra
             value -> value
@@ -201,7 +202,7 @@ spec = describe "API v1" do
       docs <- getPath tr "/proxy/docs/sdks/nodejs/expressjs" [(H.hAccept, "text/html"), ("HX-Request", "true")]
       status docs `shouldBe` 200
       filter ((== H.hContentType) . fst) (WT.simpleHeaders docs) `shouldBe` [(H.hContentType, "text/html;charset=utf-8")]
-      decodeUtf8 @Text (WT.simpleBody docs) `shouldContainAll` ["<article id=\"mainArticle\">", "<h1>ExpressJS integration</h1>", "href=\"https://monoscope.tech/docs/sdks/\""]
+      decodeUtf8 @Text (WT.simpleBody docs) `shouldContainAll` ["<article id=\"mainArticle\">", "<h1>ExpressJS integration</h1>", "href=\"https://monoscopehq.com/docs/sdks/\""]
 
     it "monitors: CRUD, persisted active/scope/compiled SQL, notification fields, bulk results and 404" \tr -> do
       let runB :: ATBaseCtx a -> IO a
@@ -221,7 +222,19 @@ spec = describe "API v1" do
       (.alertConfig.unit) <$> runB (ApiH.apiMonitorGet testPid created.id) `shouldReturn` Just "s"
       void $ runB $ ApiH.apiMonitorPatch testPid created.id (def :: ApiT.MonitorPatch){ApiT.unit = Just "ms"}
       exported <- runB $ ApiH.apiMonitorYaml testPid created.id
-      (exported.unit, exported.environment, exported.service) `shouldBe` (Just "ms", Just "production", Just "checkout")
+      (exported.condition.unit, exported.environment, exported.service) `shouldBe` (Just "ms", Just "production", Just "checkout")
+      apiKey <- createTestAPIKey tr testPid "nested-monitor-config"
+      Just document <- pure $ AE.toJSON exported ^? _Object
+      Just flat <- pure $ AE.toJSON (input "t2" "count(*)") ^? _Object
+      let applyDocument obj = request (topAppWithHTTP (runHTTPGolden "./test/golden/") tr) H.methodPost "/api/v1/monitors/apply" [demo, json, bearer apiKey] (AE.encode $ AE.Object obj)
+          invalidDocuments =
+            [ AEKM.union document flat
+            , AEKM.delete "evaluation" document
+            , AEKM.insert "condition" (AE.object ["query" AE..= ("count(*)" :: Text), "alert_threshold" AE..= ("bad" :: Text), "trigger_less_than" AE..= False]) document
+            , AEKM.insert "notify" (AE.object ["email_al" AE..= True]) document
+            ]
+      for_ invalidDocuments \invalid -> status <$> applyDocument invalid `shouldReturn` 400
+      status <$> applyDocument document `shouldReturn` 200
       -- PATCH used to keep the OLD compiled SQL, so the monitor kept alerting on its previous query.
       void $ runB $ ApiH.apiMonitorPatch testPid created.id (def :: ApiT.MonitorPatch){ApiT.query = Just "status_code == 500"}
       recompiled <- stored created.id
@@ -422,8 +435,6 @@ spec = describe "API v1" do
         rpcCallNamed name args =
           rpcCall (AE.object ["name" AE..= (name :: Text), "arguments" AE..= args])
 
-
-
     it "returns an empty dashboard's title and widget list" $ \tr -> do
       created <- toBaseServantResponse tr $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid ApiT.DashboardInput{ApiT.title = "empty dashboard", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
       rendered <- toBaseServantResponse tr $ DashPage.apiDashboardData testPid created.summary.id Nothing Nothing (Just "1h") Nothing Nothing []
@@ -478,13 +489,17 @@ spec = describe "API v1" do
           body name = do
             input <- find (\tool -> (tool ^? key "name" . _String) == Just name) tools >>= (^? key "inputSchema")
             schema <- input ^? key "properties" . key "body"
-            pure $ fromMaybe schema do
-              reference <- schema ^? key "$ref" . _String
-              definition <- T.stripPrefix "#/$defs/" reference
-              input ^? key "$defs" . key (AEK.fromText definition)
-      for_ ([("create_monitor", ["title", "query", "alert_threshold"]), ("search_events", ["query", "since"])] :: [(Text, [Text])]) $ \(name, fields) -> do
-        schema <- maybe (fail $ "Missing body schema: " <> toString name) pure $ body name
-        for_ fields $ \field -> schema ^? key "properties" . key (AEK.fromText field) `shouldSatisfy` isJust
+            let resolve value = fromMaybe value do
+                  reference <- value ^? key "$ref" . _String
+                  definition <- T.stripPrefix "#/$defs/" reference
+                  input ^? key "$defs" . key (AEK.fromText definition)
+                resolved = resolve schema
+                alternatives = resolved ^.. key "oneOf" . _Array . traverse
+            pure $ map resolve $ if null alternatives then [resolved] else alternatives
+      for_ ([("create_monitor", [["title", "query", "alert_threshold"], ["title", "condition", "evaluation", "notify"]]), ("search_events", [["query", "since"]])] :: [(Text, [[Text]])]) $ \(name, variants) -> do
+        schemas <- maybe (fail $ "Missing body schema: " <> toString name) pure $ body name
+        for_ variants $ \fields ->
+          schemas `shouldSatisfy` any (\schema -> all (\field -> isJust $ schema ^? key "properties" . key (AEK.fromText field)) fields)
       for_ (tools ^.. traverse . key "inputSchema") $ \schema ->
         for_ (schema ^.. cosmos . key "$ref" . _String) $ \reference -> do
           definition <- maybe (fail $ "Unbound schema reference: " <> toString reference) pure $ T.stripPrefix "#/$defs/" reference

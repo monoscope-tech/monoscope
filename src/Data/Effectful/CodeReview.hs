@@ -28,7 +28,6 @@ import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import Models.Projects.ProjectMemory qualified as Memory
-import Pkg.AgentOperation (AgentAwaitingReview)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.Directory (listDirectory, removeFile, removePathForcibly)

@@ -182,18 +182,18 @@ instance ToHtml ShareView where
       ShareExpired -> blank "clock" "Link expired" "This share link was valid for 48 hours and has passed its expiry. Ask the sender for a fresh link."
       ShareMissing -> blank "empty" "Event not found" "This share link doesn't exist or the underlying event is no longer available."
     where
-      blank i = emptyState_ def{icon = Just i, action = ESLink "https://monoscope.tech" "Learn about Monoscope"}
+      blank i = emptyState_ def{icon = Just i, action = ESLink "https://monoscopehq.com" "Learn about Monoscope"}
       shareTopBar :: Maybe Int -> Html ()
       shareTopBar hoursLeftM =
         nav_ [class_ "sticky top-0 z-20 h-12 w-full border-b border-strokeWeak bg-bgBase/90 backdrop-blur-sm"] do
           div_ [class_ "max-w-6xl mx-auto h-full px-4 flex items-center justify-between gap-4 flex-nowrap"] do
             div_ [class_ "flex items-center gap-3 min-w-0 flex-nowrap"] do
-              a_ [href_ "https://monoscope.tech", target_ "_blank", class_ "flex items-center shrink-0"] do
+              a_ [href_ "https://monoscopehq.com", target_ "_blank", class_ "flex items-center shrink-0"] do
                 img_ [class_ "h-5 w-auto dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
                 img_ [class_ "h-5 w-auto hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
               span_ [class_ "hidden sm:inline-block h-4 w-px bg-strokeWeak shrink-0"] ""
               fieldLabel_ "whitespace-nowrap shrink-0" "Shared event"
               whenJust hoursLeftM \h -> tonePill_ (bool NeutralBadge ErrorBadge (h <= 6)) ("Expires in " <> show h <> "h")
             a_
-              [href_ "https://monoscope.tech", target_ "_blank", class_ "text-xs font-medium text-textBrand hover:underline shrink-0 whitespace-nowrap"]
+              [href_ "https://monoscopehq.com", target_ "_blank", class_ "text-xs font-medium text-textBrand hover:underline shrink-0 whitespace-nowrap"]
               "About Monoscope ↗"

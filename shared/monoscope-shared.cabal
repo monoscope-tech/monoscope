@@ -82,6 +82,7 @@ library
     Pkg.CLIFormat
     Pkg.Deriving
     Pkg.GitCommand
+    Pkg.MonitorConfig
     Pkg.Parser.Eval
     Pkg.Parser.Expr
     Pkg.Parser.Stats
@@ -135,3 +136,4 @@ library
     , uuid
     , vector
     , wreq
+    , yaml

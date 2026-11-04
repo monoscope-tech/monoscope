@@ -41,7 +41,7 @@ import Pages.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Settings qualified as Settings
 import Pkg.DeriveUtils (mkHasqlPool)
-import Pkg.Sampling qualified as Sampling
+import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
@@ -485,7 +485,7 @@ spec = around withTestResources do
 
     ingestLog tr key "under the cap" frozenTime
     logCount tr pid `shouldReturn` 5
-    dbExec tr [sql|INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, window_start, window_end) VALUES (?, ?, 0, now() - interval '1 minute', now())|] (pid, Sampling.hardCap Projects.freeTierDailyMaxEvents)
+    dbExec tr [sql|INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, window_start, window_end) VALUES (?, ?, 0, now() - interval '1 minute', now())|] (pid, IngestBudget.hardCap Projects.freeTierDailyMaxEvents)
     Cache.purge tr.trATCtx.projectCache
     ingestLog tr key "over the cap" frozenTime
     logCount tr pid `shouldReturn` 5

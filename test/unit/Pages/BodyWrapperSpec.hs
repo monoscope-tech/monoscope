@@ -5,7 +5,7 @@ import Data.Default (def)
 import Data.Text qualified as T
 import Lucid (renderText)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pkg.Icons qualified as Icons
+import Utils qualified
 import Relude
 import System.Config (DeploymentEnv (..), EnvConfig (..))
 import Test.Hspec
@@ -61,9 +61,9 @@ spec = do
           ]
             :: [(Text, Text)]
         )
-        \(name, viewBox) -> (Icons.lookupIcon "regular" name <&> (.viewBox)) `shouldBe` Just viewBox
+        \(name, viewBox) -> (Utils.lookupIcon "regular" name <&> (.viewBox)) `shouldBe` Just viewBox
 
     it "sidebarIcons_preserveTheirStrokeWidths" do
       for_ ([("circle-question", "1.5"), ("server", "48"), ("web", "1.33333")] :: [(Text, Text)]) \(name, width) ->
-        (Icons.lookupIcon "regular" name <&> (.body))
+        (Utils.lookupIcon "regular" name <&> (.body))
           `shouldSatisfy` maybe False (T.isInfixOf $ "stroke-width=\"" <> width <> "\"")

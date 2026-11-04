@@ -17,7 +17,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
 import Pages.Components (dialogField_, filterInputAttr_, floatingDialog_, keyboardActivateAttr_, options_, searchInput_)
-import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
+import Pkg.SchemaLearning (FacetData (..), FacetValue (..))
 import Relude
 import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 

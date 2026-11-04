@@ -70,8 +70,7 @@ monoscope/
 │   ├── Pkg/                   # Shared libs: DeriveUtils (DB types/newtype/TH; re-exports Pkg.Deriving), Parser (KQL, Megaparsec), AI, Mail, Queue (Pub/Sub+Kafka), QueryCache, TestUtils, Drain, ErrorFingerprint, PatternMerge, GitHub, EmailTemplates, Components/, Parser/
 │   ├── Opentelemetry/         # OtlpServer.hs (gRPC OTLP, port 4317), OtlpMockValues.hs
 │   └── Data/Effectful/        # Custom effects: LLM, Notify, UUID, Wreq
-├── test/                      # doctests/, unit/ (no DB), integration/ (needs DB), bench/
-├── tests/golden/              # Golden files for external API mocking
+├── test/                      # doctests/, unit/ (no DB), integration/ (needs DB), bench/, golden/
 ├── static/                    # migrations/ (numbered SQL), public/ (CSS/JS/images/fonts)
 ├── web-components/src/        # TypeScript frontend (Vite): web components, chart-cli, workers
 ├── proto/opentelemetry/       # OpenTelemetry .proto files
@@ -400,7 +399,7 @@ So: run the make target. If you invoke `cabal test integration-tests` directly, 
 `USE_EXTERNAL_DB=true` yourself — and before blaming a change for integration failures,
 run one spec it did not touch.
 
-**Golden files** (`tests/golden/`): integration tests cache external API responses; `UPDATE_GOLDEN=true` re-records them with **real outbound HTTP/LLM calls**. HTML/text/JSON snapshots (`goldenText`/`goldenHtml`) regenerate with `UPDATE_SNAPSHOTS=true` instead — never set `UPDATE_GOLDEN` to refresh a snapshot.
+**Golden files** (`test/golden/`): integration tests cache external API responses; `UPDATE_GOLDEN=true` re-records them with **real outbound HTTP/LLM calls**. HTML/text/JSON snapshots (`goldenText`/`goldenHtml`) regenerate with `UPDATE_SNAPSHOTS=true` instead — never set `UPDATE_GOLDEN` to refresh a snapshot.
 
 **Testing is critical — always write tests for new features and bug fixes.** Prefer high-level e2e integration tests that exercise handlers or real user actions end-to-end (from HTTP request through DB and back). Tests should assert on responses as users would see them. Only use doctests for isolated pure functions. Avoid low-level unit tests that mock internals — test real behavior through the actual stack. Keep tests concise: no redundant tests, prefer single tests that cover multiple cases implicitly or explicitly rather than many narrow tests.
 

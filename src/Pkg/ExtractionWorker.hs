@@ -36,7 +36,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.Projects qualified as Projects
 import Pkg.Drain qualified as Drain
-import Pkg.SchemaLearning.Hot qualified as SchemaLearning
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude
 import UnliftIO (tryAny)
 

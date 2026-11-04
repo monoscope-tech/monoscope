@@ -95,7 +95,7 @@ test('installer recognizes an installed release without downloading it again', (
   writeFileSync(join(root, 'bin/curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
   for (const version of ['0.6.31', 'v0.6.31']) {
     writeFileSync(join(installed, 'monoscope'), `#!/bin/sh\necho 'monoscope ${version}'\n`, { mode: 0o755 });
-    const result = spawnSync('bash', [fileURLToPath(new URL('../install.sh', import.meta.url)), 'v0.6.31'], {
+    const result = spawnSync('sh', [fileURLToPath(new URL('../install.sh', import.meta.url)), 'v0.6.31'], {
       env: { ...env, MONOSCOPE_INSTALL_DIR: installed }, encoding: 'utf8',
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);

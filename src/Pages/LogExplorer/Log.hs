@@ -75,9 +75,8 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPa
 import Pages.Components (FieldCfg (..), FieldSize (..), formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
-import Pkg.Components.Facets (FacetChoice (..), FacetContent (..), FacetNode (..), FacetOverflow (..), facetHeadCount, facetNode_, facetTail_)
-import Pkg.Components.Facets qualified as Facets
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), VizSurface (..), VizType (..), enrichSchemaWithFacets, logQueryBox_, visTypes)
+import Pkg.Components.Table (FacetChoice (..), FacetContent (..), FacetLayout (..), FacetNode (..), FacetOverflow (..), FacetsConfig (..), facetHeadCount, facetNode_, facetTail_, sidebar_)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
@@ -86,7 +85,7 @@ import Pkg.LiveTail (capRowValue)
 import Pkg.Parser (PageCursor (..), PageDirection (..), defaultQueryLimit, pSource, parseQueryToAST, toQText)
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.Parser.Stats (QueryError (..), Section (TakeCommand), pSortSection, parseQueryDiagnosed)
-import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
+import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import Servant qualified
@@ -772,7 +771,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
         bw
           { pageTitle = "Explorer"
           , pageProvidesLogDetails = True
-          , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
+          , docsLink = Just "https://monoscopehq.com/docs/dashboard/dashboard-pages/api-log-explorer/"
           , freeTierStatus = freeTierStatus
           , headContent = Nothing
           , -- One freshness control for row streaming and periodic query refresh; their
@@ -1617,13 +1616,13 @@ apiLogsPage page = do
     -- No `contain:layout` here: it makes this a containing block for fixed/anchored
     -- descendants, which clips the facet action popover (top layer) to the sidebar.
     facetsPanel =
-      Facets.sidebar_
-        Facets.Config
+      sidebar_
+        FacetsConfig
           { elemId = "facets-container"
           , extraClass = "will-change-[width] h-full overflow-y-scroll max-md:shrink max-md:max-h-[55vh] max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0"
           , clear = Just [[__|on click repeat for cb in <input[data-field]:checked/> in closest .facet-rail call cb.click() end|]]
           , content = facetGroups <$> page.facetSummary
-          , layout = Facets.Plain
+          , layout = Plain
           }
 
     logsListPanel = div_ [class_ "@container grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do

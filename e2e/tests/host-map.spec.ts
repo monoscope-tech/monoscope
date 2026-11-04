@@ -56,7 +56,7 @@ test.describe("Host map", () => {
     const setup = dialog.getByRole("link", { name: "Set up host metrics" });
     await expect(setup).toBeVisible();
     await expect(setup).toHaveClass(/\bbtn-primary\b/);
-    await expect(setup).toHaveAttribute("href", "https://monoscope.tech/docs/sdks/infrastructure/");
+    await expect(setup).toHaveAttribute("href", "https://monoscopehq.com/docs/sdks/infrastructure/");
     await expect(dialog.getByText("No data for the selected time range")).toHaveCount(0);
   });
 

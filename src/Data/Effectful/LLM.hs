@@ -10,6 +10,7 @@ module Data.Effectful.LLM (
   modelAndEffort,
   runLLMReal,
   runLLMGolden,
+  stripCodeBlock,
 ) where
 
 import Control.Lens ((^?))
@@ -331,3 +332,20 @@ getOrCreateEmbeddingGoldenResponse goldenDir config docs =
   where
     texts = map (toStrict . DocLoader.pageContent) docs
     cacheKey = "emb_" <> sanitizeForFilename (T.intercalate "__" $ take 3 texts) <> "_n" <> show (length docs)
+
+
+-- | Strip markdown code blocks from LLM responses
+--
+-- >>> stripCodeBlock "```json\n{\"key\": \"value\"}\n```"
+-- "{\"key\": \"value\"}"
+-- >>> stripCodeBlock "```\n{\"key\": \"value\"}\n```"
+-- "{\"key\": \"value\"}"
+-- >>> stripCodeBlock "{\"key\": \"value\"}"
+-- "{\"key\": \"value\"}"
+stripCodeBlock :: Text -> Text
+stripCodeBlock t
+  | "```json" `T.isPrefixOf` stripped = T.strip $ T.dropWhileEnd (== '`') $ T.drop 7 stripped
+  | "```" `T.isPrefixOf` stripped = T.strip $ T.dropWhileEnd (== '`') $ T.drop 3 stripped
+  | otherwise = stripped
+  where
+    stripped = T.strip t

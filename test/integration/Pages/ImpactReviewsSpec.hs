@@ -69,7 +69,6 @@ import Pages.CodeContext qualified as CodeContextPage
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
-import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Git qualified as Git
 import Pkg.GitCommand qualified as HostGit
@@ -3376,7 +3375,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     retainedBody <- sentBody rejectedRequests
     let observedComment app body = withHTTPResponses \_ endpoint -> pure if "/issues/7/comments?" `T.isInfixOf` toText endpoint then Just $ AE.encode @[AE.Value] [appComment 99 app body] else Nothing
         recoverPublication app body = within (transport True . observedComment app body . interpose @Agent.CodeReview (\_ _ -> liftIO $ fail "Publication recovery reran the review agent")) $ tryAny $ Impact.reviewPullRequest run.id
-        publicationOutcomes = runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy reviewPid rejectedRun.id) <&> \entries -> [entry.outcome | entry <- entries, Operation.NativeCall Operation.PublishPullRequestComment{} <- [entry.proposal.call]]
+        publicationOutcomes = runQueryEffect tr (Investigations.listOperations @AI.OperationPolicy reviewPid rejectedRun.id) <&> \entries -> [entry.outcome | entry <- entries, Catalog.NativeCall Catalog.PublishPullRequestComment{} <- [entry.proposal.call]]
     map (\case Investigations.OperationUnknown -> True; _ -> False) <$> publicationOutcomes `shouldReturn` [True]
     for_ @[] [(456, retainedBody), (123, retainedBody <> "\nEdited")] \(app, body) -> do
       (uncertainRequests, uncertain) <- recoverPublication app body
@@ -3476,10 +3475,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
       title <- either (fail . toString) pure $ Memory.mkMemoryText "Recovered native write"
       body <- either (fail . toString) pure $ Memory.mkMemoryText "The same proposal must not write twice."
       let page = case request.attemptId of UUIDId value -> UUIDId value
-          wikiInput = Operation.WikiWrite request.attemptId $ Memory.Edit page 0 $ Memory.Document title body
-          operation = Operation.WriteWiki wikiInput
+          wikiInput = Catalog.WikiWrite request.attemptId $ Memory.Edit page 0 $ Memory.Document title body
+          operation = Catalog.WriteWiki wikiInput
           target = Investigations.RunCheckpoint $ Investigations.RunTurn reviewPid runContext.conversationId runContext.requestedBy runContext.rootId
-      for_ @[] [Operation.WriteWiki wikiInput{Operation.attemptId = UUIDId UUID.nil}, Operation.PublishPullRequestComment $ Operation.ReviewComment (UUIDId UUID.nil) "Wrong review"] \invalidRequest -> do
+      for_ @[] [Catalog.WriteWiki wikiInput{Catalog.attemptId = UUIDId UUID.nil}, Catalog.PublishPullRequestComment $ Catalog.ReviewComment (UUIDId UUID.nil) "Wrong review"] \invalidRequest -> do
         rejectedActor <- tryAny $ runTestBg frozenTime tr $ AI.executeNativeOperation runContext invalidRequest \_ -> AI.EffectfulOperation do
           liftIO $ modifyIORef' nativeWrites (+ 1)
           pure $ Right AE.Null
@@ -3489,13 +3488,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
       committed <- MVar.newEmptyMVar
       release <- MVar.newEmptyMVar
       let perform = \case
-            Operation.WriteWiki write -> AI.EffectfulOperation do
+            Catalog.WriteWiki write -> AI.EffectfulOperation do
               invocation <- liftIO $ atomicModifyIORef' nativeWrites (\count -> (count + 1, count + 1))
               stored <- Memory.writePage reviewPid write.edit.pageId write.edit.version Nothing write.edit.document $ Memory.Agent write.attemptId
               when (invocation == 1) $ liftIO $ MVar.putMVar committed () >> MVar.takeMVar release
               pure $ first show $ AE.toJSON <$> stored
-            Operation.PublishPullRequestComment{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
-            Operation.EnrichIssue{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+            Catalog.PublishPullRequestComment{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+            Catalog.EnrichIssue{} -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
           executeWrite = runTestBg frozenTime tr $ AI.executeNativeOperation runContext operation perform
       late <- withAsync executeWrite \worker -> do
         Timeout.timeout (10 * 1000000) (MVar.takeMVar committed) `shouldReturn` Just ()
@@ -3992,9 +3991,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
     deniedTitle <- either (fail . toString) pure $ Memory.mkMemoryText "Fenced wiki write"
     deniedBody <- either (fail . toString) pure $ Memory.mkMemoryText "This unowned write must not be retained."
     let deniedEdit = Memory.Edit (uid 991) 0 $ Memory.Document deniedTitle deniedBody
-        write authorization = runTestBgNoReset tr $ AI.executeNativeOperation authorization (Operation.WriteWiki $ Operation.WikiWrite foreignAttempt deniedEdit) \case
-          Operation.WriteWiki proposal -> AI.AtomicOperation $ bimap show AE.toJSON <$> Memory.writeRunPageTx testPid authorization.id proposal.edit
-          (Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+        write authorization = runTestBgNoReset tr $ AI.executeNativeOperation authorization (Catalog.WriteWiki $ Catalog.WikiWrite foreignAttempt deniedEdit) \case
+          Catalog.WriteWiki proposal -> AI.AtomicOperation $ bimap show AE.toJSON <$> Memory.writeRunPageTx testPid authorization.id proposal.edit
+          (Catalog.PublishPullRequestComment{}; Catalog.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
     write originalContext `shouldThrow` (\case Investigations.OperationScopeMismatch -> True; _ -> False)
     runQueryEffect tr (Memory.pageHistory testPid deniedEdit.pageId) >>= (`shouldSatisfy` null)
     dbExec tr "UPDATE projects.issue_fix_jobs SET agent_run_id = ? WHERE run_id = ?" (uid 992 :: UUIDId "ai_routine_run", fid)
@@ -4250,7 +4249,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     revisionBefore.author `shouldBe` Memory.Run sharedId
     Just retriedFix <- runQueryEffect tr $ Fixes.completedResult testPid interrupted
     retainedOperation.proposal.call `shouldSatisfy` \case
-      Operation.NativeCall (Operation.WriteWiki proposal) -> retriedFix.attemptId == proposal.attemptId
+      Catalog.NativeCall (Catalog.WriteWiki proposal) -> retriedFix.attemptId == proposal.attemptId
       _ -> False
     requireMinio tr pendingWith $ withSystemTempDirectory "retained-fix-media" \mediaRoot -> do
       current <- runQueryEffect tr (Fixes.getRun testPid fid) >>= either (fail . show) (maybe (fail "Completed run missing") pure)

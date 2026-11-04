@@ -51,7 +51,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (mkHasqlPool)
 import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
-import Pkg.SchemaLearning.Catalog qualified as Catalog
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
@@ -960,7 +960,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       d.dashTemplates `shouldSatisfy` (not . null)
     -- The list skips the telemetry scope pickers but keeps the rest of the shell.
     let scopeFields = ["service.name", "deployment.environment.name"]
-    runHasqlEffect tr $ SchemaCatalog.upsertSummary $ V.singleton (testPid, Catalog.SummaryDoc (HM.fromList [(k, Catalog.FieldStruct mempty mempty Catalog.FCResource False) | k <- scopeFields]) (V.singleton "checkout") (HM.fromList [(k, Catalog.TopK 1 (HM.singleton "production" 1)) | k <- scopeFields]))
+    runHasqlEffect tr $ SchemaCatalog.upsertSummary $ V.singleton (testPid, SchemaLearning.SummaryDoc (HM.fromList [(k, SchemaLearning.FieldStruct mempty mempty SchemaLearning.FCResource False) | k <- scopeFields]) (V.singleton "checkout") (HM.fromList [(k, SchemaLearning.TopK 1 (HM.singleton "production" 1)) | k <- scopeFields]))
     (_, (_, _, shell)) <- testServant tr $ BodyWrapper.mkPageCtx testPid >>= addRespHeaders
     shell.envOptions `shouldBe` V.singleton "production"
     PageCtx bw _ <- page tr Nothing filters

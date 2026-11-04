@@ -240,7 +240,7 @@ emailWrapper subject content = doctypehtml_ do
         -- Masthead
         tr_
           $ td_ [class_ "email-masthead", align_ "center"]
-          $ a_ [href_ "https://monoscope.tech?utm_source=transac_emails"]
+          $ a_ [href_ "https://monoscopehq.com?utm_source=transac_emails"]
           $ themedImages
             "https://app.monoscope.tech/public/assets/email/logo-dark-ink.png"
             "https://app.monoscope.tech/public/assets/email/logo-white-ink.png"
@@ -272,7 +272,7 @@ emailWrapper subject content = doctypehtml_ do
           tr_
             $ td_ [align_ "center", style_ "padding: 0 20px 19px;"]
             $ p_ [style_ "font-size: 12px; line-height: 1.5; text-align: center; color: #57606a; margin: 0;"] do
-              sequence_ $ intersperse (toHtmlRaw @Text " &nbsp;\183&nbsp; ") [a_ [href_ $ "https://monoscope.tech/" <> path <> "?utm_source=transac_emails", style_ "color: #57606a; text-decoration: none;"] $ toHtml @Text label | (path, label) <- [("changelog", "Changelog"), ("docs", "Docs"), ("legal/privacy", "Privacy")]]
+              sequence_ $ intersperse (toHtmlRaw @Text " &nbsp;\183&nbsp; ") [a_ [href_ $ "https://monoscopehq.com/" <> path <> "?utm_source=transac_emails", style_ "color: #57606a; text-decoration: none;"] $ toHtml @Text label | (path, label) <- [("changelog", "Changelog"), ("docs", "Docs"), ("legal/privacy", "Privacy")]]
 
 
 emailBody :: Html () -> Html ()
@@ -302,9 +302,9 @@ metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
 emailHelpLinks :: Html ()
 emailHelpLinks = p_ do
   "Need help getting started? Check out our "
-  a_ [href_ "https://monoscope.tech/docs/onboarding?utm_source=transac_emails"] "onboarding guide"
+  a_ [href_ "https://monoscopehq.com/docs/onboarding?utm_source=transac_emails"] "onboarding guide"
   " and other "
-  a_ [href_ "https://monoscope.tech/docs?utm_source=transac_emails"] "documentation"
+  a_ [href_ "https://monoscopehq.com/docs?utm_source=transac_emails"] "documentation"
   " resources. You can also "
   a_ [href_ "https://monoscope.tech/demo?utm_source=transac_emails"] "schedule a call"
   " with our team; we're always ready to help!"
@@ -860,7 +860,7 @@ weeklyReportEmail d =
             " · "
             a_ [target_ "_top", href_ $ d.projectUrl <> "/reports"] "Manage report notifications"
             " · "
-            a_ [target_ "_top", href_ "https://monoscope.tech/docs"] "Instrumentation guide"
+            a_ [target_ "_top", href_ "https://monoscopehq.com/docs"] "Instrumentation guide"
   )
   where
     daily = d.reportType == Projects.RTDaily

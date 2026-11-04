@@ -156,7 +156,7 @@ import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.CodeReview qualified as CodeReview
-import Data.Effectful.Hasql (Hasql, runHasqlPool)
+import Data.Effectful.Hasql (Hasql, TestClock, advanceTime, getTestTime, newTestClock, runHasqlPool, runHasqlPoolSynced, runMutableTime, setTestTime)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.Sleep (runNoSleep)
@@ -202,6 +202,7 @@ import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -233,9 +234,6 @@ import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.QueryCache qualified as QueryCache
-import Pkg.SchemaLearning.Worker qualified as SchemaWorker
-import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runHasqlPoolSynced, runMutableTime, setTestTime)
-import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
@@ -553,7 +551,7 @@ testSessionHeader pool hpool = do
     fst
       <$> Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 100])
-      & runHTTPGolden "./tests/golden/"
+      & runHTTPGolden "./test/golden/"
       & runHasqlPool hpool
       & runTime
       & runEff
@@ -657,7 +655,7 @@ runTestBackgroundWithNotifications t logger appCtx process = do
 -- 'TestClock' so callers can advance time across multiple runs in the same
 -- spec.
 runTestBackgroundWithClock :: TestClock -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
-runTestBackgroundWithClock = runTestBackgroundWithHTTP (runHTTPGolden "./tests/golden/")
+runTestBackgroundWithClock = runTestBackgroundWithHTTP (runHTTPGolden "./test/golden/")
 
 
 -- | 'runTestBackgroundWithClock' with the outgoing-HTTP interpreter left to the
@@ -686,7 +684,7 @@ runTestBackgroundWithHTTP http clock logger appCtx process = do
       & runUUID
       & runNoSleep
       & http
-      & ELLM.runLLMGolden "./tests/golden/"
+      & ELLM.runLLMGolden "./test/golden/"
       & CodeReview.runCodeReviewTest (const $ Left "No review agent fixture configured") (const $ Left "No fix agent fixture configured") (const $ Left "No admission agent fixture configured") (const $ Left "No artifact verification fixture configured") (const $ Left "No explanation fixture configured") (const $ Left "No independent fix review fixture configured")
       & Workspace.runWorkspaceTest (\_ _ _ -> Left "No workspace fixture") (\_ _ -> Left Workspace.RegressionUnavailable) (\_ _ -> Left "No prune fixture") (const $ Left "No maintenance fixture")
       & Artifacts.runAgentArtifactsTest (const $ Left Artifacts.StorageUnavailable) (\_ _ -> Left Artifacts.ArtifactUnavailable)
@@ -961,7 +959,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
       envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = True, slackSigningSecret = testSlackSigningSecret, discordPublicKey = testDiscordPublicKeyHex}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
-  traceSessionCache <- TSC.newTraceSessionCache
+  traceSessionCache <- QueryCache.newTraceSessionCache
   tfCircuit <- ExtractionWorker.newCircuitBreaker
   ingestBudget <- IngestBudget.newIngestBudget
   metricCatalogBuffer <- Telemetry.newMetricCatalogBuffer
@@ -1512,7 +1510,7 @@ resetSchemaLearning tr pids = do
     arr = PGArray pids
 
 
--- | Snapshot @tests/golden/html/<name>.html@, one tag per line, so the diff is reviewable.
+-- | Snapshot @test/golden/html/<name>.html@, one tag per line, so the diff is reviewable.
 -- UUIDs, trace ids, issue numbers and gzipped widget blobs (their bytes follow the platform's
 -- zlib) are scrubbed to keep it stable. Issue numbers gap
 -- because the seq-num trigger (migration 0051) consumes one per upsert attempt, a known
@@ -1532,11 +1530,11 @@ goldenParts :: FilePath -> [Text] -> Expectation
 goldenParts name = goldenHtml name . Lucid.toHtmlRaw @Text . unlines
 
 
--- | Compare against @tests/golden/<path>@; @UPDATE_SNAPSHOTS=true@ (re)writes it, a missing file fails.
+-- | Compare against @test/golden/<path>@; @UPDATE_SNAPSHOTS=true@ (re)writes it, a missing file fails.
 -- Deliberately not @UPDATE_GOLDEN@, which also switches HTTP/LLM goldens to live recording.
 goldenText :: FilePath -> Text -> Expectation
 goldenText name actual = do
-  let path = "./tests/golden/" <> name
+  let path = "./test/golden/" <> name
   update <- (== Just "true") <$> lookupEnv "UPDATE_SNAPSHOTS"
   exists <- doesFileExist path
   if
@@ -1583,7 +1581,7 @@ drainExtractionWorker TestResources{..} = do
   for_ shards \shard ->
     void
       $ runTestBackgroundWithLogger frozenTime trLogger trATCtx
-      $ SchemaWorker.flushDirty shard.schemaState
+      $ SchemaCatalog.flushDirty shard.schemaState
   where
     drainSTM isEmpty pop process = do
       mItem <- atomically $ isEmpty >>= \case True -> pure Nothing; False -> Just <$> pop

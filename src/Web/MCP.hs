@@ -11,7 +11,6 @@ module Web.MCP (
   OpenApiBinding (..),
   AgentPolicy (..),
   minimumPermission,
-  actionName,
   agentExclusions,
   allTools,
   handleJsonRpc,
@@ -47,7 +46,7 @@ import Network.Wai qualified as Wai
 
 import Data.Effectful.LLM qualified as ELLM
 import Network.Wai.Test qualified as WT
-import Pkg.AgentCatalog (AgentPolicy (..), Tool (..), actionName, apiOperations, minimumPermission, schemaObject)
+import Pkg.AgentCatalog (AgentPolicy (..), Tool (..), apiOperations, minimumPermission, schemaObject)
 import Pkg.AgentCatalog qualified as Catalog
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude

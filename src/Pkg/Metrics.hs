@@ -55,8 +55,14 @@ module Pkg.Metrics (
   endpointCacheAvoidedQueries,
   endpointCacheErrors,
   endpointCacheOversized,
+
+  -- * Payload-free drop/skip counters
+  wireTypeErrorsRef,
+  bumpErrorCounter,
 ) where
 
+import Data.Aeson qualified as AE
+import Data.HashMap.Strict qualified as HM
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (bracket)
 import GHC.Clock (getMonotonicTime)
@@ -299,7 +305,7 @@ freeTierBatchesDropped = mkCounter "monoscope.ingest.free_tier.batches_dropped" 
 {-# NOINLINE freeTierBatchesDropped #-}
 
 
--- | Records dropped by free-tier sampling ("Pkg.Sampling").
+-- | Records dropped by free-tier sampling ("Pkg.IngestBudget").
 freeTierSampledOut :: Counter Int64
 freeTierSampledOut = mkCounter "monoscope.ingest.free_tier.sampled_out" Nothing
 {-# NOINLINE freeTierSampledOut #-}
@@ -396,3 +402,26 @@ endpointCacheOversized = mkCounter "monoscope.dashboard.endpoint_cache.oversized
 {-# NOINLINE endpointCacheAvoidedQueries #-}
 {-# NOINLINE endpointCacheErrors #-}
 {-# NOINLINE endpointCacheOversized #-}
+
+
+-- | Process-wide counter for cheap, payload-free drop/skip metrics. Shared
+-- between the OTLP wire-error path (Opentelemetry.OtlpServer) and other
+-- producers (e.g. Pages.Replay). The periodic logger in OtlpServer flushes
+-- this same IORef once a minute; callers from any module can `bumpErrorCounter`
+-- without taking a dependency on OtlpServer's transitive imports.
+wireTypeErrorsRef :: IORef (HM.HashMap Text (Int, AE.Value), Int)
+{-# NOINLINE wireTypeErrorsRef #-}
+wireTypeErrorsRef = unsafePerformIO $ newIORef (HM.empty, 0)
+
+
+-- | Increment a counter without recording an example payload — for cases
+-- where holding the bytes would defeat the purpose (oversized message
+-- dropped to free heap, attacker-influenced parse failure, etc.).
+bumpErrorCounter :: MonadIO m => Text -> m ()
+bumpErrorCounter !key = liftIO $ atomicModifyIORef' wireTypeErrorsRef $ \(m, dropped) ->
+  if HM.size m >= 100 && not (HM.member key m)
+    then ((m, dropped + 1), ())
+    else
+      let inc Nothing = Just (1, AE.Null)
+          inc (Just (c, ex)) = let !c' = c + 1 in Just (c', ex)
+       in ((HM.alter inc key m, dropped), ())

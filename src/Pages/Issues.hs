@@ -113,7 +113,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), TraceFrame (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, durationQuery, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, durationQuery, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Replay qualified as Replay
 import Pages.Telemetry (traceFragmentUrl)
@@ -126,8 +126,8 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.Mail qualified as Mail
 import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.Parser.Expr (sqlStringLit)
-import Pkg.SchemaLearning.Catalog (FieldStruct (..))
-import Pkg.SchemaLearning.Catalog qualified as Catalog
+import Pkg.SchemaLearning (FieldStruct (..))
+import Pkg.SchemaLearning qualified as SchemaLearning
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (minimum1)
@@ -919,7 +919,7 @@ data IssueView = IssueView
   { pid :: Projects.ProjectId
   , issue :: Issues.Issue
   , requestId :: UUIDId "ai_routine_run"
-  , apiEvidence :: Maybe ([ApiChanges.AnomalyVM], Maybe Catalog.CatalogEntry)
+  , apiEvidence :: Maybe ([ApiChanges.AnomalyVM], Maybe SchemaLearning.CatalogEntry)
   , traceRef :: Maybe (Text, UTCTime)
   , selectedAt :: UTCTime
   , replaySession :: Maybe (Text, Replay.SessionMeta)
@@ -961,7 +961,7 @@ schemaSubjectFor v = (apiChangeData v.issue >>= (.subject)) <|> fromCatalog <|> 
     fromEndpoint = do
       d <- apiChangeData v.issue
       method <- Issues.knownMethod d
-      pure $ ApiChanges.EndpointSchema Catalog.emptyScope{Catalog.method = Just method, Catalog.urlPath = Just d.endpointPath, Catalog.host = Issues.knownHost d, Catalog.service = v.issue.service}
+      pure $ ApiChanges.EndpointSchema SchemaLearning.emptyScope{SchemaLearning.method = Just method, SchemaLearning.urlPath = Just d.endpointPath, SchemaLearning.host = Issues.knownHost d, SchemaLearning.service = v.issue.service}
 
 
 -- | KQL for the issue's events: its span hash, or a span schema's service, name and kind.
@@ -1434,11 +1434,11 @@ eventCard_ view@IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflo
                        pre_ [class_ "text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono"] $ toHtml d.errorMessage
                      if hasStack
                        then
-                         -- EF's parse, not StackTrace's: the issue hash is computed from these frames.
+                         -- The fingerprint grammar, not framesFor: the issue hash is computed from these frames.
                          stackFrames_
                            (codeContextUrl pid ((errM >>= (.base.errorData.serviceName)) <|> issue.service) Nothing)
                            trimmedStack
-                           [TraceFrame f.functionName (guarded (not . T.null) f.functionName) (guarded (not . T.null) f.filePath) f.lineNumber f.contextLine f.isInApp | f <- EF.parseStackTrace (EF.parseRuntime $ fromMaybe "" runtimeM) trimmedStack]
+                           (EF.parseStackTrace (EF.parseRuntime $ fromMaybe "" runtimeM) trimmedStack)
                        else
                          -- OTel's exception event carries `message` and `type` but no
                          -- `exception.stacktrace` unless the SDK opts in, which most do not
@@ -2443,7 +2443,7 @@ issueZeroState pid = \case
   TabArchived ->
     ZeroState "archive" "Nothing archived" "Archive the issues that aren't worth acting on. They stay hidden and never notify." (ESLink inboxUrl "Go to Inbox")
   TabInbox ->
-    ZeroState "empty-set" "Nothing to triage" "New issues and errors land here automatically once you integrate an SDK." (ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides")
+    ZeroState "empty-set" "Nothing to triage" "New issues and errors land here automatically once you integrate an SDK." (ESLink "https://monoscopehq.com/docs/sdks/" "View SDK setup guides")
   where
     inboxUrl = "/p/" <> pid.toText <> "/issues?filter=" <> tabParam TabInbox
 

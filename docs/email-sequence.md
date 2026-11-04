@@ -18,13 +18,13 @@ Monoscope is a unified observability platform for logs, traces, metrics, and API
 
 ### Next steps to get started
 
-- **[Connect your S3 bucket](https://monoscope.tech/docs/getting-started/s3-setup)**: Own your data, pay nothing for retention
-- **[Send your first telemetry](https://monoscope.tech/docs/getting-started/connect)**: OpenTelemetry setup in under 5 minutes
-- **[Explore with AI](https://monoscope.tech/docs/getting-started/ai-queries)**: Query logs, traces, and metrics in plain English
+- **[Connect your S3 bucket](https://monoscopehq.com/docs/getting-started/s3-setup)**: Own your data, pay nothing for retention
+- **[Send your first telemetry](https://monoscopehq.com/docs/getting-started/connect)**: OpenTelemetry setup in under 5 minutes
+- **[Explore with AI](https://monoscopehq.com/docs/getting-started/ai-queries)**: Query logs, traces, and metrics in plain English
 
 ---
 
-[**Explore the Docs**](https://monoscope.tech/docs)
+[**Explore the Docs**](https://monoscopehq.com/docs)
 
 ---
 
@@ -68,7 +68,7 @@ Other observability tools charge per GB ingested _and_ retained. With Monoscope,
 
 No more choosing between visibility and budget.
 
-[**Connect your bucket**](https://monoscope.tech/docs/s3-setup)
+[**Connect your bucket**](https://monoscopehq.com/docs/s3-setup)
 
 ---
 
@@ -196,7 +196,7 @@ We fingerprint your API responses and detect schema changes before your customer
 
 No more "the API changed and nobody told us" incidents. This works alongside your logs, traces, and metrics to give you complete visibility.
 
-[**Learn how it works**](https://monoscope.tech/docs/api-changes)
+[**Learn how it works**](https://monoscopehq.com/docs/api-changes)
 
 ---
 

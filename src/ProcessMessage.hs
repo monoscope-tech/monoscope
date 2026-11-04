@@ -90,10 +90,9 @@ import Models.Telemetry.DeterministicId qualified as DeterministicId
 import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary, ingestionRedactionPaths, redactJSON)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
+import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.Metrics qualified as Metrics
-import Pkg.Sampling qualified as Sampling
-import Pkg.SchemaLearning.Catalog qualified as Catalog
-import Pkg.SchemaLearning.Hot qualified as SchemaHot
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude hiding (ask)
 import Relude.Extra.Tuple (toSnd, traverseToSnd)
 import System.Clock (TimeSpec (..))
@@ -155,13 +154,13 @@ processMessages msgs attrs =
     pure $ writeRes $> (rAckIds, poison)
 
 
--- | A capped project at the hard cap of its daily budget ('Sampling.hardCap') by the hourly
+-- | A capped project at the hard cap of its daily budget ('IngestBudget.hardCap') by the hourly
 -- meter: the OTLP edge rejects its exports outright. Sampling also checks its own counters.
 overFreeTierQuota :: Projects.ProjectCache -> Bool
-overFreeTierQuota cache = any ((cache.row.dailyUsage >=) . Sampling.hardCap) cache.dailyLimit
+overFreeTierQuota cache = any ((cache.row.dailyUsage >=) . IngestBudget.hardCap) cache.dailyLimit
 
 
--- | Keep a capped project's share of the batch ("Pkg.Sampling") and record what it saw; records
+-- | Keep a capped project's share of the batch ("Pkg.IngestBudget") and record what it saw; records
 -- of uncapped or unknown projects pass through. Records sharing a key share a verdict: a key
 -- with any error in the batch is judged at the error rate, so a trace stays whole within a
 -- batch (one split across batches can be judged at two rates). A sampled
@@ -181,14 +180,14 @@ sampleCapped projectOf isError keyOf stamp caches records
       now <- currentTime
       tallies <- Projects.samplingTallies now (V.fromList $ HM.keys capped)
       -- Keyed by the id's text, which records carry, so uncapped records cost one lookup.
-      let rateOf = HM.fromList [(pid.toText, (pid, Sampling.rates now budget cache.row.dailyUsage (tally pid False, tally pid True))) | (pid, (cache, budget)) <- HM.toList capped]
+      let rateOf = HM.fromList [(pid.toText, (pid, IngestBudget.rates now budget cache.row.dailyUsage (tally pid False, tally pid True))) | (pid, (cache, budget)) <- HM.toList capped]
           tally pid err = HM.findWithDefault def (pid, err) tallies
           errorKeys = HashSet.fromList [keyOf r | r <- V.toList records, HM.member (projectOf r) rateOf, isError r]
           judge r = case HM.lookup (projectOf r) rateOf of
             Nothing -> (Just r, Nothing)
             Just (pid, (pEvents, pErrors)) ->
               let p = bool pEvents (max pEvents pErrors) (HashSet.member (keyOf r) errorKeys)
-                  keep = Sampling.keeps p (keyOf r)
+                  keep = IngestBudget.keeps p (keyOf r)
                in (bool r (stamp (1 / p) r) (p < 1) <$ guard keep, Just ((pid, isError r), Projects.SampleCounts 1 (Sum (fromEnum keep))))
           judged = V.map judge records
           counts = HM.fromListWith (<>) (mapMaybe snd $ V.toList judged)
@@ -461,14 +460,14 @@ stampHashesAtIngest caches spans = V.map stamp spans
     templatesByPid = mkBatchPathClassifiers caches spans
 
 
--- | Build a 'SchemaHot.ObservationInput' for the schema-learning catalog.
+-- | Build a 'SchemaLearning.ObservationInput' for the schema-learning catalog.
 -- Covers HTTP and non-HTTP spans uniformly; the keying tuple distinguishes
 -- them. Walks @attributes ∪ resource ∪ body ∪ events@ with redaction
 -- applied so PII never enters the catalog.
 extractObservation
   :: PathClassifier
   -> OtelLogsAndSpans
-  -> SchemaHot.ObservationInput
+  -> SchemaLearning.ObservationInput
 extractObservation canonicalTemplates otelSpan =
   let !projectIdText = otelSpan.project_id
       !attrMap = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
@@ -490,17 +489,17 @@ extractObservation canonicalTemplates otelSpan =
       -- HTTP spans key on the endpoint hash; everything else on service|name|kind.
       !(keyKind, keyHash) =
         if isHttpSpan
-          then (Catalog.HttpEndpoint, Endpoints.hashEndpoint projectIdText host method canonicalPath)
-          else (Catalog.SpanIdentity, toXXHash $ T.intercalate "|" (projectIdText : map (fromMaybe "") [service, spanName, spanKind]))
+          then (SchemaLearning.HttpEndpoint, Endpoints.hashEndpoint projectIdText host method canonicalPath)
+          else (SchemaLearning.SpanIdentity, toXXHash $ T.intercalate "|" (projectIdText : map (fromMaybe "") [service, spanName, spanKind]))
       !scope =
-        Catalog.Scope
-          { Catalog.service = service
-          , Catalog.spanName = spanName
-          , Catalog.kind = spanKind
-          , Catalog.host = guard isHttpSpan >> guarded (not . T.null) host
-          , Catalog.method = method <$ guard isHttpSpan
-          , Catalog.urlPath = canonicalPath <$ guard isHttpSpan
-          , Catalog.statusCodes = if isHttpSpan && statusCode > 0 then V.singleton statusCode else V.empty
+        SchemaLearning.Scope
+          { SchemaLearning.service = service
+          , SchemaLearning.spanName = spanName
+          , SchemaLearning.kind = spanKind
+          , SchemaLearning.host = guard isHttpSpan >> guarded (not . T.null) host
+          , SchemaLearning.method = method <$ guard isHttpSpan
+          , SchemaLearning.urlPath = canonicalPath <$ guard isHttpSpan
+          , SchemaLearning.statusCodes = if isHttpSpan && statusCode > 0 then V.singleton statusCode else V.empty
           }
 
       -- Walk every section of the span. For HTTP we keep the legacy
@@ -542,10 +541,10 @@ extractObservation canonicalTemplates otelSpan =
       -- in the top attribute bag, not in any sub-bucket).
       walkThunk () =
         let commonWalk =
-              [ tagWalk Catalog.FCAttribute (valueToFields $ redacted $ nestObject attrValue)
-              , tagWalk Catalog.FCResource (valueToFields $ redacted $ nestObject (AE.Object $ AEKM.fromMapText resMap))
-              , tagWalk Catalog.FCEvent (valueToFields $ redacted eventsValue)
-              , tagWalk Catalog.FCTopLevel (valueToFields topLevelValue)
+              [ tagWalk SchemaLearning.FCAttribute (valueToFields $ redacted $ nestObject attrValue)
+              , tagWalk SchemaLearning.FCResource (valueToFields $ redacted $ nestObject (AE.Object $ AEKM.fromMapText resMap))
+              , tagWalk SchemaLearning.FCEvent (valueToFields $ redacted eventsValue)
+              , tagWalk SchemaLearning.FCTopLevel (valueToFields topLevelValue)
               ]
             orEmpty = fromMaybe AE.emptyObject
             bodyPart k = fromMaybe AE.Null $ bodyValue ^? key k
@@ -553,15 +552,15 @@ extractObservation canonicalTemplates otelSpan =
               $ commonWalk
               <> if isHttpSpan
                 then
-                  [ tagWalk Catalog.FCPathParam (valueToFields $ redacted $ orEmpty $ attrValue ^? key "http" . key "request" . key "path_params")
-                  , tagWalk Catalog.FCQueryParam (valueToFields $ redacted $ orEmpty $ attrValue ^? key "http" . key "request" . key "query_params")
-                  , tagWalk Catalog.FCRequestHeader (valueToFields $ redacted $ orEmpty $ extractHeadersV "http.request.headers" attrValue)
-                  , tagWalk Catalog.FCResponseHeader (valueToFields $ redacted $ orEmpty $ extractHeadersV "http.response.headers" attrValue)
-                  , tagWalk Catalog.FCRequestBody (valueToFields $ redacted $ bodyPart "request_body")
-                  , tagWalk Catalog.FCResponseBody (valueToFields $ redacted $ bodyPart "response_body")
+                  [ tagWalk SchemaLearning.FCPathParam (valueToFields $ redacted $ orEmpty $ attrValue ^? key "http" . key "request" . key "path_params")
+                  , tagWalk SchemaLearning.FCQueryParam (valueToFields $ redacted $ orEmpty $ attrValue ^? key "http" . key "request" . key "query_params")
+                  , tagWalk SchemaLearning.FCRequestHeader (valueToFields $ redacted $ orEmpty $ extractHeadersV "http.request.headers" attrValue)
+                  , tagWalk SchemaLearning.FCResponseHeader (valueToFields $ redacted $ orEmpty $ extractHeadersV "http.response.headers" attrValue)
+                  , tagWalk SchemaLearning.FCRequestBody (valueToFields $ redacted $ bodyPart "request_body")
+                  , tagWalk SchemaLearning.FCResponseBody (valueToFields $ redacted $ bodyPart "response_body")
                   ]
-                else [tagWalk Catalog.FCRequestBody (valueToFields $ redacted bodyValue)]
-   in SchemaHot.ObservationInput{keyKind, keyHash, scope, walk = walkThunk, timestamp = otelSpan.timestamp}
+                else [tagWalk SchemaLearning.FCRequestBody (valueToFields $ redacted bodyValue)]
+   in SchemaLearning.ObservationInput{keyKind, keyHash, scope, walk = walkThunk, timestamp = otelSpan.timestamp}
   where
     extractHeadersV :: Text -> AE.Value -> Maybe AE.Value
     extractHeadersV prefix obj = do
@@ -573,9 +572,9 @@ extractObservation canonicalTemplates otelSpan =
     -- field category. Format hint computation here is what costs us the
     -- regex sweep — only invoked on the slow-path full walk.
     tagWalk
-      :: Catalog.FieldCategoryEnum
+      :: SchemaLearning.FieldCategoryEnum
       -> V.Vector (Text, V.Vector AE.Value)
-      -> [(Text, V.Vector (AE.Value, Maybe Text), Catalog.FieldCategoryEnum)]
+      -> [(Text, V.Vector (AE.Value, Maybe Text), SchemaLearning.FieldCategoryEnum)]
     tagWalk cat fields0 = [(path, V.map (toSnd \case AE.String s -> valueToFormatStr s; _ -> Nothing) vs, cat) | (path, vs) <- V.toList fields0]
 
 

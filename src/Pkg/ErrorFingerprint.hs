@@ -14,9 +14,12 @@ module Pkg.ErrorFingerprint (
   shapeWithMasks,
   maskMinAffixLen,
   isFrameworkTransportError,
+  framesFor,
+  revisionFor,
 )
 where
 
+import Data.Char (isDigit, isHexDigit)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
@@ -41,9 +44,12 @@ import Web.HttpApiData (FromHttpApiData (..))
 -- - Limits to first 2 non-empty lines
 -- - Replaces UUIDs, IPs, emails, timestamps, numbers with placeholders
 
--- | Represents a parsed stack frame
+-- | A parsed stack frame. Fingerprinting and every stack-trace view share this type;
+-- empty 'filePath' / 'functionName' mean the line carried none.
 data StackFrame = StackFrame
-  { filePath :: Text
+  { raw :: Text
+  -- ^ The line exactly as the runtime printed it.
+  , filePath :: Text
   , moduleName :: Maybe Text
   , functionName :: Text
   , lineNumber :: Maybe Int
@@ -71,7 +77,9 @@ parseRuntime :: Text -> Runtime
 parseRuntime = fromMaybe RGeneric . rightToMaybe . parseUrlPiece
 
 
--- | Parse a stack trace into a list of stack frames based on runtime
+-- | Parse a stack trace into frames with the declared runtime's grammar, dropping lines it
+-- does not recognise. Frozen: 'normalizeStackTrace' and the issue hashes derive from this
+-- output (pinned by ErrorFingerprintStabilitySpec). Views use 'framesFor' instead.
 --
 -- >>> length $ parseStackTrace RNodejs "at processTicksAndRejections (node:internal/process/task_queues:95:5)\nat handleRequest (/app/src/server.js:42:15)"
 -- 2
@@ -120,8 +128,8 @@ parseStackTrace runtime = mapMaybe parseFrame . filter (not . T.null) . map T.st
 
 
 -- | Every parser leaves 'contextLine' empty.
-mkFrame :: Text -> Maybe Text -> Text -> Maybe Int -> Bool -> StackFrame
-mkFrame filePath moduleName functionName lineNumber isInApp = StackFrame{contextLine = Nothing, ..}
+mkFrame :: Text -> Text -> Maybe Text -> Text -> Maybe Int -> Bool -> StackFrame
+mkFrame raw filePath moduleName functionName lineNumber isInApp = StackFrame{contextLine = Nothing, ..}
 
 
 readText :: Read a => Text -> Maybe a
@@ -163,7 +171,7 @@ parseGoFrame line
   | "(" `T.isInfixOf` line =
       let funcPart = fst $ T.breakOn "(" line
           (modName, fnName) = splitDotted funcPart
-       in Just $ mkFrame "" (guarded (not . T.null) modName) fnName Nothing (not $ isGoStdlib funcPart)
+       in Just $ mkFrame line "" (guarded (not . T.null) modName) fnName Nothing (not $ isGoStdlib funcPart)
   | otherwise = Nothing
 
 
@@ -186,7 +194,7 @@ parseJsFrame line = do
       (filePath, lineNum)
         | n >= 3 = (T.intercalate ":" $ take (n - 2) parts, viaNonEmpty head (drop (n - 2) parts) >>= readText)
         | otherwise = (loc, Nothing)
-  pure $ mkFrame filePath (Just $ T.toLower $ moduleFromPath [".js", ".ts", ".mjs", ".cjs"] filePath) fn lineNum (not $ any (`T.isInfixOf` filePath) ["node_modules/", "<anonymous>", "internal/", "node:"])
+  pure $ mkFrame line filePath (Just $ T.toLower $ moduleFromPath [".js", ".ts", ".mjs", ".cjs"] filePath) fn lineNum (not $ any (`T.isInfixOf` filePath) ["node_modules/", "<anonymous>", "internal/", "node:"])
 
 
 -- | Parse Python stack frame
@@ -198,7 +206,7 @@ parsePythonFrame line = do
       parts = T.splitOn ", " $ T.drop 2 rest -- Skip '",'
       field pfx = T.drop (T.length pfx) <$> find (pfx `T.isPrefixOf`) parts
       funcName = foldr (uncurry T.replace) (fromMaybe "<module>" $ field "in ") ([("<lambda>", "lambda"), ("<listcomp>", "listcomp"), ("<dictcomp>", "dictcomp")] :: [(Text, Text)])
-  pure $ mkFrame filePath (Just $ moduleFromPath [".py"] filePath) funcName (readText =<< field "line ") (not $ any (`T.isInfixOf` filePath) ["site-packages/", "dist-packages/", "/lib/python", "<frozen"])
+  pure $ mkFrame line filePath (Just $ moduleFromPath [".py"] filePath) funcName (readText =<< field "line ") (not $ any (`T.isInfixOf` filePath) ["site-packages/", "dist-packages/", "/lib/python", "<frozen"])
 
 
 -- | Parse Java stack frame
@@ -210,7 +218,7 @@ parseJavaFrame line = do
       (fileName, lineStr) = T.breakOn ":" $ T.dropAround (`elem` ("()" :: String)) rest
       (moduleName, funcName) = splitDotted qualifiedMethod
   -- takeWhile drops generics: method<T> -> method
-  pure $ mkFrame fileName (Just moduleName) (T.takeWhile (/= '<') funcName) (readText $ T.drop 1 lineStr) (not $ any (`T.isPrefixOf` qualifiedMethod) ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."])
+  pure $ mkFrame line fileName (Just moduleName) (T.takeWhile (/= '<') funcName) (readText $ T.drop 1 lineStr) (not $ any (`T.isPrefixOf` qualifiedMethod) ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."])
 
 
 -- | Parse PHP stack frame
@@ -222,7 +230,7 @@ parsePhpFrame line = do
       (filePath, lineStr) = T.breakOn "(" pathPart
       func = T.takeWhile (/= '(') $ T.drop 2 funcPart
       splitLast sep = viaNonEmpty last $ drop 1 $ T.splitOn sep func
-  pure $ mkFrame filePath (Just $ moduleFromPath [".php"] filePath) (T.replace "{closure}" "closure" $ fromMaybe func $ splitLast "->" <|> splitLast "::") (readText $ T.takeWhile (/= ')') $ T.drop 1 lineStr) (not $ any (`T.isInfixOf` filePath) ["/vendor/", "/phar://"])
+  pure $ mkFrame line filePath (Just $ moduleFromPath [".php"] filePath) (T.replace "{closure}" "closure" $ fromMaybe func $ splitLast "->" <|> splitLast "::") (readText $ T.takeWhile (/= ')') $ T.drop 1 lineStr) (not $ any (`T.isInfixOf` filePath) ["/vendor/", "/phar://"])
 
 
 -- | Parse .NET stack frame
@@ -235,7 +243,7 @@ parseDotNetFrame line = do
       (moduleName, funcName) = splitDotted qualifiedMethod
       (filePath, lineStr) = T.breakOn ":line " $ T.drop 4 locationPart
   -- takeWhile drops generic arity: Method`1 -> Method
-  pure $ mkFrame filePath (Just moduleName) (T.takeWhile (/= '`') funcName) (readText $ T.drop 6 lineStr) (not $ any (`T.isPrefixOf` qualifiedMethod) ["System.", "Microsoft.", "Newtonsoft."])
+  pure $ mkFrame line filePath (Just moduleName) (T.takeWhile (/= '`') funcName) (readText $ T.drop 6 lineStr) (not $ any (`T.isPrefixOf` qualifiedMethod) ["System.", "Microsoft.", "Newtonsoft."])
 
 
 -- | Generic stack frame parser for unknown formats. The function is the first
@@ -245,7 +253,7 @@ parseGenericFrame :: Text -> Maybe StackFrame
 parseGenericFrame line = do
   guard $ not ("..." `T.isPrefixOf` line)
   let fn = maybe line (T.takeWhile (/= '(')) $ find (\p -> "(" `T.isInfixOf` p || "." `T.isInfixOf` p) $ words line
-  pure $ mkFrame line Nothing fn (listToMaybe $ mapMaybe readText $ drop 1 $ T.splitOn ":" line) True
+  pure $ mkFrame line line Nothing fn (listToMaybe $ mapMaybe readText $ drop 1 $ T.splitOn ":" line) True
 
 
 -- | Normalize a stack trace for fingerprinting
@@ -563,3 +571,231 @@ applyErrorMasks masks msg = foldl' applyOne msg masks
 shapeWithMasks :: [ErrorMask] -> Text -> Text -> Text -> Text
 shapeWithMasks masks projectIdText exceptionType message =
   hashParts [projectIdText, "shape", T.strip exceptionType, applyErrorMasks masks (normalizeMessage message)]
+
+
+-- =============================================================================
+-- Display frames
+-- =============================================================================
+-- Turning a stack trace from an opaque blob into frames.
+--
+-- Every runtime prints its stack differently and none of them are structured, so an
+-- exception reaches us as one string. Rendering that string in a @\<pre\>@ is what we did
+-- before, and it is why the error panel could never say "the failure is line 88 of
+-- @checkout.py@, here is the code" the way Sentry and Datadog do — nothing downstream knew
+-- where one frame ended and the next began.
+--
+-- The parse is deliberately total and lossy-nowhere: a line that matches no known shape
+-- becomes a frame carrying only its text, so the rendered trace is always the whole trace.
+-- Recognising a frame is an upgrade (it gets a file, a line, a source snippet), never a
+-- filter.
+
+-- | Does this path look like the user's own code, rather than a runtime or a dependency?
+--
+-- Sentry calls this @in_app@ and expands the first such frame by default, which is almost
+-- always the one you want during an incident: the top of a stack is usually five frames of
+-- framework before anything you wrote.
+--
+-- A path test, because that is all a stack trace gives us. It is a heuristic and it is
+-- allowed to be wrong — being wrong costs one extra click, and the alternative (a
+-- per-project configuration nobody fills in) costs the feature. A frame with no file cannot
+-- be judged, and is treated as not-in-app so it never steals the default expansion.
+--
+-- >>> map inAppPath ["app/services/checkout.py", "/usr/lib/python3.11/json/decoder.py", "node_modules/express/lib/router.js", "vendor/bundle/gems/rack.rb", "C:\\Program Files\\dotnet\\Sys.dll", ""]
+-- [True,False,False,False,False,False]
+inAppPath :: Text -> Bool
+inAppPath p = not (T.null p) && not (any (`T.isInfixOf` normalized) vendorMarkers)
+  where
+    normalized = T.toLower $ T.replace "\\" "/" p
+    vendorMarkers =
+      [ "node_modules/"
+      , "site-packages/"
+      , "dist-packages/"
+      , "/vendor/"
+      , "vendor/bundle"
+      , "/gems/"
+      , "/usr/lib/"
+      , "/usr/local/lib/"
+      , "program files"
+      , "/.cargo/"
+      , "/go/pkg/mod/"
+      , "runtime/"
+      , "<anonymous>"
+      , "<frozen "
+      ]
+
+
+displayFrame :: Text -> Maybe Text -> Maybe Text -> Maybe Int -> StackFrame
+displayFrame raw fn path ln = StackFrame{raw, filePath = fold path, moduleName = Nothing, functionName = fold fn, lineNumber = ln, contextLine = Nothing, isInApp = inAppPath (fold path)}
+
+
+-- | The frames to show for an exception: one per non-blank line of the printed stack, else
+-- the single frame the OTel @code.*@ conventions already gave us.
+--
+-- One parser per runtime family, chosen by the line's shape rather than by a declared
+-- language: the language is not on the span, and a polyglot trace (a Node service reporting a
+-- Python subprocess's failure) is a real thing. Unlike 'parseStackTrace' this is lossless — a
+-- line that matches no shape keeps its text and loses nothing.
+--
+-- >>> let frames = map (\f -> (f.functionName, f.filePath, f.lineNumber)) . framesFor (const Nothing)
+-- >>> frames "    at checkout (/srv/app/checkout.js:88:15)\n    at /srv/app/index.js:12:3"
+-- [("checkout","/srv/app/checkout.js",Just 88),("","/srv/app/index.js",Just 12)]
+--
+-- Python — the file line and the source line the traceback echoes underneath it:
+--
+-- >>> map (.filePath) $ framesFor (const Nothing) "Traceback (most recent call last):\n  File \"app/checkout.py\", line 88, in charge\n    raise ValueError(x)"
+-- ["","app/checkout.py",""]
+--
+-- >>> frames "  File \"app/checkout.py\", line 88, in charge"
+-- [("charge","app/checkout.py",Just 88)]
+--
+-- Java\/Kotlin, Ruby, Go and PHP:
+--
+-- >>> frames "\tat com.acme.Checkout.charge(Checkout.java:88)"
+-- [("com.acme.Checkout.charge","Checkout.java",Just 88)]
+--
+-- >>> frames "app/models/order.rb:88:in `charge'"
+-- [("charge","app/models/order.rb",Just 88)]
+--
+-- >>> frames "\t/srv/app/checkout.go:88 +0x1f5"
+-- [("","/srv/app/checkout.go",Just 88)]
+--
+-- >>> frames "#0 /srv/app/Checkout.php(88): Acme\\Checkout->charge()"
+-- [("Acme\\Checkout->charge","/srv/app/Checkout.php",Just 88)]
+--
+-- Unrecognised lines keep their text; blank lines are dropped; with no printed stack the
+-- @code.*@ frame stands in:
+--
+-- >>> map (\f -> (f.raw, f.filePath)) $ framesFor (const Nothing) "ValueError: nope\n\n"
+-- [("ValueError: nope","")]
+--
+-- >>> map (.filePath) $ framesFor (\k -> viaNonEmpty head ["a.py" | k == "code.file.path"]) "   \n"
+-- ["a.py"]
+--
+-- >>> framesFor (const Nothing) ""
+-- []
+framesFor :: (Text -> Maybe Text) -> Text -> [StackFrame]
+framesFor attr stack = case map shapeFrame $ filter (not . T.null . T.strip) $ lines stack of
+  [] -> maybeToList (frameFromAttributes attr)
+  fs -> fs
+
+
+shapeFrame :: Text -> StackFrame
+shapeFrame raw = fromMaybe (displayFrame raw Nothing Nothing Nothing) $ asum [pyFile, atFrame, php, ruby, bareLocation]
+  where
+    t = T.strip raw
+    frame fn path ln = Just $ displayFrame raw fn (Just path) (Just ln)
+
+    -- Python:  File "app/checkout.py", line 88, in charge
+    pyFile = do
+      rest <- T.stripPrefix "File \"" t
+      let (path, afterPath) = T.breakOn "\"" rest
+      lineRest <- T.stripPrefix "\", line " afterPath
+      let (num, afterNum) = T.span isDigit lineRest
+      n <- readText num
+      frame (T.stripPrefix ", in " afterNum) path n
+
+    -- JS/Node:      at fn (file:line:col)  |  at file:line:col
+    -- Java/Kotlin:  at pkg.Class.method(File.java:88)
+    -- One parser, because they are one grammar: an `at`, an optional qualified name, and a
+    -- parenthesised or bare location.
+    atFrame = do
+      rest <- T.stripPrefix "at " t
+      let (fn, paren) = T.breakOn "(" rest
+          located = if T.null paren then rest else T.dropEnd 1 (T.drop 1 paren)
+      (path, n) <- fileAndLine located
+      frame (nonBlank fn <* guard (not (T.null paren))) path n
+
+    -- PHP:  #0 /srv/app/Checkout.php(88): Acme\Checkout->charge()
+    php = do
+      rest <- T.stripPrefix "#" t
+      let afterIdx = T.strip $ T.dropWhile isDigit rest
+          (path, paren) = T.breakOn "(" afterIdx
+      guard $ not (T.null path) && not (T.null paren)
+      let (num, afterNum) = T.span isDigit (T.drop 1 paren)
+      n <- readText num
+      guard $ "):" `T.isPrefixOf` afterNum
+      frame (nonBlank $ T.dropEnd 2 $ T.drop 2 afterNum) path n
+
+    -- Ruby:  app/models/order.rb:88:in `charge'
+    ruby = do
+      let (loc, inPart) = T.breakOn ":in " t
+      guard $ not (T.null inPart)
+      (path, n) <- fileAndLine loc
+      frame (nonBlank $ T.dropWhileEnd (== '\'') $ T.dropWhile (== '`') $ T.strip $ T.drop 4 inPart) path n
+
+    -- Go:  \t/srv/app/checkout.go:88 +0x1f5
+    -- Last, because "path:line" with nothing around it is the shape every other parser's
+    -- input also contains — it must only get the lines none of them claimed.
+    bareLocation = do
+      (path, n) <- fileAndLine (T.takeWhile (/= ' ') t)
+      frame Nothing path n
+
+    -- @path:line@ (optionally @:col@), split from the right so a Windows drive letter or a URL
+    -- scheme in the path does not swallow the line.
+    fileAndLine loc = let parts = reverse (T.splitOn ":" loc) in asum [split (drop 1 parts), split parts]
+    split = \case
+      num : rest@(_ : _) -> (T.intercalate ":" (reverse rest),) <$> readText num
+      _ -> Nothing
+
+
+nonBlank :: Text -> Maybe Text
+nonBlank = guarded (not . T.null) . T.strip
+
+
+-- | The frame an SDK already told us about.
+--
+-- OpenTelemetry's @code.*@ conventions are promoted columns on every span, so a runtime that
+-- follows them has handed us the failing frame directly and there is nothing to parse. Takes
+-- a lookup rather than a map so it stays independent of however the caller stores attributes.
+--
+-- >>> let attrs ps k = viaNonEmpty head [v | (k', v) <- ps, k' == k]
+-- >>> (\f -> (f.raw, f.functionName, f.filePath, f.lineNumber)) <$> frameFromAttributes (attrs [("code.file.path", "app/checkout.py"), ("code.line.number", "88"), ("code.function.name", "charge")])
+-- Just ("app/checkout.py:88 in charge","charge","app/checkout.py",Just 88)
+--
+-- A path with no line is still a frame — it just cannot anchor a snippet:
+--
+-- >>> (.lineNumber) <$> frameFromAttributes (attrs [("code.file.path", "app/checkout.py")])
+-- Just Nothing
+--
+-- >>> frameFromAttributes (attrs [("code.line.number", "88")])
+-- Nothing
+frameFromAttributes :: (Text -> Maybe Text) -> Maybe StackFrame
+frameFromAttributes attr = do
+  path <- nonBlank =<< attr "code.file.path"
+  let ln = readText =<< attr "code.line.number"
+      fn = nonBlank =<< attr "code.function.name"
+  pure $ displayFrame (path <> maybe "" ((":" <>) . show) ln <> maybe "" (" in " <>) fn) fn (Just path) ln
+
+
+-- | The revision the telemetry says it was built from, if it says at all.
+--
+-- Datadog's precedence, which is the order of the key list below: the service version when
+-- it is a commit sha, then the OTel @vcs.*@ convention, then the older @git.commit.sha@.
+-- A caller with no answer here reads the
+-- mapping's branch, which is today's source rather than the deploy that threw — right often
+-- enough to be worth showing, wrong exactly when someone is debugging an old release.
+--
+-- >>> let attrs kvs k = viaNonEmpty head [v | (k', v) <- kvs, k' == k]
+-- >>> revisionFor (attrs [("service.version", "1c0ffee")])
+-- Just "1c0ffee"
+--
+-- A semver release is a version, not a revision — resolving it as a git ref fetches whatever
+-- a tag of that name happens to point at, or nothing:
+--
+-- >>> revisionFor (attrs [("service.version", "v2.3.1"), ("git.commit.sha", "0123456789abcdef0123456789abcdef01234567")])
+-- Just "0123456789abcdef0123456789abcdef01234567"
+--
+-- >>> revisionFor (attrs [("vcs.repository.ref.revision", "abc1234"), ("git.commit.sha", "def5678")])
+-- Just "abc1234"
+-- >>> revisionFor (attrs [("service.version", "v2.3.1")])
+-- Nothing
+revisionFor :: (Text -> Maybe Text) -> Maybe Text
+revisionFor attr = asum [attr k >>= guarded looksLikeSha | k <- ["service.version", "vcs.repository.ref.revision", "git.commit.sha"]]
+
+
+-- | An abbreviated-or-full git object name: hex, and long enough not to be a version string.
+--
+-- >>> map looksLikeSha ["1c0ffee", "0123456789abcdef0123456789abcdef01234567", "v2.3.1", "abc", "1.2.3"]
+-- [True,True,False,False,False]
+looksLikeSha :: Text -> Bool
+looksLikeSha t = T.length t >= 7 && T.length t <= 40 && T.all isHexDigit t

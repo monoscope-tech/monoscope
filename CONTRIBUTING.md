@@ -280,8 +280,7 @@ monoscope/
 ├── web-components/   # TypeScript frontend components
 ├── cli/              # CLI tool source
 ├── proto/            # Protocol Buffer definitions
-├── test/             # Test scripts and helpers
-├── tests/            # Integration test suites
+├── test/             # Test suites (unit/, integration/, doctests/, golden/)
 ├── app/              # Application entry points
 ├── npm/              # Node.js helper scripts
 ├── config/           # Application configuration
@@ -293,4 +292,4 @@ monoscope/
 
 - **Discord** — Join the community at https://discord.gg/BSFCaUHxt4
 - **GitHub Issues** — For bugs and feature requests
-- **Documentation** — https://docs.monoscope.tech
+- **Documentation** — https://monoscopehq.com/docs

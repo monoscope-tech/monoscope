@@ -39,7 +39,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copySourceAttr_, curlCommand, dateTime, detailTab_, disclosure_, emptyState_, httpTab_, stackTrace_, tabPanel_, tonePill_)
 import Pkg.DeriveUtils (unAesonTextMaybe)
-import Pkg.StackTrace qualified as StackTrace
+import Pkg.ErrorFingerprint qualified as EF
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (withSpan_)
@@ -623,7 +623,7 @@ httpDetailTabs item aptSp = (activeMarker, tabs)
 -- | @attr@ reads the span's attributes (where @code.*@ lives) and @resAttr@ its resource
 -- (where @service.version@ and the @vcs.*@\/@git.*@ revision keys live). Two lookups rather
 -- than one because they are two different columns: passing the span map for both is what
--- made 'StackTrace.revisionFor' answer 'Nothing' for every span it was ever given.
+-- made 'EF.revisionFor' answer 'Nothing' for every span it was ever given.
 renderErrors :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> (Text -> Maybe Text) -> [AE.Value] -> Html ()
 renderErrors pid svcM attr resAttr errs =
   div_ [class_ "flex flex-col mt-4 gap-3 w-full"] $ ifor_ errs \idx err ->
@@ -647,7 +647,7 @@ renderErrors pid svcM attr resAttr errs =
             (faSprite_ "copy" "regular" "w-3 h-3" >> "Copy")
       unless (T.null message)
         $ pre_ [class_ $ copyId <> " text-xs font-mono whitespace-pre-wrap break-words text-textStrong px-3 py-2.5 leading-relaxed"] (toHtml message)
-      let frames = StackTrace.framesFor attr stacktrace
+      let frames = EF.framesFor attr stacktrace
       unless (null frames)
         $ div_ [class_ "border-t border-strokeError-strong/30"]
         $ disclosure_ [open_ "" | idx == 0] "px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong" ("Stack trace" >> span_ [class_ "text-2xs text-textWeak/70"] (toHtml @Text $ "(" <> show (length frames) <> " frames)"))

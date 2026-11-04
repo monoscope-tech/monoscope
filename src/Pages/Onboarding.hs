@@ -433,7 +433,7 @@ integrationsPage pid apikey =
                         , id_ $ "fw-tab-" <> l.slug <> "-" <> show idx
                         , class_ "hidden"
                         , Aria.label_ fw.name
-                        , data_ "guide-url" $ "https://monoscope.tech/docs/sdks/" <> fw.docsPath
+                        , data_ "guide-url" $ "https://monoscopehq.com/docs/sdks/" <> fw.docsPath
                         , hxGet_ $ "/proxy/docs/sdks/" <> fw.docsPath
                         , hxTarget_ $ "#fw-content-" <> l.slug
                         , term "hx-sync" $ "#fw-content-" <> l.slug <> ":replace"
@@ -443,7 +443,7 @@ integrationsPage pid apikey =
                         , hxIndicator_ $ "#fw-indicator-" <> l.slug
                         ]
                       <> [checked_ | idx == 0]
-                    unless (T.null fw.icon) $ img_ [class_ "h-5 w-5", src_ $ "https://monoscope.tech/assets/img/framework-logos/" <> fw.icon]
+                    unless (T.null fw.icon) $ img_ [class_ "h-5 w-5", src_ $ "https://monoscopehq.com/assets/img/framework-logos/" <> fw.icon]
                     span_ $ toHtml fw.name
 
               div_ [class_ "relative p-2 md:p-8"] do
@@ -799,9 +799,9 @@ stepIndicator step title prevUrl = do
     span_ [class_ "text-textStrong text-xl md:text-4xl mt-1 md:mt-4"] $ toHtml title
 
 
--- | Proxy handler for fetching documentation from monoscope.tech
+-- | Proxy handler for fetching documentation from monoscopehq.com
 -- This bypasses CORS restrictions by fetching the content server-side
 proxyLandingH :: (HTTP :> es, State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders (Html ()))
 proxyLandingH path = do
-  response <- W.get $ toString $ "https://monoscope.tech/" <> T.intercalate "/" path
-  addRespHeaders $ toHtmlRaw $ T.replace "href=\"/" "href=\"https://monoscope.tech/" $ decodeUtf8 @Text $ fromMaybe "" $ response L.^? W.responseBody
+  response <- W.get $ toString $ "https://monoscopehq.com/" <> T.intercalate "/" path
+  addRespHeaders $ toHtmlRaw $ T.replace "href=\"/" "href=\"https://monoscopehq.com/" $ decodeUtf8 @Text $ fromMaybe "" $ response L.^? W.responseBody

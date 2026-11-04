@@ -69,13 +69,12 @@ import Pages.Bots.Utils qualified as Bot
 import Pages.Bots.Whatsapp (BodyType (..), TwilioWhatsAppMessage (TwilioWhatsAppMessage), getWhatsappList, parseWhatsappBody, whatsappIncomingPostH)
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
-import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Git qualified as Git
-import Pkg.SlackRateLimit qualified as RateLimit
+import Pkg.Slack qualified as Slack
 import Data.Generics.Product.Fields qualified as Generic
-import Pkg.TestClock (advanceTime)
+import Data.Effectful.Hasql (advanceTime)
 import Pkg.TestUtils
 import Servant.API.ResponseHeaders (getHeaders, getResponse)
 import Servant.Server (ServerError (errHTTPCode))
@@ -578,7 +577,7 @@ spec = around withTestResources do
           (PGS.Only $ Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt)
       scheduled `shouldBe` [PGS.Only (1 :: Int)]
       withResource tr.trPool $ \conn -> assertDeferredJobRunnable conn $ AE.toJSON $ Jobs.ProcessSlackEvent receipt
-      (_, otherWorkspace) <- runTestBgRecordingHTTP frozenTime tr $ responses $ throttle $ RateLimit.withRateLimits "T_OTHER" $ tryAny $ void $ HTTP.postWith Wreq.defaults "https://slack.com/api/chat.postMessage" (AE.object [])
+      (_, otherWorkspace) <- runTestBgRecordingHTTP frozenTime tr $ responses $ throttle $ Slack.withRateLimits "T_OTHER" $ tryAny $ void $ HTTP.postWith Wreq.defaults "https://slack.com/api/chat.postMessage" (AE.object [])
       otherWorkspace `shouldSatisfy` isRight
       readIORef posts >>= (`shouldBe` 3)
       dbExec tr [sql|UPDATE apis.slack_api_cooldowns SET retry_at = clock_timestamp() - interval '1 second' WHERE team_id = 'T_RATE_LIMIT'|] ()
@@ -2037,11 +2036,6 @@ spec = around withTestResources do
         setRole tr testPid PM.PView
         viewer <- renderT <$> call tr (AIThreads.routineRunGetH testPid request Nothing)
         (T.isInfixOf (if administrative then "Action details require admin permission." else "Action details require edit permission.") viewer, T.isInfixOf "Proposal and outcome" viewer) `shouldBe` (True, False)
-        when administrative do
-          dbExec tr [sql|UPDATE apis.ai_agent_operations SET proposal = jsonb_set(proposal, '{policy,capability}', '{"tag":"Administration"}'::jsonb) WHERE run_id = ?|] (Only request)
-          resetLegacyEvidenceScope tr testPid saved.conversationId
-          length <$> operations request `shouldReturn` 1
-          runQueryEffect tr (Investigations.conversationEvidencePermission testPid saved.conversationId) `shouldReturn` PM.PAdmin
         dbExec tr [sql|UPDATE users.users SET is_sudo = TRUE WHERE id = ?|] (Only $ uid tr)
         setRole tr testPid PM.PAdmin
       -- A Slack post whose checkpoint or outcome write fails is not posted again.
@@ -2215,7 +2209,7 @@ spec = around withTestResources do
         when (fixture == RecordedAppend) do
           Just execution <- runTestBg frozenTime tr $ Issues.startEventRun routine (Issues.SlackMessageRequest receipt (uid tr)) Issues.ContinueRun conv "Keep this finding"
           let lease = Investigations.RunLease (Investigations.RunTurn testPid conv (uid tr) execution.id) execution.startedAt
-              proposal = Investigations.OperationProposal (Operation.ModelCall legacyCall) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Observe PM.PView
+              proposal = Investigations.OperationProposal (Catalog.ModelCall legacyCall) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Observe PM.PView
           void $ runQueryEffect tr $ Investigations.atomicOperation lease (Investigations.CheckpointCursor (Investigations.SlackCheckpoint turn) 0) proposal Nothing do
             result <- Issues.saveArtifactTx testPid conv artifactKey Nothing "Finding" Issues.ArtifactAppend
             pure $ Right $ Investigations.ToolResult (either show (const "Finding saved.") result) (AE.toJSON . (.key) <$> rightToMaybe result)
@@ -2334,7 +2328,7 @@ spec = around withTestResources do
         let conv = conversation n
             artifactKey = fromRightShow $ Issues.mkArtifactKey "reviewed-finding"
             saveCall = Chat.ToolCall "reviewed-action" "function" $ fn "save_artifact" [("key", "reviewed-finding"), ("content", "Finding"), ("mode", "append")]
-            proposal = Investigations.OperationProposal (Operation.ModelCall saveCall) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Observe PM.PView
+            proposal = Investigations.OperationProposal (Catalog.ModelCall saveCall) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Observe PM.PView
             review = Investigations.ReviewRequest (addUTCTime 60 frozenTime) (if scenario == AdministratorRequired then Investigations.ReviewAdministrators else Investigations.ReviewEditors)
             artifacts = runQueryEffect tr $ Issues.listArtifacts testPid conv $ Just artifactKey
         context <- interactiveInvocation tr testPid conv "Retain this finding after review" Issues.Observe >>= contextOf
@@ -2596,9 +2590,9 @@ spec = around withTestResources do
       for_ (zip [40 ..] [ApproveReview, DeclineReview, ExpireAfterReview]) \(n, scenario) -> do
         issueId <- newIssue tr ("review-native-" <> show n) "Original title"
         context <- enrichmentRun tr enrichment "Review the issue change" issueId
-        let native = Operation.EnrichIssue $ Enhancement.IssueEnrichment (Enhancement.IssueEnhancement issueId "Reviewed title" "" "" "") Nothing Nothing frozenTime
+        let native = Catalog.EnrichIssue $ Enhancement.IssueEnrichment (Enhancement.IssueEnhancement issueId "Reviewed title" "" "" "") Nothing Nothing frozenTime
             turn = Investigations.RunTurn testPid context.conversationId context.requestedBy context.rootId
-            proposal = Investigations.OperationProposal (Operation.NativeCall native) $ AI.OperationPolicy Catalog.ProjectWrite Issues.Autonomous PM.PAdmin
+            proposal = Investigations.OperationProposal (Catalog.NativeCall native) $ AI.OperationPolicy Catalog.ProjectWrite Issues.Autonomous PM.PAdmin
             reason = if scenario == DeclineReview then Investigations.ReviewDeclined else Investigations.ReviewTimedOut
         (cursor, _) <- runQueryEffect tr $ Investigations.prepareNativeOperation turn native
         identifier <- runQueryEffect tr (Investigations.beginOperation (pure $ Right ()) (Investigations.RunLease turn context.startedAt) cursor proposal $ Just $ Investigations.ReviewRequest (addUTCTime 60 frozenTime) Investigations.ReviewEditors) >>= \case
@@ -3965,8 +3959,8 @@ spec = around withTestResources do
           other <- newIssue tr ("other-native-" <> show n) "Other title"
           context <- runTestBg frozenTime tr $ AI.requireRunContext testPid $ Issues.EventClaim (Issues.IssueEnrichment issue) interrupted.id interrupted.startedAt
           runQueryEffect tr (Investigations.loadCheckpointFor $ Investigations.RunCheckpoint $ Investigations.RunTurn testPid context.conversationId context.requestedBy context.rootId) >>= \case
-            Just Investigations.SavedCheckpoint{checkpoint = Investigations.NativePending (Operation.EnrichIssue retained)} ->
-              runTestBg frozenTime tr (AI.executeNativeOperation context (Operation.EnrichIssue retained{Enhancement.enhancement = retained.enhancement{Enhancement.issueId = other}}) \_ -> AI.EffectfulOperation $ liftIO $ fail "Another issue's enrichment was dispatched")
+            Just Investigations.SavedCheckpoint{checkpoint = Investigations.NativePending (Catalog.EnrichIssue retained)} ->
+              runTestBg frozenTime tr (AI.executeNativeOperation context (Catalog.EnrichIssue retained{Enhancement.enhancement = retained.enhancement{Enhancement.issueId = other}}) \_ -> AI.EffectfulOperation $ liftIO $ fail "Another issue's enrichment was dispatched")
                 `shouldThrow` \case Investigations.OperationScopeMismatch -> True; _ -> False
             _ -> expectationFailure "Expected the retained typed enrichment intent"
         enrichCounting (Just calls) issue
@@ -4123,7 +4117,7 @@ spec = around withTestResources do
       tokenOf (runAsBaseRecordingHTTP tr resolve) `shouldReturn` ([], Right "renewed-token")
       -- A rate-limited refresh keeps the unspent token for the retry.
       reauthorize tr subject
-      either (isJust . fromException @RateLimit.SlackRateLimited) (const False) <$> tryAny (runAsBaseRecordingHTTP tr $ withStatus (const True) status429 resolve) `shouldReturn` True
+      either (isJust . fromException @Slack.SlackRateLimited) (const False) <$> tryAny (runAsBaseRecordingHTTP tr $ withStatus (const True) status429 resolve) `shouldReturn` True
       dbExec tr [sql|DELETE FROM apis.slack_api_cooldowns WHERE team_id = 'T_REFRESH'|] ()
       (retried, renewed) <- runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode refreshedToken) resolve
       (refreshTokens retried, (.accessToken) <$> renewed) `shouldBe` ([Just "refresh-once"], Right "renewed-token")
@@ -4333,7 +4327,7 @@ spec = around withTestResources do
                 (options ^. Wreq.param "channel", options ^. Wreq.param "message_ts") `shouldBe` ([channel], ["1735689600.000001"])
                 bearer options
                 when (scenario == ThreadCitationRevoked) $ runQueryEffect tr $ Slack.revokeSlackEvidence testPid (uid tr)
-                when (scenario == ThreadCitationRateLimited) $ throwIO $ RateLimit.SlackRateLimited $ addUTCTime 60 frozenTime
+                when (scenario == ThreadCitationRateLimited) $ throwIO $ Slack.SlackRateLimited $ addUTCTime 60 frozenTime
                 pure $ Just $ AE.encode case scenario of
                   ThreadCitationCredentialRejected -> AE.object ["ok" .= False, "error" .= ("invalid_auth" :: Text)]
                   ThreadCitationRejected -> AE.object ["ok" .= False, "error" .= ("message_not_found" :: Text)]
@@ -4393,7 +4387,7 @@ spec = around withTestResources do
           let pendingRead = interpose @ELLM.LLM \_ -> \case
                 ELLM.CallAgenticChat{} -> pure $ invoking [fn "slack_read_channel" []]
                 request -> send @ELLM.LLM $ coerce request
-          runTestBgRecordingHTTP frozenTime tr (limited $ model $ pendingRead $ tryAny $ chat pendingConfig "Resume Slack read") >>= (`shouldBe` (0, True)) . bimap length (either (isJust . fromException @RateLimit.SlackRateLimited) (const False))
+          runTestBgRecordingHTTP frozenTime tr (limited $ model $ pendingRead $ tryAny $ chat pendingConfig "Resume Slack read") >>= (`shouldBe` (0, True)) . bimap length (either (isJust . fromException @Slack.SlackRateLimited) (const False))
         cleanup
 
   describe "Slack replies" do
@@ -5135,10 +5129,10 @@ statusOf :: Error ServerError :> es => Eff es a -> Eff es Int
 statusOf act = catchError @ServerError (act $> 200) \_ err -> pure err.errHTTPCode
 
 
--- | Compare with @tests/golden/bots/<path>@ as JSON; @UPDATE_SNAPSHOTS=true@ rewrites it, a missing file fails.
+-- | Compare with @test/golden/bots/<path>@ as JSON; @UPDATE_SNAPSHOTS=true@ rewrites it, a missing file fails.
 goldenJson :: FilePath -> AE.Value -> Expectation
 goldenJson path actual = do
-  let file = "./tests/golden/bots/" <> path
+  let file = "./test/golden/bots/" <> path
   whenM ((== Just "true") <$> lookupEnv "UPDATE_SNAPSHOTS") $ writeFileLBS file $ encodePretty actual
   AE.eitherDecodeFileStrict file `shouldReturn` Right actual
 
@@ -5308,7 +5302,7 @@ waitingDashboard tr context title = do
   let toolRequest = Chat.ToolCall "review" "function" $ newDashboard title
       turn = Investigations.RunTurn testPid context.conversationId (uid tr) context.rootId
       target = Investigations.RunCheckpoint turn
-      proposal = Investigations.OperationProposal (Operation.ModelCall toolRequest) $ AI.OperationPolicy Catalog.ProjectWrite reviewChanges PM.PAdmin
+      proposal = Investigations.OperationProposal (Catalog.ModelCall toolRequest) $ AI.OperationPolicy Catalog.ProjectWrite reviewChanges PM.PAdmin
   saved <- runQueryEffect tr $ Investigations.startCheckpointFor target $ awaiting toolRequest
   let begin = runQueryEffect tr $ Investigations.beginOperation (pure $ Right ()) (Investigations.RunLease turn context.startedAt) (Investigations.CheckpointCursor target saved.revision) proposal $ Just $ Investigations.ReviewRequest (addUTCTime 60 frozenTime) Investigations.ReviewEditors
   begin >>= \case
@@ -5382,7 +5376,7 @@ seedOperations :: TestResources -> UUIDId "ai_routine_run" -> Projects.UserId ->
 seedOperations tr run actor limit = runQueryEffect tr $ for_ (zip [0, 1 :: Int64] [Investigations.OperationRunning, Investigations.OperationReturned $ Investigations.ToolResult "Known response" Nothing]) \(revision, outcome) ->
   Hasql.interpExecute_ [HI.sql|INSERT INTO apis.ai_agent_operations (id, project_id, run_id, requested_by, checkpoint_revision, proposal, outcome) VALUES (gen_random_uuid(), #{testPid}, #{run}, #{actor}, #{revision}, #{Aeson proposal}, #{Aeson outcome})|]
   where
-    proposal = Investigations.OperationProposal (Operation.ModelCall $ Chat.ToolCall "pending" "function" $ fn "save_artifact" []) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Autonomous limit
+    proposal = Investigations.OperationProposal (Catalog.ModelCall $ Chat.ToolCall "pending" "function" $ fn "save_artifact" []) $ AI.OperationPolicy Catalog.ConversationWrite Issues.Autonomous limit
 
 
 -- | Save a document through an Observe request, returning its recorded response.

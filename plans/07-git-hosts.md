@@ -75,19 +75,11 @@ which is the same surface a bad token already produces.
 - **Running the write path against a live host.** Reads are now verified against all four real
   APIs; `pushFile` is not, because writing needs a credential. `liveSmokeSpec` covers it and is
   one env-var set away. This is the last thing between the flag and being on by default.
-- **Dropping `0126_git_rename_compat_views.sql`.** Written and reviewed, sitting at
-  `static/migrations-pending/0127_drop_git_rename_compat_views.sql`. It is in a sibling
-  directory rather than `static/migrations/` because the runner applies everything in the
-  migrations directory at start-up: writing it into place now would drop the views out from
-  under the currently-deployed build — exactly how GitHub sync broke during the 0125 work. The
-  file carries its own precondition and the one-line `git mv` that activates it, so this is a
-  scheduled step rather than something to re-derive later.
 
-  Note when renumbering: prod already carries **two** `0125_*` migrations
-  (`0125_git_hosts.sql` and `0125_issue_ack_window.sql`, the latter from a parallel branch that
-  has since landed in the tree). Check `SELECT filename FROM schema_migrations ORDER BY filename DESC`
-  before picking a number. Ours must not be renumbered — it is already recorded in prod under
-  its current name, and re-running it would fail on the already-performed `ALTER TABLE … RENAME`.
+### Compatibility view decision — 4 November 2026
+
+Retain the compatibility views from `0126_git_rename_compat_views.sql`. Removing them provides no functional benefit and requires deployment coordination.
+The unused drop-view proposal is deleted. The applied migration remains unchanged.
 
 
 ## What exists today

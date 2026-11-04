@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -12,7 +12,7 @@ import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, h
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.StackTrace qualified as StackTrace
+import Pkg.ErrorFingerprint qualified as EF
 import PyF qualified
 import Relude
 import Text.Time.Pretty (prettyTimeAuto)
@@ -426,7 +426,7 @@ enterprisePricing =
         "Enterprise"
         "Custom plan for your team"
         (div_ [class_ "flex items-end"] (span_ [class_ "text-4xl text-textStrong"] "Custom") >> div_ [class_ "flex flex-col text-textWeak text-sm"] (span_ [] "pricing"))
-        (div_ $ a_ [class_ "btn btn-primary mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg", href_ "https://monoscope.tech/pricing", target_ "_blank"] "Contact us")
+        (div_ $ a_ [class_ "btn btn-primary mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg", href_ "https://monoscopehq.com/pricing", target_ "_blank"] "Contact us")
         ["Premium features & integrations", "SSO & advanced auth", "Priority support & SLA", "Advanced security & compliance"]
         (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "open source" >> " plus...")
 
@@ -435,7 +435,7 @@ navBar :: Html ()
 navBar =
   nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full px-4 py-4 bg-bgOverlay flex flex-row justify-between"]
     $ div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"]
-    $ a_ [href_ "https://monoscope.tech", class_ "flex items-center text-textWeak hover:text-textStrong"]
+    $ a_ [href_ "https://monoscopehq.com", class_ "flex items-center text-textWeak hover:text-textStrong"]
     $ brandLogo_ "h-12"
 
 
@@ -1391,17 +1391,12 @@ sparkline_ buckets
       | otherwise = show n
 
 
--- | A frame normalised across our two parsers: 'StackTrace.Frame' (Explorer) and
--- @EF.StackFrame@ (Issues, whose issue hash derives from that parse).
-data TraceFrame = TraceFrame {raw :: Text, function :: Maybe Text, file :: Maybe Text, line :: Maybe Int, context :: Maybe Text, inApp :: Bool}
-
-
 -- | Explorer's stack trace: frames from the printed stack, else the span's @code.*@ attributes.
 -- @resAttr@ reads the resource, where the deploy's revision lives, so a snippet shows the
 -- source that threw rather than the source as it is now.
 stackTrace_ :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> (Text -> Maybe Text) -> Text -> Html ()
 stackTrace_ pid svcM attr resAttr stack =
-  stackFrames_ (codeContextUrl pid svcM (StackTrace.revisionFor resAttr)) stack [TraceFrame f.raw f.function f.file f.line Nothing (StackTrace.isInApp f) | f <- StackTrace.framesFor attr stack]
+  stackFrames_ (codeContextUrl pid svcM (EF.revisionFor resAttr)) stack (EF.framesFor attr stack)
 
 
 codeContextUrl :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Text -> Int -> Text
@@ -1413,7 +1408,7 @@ codeContextUrl pid svcM revM path n = "/p/" <> pid.toText <> "/code_context?file
 -- opened — resolving it is an SCM call the panel must not block on. The first in-app frame
 -- starts open; runtime frames keep their call-order position but fold behind a count; the
 -- raw text stays one disclosure away, and is all we show when nothing parsed.
-stackFrames_ :: (Text -> Int -> Text) -> Text -> [TraceFrame] -> Html ()
+stackFrames_ :: (Text -> Int -> Text) -> Text -> [EF.StackFrame] -> Html ()
 stackFrames_ snippetUrl raw frames
   | null frames = rawBlock
   | otherwise = div_ [class_ "group/frames"] do
@@ -1426,26 +1421,26 @@ stackFrames_ snippetUrl raw frames
           span_ [class_ "hidden group-has-[.sys-frames:checked]/frames:inline"] "Hide runtime frames"
       unless (T.null $ T.strip raw) $ div_ [class_ "border-t border-strokeWeak"] $ disclosure_ [] "px-3 py-2 text-xs text-textWeak hover:text-textStrong" "Raw" rawBlock
   where
-    firstInApp = findIndex (.inApp) frames
+    firstInApp = findIndex (.isInApp) frames
     -- Only once something is in-app: folding every frame would leave an empty list.
-    folds f = isJust firstInApp && not f.inApp && isJust f.file
+    folds f = isJust firstInApp && not f.isInApp && not (T.null f.filePath)
     folded = length $ filter folds frames
     rawBlock = pre_ [class_ "max-h-80 overflow-auto text-xs font-mono leading-relaxed whitespace-pre-wrap break-words px-3 py-2"] $ toHtml raw
-    frame_ :: Bool -> TraceFrame -> Html ()
+    frame_ :: Bool -> EF.StackFrame -> Html ()
     frame_ open f = div_ [class_ $ "border-b border-strokeWeak last:border-0 " <> bool "" "hidden group-has-[.sys-frames:checked]/frames:block bg-fillWeaker" (folds f)] do
-      case f.file of
+      case guarded (not . T.null) f.filePath of
         -- An unplaced line keeps its text and gets no disclosure: there is nothing behind it.
         Nothing -> div_ [class_ "px-3 py-1 font-mono text-2xs text-textWeak whitespace-pre-wrap break-words"] $ toHtml f.raw
-        Just path -> disclosure_ [open_ "" | open] "px-3 py-1.5 hover:bg-fillWeaker text-xs" (summary path) case f.line of
+        Just path -> disclosure_ [open_ "" | open] "px-3 py-1.5 hover:bg-fillWeaker text-xs" (summary path) case f.lineNumber of
           Nothing -> div_ [class_ "px-3 pb-2 pl-8 text-2xs text-textWeak italic"] "No source linked for this file."
           Just n -> div_ [class_ "px-3 pb-2", hxGet_ (snippetUrl path n), hxTrigger_ "intersect once", hxTarget_ "this", hxSwap_ "innerHTML"] $ div_ [class_ "pl-5 py-1 text-2xs text-textWeak"] "Loading source…"
-      whenJust f.context $ pre_ [class_ "mx-3 mb-1.5 text-xs font-mono text-textStrong bg-fillWeaker rounded px-2 py-1 overflow-x-auto"] . toHtml
+      whenJust f.contextLine $ pre_ [class_ "mx-3 mb-1.5 text-xs font-mono text-textStrong bg-fillWeaker rounded px-2 py-1 overflow-x-auto"] . toHtml
       where
         summary path = do
-          span_ [class_ $ "font-mono truncate " <> bool "text-textWeak" "text-textStrong font-medium" f.inApp] $ toHtml $ path <> foldMap ((":" <>) . show) f.line
-          whenJust f.function \fn -> span_ [class_ "text-textWeak truncate max-md:hidden"] $ toHtml ("in " <> fn)
+          span_ [class_ $ "font-mono truncate " <> bool "text-textWeak" "text-textStrong font-medium" f.isInApp] $ toHtml $ path <> foldMap ((":" <>) . show) f.lineNumber
+          unless (T.null f.functionName) $ span_ [class_ "text-textWeak truncate max-md:hidden"] $ toHtml ("in " <> f.functionName)
           -- In-app is a path heuristic, so it is labelled rather than encoded only in weight.
-          when f.inApp $ span_ [class_ "ml-auto shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak"] "in app"
+          when f.isInApp $ span_ [class_ "ml-auto shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak"] "in app"
 
 
 -- | Native disclosure with a chevron that turns when open. @attrs@ go on the @\<details\>@

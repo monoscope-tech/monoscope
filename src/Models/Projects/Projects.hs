@@ -179,8 +179,8 @@ import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Pkg.DeriveUtils (DB, SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
+import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.Parser.Stats (Section)
-import Pkg.Sampling qualified as Sampling
 import Relude
 import Servant (FromHttpApiData (..), Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
 import System.Envy (Var)
@@ -483,16 +483,16 @@ dailyUsageOfDay :: DB es => ProjectId -> UTCTime -> Eff es Int
 dailyUsageOfDay pid t = fromMaybe 0 <$> EHasql.interpOne (dailyUsageOfDaySql pid t)
 
 
--- | One pool of a capped project ('Sampling.Tally' plus its key), for the UTC hour containing @now@.
+-- | One pool of a capped project ('IngestBudget.Tally' plus its key), for the UTC hour containing @now@.
 data SamplingTally = SamplingTally {projectId :: ProjectId, isError :: Bool, keptToday, seenYesterdayAhead, seenLastHour, seenThisHour :: Int}
   deriving stock (Generic)
   deriving anyclass (HI.DecodeRow)
 
 
-samplingTallies :: DB es => UTCTime -> V.Vector ProjectId -> Eff es (HM.HashMap (ProjectId, Bool) Sampling.Tally)
+samplingTallies :: DB es => UTCTime -> V.Vector ProjectId -> Eff es (HM.HashMap (ProjectId, Bool) IngestBudget.Tally)
 samplingTallies now pids =
   HM.fromList
-    . map (\(t :: SamplingTally) -> ((t.projectId, t.isError), Sampling.Tally t.keptToday t.seenYesterdayAhead t.seenLastHour t.seenThisHour))
+    . map (\(t :: SamplingTally) -> ((t.projectId, t.isError), IngestBudget.Tally t.keptToday t.seenYesterdayAhead t.seenLastHour t.seenThisHour))
     <$> EHasql.interp
       [HI.sql| WITH b AS (SELECT date_trunc('hour', #{now}::timestamptz, 'UTC') AS h, date_trunc('day', #{now}::timestamptz, 'UTC') AS d)
                SELECT s.project_id, s.is_error,

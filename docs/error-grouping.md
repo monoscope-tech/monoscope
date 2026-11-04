@@ -273,13 +273,13 @@ against.
    are injection-*proof* are the mechanical ones — `routeWordFraction` and
    `shapeAgreementOk` — because they do not consult the model. Confirmations and the
    refute pass both re-read the same attacker-controlled text, so a persistent
-   crafted message can clear them. `errorCanMerge` (`PatternMerge.hs:495`) is the
+   crafted message can clear them. `errorCanMerge` (`Pkg/Drain.hs`) is the
    existing candidate to extend for this.
 5. Apply, quarantine, and still re-check on the existing challenge schedule.
 
 **Use the key-echo parser (`parseGroupReview`), not `parseJudgeResponse`.** An error
 judge already exists but is index-keyed ("same order as the input"), and the
-codebase's own note at `PatternMerge.hs:162` records that small models renumber
+codebase's own note in `Pkg/Drain.hs` records that small models renumber
 batched items — which is why endpoints moved to key echo. Two incompatible parsers
 exist; say which one this ports so an implementer does not pick the disqualified one.
 

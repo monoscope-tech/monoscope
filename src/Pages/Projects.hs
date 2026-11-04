@@ -157,7 +157,7 @@ listProjectsBody sessM projects demoProject showDemoProject restrictedProjectTit
             )
           span_ [class_ "swap-off"] $ faSprite_ "sun-bright" "regular" "h-5 w-5"
           span_ [class_ "swap-on"] $ faSprite_ "moon-stars" "regular" "h-5 w-5"
-        a_ [class_ "btn btn-ghost btn-sm", href_ "https://monoscope.tech/docs/", target_ "_blank"] "Docs"
+        a_ [class_ "btn btn-ghost btn-sm", href_ "https://monoscopehq.com/docs/", target_ "_blank"] "Docs"
         a_ [class_ "btn btn-ghost btn-sm text-textError", href_ "/logout"] "Logout"
 
   section_ [id_ "main-content", class_ "mx-auto max-md:px-2 px-4 py-6 pb-36 pt-20 overflow-y-auto h-full"] do

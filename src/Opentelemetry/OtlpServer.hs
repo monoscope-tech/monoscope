@@ -75,10 +75,10 @@ import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), unUUIDId)
-import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.LiveTail qualified as LiveTail
+import Pkg.Metrics (wireTypeErrorsRef)
 import Pkg.Metrics qualified as Metrics
-import Pkg.TraceSessionCache qualified as TSC
+import Pkg.QueryCache qualified as QueryCache
 import ProcessMessage (fetchIngestCaches, overFreeTierQuota, sampleMetrics, sampleSpans, stampHashesAtIngest, urlPathFromRawUrl)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
@@ -247,7 +247,7 @@ getMetricApiKey !rms = V.mapMaybe (\rm -> getApiKeyAttr (rm ^. PMF.resource . PR
 -- | Best-effort session stamping; falls back to unstamped spans on failure (backfill timer catches them).
 stampOrPassthrough :: (IOE :> es, Log :> es, Time.Time :> es) => AuthContext -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es (V.Vector Telemetry.OtelLogsAndSpans)
 stampOrPassthrough appCtx v =
-  try (TSC.lookupAndStamp appCtx.traceSessionCache v) >>= \case
+  try (QueryCache.lookupAndStamp appCtx.traceSessionCache v) >>= \case
     Right stamped -> pure stamped
     Left (e :: SomeException) -> do
       Log.logAttention "trace-session-cache:stamp-failed" (AE.object ["error" AE..= show @Text e, "span_count" AE..= V.length v])

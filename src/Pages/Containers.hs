@@ -174,7 +174,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       { icon = "cube"
                       , title = "No containers reporting"
                       , description = "Point an OpenTelemetry Collector with the kubeletstats, k8s_cluster or docker_stats receivers at this project and your containers appear here."
-                      , action = ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Collector setup guide"
+                      , action = ESLink "https://monoscopehq.com/docs/sdks/infrastructure/kubernetes" "Collector setup guide"
                       }
               }
         }

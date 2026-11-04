@@ -48,7 +48,6 @@ import Network.HTTP.Types.URI (urlEncode)
 import OpenAI.V1.Chat.Completions qualified as OpenAI
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
-import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.Git qualified as Git
@@ -373,12 +372,12 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                             services <- requireActive run execution >> authorizedServices run mappings
                             if null services
                               then pure $ Left "Project memory authorization is no longer available"
-                              else AI.executeNativeOperation context (Operation.WriteWiki $ Operation.WikiWrite attemptId edit) \case
-                                Operation.WriteWiki write ->
+                              else AI.executeNativeOperation context (Catalog.WriteWiki $ Catalog.WikiWrite attemptId edit) \case
+                                Catalog.WriteWiki write ->
                                   AI.ReconcilableOperation
                                     (AI.AtomicOperation $ writeWiki context write)
                                     (\original -> reconcileComment run conn original <* unlessM (not . null <$> authorizedServices run mappings) (throwError $ ReviewFailure "Project memory authorization is no longer available"))
-                                (Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+                                (Catalog.PublishPullRequestComment{}; Catalog.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
                           (Agent.ProjectMemory Memory.List; Agent.ProjectMemory Memory.Search{}; Agent.ProjectMemory Memory.Read{}; Agent.Recall{}; Agent.Remember{}) ->
                             requestKnowledge context attemptId (Git.RepoRef run.owner run.repo run.revision) (requireActive run execution >> authorizedServices run mappings) evidence request
                   )
@@ -457,10 +456,10 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
               void $ require . first AI.toolDenialMessage =<< AI.authorizeRunOperation context Catalog.ExternalPublication
               let runLink = "\n\n[Run and artifacts](" <> T.dropWhileEnd (== '/') cfg.hostUrl <> "/p/" <> run.projectId.toText <> "/ai/runs/" <> context.rootId.toText <> ")"
                   body = marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink
-                  comment = Operation.ReviewComment run.id body
+                  comment = Catalog.ReviewComment run.id body
               response <-
-                either (throwError . ReviewPublicationRefused) pure =<< AI.executeNativeOperation context (Operation.PublishPullRequestComment comment) \case
-                  Operation.PublishPullRequestComment frozen ->
+                either (throwError . ReviewPublicationRefused) pure =<< AI.executeNativeOperation context (Catalog.PublishPullRequestComment comment) \case
+                  Catalog.PublishPullRequestComment frozen ->
                     AI.ReconcilableOperation
                       ( AI.EffectfulOperation do
                           unless (frozen == comment) $ throwIO Investigations.OperationProposalChanged
@@ -470,17 +469,17 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                           pure $ Right $ AE.toJSON published
                       )
                       (reconcileComment run conn)
-                  (Operation.WriteWiki{}; Operation.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+                  (Catalog.WriteWiki{}; Catalog.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
               cid <- require $ first toText $ AET.parseEither AE.parseJSON response
               Reviews.finishRun run (Just cid)
-    reconcileComment :: (Error ReviewFailure :> es, HTTP.HTTP :> es, Reader AuthContext :> es) => Reviews.ReviewRun -> Git.GitConn -> Operation.OperationCall -> Eff es (Maybe (Either Text AE.Value))
+    reconcileComment :: (Error ReviewFailure :> es, HTTP.HTTP :> es, Reader AuthContext :> es) => Reviews.ReviewRun -> Git.GitConn -> Catalog.OperationCall -> Eff es (Maybe (Either Text AE.Value))
     reconcileComment run conn = \case
-      Operation.NativeCall (Operation.PublishPullRequestComment retained) | retained.reviewId == run.id -> do
+      Catalog.NativeCall (Catalog.PublishPullRequestComment retained) | retained.reviewId == run.id -> do
         cfg <- (.config) <$> ask @AuthContext
         appId <- maybe (throwError $ ReviewFailure "GITHUB_APP_ID must be numeric") pure $ readMaybe @Int64 $ toString cfg.githubAppId
         observed <- either (throwError . ReviewFailure) pure =<< Git.listPullRequestComments conn (Git.RepoRef run.owner run.repo run.revision) run.number
         pure $ Right . AE.toJSON . (.id) <$> find (\comment -> fmap (.id) comment.performedViaGithubApp == Just appId && comment.body == retained.body) observed
-      (Operation.ModelCall{}; Operation.NativeCall Operation.WriteWiki{}; Operation.NativeCall Operation.EnrichIssue{}; Operation.NativeCall Operation.PublishPullRequestComment{}) -> pure Nothing
+      (Catalog.ModelCall{}; Catalog.NativeCall Catalog.WriteWiki{}; Catalog.NativeCall Catalog.EnrichIssue{}; Catalog.NativeCall Catalog.PublishPullRequestComment{}) -> pure Nothing
 
     requireActive :: (DB es, Error ReviewFailure :> es) => Reviews.ReviewRun -> Issues.EventRun -> Eff es ()
     requireActive run execution = do
@@ -670,9 +669,9 @@ projectMemory context attempt authorized request = do
         case viaNonEmpty head history of
           Nothing -> pure $ Left "Wiki page not found"
           Just current -> visible $ AE.toJSON current
-      Memory.Write edit -> AI.executeNativeOperation context (Operation.WriteWiki $ Operation.WikiWrite attempt edit) \case
-        Operation.WriteWiki write -> AI.AtomicOperation $ writeWiki context write
-        (Operation.PublishPullRequestComment{}; Operation.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+      Memory.Write edit -> AI.executeNativeOperation context (Catalog.WriteWiki $ Catalog.WikiWrite attempt edit) \case
+        Catalog.WriteWiki write -> AI.AtomicOperation $ writeWiki context write
+        (Catalog.PublishPullRequestComment{}; Catalog.EnrichIssue{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
   where
     listing query = Memory.discoverPages context.projectId query >>= visible . AE.toJSON . map Memory.summarize
     visible value = do
@@ -680,7 +679,7 @@ projectMemory context attempt authorized request = do
       pure $ if permitted then Right value else Left "Project memory authorization is no longer available"
 
 
-writeWiki :: Issues.RunContext -> Operation.WikiWrite -> Tx.Transaction (Either Text AE.Value)
+writeWiki :: Issues.RunContext -> Catalog.WikiWrite -> Tx.Transaction (Either Text AE.Value)
 writeWiki context write = response <$> Memory.writeRunPageTx context.projectId context.id write.edit
   where
     response = \case

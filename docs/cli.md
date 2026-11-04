@@ -413,6 +413,60 @@ monoscope monitors bulk mute --ids id1,id2,id3 --duration 60
 monoscope monitors bulk resolve --ids id1,id2
 ```
 
+Monitor files group related configuration under three keys:
+
+- `condition`: query, unit, thresholds, comparison direction, and recovery thresholds.
+- `evaluation`: check interval, lookback window, and sustained threshold duration, all in minutes.
+- `notify`: alert text, recipients, repeat interval, and notification limit.
+
+```yaml
+title: High error rate
+severity: critical
+active: true
+
+condition:
+  query: >-
+    severity.severity_text == "error"
+  alert_threshold: 10
+  trigger_less_than: false
+
+evaluation:
+  check_interval_mins: 5
+  time_window_mins: 15
+  threshold_sustained_for_mins: 2
+
+notify:
+  subject: Error rate elevated
+  message: Check the error logs.
+  email_all: true
+```
+
+The required fields are `title`, `condition.query`, `condition.alert_threshold`,
+`condition.trigger_less_than`, `evaluation.check_interval_mins`, and
+`evaluation.time_window_mins`. All other fields are optional.
+Keep `severity`, `active`, `environment`, `service`, and `visualization_type` at the top level.
+Put `unit` inside `condition`.
+
+Without `notify`, the monitor has no notification recipients. Omitted recipient
+lists default to empty. The other defaults match the flat configuration:
+`severity: error`, `active: true`, `visualization_type: timeseries`,
+`threshold_sustained_for_mins: 0`, `email_all: false`, the title as the subject,
+and an empty message. Recovery thresholds and notification repeat limits are unset.
+
+`create`, `update`, `apply`, and repository sync accept both nested and existing flat files.
+A nested file rejects unknown fields and fields placed in the wrong group.
+`patch` continues to use flat fields.
+
+To export a monitor in the nested format, run:
+
+```bash
+monoscope monitors yaml <id> > monitor.yaml
+monoscope monitors apply monitor.yaml
+```
+
+Exports omit unset optional fields, empty recipient lists, and the default
+`visualization_type: timeseries`. See [example monitors](examples/monitors/).
+
 ---
 
 ## Dashboards

@@ -127,7 +127,7 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Apis.MonitorDefinitions (compileAlertSql, monitorFromInput, monitorToInput)
+import Models.Apis.MonitorDefinitions (compileAlertSql, monitorConfig, monitorFromInput, monitorToInput)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Apis.ShareEvents qualified as ShareEvents
@@ -144,8 +144,9 @@ import Pages.Replay qualified as Replay
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..))
+import Pkg.MonitorConfig (MonitorConfig)
 import Pkg.Parser.Expr qualified as ParserExpr
-import Pkg.SchemaLearning.Catalog qualified as Fields
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude hiding (ask, id)
 import Servant (Capture, Delete, Description, Get, HasServer (..), Header, Headers, JSON, NamedRoutes, NoContent (..), Optional, Patch, Post, Put, QueryParam, QueryParam', ReqBody, ServerError (..), Strict, addHeader, err400, err401, err403, err404, (:-), (:>))
 import Servant.OpenApi (HasOpenApi (..), toOpenApi)
@@ -229,8 +230,8 @@ data ApiV1Routes mode = ApiV1Routes
   , monitorGet :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Get '[JSON] Monitors.QueryMonitor
   , monitorCreate :: mode :- "monitors" :> ReqBody '[JSON] MonitorInput :> Post '[JSON] Monitors.QueryMonitor
   , monitorApply :: mode :- "monitors" :> "apply" :> ReqBody '[JSON] MonitorInput :> Post '[JSON] Monitors.QueryMonitor
-  , monitorYaml :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] MonitorInput
-  -- ^ /yaml returns the applyable MonitorInput as JSON (same for dashboards);
+  , monitorYaml :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] MonitorConfig
+  -- ^ /yaml returns the applyable configuration as JSON (same for dashboards);
   -- the CLI renders it as YAML client-side via runYamlDump.
   , monitorUpdate :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] MonitorInput :> Put '[JSON] Monitors.QueryMonitor
   , monitorPatch :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] MonitorPatch :> Patch '[JSON] Monitors.QueryMonitor
@@ -592,10 +593,10 @@ apiMonitorApply pid inp =
 
 -- | Inverse of 'monitorFromInput': dump a monitor as the applyable input
 -- shape, so `monitors yaml ID > m.yaml && monitors apply m.yaml` round-trips.
-apiMonitorYaml :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx MonitorInput
+apiMonitorYaml :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx MonitorConfig
 apiMonitorYaml pid mid = do
   m <- apiMonitorGet pid mid
-  pure $ monitorToInput m
+  pure $ monitorConfig $ monitorToInput m
 
 
 -- | PATCH — merge fields into existing monitor.
@@ -1450,7 +1451,7 @@ apiFacets pid sinceM fromM toM fieldM = do
       defaultFrom = fromMaybe (addUTCTime (negate nominalDay) now) fromT
       defaultTo = fromMaybe now toT
   summaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" defaultFrom defaultTo
-  let Fields.FacetData facetMap = maybe (Fields.FacetData mempty) (.facetJson) summaryM
+  let SchemaLearning.FacetData facetMap = maybe (SchemaLearning.FacetData mempty) (.facetJson) summaryM
       -- Storage uses `___` as the path separator (raw column names like
       -- `resource___service___name`); the public API contract is dotted.
       dotKey = AEK.fromText . T.replace "___" "." . AEK.toText

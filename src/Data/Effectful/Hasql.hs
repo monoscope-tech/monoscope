@@ -35,6 +35,15 @@ module Data.Effectful.Hasql (
   executeTx,
   withHasqlTimefusion,
   withLabeled,
+
+  -- * Test clock
+  TestClock,
+  newTestClock,
+  advanceTime,
+  setTestTime,
+  getTestTime,
+  runMutableTime,
+  runHasqlPoolSynced,
 ) where
 
 import Control.Exception (ErrorCall (..))
@@ -45,6 +54,7 @@ import Data.Effectful.Sleep (Sleep, monotonicMicros, runSleep, sleepMicros)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Text.Display (Display)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -54,10 +64,13 @@ import Effectful.Exception qualified as EE
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
+import Effectful.Time (Time (..))
+import GHC.Clock (getMonotonicTime)
 import Hasql.Errors (IsError (..), ServerError (..), SessionError (..), StatementError (..), toDetailedText)
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool (UsageError (..))
 import Hasql.Session (Session)
+import Hasql.Session qualified as Session
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
@@ -437,3 +450,62 @@ retryTransientLoop budgetMicros msg key label act = do
 retryTransientEff :: (IOE :> es, Log :> es) => Int -> Text -> Eff es a -> Eff es a
 retryTransientEff budgetMicros op act =
   either UnliftIO.throwIO pure =<< runSleep (retryTransientLoop budgetMicros "retryTransientEff: transient read error, retrying" "op" op (raise act))
+
+
+-- Mutable test clock for unified time testing.
+--
+-- Provides a controllable, advanceable clock backed by an 'IORef UTCTime'.
+-- In tests, use 'runMutableTime' instead of 'runFrozenTime' to get a clock
+-- that can be fast-forwarded with 'advanceTime'.
+--
+-- The companion migration 0094_app_now_function.sql defines a PostgreSQL
+-- @app_now()@ that reads the @app.current_time@ GUC. 'runHasqlPoolSynced' pushes
+-- the clock into that GUC before every Session, so triggers and stored
+-- procedures see the same clock as the Haskell effect. 'Pkg.TestUtils' wires it
+-- for all test DB access, which is why time-sensitive SQL in specs already
+-- observes 'advanceTime'.
+
+newtype TestClock = TestClock (IORef UTCTime)
+
+
+newTestClock :: UTCTime -> IO TestClock
+newTestClock t = TestClock <$> newIORef t
+
+
+advanceTime :: TestClock -> NominalDiffTime -> IO ()
+advanceTime (TestClock ref) dt = modifyIORef' ref (addUTCTime dt)
+
+
+setTestTime :: TestClock -> UTCTime -> IO ()
+setTestTime (TestClock ref) = writeIORef ref
+
+
+getTestTime :: TestClock -> IO UTCTime
+getTestTime (TestClock ref) = readIORef ref
+
+
+-- | 'MonotonicTime' stays on the real clock; only 'CurrentTime' is controllable.
+runMutableTime :: IOE :> es => TestClock -> Eff (Time ': es) a -> Eff es a
+runMutableTime clock = interpret $ \_ -> \case
+  CurrentTime -> liftIO $ getTestTime clock
+  MonotonicTime -> liftIO getMonotonicTime
+
+
+-- | Hasql twin of 'runHasqlPool' that pushes the test clock into the
+-- @app.current_time@ GUC before each Session. Use in tests that exercise
+-- triggers / stored procedures going through @app_now()@. The setting is
+-- session-scoped (@is_local=false@) so it survives the auto-commit boundary
+-- between the @SET@ and the user's Session, but every call re-sets it so
+-- the pool may freely rotate connections without contaminating tests.
+runHasqlPoolSynced :: forall es a. IOE :> es => TestClock -> TracedPool -> Eff (Hasql ': es) a -> Eff es a
+runHasqlPoolSynced clock pool = interpret \_ -> \case
+  UseSession s -> withClock $ \pre -> OHasql.use pool (pre *> s)
+  UseStatement p st -> withClock $ \pre -> OHasql.use pool (pre *> Session.statement p st)
+  UseLabeledSession n xs s -> withClock $ \pre -> OHasql.useSession pool n xs (pre *> s)
+  where
+    withClock :: forall r. (Session.Session () -> IO r) -> Eff es r
+    withClock run = liftIO $ do
+      t <- getTestTime clock
+      let timeStr = formatTime defaultTimeLocale "%F %T%Q+00" t
+          setStmt = "SELECT set_config('app.current_time', '" <> toText timeStr <> "', false)"
+      run (Session.script setStmt)

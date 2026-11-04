@@ -37,7 +37,6 @@ import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.QueryCache qualified as QueryCache
-import Pkg.TraceSessionCache qualified as TraceSessionCache
 import Relude
 import System.Clock (TimeSpec (TimeSpec))
 import System.Directory (getDirectoryContents)
@@ -270,7 +269,7 @@ data EnvConfig = EnvConfig
   -- many seconds. Updates to already-compressed chunks force TimescaleDB to
   -- decompress them; capping at ~2h keeps writes on the hot, uncompressed
   -- tail.
-  , -- Schema-learning knobs (see "Pkg.SchemaLearning.Hot").
+  , -- Schema-learning knobs (see "Pkg.SchemaLearning").
     enableSchemaLearning :: Bool
   -- ^ Kill switch for the in-process schema-learning pipeline. When False,
   -- 'observeSpans' is skipped on the hot path and the flush fiber doesn't
@@ -470,7 +469,7 @@ data AuthContext = AuthContext
   -- here closes a cycle through 'Models.Projects.ProjectApiKeys'.
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , extractionWorker :: ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans
-  , traceSessionCache :: TraceSessionCache.TraceSessionCache
+  , traceSessionCache :: QueryCache.TraceSessionCache
   , tfCircuit :: ExtractionWorker.CircuitBreaker
   , ingestBudget :: IngestBudget.IngestBudget
   , metricCatalogBuffer :: Telemetry.MetricCatalogBuffer
@@ -583,7 +582,7 @@ configToEnv config = do
   -- added to the installation while the page is open is one reload away either way.
   repoListCache <- liftIO $ newCache (Just $ TimeSpec (10 * 60) 0)
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
-  traceSessionCache <- liftIO TraceSessionCache.newTraceSessionCache
+  traceSessionCache <- liftIO QueryCache.newTraceSessionCache
   tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
   ingestBudget <- liftIO IngestBudget.newIngestBudget
   metricCatalogBuffer <- liftIO Telemetry.newMetricCatalogBuffer

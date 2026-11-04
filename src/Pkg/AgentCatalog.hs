@@ -28,6 +28,11 @@ module Pkg.AgentCatalog (
   policiesByName,
   policyForCall,
   schemaObject,
+  OperationCall (ModelCall, NativeCall),
+  NativeOperation (..),
+  WikiWrite (..),
+  ReviewComment (..),
+  sameOperation,
 ) where
 
 import Data.Aeson qualified as AE
@@ -35,11 +40,13 @@ import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Map.Strict qualified as Map
+import Deriving.Aeson qualified as DAE
 import Langchain.LLM.Core qualified as LLM
+import Models.Apis.IssueEnhancement.Types qualified as Enhancement
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.ProjectMemory qualified as Memory
 import Network.HTTP.Types (renderStdMethod)
-import Pkg.AgentOperation qualified as Operation
-import Pkg.DeriveUtils (WrappedEnumSC (..), constructorName, encodeEnumSC)
+import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), constructorName, encodeEnumSC)
 import Relude
 import Text.Casing (quietSnake)
 import Web.HttpApiData (FromHttpApiData)
@@ -51,6 +58,11 @@ import Web.Operations qualified as Operations
 -- >>> import Models.Projects.ProjectMembers qualified as ProjectMembers
 -- >>> import Data.Aeson qualified as AE
 -- >>> import Data.Either (isLeft)
+-- >>> import Data.Map.Strict qualified as Map
+-- >>> import Data.UUID qualified as UUID
+-- >>> import Pkg.DeriveUtils (UUIDId (..))
+-- >>> import Langchain.LLM.Core qualified as LLM
+-- >>> let call = LLM.ToolCall "legacy" "function" (LLM.ToolFunction "save_artifact" Map.empty)
 
 
 data Tool operation = Tool
@@ -95,7 +107,7 @@ data AgentPolicy
   | ExternalPublication
   | Administration ProjectMembers.Permissions
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.ToJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data ReviewApprover = ReviewEditors | ReviewAdministrators
@@ -127,20 +139,6 @@ reviewClass = \case
   ProjectWrite -> Just ProjectChanges
   ExternalPublication -> Just ExternalPosts
   Administration{} -> Just AdministrativeChanges
-
-
--- | Historical administration snapshots did not describe their result audience.
---
--- >>> AE.eitherDecode @AgentPolicy "{\"tag\":\"Administration\"}"
--- Right (Administration PAdmin)
--- >>> AE.fromJSON (AE.toJSON (Administration ProjectMembers.PView)) == AE.Success (Administration ProjectMembers.PView)
--- True
--- >>> isLeft (AE.eitherDecode @AgentPolicy "{\"tag\":\"Administration\",\"contents\":\"owner\"}")
--- True
-instance AE.FromJSON AgentPolicy where
-  parseJSON (AE.Object fields)
-    | KM.lookup "tag" fields == Just (AE.String "Administration"), not (KM.member "contents" fields) = pure $ Administration ProjectMembers.PAdmin
-  parseJSON value = AE.genericParseJSON AE.defaultOptions value
 
 
 -- | Mutation classes fix their minimum roles; callers cannot choose a weaker one.
@@ -237,18 +235,18 @@ localPolicy = \case
   (GetFieldValues; GetServices; CountQuery; SampleLogs; GetFacets; RunQuery; RunSqlQuery; GetInvestigationHistory; GetRelatedIncidents; GetIncidentContext; ReadArtifact; SearchProjectTools; GetProjectToolSchema; GetCodeContext; ListRunbooks; ReadRunbook; GetLinkedRepositories; GetDeployments; ListProjectMemory; ReadProjectMemory) -> ReadOnly ProjectMembers.PView
 
 
-operationName :: Operation.OperationCall -> Text
+operationName :: OperationCall -> Text
 operationName = \case
-  Operation.ModelCall call -> LLM.toolFunctionName $ LLM.toolCallFunction call
-  Operation.NativeCall (Operation.WriteWiki _) -> toText $ encodeEnumSC @"" WriteProjectMemory
-  Operation.NativeCall native -> toText $ quietSnake $ constructorName native
+  ModelCall call -> LLM.toolFunctionName $ LLM.toolCallFunction call
+  NativeCall (WriteWiki _) -> toText $ encodeEnumSC @"" WriteProjectMemory
+  NativeCall native -> toText $ quietSnake $ constructorName native
 
 
-nativePolicy :: Operation.NativeOperation -> AgentPolicy
+nativePolicy :: NativeOperation -> AgentPolicy
 nativePolicy = \case
-  Operation.WriteWiki _ -> localPolicy WriteProjectMemory
-  Operation.PublishPullRequestComment _ -> ExternalPublication
-  Operation.EnrichIssue _ -> ProjectWrite
+  WriteWiki _ -> localPolicy WriteProjectMemory
+  PublishPullRequestComment _ -> ExternalPublication
+  EnrichIssue _ -> ProjectWrite
 
 
 localTools :: Map Text (Tool LocalOperation)
@@ -303,10 +301,10 @@ compositeTools =
     composite name description props required = Tool name description (propsSchema props required) (Just $ ReadOnly ProjectMembers.PView)
 
 
-policyForCall :: Operation.OperationCall -> Maybe AgentPolicy
+policyForCall :: OperationCall -> Maybe AgentPolicy
 policyForCall = \case
-  Operation.ModelCall call -> join $ Map.lookup (LLM.toolFunctionName $ LLM.toolCallFunction call) policiesByName
-  Operation.NativeCall operation -> Just $ nativePolicy operation
+  ModelCall call -> join $ Map.lookup (LLM.toolFunctionName $ LLM.toolCallFunction call) policiesByName
+  NativeCall operation -> Just $ nativePolicy operation
 
 
 policiesByName :: Map Text (Maybe AgentPolicy)
@@ -327,3 +325,58 @@ schemaObject props requireds =
     , "properties" AE..= AE.Object props
     , "required" AE..= requireds
     ]
+
+
+data WikiWrite = WikiWrite {attemptId :: UUIDId "agent_attempt", edit :: Memory.Edit}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data ReviewComment = ReviewComment {reviewId :: UUIDId "pr_review", body :: Text}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data NativeOperation = WriteWiki WikiWrite | PublishPullRequestComment ReviewComment | EnrichIssue Enhancement.IssueEnrichment
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.TagSingleConstructors] NativeOperation
+
+
+-- | Model proposals keep their historical untagged wire format; a native call is persisted as
+-- @{"tag":"NativeCall","contents":…}@, which no 'LLM.ToolCall' parses as.
+--
+-- >>> let legacy = "{\"id\":\"legacy\",\"type\":\"function\",\"function\":{\"name\":\"save_artifact\",\"arguments\":{}}}"
+-- >>> AE.eitherDecode @OperationCall legacy == Right (ModelCall call)
+-- True
+-- >>> AE.eitherDecode @AE.Value (AE.encode (ModelCall call)) == AE.eitherDecode @AE.Value legacy
+-- True
+-- >>> let native = NativeCall (PublishPullRequestComment (ReviewComment (UUIDId UUID.nil) "b"))
+-- >>> AE.toJSON native == AE.object ["tag" AE..= ("NativeCall" :: Text), "contents" AE..= AE.object ["tag" AE..= ("PublishPullRequestComment" :: Text), "contents" AE..= AE.object ["reviewId" AE..= UUID.nil, "body" AE..= ("b" :: Text)]]]
+-- True
+-- >>> AE.eitherDecode (AE.encode native) == Right native
+-- True
+-- >>> isLeft (AE.eitherDecode @OperationCall "{\"tag\":\"UnsupportedNativeCall\"}")
+-- True
+data OperationCall = ModelCall LLM.ToolCall | NativeEnvelope Native
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.SumUntaggedValue] OperationCall
+
+
+newtype Native = Native NativeOperation
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.TagSingleConstructors, DAE.ConstructorTagModifier (DAE.Rename "Native" "NativeCall")] Native
+
+
+pattern NativeCall :: NativeOperation -> OperationCall
+pattern NativeCall operation = NativeEnvelope (Native operation)
+
+
+{-# COMPLETE ModelCall, NativeCall #-}
+
+
+-- Transport call IDs and worker attempts do not create another domain action.
+sameOperation :: OperationCall -> OperationCall -> Bool
+sameOperation (ModelCall left) (ModelCall right) = left.toolCallFunction == right.toolCallFunction
+sameOperation (NativeCall (WriteWiki left)) (NativeCall (WriteWiki right)) = left.edit == right.edit
+sameOperation (NativeCall left) (NativeCall right) = left == right
+sameOperation _ _ = False

@@ -57,10 +57,9 @@ import Pages.Telemetry qualified as TelemetryPage
 import Pkg.DeriveUtils (AesonText (..), mkHasqlPool, rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.ExtractionWorker qualified as ExtractionWorker
-import Pkg.PatternMerge qualified as PatternMerge
+import Pkg.QueryCache qualified as QueryCache
 import Pkg.Queue qualified as Queue
 import Pkg.TestUtils
-import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage (PathClassifier (..), emptyPathClassifier, processMessages, processSpanToEntities, stampHashesAtIngest)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
@@ -148,7 +147,7 @@ spec = do
     let batch = V.fromList [("first", "Connected to database primary"), ("second", "Connected to database replica"), ("third", "Connected to database <*> <*>")]
         build = Drain.buildDrainBatch (V.fromList . T.words . snd) fst (Just . snd)
         (tree, patterns) = build Drain.emptyDrainTree batch frozenTime
-        merged = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold patterns
+        merged = Drain.mergeByJaccard Drain.jaccardMergeThreshold patterns
         members = concatMap (V.toList . (.logIds)) . V.toList
         frequency = sum . map (.frequency) . V.toList
     (V.length merged, frequency merged) `shouldBe` (1, 3)
@@ -162,13 +161,13 @@ spec = do
     members evicted `shouldMatchList` V.toList (V.map fst evictionBatch)
     members (snd $ build Drain.emptyDrainTree repeated frozenTime) `shouldMatchList` V.toList (V.map fst repeated)
     -- 300s idle evicts t0; then an LRU cap of 1 keeps only the newest.
-    cache <- TSC.newTraceSessionCache
-    let info t = TSC.TraceSessionInfo (Just "s") Nothing Nothing Nothing Nothing t
+    cache <- QueryCache.newTraceSessionCache
+    let info t = QueryCache.TraceSessionInfo (Just "s") Nothing Nothing Nothing Nothing t
         now = addUTCTime 400 frozenTime
     atomicModifyIORef' cache $ const (HM.fromList [(("p", "tr" <> show i), info (addUTCTime (100 * fromIntegral i) frozenTime)) | i <- [0 .. 2 :: Int]], ())
-    TSC.evictStaleEntries cache 300 10 now `shouldReturn` 1
+    QueryCache.evictStaleEntries cache 300 10 now `shouldReturn` 1
     sort . HM.keys <$> readIORef cache `shouldReturn` [("p", "tr1"), ("p", "tr2")]
-    TSC.evictStaleEntries cache 300 1 now `shouldReturn` 1
+    QueryCache.evictStaleEntries cache 300 1 now `shouldReturn` 1
     HM.keys <$> readIORef cache `shouldReturn` [("p", "tr2")]
 
   around withTestResources do

@@ -40,7 +40,7 @@ import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
-import Pkg.SchemaLearning.Catalog qualified as Catalog
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude hiding (id)
 import System.Types (DB)
 import Web.HttpApiData (FromHttpApiData (..))
@@ -90,8 +90,8 @@ data AnomalyVM = AnomalyVM
   , endpointUrlPath :: Maybe Text
   , endpointHost :: Maybe Text
   , serviceName :: Maybe Text
-  , keyKind :: Maybe Catalog.KeyKind
-  , scope :: Maybe (Aeson Catalog.Scope)
+  , keyKind :: Maybe SchemaLearning.KeyKind
+  , scope :: Maybe (Aeson SchemaLearning.Scope)
   , newFields :: V.Vector Text
   , modifiedFields :: V.Vector Text
   , fieldEvidence :: Aeson (V.Vector FieldEvidence)
@@ -101,17 +101,17 @@ data AnomalyVM = AnomalyVM
 
 
 -- | HTTP and non-HTTP schema observations have different telemetry identities.
-data SchemaSubject = EndpointSchema Catalog.Scope | SpanSchema Catalog.Scope
+data SchemaSubject = EndpointSchema SchemaLearning.Scope | SpanSchema SchemaLearning.Scope
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
 
 
-schemaSubject :: Catalog.KeyKind -> Catalog.Scope -> SchemaSubject
-schemaSubject Catalog.HttpEndpoint = EndpointSchema
-schemaSubject Catalog.SpanIdentity = SpanSchema
+schemaSubject :: SchemaLearning.KeyKind -> SchemaLearning.Scope -> SchemaSubject
+schemaSubject SchemaLearning.HttpEndpoint = EndpointSchema
+schemaSubject SchemaLearning.SpanIdentity = SpanSchema
 
 
-spanSchemaTitle :: Catalog.Scope -> Text
+spanSchemaTitle :: SchemaLearning.Scope -> Text
 spanSchemaTitle scope = "Span schema changed" <> foldMap (": " <>) scope.spanName
 
 
@@ -126,20 +126,20 @@ data FieldEvidence = FieldEvidence
 
 
 data FieldSnapshot = FieldSnapshot
-  { structure :: !Catalog.FieldStruct
+  { structure :: !SchemaLearning.FieldStruct
   , examples :: !(V.Vector AE.Value)
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
 
 
-fieldSnapshot :: Text -> Catalog.CatalogEntry -> Maybe FieldSnapshot
+fieldSnapshot :: Text -> SchemaLearning.CatalogEntry -> Maybe FieldSnapshot
 fieldSnapshot path entry = (\structure -> FieldSnapshot structure (maybe V.empty (.values) $ HM.lookup path entry.valuesDelta)) <$> HM.lookup path entry.template.fields
 
 
 -- | Read VM rows for the anomalies UI.
 --
--- target_hash conventions (set by @Pkg.SchemaLearning.Worker@):
+-- target_hash conventions (set by @Models.Apis.SchemaCatalog.flushDirty@):
 --   * endpoint → @keyHash@                              (== endpoints.hash for HTTP)
 --   * shape    → @keyHash:s:<templateHash[:8]>@
 --   * field    → @keyHash:f:<xxhash(fieldPath)[:8]>@

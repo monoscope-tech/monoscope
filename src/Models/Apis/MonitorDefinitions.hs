@@ -1,9 +1,12 @@
-module Models.Apis.MonitorDefinitions (MonitorInput (..), monitorFromInput, monitorToInput, compileAlertSql) where
+module Models.Apis.MonitorDefinitions (MonitorInput (..), monitorConfig, monitorFromInput, monitorToInput, compileAlertSql) where
 
+import Control.Lens ((?~))
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.CaseInsensitive qualified as CI
-import Data.Default (Default)
-import Data.OpenApi (ToSchema)
+import Data.Default (Default (..))
+import Data.OpenApi (ToSchema (..))
+import Data.OpenApi qualified as OpenApi
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
@@ -11,6 +14,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (SnakeJSON (..), SnakeSchema (..))
+import Pkg.MonitorConfig (MonitorCondition (..), MonitorConfig (..), MonitorEvaluation (..), MonitorNotification (..))
 import Pkg.Parser qualified as Parser
 import Relude
 
@@ -45,7 +49,97 @@ data MonitorInput = MonitorInput
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
-  deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON SnakeSchema MonitorInput
+  deriving (AE.ToJSON) via SnakeJSON SnakeSchema MonitorInput
+
+
+instance ToSchema MonitorInput where
+  declareNamedSchema _ = do
+    OpenApi.NamedSchema _ flat <- declareNamedSchema (Proxy @(SnakeSchema MonitorInput))
+    nested <- OpenApi.declareSchemaRef (Proxy @MonitorConfig)
+    pure $ OpenApi.NamedSchema (Just "MonitorInput") $ mempty & OpenApi.oneOf ?~ [OpenApi.Inline flat, nested]
+
+
+-- | Flat API requests remain valid; as-code documents group related settings.
+-- Mixed documents are rejected so an accidentally misplaced field cannot be ignored.
+instance AE.FromJSON MonitorInput where
+  parseJSON = AE.withObject "MonitorInput" \obj ->
+    if any (`KM.member` obj) ["condition", "evaluation", "notify"]
+      then configInput <$> AE.parseJSON (AE.Object obj)
+      else coerce <$> AE.parseJSON @(SnakeJSON SnakeSchema MonitorInput) (AE.Object obj)
+    where
+      configInput :: MonitorConfig -> MonitorInput
+      configInput cfg =
+        let notification = fromMaybe def cfg.notify
+         in MonitorInput
+              { title = cfg.title
+              , severity = cfg.severity
+              , active = cfg.active
+              , environment = cfg.environment
+              , service = cfg.service
+              , query = cfg.condition.query
+              , unit = cfg.condition.unit
+              , alertThreshold = cfg.condition.alertThreshold
+              , warningThreshold = cfg.condition.warningThreshold
+              , triggerLessThan = cfg.condition.triggerLessThan
+              , alertRecoveryThreshold = cfg.condition.alertRecoveryThreshold
+              , warningRecoveryThreshold = cfg.condition.warningRecoveryThreshold
+              , checkIntervalMins = cfg.evaluation.checkIntervalMins
+              , timeWindowMins = cfg.evaluation.timeWindowMins
+              , thresholdSustainedForMins = cfg.evaluation.thresholdSustainedForMins
+              , subject = notification.subject
+              , message = notification.message
+              , emailAll = notification.emailAll
+              , emails = fold notification.emails
+              , slackChannels = fold notification.slackChannels
+              , teams = fold notification.teams
+              , notifyAfterMins = notification.notifyAfterMins
+              , stopAfterCount = notification.stopAfterCount
+              , visualizationType = Just $ fromMaybe defaultVisualizationType cfg.visualizationType
+              }
+
+
+monitorConfig :: MonitorInput -> MonitorConfig
+monitorConfig inp =
+  MonitorConfig
+    { title = inp.title
+    , severity = inp.severity
+    , active = inp.active
+    , environment = inp.environment
+    , service = inp.service
+    , condition =
+        MonitorCondition
+          { query = inp.query
+          , unit = inp.unit
+          , alertThreshold = inp.alertThreshold
+          , warningThreshold = inp.warningThreshold
+          , triggerLessThan = inp.triggerLessThan
+          , alertRecoveryThreshold = inp.alertRecoveryThreshold
+          , warningRecoveryThreshold = inp.warningRecoveryThreshold
+          }
+    , evaluation =
+        MonitorEvaluation
+          { checkIntervalMins = inp.checkIntervalMins
+          , timeWindowMins = inp.timeWindowMins
+          , thresholdSustainedForMins = inp.thresholdSustainedForMins
+          }
+    , notify =
+        Just
+          $ MonitorNotification
+            { subject = inp.subject
+            , message = inp.message
+            , emailAll = inp.emailAll
+            , emails = viaNonEmpty toList inp.emails
+            , slackChannels = viaNonEmpty toList inp.slackChannels
+            , teams = viaNonEmpty toList inp.teams
+            , notifyAfterMins = inp.notifyAfterMins
+            , stopAfterCount = inp.stopAfterCount
+            }
+    , visualizationType = mfilter (/= defaultVisualizationType) inp.visualizationType
+    }
+
+
+defaultVisualizationType :: Text
+defaultVisualizationType = "timeseries"
 
 
 -- | The compiled form of a monitor's KQL, which is what alert evaluation actually
@@ -91,7 +185,7 @@ monitorFromInput pid now mid existingM inp =
           }
     , deactivatedAt = bool (Just now) Nothing (fromMaybe True inp.active)
     , deletedAt = Nothing
-    , visualizationType = fromMaybe "timeseries" inp.visualizationType
+    , visualizationType = fromMaybe defaultVisualizationType inp.visualizationType
     , teams = V.fromList inp.teams
     , widgetId = existingM >>= (.widgetId)
     , dashboardId = existingM >>= (.dashboardId)

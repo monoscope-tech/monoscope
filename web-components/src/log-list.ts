@@ -4863,7 +4863,7 @@ function emptyState(cols: number) {
           ${faSprite('inbox-full', 'regular', 'w-6 h-6 text-iconNeutral')}
           <h2 class="text-base text-textStrong font-semibold">${title}</h2>
           <p class="text-sm max-w-md text-textWeak">${subText}</p>
-          <a href="https://monoscope.tech/docs/sdks/" target="_BLANK" class="text-sm text-textBrand hover:text-textStrong underline mt-1">
+          <a href="https://monoscopehq.com/docs/sdks/" target="_BLANK" class="text-sm text-textBrand hover:text-textStrong underline mt-1">
             Read integration guides
           </a>
         </div>

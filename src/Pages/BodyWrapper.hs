@@ -821,7 +821,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       div_ [class_ "border-t border-strokeWeak my-2"] ""
       renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear"
       a_
-        ( [ href_ "https://monoscope.tech/docs/"
+        ( [ href_ "https://monoscopehq.com/docs/"
           , target_ "blank"
           , Aria.label_ "Docs"
           , class_ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100"
@@ -1178,7 +1178,7 @@ loginBanner = do
       span_ [class_ "font-medium text-textStrong"] "Demo Project"
       span_ [class_ "hidden sm:inline text-textWeak"] "· Explore Monoscope's features"
     div_ [class_ "flex items-center gap-2 max-md:gap-1.5 max-md:ml-auto"] do
-      a_ [class_ "text-textBrand hover:underline underline-offset-2 max-md:hidden", href_ "https://monoscope.tech/docs/onboarding/"] "Docs"
+      a_ [class_ "text-textBrand hover:underline underline-offset-2 max-md:hidden", href_ "https://monoscopehq.com/docs/onboarding/"] "Docs"
       a_ [class_ "py-1 px-2.5 rounded-lg bg-fillWeak hover:bg-fillHover text-textStrong border border-strokeWeak text-xs font-medium max-md:hidden", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book Demo"
       a_ [class_ "py-1 px-2.5 rounded-lg bg-fillBrand-strong hover:opacity-90 text-textInverse-strong text-xs font-medium", href_ "/login"] "Start Free Trial"
 

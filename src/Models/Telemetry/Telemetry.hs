@@ -122,6 +122,8 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Types qualified as AET
+import Data.Bits (shiftL, (.&.), (.|.))
+import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql, retryTransientLoop)
@@ -174,7 +176,6 @@ import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), Wrapp
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
 import Pkg.Metrics qualified as Metrics
-import Pkg.UUID qualified as UUIDBytes
 import Relude hiding (ask)
 import Relude.Extra.Bifunctor (bimapF)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -183,6 +184,7 @@ import System.Tracing (forkWithCtx)
 import Text.Casing (fromAny, toKebab)
 import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
 import Web.HttpApiData (FromHttpApiData (..))
+import "cryptonite" Crypto.Hash qualified as Crypto
 
 
 -- $setup
@@ -1523,9 +1525,7 @@ type WriteFailure = These SomeException SomeException
 
 
 -- | Which stores a (re)write should attempt. Live ingest writes both; DLQ
--- replay narrows to the leg that originally failed. PostgreSQL additionally
--- ignores conflicts once the event-identity unique index is activated; the
--- targeting remains useful because it avoids needless writes to the healthy leg.
+-- replay narrows to the leg that originally failed, avoiding writes to the healthy leg.
 data WriteTarget = WriteBoth | WritePgOnly | WriteTfOnly
   deriving stock (Eq, Ord, Show)
 
@@ -1643,6 +1643,26 @@ writeFailureDlqHeaders wf =
         ]
 
 
+-- | UUID v5 with a byte-string name. The uuid package's list API unpacks and
+-- repacks the entire name; metric series names can contain large JSON values.
+-- SHA1 supplies 20 bytes; UUID v5 uses the first 16, with its version and variant.
+--
+-- >>> import Data.UUID.V5 qualified as V5
+-- >>> import Data.ByteString qualified as BS
+-- >>> map (\s -> generateNamedV5 V5.namespaceDNS s == V5.generateNamed V5.namespaceDNS (BS.unpack s)) ["", "www.widgets.com", "a\NULb"]
+-- [True,True,True]
+generateNamedV5 :: UUID.UUID -> ByteString -> UUID.UUID
+generateNamedV5 namespace name =
+  UUID.fromWords
+    (wordAt 0)
+    ((wordAt 4 .&. 0xffff0fff) .|. 0x5000)
+    ((wordAt 8 .&. 0x3fffffff) .|. 0x80000000)
+    (wordAt 12)
+  where
+    digest = BA.convert (Crypto.hash (toStrict (UUID.toByteString namespace) <> name) :: Crypto.Digest Crypto.SHA1)
+    wordAt offset = BS.foldl' (\word byte -> shiftL word 8 .|. fromIntegral byte) 0 (BS.take 4 $ BS.drop offset digest)
+
+
 -- | Correlate the multiset of submitted logical row keys. This is not a payload
 -- digest, idempotency key, or Delta publication receipt. The existing row IDs
 -- and microsecond timestamp conversion remain authoritative.
@@ -1655,7 +1675,7 @@ writeFailureDlqHeaders wf =
 -- [True,True]
 writeBatchIdentity :: Text -> V.Vector (Text, UTCTime, Text) -> UUID.UUID
 writeBatchIdentity table keys =
-  UUIDBytes.generateNamedV5 otelIdNamespace
+  generateNamedV5 otelIdNamespace
     $ toStrict
     $ AE.encode ("write-batch-v1" :: Text, table, sort [(project, roundUTCToMicros time, rowId) | (project, time, rowId) <- V.toList keys])
 
@@ -2931,7 +2951,7 @@ metricIdNamespace = [uuid|5a5e99db-2f4d-58c6-9f8a-b9db1f6139aa|]
 
 -- | v5 id over 0x1F-joined key parts, in 'metricIdNamespace'.
 metricUuid :: [Text] -> UUID.UUID
-metricUuid = UUIDBytes.generateNamedV5 metricIdNamespace . encodeUtf8 . T.intercalate "\x1f"
+metricUuid = generateNamedV5 metricIdNamespace . encodeUtf8 . T.intercalate "\x1f"
 
 
 metricSeriesId :: MetricRecord -> Text

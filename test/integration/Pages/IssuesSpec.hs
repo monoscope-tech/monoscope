@@ -27,7 +27,7 @@ import Pages.Issues qualified as IssuesPage
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker (TimePicker (..))
-import Pkg.SchemaLearning.Catalog qualified as Catalog
+import Pkg.SchemaLearning qualified as SchemaLearning
 import Pkg.TestUtils
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
@@ -140,7 +140,7 @@ spec = around withTestResources $ describe "Issues" do
     ((.occurrenceCount) <$>) . (.patternM) <$> detailView tr logPattern `shouldReturn` Just (92 :: Int64)
 
     -- A span schema has no HTTP endpoint, so no trace may be looked up by placeholder method/path.
-    let subject = ApiChanges.SpanSchema Catalog.emptyScope{Catalog.service = Just "checkout", Catalog.spanName = Just "process-order"}
+    let subject = ApiChanges.SpanSchema SchemaLearning.emptyScope{SchemaLearning.service = Just "checkout", SchemaLearning.spanName = Just "process-order"}
     dbExec tr [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, attributes___http___request___method, attributes___url___path, context___trace_id, summary) VALUES (gen_random_uuid(), ?, ?, ?, 'UNKNOWN', '/', 'placeholder-trace', '{}') |] (testPid, frozenTime, frozenTime)
     spanSchema <- seedIssue tr (issueSeed Issues.ApiChange "span-schema"){title = "Span schema changed", payload = [aesonQQ|{ "subject": #{subject}, "endpoint_method": "UNKNOWN", "endpoint_path": "/", "endpoint_host": "Unknown", "anomaly_hashes": [], "shape_changes": [], "format_changes": [], "new_fields": [], "deleted_fields": [], "modified_fields": [] }|]}
     (.traceRef) <$> detailView tr spanSchema `shouldReturn` Nothing

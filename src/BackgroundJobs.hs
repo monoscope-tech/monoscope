@@ -112,7 +112,6 @@ import Pages.Reports qualified as RP
 import Pkg.AI qualified as AI
 import Pkg.AdConversions qualified as AdConversions
 import Pkg.AgentCatalog qualified as Catalog
-import Pkg.AgentOperation qualified as Operation
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
@@ -125,13 +124,10 @@ import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), addConvertKitUs
 import Pkg.Mail qualified as Mail
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser
-import Pkg.PatternMerge qualified as PatternMerge
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
-import Pkg.SchemaLearning.Catalog (SummaryDoc (..))
-import Pkg.SchemaLearning.Hot qualified as SchemaHot
-import Pkg.SchemaLearning.Worker qualified as SchemaWorker
-import Pkg.TraceSessionCache qualified as TSC
+import Pkg.SchemaLearning (SummaryDoc (..))
+import Pkg.SchemaLearning qualified as SchemaLearning
 import ProcessMessage (classifyUrlPath, classifyUrlPathWith, extractObservation, fetchProjectCache, mkBatchPathClassifiers, mkPathClassifier, processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask, local)
@@ -1043,7 +1039,7 @@ sendDiscordData authCtx userId projectId fullName stack foundUsFrom = whenJustM 
         project_title = project.title
         msg =
           [fmtTrim|
-  🎉 New project created on monoscope.tech! 🎉
+  🎉 New project created on monoscopehq.com! 🎉
   - **User Full Name**: {fullName}
   - **User Email**: {userEmail}
   - **Project Title**: [{project_title}]({project_url})
@@ -2447,7 +2443,7 @@ pgExecLabeled label sql' = retryOnDeadlock label $ Hasql.transaction TxS.ReadCom
 
 -- | Cross-batch session/user backfill, dual-written to PG + TimeFusion.
 --
--- The ingest-time cache ('TSC.lookupAndStamp') stamps the common case inline;
+-- The ingest-time cache ('QueryCache.lookupAndStamp') stamps the common case inline;
 -- this 90s sweep fills only the residual cross-batch gaps (sibling spans of a
 -- trace that arrived in separate batches, before the source attrs were cached)
 -- — for BOTH stores, so TimeFusion converges too (the store we're migrating to).
@@ -2548,7 +2544,7 @@ processEagerBatch batch shard
         -- Stream into the in-memory schema catalog. Single-writer per shard;
         -- the schema-flusher fiber persists the dirty subset on its own tick.
         let !policy =
-              SchemaHot.DecisionPolicy
+              SchemaLearning.DecisionPolicy
                 { learnFullThreshold = fromIntegral ctx.config.schemaLearnFullThreshold
                 , learnSampleEveryN = fromIntegral ctx.config.schemaLearnSampleEveryN
                 , maxKeysPerProject = ctx.config.schemaCatalogMaxKeysPerProject
@@ -2557,7 +2553,7 @@ processEagerBatch batch shard
                 }
         when ctx.config.enableSchemaLearning
           $ liftIO
-          $ SchemaHot.observeSpans shard.schemaState policy pid observations
+          $ SchemaLearning.observeSpans shard.schemaState policy pid observations
 
         -- Error extraction (pure).
         let !allErrors = Telemetry.getAllATErrors spans
@@ -2734,12 +2730,12 @@ runSchemaFlusherFiber logger ctx tp
   | not ctx.config.enableSchemaLearning = forever (threadDelay maxBound)
   | otherwise = do
       let refs = V.toList $ V.map (.schemaState) ctx.extractionWorker.shards
-          emptyFR = SchemaWorker.FlushResult 0 0 0 0 0
+          emptyFR = SchemaCatalog.FlushResult 0 0 0 0 0
           flushOne ref =
             -- Catch *here* so we keep the logger / tracer context and can
             -- record the failure. Letting this propagate kills the fiber →
             -- shard dirty set never drains → heap OOM.
-            tryAny (runBackground logger ctx tp (SchemaWorker.flushDirty ref)) >>= \case
+            tryAny (runBackground logger ctx tp (SchemaCatalog.flushDirty ref)) >>= \case
               Left e -> do
                 runBackground logger ctx tp
                   $ LogLegacy.logAttention "schema-flusher batch failed" (show @Text e)
@@ -2758,7 +2754,7 @@ runSchemaFlusherFiber logger ctx tp
                         ]
                     )
                 pure r
-      SchemaWorker.runSchemaFlusher ctx.config.schemaFlushIntervalSecs refs flushOne
+      SchemaCatalog.runSchemaFlusher ctx.config.schemaFlushIntervalSecs refs flushOne
 
 
 runWorkspaceMaintenanceTimer :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
@@ -2897,7 +2893,7 @@ flushDrainTask shard task
 
       -- Merge membership along with templates before deriving tags or error flags.
       -- The same representative is now used for persisted patterns and events.
-      let allPatterns = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold allPatternsRaw
+      let allPatterns = Drain.mergeByJaccard Drain.jaccardMergeThreshold allPatternsRaw
           tagByEvent :: HM.HashMap Text Text
           tagByEvent = HM.fromList [(lid, LogQueries.patHashPrefix <> toXXHash dp.templateStr) | dp <- V.toList allPatterns, lid <- V.toList dp.logIds]
           errByEvent :: HM.HashMap Text Bool
@@ -2993,7 +2989,7 @@ runDrainAgeFlushTimer logger ctx = forever $ do
   tryStepIO logger ctx "drain-age-flush:enforceBufferBound" $ ExtractionWorker.enforceBufferBound worker ctx.config.maxBufferedSpans now
   tryStepIO logger ctx "drain-age-flush:evictStaleTrees" $ ExtractionWorker.evictStaleTrees worker ctx.config.maxDrainTrees now
   tryStepIO logger ctx "drain-age-flush:evictTraceSessions" $ do
-    n <- TSC.evictStaleEntries ctx.traceSessionCache 300 50_000 now
+    n <- QueryCache.evictStaleEntries ctx.traceSessionCache 300 50_000 now
     when (n > 0)
       $ runLogT (show ctx.config.environment) logger ctx.config.logLevel
       $ LogLegacy.logTrace "drain-age-flush:evictTraceSessions" (show @Text n)
@@ -3919,7 +3915,7 @@ enhanceIssuesWithLLM pid issueIds = do
                 let target = Investigations.RunCheckpoint $ Investigations.RunTurn pid context.conversationId context.requestedBy context.rootId
                 saved <- lift $ Investigations.loadCheckpointFor target
                 enrichment <- case saved of
-                  Just Investigations.SavedCheckpoint{checkpoint = Investigations.NativePending (Operation.EnrichIssue retained)} -> pure retained
+                  Just Investigations.SavedCheckpoint{checkpoint = Investigations.NativePending (Catalog.EnrichIssue retained)} -> pure retained
                   Just Investigations.SavedCheckpoint{checkpoint = (Investigations.ModelPending{}; Investigations.ToolsPending{}; Investigations.AnswerReady{}; Investigations.LegacyUncertain{}; Investigations.NativePending{}; Investigations.NativeReady)} -> throwError "Issue enrichment checkpoint has another operation"
                   Nothing -> do
                     let complete = AI.callRoutineLLM ctx.config ctx.config.openaiSmallModel context
@@ -3939,9 +3935,9 @@ enhanceIssuesWithLLM pid issueIds = do
                   Issues.Observe -> void $ Issues.completeRun context $ Issues.CompletedResult Issues.ResultSucceeded Issues.PublishAnswer $ Enhancement.enrichmentAnswer Enhancement.Observed enrichment
                   (Issues.Autonomous; Issues.ReviewSelected{}) ->
                     ( do
-                        result <- AI.executeNativeOperation context (Operation.EnrichIssue enrichment) \case
-                          Operation.EnrichIssue frozen -> AI.AtomicOperation $ Enhancement.completeEnrichmentTx context frozen
-                          (Operation.WriteWiki{}; Operation.PublishPullRequestComment{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
+                        result <- AI.executeNativeOperation context (Catalog.EnrichIssue enrichment) \case
+                          Catalog.EnrichIssue frozen -> AI.AtomicOperation $ Enhancement.completeEnrichmentTx context frozen
+                          (Catalog.WriteWiki{}; Catalog.PublishPullRequestComment{}) -> AI.EffectfulOperation $ throwIO Investigations.OperationProposalChanged
                         for_ (leftToMaybe result) $ \reason -> void $ Issues.completeRun context $ Issues.CancelledResult $ Just reason
                     )
                       `catch` \(AI.AgentAwaitingReview identifier deadline) -> Jobs.deferOperationReview pid identifier deadline
@@ -3977,9 +3973,9 @@ embedAndMergeErrors pid ctx =
     ctx
     MergeConfig
       { label = "error"
-      , normalizeEmb = PatternMerge.normalizeErrorForEmbedding
-      , canMerge = PatternMerge.errorCanMerge
-      , judgeFn = mkJudge PatternMerge.buildErrorJudgePrompt
+      , normalizeEmb = Drain.normalizeErrorForEmbedding
+      , canMerge = Drain.errorCanMerge
+      , judgeFn = mkJudge Drain.buildErrorJudgePrompt
       , verifyMerge = Nothing
       }
 
@@ -3992,8 +3988,8 @@ embedAndMergeLogPatterns pid ctx =
     MergeConfig
       { label = "log"
       , normalizeEmb = Drain.normalizePlaceholders
-      , canMerge = PatternMerge.logCanMerge
-      , judgeFn = mkJudge PatternMerge.buildLogClusterJudgePrompt
+      , canMerge = Drain.logCanMerge
+      , judgeFn = mkJudge Drain.buildLogClusterJudgePrompt
       , verifyMerge = Just PatternMergeDB.fetchLogSamples
       }
 
@@ -4002,7 +3998,7 @@ embedAndMergeLogPatterns pid ctx =
 mkJudge :: ([(Text, Text)] -> Text) -> [(Text, Text)] -> ATBackgroundCtx (Either Text [Int])
 mkJudge buildPrompt pairs = do
   ctx <- ask @Config.AuthContext
-  ELLM.callLLM ctx.config.openaiSmallModel (buildPrompt pairs) ctx.config.openaiApiKey <&> fmap PatternMerge.parseJudgeResponse
+  ELLM.callLLM ctx.config.openaiSmallModel (buildPrompt pairs) ctx.config.openaiApiKey <&> fmap Drain.parseJudgeResponse
 
 
 data MergeConfig k = MergeConfig
@@ -4028,7 +4024,7 @@ embedAndMerge pid ctx cfg =
         allCentroids <- PatternMergeDB.getCanonicalPatterns pid
         let newIds = S.fromList $ map fst items
             centroids = filter (\(cid, _) -> not $ S.member cid newIds) allCentroids
-            !(autoMerges, ambiguous) = PatternMerge.assignToCentroids centroids newWithEmbs
+            !(autoMerges, ambiguous) = Drain.assignToCentroids centroids newWithEmbs
             neededIds = ordNub $ map snd autoMerges <> map snd ambiguous
         textMap <- if null neededIds then pure mempty else PatternMergeDB.fetchPatternTexts neededIds
         let allTexts = Map.fromList items <> textMap
@@ -4039,7 +4035,7 @@ embedAndMerge pid ctx cfg =
               Nothing -> pure merges
               Just fetchSamples -> do
                 samples <- fetchSamples (map fst merges)
-                pure $ filter (\(newId, canId) -> fromMaybe True $ PatternMerge.verifyMergeDecision <$> Map.lookup canId allTexts <*> Map.lookup newId samples) merges
+                pure $ filter (\(newId, canId) -> fromMaybe True $ Drain.verifyMergeDecision <$> Map.lookup canId allTexts <*> Map.lookup newId samples) merges
         verified validAutoMerges >>= void . PatternMergeDB.assignPatternsToCanonical
         let !validAmbiguous = filter validMerge ambiguous
         unless (null validAmbiguous) do
@@ -4197,11 +4193,11 @@ reviewResidualEndpointGroups pid = do
           take endpointGroupReviewBatch
             $ sortOn (\(_, _, n, _, _, _) -> negate n) [g | g@(gkey, mhash, _, _, _, _) <- keyed, maybe True (\r -> r.dueForReconfirm || r.membersHash /= mhash) (HM.lookup gkey seen)]
     unless (null fresh) do
-      reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildGroupReviewPrompt [(k, p, c) | (k, _, _, p, _, c) <- fresh]) ctx.config.openaiApiKey
+      reply <- ELLM.callLLM ctx.config.openaiSmallModel (Drain.buildGroupReviewPrompt [(k, p, c) | (k, _, _, p, _, c) <- fresh]) ctx.config.openaiApiKey
       case reply of
         Left err -> Log.logAttention "Endpoint group review: LLM call failed" (pid, err)
         Right txt -> do
-          let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- PatternMerge.parseGroupReview txt]
+          let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- Drain.parseGroupReview txt]
               rows = [(gkey, mhash, n, display v, sh) | (gkey, mhash, n, _, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
           Endpoints.recordGroupReviews pid rows
           Log.logInfo
@@ -4234,7 +4230,7 @@ confirmedGroups reviews keyed =
   [ (r, gkey, prefix, pos, kids)
   | (gkey, _, n, prefix, pos, kids) <- keyed
   , Just r <- [HM.lookup gkey byKey]
-  , r.verdict == display PatternMerge.Param
+  , r.verdict == display Drain.Param
   , mergeEvidenceMet r.confirmations r.firstMemberCount (fromIntegral n) kids
   ]
   where
@@ -4417,11 +4413,11 @@ recheckQuarantinedMerges pid = do
     pending <- Endpoints.getQuarantinedMerges pid
     unless (null pending) do
       let asked = [(m.groupKey, m.canonicalPath, ordNub (V.toList m.urlPaths)) | m <- pending]
-      reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildMergeChallengePrompt asked) ctx.config.openaiApiKey
+      reply <- ELLM.callLLM ctx.config.openaiSmallModel (Drain.buildMergeChallengePrompt asked) ctx.config.openaiApiKey
       case reply of
         Left err -> Log.logAttention "Quarantine re-check: LLM call failed, merges stay quarantined" (pid, err)
         Right txt -> do
-          let refuted = [k | (k, v, _) <- PatternMerge.parseGroupReview txt, v /= PatternMerge.Param]
+          let refuted = [k | (k, v, _) <- Drain.parseGroupReview txt, v /= Drain.Param]
           forM_ refuted \gkey -> do
             hashes <- Endpoints.appliedCanonicalHashes pid gkey
             restored <- Endpoints.revertGroupApply pid gkey hashes
@@ -5858,12 +5854,12 @@ reviewErrorGroups pid = do
                 -- happens only inside hashing. This is a vendor call, so the
                 -- substitution has to be made here, explicitly, before the text leaves.
                 pure (gkey, mhash, g, ordNub $ map EF.normalizeMessage $ Map.elems texts)
-              reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildErrorGroupReviewPrompt [(k, g.errorType, msgs) | (k, _, g, msgs) <- members]) ctx.config.openaiApiKey
+              reply <- ELLM.callLLM ctx.config.openaiSmallModel (Drain.buildErrorGroupReviewPrompt [(k, g.errorType, msgs) | (k, _, g, msgs) <- members]) ctx.config.openaiApiKey
               case reply of
                 Left err -> Log.logAttention "Error group review: LLM call failed" (pid, err)
                 Right txt -> do
                   -- One pass, verdict and shape together — as the endpoint sibling does.
-                  let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- PatternMerge.parseGroupReview txt]
+                  let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- Drain.parseGroupReview txt]
                       rows =
                         [ (gkey, mhash, g.memberCount, display v, sh)
                         | (gkey, mhash, g, _) <- members
@@ -5873,7 +5869,7 @@ reviewErrorGroups pid = do
                   -- Refute only what was proposed as one bug. Asking about the
                   -- "routes" verdicts would spend a call to be told what we already
                   -- decided to do, which is nothing.
-                  let proposed = [(gkey, g, msgs) | (gkey, _, g, msgs) <- members, (fst <$> HM.lookup gkey verdicts) == Just PatternMerge.Param]
+                  let proposed = [(gkey, g, msgs) | (gkey, _, g, msgs) <- members, (fst <$> HM.lookup gkey verdicts) == Just Drain.Param]
                   unless (null proposed) $ refuteErrorGroups pid ctx proposed
                   Log.logInfo
                     "Error group review complete"
@@ -5885,17 +5881,17 @@ reviewErrorGroups pid = do
 -- | Second pass: assert each proposed merge and ask for the fault.
 refuteErrorGroups :: Projects.ProjectId -> Config.AuthContext -> [(Text, PatternMergeDB.ErrorShapeGroup, [Text])] -> ATBackgroundCtx ()
 refuteErrorGroups pid ctx proposed = do
-  reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildErrorMergeChallengePrompt [(k, g.errorType, msgs) | (k, g, msgs) <- proposed]) ctx.config.openaiApiKey
+  reply <- ELLM.callLLM ctx.config.openaiSmallModel (Drain.buildErrorMergeChallengePrompt [(k, g.errorType, msgs) | (k, g, msgs) <- proposed]) ctx.config.openaiApiKey
   case reply of
     -- No refutation is not a survived refutation. A failed call leaves the proposals
     -- unrefuted, which 'errorGroupEvidenceMet' reads as "not eligible" — the whole
     -- point of storing the two facts separately.
     Left err -> Log.logAttention "Error merge refutation: LLM call failed, proposals stay ineligible" (pid, err)
     Right txt -> do
-      let answered = PatternMerge.parseGroupReview txt
+      let answered = Drain.parseGroupReview txt
           asked = [k | (k, _, _) <- proposed]
-          refuted = [k | (k, v, _) <- answered, v /= PatternMerge.Param, k `elem` asked]
-          survived = [k | (k, v, _) <- answered, v == PatternMerge.Param, k `elem` asked]
+          refuted = [k | (k, v, _) <- answered, v /= Drain.Param, k `elem` asked]
+          survived = [k | (k, v, _) <- answered, v == Drain.Param, k `elem` asked]
       PatternMergeDB.markErrorGroupRefuted pid survived True
       PatternMergeDB.markErrorGroupRefuted pid refuted False
       Log.logInfo
@@ -5913,7 +5909,7 @@ applyConfirmedErrorGroups pid = do
         [ (r.groupKey, g)
         | r <- reviews
         , isNothing r.appliedAt
-        , r.verdict == display PatternMerge.Param
+        , r.verdict == display Drain.Param
         , errorGroupEvidenceMet r.confirmations r.firstMemberCount r.memberCount r.survivedRefute
         , Just g <- [HM.lookup r.groupKey byKey]
         ]
@@ -5925,7 +5921,7 @@ applyConfirmedErrorGroups pid = do
       -- message on every pass; this one never asks the model anything.
       texts <- PatternMergeDB.fetchPatternTexts (V.toList g.memberIds)
       let canonText = fromMaybe "" $ Map.lookup canonical texts
-          mergeable = V.filter (\m -> maybe False (PatternMerge.errorCanMerge canonText) (Map.lookup m texts)) rest
+          mergeable = V.filter (\m -> maybe False (Drain.errorCanMerge canonText) (Map.lookup m texts)) rest
       if V.null mergeable
         then Log.logAttention "Error group cleared review but no member passed errorCanMerge, not merging" ("project_id", pid.toText, "group", gkey)
         else do
@@ -5949,11 +5945,11 @@ recheckQuarantinedErrorMerges pid = do
   when (ctx.config.enableErrorGroupAutoApply && not (T.null ctx.config.openaiApiKey)) $ tryStep "errorMergeRecheck" do
     pending <- PatternMergeDB.getQuarantinedErrorMerges pid
     unless (null pending) do
-      reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildErrorMergeChallengePrompt [(k, et, ordNub $ map EF.normalizeMessage $ V.toList msgs) | (k, et, msgs, _) <- pending]) ctx.config.openaiApiKey
+      reply <- ELLM.callLLM ctx.config.openaiSmallModel (Drain.buildErrorMergeChallengePrompt [(k, et, ordNub $ map EF.normalizeMessage $ V.toList msgs) | (k, et, msgs, _) <- pending]) ctx.config.openaiApiKey
       case reply of
         Left err -> Log.logAttention "Error quarantine re-check: LLM call failed, merges stay quarantined" (pid, err)
         Right txt -> do
-          let refuted = [k | (k, v, _) <- PatternMerge.parseGroupReview txt, v /= PatternMerge.Param]
+          let refuted = [k | (k, v, _) <- Drain.parseGroupReview txt, v /= Drain.Param]
           forM_ [(k, cids) | (k, _, _, cids) <- pending, k `elem` refuted] \(gkey, cids) -> do
             restored <- PatternMergeDB.revertErrorGroupApply pid gkey cids
             Log.logAttention

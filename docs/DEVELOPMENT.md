@@ -249,7 +249,7 @@ monoscope/
 ├── src/              # Haskell source code
 ├── static/           # Static assets and migrations
 ├── web-components/   # Frontend TypeScript components
-├── tests/           # Test suites
+├── test/            # Test suites and goldens
 ├── build.log        # Auto-generated build status
 └── build-doctests.log # Doctest results
 ```

@@ -1,49 +1,45 @@
-# Overnight work plan — 2026-08-10
+# Plans
 
-Master todo. One plan document per task; tick items here as each lands.
+This directory holds focused plans and unresolved investigations. Status statements belong to each document's recorded date.
+The index groups documents by topic. It does not certify current deployment or test results.
 
-| # | Task | Plan | Status |
-|---|------|------|--------|
-| 1 | Environment switcher (prod/staging/…) — `deployment.environment.name` promoted to a first-class TimeFusion column + sticky app-wide selector, Datadog-style | [01-environments.md](01-environments.md) | **done** (`f78051166`) — ⚠ TF schema hunk left UNCOMMITTED, see below |
-| 2 | Service map: fix prod render (hyperscript parse error + null deref), fix the node context menu (`viz_type=traces` is not a viz type; logs/traces are one surface here) | [02-service-map.md](02-service-map.md) | **done** (`4615b0cc1`) |
-| 3 | Log-list latency column: break down by service and/or kind, rethink the child-row UX | [03-latency-column.md](03-latency-column.md) | **done** (`ab48f9c10`) |
-| 4 | Error-in-source-context (Sentry/Datadog parity): upload source, link to a service, render the failing frame with surrounding lines | [04-code-context.md](04-code-context.md) | **done** (`8b27dd49f`, `e292038e2`, `a1b44e481`) |
-| 5 | Log-item detail: show the full session/tenant facet set (tenant id, user id, …), not just email | [05-session-tenant-fields.md](05-session-tenant-fields.md) | **done** (`cc0c346bb`) |
+## Start here
 
-## Working rules for this run
+- [Product improvement program](2026-09-17-product-improvement-program.md): query trust, investigation flows, activation, scope, and billing follow-ups.
+- [Unified agent](2026-10-30-unified-agent.md): the current agent contract, architecture, rollout, and remaining manual checks.
+- [Retained context](context.md): decisions and follow-ups from completed work and superseded plans.
+- [Customer flow coverage](customer-flow-test-coverage.md): coverage evidence and remaining test work.
 
-- Verify compiles by reading `build.log` (ghcid), never `cabal build`.
-- Verify tests by reading `build-test-dev.log` (`make live-test-dev`), never `cabal test`.
-- Migrations are append-only.
-- Run `/hs-distill`, `/hs-lob-review`, `/hs-evasion-review`, `/code-review` before each commit.
-- Commit per task (or per coherent sub-step), no Claude co-authorship.
+## Query and investigation
 
-## Verification
+- [Dashboard queries and panels](dashboard-query-and-panel-convergence.md)
+- [Array membership lowering](array-has-lowering.md)
+- [Log list performance](log-list-performance.md)
+- [Live tail](07-live-tail.md)
+- [Git hosts](07-git-hosts.md)
+- [Scanner traffic and endpoint discovery](scanner-traffic-pollutes-endpoint-discovery.md)
 
-- `make test-doctests` — **919 → 918 examples, 0 failures.**
-- `npx vitest run` (web-components) — **290 passed**, three consecutive clean runs.
-- New integration tests: environment scoping, log-item identity, code mappings — all green.
-- ghcid green, `make lint` clean on every file touched.
+## Infrastructure and presentation
 
-Three integration tests fail locally and **were already failing before this work** — I
-checked out `4aa402626` and reran them to be sure:
+- [Infrastructure experience](infrastructure-experience.md): product model and navigation.
+- [Container monitoring](container-monitoring.md): collector, metric, and inventory contract.
+- [Infrastructure, Sessions, and RUM performance](infra-sessions-rum-performance.md): query findings and implementation history.
+- [Light-mode contrast](light-mode-color-contrast.md)
+- [Color signal hierarchy](color-signal-hierarchy-v2.md)
+- [Weekly reports](weekly-report-redesign.md): completed report contract and verification record.
 
-| Test | Why |
-|---|---|
-| `keeps the initial log-data preload inside the HTMX swap target` | asserts `preload="false"`; the shell emits `hx-preload="false"` |
-| `trace-timefusion-read loads a span …` | needs TimeFusion, which is not running locally |
-| `merges SDK payload bodies into the parent request …` | same |
+## Billing and operations
 
-## ⚠ Needs your hand in the morning
+- [Billing pricing v2](billing-pricing-v2.md): metering design. The [activation runbook](../docs/runbooks/activate-metered-billing.md) covers provider changes.
+- [Job scheduler redesign](job-scheduler-redesign.md)
+- [Self-chaining tickers](self-chaining-tickers-multiply.md): the scheduler investigation.
+- [Firing alerts triage](firing-alerts-triage-2026-09-01.md)
+- [Replay demo outage](session-replay-demo-outage-2026-09-01.md)
+- [Talstack notification repair](talstack-notification-repair-2026-09-07.sql): an unexecuted, guarded repair, retained for operator review.
 
-**`timefusion/schemas/otel_logs_and_spans.yaml` is edited but NOT committed.** Task 1 adds
-`resource___deployment___environment___name` there. I left it uncommitted on purpose: that
-working tree already held someone else's in-progress rollup work (`src/rollup.rs`,
-`src/schema_loader.rs`, `src/database.rs`, `schemas/otel_metrics.yaml`), and committing
-would have swept it up. My hunk is self-contained — the `- name:
-resource___deployment___environment___name` block after `resource___service___namespace`.
+## Maintenance
 
-Nothing breaks while it waits. The monoscope side only emits the environment predicate when
-an environment is selected, and nothing is selected by default; TimeFusion evolves into the
-column additively (`SchemaMode::Merge`) once it deploys. Postgres already has it via
-migration 0122.
+Keep one plan per distinct workstream. Fold durable decisions and unresolved follow-ups into the existing plan before deleting superseded documents.
+Remove completed task logs when the code, tests, runbooks, or review records hold the necessary evidence.
+Git history retains removed documents: `git log --all -- plans/<filename>`.
+Repository guidance in [AGENTS.md](../AGENTS.md) controls current development and release procedures.

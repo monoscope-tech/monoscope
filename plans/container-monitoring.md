@@ -299,7 +299,7 @@ A **Containers page** — one table for every runtime, mirroring the Containers 
 - **Adding `("Containers", "/containers")` to `explorerTabs` yields both the tab strip and the
   sidebar flyout entry** (`navFlyoutItems "Explorer"` reads the same list), so nav is one edit.
 - **Onboarding snippets are not in this repo.** `src/Pages/Onboarding.hs` fetches them over HTMX
-  from `monoscope.tech/docs/sdks/...` via `proxyLandingH`, and Docker and Kubernetes are already
+  from `monoscopehq.com/docs/sdks/...` via `proxyLandingH`, and Docker and Kubernetes are already
   listed in its Infrastructure group. Our collector-config work is therefore the `docs/` content,
   not an in-app snippet component.
 

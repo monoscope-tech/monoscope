@@ -92,9 +92,8 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
 import Pkg.DeriveUtils (UUIDId, enumLit, refineText)
-import Pkg.SlackOAuth (SlackTokenLifetime (..), SlackUserGrant (..), slackEvidenceScopes)
-import Pkg.SlackOAuth qualified as OAuth
-import Pkg.SlackRateLimit qualified as RateLimit
+import Pkg.Slack (SlackTokenLifetime (..), SlackUserGrant (..), slackEvidenceScopes)
+import Pkg.Slack qualified as Slack
 import Relude
 import System.Types (DB)
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
@@ -664,12 +663,12 @@ resolveSlackEvidenceGrant key clientId clientSecret subject = do
         else
           ( do
               response <-
-                RateLimit.withRateLimits subject.teamId (OAuth.exchangeUserToken clientId clientSecret $ OAuth.RefreshUserToken $ OAuth.SlackTokenRefresh subject.teamId subject.slackUserId snapshot.grant.scopes refresh)
-                  `Exception.catch` \(err :: RateLimit.SlackRateLimited) -> do
+                Slack.withRateLimits subject.teamId (Slack.exchangeUserToken clientId clientSecret $ Slack.RefreshUserToken $ Slack.SlackTokenRefresh subject.teamId subject.slackUserId snapshot.grant.scopes refresh)
+                  `Exception.catch` \(err :: Slack.SlackRateLimited) -> do
                     void $ changeSlackRefreshState subject claimed RefreshIdle
                     Exception.throwIO err
               case response of
-                Left OAuth.OAuthRevoked -> do
+                Left Slack.OAuthRevoked -> do
                   removed <- withSlackCredentialLock subject.projectId subject.userId $ Hasql.queryTx @HI.RowsAffected $ [HI.sql|DELETE FROM apis.slack_user_credentials target|] <> slackCredentialVersionSql subject claimed
                   if HI.getRowsAffected removed == 1 then pure $ Left SlackRefreshRevoked else current SlackRefreshRevoked
                 Left _ -> uncertain >> current SlackRefreshUncertain

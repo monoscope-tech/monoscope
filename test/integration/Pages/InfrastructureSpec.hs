@@ -44,8 +44,7 @@ import Pages.Settings qualified as Settings
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table (Features (customizeColumns, exportName, resultSummary), Table (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Icons qualified as Icons
-import Pkg.TestClock (setTestTime)
+import Data.Effectful.Hasql (setTestTime)
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
@@ -58,7 +57,7 @@ import Servant.API (ResponseHeader (..), lookupResponseHeader, parseUrlPiece)
 import System.Config (AuthContext (..))
 import System.Config qualified as Config
 import Text.Read (read)
-import Utils (formatUTC)
+import Utils (formatUTC, lookupIcon)
 
 
 spec :: Spec
@@ -180,7 +179,7 @@ spec = do
         <> tagsWith ["data-tippy-content=\"" <> clusterUid, "badge-error"] (renderT kubernetes)
         <> tagsWith ["bg-fillNeutral-strong\" style=\"clip-path", "name=\"fill\"", "data-component=\"facet-rail\""] (renderT hostMap)
       [sinceOf path h | (path, h) <- [("/infrastructure/hosts/detail", hostsHtml), ("/infrastructure/images/detail", renderT images), ("/infrastructure/kubernetes/detail", renderT kubernetes)]] `shouldBe` replicate 3 [Just "5M"]
-      (T.isInfixOf ">Apply</button>" (renderT hostMap), map isJust [Icons.lookupIcon "solid" "download", Icons.lookupIcon "regular" "cube"]) `shouldBe` (False, [True, True])
+      (T.isInfixOf ">Apply</button>" (renderT hostMap), map isJust [lookupIcon "solid" "download", lookupIcon "regular" "cube"]) `shouldBe` (False, [True, True])
 
       hostDetail <- shellHtml tr $ Infrastructure.hostDetailGetH pid (Just "vps-bare-01") Nothing Nothing Nothing
       hostDetail `shouldContainAll` ["Host summary", "CPU usage", "Memory usage", "Recent logs", "View logs in Explorer", "View in Metrics", "Metrics coverage: 2 of 4"]
@@ -384,7 +383,7 @@ spec = do
       -- A group of one is not a group, and a database is already named by its system.
       map (\k -> nodeBy graph k <&> \n -> (n.memberCount, n.groupKey)) ["http:api.paystack.co", "db:redis"] `shouldBe` [Just (Nothing, Nothing), Just (Nothing, Nothing)]
       -- The legend's icons must exist in the sprite, or they silently render nothing.
-      map isJust [Icons.lookupIcon "regular" "diagram-project", Icons.lookupIcon "regular" "arrow-right-to-bracket"] `shouldBe` [True, True]
+      map isJust [lookupIcon "regular" "diagram-project", lookupIcon "regular" "arrow-right-to-bracket"] `shouldBe` [True, True]
       edgePairs graph `shouldBe` L.sort ([("api", t) | t <- tenants] <> [("api", grp), ("api", "http:api.paystack.co"), ("api", "db:redis")])
 
       -- The cap counts drawn nodes, so a collapsed group costs one slot however many peers it holds.

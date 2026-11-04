@@ -120,7 +120,7 @@ interceptor should be thin — if one is getting large, it is duplicating the co
       store, so with no flag the only way to stop capturing is to remove the wrapper.
 - [ ] **Body size cap.** No SDK has one today. A gRPC message can be megabytes, and it lands
       base64-encoded on a span attribute. Pick a limit, truncate with a marker.
-- [ ] **Docs.** Each SDK's page under `monoscope.tech/docs/sdks/...` needs a gRPC section, and
+- [ ] **Docs.** Each SDK's page under `monoscopehq.com/docs/sdks/...` needs a gRPC section, and
       the `instrument` skill's detection table needs a gRPC row — it currently routes every
       detected framework to an HTTP middleware.
 

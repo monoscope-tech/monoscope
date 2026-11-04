@@ -11,7 +11,7 @@ Ingest and explore logs, traces, and metrics stored in your S3 buckets. Query wi
 [![Haskell](https://img.shields.io/badge/Built%20with-Haskell-5e5086?logo=haskell)](https://www.haskell.org/)
 [![Discord](https://img.shields.io/discord/904634773329297429?color=7289da&logo=discord&logoColor=white)](https://discord.gg/BSFCaUHxt4)
 
-[**Website**](https://monoscope.tech) • [**Playground**](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/log_explorer) • [**Discord**](https://discord.gg/BSFCaUHxt4) • [**Twitter**](https://x.com/monoscope-tech) • [**Documentation**](https://docs.monoscope.tech)
+[**Website**](https://monoscopehq.com) • [**Playground**](https://app.monoscope.tech/p/00000000-0000-0000-0000-000000000000/log_explorer) • [**Discord**](https://discord.gg/BSFCaUHxt4) • [**Twitter**](https://x.com/monoscope-tech) • [**Documentation**](https://docs.monoscope.tech)
 
 </div>
 
@@ -29,7 +29,7 @@ Ingest and explore logs, traces, and metrics stored in your S3 buckets. Query wi
 
 ## What is Monoscope?
 
-Monoscope is an open-source observability platform that stores your telemetry data in S3-compatible storage. Self-host it or use our [cloud offering](https://monoscope.tech).
+Monoscope is an open-source observability platform that stores your telemetry data in S3-compatible storage. Self-host it or use our [cloud offering](https://monoscopehq.com).
 
 **Core capabilities:**
 
@@ -53,9 +53,9 @@ In both options, you bring your own S3 buckets—your data stays yours.
 | **Compute** | Managed by us | You manage |
 | **Auth & SSO** | Built-in | DIY |
 | **Alert channels** | Slack, PagerDuty, etc. | Basic email |
-| **Pricing** | [Usage-based](https://monoscope.tech/pricing) | Free (AGPL-3.0) |
+| **Pricing** | [Usage-based](https://monoscopehq.com/pricing) | Free (AGPL-3.0) |
 
-→ [Start free on Cloud](https://monoscope.tech) or continue below to self-host.
+→ [Start free on Cloud](https://monoscopehq.com) or continue below to self-host.
 
 The Cloud Free plan supports one user: the project owner (the first member added
 when the project is created). Other members can access the project after an
@@ -347,16 +347,16 @@ Real-time metrics and performance monitoring with AI-powered insights.
 <div align="center">
   <table>
     <tr>
-      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/andela.svg" alt="Andela" height="30" /></td>
-      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/partna.svg" alt="Partna" height="30" /></td>
-      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/grovepay.svg" alt="GrovePay" height="30" /></td>
-      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/sameday.svg" alt="SameDay" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscopehq.com/assets/img/customers/andela.svg" alt="Andela" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscopehq.com/assets/img/customers/partna.svg" alt="Partna" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscopehq.com/assets/img/customers/grovepay.svg" alt="GrovePay" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscopehq.com/assets/img/customers/sameday.svg" alt="SameDay" height="30" /></td>
     </tr>
     <tr>
-      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/platnova.png" alt="Platnova" height="30" /></td>
-      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/payfonte.svg" alt="PayFonte" height="30" /></td>
-      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/thepeer.svg" alt="ThePeer" height="30" /></td>
-      <td align="center" width="120" height="60"><img src="https://monoscope.tech/assets/img/customers/blockradar-full.svg" alt="BlockRadar" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscopehq.com/assets/img/customers/platnova.png" alt="Platnova" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscopehq.com/assets/img/customers/payfonte.svg" alt="PayFonte" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscopehq.com/assets/img/customers/thepeer.svg" alt="ThePeer" height="30" /></td>
+      <td align="center" width="120" height="60"><img src="https://monoscopehq.com/assets/img/customers/blockradar-full.svg" alt="BlockRadar" height="30" /></td>
     </tr>
   </table>
 </div>

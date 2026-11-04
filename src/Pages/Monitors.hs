@@ -491,7 +491,7 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
         bw
           { pageTitle = "Monitors"
           , menuItem = Just "Monitors"
-          , docsLink = Just "https://monoscope.tech/docs/monitors/"
+          , docsLink = Just "https://monoscopehq.com/docs/monitors/"
           , freeTierStatus = freeTierStatus
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
               a_ [class_ "btn btn-sm btn-ghost gap-2", href_ $ "/p/" <> pid.toText <> "/monitors/cron"] do
@@ -664,7 +664,7 @@ unifiedMonitorOverviewH pid monitorId = do
           { pageTitle = "Monitor Overview"
           , prePageTitle = Just "Monitors"
           , menuItem = Just "Monitors"
-          , docsLink = Just "https://monoscope.tech/docs/monitors/"
+          , docsLink = Just "https://monoscopehq.com/docs/monitors/"
           , freeTierStatus = freeTierStatus
           }
 
