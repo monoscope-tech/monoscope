@@ -228,7 +228,7 @@ linkProjectGetH slack_code stateM = do
   authorization <- Integrations.consumeSlackAuthorization stateId sess.user.id >>= maybe (throwError err403) pure
   case authorization of
     Integrations.EvidenceAuthorization consent -> linkEvidence consent code
-    Integrations.WorkspaceAuthorization install -> linkWorkspace install code
+    Integrations.WorkspaceAuthorization install -> linkWorkspace sess.user.id install code
   where
     linkEvidence :: Integrations.SlackEvidenceConsent -> Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
     linkEvidence consent code = do
@@ -240,8 +240,8 @@ linkProjectGetH slack_code stateM = do
         Left _ -> throwError err503{errBody = "Slack search access could not be stored. Please try again later."}
         Right False -> throwError err403{errBody = "This Slack connection no longer matches your account, project, or workspace. Start a new connection."}
         Right True -> pure $ addHeader ("/p/" <> consent.projectId.toText <> "/settings/integrations") $ NoContent $ PageCtx def ()
-    linkWorkspace :: Integrations.SlackInstall -> Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
-    linkWorkspace install code = do
+    linkWorkspace :: Projects.UserId -> Integrations.SlackInstall -> Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
+    linkWorkspace installer install code = do
       let pid = install.projectId
           bwconf = (def :: BWConfig){pageTitle = "Slack app installed"}
       envCfg <- asks env
@@ -259,6 +259,8 @@ linkProjectGetH slack_code stateM = do
             Log.logAttention ("Slack re-install switching workspaces; clearing old channels" :: Text) $ AE.object ["project_id" AE..= pid, "old_team_id" AE..= prev.teamId, "new_team_id" AE..= token'.team.id]
             ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
           void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel token'.incomingWebhook.url (Just $ V.fromList $ filter (not . T.null) $ map T.strip $ T.splitOn "," token'.scope)
+          -- Event routines have no schedule to enqueue.
+          void $ Issues.ensureRoutineTemplate installer pid project'.timeZone Issues.slackInvestigationTemplate
           void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
           when wasAdded do
@@ -1453,16 +1455,18 @@ refreshSlackProgress publicationId = do
 -- No match is never treated as proof that Slack rejected the original send.
 reconcileReplyHistory :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => Text -> AI.AgentAccess -> SlackData -> Investigations.CheckpointTarget -> Investigations.ReplyDestination -> Int -> Eff es ()
 reconcileReplyHistory appId access slackData target destination part =
-  unless (T.null appId) $ Investigations.loadReplySearch target part >>= traverse_ \search -> do
-    let (project, conversation) = case target of
-          Investigations.SlackCheckpoint turn -> (turn.projectId, turn.conversationId)
-          Investigations.RunCheckpoint turn -> (turn.projectId, turn.conversationId)
-    AI.requireAgentAccess access project
-    void $ AI.requireEvidenceAccess access project conversation
-    unless (search.teamId == slackData.teamId && search.teamId == destination.teamId && search.channelId == destination.channelId && search.threadTs == destination.threadTs) $ throwIO AI.AgentAccessDenied
-    outcome <- searchPublicationHistory appId slackData "monoscope_investigation_reply" search
-    AI.requireAgentAccess access project
-    settlePublicationSearch (Investigations.confirmReplyPublication search.publicationId) (Investigations.saveReplySearchCursor search) outcome
+  unless (T.null appId)
+    $ Investigations.loadReplySearch target part
+    >>= traverse_ \search -> do
+      let (project, conversation) = case target of
+            Investigations.SlackCheckpoint turn -> (turn.projectId, turn.conversationId)
+            Investigations.RunCheckpoint turn -> (turn.projectId, turn.conversationId)
+      AI.requireAgentAccess access project
+      void $ AI.requireEvidenceAccess access project conversation
+      unless (search.teamId == slackData.teamId && search.teamId == destination.teamId && search.channelId == destination.channelId && search.threadTs == destination.threadTs) $ throwIO AI.AgentAccessDenied
+      outcome <- searchPublicationHistory appId slackData "monoscope_investigation_reply" search
+      AI.requireAgentAccess access project
+      settlePublicationSearch (Investigations.confirmReplyPublication search.publicationId) (Investigations.saveReplySearchCursor search) outcome
 
 
 reconcileProgressHistory :: Investigations.ProgressTarget -> UUIDId "slack_progress" -> ATBackgroundCtx (Maybe Text)
