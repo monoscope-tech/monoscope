@@ -3,6 +3,8 @@ module Pages.Dashboards (
   dashboardGetH,
   DashboardViewForm (..),
   dashboardViewPostH,
+  InvalidViewName (..),
+  SavedViews (..),
   dashboardViewDeleteH,
   dashboardViewsGetH,
   dashboardTabGetH,
@@ -29,6 +31,7 @@ module Pages.Dashboards (
   DashboardRenameForm (..),
   dashboardDuplicatePostH,
   dashboardStarPostH,
+  StarButton (..),
   DashboardBulkActionForm (..),
   DashboardBulkAction (..),
   DashboardRes (..),
@@ -52,6 +55,10 @@ module Pages.Dashboards (
   widgetAlertUpsertH,
   widgetAlertDeleteH,
   widgetAlertToggleH,
+  WidgetMonitorRejection (..),
+  WidgetMonitorResult (..),
+  WidgetMonitorRemoved (..),
+  WidgetMonitorStatus (..),
   -- SQL debug preview
   widgetSqlPreviewGetH,
   widgetSqlTextGetH,
@@ -138,6 +145,7 @@ import Utils
 import Web.ApiTypes qualified as ApiT
 import Web.FormUrlEncoded (FromForm (..), parseUnique, toListStable)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
+import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 
 
 -- | Server-rendered dashboard data: one request returns every widget on the
@@ -390,27 +398,47 @@ instance FromForm DashboardViewForm where
   fromForm form = DashboardViewForm <$> parseUnique "name" form <*> pure (filter ((/= "name") . fst) $ second Just <$> toListStable form)
 
 
-dashboardViewPostH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardViewForm -> ATAuthCtx (RespHeaders (Html ()))
-dashboardViewPostH pid did form = savedViewH pid did form.params \_ dash -> do
+data InvalidViewName = InvalidViewName
+  deriving stock (Eq, Show)
+
+
+instance Rejection InvalidViewName where
+  rejectionMessage _ = "View name must contain 1–100 characters."
+
+
+-- | The saved-views menu, re-rendered after every change.
+data SavedViews = SavedViews Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard Dashboards.DashboardVM [(Text, Maybe Text)]
+  deriving anyclass (HxOutcome)
+
+
+instance ToHtml SavedViews where
+  toHtml (SavedViews pid did dash vm params) = toHtml $ dashboardViews_ pid did dash vm params []
+  toHtmlRaw = toHtml
+
+
+dashboardViewPostH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardViewForm -> ATAuthCtx (HxResult InvalidViewName SavedViews)
+dashboardViewPostH pid did form = hxAction do
+  _ <- Projects.sessionAndProject pid
   let name = T.strip form.name
-  when (T.null name || T.length name > 100) $ throwError err400{errBody = "View name must contain 1–100 characters."}
-  Dashboards.setSavedView pid did name $ Just $ variableValues dash form.params
+  if T.null name || T.length name > 100
+    then pure $ Left InvalidViewName
+    else Right <$> savedViewH pid did form.params \_ dash -> Dashboards.setSavedView pid did name $ Just $ variableValues dash form.params
 
 
-dashboardViewDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
-dashboardViewDeleteH pid did name params = savedViewH pid did params \_ _ -> Dashboards.setSavedView pid did name Nothing
+dashboardViewDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders SavedViews)
+dashboardViewDeleteH pid did name params = addRespHeaders =<< savedViewH pid did params \_ _ -> Dashboards.setSavedView pid did name Nothing
 
 
-dashboardViewsGetH :: Projects.ProjectId -> Dashboards.DashboardId -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
-dashboardViewsGetH pid did params = savedViewH pid did params \vm _ -> pure $ Just vm.savedViews
+dashboardViewsGetH :: Projects.ProjectId -> Dashboards.DashboardId -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders SavedViews)
+dashboardViewsGetH pid did params = addRespHeaders =<< savedViewH pid did params \vm _ -> pure $ Just vm.savedViews
 
 
-savedViewH :: Projects.ProjectId -> Dashboards.DashboardId -> [(Text, Maybe Text)] -> (Dashboards.DashboardVM -> Dashboards.Dashboard -> ATAuthCtx (Maybe (V.Vector Dashboards.DashboardView))) -> ATAuthCtx (RespHeaders (Html ()))
+savedViewH :: Projects.ProjectId -> Dashboards.DashboardId -> [(Text, Maybe Text)] -> (Dashboards.DashboardVM -> Dashboards.Dashboard -> ATAuthCtx (Maybe (V.Vector Dashboards.DashboardView))) -> ATAuthCtx SavedViews
 savedViewH pid did params change = do
   _ <- Projects.sessionAndProject pid
   (vm, dash) <- getDashAndVM pid did Nothing
   savedViews <- change vm dash `whenNothingM` throwError err404{errBody = "Dashboard with ID not found. ID:" <> encodeUtf8 did.toText}
-  addRespHeaders $ dashboardViews_ pid did dash vm{Dashboards.savedViews = savedViews} params []
+  pure $ SavedViews pid did dash vm{Dashboards.savedViews = savedViews} params
 
 
 -- | Effective value of every dashboard variable: the @var-@ param, else its default.
@@ -1215,12 +1243,15 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
       widget & #dataset ?~ if widget.wType == Widget.WTStat then def{Widget.source = AE.Null, Widget.value = md.dataFloat} else Widget.toWidgetDataset md
 
 
-dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
+dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (HxResult WidgetMonitorRejection Widget.Widget)
 dashboardWidgetPutH pid dashId widgetIdM tabSlugM = dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM Nothing
 
 
-dashboardWidgetPutWithMonitorH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
-dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM widget = do
+instance HxOutcome Widget.Widget
+
+
+dashboardWidgetPutWithMonitorH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (HxResult WidgetMonitorRejection Widget.Widget)
+dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM widget = hxAction do
   _ <- Projects.sessionAndProject pid
   (dashVM, dash) <- getDashAndVM pid dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
@@ -1236,36 +1267,36 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
        in maybe (throwError err404{errBody = "Widget not found in dashboard"}) (pure . (mfilter onTab tabSlugM <|>) . fst) $ findWidgetInDashboard nwid dash
 
   existingMonitorM <- maybe (pure Nothing) (Monitors.queryMonitorByWidgetId pid (Just dashId)) normalizedWidgetIdM
-  when (isJust existingMonitorM && isNothing widgetUpdated.alertThreshold) do
-    addErrorToast "Alert threshold required" (Just "Set an alert threshold or remove the monitor before saving.")
-    throwError err400{errBody = "Set an alert threshold or remove the monitor before saving"}
-  -- The render-time tab slug comes back in the posted JSON; it must not be persisted.
-  _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
-  syncDashboardAndQueuePush pid dashId
-  whenJust existingMonitorM \monitor -> do
-    let newQuery = fromMaybe monitor.logQuery widget.query
-        scope = mkScopedQuery pid (Nothing, Nothing) monitor.environment monitor.service
-        sqlQueryCfg = (applyScopedQuery scope $ defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins}
-        newSqlQuery =
-          if monitor.logQuery == newQuery
-            then monitor.logQueryAsSql
-            else case parseQueryToComponents sqlQueryCfg newQuery of
-              Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
-              Left _ -> monitor.logQueryAsSql
-        updatedMonitor =
-          (monitor :: Monitors.QueryMonitor)
-            { Monitors.logQuery = newQuery
-            , Monitors.logQueryAsSql = newSqlQuery
-            , Monitors.alertThreshold = fromMaybe monitor.alertThreshold widgetUpdated.alertThreshold
-            , Monitors.warningThreshold = widgetUpdated.warningThreshold
-            , Monitors.alertConfig = monitor.alertConfig{Monitors.unit = widgetUpdated.unit, Monitors.title = widgetMonitorTitle dashVM.title widgetUpdated.title}
-            }
-        synced (m :: Monitors.QueryMonitor) = (m.logQuery, m.alertThreshold, m.warningThreshold, m.alertConfig.unit, m.alertConfig.title)
-    when (synced updatedMonitor /= synced monitor) $ void $ Monitors.queryMonitorUpsert updatedMonitor
+  if isJust existingMonitorM && isNothing widgetUpdated.alertThreshold
+    then pure $ Left MonitorNeedsThreshold
+    else Right <$> do
+      -- The render-time tab slug comes back in the posted JSON; it must not be persisted.
+      _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
+      syncDashboardAndQueuePush pid dashId
+      whenJust existingMonitorM \monitor -> do
+        let newQuery = fromMaybe monitor.logQuery widget.query
+            scope = mkScopedQuery pid (Nothing, Nothing) monitor.environment monitor.service
+            sqlQueryCfg = (applyScopedQuery scope $ defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins}
+            newSqlQuery =
+              if monitor.logQuery == newQuery
+                then monitor.logQueryAsSql
+                else case parseQueryToComponents sqlQueryCfg newQuery of
+                  Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
+                  Left _ -> monitor.logQueryAsSql
+            updatedMonitor =
+              (monitor :: Monitors.QueryMonitor)
+                { Monitors.logQuery = newQuery
+                , Monitors.logQueryAsSql = newSqlQuery
+                , Monitors.alertThreshold = fromMaybe monitor.alertThreshold widgetUpdated.alertThreshold
+                , Monitors.warningThreshold = widgetUpdated.warningThreshold
+                , Monitors.alertConfig = monitor.alertConfig{Monitors.unit = widgetUpdated.unit, Monitors.title = widgetMonitorTitle dashVM.title widgetUpdated.title}
+                }
+            synced (m :: Monitors.QueryMonitor) = (m.logQuery, m.alertThreshold, m.warningThreshold, m.alertConfig.unit, m.alertConfig.title)
+        when (synced updatedMonitor /= synced monitor) $ void $ Monitors.queryMonitorUpsert updatedMonitor
 
-  addSuccessToast (if isJust existingMonitorM then "Widget and monitor updated successfully" else if isJust normalizedWidgetIdM then "Widget updated successfully" else "Widget added to dashboard successfully") Nothing
-  unless (configureMonitorM == Just "true") $ addTriggerEvent "closeModal" ""
-  addRespHeaders widgetUpdated
+      addSuccessToast (if isJust existingMonitorM then "Widget and monitor updated successfully" else if isJust normalizedWidgetIdM then "Widget updated successfully" else "Widget added to dashboard successfully") Nothing
+      unless (configureMonitorM == Just "true") $ addTriggerEvent "closeModal" ""
+      pure widgetUpdated
 
 
 updateDashboardWidgets :: Dashboards.Dashboard -> Maybe Text -> Maybe Text -> Widget.Widget -> Dashboards.Dashboard
@@ -1870,99 +1901,141 @@ data WidgetAlertForm = WidgetAlertForm
   deriving (FromForm) via (FormWithOptional "teams" WidgetAlertForm)
 
 
-widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> WidgetAlertForm -> ATAuthCtx (RespHeaders (Html ()))
-widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
+-- | Refusals shared by the widget save and the widget monitor form.
+data WidgetMonitorRejection = RawSqlWidget | MissingThreshold | InvalidWarningThreshold | MonitorNeedsThreshold
+  deriving stock (Eq, Show)
+
+
+instance Rejection WidgetMonitorRejection where
+  rejectionMessage = \case
+    RawSqlWidget -> "This widget can't be monitored: monitors need a KQL query, and this widget is built from raw SQL."
+    MissingThreshold -> "Enter an alert threshold before creating a monitor"
+    InvalidWarningThreshold -> "Warning threshold must be a number"
+    MonitorNeedsThreshold -> "Set an alert threshold or remove the monitor before saving"
+
+
+-- | An invalid compiled query still answers 200: the new-widget form closes its drawer on any status below 400.
+data WidgetMonitorResult = WidgetMonitorSaved | WidgetMonitorQueryInvalid Text
+  deriving stock (Eq, Show)
+  deriving (ToHtml) via NoBody WidgetMonitorResult
+
+
+instance HxOutcome WidgetMonitorResult where
+  hxSuccess = \case
+    WidgetMonitorSaved -> Just "Widget monitor configured successfully"
+    WidgetMonitorQueryInvalid _ -> Nothing
+
+
+widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> WidgetAlertForm -> ATAuthCtx (HxResult WidgetMonitorRejection WidgetMonitorResult)
+widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = hxAction do
   (session, _) <- Projects.sessionAndProject pid
   now <- Time.currentTime
+  let chartThresholdM = form.alertThreshold >>= readMaybe . toString
+      warningThresholdE = traverse (maybeToRight InvalidWarningThreshold . readMaybe . toString) (mfilter (not . T.null) $ T.strip <$> form.warningThreshold)
+  case (T.null (T.strip form.query), chartThresholdM, warningThresholdE) of
+    -- An empty query compiles to a count over all traffic, not the widget's series.
+    (True, _, _) -> pure $ Left RawSqlWidget
+    (_, Nothing, _) -> pure $ Left MissingThreshold
+    (_, _, Left e) -> pure $ Left e
+    (_, Just chartThreshold, Right warningThreshold) -> Right <$> do
+      -- Reuse the widget's existing monitor id when there is one
+      existingMonitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM form.widgetId
+      everyoneM <- ManageMembers.getEveryoneTeam pid
+      queryMonitorId <- maybe (Monitors.QueryMonitorId <$> UUID.genUUID) (pure . (.id)) existingMonitor
 
-  -- An empty query compiles to a count over all traffic, not the widget's series.
-  when (T.null (T.strip form.query)) do
-    addErrorToast "This widget can't be monitored" (Just "Monitors need a KQL query; this widget is built from raw SQL.")
-    throwError err400{errBody = "Widget monitors need a KQL query"}
+      chartWidgetM <-
+        traverse
+          ( \dashId -> do
+              (dashVM, dash) <- getDashAndVM pid dashId Nothing
+              maybe (throwError err404{errBody = "Widget not found in dashboard"}) (\(slug, widget) -> pure (dashId, dashVM.title, dash, slug, widget)) $ findWidgetInDashboard form.widgetId dash
+          )
+          dashboardIdM
 
-  -- Reuse the widget's existing monitor id when there is one
-  existingMonitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM form.widgetId
-  everyoneM <- ManageMembers.getEveryoneTeam pid
-  queryMonitorId <- maybe (Monitors.QueryMonitorId <$> UUID.genUUID) (pure . (.id)) existingMonitor
+      let unitM = mfilter (not . T.null) $ T.strip <$> form.unit
+          monitorTitle = maybe (maybe "Widget monitor" (.alertConfig.title) existingMonitor) (\(_, dashboardTitle, _, _, widget) -> widgetMonitorTitle dashboardTitle widget.title) chartWidgetM
+      whenJust chartWidgetM \(dashId, _, dash, tabSlugM, widget) ->
+        when ((widget.alertThreshold, widget.warningThreshold, widget.unit) /= (Just chartThreshold, warningThreshold, unitM)) do
+          _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM (Just form.widgetId) widget{Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}) Nothing
+          syncDashboardAndQueuePush pid dashId
+      -- Convert to AlertUpsertForm and reuse convertToQueryMonitor
+      let alertForm =
+            Alerts.AlertUpsertForm
+              { unit = unitM
+              , alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
+              , alertThreshold = chartThreshold
+              , warningThreshold = show <$> warningThreshold
+              , recipientEmails = []
+              , recipientSlacks = []
+              , recipientEmailAll = Just $ null form.teams || maybe False (\team -> team.id `elem` form.teams) everyoneM
+              , direction = form.direction
+              , title = monitorTitle
+              , severity = fromMaybe "Warning" form.severity
+              , subject = fromMaybe monitorTitle form.subject
+              , message = fromMaybe "" form.message
+              , query = form.query
+              , since = "1h"
+              , from = ""
+              , to = ""
+              , frequency = form.frequency
+              , timeWindow = form.timeWindow
+              , conditionType = Just "threshold_exceeded"
+              , source = Just "widget"
+              , vizType = form.vizType
+              , teams = form.teams
+              , alertRecoveryThreshold = form.alertRecoveryThreshold
+              , warningRecoveryThreshold = form.warningRecoveryThreshold
+              , widgetId = Just form.widgetId
+              , dashboardId = (.toText) <$> dashboardIdM
+              , notifyAfterCheck = form.notifyAfterCheck
+              , notifyAfter = form.notifyAfter
+              , stopAfterCheck = form.stopAfterCheck
+              , stopAfter = form.stopAfter
+              , environment = session.environment
+              , service = session.service
+              }
 
-  chartWidgetM <-
-    traverse
-      ( \dashId -> do
-          (dashVM, dash) <- getDashAndVM pid dashId Nothing
-          maybe (throwError err404{errBody = "Widget not found in dashboard"}) (\(slug, widget) -> pure (dashId, dashVM.title, dash, slug, widget)) $ findWidgetInDashboard form.widgetId dash
-      )
-      dashboardIdM
-
-  chartThreshold <- maybe (addErrorToast "Alert threshold required" Nothing >> throwError err400{errBody = "Enter an alert threshold before creating a monitor"}) pure (form.alertThreshold >>= readMaybe . toString)
-  warningThreshold <- traverse (\value -> maybe (throwError err400{errBody = "Invalid warning threshold"}) pure (readMaybe $ toString value)) (mfilter (not . T.null) $ T.strip <$> form.warningThreshold)
-  let unitM = mfilter (not . T.null) $ T.strip <$> form.unit
-      monitorTitle = maybe (maybe "Widget monitor" (.alertConfig.title) existingMonitor) (\(_, dashboardTitle, _, _, widget) -> widgetMonitorTitle dashboardTitle widget.title) chartWidgetM
-  whenJust chartWidgetM \(dashId, _, dash, tabSlugM, widget) ->
-    when ((widget.alertThreshold, widget.warningThreshold, widget.unit) /= (Just chartThreshold, warningThreshold, unitM)) do
-      _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM (Just form.widgetId) widget{Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}) Nothing
-      syncDashboardAndQueuePush pid dashId
-  -- Convert to AlertUpsertForm and reuse convertToQueryMonitor
-  let alertForm =
-        Alerts.AlertUpsertForm
-          { unit = unitM
-          , alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
-          , alertThreshold = chartThreshold
-          , warningThreshold = show <$> warningThreshold
-          , recipientEmails = []
-          , recipientSlacks = []
-          , recipientEmailAll = Just $ null form.teams || maybe False (\team -> team.id `elem` form.teams) everyoneM
-          , direction = form.direction
-          , title = monitorTitle
-          , severity = fromMaybe "Warning" form.severity
-          , subject = fromMaybe monitorTitle form.subject
-          , message = fromMaybe "" form.message
-          , query = form.query
-          , since = "1h"
-          , from = ""
-          , to = ""
-          , frequency = form.frequency
-          , timeWindow = form.timeWindow
-          , conditionType = Just "threshold_exceeded"
-          , source = Just "widget"
-          , vizType = form.vizType
-          , teams = form.teams
-          , alertRecoveryThreshold = form.alertRecoveryThreshold
-          , warningRecoveryThreshold = form.warningRecoveryThreshold
-          , widgetId = Just form.widgetId
-          , dashboardId = (.toText) <$> dashboardIdM
-          , notifyAfterCheck = form.notifyAfterCheck
-          , notifyAfter = form.notifyAfter
-          , stopAfterCheck = form.stopAfterCheck
-          , stopAfter = form.stopAfter
-          , environment = session.environment
-          , service = session.service
-          }
-
-  case Alerts.convertToQueryMonitor pid now queryMonitorId alertForm of
-    Left err -> addToast "error" "Monitor query is invalid" (Just err)
-    Right monitor -> do
-      _ <- Monitors.queryMonitorUpsert monitor{Monitors.deactivatedAt = existingMonitor >>= (.deactivatedAt)}
-      addSuccessToast "Widget monitor configured successfully" Nothing
-      addTriggerEvent "closeModal" ""
-  addRespHeaders ""
+      case Alerts.convertToQueryMonitor pid now queryMonitorId alertForm of
+        Left err -> WidgetMonitorQueryInvalid err <$ addToast "error" "Monitor query is invalid" (Just err)
+        Right monitor -> do
+          _ <- Monitors.queryMonitorUpsert monitor{Monitors.deactivatedAt = existingMonitor >>= (.deactivatedAt)}
+          WidgetMonitorSaved <$ addTriggerEvent "closeModal" ""
 
 
-widgetAlertDeleteH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Html ()))
+data WidgetMonitorRemoved = WidgetMonitorRemoved
+  deriving stock (Eq, Show)
+  deriving (ToHtml) via NoBody WidgetMonitorRemoved
+
+
+instance HxOutcome WidgetMonitorRemoved where
+  hxSuccess _ = Just "Monitor removed from widget"
+
+
+widgetAlertDeleteH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders WidgetMonitorRemoved)
 widgetAlertDeleteH pid widgetId dashboardIdM = do
   _ <- Projects.sessionAndProject pid
   _ <- Monitors.deleteMonitorsByWidgetIds pid dashboardIdM [widgetId]
-  addSuccessToast "Monitor removed from widget" Nothing
-  addRespHeaders ""
+  hxDone WidgetMonitorRemoved
 
 
-widgetAlertToggleH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Html ()))
+-- | A widget's monitor badge after a pause/resume.
+data WidgetMonitorStatus = WidgetMonitorStatus Projects.ProjectId Text (Maybe Dashboards.DashboardId) (Maybe Monitors.QueryMonitor)
+
+
+instance ToHtml WidgetMonitorStatus where
+  toHtml (WidgetMonitorStatus pid widgetId dashboardIdM monitorM) = toHtml $ widgetMonitorStatus_ pid "widget-monitor-status" widgetId dashboardIdM monitorM
+  toHtmlRaw = toHtml
+
+
+instance HxOutcome WidgetMonitorStatus where
+  hxSuccess (WidgetMonitorStatus _ _ _ monitorM) = (\m -> if isJust m.deactivatedAt then "Monitor paused" else "Monitor resumed") <$> monitorM
+
+
+widgetAlertToggleH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders WidgetMonitorStatus)
 widgetAlertToggleH pid widgetId dashboardIdM = do
   _ <- Projects.sessionAndProject pid
   monitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId `whenNothingM` throwError err404{errBody = "Widget monitor not found"}
   void $ Monitors.monitorToggleActiveById pid monitor.id
-  updated <- Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId
-  addSuccessToast (if isJust monitor.deactivatedAt then "Monitor resumed" else "Monitor paused") Nothing
-  addRespHeaders $ widgetMonitorStatus_ pid "widget-monitor-status" widgetId dashboardIdM updated
+  hxDone . WidgetMonitorStatus pid widgetId dashboardIdM =<< Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId
 
 
 --------------------------------------------------------------------
@@ -2544,15 +2617,26 @@ dashboardDuplicatePostH pid dashId = do
       addRespHeaders DashboardNoContent
 
 
-dashboardStarPostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Html ()))
+data StarButton = StarButton Projects.ProjectId Dashboards.DashboardId Bool
+
+
+instance ToHtml StarButton where
+  toHtml (StarButton pid dashId starred) = toHtml $ starButton_ pid dashId starred
+  toHtmlRaw = toHtml
+
+
+instance HxOutcome StarButton where
+  hxSuccess (StarButton _ _ starred) = Just $ if starred then "Dashboard starred" else "Dashboard unstarred"
+
+
+dashboardStarPostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders StarButton)
 dashboardStarPostH pid dashId = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
   dashVM <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404{errBody = "Dashboard not found"}
   let newStarredSince = if isJust dashVM.starredSince then Nothing else Just now
   _ <- Dashboards.updateStarredSince pid dashId newStarredSince
-  addSuccessToast (if isJust newStarredSince then "Dashboard starred" else "Dashboard unstarred") Nothing
-  addRespHeaders $ starButton_ pid dashId (isJust newStarredSince)
+  hxDone $ StarButton pid dashId (isJust newStarredSince)
 
 
 -- | Handler for deleting a dashboard.

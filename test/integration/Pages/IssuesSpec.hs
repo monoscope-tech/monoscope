@@ -199,7 +199,7 @@ spec = around withTestResources $ describe "Issues" do
     -- links, acks and monitor recoveries share the timeline.
     replicateM_ 2 $ call tr $ IssuesPage.issueViewedPostH testPid a
     void $ call tr $ IssuesPage.commentPostH testPid a (IssuesPage.CommentForm "Rolled back the cart service")
-    forM_ [IssuesPage.LinkForm "https://github.com/acme/shop/issues/42" (Just "Cart crash"), IssuesPage.LinkForm "javascript:alert(1)" Nothing] (call tr . IssuesPage.linkPostH testPid a)
+    forM [IssuesPage.LinkForm "https://github.com/acme/shop/issues/42" (Just "Cart crash"), IssuesPage.LinkForm "javascript:alert(1)" Nothing] (fmap void . call tr . IssuesPage.linkPostH testPid a) `shouldReturn` [Right (), Left IssuesPage.NotAnHttpLink]
     void $ call tr $ IssuesPage.acknowledgeIssueGetH testPid True a Nothing
     Just slack <- pure $ Incidents.slackPayload $ AE.object ["text" AE..= ("checkout alert" :: Text)]
     forM_ [(frozenTime, Incidents.IncidentAlert), (addUTCTime 60 frozenTime, Incidents.IncidentRecovered)] \(observedAt, change) ->

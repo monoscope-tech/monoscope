@@ -39,6 +39,8 @@ instance HasStatus (Invalid e) where type StatusOf (Invalid e) = 422
 -- | Expected, user-correctable failures, one constructor per case.
 class Rejection e where
   rejectionMessage :: e -> Text
+  rejectionDetail :: e -> Maybe Text
+  rejectionDetail = const Nothing
 
 
 -- | What a successful outcome tells htmx besides its body.
@@ -66,7 +68,7 @@ hxDone a = traverse_ redirectCS (hxRedirect a) >> traverse_ (`addSuccessToast` N
 hxAction :: (HxOutcome a, Rejection e, HxState es) => Eff es (Either e a) -> Eff es (HxResult e a)
 hxAction run =
   run >>= \case
-    Left e -> addToast "error" (rejectionMessage e) Nothing >> addReswap "none" >> (respond =<< addRespHeaders (Invalid e))
+    Left e -> addToast "error" (rejectionMessage e) (rejectionDetail e) >> addReswap "none" >> (respond =<< addRespHeaders (Invalid e))
     Right a -> respond . fmap Ok =<< hxDone a
 
 

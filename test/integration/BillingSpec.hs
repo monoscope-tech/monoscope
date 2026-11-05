@@ -133,8 +133,8 @@ spec = around withTestResources do
     -- not block the project's redirect either.
     _ <- runQueryEffect tr $ Projects.completeOnboardingStep pid "explored_logs"
     let configured = tr{trATCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.convertkitApiKey = "test-key"}}}
-    (_, (pricingHeaders, _)) <- testServantWithNotifications configured $ interpose @HTTP (\_ _ -> throwIO $ userError "conversion service unavailable") $ CreateProject.pricingUpdateH pid def{CreateProject.isOnboarding = Just True}
-    redirect pricingHeaders `shouldBe` Header ("/p/" <> pid.toText <> "/")
+    call configured (interpose @HTTP (\_ _ -> throwIO $ userError "conversion service unavailable") $ CreateProject.pricingUpdateH pid def{CreateProject.isOnboarding = Just True})
+      `shouldReturn` Right (CreateProject.PricingOnboarded pid)
     project <- projectOf tr pid
     (project.paymentPlan, sort (V.toList project.onboardingStepsCompleted)) `shouldBe` ("Free", ["Info", "Integration", "NotifChannel", "Pricing", "Survey", "created_monitor", "explored_logs"])
     landing <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] pid []

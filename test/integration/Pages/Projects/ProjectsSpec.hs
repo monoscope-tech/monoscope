@@ -74,7 +74,7 @@ spec = around withTestResources do
     -- Viewers change nothing; editors cannot delete; deletion is admin-only, and an explicit
     -- role binds sudo users too (sudo only stands in for a missing membership).
     setRole tr testPid PView
-    traverse (httpStatus tr) [void $ Pages.createProjectPostH testPid (form "Forbidden"), void $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] Nothing), void $ Pages.deleteProjectGetH testPid] `shouldReturn` [403, 403, 403]
+    traverse (httpStatus tr) [void $ Pages.createProjectPostH testPid (form "Forbidden"), void $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] Nothing), void $ Pages.deleteProjectGetH testPid, void $ Pages.pagerdutyConnectH testPid (Pages.PagerdutyConnectForm "viewer-key-0123456789abcdef"), void $ Pages.pagerdutyDisconnectH testPid, void $ Pages.slackDisconnectH testPid] `shouldReturn` [403, 403, 403, 403, 403, 403]
     setRole tr testPid PEdit
     httpStatus tr (Pages.deleteProjectGetH testPid) `shouldReturn` 403
     setRole tr ownPid PView
@@ -113,7 +113,7 @@ spec = around withTestResources do
     setEveryone tr "pagerduty_services" ["deleted-project-test"]
     setEveryone tr "disabled_channels" []
     fst <$> captureNotifs tr BackgroundJobs.checkTriggeredQueryMonitors >>= (`shouldSatisfy` any (\case PagerdutyNotification{} -> True; _ -> False))
-    void $ testServant tr $ Pages.deleteProjectGetH testPid
+    call tr (Pages.deleteProjectGetH testPid) `shouldReturn` Right Pages.ProjectDeleted
     void $ try @SomeException $ ingestLog tr apiKey "after project deletion" (addUTCTime 1 frozenTime)
     countLogs "after project deletion" `shouldReturn` 0
     isNothing <$> runTestBgNoReset tr (Projects.activeProjectById testPid) `shouldReturn` True
@@ -130,10 +130,10 @@ spec = around withTestResources do
     Settings.ApiPost pid created (Just (apiKey, keyText)) <- call tr $ Settings.apiPostH testPid Settings.GenerateAPIKeyForm{title = "Test", from = Nothing}
     (pid, length created, apiKey.title, apiKey.active, apiKey.keyPrefix) `shouldBe` (testPid, 2, "Test", True, keyText)
     ingestLog tr keyText "accepted before revoke" frozenTime
-    Settings.ApiPost _ revoked Nothing <- call tr $ Settings.apiDeleteH testPid apiKey.id
+    Right (Settings.ApiKeyToggled _ _ revoked) <- call tr $ Settings.apiDeleteH testPid apiKey.id
     keyActive apiKey.id revoked `shouldBe` Just False
     ingestLog tr keyText "rejected after revoke" frozenTime `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
-    Settings.ApiPost _ reactivated Nothing <- call tr $ Settings.apiActivateH testPid apiKey.id
+    Right (Settings.ApiKeyToggled _ _ reactivated) <- call tr $ Settings.apiActivateH testPid apiKey.id
     keyActive apiKey.id reactivated `shouldBe` Just True
     ingestLog tr keyText "accepted after activation" frozenTime
     html <- renderT <$> call tr (Settings.apiGetH testPid)
@@ -211,11 +211,8 @@ spec = around withTestResources do
 
     -- Team handles are unique per project and every field is validated.
     let team = Pages.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = V.empty, teamMembers = [uid], discordChannels = V.empty, slackChannels = V.empty, phoneNumbers = V.empty, pagerdutyServices = V.empty, teamId = Nothing}
-        teamError f = call tr (Pages.manageTeamPostH testPid f Nothing) >>= \case
-          Pages.ManageTeamsPostError e -> pure e
-          _ -> fail "expected ManageTeamsPostError"
-    traverse teamError [team, team, team{Pages.teamName = ""}, team{Pages.teamHandle = "invalid handle"}, team{Pages.notifEmails = ["not-an-email"]}]
-      `shouldReturn` ["", "Team handle already exists for this project.", "Team name is required", "Handle must be lowercase, no spaces, and hyphens only", "Invalid email format: not-an-email"]
+    traverse (\f -> call tr (Pages.manageTeamPostH testPid f Nothing)) [team, team, team{Pages.teamName = ""}, team{Pages.teamHandle = "invalid handle"}, team{Pages.notifEmails = ["not-an-email"]}]
+      `shouldReturn` [Right (Pages.TeamCreated testPid), Left Pages.DuplicateHandle, Left Pages.TeamNameRequired, Left Pages.HandleInvalidChars, Left (Pages.InvalidTeamEmail "not-an-email")]
 
     -- `INSERT … ON CONFLICT DO NOTHING RETURNING id` returns no row for an existing email, and
     -- the invite handler `error`ed on that: two people inviting one new address was a 500.
@@ -304,12 +301,12 @@ spec = around withTestResources do
         teams = call tr (Pages.manageTeamsGetH testPid (Just "")) >>= \case
           Pages.ManageTeamsGet' (_, _, _, _, ts) -> pure ts
           _ -> fail "expected ManageTeamsGet'"
-    Pages.ManageTeamsPostError "" <- call tr $ Pages.manageTeamPostH testPid Pages.TeamForm{teamName = "Routing Team", teamDescription = "Owns customer alerts", teamHandle = "routing-team", teamMembers = [(getResponse tr.trSessAndHeader).user.id], notifEmails = V.empty, slackChannels = ["#team-alerts"], discordChannels = V.empty, phoneNumbers = V.empty, pagerdutyServices = [teamKey], teamId = Nothing} Nothing
+    Right (Pages.TeamCreated _) <- call tr $ Pages.manageTeamPostH testPid Pages.TeamForm{teamName = "Routing Team", teamDescription = "Owns customer alerts", teamHandle = "routing-team", teamMembers = [(getResponse tr.trSessAndHeader).user.id], notifEmails = V.empty, slackChannels = ["#team-alerts"], discordChannels = V.empty, phoneNumbers = V.empty, pagerdutyServices = [teamKey], teamId = Nothing} Nothing
     Just team <- V.find ((== "routing-team") . (.handle)) <$> teams
     map (.memberEmail) (V.toList team.members) `shouldBe` ["test@monoscope.tech"]
     slackTo <$> send "runtime_exception" TCSlack (Just team.id) `shouldReturn` ["#team-alerts"]
     send "runtime_exception" TCPagerduty (Just team.id) >>= \ns -> [Notify.integrationKey d | PagerdutyNotification d <- ns] `shouldBe` [teamKey]
-    Pages.ManageTeamsDelete <- call tr $ Pages.manageTeamBulkActionH testPid "delete" (Pages.TBulkActionForm [team.id.unwrap]) Nothing
+    Right (Pages.TeamsDeleted _ _) <- call tr $ Pages.manageTeamBulkActionH testPid "delete" (Pages.TBulkActionForm [team.id.unwrap]) Nothing
     V.any ((== team.id) . (.id)) <$> teams `shouldReturn` False
     slackTo <$> send "runtime_exception" TCSlack (Just team.id) `shouldReturn` []
 
@@ -325,13 +322,13 @@ spec = around withTestResources do
     sort . slackTo <$> send "runtime_exception" TCSlack Nothing `shouldReturn` ["C_ONE", "C_TWO"]
 
   it "notification settings: PagerDuty and Slack connect and disconnect, saves are authoritative, identityOn is opt-out" \tr -> do
-    let save enabled slack identityOn = void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm enabled [] [] slack identityOn)
+    let save enabled slack identityOn = void $ call tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm enabled [] [] slack identityOn)
         slackRows = dbQuery @_ @(Text, Maybe Text) tr [sql|SELECT channel_id, team_name FROM apis.slack WHERE project_id = ?|] (Only testPid)
         key = "a1b2c3d4e5f67890abcdef1234567890"
     setEveryone tr "pagerduty_services" []
-    void $ testServant tr $ Pages.pagerdutyConnectH testPid (Pages.PagerdutyConnectForm "short")
+    (void <$> call tr (Pages.pagerdutyConnectH testPid (Pages.PagerdutyConnectForm "short"))) `shouldReturn` Left Pages.PagerdutyKeyTooShort
     everyone tr "pagerduty_services" `shouldReturn` []
-    void $ testServant tr $ Pages.pagerdutyConnectH testPid (Pages.PagerdutyConnectForm key)
+    void $ call tr $ Pages.pagerdutyConnectH testPid (Pages.PagerdutyConnectForm key)
     everyone tr "pagerduty_services" `shouldReturn` [key]
     void $ testServant tr $ Pages.pagerdutyDisconnectH testPid
     everyone tr "pagerduty_services" `shouldReturn` []
@@ -344,7 +341,7 @@ spec = around withTestResources do
       void $ ProjectMembers.addSlackChannelToEveryoneTeam testPid "C_OAUTH"
     slackRows `shouldReturn` [("C_OAUTH", Just "Workspace")]
     everyone tr "slack_channels" `shouldReturn` ["C_OAUTH"]
-    void $ testServant tr $ Pages.slackDisconnectH testPid
+    void $ call tr $ Pages.slackDisconnectH testPid
     slackRows `shouldReturn` []
     everyone tr "slack_channels" `shouldReturn` []
 
