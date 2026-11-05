@@ -638,12 +638,23 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
   variableLastRefresh.set(input, { url, startedAt: Date.now() });
   const refresh = { url, request: Promise.resolve() };
   variableRefreshes.set(input, refresh);
+  // A rejected query is the author's to fix: mark the picker rather than console.error,
+  // which the browser SDK files as a critical runtime exception.
+  const fieldset = input.closest('fieldset');
+  const markInvalid = (message?: string) => {
+    input.toggleAttribute('data-invalid', !!message);
+    if (!fieldset) return;
+    fieldset.dataset.help ??= fieldset.title;
+    fieldset.title = message ?? fieldset.dataset.help;
+  };
   refresh.request = (async () => {
     try {
       const response = await fetch(url);
+      if (response.status < 500 && !response.ok) return markInvalid((await response.text()) || `Variable options request failed: ${response.status}`);
       if (!response.ok) throw new Error(`Variable options request failed: ${response.status}`);
       const { data_text, error } = await response.json();
-      if (error) throw new Error(error);
+      if (error) return markInvalid(error);
+      markInvalid();
       if (!Array.isArray(data_text)) throw new Error('Variable options response is missing data');
       if (variableRefreshes.get(input) !== refresh || (input as any)._tagifyInstance !== tgfy || !input.isConnected) return;
       const valueOf = (option: any) => String(typeof option === 'object' ? option.value : option);

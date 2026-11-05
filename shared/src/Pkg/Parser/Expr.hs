@@ -950,8 +950,7 @@ resolvesIn :: FieldUniverse -> T.Text -> Bool
 resolvesIn u col = col `S.member` u.bareCols || T.replace "___" "." col `S.member` u.flatCols
 
 
--- | Names a KQL subject may start with: a real bare column, a SELECT alias,
--- or the @url_path@ shim 'transformFlattenedAttribute' rewrites. Also the set
+-- | Names a KQL subject may start with: a real bare column or a SELECT alias. Also the set
 -- @/api/v1/schema@ advertises, so the query editor validates against exactly
 -- what the parser accepts.
 --
@@ -962,7 +961,6 @@ acceptedFieldRoots :: FieldUniverse -> Set T.Text
 acceptedFieldRoots u =
   u.bareCols
     <> M.keysSet (M.filter (resolvesIn u) outputFieldAliases)
-    <> (if resolvesIn u "attributes___url___path" then one "url_path" else mempty)
 
 
 -- | Whether a subject's root names something queryable. @*@/@""@ come from
@@ -1058,6 +1056,12 @@ suggestFieldRoot u root =
 -- >>> outputFieldAliases M.! "method"
 -- "attributes___http___request___method"
 --
+-- @url_path@ is the name endpoints use; it was accepted by validation but shipped raw,
+-- so TimeFusion answered @No field named url_path@.
+--
+-- >>> fmap display (parse pSubject "" "url_path")
+-- Right "attributes___url___path"
+--
 -- Report URLs sent before the resource-field correction retain @service.name@.
 --
 -- >>> fmap (\subject -> (toQText subject, display subject)) (parse pSubject "" "service.name")
@@ -1070,6 +1074,7 @@ outputFieldAliases =
     , ("service.name", "resource___service___name")
     , ("trace_id", "context___trace_id")
     , ("method", "attributes___http___request___method")
+    , ("url_path", "attributes___url___path")
     ]
 
 
@@ -1109,7 +1114,6 @@ transformFlattenedAttribute entire
         <> field
         <> "') #>> '{}'))"
   | entire `S.member` flattenedOtelAttributes = T.replace "." "___" entire
-  | entire == "url_path" = "attributes___url___path"
   | otherwise = entire
 
 

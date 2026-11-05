@@ -349,7 +349,7 @@ dashboardVariables_ pid dashId variables extraAttrs = div_ ([id_ "dashboard-vari
     when (hidden > 0) do
       input_ [type_ "checkbox", class_ "hidden peer/more", id_ "dash-vars-more"]
       label_ [Lucid.for_ "dash-vars-more", class_ "order-last self-end h-9 px-3 inline-flex items-center rounded-lg border border-strokeWeak bg-bgRaised text-sm text-textWeak cursor-pointer hover:border-strokeStrong hover:text-textStrong peer-checked/more:hidden", Aria.label_ $ "Show " <> show hidden <> " more filters"] $ toHtml $ "+" <> show @Text hidden
-    forM_ (zip [0 :: Int ..] variables) \(i, var) -> fieldset_ ([class_ $ "dash-variable max-md:w-full pl-3 pr-2.5 border border-strokeWeak bg-bgRaised rounded-lg text-sm hover:border-strokeStrong focus-within:border-strokeFocus" <> memptyIfFalse (folds i var) " hidden peer-checked/more:block"] <> foldMap (pure . title_) var.helpText) do
+    forM_ (zip [0 :: Int ..] variables) \(i, var) -> fieldset_ ([class_ $ "dash-variable max-md:w-full pl-3 pr-2.5 border border-strokeWeak bg-bgRaised rounded-lg text-sm hover:border-strokeStrong focus-within:border-strokeFocus has-[[data-invalid]]:border-strokeError-strong" <> memptyIfFalse (folds i var) " hidden peer-checked/more:block"] <> foldMap (pure . title_) var.helpText) do
       legend_ [class_ "ml-1 px-1 text-xs leading-none text-textWeak whitespace-nowrap cursor-pointer", [__|on click call (next .tagify__input).focus()|]] do
         toHtml $ fromMaybe var.key var.title
         when (var.required == Just True) $ span_ [class_ "text-textError"] (span_ [Aria.hidden_ "true"] " *" >> span_ [class_ "sr-only"] " (required)")

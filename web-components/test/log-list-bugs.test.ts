@@ -1,4 +1,5 @@
 import { render } from 'lit';
+import { repeat } from 'lit/directives/repeat.js';
 import { describe, test, expect, vi } from 'vitest';
 import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList, fakeLiveTransport, stubContainer, stubVirtualizer } from './log-list-harness';
 import { DenseRowFlowLayout, virtualItemKey, MAX_RETAINED_ROWS, HISTORY_PREFETCH_ROWS } from '../src/log-list';
@@ -1074,9 +1075,18 @@ describe('LogList — concurrent refresh vs load-more', () => {
   // A row carries a `type` of its own ('log' | 'span'), so keying on `'type' in item` would
   // give every event the same key — the virtualizer would recycle rows onto the wrong data.
   test('virtual rows are keyed by identity, not by list position', async () => {
-    expect(virtualItemKey(row('abc'))).toBe('abc');
-    expect(virtualItemKey({ type: 'loadMore' })).toBe('loadMore');
-    expect(virtualItemKey({ type: 'aggregateChildren', parentKey: 'k' })).toBe('aggregateChildren:k');
+    expect(virtualItemKey(row('abc'), 0)).toBe('abc');
+    expect(virtualItemKey({ type: 'loadMore' }, 0)).toBe('loadMore');
+    expect(virtualItemKey({ type: 'aggregateChildren', parentKey: 'k' }, 0)).toBe('aggregateChildren:k');
+  });
+
+  // lit-virtualizer 2.1.1 re-renders items[first..last] on `rangeChanged` with a range
+  // measured before the list shrank, so trailing slots are undefined (issue bef97251:
+  // "Cannot use 'in' operator to search for 'id' in undefined").
+  test('virtualRows_staleRangeAfterShrink_rendersNothingForMissingSlots', async () => {
+    const el = await mountList();
+    const host = document.createElement('div');
+    expect(() => render(repeat([row('a'), undefined as any], virtualItemKey, (el as any).renderVirtualItem), host)).not.toThrow();
   });
 
   test('finishing one fetch kind does not clear another kind\'s in-flight guard', async () => {
