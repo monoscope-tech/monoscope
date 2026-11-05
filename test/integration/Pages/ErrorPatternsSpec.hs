@@ -256,7 +256,7 @@ spec = around withTestResources $ describe "Error patterns" do
     drainExtractionWorker tr
     void $ runBackgroundJobsWhere frozenTime tr.trATCtx quiet
 
-    void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
+    void $ call tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
     routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventIssueEnrichment) >>= maybe (fail "Missing activated enrichment template") pure
     queued <- getPendingBackgroundJobs tr.trATCtx
     let enhancements = [job | (_, job@BackgroundJobs.EnhanceIssuesWithLLM{}) <- toList queued]
@@ -279,7 +279,7 @@ spec = around withTestResources $ describe "Error patterns" do
     map (.status) executions `shouldSatisfy` all (== Issues.RunSucceeded)
     artifacts <- runQueryEffect tr $ concat <$> traverse (Issues.listRunArtifacts testPid . (.id)) executions
     mapMaybe (.content) artifacts `shouldSatisfy` any (T.isInfixOf "The fixture application dereferenced an absent value.")
-    void $ testServant tr $ AIThreads.routinePausePostH testPid routine.conversationId
+    void $ call tr $ AIThreads.routinePausePostH testPid routine.conversationId
 
     titles <- map fromOnly <$> dbQuery tr [sql| SELECT title FROM apis.issues WHERE project_id = ? AND issue_type = 'runtime_exception' |] (Only testPid)
     titles `shouldSatisfy` any (== "Checkout runtime failure")

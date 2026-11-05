@@ -1062,7 +1062,7 @@ spec = do
         map (.service) details.content.mappings `shouldBe` [Just "checkout"]
         fmap (.id) details.content.dashboardSync `shouldBe` Just sync.id
         readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewNeedsRoutine -> True; _ -> False)
-        void $ testServant configured $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
+        void $ call configured $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
         readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False)
         noRunner <- renderT . (.content) <$> call withoutAgent (PageCodeContext.repositoryGetH testPid repository.id)
         noRunner `shouldNotSatisfy` T.isInfixOf "Ready for pull requests"

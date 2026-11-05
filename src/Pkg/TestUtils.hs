@@ -278,6 +278,7 @@ import Web.ApiTypes (ApiActor (..))
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.I18n qualified as I18n
+import Web.Outcome (HxResult, hxOutcome)
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "cryptonite" Crypto.Error (throwCryptoError)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -1346,8 +1347,24 @@ renderT = toStrict . Lucid.renderText . Lucid.toHtml
 
 
 -- | A handler's typed payload, for specs that assert on data rather than headers.
-call :: TestResources -> ATAuthCtx (RespHeaders a) -> IO a
-call tr = fmap snd . testServant tr
+call :: Answer r => TestResources -> ATAuthCtx r -> IO (Payload r)
+call tr = fmap answerPayload . runAuthHandler tr
+
+
+-- | What a handler answer carries once the transport wrapper is stripped.
+class Answer r where
+  type Payload r
+  answerPayload :: r -> Payload r
+
+
+instance Answer (Servant.Headers hs a) where
+  type Payload (Servant.Headers hs a) = a
+  answerPayload = Servant.getResponse
+
+
+instance Answer (HxResult e a) where
+  type Payload (HxResult e a) = Either e a
+  answerPayload = hxOutcome
 
 
 -- | The page of a full table response; a rows-only (load-more) fragment fails the test.

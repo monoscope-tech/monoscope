@@ -465,6 +465,7 @@ library
       Web.FacetsFallback
       Web.I18n
       Web.MCP
+      Web.Outcome
       Web.Routes
       Proto.Opentelemetry.Proto.Common.V1.Common
       Proto.Opentelemetry.Proto.Common.V1.Common_Fields
@@ -1076,6 +1077,7 @@ test-suite test-dev
       Web.FacetsFallback
       Web.I18n
       Web.MCP
+      Web.Outcome
       Web.Routes
       BackgroundJobsSpec
       BillingSpec

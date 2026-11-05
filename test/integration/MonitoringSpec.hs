@@ -367,14 +367,11 @@ spec = describe "Monitoring" do
 
     it "uptime checks and cron monitors: failures open downtime/missed/failed issues, recovery resolves them" \tr -> do
       pid <- createTestProject tr "uptime-cron"
-      -- A rejected submission swaps nothing so the form keeps what was typed; an accepted one
-      -- re-renders the form blank above the list (htmx 4 needs the explicit :inherited targets).
-      (rejectedH, rejected) <- testServant tr $ Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200))
-      (reswapOf rejectedH, T.isInfixOf "10.0.0.1" (renderT rejected)) `shouldBe` (Just "none", False)
-      (addedH, added) <- testServant tr $ Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200))
-      reswapOf addedH `shouldBe` Nothing
+      -- An accepted submission re-renders the form blank above the list (htmx 4 needs the explicit :inherited targets).
+      (void <$> call tr (Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200)))) `shouldReturn` Left Alerts.UnsafeUrl
+      added <- fromRightShow <$> call tr (Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200)))
       renderT added `shouldContainAll` ["https://shop.example.com/health"]
-      cronAdded <- call tr $ Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Nightly billing" 3600 300)
+      cronAdded <- fromRightShow <$> call tr (Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Nightly billing" 3600 300))
       goldenParts "uptime-cron-forms" . ordNub $ tagsWith ["value name=\"url\"", "hx-target:inherited=\"this\""] (renderT added) <> tagsWith ["value name=\"slug\"", "hx-target:inherited=\"this\""] (renderT cronAdded)
 
       -- One failure is a blip; two open a downtime issue; a success resolves it.
@@ -401,8 +398,7 @@ spec = describe "Monitoring" do
       -- Cron: a duplicate slug is refused; a check-in keeps it healthy, a missed window and an error
       -- run open issues, a later check-in resolves. Check-ins go through ingestion (TimeFusion on
       -- CI), so each evaluation retries until the check-in it depends on is visible.
-      (dupH, _) <- testServant tr $ Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Again" 3600 300)
-      reswapOf dupH `shouldBe` Just "none"
+      (void <$> call tr (Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Again" 3600 300))) `shouldReturn` Left (Alerts.DuplicateSlug "nightly-billing")
       [m] <- runQueryEffect tr (Monitors.cronMonitorsByProject pid)
       apiKey <- createTestAPIKey tr pid "cron-key"
       let at dt = addUTCTime dt frozenTime
