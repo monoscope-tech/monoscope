@@ -18,7 +18,6 @@ import Data.List (lookup)
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime, secondsToNominalDiffTime)
-import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Deriving.Aeson.Stock qualified as DAE
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
@@ -32,12 +31,13 @@ import System.Clock (TimeSpec (TimeSpec))
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, formatUTC, nonEmptyT, popoverPanel_, popoverTrigger_, sinceWindows, timeScopedUrl, toUriStr)
+import Utils (faSprite_, nonEmptyT, parseTime, popoverPanel_, popoverTrigger_, sinceWindows, timeScopedUrl, toUriStr)
 
 
 -- $setup
 -- >>> import Relude.Unsafe qualified as Unsafe
 -- >>> import Data.Time (UTCTime (UTCTime), fromGregorian)
+-- >>> import Utils (parseTime)
 -- >>> let epoch = UTCTime (fromGregorian 2026 1 1) 0
 
 
@@ -134,17 +134,19 @@ defaultSince = "1H"
 -- Empty since/from/to must fall back to the default range, never an unbounded scan
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker (Just "") (Just "") (Just ""))
 -- (Just 2024-10-31 11:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("1H",""))
+--
+-- Absolute and one-sided ranges agree with the other telemetry surfaces:
+-- >>> let start = Just "2025-12-31T22:00:00Z"; end = Just "2026-01-01T00:00:00Z"
+-- >>> and [parseTimeRange epoch (TimePicker Nothing start upper) == parseTime start upper Nothing epoch | upper <- [end, Nothing]]
+-- True
+-- >>> parseTimeRange epoch (TimePicker Nothing (Just "invalid") Nothing) == parseTimeRange epoch (TimePicker Nothing Nothing Nothing)
+-- True
 parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseTimeRange now tp = case (nonEmptyT tp.since, nonEmptyT tp.from, nonEmptyT tp.to) of
-  (Just s, _, _) -> parseSince now s
-  (_, Nothing, Nothing) -> parseSince now defaultSince
-  (_, fromM, toM) -> case (parseUTCTime fromM, parseUTCTime toM) of
-    (Nothing, Nothing) -> parseSince now defaultSince
-    (f, t) -> (f, t, liftA2 (,) (fmtTime f) (fmtTime t))
-  where
-    parseUTCTime = (>>= iso8601ParseM . toString)
-    -- Browser Date parsing must retain the UTC instant in every viewer timezone.
-    fmtTime = fmap formatUTC
+parseTimeRange now tp = case nonEmptyT tp.since of
+  Just s -> parseSince now s
+  Nothing -> case parseTime tp.from tp.to Nothing now of
+    (Nothing, Nothing, _) -> parseSince now defaultSince
+    range -> range
 
 
 -----------------------------------------------------------------------------------------------------

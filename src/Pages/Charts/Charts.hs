@@ -149,68 +149,66 @@ queryMetrics dbSource respDataType pidM queryM querySQLM sinceM fromM toM source
 
 
 queryProjectMetrics :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => M SqlSource -> M DataType -> Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
-queryProjectMetrics dbSource (maybeToMonoid -> respDataType) pid (Utils.nonEmptyT -> queryM) (Utils.nonEmptyT -> querySQLM) (Utils.nonEmptyT -> sinceM) (Utils.nonEmptyT -> fromM) (Utils.nonEmptyT -> toM) (Utils.nonEmptyT -> sourceM) binDensityM allParams = do
+queryProjectMetrics dbSource (maybeToMonoid -> respDataType) pid queryM (Utils.nonEmptyT -> querySQLM) sinceM fromM toM sourceM binDensityM allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
-  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  let density = fromMaybe def binDensityM
-      -- The chart routes bind this to the authenticated session instead of trusting a
-      -- browser query parameter. Other callers may leave it absent for deliberately
-      -- cross-environment exports and background work.
-      environment = Utils.nonEmptyT $ join $ lookup "environment" allParams
-      service = Utils.nonEmptyT $ join $ lookup "service" allParams
-  let mappngSQL = variablePresets density pid.toText fromD toD allParams now
-      mappngKQL = variablePresetsKQL density pid.toText fromD toD allParams now
-  let source = parseMaybe pSource =<< sourceM
-  -- A KQL parse/unknown-field failure is user input, not a server fault: carry it
-  -- in the payload so the widget renders its error overlay. A 400 body isn't JSON,
-  -- so the client would otherwise fall back to a generic "couldn't load this chart".
-  -- Validated against `source`, not blind: a widget can carry `source=metrics` in the
-  -- request rather than in the query text, and checking those fields against
-  -- otel_logs_and_spans rejects the metrics table's own columns (`metric_name`, `value`).
-  case first queryErrorText $ parseQueryDiagnosed source $ fillQueryTemplate KqlTemplate mappngKQL $ maybeToMonoid queryM of
+  let prepared = prepareChartQuery (usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource) pid now (Components.TimePicker sinceM fromM toM) sourceM binDensityM queryM allParams
+      sqlQueryCfg = prepared.config
+      (fromD, toD) = sqlQueryCfg.dateRange
+      mappngSQL = prepared.mapping
+      query = maybeToMonoid $ Utils.nonEmptyT queryM
+  case prepared.parsed of
     Left err -> pure (emptyMetricsFor now fromD toD){error = Just err}
-    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density environment service (maybe False (T.null . snd) currentRange) queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
-
-
--- | Run a parsed chart query, either through the caller's raw SQL template or
--- the KQL-generated query.
-runQueryAST :: (DB es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe SqlSource -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> Bool -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
-runQueryAST authCtx dbSource respDataType pid source binDensity environment service liveRange queryAST queryM querySQLM mappngSQL now fromD toD = do
-  let scope = mkScopedQuery pid (fromD, toD) environment service
-      sqlQueryCfg =
-        applyScopedQuery
-          scope
-          (defSqlQueryCfg pid now source Nothing)
-            { binDensity
-            , targetsTimefusion = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
-            }
-
-  case querySQLM of
-    Just querySQL
-      | Just message <- rawSqlScopeError environment service (fillQueryTemplate SqlTemplate mappngSQL querySQL) ->
-          pure (emptyMetricsFor now fromD toD){error = Just message}
-    Just querySQL -> do
-      let tbl = sourceTable source
-          sqlQuery = fillQueryTemplate SqlTemplate mappngSQL querySQL
-      convertTimestampsToMs
-        <$> withChartSpan
-          tbl
-          (rawSqlSpanAttrs tbl sqlQuery)
-          sqlQuery
-          (emptyMetricsFor now fromD toD)
-          (runRawQuery authCtx dbSource respDataType sqlQueryCfg queryAST queryM querySQL mappngSQL liveRange Nothing)
-    Nothing ->
-      let actualDataType = decoderFor respDataType queryAST
-       in convertTimestampsToMs
-            . coerceBinnedScalar respDataType actualDataType
-            <$> queryMetricsWithCache authCtx dbSource actualDataType pid source queryAST sqlQueryCfg queryM now fromD toD
+    Right queryAST -> case querySQLM of
+      Just querySQL
+        | Just message <- rawSqlScopeError sqlQueryCfg.environment sqlQueryCfg.service (fillQueryTemplate SqlTemplate mappngSQL querySQL) ->
+            pure (emptyMetricsFor now fromD toD){error = Just message}
+      Just querySQL -> do
+        let tbl = sourceTable sqlQueryCfg.source
+            sqlQuery = fillQueryTemplate SqlTemplate mappngSQL querySQL
+        convertTimestampsToMs
+          <$> withChartSpan
+            tbl
+            (rawSqlSpanAttrs tbl sqlQuery)
+            sqlQuery
+            (emptyMetricsFor now fromD toD)
+            (runRawQuery authCtx dbSource respDataType sqlQueryCfg queryAST query querySQL mappngSQL prepared.liveRange Nothing)
+      Nothing ->
+        let actualDataType = decoderFor respDataType queryAST
+         in convertTimestampsToMs
+              . coerceBinnedScalar respDataType actualDataType
+              <$> queryMetricsWithCache authCtx dbSource actualDataType pid sqlQueryCfg.source queryAST sqlQueryCfg query now fromD toD
   where
     rawSqlSpanAttrs table statement =
       chartSpanAttrs table statement respDataType pid.toText
-        <> [ ("monoscope.kql.query", OA.toAttribute queryM)
+        <> [ ("monoscope.kql.query", OA.toAttribute (maybeToMonoid $ Utils.nonEmptyT queryM))
            , ("monoscope.kql.mode", OA.toAttribute ("sql" :: Text))
            ]
+
+
+data ChartQuery = ChartQuery
+  { config :: SqlQueryCfg
+  , mapping :: M.Map Text Text
+  , parsed :: Either Text [Section]
+  , liveRange :: Bool
+  }
+
+
+-- | Shared preparation; chart routes supply the authenticated environment and service.
+prepareChartQuery :: Bool -> Projects.ProjectId -> UTCTime -> Components.TimePicker -> Maybe Text -> Maybe BinDensity -> Maybe Text -> [(Text, Maybe Text)] -> ChartQuery
+prepareChartQuery targetsTimefusion pid now timePicker sourceM densityM queryM allParams =
+  ChartQuery
+    { config = (applyScopedQuery scope $ defSqlQueryCfg pid now source Nothing){binDensity = density, targetsTimefusion}
+    , mapping = variablePresets density pid.toText fromD toD allParams now
+    , parsed = first queryErrorText $ parseQueryDiagnosed source $ fillQueryTemplate KqlTemplate mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM
+    , liveRange = maybe False (T.null . snd) currentRange
+    }
+  where
+    (fromD, toD, currentRange) = Components.parseTimeRange now timePicker
+    density = fromMaybe def densityM
+    source = parseMaybe pSource =<< Utils.nonEmptyT sourceM
+    scope = mkScopedQuery pid (fromD, toD) (Utils.nonEmptyT $ join $ lookup "environment" allParams) (Utils.nonEmptyT $ join $ lookup "service" allParams)
+    mappingKQL = variablePresetsKQL density pid.toText fromD toD allParams now
 
 
 -- | Both JSON and streaming raw SQL use exactly the same bounds and cache key.
@@ -741,21 +739,13 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
   now <- Time.currentTime
   pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
   let requested = maybeToMonoid dataTypeM
-      (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker (Utils.nonEmptyT sinceM) (Utils.nonEmptyT fromM) (Utils.nonEmptyT toM))
-      density = fromMaybe def densityM
-      source = parseMaybe pSource =<< Utils.nonEmptyT sourceM
-      environment = Utils.nonEmptyT $ join $ lookup "environment" allParams
-      service = Utils.nonEmptyT $ join $ lookup "service" allParams
-      mapping = variablePresets density pid.toText fromD toD allParams now
-      mappingKQL = variablePresetsKQL density pid.toText fromD toD allParams now
+      prepared = prepareChartQuery (usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource) pid now (Components.TimePicker sinceM fromM toM) sourceM densityM queryM allParams
+      cfg = prepared.config
+      (fromD, toD) = cfg.dateRange
+      source = cfg.source
+      mapping = prepared.mapping
       raw = Utils.nonEmptyT querySQLM
-      parsed =
-        maybe
-          (first queryErrorText $ parseQueryDiagnosed source $ fillQueryTemplate KqlTemplate mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM)
-          Left
-          (raw >>= rawSqlScopeError environment service . fillQueryTemplate SqlTemplate mapping)
-      scope = mkScopedQuery pid (fromD, toD) environment service
-      cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source Nothing){binDensity = density, targetsTimefusion = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource}
+      parsed = maybe prepared.parsed Left (raw >>= rawSqlScopeError cfg.environment cfg.service . fillQueryTemplate SqlTemplate mapping)
       run emit = case parsed of
         Left message -> pure $ Left message
         Right ast -> do
@@ -803,7 +793,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
             Just template ->
               runEff
                 $ runHasqlPool authCtx.hasqlPool
-                $ runRawQuery authCtx dbSource actual cfg ast (maybeToMonoid $ Utils.nonEmptyT queryM) template mapping (maybe False (T.null . snd) currentRange) (Just $ emit . convert)
+                $ runRawQuery authCtx dbSource actual cfg ast (maybeToMonoid $ Utils.nonEmptyT queryM) template mapping prepared.liveRange (Just $ emit . convert)
             Nothing ->
               runEff
                 $ Time.runTime
