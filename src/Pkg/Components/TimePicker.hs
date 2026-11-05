@@ -122,6 +122,7 @@ defaultSince = "1H"
 -- are treated as absent, and any range that resolves to nothing falls back to
 -- 'defaultSince' — so this can never emit an unbounded scan regardless of what
 -- the client sends.
+-- 'parseTime' formats absolute bounds in UTC so browser Date parsing retains the instant.
 --
 -- Test with since value (uses current time as end)
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker (Just "2H") Nothing Nothing)
@@ -137,7 +138,9 @@ defaultSince = "1H"
 --
 -- Absolute and one-sided ranges agree with the other telemetry surfaces:
 -- >>> let start = Just "2025-12-31T22:00:00Z"; end = Just "2026-01-01T00:00:00Z"
--- >>> and [parseTimeRange epoch (TimePicker Nothing start upper) == parseTime start upper Nothing epoch | upper <- [end, Nothing]]
+-- >>> parseTimeRange epoch (TimePicker Nothing start end) == parseTime start end Nothing epoch
+-- True
+-- >>> parseTimeRange epoch (TimePicker Nothing start Nothing) == parseTime start Nothing Nothing epoch
 -- True
 -- >>> parseTimeRange epoch (TimePicker Nothing (Just "invalid") Nothing) == parseTimeRange epoch (TimePicker Nothing Nothing Nothing)
 -- True

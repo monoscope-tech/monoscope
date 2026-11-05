@@ -547,8 +547,14 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- Raw SQL has no safe insertion point: under an environment it must reserve {{query_ast_filters}}.
     let unscopedMsg = "This raw SQL widget must include {{query_ast_filters}} to respect the selected environment."
         envOnly = [("environment", Just "production")]
-    (.error) <$> sqlChart tr Nothing Charts.DTText "SELECT 1::int4 AS n" envOnly `shouldReturn` Just unscopedMsg
-    sqlStream tr Nothing Charts.DTText "SELECT 1::int4 AS n" envOnly >>= streamFrames >>= (`shouldSatisfy` either (const False) (any \case AE.Object o -> KM.lookup "error" o == Just (AE.String unscopedMsg); _ -> False))
+        serviceOnly = [("service", Just "checkout")]
+    for_ @[] [(envOnly, unscopedMsg), (serviceOnly, "This raw SQL widget must include {{query_ast_filters}} to respect the selected service."), (envOnly <> serviceOnly, "This raw SQL widget must include {{query_ast_filters}} to respect the selected environment and service.")] \(scope, message) ->
+      for_ @[] [Nothing, Just "name =="] \query -> do
+        -- Scope rejection precedes KQL diagnostics on both transports.
+        result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just testPid) query (Just "SELECT 1::int4 AS n") (Just "24H") Nothing Nothing Nothing Nothing scope
+        result.error `shouldBe` Just message
+        stream <- runQueryEffect tr $ Charts.queryMetricsStream Nothing (Just Charts.DTText) (Just testPid) query (Just "SELECT 1::int4 AS n") (Just "24H") Nothing Nothing Nothing Nothing scope
+        streamFrames stream >>= (`shouldSatisfy` either (const False) (any \case AE.Object o -> KM.lookup "error" o == Just (AE.String message); _ -> False))
     ingest "GET /raw/" "production" "checkout" "1"
     ingest "GET /raw/" "production" "catalog" "2"
     ingest "GET /raw/" "staging" "checkout" "3"
