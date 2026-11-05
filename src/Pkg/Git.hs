@@ -84,6 +84,8 @@ module Pkg.Git (
   parseWebhookRevision,
   webhookTargetsBranch,
   verifyWebhook,
+  WebhookRejection (..),
+  webhookRejectionMessage,
 ) where
 
 import Control.Lens (toListOf, (.~), (^.), (^..), (^?))
@@ -1126,9 +1128,9 @@ webhookTargetsBranch host branch body = case host of
 -- secret is a row that asked to be checked:
 --
 -- >>> verifyWebhook GitHub (Just "s3cret") (signed GitHub "sha256=deadbeef")
--- Left "invalid signature"
+-- Left SignatureMismatch
 -- >>> verifyWebhook GitHub (Just "s3cret") (WebhookReq Nothing Nothing Nothing Nothing Nothing payload)
--- Left "signature required but not provided"
+-- Left SignatureMissing
 --
 -- GitLab signs @id.timestamp.body@, tolerates several candidates during a key rotation, and
 -- falls back to the pre-19.1 plaintext token when it sends no signature at all:
@@ -1152,20 +1154,20 @@ webhookTargetsBranch host branch body = case host of
 -- different delivery id does not verify:
 --
 -- >>> verifyWebhook GitLab (Just "s3cret") (WebhookReq Nothing (Just ("v1," <> glSig)) Nothing (Just "d2") (Just "1700000000") payload)
--- Left "invalid signature"
+-- Left SignatureMismatch
 -- >>> verifyWebhook GitLab (Just "s3cret") (glReq "v1,bm90LXJpZ2h0")
--- Left "invalid signature"
+-- Left SignatureMismatch
 -- >>> verifyWebhook GitLab (Just "tok") (WebhookReq Nothing Nothing (Just "tok") Nothing Nothing payload)
 -- Right ()
 -- >>> verifyWebhook GitLab (Just "tok") (WebhookReq Nothing Nothing (Just "nope") Nothing Nothing payload)
--- Left "invalid signature"
+-- Left SignatureMismatch
 --
 -- A row with no secret cannot verify anything. That is only reachable for GitHub rows made
 -- before secrets were required, and the caller logs it:
 --
 -- >>> verifyWebhook GitHub Nothing (WebhookReq Nothing Nothing Nothing Nothing Nothing payload)
 -- Right ()
-verifyWebhook :: GitHost -> Maybe Text -> WebhookReq -> Either Text ()
+verifyWebhook :: GitHost -> Maybe Text -> WebhookReq -> Either WebhookRejection ()
 verifyWebhook _ Nothing _ = Right ()
 verifyWebhook h (Just secret) req = case h of
   GitHub -> hmacOf "sha256="
@@ -1174,32 +1176,46 @@ verifyWebhook h (Just secret) req = case h of
   GitLab -> gitlab
   where
     matches a b = BA.constEq (encodeUtf8 @Text @ByteString a) (encodeUtf8 @Text @ByteString b)
-    eq a b = unless (matches a b) $ Left "invalid signature"
+    eq a b = unless (matches a b) $ Left SignatureMismatch
 
     hmacOf prefix = do
-      sig <- maybeToRight "signature required but not provided" req.signature
+      sig <- maybeToRight SignatureMissing req.signature
       eq sig (prefix <> hmacHex secret req.body)
 
     -- The signed message is `id.timestamp.body`, so a delivery replayed later fails on the
     -- timestamp even with a valid signature.
     gitlab = case req.signature of
       Just sigHeader -> do
-        wid <- maybeToRight "webhook-id required but not provided" req.gitlabWebhookId
-        ts <- maybeToRight "webhook-timestamp required but not provided" req.gitlabTimestamp
+        wid <- maybeToRight WebhookIdMissing req.gitlabWebhookId
+        ts <- maybeToRight TimestampMissing req.gitlabTimestamp
         hmacKey <- gitlabKey secret
         let signed = encodeUtf8 (wid <> "." <> ts <> ".") <> req.body
             expected = extractBase64 $ B64.encodeBase64 $ BA.convert (HMAC.hmac hmacKey signed :: HMAC.HMAC SHA256)
             candidates = mapMaybe (T.stripPrefix "v1,") $ T.splitOn " " sigHeader
-        unless (any (matches expected) candidates) $ Left "invalid signature"
+        unless (any (matches expected) candidates) $ Left SignatureMismatch
       -- Pre-19.1 self-hosted GitLab has only the plaintext token.
       Nothing -> eq (fromMaybe "" req.gitlabToken) secret
 
 
+-- | Why a delivery was not accepted as coming from the repository's host.
+data WebhookRejection = SignatureMissing | WebhookIdMissing | TimestampMissing | MalformedSecret | SignatureMismatch
+  deriving stock (Eq, Show)
+
+
+webhookRejectionMessage :: WebhookRejection -> Text
+webhookRejectionMessage = \case
+  SignatureMissing -> "signature required but not provided"
+  WebhookIdMissing -> "webhook-id required but not provided"
+  TimestampMissing -> "webhook-timestamp required but not provided"
+  MalformedSecret -> "webhook secret is not valid base64"
+  SignatureMismatch -> "invalid signature"
+
+
 -- | GitLab signing keys are handed out as @whsec_<base64>@; the HMAC key is the decoded bytes.
-gitlabKey :: Text -> Either Text ByteString
+gitlabKey :: Text -> Either WebhookRejection ByteString
 gitlabKey secret = case T.stripPrefix "whsec_" secret of
   Nothing -> Right $ encodeUtf8 secret
-  Just b64 -> first (const "webhook secret is not valid base64") $ B64.decodeBase64Untyped (encodeUtf8 b64)
+  Just b64 -> first (const MalformedSecret) $ B64.decodeBase64Untyped (encodeUtf8 b64)
 
 
 -- | HMAC-SHA256 of a body under a secret, hex-encoded — the shape GitHub, Gitea and Bitbucket

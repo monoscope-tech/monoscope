@@ -99,7 +99,7 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
     outcomes <- forM syncs \sync -> case Git.verifyWebhook host sync.webhookSecret req of
       Left err -> do
         Metrics.bump Metrics.gitWebhookRejections [("host", Otel.toAttribute $ Git.hostSlug host), ("reason", Otel.toAttribute $ rejectionReason err)]
-        Log.logAttention "Git webhook signature validation failed" (Git.hostSlug host, fullName, err)
+        Log.logAttention "Git webhook signature validation failed" (Git.hostSlug host, fullName, Git.webhookRejectionMessage err)
         pure $ Left err
       Right () -> do
         when (isNothing sync.webhookSecret) $ Log.logWarn "Git webhook accepted without a secret to verify against" (Git.hostSlug host, fullName)
@@ -111,20 +111,21 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
         pure $ Right ()
     pure $ case partitionEithers outcomes of
       (_, _ : _) -> statusResp $ bool "ignored" "ok" (Git.isPushEvent host req.event)
-      (err : _, []) -> errResp err
+      (err : _, []) -> errResp $ Git.webhookRejectionMessage err
       ([], []) -> statusResp "ignored"
   where
     statusResp :: Text -> AE.Value
     statusResp s = AE.object ["status" AE..= s]
     errResp :: Text -> AE.Value
     errResp msg = AE.object ["status" AE..= ("error" :: Text), "message" AE..= msg]
-    -- Collapse a verification failure into one of a handful of labels: this becomes a metric
-    -- dimension, and 'Git.verifyWebhook' can only fail in these ways.
-    rejectionReason :: Text -> Text
-    rejectionReason err
-      | "not provided" `T.isInfixOf` err = "missing"
-      | "base64" `T.isInfixOf` err = "malformed_secret"
-      | otherwise = "invalid"
+    -- A metric dimension, so a handful of labels rather than one per rejection.
+    rejectionReason :: Git.WebhookRejection -> Text
+    rejectionReason = \case
+      Git.SignatureMissing -> "missing"
+      Git.WebhookIdMissing -> "missing"
+      Git.TimestampMissing -> "missing"
+      Git.MalformedSecret -> "malformed_secret"
+      Git.SignatureMismatch -> "invalid"
 
 
 -- | Connect or update the config-sync repository. The connection is vetted before anything is

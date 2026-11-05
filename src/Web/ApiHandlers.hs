@@ -503,14 +503,68 @@ apiV1Server actor principal queryEvents dashboardRenderer mcpHandler =
     pid = principal.projectId
 
 
--- | Return the value or throw a 404 with a given message.
-notFoundOr :: Text -> Maybe a -> ATBaseCtx a
-notFoundOr msg = maybe (throwError err404{errBody = encodeUtf8 msg}) pure
+data Resource = RMonitor | RDashboard | RApiKey | REvent | RProject | REndpoint | RLogPattern | RIncident | RIssue | RTeam | RMember | RUser
+  deriving stock (Eq, Show)
 
 
--- | 404 with @msg@ unless the row exists /and/ belongs to @pid@.
-ownedOr :: HasField "projectId" a Projects.ProjectId => Text -> Projects.ProjectId -> Maybe a -> ATBaseCtx a
-ownedOr msg pid = notFoundOr msg . (>>= guarded ((pid ==) . (.projectId)))
+-- | Every refusal @/api/v1@ answers with; 'refuse' fixes each one's status and body.
+data ApiError
+  = NotFound Resource
+  | NoActiveIngestionKey
+  | UserNotCreated
+  | UnknownBulkAction Text
+  | NonPositiveTimeWindow
+  | Required Text
+  | EveryoneTeamNotUpdatable
+  | EveryoneTeamNotDeletable
+  | ReservedHandle
+  | HandleInUse Text
+  | MemberIdentityMissing
+  | AuthenticationRequired
+  | ProjectInactive
+  deriving stock (Eq, Show)
+
+
+refuse :: ApiError -> ATBaseCtx a
+refuse e = throwError status{errBody = encodeUtf8 body}
+  where
+    (status, body) = case e of
+      NotFound r -> (err404, resource r <> " not found")
+      NoActiveIngestionKey -> (err404, "No active ingestion key; create one in project settings")
+      UserNotCreated -> (err404, "Could not create user")
+      UnknownBulkAction a -> (err400, "Unknown bulk action: " <> a)
+      NonPositiveTimeWindow -> (err400, "time_window_mins must be positive")
+      Required field -> (err400, field <> " is required")
+      EveryoneTeamNotUpdatable -> (err400, "The everyone team cannot be updated via this endpoint")
+      EveryoneTeamNotDeletable -> (err400, "The everyone team cannot be deleted")
+      ReservedHandle -> (err400, "Handle \"everyone\" is reserved")
+      HandleInUse h -> (err400, "Handle \"" <> h <> "\" is already in use")
+      MemberIdentityMissing -> (err400, "Either email or user_id is required")
+      AuthenticationRequired -> (err401, "Authentication required to retrieve an ingestion key")
+      ProjectInactive -> (err403, "Project is deactivated or deleted")
+    resource = \case
+      RMonitor -> "Monitor"
+      RDashboard -> "Dashboard"
+      RApiKey -> "API key"
+      REvent -> "event"
+      RProject -> "Project"
+      REndpoint -> "Endpoint"
+      RLogPattern -> "Log pattern"
+      RIncident -> "Incident"
+      RIssue -> "Issue"
+      RTeam -> "Team"
+      RMember -> "Member"
+      RUser -> "User"
+
+
+-- | Return the value or refuse with a 404 for @r@.
+notFoundOr :: Resource -> Maybe a -> ATBaseCtx a
+notFoundOr r = maybe (refuse $ NotFound r) pure
+
+
+-- | 404 unless the row exists /and/ belongs to @pid@.
+ownedOr :: HasField "projectId" a Projects.ProjectId => Resource -> Projects.ProjectId -> Maybe a -> ATBaseCtx a
+ownedOr r pid = notFoundOr r . (>>= guarded ((pid ==) . (.projectId)))
 
 
 -- | Result an op reports back to 'bulkExec': an affected-row count
@@ -534,7 +588,7 @@ count = fmap BulkCount
 bulkExec :: Eq a => BulkAction a -> [(Text, ATBaseCtx (BulkOpResult a))] -> ATBaseCtx (BulkResult a)
 bulkExec ba ops = do
   let action = T.toLower ba.action
-  r <- fromMaybe (throwError err400{errBody = encodeUtf8 $ "Unknown bulk action: " <> ba.action}) $ List.lookup (fromMaybe action $ List.lookup action [("ack", "acknowledge"), ("unack", "unacknowledge")]) ops
+  r <- fromMaybe (refuse $ UnknownBulkAction ba.action) $ List.lookup (fromMaybe action $ List.lookup action [("ack", "acknowledge"), ("unack", "unacknowledge")]) ops
   let mkResult ok = BulkResult{succeeded = ok, failed = [BulkFailure{id = i, error = "not applied"} | i <- ba.ids, i `notElem` ok]}
   pure $ case r of
     BulkCount n -> mkResult $ bool [] ba.ids (n > 0)
@@ -558,14 +612,14 @@ apiMonitorsList = Monitors.queryMonitorsAll
 
 
 apiMonitorGet :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorGet pid mid = ownedOr "Monitor not found" pid =<< Monitors.queryMonitorById mid
+apiMonitorGet pid mid = ownedOr RMonitor pid =<< Monitors.queryMonitorById mid
 
 
 -- | Persist a monitor built from @inp@; @existingM@ carries over the fields an
 -- input can't supply (createdAt, trigger history, status).
 saveMonitor :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Monitors.QueryMonitor -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor
 saveMonitor pid mid existingM inp = do
-  when (inp.timeWindowMins <= 0) $ throwError err400{errBody = "time_window_mins must be positive"}
+  when (inp.timeWindowMins <= 0) $ refuse NonPositiveTimeWindow
   now <- Time.currentTime
   let mon = monitorFromInput pid now mid existingM inp
   mon <$ Monitors.queryMonitorUpsert mon
@@ -602,7 +656,7 @@ apiMonitorYaml pid mid = do
 -- | PATCH — merge fields into existing monitor.
 apiMonitorPatch :: Projects.ProjectId -> Monitors.QueryMonitorId -> MonitorPatch -> ATBaseCtx Monitors.QueryMonitor
 apiMonitorPatch pid mid patch = do
-  when (maybe False (<= 0) patch.timeWindowMins) $ throwError err400{errBody = "time_window_mins must be positive"}
+  when (maybe False (<= 0) patch.timeWindowMins) $ refuse NonPositiveTimeWindow
   existing <- apiMonitorGet pid mid
   now <- Time.currentTime
   let ac = existing.alertConfig
@@ -725,7 +779,7 @@ apiDashboardsList pid sortM teamIdM = do
 
 
 apiDashboardGet :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
-apiDashboardGet pid did = toFull <$> (notFoundOr "Dashboard not found" =<< Dashboards.getDashboardByProjectId pid did)
+apiDashboardGet pid did = toFull <$> (notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did)
 
 
 -- | Insert a new dashboard row from an input.
@@ -744,7 +798,7 @@ insertDashboard pid uid now did title tags teams filePath schema = do
 
 apiDashboardCreate :: ApiActor -> Projects.ProjectId -> DashboardInput -> ATBaseCtx DashboardFull
 apiDashboardCreate principal pid inp = do
-  when (T.null inp.title) $ throwError err400{errBody = "title is required"}
+  when (T.null inp.title) $ refuse $ Required "title"
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
   insertDashboard pid (fromMaybe Projects.systemUserId $ principalUser principal) now did inp.title inp.tags inp.teams inp.filePath inp.schema
@@ -864,7 +918,7 @@ apiKeysList pid = fmap toApiKeySummary <$> ProjectApiKeys.projectApiKeysByProjec
 
 
 apiKeyGet :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx ApiKeySummary
-apiKeyGet pid kid = toApiKeySummary <$> (ownedOr "API key not found" pid =<< ProjectApiKeys.getProjectApiKey kid)
+apiKeyGet pid kid = toApiKeySummary <$> (ownedOr RApiKey pid =<< ProjectApiKeys.getProjectApiKey kid)
 
 
 apiKeyCreate :: Projects.ProjectId -> ApiKeyCreate -> ATBaseCtx ApiKeyCreated
@@ -929,7 +983,7 @@ data ShareLinkCreated = ShareLinkCreated
 apiShareLinkCreate :: Projects.ProjectId -> ShareLinkCreate -> ATBaseCtx ShareLinkCreated
 apiShareLinkCreate pid req = do
   authCtx <- ask @AuthContext
-  _ <- notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId authCtx.env.enableTimefusionReads pid req.eventCreatedAt req.eventId
+  _ <- notFoundOr REvent =<< Telemetry.otelRecordByProjectAndId authCtx.env.enableTimefusionReads pid req.eventCreatedAt req.eventId
   shareId <- UUID.genUUID
   ShareEvents.createShareLink shareId pid req.eventId (fromMaybe ShareEvents.ShareRequest req.eventType) req.eventCreatedAt
   let url = hostPath authCtx.config.hostUrl $ "share/r/" <> UUID.toText shareId
@@ -950,23 +1004,23 @@ toProjectFull p emails =
 
 apiMe :: Projects.ProjectId -> ATBaseCtx MeResponse
 apiMe pid = do
-  p <- notFoundOr "Project not found" =<< Projects.projectById pid
+  p <- notFoundOr RProject =<< Projects.projectById pid
   ctx <- ask @AuthContext
   pure MeResponse{projectId = pid, project = upcast p, hostUrl = ctx.config.hostUrl}
 
 
 apiIngestionKey :: ApiPrincipal -> ATBaseCtx (Headers '[Header "Cache-Control" Text] Wire.IngestionKey)
 apiIngestionKey = \case
-  DemoReader _ -> throwError err401{errBody = "Authentication required to retrieve an ingestion key"}
+  DemoReader _ -> refuse AuthenticationRequired
   Authenticated pid -> do
-    whenNothingM_ (Projects.activeProjectById pid) $ throwError err403{errBody = "Project is deactivated or deleted"}
-    k <- notFoundOr "No active ingestion key; create one in project settings" . find (\key -> key.active && isNothing key.deletedAt) =<< ProjectApiKeys.projectApiKeysByProjectId pid
+    whenNothingM_ (Projects.activeProjectById pid) $ refuse ProjectInactive
+    k <- maybe (refuse NoActiveIngestionKey) pure . find (\key -> key.active && isNothing key.deletedAt) =<< ProjectApiKeys.projectApiKeysByProjectId pid
     pure $ addHeader ("no-store" :: Text) (Wire.IngestionKey k.keyPrefix)
 
 
 apiProjectGet :: Projects.ProjectId -> ATBaseCtx ProjectFull
 apiProjectGet pid = do
-  p <- notFoundOr "Project not found" =<< Projects.projectById pid
+  p <- notFoundOr RProject =<< Projects.projectById pid
   emails <- maybe [] (V.toList . (.notify_emails)) <$> PM.getEveryoneTeam pid
   pure $ toProjectFull p emails
 
@@ -976,7 +1030,7 @@ apiProjectPatch :: Projects.ProjectId -> Projects.ProjectPatch -> ATBaseCtx Proj
 apiProjectPatch pid patch = do
   now <- Time.currentTime
   n <- Projects.patchProjectSettings pid patch now
-  when (n == 0) $ throwError err404{errBody = "Project not found"}
+  when (n == 0) $ refuse $ NotFound RProject
   apiProjectGet pid
 
 
@@ -1005,7 +1059,7 @@ apiEndpointsList pid searchM outgoingM pageM perPageM = paged pageM perPageM 100
 
 apiEndpointGet :: Projects.ProjectId -> Endpoints.EndpointId -> ATBaseCtx EndpointFull
 apiEndpointGet pid eid = do
-  e <- notFoundOr "Endpoint not found" =<< Endpoints.getEndpointById pid eid
+  e <- notFoundOr REndpoint =<< Endpoints.getEndpointById pid eid
   pure EndpointFull{summary = endpointToSummary e, urlParams = e.urlParams, createdAt = e.createdAt, updatedAt = e.updatedAt}
 
 
@@ -1035,7 +1089,7 @@ apiLogPatternsList pid pageM perPageM = paged pageM perPageM 200 $ \perPage offs
 
 
 fetchLogPattern :: Projects.ProjectId -> Int64 -> ATBaseCtx LogPatterns.LogPattern
-fetchLogPattern pid lpid = notFoundOr "Log pattern not found" =<< LogPatterns.getLogPatternByIdScoped pid lpid
+fetchLogPattern pid lpid = notFoundOr RLogPattern =<< LogPatterns.getLogPatternByIdScoped pid lpid
 
 
 apiLogPatternGet :: Projects.ProjectId -> Int64 -> ATBaseCtx LogPatternFull
@@ -1132,11 +1186,11 @@ apiIncidentsList pid phase limit = map incidentToSummary <$> Incidents.listEpiso
 
 
 apiIncidentGet :: Projects.ProjectId -> Incidents.EpisodeId -> ATBaseCtx IncidentSummary
-apiIncidentGet pid eid = incidentToSummary <$> (notFoundOr "Incident not found" =<< Incidents.getEpisode pid eid)
+apiIncidentGet pid eid = incidentToSummary <$> (notFoundOr RIncident =<< Incidents.getEpisode pid eid)
 
 
 fetchIssue :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx Issues.Issue
-fetchIssue pid iid = notFoundOr "Issue not found" =<< Issues.selectIssueById pid iid
+fetchIssue pid iid = notFoundOr RIssue =<< Issues.selectIssueById pid iid
 
 
 apiIssueGet :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
@@ -1270,14 +1324,14 @@ apiTeamGet pid tid = do
 
 -- | Fetch a single team by id (scoped to project). 404s if missing.
 fetchTeam :: Projects.ProjectId -> TeamId -> ATBaseCtx PM.Team
-fetchTeam pid tid = notFoundOr "Team not found" =<< PM.getTeamById pid tid
+fetchTeam pid tid = notFoundOr RTeam =<< PM.getTeamById pid tid
 
 
 -- | 'fetchTeam' that also rejects the everyone team, which is not editable here.
 fetchEditableTeam :: Projects.ProjectId -> TeamId -> ATBaseCtx PM.Team
 fetchEditableTeam pid tid = do
   t <- fetchTeam pid tid
-  t <$ when t.is_everyone (throwError err400{errBody = "The everyone team cannot be updated via this endpoint"})
+  t <$ when t.is_everyone (refuse EveryoneTeamNotUpdatable)
 
 
 apiTeamsList :: Projects.ProjectId -> ATBaseCtx [TeamSummary]
@@ -1287,7 +1341,7 @@ apiTeamsList pid = fmap toTeamSummary <$> PM.getTeams pid
 -- | Validate an input and build 'PM.TeamDetails', resolving optional collections to empty.
 teamDetailsFromInput :: TeamInput -> ATBaseCtx PM.TeamDetails
 teamDetailsFromInput inp = do
-  when (T.null inp.name) $ throwError err400{errBody = "name is required"}
+  when (T.null inp.name) $ refuse $ Required "name"
   assertHandleAllowed inp.handle
   pure
     PM.TeamDetails
@@ -1311,15 +1365,15 @@ teamDetailsFromInput inp = do
 assertHandleAllowed :: Text -> ATBaseCtx ()
 assertHandleAllowed h
   | T.toLower h == "everyone" =
-      throwError err400{errBody = "Handle \"everyone\" is reserved"}
-  | T.null h = throwError err400{errBody = "handle is required"}
+      refuse ReservedHandle
+  | T.null h = refuse $ Required "handle"
   | otherwise = pass
 
 
 apiTeamCreate :: Projects.ProjectId -> TeamInput -> ATBaseCtx TeamFull
 apiTeamCreate pid inp = do
   createdM <- PM.createTeam pid Nothing =<< teamDetailsFromInput inp
-  maybe (throwError err400{errBody = encodeUtf8 $ "Handle \"" <> inp.handle <> "\" is already in use"}) (apiTeamGet pid) createdM
+  maybe (refuse $ HandleInUse inp.handle) (apiTeamGet pid) createdM
 
 
 apiTeamUpdate :: Projects.ProjectId -> TeamId -> TeamInput -> ATBaseCtx TeamFull
@@ -1352,7 +1406,7 @@ apiTeamPatch pid tid p = do
 apiTeamDelete :: Projects.ProjectId -> TeamId -> ATBaseCtx NoContent
 apiTeamDelete pid tid = do
   t <- fetchTeam pid tid
-  when t.is_everyone $ throwError err400{errBody = "The everyone team cannot be deleted"}
+  when t.is_everyone $ refuse EveryoneTeamNotDeletable
   NoContent <$ PM.deleteTeams pid (V.singleton tid)
 
 
@@ -1388,7 +1442,7 @@ apiMembersList pid = fmap toMemberSummary <$> PM.selectActiveProjectMembers pid
 
 -- | Locate a single member row via its user_id (project-scoped).
 fetchMemberByUserId :: Projects.ProjectId -> Projects.UserId -> ATBaseCtx PM.ProjectMemberVM
-fetchMemberByUserId pid uid = notFoundOr "Member not found" =<< PM.getActiveProjectMemberByUserId pid uid
+fetchMemberByUserId pid uid = notFoundOr RMember =<< PM.getActiveProjectMemberByUserId pid uid
 
 
 apiMemberGet :: Projects.ProjectId -> Projects.UserId -> ATBaseCtx MemberSummary
@@ -1400,11 +1454,11 @@ apiMemberGet pid uid = toMemberSummary <$> fetchMemberByUserId pid uid
 apiMemberAdd :: Projects.ProjectId -> MemberAdd -> ATBaseCtx MemberSummary
 apiMemberAdd pid req = do
   uid <- case (req.userId, req.email) of
-    (Just u, _) -> u <$ (notFoundOr "User not found" =<< Projects.userById u)
+    (Just u, _) -> u <$ (notFoundOr RUser =<< Projects.userById u)
     (Nothing, Just e) ->
-      maybe (notFoundOr "Could not create user" =<< Projects.createEmptyUser e) pure =<< Projects.userIdByEmail e
+      maybe (maybe (refuse UserNotCreated) pure =<< Projects.createEmptyUser e) pure =<< Projects.userIdByEmail e
     (Nothing, Nothing) ->
-      throwError err400{errBody = "Either email or user_id is required"}
+      refuse MemberIdentityMissing
   _ <- PM.insertProjectMembers [PM.CreateProjectMembers{projectId = pid, userId = uid, permission = fromMaybe PM.PView req.permission}]
   apiMemberGet pid uid
 
@@ -1479,4 +1533,4 @@ apiFacets pid sinceM fromM toM fieldM = do
 apiEventGet :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATBaseCtx AE.Value
 apiEventGet pid eid ts = do
   useTf <- useTfReads
-  AE.toJSON <$> (notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId useTf pid ts eid)
+  AE.toJSON <$> (notFoundOr REvent =<< Telemetry.otelRecordByProjectAndId useTf pid ts eid)
