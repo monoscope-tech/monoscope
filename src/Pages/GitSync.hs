@@ -1,6 +1,9 @@
 module Pages.GitSync (
   gitWebhookPostH,
-  gitSyncSettingsView,
+  GitSyncSettings (..),
+  GitSyncFailure (..),
+  GitSyncRejection (..),
+  GitSyncRemoval (..),
   repositoryDashboardGetH,
   repositoryDashboardPostH,
   RepositoryDashboardGet (..),
@@ -23,9 +26,14 @@ module Pages.GitSync (
   githubAppCallbackH,
   githubAppReposH,
   githubAppSelectRepoH,
+  GitHubConnect (..),
+  ConnectFailure (..),
+  SelectRejection (..),
+  SyncPanels (..),
 ) where
 
 import BackgroundJobs qualified
+import Control.Monad.Trans.Except (withExceptT)
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
 import Data.Default (def)
@@ -45,7 +53,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
 import OpenTelemetry.Attributes qualified as Otel
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), colorChip_, connectionBadge_, copyButton_, copyField_, disclosure_, formField_, formSelectField_, headerRow_, sectionLabel_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
@@ -58,6 +66,7 @@ import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHe
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, renderMarkdown)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
+import Web.Outcome (HxOutcome (..), HxResult, Rejection (..), hxAction, hxDone)
 
 
 data GitSyncForm = GitSyncForm
@@ -131,7 +140,7 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
 -- | Connect or update the config-sync repository. The connection is vetted before anything is
 -- written — storing first and discovering a bad origin on the next background job would leave a
 -- row that looks connected and never syncs.
-gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
+gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (HxResult GitSyncRejection GitSyncSettings)
 gitSyncSettingsPostH pid submitted = do
   requireGitWrite pid
   syncs <- GitSync.getGitSyncs pid
@@ -142,15 +151,25 @@ gitSyncSettingsPostH pid submitted = do
   saveGitSyncH pid (matched <|> legacy) form
 
 
-gitSyncSettingsUpdateH :: Projects.ProjectId -> GitSync.GitHubSyncId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
+gitSyncSettingsUpdateH :: Projects.ProjectId -> GitSync.GitHubSyncId -> GitSyncForm -> ATAuthCtx (HxResult GitSyncRejection GitSyncSettings)
 gitSyncSettingsUpdateH pid sid form = do
   requireGitWrite pid
   sync <- GitSync.getGitSyncById pid sid >>= maybe (throwError err404) pure
   saveGitSyncH pid (Just sync) form{owner = sync.owner, repo = sync.repo, host = Just sync.host, apiBase = sync.apiBase}
 
 
-saveGitSyncH :: Projects.ProjectId -> Maybe GitSync.GitHubSync -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
-saveGitSyncH pid existingM form = do
+-- | Why a connection was not saved; the host's own reason is the detail.
+data GitSyncRejection = ConnectionFailed Git.GitHost Text
+  deriving stock (Eq, Show)
+
+
+instance Rejection GitSyncRejection where
+  rejectionMessage (ConnectionFailed host _) = "Could not connect to " <> Git.hostLabel host
+  rejectionDetail (ConnectionFailed _ err) = Just err
+
+
+saveGitSyncH :: Projects.ProjectId -> Maybe GitSync.GitHubSync -> GitSyncForm -> ATAuthCtx (HxResult GitSyncRejection GitSyncSettings)
+saveGitSyncH pid existingM form = hxAction do
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
       host = fromMaybe Git.GitHub form.host
@@ -160,101 +179,130 @@ saveGitSyncH pid existingM form = do
   -- The host/origin pair is vetted on its own: an update that keeps the stored token has no
   -- token to build a connection with, and 'Git.validateOrigin' is the half of the check that
   -- never needed one.
-  case validation of
-    Left err -> do
-      addErrorToast ("Could not connect to " <> Git.hostLabel host) (Just err)
-      addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid existingM
-    Right _ -> do
-      -- Detecting the default branch needs a token, so a form that kept the stored one falls
-      -- back to "main" rather than asking the host with a credential it does not have.
-      branch <- case (T.null form.branch, Git.mkGitConn host form.apiBase form.accessToken) of
-        (False, _) -> pure form.branch
-        (True, Right conn) -> W.runHTTPWreq $ Git.defaultBranchOf conn (Git.RepoRef form.owner form.repo "HEAD")
-        -- No usable token, so nothing to ask the host with; "main" is what the field would
-        -- have defaulted to anyway.
-        (True, Left _) -> pure "main"
-      let apiBase = rightToMaybe . Git.normalizeOrigin =<< mfilter (not . T.null . T.strip) form.apiBase
-      syncM <- case existingM of
-        Nothing -> GitSync.insertGitHubSync encKey pid host apiBase form.owner form.repo branch (GitSync.PersonalToken form.accessToken) form.webhookSecret (fromMaybe "" form.pathPrefix)
-        -- An empty token box means "keep the stored one", not "clear it".
-        Just existing -> GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch (guarded (not . T.null) form.accessToken) form.pathPrefix
-      whenJust syncM \sync -> do
-        when (maybe True (not . (.syncEnabled)) existingM) $ BackgroundJobs.enqueueJobs ctx [BackgroundJobs.GitSyncRepository pid sync.id]
-        unless (T.null form.accessToken)
-          $ void
-          $ GitSync.upsertGitHubCredential encKey pid sync.host sync.apiBase sync.owner Nothing (Just form.accessToken)
-      Log.logTrace (bool "Created git sync config" "Updated git sync config" (isJust existingM)) (pid, Git.hostSlug host, form.owner, form.repo)
-      addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid syncM
+  forM (first (ConnectionFailed host) validation) \() -> do
+    -- Detecting the default branch needs a token, so a form that kept the stored one falls
+    -- back to "main" rather than asking the host with a credential it does not have.
+    branch <- case (T.null form.branch, Git.mkGitConn host form.apiBase form.accessToken) of
+      (False, _) -> pure form.branch
+      (True, Right conn) -> W.runHTTPWreq $ Git.defaultBranchOf conn (Git.RepoRef form.owner form.repo "HEAD")
+      -- No usable token, so nothing to ask the host with; "main" is what the field would
+      -- have defaulted to anyway.
+      (True, Left _) -> pure "main"
+    let apiBase = rightToMaybe . Git.normalizeOrigin =<< mfilter (not . T.null . T.strip) form.apiBase
+    syncM <- case existingM of
+      Nothing -> GitSync.insertGitHubSync encKey pid host apiBase form.owner form.repo branch (GitSync.PersonalToken form.accessToken) form.webhookSecret (fromMaybe "" form.pathPrefix)
+      -- An empty token box means "keep the stored one", not "clear it".
+      Just existing -> GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch (guarded (not . T.null) form.accessToken) form.pathPrefix
+    whenJust syncM \sync -> do
+      when (maybe True (not . (.syncEnabled)) existingM) $ BackgroundJobs.enqueueJobs ctx [BackgroundJobs.GitSyncRepository pid sync.id]
+      unless (T.null form.accessToken)
+        $ void
+        $ GitSync.upsertGitHubCredential encKey pid sync.host sync.apiBase sync.owner Nothing (Just form.accessToken)
+    Log.logTrace (bool "Created git sync config" "Updated git sync config" (isJust existingM)) (pid, Git.hostSlug host, form.owner, form.repo)
+    pure $ GitSyncSettings ctx.env.hostUrl pid syncM Nothing
 
 
-gitSyncSettingsDeleteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+-- | What disconnecting answered with. 'ChooseRepository' sends a project with several
+-- connections to the list, since the id-less route cannot tell which one was meant.
+data GitSyncRemoval = Disconnected GitSync.GitHubSyncId | Kept GitSyncSettings | ChooseRepository Projects.ProjectId
+
+
+instance ToHtml GitSyncRemoval where
+  toHtml = \case
+    Disconnected sid -> div_ [id_ ("git-sync-" <> sid.toText), class_ "rounded-lg bg-fillWeak p-4 text-sm text-textWeak"] "Dashboard sync disconnected. Dashboards are retained as local dashboards."
+    Kept settings -> toHtml settings
+    ChooseRepository _ -> mempty
+  toHtmlRaw = toHtml
+
+
+instance HxOutcome GitSyncRemoval where
+  hxRedirect = \case
+    ChooseRepository pid -> Just $ "/p/" <> pid.toText <> "/repositories"
+    Disconnected _ -> Nothing
+    Kept _ -> Nothing
+
+
+gitSyncSettingsDeleteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders GitSyncRemoval)
 gitSyncSettingsDeleteH pid = do
   requireGitWrite pid
   GitSync.getGitSyncs pid >>= \case
     [sync] -> gitSyncRepositoryDeleteH pid sync.id
     [] -> do
       ctx <- ask @Config.AuthContext
-      addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid Nothing
-    _ -> do
-      addErrorToast "Choose a repository to disconnect" Nothing
-      redirectCS $ "/p/" <> pid.toText <> "/repositories"
-      addRespHeaders mempty
+      hxDone $ Kept $ GitSyncSettings ctx.env.hostUrl pid Nothing Nothing
+    _ -> addErrorToast "Choose a repository to disconnect" Nothing >> hxDone (ChooseRepository pid)
 
 
-gitSyncRepositoryDeleteH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders (Html ()))
+gitSyncRepositoryDeleteH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders GitSyncRemoval)
 gitSyncRepositoryDeleteH pid sid = do
   requireGitWrite pid
   sync <- GitSync.getGitSyncById pid sid >>= maybe (throwError err404) pure
+  ctx <- ask @Config.AuthContext
   GitSync.deleteGitHubSync sid >>= \case
     Left GitSync.ConnectionMissing -> throwError err404
-    Left GitSync.SyncRunning -> do
-      ctx <- ask @Config.AuthContext
-      addRespHeaders $ gitSyncSettingsViewWithError (Just "A dashboard sync is running. Try disconnecting again when it finishes.") ctx.env.hostUrl pid (Just sync)
-    Right () -> addRespHeaders $ div_ [id_ ("git-sync-" <> sid.toText), class_ "rounded-lg bg-fillWeak p-4 text-sm text-textWeak"] "Dashboard sync disconnected. Dashboards are retained as local dashboards."
+    Left GitSync.SyncRunning -> hxDone $ Kept $ GitSyncSettings ctx.env.hostUrl pid (Just sync) (Just SyncRunning)
+    Right () -> hxDone $ Disconnected sid
 
 
-gitSyncRepositoryRetryH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders (Html ()))
+gitSyncRepositoryRetryH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders GitSyncSettings)
 gitSyncRepositoryRetryH pid sid = do
   requireGitWrite pid
   sync <- GitSync.getGitSyncById pid sid >>= maybe (throwError err404) pure
   ctx <- ask @Config.AuthContext
-  if sync.syncEnabled
-    then do
-      job <- case maybe GitSync.ImportDashboards (.operation) sync.lastError of
-        GitSync.ImportDashboards -> pure $ Just $ BackgroundJobs.GitSyncRepository pid sid
-        GitSync.ExportDashboards -> pure $ Just $ BackgroundJobs.GitSyncPushRepository pid sid
+  job <-
+    if not sync.syncEnabled
+      then pure $ Left SyncPaused
+      else case maybe GitSync.ImportDashboards (.operation) sync.lastError of
+        GitSync.ImportDashboards -> pure $ Right $ BackgroundJobs.GitSyncRepository pid sid
+        GitSync.ExportDashboards -> pure $ Right $ BackgroundJobs.GitSyncPushRepository pid sid
         GitSync.ExportDashboard did -> do
           dashboard <- Dashboards.getDashboardByProjectId pid did
-          if maybe False ((== Just sid) . (.gitSyncId)) dashboard
-            then pure $ Just $ BackgroundJobs.GitSyncPushDashboard pid did.unUUIDId
-            else addErrorToast "Dashboard unavailable" (Just "This dashboard no longer belongs to this repository.") $> Nothing
-      whenJust job \retry -> do
-        BackgroundJobs.enqueueJobs ctx [retry]
-        addSuccessToast "Retry queued" (Just "The error stays visible until this operation succeeds.")
-    else addErrorToast "Sync is paused" (Just "Enable sync before retrying.")
-  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid (Just sync)
+          pure $ if maybe False ((== Just sid) . (.gitSyncId)) dashboard then Right (BackgroundJobs.GitSyncPushDashboard pid did.unUUIDId) else Left DashboardUnavailable
+  whenRight_ job \retry -> do
+    BackgroundJobs.enqueueJobs ctx [retry]
+    addSuccessToast "Retry queued" (Just "The error stays visible until this operation succeeds.")
+  hxDone $ GitSyncSettings ctx.env.hostUrl pid (Just sync) (leftToMaybe job)
 
 
-gitSyncRepositoryPauseH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders (Html ()))
+gitSyncRepositoryPauseH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders GitSyncSettings)
 gitSyncRepositoryPauseH pid sid = do
   requireGitWrite pid
   sync <- GitSync.pauseGitSync pid sid >>= maybe (throwError err404) pure
   ctx <- ask @Config.AuthContext
-  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid (Just sync)
+  hxDone $ GitSyncSettings ctx.env.hostUrl pid (Just sync) Nothing
 
 
 requireGitWrite :: Projects.ProjectId -> ATAuthCtx ()
 requireGitWrite = void . ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit
 
 
-gitSyncSettingsView :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
-gitSyncSettingsView = gitSyncSettingsViewWithError Nothing
+-- | Why an action left a connection as it was; shown inside its panel.
+data GitSyncFailure = SyncRunning | SyncPaused | DashboardUnavailable
+  deriving stock (Eq, Show)
 
 
-gitSyncSettingsViewWithError :: Maybe Text -> Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
-gitSyncSettingsViewWithError failure hostUrl pid syncM =
+-- | One connection's settings panel, the morph target of every action on it.
+data GitSyncSettings = GitSyncSettings
+  { hostUrl :: Text
+  , projectId :: Projects.ProjectId
+  , sync :: Maybe GitSync.GitHubSync
+  , failure :: Maybe GitSyncFailure
+  }
+  deriving anyclass (HxOutcome)
+
+
+instance ToHtml GitSyncSettings where
+  toHtml = toHtml . gitSyncSettingsView
+  toHtmlRaw = toHtml
+
+
+gitSyncSettingsView :: GitSyncSettings -> Html ()
+gitSyncSettingsView GitSyncSettings{hostUrl, projectId = pid, sync = syncM, failure} =
   div_ [id_ targetId, class_ "space-y-6"] do
-    whenJust failure $ p_ [role_ "alert", class_ "text-sm text-textWarning"] . toHtml
+    whenJust failure $ p_ [role_ "alert", class_ "text-sm text-textWarning"] . \case
+      SyncRunning -> "A dashboard sync is running. Try disconnecting again when it finishes."
+      SyncPaused -> "Sync is paused. Enable sync before retrying."
+      DashboardUnavailable -> "This dashboard no longer belongs to this repository."
     maybe notConnectedView connectedView syncM
   where
     baseUrl = "/p/" <> pid.toText <> "/settings/git-sync"
@@ -535,7 +583,7 @@ instance ToHtml RepositoryDashboardGet where
               whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml . (.message)
         else case page.sync of
           Just sync -> do
-            toHtml $ gitSyncSettingsView page.hostUrl repository.projectId (Just sync)
+            toHtml $ GitSyncSettings page.hostUrl repository.projectId (Just sync) Nothing
             when (isNothing sync.installationId) $ whenJust sync.webhookSecret \secret -> div_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
               formField_ FieldSm def{inputId = Just "repository-webhook-secret", inputType = "password", value = secret, extraAttrs = [readonly_ "true"]} "Webhook secret" "webhookSecret" False Nothing
               toHtml $ copyButton_ "btn btn-xs btn-ghost gap-1" "w-3 h-3" "my @data-secret" [term "data-secret" secret]
@@ -676,67 +724,70 @@ data RepoSelectForm = RepoSelectForm
   deriving anyclass (FromForm)
 
 
--- | Meta-refresh redirect (no JS, escapes url properly) with a fallback link for no-refresh clients.
-redirectPage :: Text -> Text -> Html ()
-redirectPage msg url = div_ [class_ "p-8 text-center"] do
-  meta_ [httpEquiv_ "refresh", content_ ("0;url=" <> url)]
-  p_ [class_ "text-textWeak mb-4"] $ toHtml msg
-  a_ [href_ url, class_ "text-textBrand underline"] "Continue"
+-- | Where connecting a GitHub account goes next: on to GitHub or back into the project, or a
+-- failure with a way back to the project (or to the project list when the attempt names none).
+data GitHubConnect = Continue Text Text | ConnectFailed (Maybe Projects.ProjectId) ConnectFailure
+
+
+data ConnectFailure = AppNotConfigured | AttemptMissing | AuthorizationFailed GitSync.InstallationError | ConnectionIncomplete
+  deriving stock (Eq, Show)
+
+
+instance ToHtml GitHubConnect where
+  toHtml = \case
+    -- Meta-refresh redirect (no JS, escapes url properly) with a fallback link for no-refresh clients.
+    Continue msg url -> div_ [class_ "p-8 text-center"] do
+      meta_ [httpEquiv_ "refresh", content_ ("0;url=" <> url)]
+      p_ [class_ "text-textWeak mb-4"] $ toHtml msg
+      a_ [href_ url, class_ "text-textBrand underline"] "Continue"
+    ConnectFailed pidM failure -> div_ [class_ "mx-auto max-w-xl space-y-4 p-6"] do
+      h1_ [class_ "text-xl font-semibold text-textStrong"] "Connect GitHub"
+      p_ [role_ "alert", class_ "text-sm text-textError"] $ toHtml @Text case failure of
+        AppNotConfigured -> "An administrator must configure GitHub user authorization before connecting an account."
+        AttemptMissing -> "This connection request is missing, expired, or already used. Return to Repositories and connect the account again."
+        AuthorizationFailed err -> GitSync.installationErrorMessage err
+        ConnectionIncomplete -> "GitHub did not complete the connection. Return to Repositories and try again."
+      a_ [href_ (maybe "/" (\pid -> "/p/" <> pid.toText <> "/repositories/connect") pidM), class_ "btn btn-sm btn-ghost"] $ if isJust pidM then "Back to repository connections" else "Back to projects"
+  toHtmlRaw = toHtml
 
 
 -- | Begin installation with an opaque state bound to the signed-in browser session.
-githubAppInstallH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+githubAppInstallH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx GitHubConnect))
 githubAppInstallH pid toM = do
   requireGitWrite pid
   ctx <- ask @Config.AuthContext
   session <- Projects.getSession
-  if any T.null [ctx.config.githubClientId, ctx.config.githubClientSecret]
-    then do
-      (_, _, bw) <- mkPageCtx pid
-      addRespHeaders $ bodyWrapper bw{pageTitle = "Connect GitHub"} $ section_ [class_ "mx-auto max-w-xl space-y-4 px-4 py-6 sm:px-8 sm:py-8"] do
-        h1_ [class_ "text-xl font-semibold text-textStrong"] "Connect GitHub"
-        p_ [role_ "alert", class_ "text-sm text-textError"] "An administrator must configure GitHub user authorization before connecting an account."
-        a_ [href_ ("/p/" <> pid.toText <> "/repositories/connect"), class_ "btn btn-sm btn-ghost"] "Back to repository connections"
-    else do
-      nonce <- GitSync.createInstallationAttempt session.persistentSession.id (GitSync.InstallationAttempt pid (if toM == Just "code" then GitSync.InstallCode else GitSync.InstallSync) GitSync.InstallApp)
-      addRespHeaders $ redirectPage "Continue to GitHub to choose the account and repositories." $ "https://github.com/apps/" <> ctx.config.githubAppName <> "/installations/new?state=" <> UUID.toText nonce
+  (_, _, bw) <- mkPageCtx pid
+  addRespHeaders . PageCtx bw{pageTitle = "Connect GitHub"}
+    =<< if any T.null [ctx.config.githubClientId, ctx.config.githubClientSecret]
+      then pure $ ConnectFailed (Just pid) AppNotConfigured
+      else do
+        nonce <- GitSync.createInstallationAttempt session.persistentSession.id (GitSync.InstallationAttempt pid (if toM == Just "code" then GitSync.InstallCode else GitSync.InstallSync) GitSync.InstallApp)
+        pure $ Continue "Continue to GitHub to choose the account and repositories." $ "https://github.com/apps/" <> ctx.config.githubAppName <> "/installations/new?state=" <> UUID.toText nonce
 
 
-githubAppCallbackH :: Maybe Int64 -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+githubAppCallbackH :: Maybe Int64 -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx GitHubConnect))
 githubAppCallbackH instIdM _setupAction stateM codeM = do
   ctx <- ask @Config.AuthContext
   session <- Projects.getSession
   attemptM <- maybe (pure Nothing) (GitSync.consumeInstallationAttempt session.persistentSession.id) (stateM >>= rightToMaybe . parseUrlPiece)
-  let bw = (def :: BWConfig){sessM = Just session, pageTitle = "Connect GitHub", config = ctx.config}
-      callback = T.dropWhileEnd (== '/') ctx.config.hostUrl <> "/github/callback"
+  let callback = T.dropWhileEnd (== '/') ctx.config.hostUrl <> "/github/callback"
       escaped = decodeUtf8 . urlEncode True . encodeUtf8
-      errorView :: Text -> Html ()
-      errorView message = div_ [class_ "mx-auto max-w-xl space-y-4 p-6"] do
-        h1_ [class_ "text-xl font-semibold text-textStrong"] "Connect GitHub"
-        p_ [role_ "alert", class_ "text-sm text-textError"] $ toHtml @Text message
-        a_ [href_ (maybe "/" (\attempt -> "/p/" <> attempt.projectId.toText <> "/repositories/connect") attemptM), class_ "btn btn-sm btn-ghost"] $ if isJust attemptM then "Back to repository connections" else "Back to projects"
   content <- case attemptM of
-    Nothing -> pure $ errorView "This connection request is missing, expired, or already used. Return to Repositories and connect the account again."
+    Nothing -> pure $ ConnectFailed Nothing AttemptMissing
     Just attempt -> do
       requireGitWrite attempt.projectId
       let installation = case attempt.step of GitSync.InstallApp -> instIdM; GitSync.AuthorizeApp iid -> Just iid
       case (installation, codeM) of
-        (Just iid, Just code) -> do
-          result <- GitSync.authorizeGitHubInstallation (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) attempt.projectId ctx.config.githubAppId ctx.config.githubClientId ctx.config.githubClientSecret code callback iid
-          pure $ case result of
-            Left err -> errorView $ GitSync.installationErrorMessage err
-            Right () ->
-              redirectPage "GitHub account verified. Choose the repositories to connect."
-                $ "/p/"
-                <> attempt.projectId.toText
-                <> case attempt.destination of
-                  GitSync.InstallCode -> "/repositories/connect"
-                  GitSync.InstallSync -> "/repositories/connect"
+        (Just iid, Just code) ->
+          GitSync.authorizeGitHubInstallation (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) attempt.projectId ctx.config.githubAppId ctx.config.githubClientId ctx.config.githubClientSecret code callback iid <&> \case
+            Left err -> ConnectFailed (Just attempt.projectId) (AuthorizationFailed err)
+            Right () -> Continue "GitHub account verified. Choose the repositories to connect." $ "/p/" <> attempt.projectId.toText <> "/repositories/connect"
         (Just iid, Nothing) | GitSync.InstallApp <- attempt.step -> do
           nonce <- GitSync.createInstallationAttempt session.persistentSession.id attempt{GitSync.step = GitSync.AuthorizeApp iid}
-          pure $ redirectPage "Authorize your GitHub account to verify this installation." $ "https://github.com/login/oauth/authorize?client_id=" <> escaped ctx.config.githubClientId <> "&redirect_uri=" <> escaped callback <> "&state=" <> UUID.toText nonce
-        _ -> pure $ errorView "GitHub did not complete the connection. Return to Repositories and try again."
-  addRespHeaders $ bodyWrapper bw content
+          pure $ Continue "Authorize your GitHub account to verify this installation." $ "https://github.com/login/oauth/authorize?client_id=" <> escaped ctx.config.githubClientId <> "&redirect_uri=" <> escaped callback <> "&state=" <> UUID.toText nonce
+        _ -> pure $ ConnectFailed (Just attempt.projectId) ConnectionIncomplete
+  addRespHeaders $ PageCtx (def :: BWConfig){sessM = Just session, pageTitle = "Connect GitHub", config = ctx.config} content
 
 
 -- | List repositories from GitHub App installation (full page with BodyWrapper)
@@ -749,9 +800,34 @@ githubAppReposH pid instIdParam = do
   addRespHeaders mempty
 
 
+-- | Why selected repositories were not connected.
+data SelectRejection = NoRepositorySelected | RepositoryListFailed Text | RepositoryUnavailable Text
+  deriving stock (Eq, Show)
+
+
+instance Rejection SelectRejection where
+  rejectionMessage = \case
+    NoRepositorySelected -> "Select at least one repository"
+    RepositoryListFailed _ -> "Could not connect repositories"
+    RepositoryUnavailable _ -> "Could not connect repositories"
+  rejectionDetail = \case
+    NoRepositorySelected -> Nothing
+    RepositoryListFailed err -> Just err
+    RepositoryUnavailable name -> Just $ "Repository access is unavailable: " <> name
+
+
+newtype SyncPanels = SyncPanels [GitSyncSettings]
+  deriving anyclass (HxOutcome)
+
+
+instance ToHtml SyncPanels where
+  toHtml (SyncPanels panels) = div_ [class_ "space-y-6"] $ traverse_ toHtml panels
+  toHtmlRaw = toHtml
+
+
 -- | Handle repo selection from GitHub App
-githubAppSelectRepoH :: Projects.ProjectId -> RepoSelectForm -> ATAuthCtx (RespHeaders (Html ()))
-githubAppSelectRepoH pid form = do
+githubAppSelectRepoH :: Projects.ProjectId -> RepoSelectForm -> ATAuthCtx (HxResult SelectRejection SyncPanels)
+githubAppSelectRepoH pid form = hxAction do
   requireGitWrite pid
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
@@ -763,25 +839,23 @@ githubAppSelectRepoH pid form = do
   branches <- runExceptT do
     repos <- case cached of
       Just available -> pure available
-      Nothing -> do
+      Nothing -> withExceptT RepositoryListFailed do
         token <- ExceptT $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey creds
         conn <- hoistEither $ Git.mkGitConn Git.GitHub Nothing token
         available <- ExceptT $ Git.listRepos conn
         lift $ liftIO $ Cache.insert ctx.repoListCache account.id available
         pure available
-    forM selections \name -> do
-      repo <- hoistEither $ maybeToRight ("Repository access is unavailable: " <> name) $ find ((== name) . (.fullName)) repos
+    selected <- forM selections \name -> do
+      repo <- hoistEither $ maybeToRight (RepositoryUnavailable name) $ find ((== name) . (.fullName)) repos
       pure (name, if T.null (T.strip form.branch) then repo.defaultBranch else T.strip form.branch)
-  case branches of
-    Left err -> addErrorToast "Could not connect repositories" (Just err) >> addRespHeaders (p_ [class_ "text-sm text-textError"] $ toHtml err)
-    Right [] -> addErrorToast "Select at least one repository" Nothing >> addRespHeaders (p_ [class_ "text-sm text-textWeak"] "Select at least one repository and try again.")
-    Right selected -> do
-      syncs <- GitSync.getGitSyncs pid
-      results <-
-        catMaybes <$> forM selected \(name, branch) -> do
-          let (ownerVal, repoVal) = Git.splitFullName name
-          case find (\s -> s.host == Git.GitHub && isNothing s.apiBase && s.owner == ownerVal && s.repo == repoVal) syncs of
-            Nothing -> GitSync.insertGitHubSync encKey pid Git.GitHub Nothing ownerVal repoVal branch creds (guarded (not . T.null) ctx.config.githubAppWebhookSecret) (fromMaybe "" form.pathPrefix)
-            Just existing -> pure $ Just existing
-      BackgroundJobs.enqueueJobs ctx $ map (BackgroundJobs.GitSyncRepository pid . (.id)) results
-      addRespHeaders $ div_ [class_ "space-y-6"] $ forM_ results $ gitSyncSettingsView ctx.env.hostUrl pid . Just
+    hoistEither $ maybeToRight NoRepositorySelected $ nonEmpty selected
+  forM branches \selected -> do
+    syncs <- GitSync.getGitSyncs pid
+    results <-
+      catMaybes <$> forM (toList selected) \(name, branch) -> do
+        let (ownerVal, repoVal) = Git.splitFullName name
+        case find (\s -> s.host == Git.GitHub && isNothing s.apiBase && s.owner == ownerVal && s.repo == repoVal) syncs of
+          Nothing -> GitSync.insertGitHubSync encKey pid Git.GitHub Nothing ownerVal repoVal branch creds (guarded (not . T.null) ctx.config.githubAppWebhookSecret) (fromMaybe "" form.pathPrefix)
+          Just existing -> pure $ Just existing
+    BackgroundJobs.enqueueJobs ctx $ map (BackgroundJobs.GitSyncRepository pid . (.id)) results
+    pure $ SyncPanels [GitSyncSettings ctx.env.hostUrl pid (Just sync) Nothing | sync <- results]

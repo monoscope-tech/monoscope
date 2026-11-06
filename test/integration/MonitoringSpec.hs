@@ -1079,7 +1079,7 @@ spec = describe "Monitoring" do
         update <- setupWithIssue tr
         setupLinkedSlackData tr testPid "T1"
         void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
-        channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+        channel <- either (fail . show) pure $ Issues.incidentChannel "T1" "C1"
         Just routine <- runTestBgNoReset tr $ Issues.getIncidentRoutine testPid channel
         runTestBgNoReset tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId policy
         I.Recorded _ event <- runTestBgNoReset tr $ I.recordIncidentEvent update
@@ -1132,7 +1132,7 @@ spec = describe "Monitoring" do
         update <- setupWithIssue tr
         setupLinkedSlackData tr testPid "T1"
         void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
-        channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+        channel <- either (fail . show) pure $ Issues.incidentChannel "T1" "C1"
         Just routine <- runTestBgNoReset tr $ Issues.getIncidentRoutine testPid channel
         runTestBgNoReset tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
         I.Recorded _ event <- runTestBgNoReset tr $ I.recordIncidentEvent update
@@ -1191,7 +1191,7 @@ spec = describe "Monitoring" do
             user = (Servant.getResponse tr.trSessAndHeader).user.id
             revoke = liftIO $ dbExec tr [sql|UPDATE projects.project_members SET active = false WHERE project_id = ? AND user_id = ?|] (testPid, user)
         unless (interruption == NoIncidentOptIn) $ void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH command
-        channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+        channel <- either (fail . show) pure $ Issues.incidentChannel "T1" "C1"
         let installation = Issues.incidentRoutineConversationId testPid channel
         I.Recorded episode event <- runTestBgNoReset tr $ I.recordIncidentEvent update
         issue <- maybe (fail "Fixture episode has no issue") pure episode.issueId
@@ -1228,7 +1228,7 @@ spec = describe "Monitoring" do
       update <- setupWithIssue tr
       setupLinkedSlackData tr testPid "T1"
       void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
-      channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+      channel <- either (fail . show) pure $ Issues.incidentChannel "T1" "C1"
       Just routine <- runTestBgNoReset tr $ Issues.getIncidentRoutine testPid channel
       I.Recorded episode event <- runTestBgNoReset tr $ I.recordIncidentEvent update
       issue <- maybe (fail "Fixture episode has no issue") pure episode.issueId

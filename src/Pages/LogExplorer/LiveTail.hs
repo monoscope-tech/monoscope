@@ -126,27 +126,20 @@ liveTailRegisterH pid body = do
   (sess, _) <- Projects.sessionAndProject pid
   appCtx <- Reader.ask @AuthContext
   let scope = LT.scopeFor body
-  whenLeft_ (LT.compileQuery (fromMaybe "" body.query)) refuse
+  whenLeft_ (LT.compileQuery (fromMaybe "" body.query)) (refuse . Register)
   now <- Time.currentTime
   let expiresAt = addUTCTime (fromIntegral LT.leaseSecs) now
   -- The limits are checked inside the INSERT, not before it: a separate count would leave a
   -- window for other registrations to land between the check and the write.
   sid <-
     LT.insertSubscription pid sess.user.id body scope LT.maxPerUser LT.maxPerProject expiresAt
-      >>= (`whenNothing` (refuse =<< limitHit pid sess.user.id appCtx))
+      >>= (`whenNothing` (refuse . Register =<< limitHit pid sess.user.id appCtx))
   addRespHeaders
     RegisterResponse
       { subscriptionId = sid.toText
       , streamUrl = "/p/" <> pid.toText <> "/live_tail/subscriptions/" <> sid.toText <> "/stream"
       , expiresAt
       }
-  where
-    refuse :: LT.RegisterError -> ATAuthCtx a
-    refuse e = Error.throwError (jsonError (status e) (LT.registerErrorMessage e))
-    status = \case
-      LT.TooManySubscriptionsForUser _ -> Servant.err409
-      LT.TooManySubscriptionsForProject _ -> Servant.err409
-      _ -> Servant.err400
 
 
 -- | Which cap refused the insert. Read only on the failure path — the numbers are for the
@@ -159,12 +152,29 @@ limitHit pid uid appCtx = do
     else LT.TooManySubscriptionsForProject <$> LT.countActiveForProject pid
 
 
-jsonError :: Servant.ServerError -> Text -> Servant.ServerError
-jsonError e msg =
-  e
-    { Servant.errBody = AE.encode (AE.object ["error" AE..= msg])
-    , Servant.errHeaders = [("Content-Type", "application/json")]
-    }
+-- | Every refusal the Live Tail endpoints answer with, as @{"error": message}@ JSON.
+data LiveTailError = Register LT.RegisterError | RecordNotReady | NoSuchTail | TailExpired
+
+
+refuse :: LiveTailError -> ATAuthCtx a
+refuse e =
+  Error.throwError
+    status
+      { Servant.errBody = AE.encode (AE.object ["error" AE..= msg])
+      , Servant.errHeaders = [("Content-Type", "application/json")]
+      }
+  where
+    (status, msg) = case e of
+      Register r -> (registerStatus r, LT.registerErrorMessage r)
+      RecordNotReady -> (Servant.err404, "The complete record is not available yet.")
+      NoSuchTail -> (Servant.err404, "No such live tail.")
+      TailExpired -> (Servant.err404, "This live tail has expired. Start a new one.")
+    registerStatus = \case
+      LT.TooManySubscriptionsForUser _ -> Servant.err409
+      LT.TooManySubscriptionsForProject _ -> Servant.err409
+      LT.NotAFilter -> Servant.err400
+      LT.BadQuery _ -> Servant.err400
+      LT.QueryTooLong _ -> Servant.err400
 
 
 -- | Push the lease out.
@@ -184,24 +194,24 @@ liveTailRecordH pid recordId timestamp = do
   _ <- Projects.sessionAndProject pid
   appCtx <- Reader.ask @AuthContext
   Telemetry.otelRecordByProjectAndId appCtx.env.enableTimefusionReads pid (LT.storageTimestamp timestamp) recordId
-    >>= maybe (Error.throwError (jsonError Servant.err404 "The complete record is not available yet.")) addRespHeaders
+    >>= maybe (refuse RecordNotReady) addRespHeaders
 
 
 liveTailRenewH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders AE.Value)
 liveTailRenewH pid rawSid = do
   sess <- Projects.getSession
   appCtx <- Reader.ask @AuthContext
-  sid <- maybe (Error.throwError (jsonError Servant.err404 "No such live tail.")) pure (idFromText rawSid)
+  sid <- maybe (refuse NoSuchTail) pure (idFromText rawSid)
   -- Scoped to the caller before renewing, so a leaked id cannot be used to keep someone
   -- else's tail alive.
   _ <-
-    maybe (Error.throwError (jsonError Servant.err404 "This live tail has expired. Start a new one.")) pure
+    maybe (refuse TailExpired) pure
       =<< LT.activeSubscriptionFor pid sess.user.id sid
   now <- Time.currentTime
   let expiresAt = addUTCTime (fromIntegral LT.leaseSecs) now
   renewed <- LT.renewLease sid expiresAt
   maybe
-    (Error.throwError (jsonError Servant.err404 "This live tail has expired. Start a new one."))
+    (refuse TailExpired)
     (\e -> addRespHeaders (AE.object ["expires_at" AE..= e]))
     renewed
 
@@ -231,9 +241,9 @@ liveTailStreamH :: Projects.ProjectId -> Text -> ATAuthCtx (SseHeaders (Servant.
 liveTailStreamH pid rawSid = do
   sess <- Projects.getSession
   appCtx <- Reader.ask @AuthContext
-  sid <- maybe (Error.throwError (jsonError Servant.err404 "No such live tail.")) pure (idFromText rawSid)
+  sid <- maybe (refuse NoSuchTail) pure (idFromText rawSid)
   sub <-
-    maybe (Error.throwError (jsonError Servant.err404 "This live tail has expired. Start a new one.")) pure
+    maybe (refuse TailExpired) pure
       =<< LT.activeSubscriptionFor pid sess.user.id sid
   conn <- LT.newConn LT.queueCapacity
   detach <- LT.attachConn appCtx.liveTail.hub sid conn

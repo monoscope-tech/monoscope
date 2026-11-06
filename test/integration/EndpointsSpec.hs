@@ -280,10 +280,11 @@ spec = around withTestResources do
     dbExec tr [sql| UPDATE apis.issues SET acknowledged_at = ?, acknowledged_by = ? WHERE project_id = ? AND issue_type = 'api_change' |] (frozenTime, Projects.UserId UUID.nil, pid)
     listed Nothing `shouldReturn` both
 
-    let bulk action reqType hosts = snd <$> testServant tr (ApiCatalog.apiCatalogBulkActionH pid action reqType ApiCatalog.HostBulk{itemId = hosts})
+    let bulk action reqType hosts = call tr (ApiCatalog.apiCatalogBulkActionH pid action reqType ApiCatalog.HostBulk{itemId = hosts})
         directions = (,) <$> hostNames "Incoming" Nothing <*> hostNames "Outgoing" Nothing
-    void $ bulk ApiCatalog.BAArchive (Just "Incoming") ["172.31.29.11"]
+    bulk ApiCatalog.BAArchive (Just "Incoming") ["172.31.29.11"] `shouldReturn` Right (ApiCatalog.CatalogBulkDone ApiCatalog.BAArchive 1 1)
     (,) <$> hostNames "Incoming" Nothing <*> hostNames "Incoming" (Just "Archived") `shouldReturn` (["api.test.com"], ["172.31.29.11"])
+    bulk ApiCatalog.BAArchive (Just "Incoming") ["172.31.29.11"] `shouldReturn` Left (ApiCatalog.NothingChanged ApiCatalog.BAArchive 1)
     void $ bulk ApiCatalog.BAUnarchive (Just "Incoming") ["172.31.29.11"]
     (,) <$> hostNames "Incoming" Nothing <*> hostNames "Incoming" (Just "Archived") `shouldReturn` (["172.31.29.11", "api.test.com"], [])
     -- An outgoing host archives independently of incoming ones.
@@ -296,7 +297,7 @@ spec = around withTestResources do
     hostNames "Incoming" (Just "Archived") `shouldReturn` ["172.31.29.11", "api.upstream.example"]
     void $ bulk ApiCatalog.BAUnarchive Nothing ["172.31.29.11", "api.upstream.example"]
     directions `shouldReturn` (["172.31.29.11", "api.test.com"], ["api.upstream.example"])
-    bulk ApiCatalog.BAArchive (Just "Incoming") [] >>= \case ApiCatalog.CatalogBulkDone -> pass
+    bulk ApiCatalog.BAArchive (Just "Incoming") [] `shouldReturn` Left ApiCatalog.NoHostsSelected
     directions `shouldReturn` (["172.31.29.11", "api.test.com"], ["api.upstream.example"])
 
   it "endpoint queries paginate disjointly, scope to a service before paginating, and sort by name or recency" \tr -> do

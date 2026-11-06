@@ -140,6 +140,48 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
   token <$ when (isNothing token) (Log.logAttention "Slack oauth.v2.access token exchange failed" (AE.object ["error" AE..= either Relude.id (const "unparseable_response") (parseSlackOkOrErr responseBdy)]))
 
 
+-- | Every Slack refusal that carries a body; 'refuse' fixes each one's status and wire text.
+data SlackRefusal
+  = EvidenceNeedsLinkedAccount
+  | LinkExpired
+  | LinkRejected
+  | EvidenceExchangeFailed
+  | EvidenceNotStored
+  | EvidenceGrantMismatch
+  | NoDashboards
+  | IncidentChannelInvalid Integrations.SlackChannelError
+  | CommandOriginInvalid Issues.CommandOriginError
+  | CommandNotAdmitted
+  | DashboardContextLost
+  | DashboardUnavailable
+  | WidgetChanged
+  | ThreadBoundElsewhere
+  deriving stock (Eq, Show)
+
+
+refuse :: Error ServerError :> es => SlackRefusal -> Eff es a
+refuse e = throwError status{errBody = body}
+  where
+    (status, body) = case e of
+      EvidenceNeedsLinkedAccount -> (err403, "Link this Slack account to your Monoscope account before connecting Slack search.")
+      LinkExpired -> (err403, "This Slack link has expired or was already used. Ask Monoscope in Slack for a new link.")
+      LinkRejected -> (err403, "This link cannot be used with this account or project. Request a new link in Slack and check your project access.")
+      EvidenceExchangeFailed -> (err400, "Slack search access could not be connected. Start a new connection and approve read access for your linked Slack account.")
+      EvidenceNotStored -> (err503, "Slack search access could not be stored. Please try again later.")
+      EvidenceGrantMismatch -> (err403, "This Slack connection no longer matches your account, project, or workspace. Start a new connection.")
+      NoDashboards -> (err400, "No dashboards found for this project")
+      IncidentChannelInvalid Integrations.WorkspaceRequired -> (err400, "A Slack workspace is required.")
+      IncidentChannelInvalid Integrations.ChannelRequired -> (err400, "Choose a Slack channel for incident investigations.")
+      CommandOriginInvalid Issues.CommandWorkspaceRequired -> (err400, "Slack workspace is required")
+      CommandOriginInvalid Issues.CommandDestinationInvalid -> (err400, "Invalid Slack destination")
+      CommandOriginInvalid Issues.CommandUserRequired -> (err400, "Slack user is required")
+      CommandNotAdmitted -> (err409, "The request could not be admitted with its current routine and actor.")
+      DashboardContextLost -> (err400, "Reopen /dashboard to share a widget.")
+      DashboardUnavailable -> (err400, "This dashboard is unavailable. Reopen /dashboard.")
+      WidgetChanged -> (err400, "This widget changed. Reopen /dashboard.")
+      ThreadBoundElsewhere -> (err403, "Slack investigation thread belongs to another project")
+
+
 startInstallGetH :: Projects.ProjectId -> Bool -> ATAuthCtx (Headers '[Header "Location" Text] Servant.NoContent)
 startInstallGetH pid onboarding = do
   sess <- Projects.getSession
@@ -163,7 +205,7 @@ startEvidenceGetH pid slackUser = do
   stateId <- UUIDId <$> UUID.genUUID
   verifier <- Integrations.newSlackPKCE
   allowed <- Integrations.createSlackEvidenceConsent stateId sess.user.id pid slackUser verifier
-  unless allowed $ throwError err403{errBody = "Link this Slack account to your Monoscope account before connecting Slack search."}
+  unless allowed $ refuse EvidenceNeedsLinkedAccount
   envCfg <- asks env
   let params =
         [ ("client_id", envCfg.slackClientId)
@@ -191,7 +233,7 @@ newtype SlackLinkForm = SlackLinkForm {projectId :: Projects.ProjectId}
 linkIdentityGetH :: UUIDId "slack_link" -> ATAuthCtx (RespHeaders (H.Html ()))
 linkIdentityGetH linkId = do
   sess <- Projects.getSession
-  request <- Integrations.getSlackLink linkId >>= maybe (throwError err403{errBody = "This Slack link has expired or was already used. Ask Monoscope in Slack for a new link."}) pure
+  request <- Integrations.getSlackLink linkId >>= maybe (refuse LinkExpired) pure
   projects <- Integrations.slackLinkProjects request.teamId sess.user.id
   addRespHeaders
     $ bodyWrapper def{sessM = Just sess, pageTitle = "Link Slack account"}
@@ -211,7 +253,7 @@ linkIdentityPostH :: UUIDId "slack_link" -> SlackLinkForm -> ATAuthCtx (RespHead
 linkIdentityPostH linkId form = do
   sess <- Projects.getSession
   linked <- Integrations.completeSlackLink linkId sess.user.id form.projectId
-  unless linked $ throwError err403{errBody = "This link cannot be used with this account or project. Request a new link in Slack and check your project access."}
+  unless linked $ refuse LinkRejected
   addRespHeaders
     $ bodyWrapper def{sessM = Just sess, pageTitle = "Slack account linked"}
     $ H.main_ [H.class_ "mx-auto max-w-lg p-6 space-y-4"] do
@@ -233,11 +275,11 @@ linkProjectGetH slack_code stateM = do
     linkEvidence consent code = do
       envCfg <- asks @AuthContext (.config)
       response <- Slack.withRateLimits consent.teamId $ Slack.exchangeUserToken envCfg.slackClientId envCfg.slackClientSecret $ Slack.ExchangeUserCode $ Slack.SlackUserCode code envCfg.slackRedirectUri $ Integrations.slackPKCEVerifier consent.verifier
-      grant <- either (const $ throwError err400{errBody = "Slack search access could not be connected. Start a new connection and approve read access for your linked Slack account."}) pure response
+      grant <- either (const $ refuse EvidenceExchangeFailed) pure response
       saved <- Integrations.saveSlackEvidenceGrant (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) consent grant
       case saved of
-        Left _ -> throwError err503{errBody = "Slack search access could not be stored. Please try again later."}
-        Right False -> throwError err403{errBody = "This Slack connection no longer matches your account, project, or workspace. Start a new connection."}
+        Left _ -> refuse EvidenceNotStored
+        Right False -> refuse EvidenceGrantMismatch
         Right True -> pure $ addHeader ("/p/" <> consent.projectId.toText <> "/settings/integrations") $ NoContent $ PageCtx def ()
     linkWorkspace :: Projects.UserId -> Integrations.SlackInstall -> Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
     linkWorkspace installer install code = do
@@ -299,7 +341,7 @@ slackInteractionsHWithTools projectTools interaction = do
           runMonoscopeHere interaction slackData >>= traceResp
         "/dashboard" -> do
           dashboards <- V.fromList <$> getDashboardsForSlack principal.projectId
-          when (V.null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
+          when (V.null dashboards) $ refuse NoDashboards
           AI.requireAgentAccess access principal.projectId
           triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView (SlackDashboardContext principal.projectId interaction.user_id interaction.channel_id Nothing) (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
           traceResp $ textResp "modal opened"
@@ -313,7 +355,7 @@ slackInteractionsHWithTools projectTools interaction = do
           permission <- ProjectMembers.getUserPermission principal.projectId principal.userId
           unless (permission >= Just ProjectMembers.PEdit) $ throwError err403
           AI.requireAgentAccess access principal.projectId
-          channel <- either (\err -> throwError err400{errBody = encodeUtf8 err}) pure $ Issues.incidentChannel interaction.team_id interaction.channel_id
+          channel <- either (refuse . IncidentChannelInvalid) pure $ Issues.incidentChannel interaction.team_id interaction.channel_id
           let conversation = Issues.incidentRoutineConversationId principal.projectId channel
               enabled = T.strip interaction.text == "incidents on"
           if enabled
@@ -337,8 +379,8 @@ slackInteractionsHWithTools projectTools interaction = do
             Just routine -> do
               AI.requireAgentAccess access principal.projectId
               let convId = Issues.slackCommandConversationId principal.projectId interaction.team_id interaction.channel_id interaction.trigger_id
-              origin <- either (\err -> throwError err400{errBody = encodeUtf8 err}) pure $ Issues.commandOrigin interaction.team_id interaction.channel_id interaction.user_id
-              execution <- BgJobs.startCommand routine origin convId principal.userId interaction.text >>= maybe (throwError err409{errBody = "The request could not be admitted with its current routine and actor."}) pure
+              origin <- either (refuse . CommandOriginInvalid) pure $ Issues.commandOrigin interaction.team_id interaction.channel_id interaction.user_id
+              execution <- BgJobs.startCommand routine origin convId principal.userId interaction.text >>= maybe (refuse CommandNotAdmitted) pure
               let status = if execution.status == Issues.RunRunning then getLoadingMessage (detectReportIntent interaction.text) else "This request has ended. Its result and history are retained."
               traceResp $ textResp $ status <> "\n<" <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/runs/" <> execution.id.toText <> "|View run and review actions>"
   where
@@ -491,7 +533,7 @@ slackActionsH action = do
     dashboardActionsH :: SlackAction -> ATBaseCtx AE.Value
     dashboardActionsH slackAction = do
       envCfg <- asks env
-      context <- either (const $ throwError err400{errBody = "Reopen /dashboard to share a widget."}) pure $ AE.eitherDecode @SlackDashboardContext $ encodeUtf8 slackAction.view.private_metadata
+      context <- either (const $ refuse DashboardContextLost) pure $ AE.eitherDecode @SlackDashboardContext $ encodeUtf8 slackAction.view.private_metadata
       team <- maybe (throwError err403) pure slackAction.team
       unless (context.userId == slackAction.user.id && not (T.null context.channelId)) $ throwError err403
       principal <- Integrations.resolveSlackPrincipal team.id slackAction.user.id (Just context.projectId) >>= maybe (throwError err403) pure
@@ -506,11 +548,11 @@ slackActionsH action = do
             requireAccess
             vm <- Dashboards.getDashboardByProjectId context.projectId did >>= maybe (throwError err403) pure
             templates <- DashboardTemplates.getDashboardTemplates envCfg
-            maybe (throwError err400{errBody = "This dashboard is unavailable. Reopen /dashboard."}) pure $ DashboardTemplates.loadDashboardFromVM templates vm
+            maybe (refuse DashboardUnavailable) pure $ DashboardTemplates.loadDashboardFromVM templates vm
           withWidget selected perform = do
             did <- maybe (throwError err400) pure context.dashboardId
             dashboard <- loadDashboard did
-            widget <- maybe (throwError err400{errBody = "This widget changed. Reopen /dashboard."}) pure $ find ((== selected) . widgetSelectionId) dashboard.widgets
+            widget <- maybe (refuse WidgetChanged) pure $ find ((== selected) . widgetSelectionId) dashboard.widgets
             let title = fromMaybe "Untitled" widget.title
             requireAccess
             chartUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl context.projectId widget Nothing Nothing Nothing
@@ -1088,7 +1130,7 @@ processSlackEventWithTools projectTools receiptId =
             Nothing -> sendIdentityLink envCfg workspaceId
             Just principal -> do
               bound <- Integrations.bindSlackInvestigation principal workspaceId event.channel threadTs
-              unless bound $ throwError err403{errBody = "Slack investigation thread belongs to another project"}
+              unless bound $ refuse ThreadBoundElsewhere
               unlessM (Investigations.isAcceptedFollowup principal.projectId workspaceId event.channel threadTs event.ts) $ void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
                 if Integrations.slackAgentScopesGranted slackData
                   then

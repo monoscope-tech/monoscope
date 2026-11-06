@@ -149,6 +149,7 @@ module Models.Apis.Issues (
   startEventRun,
   startCommandRunWith,
   CommandOrigin,
+  CommandOriginError (..),
   commandOrigin,
   routineRunActive,
   incidentReportAllowed,
@@ -1884,25 +1885,29 @@ data CommandOriginRow = CommandOriginRow {teamId :: Text, channelId :: Text, sla
   deriving stock (Eq, Generic, Show)
 
 
+data CommandOriginError = CommandWorkspaceRequired | CommandDestinationInvalid | CommandUserRequired
+  deriving stock (Eq, Show)
+
+
 -- | Parse a command destination, including a direct-message channel.
 --
 -- >>> import Data.Aeson qualified as AE
 -- >>> fmap (\origin -> AE.fromJSON (AE.toJSON origin) == AE.Success origin) (commandOrigin "T1" "D123" "U1")
 -- Right True
 -- >>> commandOrigin "T1" "" "U1"
--- Left "Invalid Slack destination"
-commandOrigin :: Text -> Text -> Text -> Either Text CommandOrigin
+-- Left CommandDestinationInvalid
+commandOrigin :: Text -> Text -> Text -> Either CommandOriginError CommandOrigin
 commandOrigin team channel user
-  | T.null (T.strip team) = Left "Slack workspace is required"
-  | T.length channel < 2 || T.take 1 channel `notElem` ["C", "G", "D"] || not (T.all (\char -> isAsciiUpper char || isDigit char) channel) = Left "Invalid Slack destination"
-  | T.null (T.strip user) = Left "Slack user is required"
+  | T.null (T.strip team) = Left CommandWorkspaceRequired
+  | T.length channel < 2 || T.take 1 channel `notElem` ["C", "G", "D"] || not (T.all (\char -> isAsciiUpper char || isDigit char) channel) = Left CommandDestinationInvalid
+  | T.null (T.strip user) = Left CommandUserRequired
   | otherwise = Right $ CommandOrigin $ CommandOriginRow team channel user
 
 
 instance AE.FromJSON CommandOrigin where
   parseJSON = AE.withObject "Slack command origin" \value -> do
     parsed <- commandOrigin <$> value AE..: "team_id" <*> value AE..: "channel_id" <*> value AE..: "slack_user_id"
-    either (fail . toString) pure parsed
+    either (fail . show) pure parsed
 
 
 data EventRequest
@@ -2249,11 +2254,11 @@ type IncidentChannel = Integrations.SlackChannel
 -- >>> fmap AE.toJSON (incidentChannel "T1" "C123") == Right (AE.object ["teamId" AE..= ("T1" :: Text), "channelId" AE..= ("C123" :: Text)])
 -- True
 -- >>> incidentChannel "T1" "D123"
--- Left "Choose a Slack channel for incident investigations."
+-- Left ChannelRequired
 -- >>> incidentChannel "" "C123"
--- Left "A Slack workspace is required."
-incidentChannel :: Text -> Text -> Either Text IncidentChannel
-incidentChannel team channel = first (\case Integrations.WorkspaceRequired -> "A Slack workspace is required."; Integrations.ChannelRequired -> "Choose a Slack channel for incident investigations.") $ Integrations.slackChannel team channel
+-- Left WorkspaceRequired
+incidentChannel :: Text -> Text -> Either Integrations.SlackChannelError IncidentChannel
+incidentChannel = Integrations.slackChannel
 
 
 incidentRoutineConversationId :: Projects.ProjectId -> IncidentChannel -> UUIDId "conversation"

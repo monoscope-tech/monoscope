@@ -130,12 +130,26 @@ getDiscordChannels token guildId = do
   either (\err -> [] <$ Log.logAttention ("Error decoding discord channels response: " <> toText err) ()) pure $ AE.eitherDecode (r ^. responseBody)
 
 
+data DiscordRefusal = InvalidInteraction | InvalidSignature | NoCommandData | MissingGuild
+  deriving stock (Eq, Show)
+
+
+refuse :: DiscordRefusal -> ATBaseCtx a
+refuse e = throwError status{errBody = body}
+  where
+    (status, body) = case e of
+      InvalidInteraction -> (err404, "Invalid interaction data")
+      InvalidSignature -> (err401, "Invalid or missing signature")
+      NoCommandData -> (err400, "No command data provided")
+      MissingGuild -> (err400, "Missing guild_id in interaction")
+
+
 discordInteractionsH :: Maybe AI.ProjectTools -> BS.ByteString -> Maybe BS.ByteString -> Maybe BS.ByteString -> ATBaseCtx AE.Value
 discordInteractionsH projectTools rawBody signatureM timestampM = do
   envCfg <- asks @AuthContext env
   now <- Time.currentTime
   validateSignature envCfg signatureM (guarded (freshWebhookTimestamp now . decodeUtf8) =<< timestampM) rawBody
-  interaction <- either (const $ throwError err404{errBody = "Invalid interaction data"}) pure $ AE.eitherDecode (fromStrict rawBody)
+  interaction <- either (const $ refuse InvalidInteraction) pure $ AE.eitherDecode (fromStrict rawBody)
   Log.logTrace ("Discord interaction received" :: Text) $ AE.object ["type" AE..= show interaction.interaction_type, "guild_id" AE..= interaction.guild_id, "channel_id" AE..= interaction.channel_id, "data" AE..= interaction.data_i]
 
   case interaction.interaction_type of
@@ -144,12 +158,12 @@ discordInteractionsH projectTools rawBody signatureM timestampM = do
   where
     validateSignature envCfg sigM tmeM body = do
       valid <- maybe (pure False) (\(sig, tme) -> verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body) ((,) <$> sigM <*> tmeM)
-      unless valid $ throwError err401{errBody = "Invalid or missing signature"}
+      unless valid $ refuse InvalidSignature
 
     handleApplicationCommand :: DiscordInteraction -> EnvConfig -> ATBaseCtx AE.Value
     handleApplicationCommand interaction envCfg = do
-      cmdData <- maybe (throwError err400{errBody = "No command data provided"}) pure interaction.data_i
-      guildId <- maybe (throwError err400{errBody = "Missing guild_id in interaction"}) pure $ maybe interaction.guild_id (.guild_id) interaction.channel
+      cmdData <- maybe (refuse NoCommandData) pure interaction.data_i
+      guildId <- maybe (refuse MissingGuild) pure $ maybe interaction.guild_id (.guild_id) interaction.channel
       maybe (pure $ reply $ formatBotError Discord ServiceError) (handleCommand cmdData interaction envCfg) =<< getDiscordData guildId
 
     handleCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> DiscordData -> ATBaseCtx AE.Value

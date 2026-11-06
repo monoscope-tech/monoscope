@@ -56,7 +56,7 @@ import Pages.Dashboards qualified as DashboardPage
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.Git qualified as Git
 import Pkg.TestUtils
-import Servant (ResponseHeader (..), ServerError (..), getHeaders, getResponse, lookupResponseHeader)
+import Servant (ServerError (..), getHeaders, getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Directory (doesFileExist)
@@ -203,7 +203,7 @@ configurationProvider tr prState = withHTTPResponses \_ endpoint -> do
 setupSyncOn :: TestResources -> Git.GitHost -> Text -> Text -> Maybe Text -> IO ()
 setupSyncOn tr host owner repo secret = do
   void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
-  void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid
+  void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid
     GitSyncPage.GitSyncForm
       { host = Just host
       , apiBase = if host == Git.Gitea then Just "https://git.example.com" else Nothing
@@ -556,7 +556,7 @@ spec = do
           void $ testServant tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (PageCodeContext.RepositoryConnectForm [name])
         map (\r -> (r.owner, r.repo)) <$> runQueryEffect tr (GitSync.getRepositories testPid) `shouldReturn` [("team", "checkout")]
         for_ ([("Team", "Checkout"), ("team", "checkout")] :: [(Text, Text)]) \(owner, repo) ->
-          void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch = "main", accessToken = "fixture-token", webhookSecret = Just "fixture-secret", pathPrefix = Nothing}
+          void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch = "main", accessToken = "fixture-token", webhookSecret = Just "fixture-secret", pathPrefix = Nothing}
         syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
         map (\s -> (s.owner, s.repo)) syncs `shouldBe` [("team", "checkout")]
         map (.id) <$> runQueryEffect tr (GitSync.getGitSyncsByRepo Git.GitHub "TEAM" "CHECKOUT") `shouldReturn` map (.id) syncs
@@ -619,7 +619,7 @@ spec = do
         apiBases <$> runQueryEffect tr (GitSync.getGitHubCredentials testPid) `shouldReturn` origins
         -- repositoryConnection_keepsIdenticalNamesOnDifferentServersIndependent, from a fresh project.
         formed <- createTestProject tr "Same names on two servers"
-        for_ origins $ testServant tr . GitSyncPage.gitSyncSettingsPostH formed . \origin -> GitSyncPage.GitSyncForm (Just Git.GitHub) origin "team" "dashboards" "main" "fixture" Nothing Nothing
+        for_ origins $ call tr . GitSyncPage.gitSyncSettingsPostH formed . \origin -> GitSyncPage.GitSyncForm (Just Git.GitHub) origin "team" "dashboards" "main" "fixture" Nothing Nothing
         apiBases <$> runQueryEffect tr (GitSync.getGitSyncs formed) `shouldReturn` origins
         apiBases <$> runQueryEffect tr (GitSync.getGitHubCredentials formed) `shouldReturn` origins
         overview <- call tr $ PageCodeContext.repositoriesGetH formed Nothing Nothing
@@ -629,7 +629,7 @@ spec = do
         account <- grantOf tr picked Git.GitHub Nothing "team" (Just 42) Nothing
         Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team/dashboards" "dashboards" True "main"]
         void $ syncOf tr picked (Just "https://git.example.com") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
-        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH picked $ GitSyncPage.RepoSelectForm ["team/dashboards"] "main" Nothing 42
+        void $ call tr $ GitSyncPage.githubAppSelectRepoH picked $ GitSyncPage.RepoSelectForm ["team/dashboards"] "main" Nothing 42
         apiBases <$> runQueryEffect tr (GitSync.getGitSyncs picked) `shouldReturn` origins
 
       it "repositoryConnection_reportsUnreadableTokensWithoutChangingTheFailedOperation" \tr -> do
@@ -646,10 +646,10 @@ spec = do
         account <- grantOf tr testPid Git.GitHub Nothing "team-a" (Just 42) Nothing
         Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team-a/dashboards" "dashboards" True "main", Git.GitRepo "team-b/dashboards" "dashboards" True "main"]
         let selection = GitSyncPage.RepoSelectForm ["team-a/dashboards", "team-b/dashboards", "team-a/dashboards"] "trunk" (Just "observability") 42
-        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH testPid selection
+        void $ call tr $ GitSyncPage.githubAppSelectRepoH testPid selection
         syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
         sort [(s.owner, s.repo, s.branch, s.pathPrefix) | s <- syncs] `shouldBe` [("team-a", "dashboards", "trunk", "observability"), ("team-b", "dashboards", "trunk", "observability")]
-        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH testPid selection{GitSyncPage.branch = "different", GitSyncPage.pathPrefix = Just "other"}
+        void $ call tr $ GitSyncPage.githubAppSelectRepoH testPid selection{GitSyncPage.branch = "different", GitSyncPage.pathPrefix = Just "other"}
         unchanged <- runQueryEffect tr $ GitSync.getGitSyncs testPid
         sort [(s.id, s.branch, s.pathPrefix) | s <- unchanged] `shouldBe` sort [(s.id, s.branch, s.pathPrefix) | s <- syncs]
 
@@ -1235,20 +1235,17 @@ spec = do
       it "tokenConnection_rejectsMissingTokenAndQueuesOnlyFirstImport" \tr -> do
         let form owner repo branch token prefix = GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
         for_ ["", " "] \token -> do
-          (headers, _) <- testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing)
-          case lookupResponseHeader @"HX-Trigger" headers of
-            Header value -> value `shouldSatisfy` T.isInfixOf "Enter an access token."
-            _ -> expectationFailure "Missing token error was not shown"
+          (void <$> call tr (GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing))) `shouldReturn` Left (GitSyncPage.ConnectionFailed Git.GitHub "Enter an access token.")
           runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
           pendingJobs tr >>= (`shouldSatisfy` null)
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
+        void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
         sync <- onlySync tr >>= maybe (fail "Git connection was not created") pure
         (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)
         let imports = filter isImport <$> pendingJobs tr
         imports >>= \jobs -> [(pid, sid) | BackgroundJobs.GitSyncRepository pid sid <- jobs] `shouldBe` [(testPid, sync.id)]
         -- The update path wrote every field but the folder, so an edit to "Folder in repo" vanished
         -- on save while the page redrew as if it had stuck. An empty token keeps the stored one.
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "updated" "updated-repo" "dev" "" (Just "monoscope"))
+        void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "updated" "updated-repo" "dev" "" (Just "monoscope"))
         updated <- onlySync tr >>= maybe (fail "Git connection disappeared after update") pure
         (updated.owner, updated.repo, updated.branch, updated.pathPrefix) `shouldBe` ("updated", "updated-repo", "dev", "monoscope")
         updated.accessToken `shouldBe` sync.accessToken

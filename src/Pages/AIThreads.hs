@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH) where
+module Pages.AIThreads (AIPage (..), PolicySaved (..), PromptError (..), NewThreadError (..), TurnError (..), EmptyTitle (..), UnknownTemplate (..), NoReviewClasses (..), OperationReviewed (..), AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), RoutinePolicyForm (..), OperationReviewForm (..), operationReviewPostH, operationGetH, RoutineInstructionsForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineRunGetH, routineInstructionsPostH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routinePolicyPostH, routineDeleteH, aiSearchH) where
 
 import BackgroundJobs qualified
 import BackgroundJobs.Types qualified as Jobs
@@ -37,7 +37,7 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC)
 import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders)
 import Utils (faSprite_, renderMarkdownTocWithPrefix)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
@@ -45,27 +45,26 @@ import Web.MCP qualified as MCP
 import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 
 
+-- | Refusals of the JSON search endpoint; status and body are what the query box reads.
+data AISearchError = MalformedSearch | EmptySearch | SearchFailed Text
+
+
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
 aiSearchH pid requestBody = do
   _ <- Projects.sessionAndProject pid
   authCtx <- ask @AuthContext
-  let envCfg = authCtx.env
-      parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
-
-  (inputText, timezoneM) <-
-    parsed `whenNothing` do
-      addErrorToast "Invalid AI search input" Nothing
-      throwError Servant.err400{Servant.errBody = "Invalid input format"}
-
-  when (T.null (T.strip inputText)) do
-    addErrorToast "Please enter a search query" Nothing
-    throwError Servant.err400{Servant.errBody = "Empty input"}
-
-  AI.runNlSearch pid envCfg timezoneM inputText >>= \case
-    Left errMsg -> do
-      addErrorToast "AI search failed" (Just errMsg)
-      throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
-    Right payload -> addRespHeaders payload
+  let parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
+  (inputText, timezoneM) <- parsed `whenNothing` refuse MalformedSearch
+  when (T.null (T.strip inputText)) $ refuse EmptySearch
+  either (refuse . SearchFailed) addRespHeaders =<< AI.runNlSearch pid authCtx.env timezoneM inputText
+  where
+    refuse :: AISearchError -> ATAuthCtx a
+    refuse e = addErrorToast toast detail >> throwError status{Servant.errBody = body}
+      where
+        (toast, detail, status, body) = case e of
+          MalformedSearch -> ("Invalid AI search input", Nothing, Servant.err400, "Invalid input format")
+          EmptySearch -> ("Please enter a search query", Nothing, Servant.err400, "Empty input")
+          SearchFailed msg -> ("AI search failed", Just msg, Servant.err502, encodeUtf8 msg)
 
 
 data AIChatForm = AIChatForm
@@ -895,16 +894,30 @@ operationGetH pid identifier = do
   routineRunGetH pid run Nothing
 
 
-operationReviewPostH :: Projects.ProjectId -> UUIDId "agent_operation" -> OperationReviewForm -> ATAuthCtx (RespHeaders (Html ()))
+-- | The operation page re-rendered after a review decision; 'ReviewUnavailable' never reaches it (403).
+data OperationReviewed = OperationReviewed {response :: Investigations.ReviewResponse, page :: Html ()}
+
+
+instance ToHtml OperationReviewed where
+  toHtml = toHtml . (.page)
+  toHtmlRaw = toHtml
+
+
+instance HxOutcome OperationReviewed where
+  hxSuccess r = case r.response of
+    Investigations.ReviewSaved{} -> Just "Decision saved."
+    Investigations.ReviewAlreadyDecided{} -> Just "This action already has a decision."
+    Investigations.ReviewExpired -> Nothing
+    Investigations.ReviewUnavailable -> Nothing
+
+
+operationReviewPostH :: Projects.ProjectId -> UUIDId "agent_operation" -> OperationReviewForm -> ATAuthCtx (RespHeaders OperationReviewed)
 operationReviewPostH pid identifier form = do
   (session, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
-  result <- Jobs.reviewOperation pid session.user.id identifier form.decision
-  case result of
-    Investigations.ReviewUnavailable -> throwError Servant.err403
-    Investigations.ReviewExpired -> addErrorToast "This action's review deadline has passed." Nothing
-    Investigations.ReviewAlreadyDecided{} -> addSuccessToast "This action already has a decision." Nothing
-    Investigations.ReviewSaved{} -> addSuccessToast "Decision saved." Nothing
-  fmap (.content) <$> operationGetH pid identifier
+  response <- Jobs.reviewOperation pid session.user.id identifier form.decision
+  when (response == Investigations.ReviewUnavailable) $ throwError Servant.err403
+  when (response == Investigations.ReviewExpired) $ addErrorToast "This action's review deadline has passed." Nothing
+  hxDone . OperationReviewed response . (.content) . Servant.getResponse =<< operationGetH pid identifier
 
 
 runStatus :: Issues.RoutineRunStatus -> (BadgeColor, Text)

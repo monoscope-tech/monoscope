@@ -284,7 +284,7 @@ data Routes mode = Routes
           :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> RawM
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[PNG] (Headers '[Header "Cache-Control" Text] LBS.ByteString)
-  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders Onboarding.ProxiedPage)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
   , emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (Html ())
@@ -351,7 +351,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders (Table.TableResponse ApiCatalog.EnpReqStatsVM))
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPT "period" :> QPI "skip" :> QPT "filter" :> QPT "stats" :> Get '[HTML] (RespHeaders (Table.TableResponse ApiCatalog.HostEventsVM))
-  , apiCatalogBulkAction :: mode :- "p" :> ProjectId :> "api_catalog" :> "bulk_action" :> Capture "action" ApiCatalog.HostBulkAction :> QPT "request_type" :> ReqBody '[FormUrlEncoded] ApiCatalog.HostBulkActionForm :> Post '[HTML] (RespHeaders ApiCatalog.CatalogBulkAction)
+  , apiCatalogBulkAction :: mode :- "p" :> ProjectId :> "api_catalog" :> "bulk_action" :> Capture "action" ApiCatalog.HostBulkAction :> QPT "request_type" :> ReqBody '[FormUrlEncoded] ApiCatalog.HostBulkActionForm :> HxPost ApiCatalog.CatalogBulkRejection ApiCatalog.CatalogBulkAction
   , -- The learned OpenAPI document: rendered reference, plus the raw spec in both
     -- serialisations. Static ".json"/".yaml" segments rather than content negotiation,
     -- because these URLs are meant to be pasted into curl, CI, and codegen.
@@ -395,12 +395,12 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , repositorySourcePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> HxPost PageCodeContext.MappingRejection PageCodeContext.MappingsPanel
   , repositorySourceDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> Capture "mapping_id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
   , repositoryReviewsPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> "reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders (Html ()))
-  , gitSyncRepositoryUpdate :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncRepositoryRetry :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "retry" :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncRepositoryPause :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "pause" :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncRepositoryDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> Delete '[HTML] (RespHeaders (Html ()))
+  , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> HxPost GitSync.GitSyncRejection GitSync.GitSyncSettings
+  , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders GitSync.GitSyncRemoval)
+  , gitSyncRepositoryUpdate :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> HxPost GitSync.GitSyncRejection GitSync.GitSyncSettings
+  , gitSyncRepositoryRetry :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "retry" :> Post '[HTML] (RespHeaders GitSync.GitSyncSettings)
+  , gitSyncRepositoryPause :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "pause" :> Post '[HTML] (RespHeaders GitSync.GitSyncSettings)
+  , gitSyncRepositoryDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> Delete '[HTML] (RespHeaders GitSync.GitSyncRemoval)
   , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , codeMappingsEditor :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> "editor" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> HxPost PageCodeContext.MappingRejection PageCodeContext.MappingsPanel
@@ -417,10 +417,10 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , prometheusSettingsToggle :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Patch '[HTML] (RespHeaders Settings.PrometheusMut)
   , prometheusSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Delete '[HTML] (RespHeaders Settings.PrometheusMut)
   , -- GitHub App routes
-    githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> QueryParam "to" Text :> Get '[HTML] (RespHeaders (Html ()))
-  , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> QueryParam "code" Text :> Get '[HTML] (RespHeaders (Html ()))
+    githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> QueryParam "to" Text :> Get '[HTML] (RespHeaders (PageCtx GitSync.GitHubConnect))
+  , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> QueryParam "code" Text :> Get '[HTML] (RespHeaders (PageCtx GitSync.GitHubConnect))
   , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
-  , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Post '[HTML] (RespHeaders (Html ()))
+  , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> HxPost GitSync.SelectRejection GitSync.SyncPanels
   , -- Command palette
     commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ())) -- dynamic items only
   , commandPaletteRecentPost :: mode :- "p" :> ProjectId :> "command-palette" :> "recents" :> ReqBody '[FormUrlEncoded] CommandPalette.RecentForm :> Post '[HTML] (RespHeaders NoContent)
@@ -428,7 +428,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , aiRoutineInstallPost :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> "install" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineTemplateForm :> HxPost AIThreads.UnknownTemplate AIThreads.AIPage
   , aiThreadsGet :: mode :- "p" :> ProjectId :> "ai" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , aiOperationGet :: mode :- "p" :> ProjectId :> "ai" :> "operations" :> Capture "operation_id" (UUIDId "agent_operation") :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiOperationReviewPost :: mode :- "p" :> ProjectId :> "ai" :> "operations" :> Capture "operation_id" (UUIDId "agent_operation") :> "review" :> ReqBody '[FormUrlEncoded] AIThreads.OperationReviewForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiOperationReviewPost :: mode :- "p" :> ProjectId :> "ai" :> "operations" :> Capture "operation_id" (UUIDId "agent_operation") :> "review" :> ReqBody '[FormUrlEncoded] AIThreads.OperationReviewForm :> Post '[HTML] (RespHeaders AIThreads.OperationReviewed)
   , aiRoutineRunGet :: mode :- "p" :> ProjectId :> "ai" :> "runs" :> Capture "run_id" (UUIDId "ai_routine_run") :> QueryParam "conversation" (UUIDId "conversation") :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , aiRoutineInstructionsPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "instructions" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineInstructionsForm :> HxPost AIThreads.PromptError AIThreads.AIPage
   , aiThreadGet :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> QueryParam "doc" Issues.ArtifactKey :> Header "HX-Target" Text :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
@@ -624,9 +624,9 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
   , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
   , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingPhoneEmailsPost)
-  , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
-  , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Post '[HTML] (RespHeaders (Html ()))
-  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> LenientQP "step" Onboarding.OnboardingStep :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> HxVerb 'GET Onboarding.NoEventsYet Onboarding.IntegrationCheck
+  , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Post '[HTML] (RespHeaders Onboarding.ChecklistDismissed)
+  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> LenientQP "step" Onboarding.OnboardingStep :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
   , -- Pricing routes
     onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> HxPost CreateProject.SubscriptionLookupFailed CreateProject.PricingUpdated
   }
