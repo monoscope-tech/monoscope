@@ -8,7 +8,7 @@ import Relude
 import Servant (HasStatus (..), StdMethod (POST), UVerb, Union, getResponse, respond)
 import Servant.API.UVerb (foldMapUnion)
 import Servant.HTML.Lucid (HTML)
-import System.Types (HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addReswap, addRespHeaders, addSuccessToast, addToast, redirectCS)
+import System.Types (HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, addReswap, addSuccessToast, addToast, redirectCS)
 
 
 -- | The action succeeded; the body is the outcome's 'ToHtml'.
@@ -65,7 +65,7 @@ hxDone :: (HxOutcome a, HxState es) => a -> Eff es (RespHeaders a)
 hxDone a = traverse_ redirectCS (hxRedirect a) >> traverse_ (`addSuccessToast` Nothing) (hxSuccess a) >> addRespHeaders a
 
 
-hxAction :: (HxOutcome a, Rejection e, HxState es) => Eff es (Either e a) -> Eff es (HxResult e a)
+hxAction :: (HxOutcome a, HxState es, Rejection e) => Eff es (Either e a) -> Eff es (HxResult e a)
 hxAction run =
   run >>= \case
     Left e -> addToast "error" (rejectionMessage e) (rejectionDetail e) >> addReswap "none" >> (respond =<< addRespHeaders (Invalid e))

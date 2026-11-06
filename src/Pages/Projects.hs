@@ -281,7 +281,8 @@ integrationsPage pid = do
   includeUserIdentityInAlerts <- Projects.includeAlertUserIdentity pid
   let extraSlackChannels = seededExtras <> fetchedExtras
   pure
-    $ PageCtx bw{pageTitle = "Integrations", isSettingsPage = True}
+    $ PageCtx
+      bw{pageTitle = "Integrations", isSettingsPage = True}
       IntegrationsConfig
         { projectId = pid
         , envConfig = appCtx.env
@@ -386,54 +387,54 @@ updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (
 updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = hxAction do
   void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   validateNotificationChannels pid enabledChannels phones >>= traverse \() -> do
-      projectM <- Projects.projectById pid
-      slackInfoM <- getProjectSlackData pid
-      everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
-      whenJust everyoneTeamM \team -> do
-        -- The submitted list is authoritative: the tagify input is seeded with every
-        -- stored channel (resolved or not), so anything absent from it was deliberately
-        -- removed — including the OAuth-time default, which projects do swap away from.
-        let oldChannels = S.fromList $ V.toList team.slack_channels
-            requested = ordNub slackChannels
-            addedChannels = filter (`S.notMember` oldChannels) requested
+    projectM <- Projects.projectById pid
+    slackInfoM <- getProjectSlackData pid
+    everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
+    whenJust everyoneTeamM \team -> do
+      -- The submitted list is authoritative: the tagify input is seeded with every
+      -- stored channel (resolved or not), so anything absent from it was deliberately
+      -- removed — including the OAuth-time default, which projects do swap away from.
+      let oldChannels = S.fromList $ V.toList team.slack_channels
+          requested = ordNub slackChannels
+          addedChannels = filter (`S.notMember` oldChannels) requested
 
-        -- Gate-on-reachability: try the welcome message for each newly-added
-        -- channel; drop any where Slack says not_in_channel / channel_not_found
-        -- / etc. so we don't persist unreachable routes that fail every alert.
-        unreachable <- case (,) <$> projectM <*> slackInfoM of
-          Just (project, slackInfo) ->
-            lefts <$> forM addedChannels \cid -> do
-              -- OAuth-default channel: probe via the channel-bound webhook URL
-              -- (works for private channels; no bot membership needed).
-              -- Other channels: probe via chat.postMessage (needs bot membership).
-              -- A dead OAuth webhook (uninstalled app, revoked token) shouldn't
-              -- persist as a routing target any more than an un-invited channel.
-              r <- trySync $ case (cid == slackInfo.channelId, slackInfo.webhookUrl) of
-                (True, Just url) -> SlackP.sendSlackWelcomeViaWebhook url project.title
-                _ -> SlackP.sendSlackWelcomeMessage slackInfo.botToken cid project.title
-              case r of
-                Right () -> pure (Right cid)
-                Left err -> do
-                  SlackP.logWelcomeMessageFailure cid err
-                  pure (Left cid)
-          Nothing -> do
-            unless (null addedChannels)
-              $ addErrorToast "Slack workspace is not linked to this project; new channels were not saved." Nothing
-            pure addedChannels
+      -- Gate-on-reachability: try the welcome message for each newly-added
+      -- channel; drop any where Slack says not_in_channel / channel_not_found
+      -- / etc. so we don't persist unreachable routes that fail every alert.
+      unreachable <- case (,) <$> projectM <*> slackInfoM of
+        Just (project, slackInfo) ->
+          lefts <$> forM addedChannels \cid -> do
+            -- OAuth-default channel: probe via the channel-bound webhook URL
+            -- (works for private channels; no bot membership needed).
+            -- Other channels: probe via chat.postMessage (needs bot membership).
+            -- A dead OAuth webhook (uninstalled app, revoked token) shouldn't
+            -- persist as a routing target any more than an un-invited channel.
+            r <- trySync $ case (cid == slackInfo.channelId, slackInfo.webhookUrl) of
+              (True, Just url) -> SlackP.sendSlackWelcomeViaWebhook url project.title
+              _ -> SlackP.sendSlackWelcomeMessage slackInfo.botToken cid project.title
+            case r of
+              Right () -> pure (Right cid)
+              Left err -> do
+                SlackP.logWelcomeMessageFailure cid err
+                pure (Left cid)
+        Nothing -> do
+          unless (null addedChannels)
+            $ addErrorToast "Slack workspace is not linked to this project; new channels were not saved." Nothing
+          pure addedChannels
 
-        void
-          $ ProjectMembers.updateTeam pid team.id
-          $ (ProjectMembers.teamToDetails team)
-            { ProjectMembers.slackChannels = V.fromList $ filter (`notElem` unreachable) requested
-            , ProjectMembers.notifyEmails = V.fromList emails
-            , ProjectMembers.phoneNumbers = V.fromList phones
-            , ProjectMembers.disabledChannels = V.fromList $ filter (`notElem` enabledChannels) allChannels
-            }
+      void
+        $ ProjectMembers.updateTeam pid team.id
+        $ (ProjectMembers.teamToDetails team)
+          { ProjectMembers.slackChannels = V.fromList $ filter (`notElem` unreachable) requested
+          , ProjectMembers.notifyEmails = V.fromList emails
+          , ProjectMembers.phoneNumbers = V.fromList phones
+          , ProjectMembers.disabledChannels = V.fromList $ filter (`notElem` enabledChannels) allChannels
+          }
 
-        unless (null unreachable)
-          $ addErrorToast ("Could not reach Slack channel(s): " <> T.intercalate ", " unreachable <> ". Invite Monoscope to each channel and try again.") Nothing
-      whenJust includeUserIdentityInAlerts $ Projects.setIncludeAlertUserIdentity pid
-      integrationsSaved pid ChannelsUpdated
+      unless (null unreachable)
+        $ addErrorToast ("Could not reach Slack channel(s): " <> T.intercalate ", " unreachable <> ". Invite Monoscope to each channel and try again.") Nothing
+    whenJust includeUserIdentityInAlerts $ Projects.setIncludeAlertUserIdentity pid
+    integrationsSaved pid ChannelsUpdated
 
 
 validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either ChannelsRejection ())
@@ -867,9 +868,10 @@ instance HxOutcome TeamSaved where
     Just . \case
       TeamCreated pid -> "/p/" <> pid.toText <> "/manage_teams"
       TeamUpdated pid handleM -> "/p/" <> pid.toText <> "/manage_teams" <> foldMap ("/" <>) handleM
-  hxSuccess = Just . \case
-    TeamCreated _ -> "Team saved successfully"
-    TeamUpdated _ _ -> "Team updated successfully"
+  hxSuccess =
+    Just . \case
+      TeamCreated _ -> "Team saved successfully"
+      TeamUpdated _ _ -> "Team updated successfully"
 
 
 validateTeamDetails :: Text -> Text -> V.Vector Text -> Either TeamRejection ()

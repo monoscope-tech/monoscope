@@ -771,14 +771,15 @@ threadPostHWithTools projectTools pid convId form = hxAction do
   authorizeProject pid
   case normalizeQuery form.query of
     Left err -> pure $ Left $ TurnPrompt err
-    Right prompt -> do
-      requestId <- maybe (UUIDId <$> UUID.genUUID) pure form.requestId
-      Issues.getConversation pid convId >>= traverse \conversation -> do
-        case Issues.conversationIssueId conversation of
-          Just issueId -> void $ IssuePage.aiChatPostHWithTools projectTools pid issueId (IssuePage.AIChatForm prompt $ Just requestId)
-          Nothing -> submitTurn projectTools Issues.WebMessage requestId (form.allowActions == Just True) pid convId prompt
-        pure $ ThreadPage pid convId
-      <&> maybeToRight ConversationGone
+    Right prompt ->
+      do
+        requestId <- maybe (UUIDId <$> UUID.genUUID) pure form.requestId
+        Issues.getConversation pid convId >>= traverse \conversation -> do
+          case Issues.conversationIssueId conversation of
+            Just issueId -> void $ IssuePage.aiChatPostHWithTools projectTools pid issueId (IssuePage.AIChatForm prompt $ Just requestId)
+            Nothing -> submitTurn projectTools Issues.WebMessage requestId (form.allowActions == Just True) pid convId prompt
+          pure $ ThreadPage pid convId
+        <&> maybeToRight ConversationGone
 
 
 threadTitlePostH :: Projects.ProjectId -> UUIDId "conversation" -> TitleForm -> ATAuthCtx (HxResult EmptyTitle AIPage)

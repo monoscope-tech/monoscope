@@ -186,8 +186,8 @@ instance HxOutcome OnboardingStepPost where hxRedirect (OnboardingStepPost pid s
 
 data ChecklistDismissed = ChecklistDismissed
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody ChecklistDismissed
   deriving anyclass (HxOutcome)
+  deriving (ToHtml) via NoBody ChecklistDismissed
 
 
 -- | What an integration check answers while the docs page is open.

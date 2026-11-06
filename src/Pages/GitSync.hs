@@ -758,7 +758,8 @@ githubAppInstallH pid toM = do
   ctx <- ask @Config.AuthContext
   session <- Projects.getSession
   (_, _, bw) <- mkPageCtx pid
-  addRespHeaders . PageCtx bw{pageTitle = "Connect GitHub"}
+  addRespHeaders
+    . PageCtx bw{pageTitle = "Connect GitHub"}
     =<< if any T.null [ctx.config.githubClientId, ctx.config.githubClientSecret]
       then pure $ ConnectFailed (Just pid) AppNotConfigured
       else do

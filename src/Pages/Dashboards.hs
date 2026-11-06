@@ -1269,34 +1269,35 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
   existingMonitorM <- maybe (pure Nothing) (Monitors.queryMonitorByWidgetId pid (Just dashId)) normalizedWidgetIdM
   if isJust existingMonitorM && isNothing widgetUpdated.alertThreshold
     then pure $ Left MonitorNeedsThreshold
-    else Right <$> do
-      -- The render-time tab slug comes back in the posted JSON; it must not be persisted.
-      _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
-      syncDashboardAndQueuePush pid dashId
-      whenJust existingMonitorM \monitor -> do
-        let newQuery = fromMaybe monitor.logQuery widget.query
-            scope = mkScopedQuery pid (Nothing, Nothing) monitor.environment monitor.service
-            sqlQueryCfg = (applyScopedQuery scope $ defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins}
-            newSqlQuery =
-              if monitor.logQuery == newQuery
-                then monitor.logQueryAsSql
-                else case parseQueryToComponents sqlQueryCfg newQuery of
-                  Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
-                  Left _ -> monitor.logQueryAsSql
-            updatedMonitor =
-              (monitor :: Monitors.QueryMonitor)
-                { Monitors.logQuery = newQuery
-                , Monitors.logQueryAsSql = newSqlQuery
-                , Monitors.alertThreshold = fromMaybe monitor.alertThreshold widgetUpdated.alertThreshold
-                , Monitors.warningThreshold = widgetUpdated.warningThreshold
-                , Monitors.alertConfig = monitor.alertConfig{Monitors.unit = widgetUpdated.unit, Monitors.title = widgetMonitorTitle dashVM.title widgetUpdated.title}
-                }
-            synced (m :: Monitors.QueryMonitor) = (m.logQuery, m.alertThreshold, m.warningThreshold, m.alertConfig.unit, m.alertConfig.title)
-        when (synced updatedMonitor /= synced monitor) $ void $ Monitors.queryMonitorUpsert updatedMonitor
+    else
+      Right <$> do
+        -- The render-time tab slug comes back in the posted JSON; it must not be persisted.
+        _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
+        syncDashboardAndQueuePush pid dashId
+        whenJust existingMonitorM \monitor -> do
+          let newQuery = fromMaybe monitor.logQuery widget.query
+              scope = mkScopedQuery pid (Nothing, Nothing) monitor.environment monitor.service
+              sqlQueryCfg = (applyScopedQuery scope $ defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins}
+              newSqlQuery =
+                if monitor.logQuery == newQuery
+                  then monitor.logQueryAsSql
+                  else case parseQueryToComponents sqlQueryCfg newQuery of
+                    Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
+                    Left _ -> monitor.logQueryAsSql
+              updatedMonitor =
+                (monitor :: Monitors.QueryMonitor)
+                  { Monitors.logQuery = newQuery
+                  , Monitors.logQueryAsSql = newSqlQuery
+                  , Monitors.alertThreshold = fromMaybe monitor.alertThreshold widgetUpdated.alertThreshold
+                  , Monitors.warningThreshold = widgetUpdated.warningThreshold
+                  , Monitors.alertConfig = monitor.alertConfig{Monitors.unit = widgetUpdated.unit, Monitors.title = widgetMonitorTitle dashVM.title widgetUpdated.title}
+                  }
+              synced (m :: Monitors.QueryMonitor) = (m.logQuery, m.alertThreshold, m.warningThreshold, m.alertConfig.unit, m.alertConfig.title)
+          when (synced updatedMonitor /= synced monitor) $ void $ Monitors.queryMonitorUpsert updatedMonitor
 
-      addSuccessToast (if isJust existingMonitorM then "Widget and monitor updated successfully" else if isJust normalizedWidgetIdM then "Widget updated successfully" else "Widget added to dashboard successfully") Nothing
-      unless (configureMonitorM == Just "true") $ addTriggerEvent "closeModal" ""
-      pure widgetUpdated
+        addSuccessToast (if isJust existingMonitorM then "Widget and monitor updated successfully" else if isJust normalizedWidgetIdM then "Widget updated successfully" else "Widget added to dashboard successfully") Nothing
+        unless (configureMonitorM == Just "true") $ addTriggerEvent "closeModal" ""
+        pure widgetUpdated
 
 
 updateDashboardWidgets :: Dashboards.Dashboard -> Maybe Text -> Maybe Text -> Widget.Widget -> Dashboards.Dashboard

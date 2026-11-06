@@ -125,7 +125,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
-import Pages.Components (resetFormOnRefusalAttr_, BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, durationQuery, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, durationQuery, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resetFormOnRefusalAttr_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Replay qualified as Replay
 import Pages.Telemetry (traceFragmentUrl)
@@ -150,8 +150,8 @@ import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, useTfReads)
 import Utils (LoadingSize (..), LoadingType (..), countNoun, faSprite_, fmtDate, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
-import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 import Web.HttpApiData (FromHttpApiData (..), parseQueryParamMaybe)
+import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 
 
 newtype IssueBulkForm = IssueBulk
@@ -388,9 +388,11 @@ issueBulkActionsPostH pid action durationM valueM items = do
         BAPriority -> case valueM >>= parseQueryParamMaybe @Issues.IssueSeverity of
           Just sev -> Issues.setIssuePriority pid issueIds sev $> ([], Nothing, "Priority set to " <> display sev)
           Nothing -> pure ([], Nothing, "Pick a priority")
-        BAAssign -> (`parseAssignee` valueM) <$> ProjectMembers.selectActiveProjectMembers pid >>= \case
-          Right assigneeM -> assignIssues pid sess.user.id issues assigneeM $> ([], Nothing, maybe "Unassigned" (const "Assigned") assigneeM)
-          Left _ -> pure ([], Nothing, "Pick a member to assign")
+        BAAssign -> do
+          members <- ProjectMembers.selectActiveProjectMembers pid
+          case parseAssignee members valueM of
+            Right assigneeM -> assignIssues pid sess.user.id issues assigneeM $> ([], Nothing, maybe "Unassigned" (const "Assigned") assigneeM)
+            Left _ -> pure ([], Nothing, "Pick a member to assign")
         -- The error first seen earliest becomes canonical (created_at ties within one extraction
         -- pass, so first event time decides); the rest join its group and leave the Inbox.
         BAMerge -> do
@@ -3020,9 +3022,10 @@ data ViewChanged = ViewSaved Projects.ProjectId Text | ViewDeleted Projects.Proj
 
 
 instance HxOutcome ViewChanged where
-  hxRedirect = Just . \case
-    ViewSaved pid query -> "/p/" <> pid.toText <> "/issues?" <> query
-    ViewDeleted pid -> "/p/" <> pid.toText <> "/issues"
+  hxRedirect =
+    Just . \case
+      ViewSaved pid query -> "/p/" <> pid.toText <> "/issues?" <> query
+      ViewDeleted pid -> "/p/" <> pid.toText <> "/issues"
 
 
 saveViewPostH :: Projects.ProjectId -> SaveViewForm -> ATAuthCtx (HxResult UnnamedView ViewChanged)
@@ -3072,8 +3075,8 @@ instance Rejection TimelineRejection where
 
 -- | An entry landed on the issue's timeline.
 data TimelineLogged = TimelineLogged
-  deriving (ToHtml) via NoBody TimelineLogged
   deriving anyclass (HxOutcome)
+  deriving (ToHtml) via NoBody TimelineLogged
 
 
 -- | Log that the user opened the issue (at most once a day), for the People list.
