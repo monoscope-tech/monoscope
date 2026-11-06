@@ -235,28 +235,24 @@ data APIError = APIError {statusCode :: Int, message :: Text}
 
 -- | Human-readable rendering for end-user error messages.
 -- - Connection-level errors (statusCode == 0) print the bare message.
--- - When the server returns a structured @{"error": {...}}@ body (A2),
---   surface just the one-line @message@ + @suggestion@; the SQL/Hasql
---   blob lives in @details@ which is only shown under @--debug@.
+-- - A structured @{"error": {code, message, suggestion?, ...}}@ body prints its
+--   @message@ (+ @suggestion@); query/validation codes drop the @HTTP N:@ prefix.
+--   The raw @details@ blob is only shown under @--debug@.
 -- - Otherwise, falls back to @HTTP N: <body>@.
 renderAPIError :: APIError -> Text
 renderAPIError e
   | e.statusCode == 0 = e.message
-  | otherwise = case decodeStructured e.message of
-      Just (code, msg, suggestionM)
-        | code == "unknown_field" || code == "invalid_query" || code == "validation" ->
-            msg <> maybe "" (\s -> " (" <> s <> ")") suggestionM
-      _ -> "HTTP " <> show e.statusCode <> ": " <> e.message
+  | otherwise = case decodeStructured of
+      Just (code, msg, suggestionM) ->
+        bool ("HTTP " <> show e.statusCode <> ": ") "" (code `elem` ["unknown_field", "invalid_query", "validation"]) <> msg <> foldMap (\s -> " (" <> s <> ")") suggestionM
+      Nothing -> "HTTP " <> show e.statusCode <> ": " <> e.message
   where
-    decodeStructured txt = case AE.eitherDecodeStrict @AE.Value (encodeUtf8 txt) of
+    decodeStructured = case AE.eitherDecodeStrict @AE.Value (encodeUtf8 e.message) of
       Right (AE.Object o)
         | Just (AE.Object err) <- KM.lookup "error" o
         , Just (AE.String c) <- KM.lookup "code" err
         , Just (AE.String m) <- KM.lookup "message" err ->
-            let s = case KM.lookup "suggestion" err of
-                  Just (AE.String x) -> Just x
-                  _ -> Nothing
-             in Just (c, m, s)
+            Just (c, m, case KM.lookup "suggestion" err of Just (AE.String x) -> Just x; _ -> Nothing)
       _ -> Nothing
 
 

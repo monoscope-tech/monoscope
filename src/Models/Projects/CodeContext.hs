@@ -304,7 +304,7 @@ mappingConnection cfg pid mapping = runExceptT do
   creds <- hoistEither $ maybeToRight CredentialGone $ credentialCreds cred
   let located = mapping.owner <> "/" <> mapping.repo
   token <- ExceptT $ first (ReadFailed located) <$> githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
-  conn <- hoistEither $ first (ReadFailed located) $ credentialConn cred token
+  conn <- hoistEither $ first (ReadFailed located . Git.gitConnErrorMessage) $ credentialConn cred token
   pure (cred, conn)
 
 

@@ -21,6 +21,7 @@ module Pages.Settings (
   prometheusPostH,
   prometheusUpdateH,
   prometheusTestH,
+  ScrapeProbe (..),
   prometheusDeleteH,
   prometheusToggleH,
   PrometheusForm (..),
@@ -122,7 +123,7 @@ import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), err400, err503, errBody)
 import System.Config
-import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
+import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
 import Text.Printf (printf)
 import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
@@ -640,23 +641,37 @@ promSave pid form verb persist = do
 -- | One-shot scrape used by the form's Test button: fetch + parse, no DB write, no ingest.
 -- Reports sample count + latency, or a (truncated) error, so a user validates a target
 -- before saving instead of saving blind and squinting at last_status a minute later.
-prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders (Html ()))
+prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders (Done ScrapeProbe))
 prometheusTestH pid form = do
   void $ requireSettingsWrite pid
-  case validateScrapeUrl form.url of
-    Left err -> addRespHeaders $ prometheusTestResult $ Just $ Left $ refusalMessage err
+  done =<< case validateScrapeUrl form.url of
+    Left err -> pure $ ProbeRefused err
     Right url -> do
       let opts = PromCfg.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
       t0 <- Time.currentTime
       res <- trySync (W.getWith opts (toString url))
       t1 <- Time.currentTime
       let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
-      addRespHeaders $ prometheusTestResult $ Just $ case res of
-        Left e -> Left (T.take 300 (show e))
+      pure $ case res of
+        Left e -> ProbeFailed (T.take 300 (show e))
         Right resp ->
           -- Count only the samples ingestScrapedBody would store (shared isFiniteSample).
           let finite = filter Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody)))
-           in Right (length finite, ms)
+           in ProbeScraped (length finite) ms
+
+
+-- | A scrape test's result, shown in the form beside the endpoint it tested.
+data ScrapeProbe = ProbeRefused ScrapeRejection | ProbeFailed Text | ProbeScraped Int Int
+  deriving stock (Eq, Show)
+  deriving (Outcome) via Rendered ScrapeProbe
+
+
+instance ToHtml ScrapeProbe where
+  toHtmlRaw = toHtml
+  toHtml probe = toHtml $ prometheusTestResult $ Just case probe of
+    ProbeRefused err -> Left $ refusalMessage err
+    ProbeFailed err -> Left err
+    ProbeScraped samples ms -> Right (samples, ms)
 
 
 prometheusDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)

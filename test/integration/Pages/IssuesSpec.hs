@@ -334,8 +334,7 @@ spec = around withTestResources $ describe "Issues" do
     let errData = [aesonQQ|{"when":"2026-01-01T00:00:00Z","error_type":"SecretTypeError","root_error_type":"SecretTypeError","message":"victim-only-message","root_error_message":"victim-only-message","stack_trace":"","hash":"group-authz","is_framework":false}|]
     dbExec tr [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, error_data) VALUES (?, ?, 'group-canonical', 'CanonicalType', 'canonical', '', ?) |] (canonical, otherPid, errData)
     dbExec tr [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, error_data, canonical_id, merge_override) VALUES (?, ?, 'group-authz', 'SecretTypeError', 'victim-only-message', '', ?, ?, FALSE) |] (member, otherPid, errData, canonical)
-    members <- renderT <$> call tr (IssuesPage.errorGroupMembersGetH testPid canonical)
-    members `shouldNotSatisfy` T.isInfixOf "victim-only-message"
+    call tr (IssuesPage.errorGroupMembersGetH testPid canonical) >>= (`shouldSatisfy` null) . (.members)
     void $ call tr $ IssuesPage.errorUnmergePostH testPid member
     dbOne tr [sql| SELECT merge_override FROM apis.error_patterns WHERE id=? |] (Only member) `shouldReturn` False
 

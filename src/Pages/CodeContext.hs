@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH) where
+module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
@@ -70,7 +70,7 @@ import Relude
 import Servant (Header, Headers, ServerError (errHeaders), addHeader, err403, err404, err503, getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, ActionResult, DB, Outcome, Refusal (..), Rendered (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
+import System.Types (ATAuthCtx, ActionResult, DB, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, Toast (..), ToastLevel (..), act, addErrorToast, addRespHeaders, addSuccessToast, done, redirectCS)
 import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Parsec qualified as Parsec
 import Text.Slugify (slugify)
@@ -190,35 +190,31 @@ issueFixMediaH pid fid asset request send = do
 -- failure it did not cause. The reasons are distinguished, though — "no mapping covers this
 -- path" and "that line is past the end of the file" have different fixes, and collapsing
 -- them into silence sends the reader to configure something already configured.
-codeContextH :: Projects.ProjectId -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+codeContextH :: Projects.ProjectId -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders FrameSource)
 codeContextH pid fileM lineM svcM revM = do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
-  case (nonEmptyT fileM, lineM) of
-    (Just path, Just n) ->
-      W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonEmptyT revM) path n)
-        >>= addRespHeaders
-        . either reason_ snippet_
-    _ -> addRespHeaders $ note_ "This frame has no file and line to look up." Nothing
-  where
+  addRespHeaders =<< case (nonEmptyT fileM, lineM) of
+    (Just path, Just n) -> either (SnippetUnavailable pid) SnippetFound <$> W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonEmptyT revM) path n)
+    _ -> pure NoFrameLine
+
+
+data FrameSource = NoFrameLine | SnippetUnavailable Projects.ProjectId CodeContext.SnippetError | SnippetFound CodeContext.Snippet
+  deriving stock (Eq, Show)
+
+
+instance ToHtml FrameSource where
+  toHtmlRaw = toHtml
+  toHtml = \case
+    NoFrameLine -> note_ "This frame has no file and line to look up." Nothing
     -- An unmapped frame is the one failure the reader can act on from here, so it is the one
     -- that gets a control — carrying the path, so the form it opens is already filled in.
-    reason_ err = note_ (CodeContext.snippetErrorMessage err) case err of
-      CodeContext.NoMapping path -> Just path
+    SnippetUnavailable pid err -> note_ (CodeContext.snippetErrorMessage err) case err of
+      CodeContext.NoMapping path -> Just $ "/p/" <> pid.toText <> "/repositories?sample=" <> toUriStr path
       (CodeContext.CredentialGone; CodeContext.ReadFailed{}; CodeContext.LineOutOfRange{}) -> Nothing
-    note_ :: Text -> Maybe Text -> Html ()
-    note_ msg fixPathM = div_ [class_ "pl-5 py-1 text-2xs text-textWeak italic flex items-center gap-2"] do
-      toHtml msg
-      whenJust fixPathM \path ->
-        a_
-          [ href_ ("/p/" <> pid.toText <> "/repositories?sample=" <> toUriStr path)
-          , class_ "not-italic text-textBrand underline shrink-0"
-          ]
-          "Choose a repository"
     -- No empty-body arm: 'fetchSnippet' returns a 'Left' for a line past the end of the
     -- file, so a 'Snippet' that reaches here has source in it.
-    snippet_ :: CodeContext.Snippet -> Html ()
-    snippet_ s =
+    SnippetFound s ->
       div_ [class_ "mt-1 rounded-md border border-strokeWeak overflow-hidden font-mono text-2xs leading-relaxed"]
         $ forM_ (zip [s.startLine ..] s.body) \(n, src) ->
           -- The failing line is marked by a background AND a gutter caret, never by
@@ -227,6 +223,11 @@ codeContextH pid fileM lineM svcM revM = do
             span_ [class_ "shrink-0 w-12 px-2 text-right tabular-nums text-textWeak select-none border-r border-strokeWeak"] $ toHtml @Text (show n)
             span_ [class_ $ "shrink-0 w-3 text-center " <> bool "text-transparent" "text-textError" (n == s.focusLine)] $ toHtml @Text "›"
             span_ [class_ "px-2 whitespace-pre overflow-x-auto c-scroll"] $ toHtml src
+    where
+      note_ :: Monad m => Text -> Maybe Text -> HtmlT m ()
+      note_ msg fixUrlM = div_ [class_ "pl-5 py-1 text-2xs text-textWeak italic flex items-center gap-2"] do
+        toHtml msg
+        whenJust fixUrlM \url -> a_ [href_ url, class_ "not-italic text-textBrand underline shrink-0"] "Choose a repository"
 
 
 -- | Mapping form. Only @repo@ is required, and it arrives from a picker rather than a text
@@ -252,7 +253,7 @@ data CodeMappingForm = CodeMappingForm
 -- | The mapping editor. @sample@ carries a stack-frame path in from the frame that had no
 -- mapping, so arriving from an unmapped trace lands on a form already holding the example it
 -- needs.
-codeMappingsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+codeMappingsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx RepositoriesGet))
 codeMappingsGetH pid = repositoriesGetH pid (Just Overview)
 
 
@@ -539,23 +540,34 @@ instance FromHttpApiData RepositoryTab where
   parseUrlPiece value = maybeToRight "Choose repositories, reviews, fixes, usage or wiki" $ lookup value [("overview", Overview), ("reviews", PullRequests), ("fixes", Fixes), ("usage", Usage), ("wiki", Wiki), ("configuration", Overview)]
 
 
-repositoriesGetH :: Projects.ProjectId -> Maybe RepositoryTab -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+repositoriesGetH :: Projects.ProjectId -> Maybe RepositoryTab -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx RepositoriesGet))
 repositoriesGetH pid tabM sampleM = case fromMaybe Overview tabM of
   Overview -> repositoriesPageH pid $ OverviewPage sampleM Nothing
   PullRequests -> repositoriesPageH pid ReviewsPage
   Fixes -> repositoriesPageH pid FixesPage
   Usage -> repositoriesPageH pid UsagePage
-  Wiki -> fmap toHtml <$> memoryGetH pid Nothing
+  Wiki -> fmap (\(PageCtx conf wiki) -> PageCtx conf $ RepositoryWiki wiki) <$> memoryGetH pid Nothing
 
 
-serviceRepositoriesGetH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
+-- | A repositories tab: a rendered view under the service it is scoped to, or the wiki.
+data RepositoriesGet = RepositoryContent (Maybe Text) (Html ()) | RepositoryWiki WikiGet
+
+
+instance ToHtml RepositoriesGet where
+  toHtmlRaw = toHtml
+  toHtml = \case
+    RepositoryContent serviceM content -> toHtml $ repositoryLayout_ serviceM content
+    RepositoryWiki wiki -> toHtml wiki
+
+
+serviceRepositoriesGetH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (PageCtx RepositoriesGet))
 serviceRepositoriesGetH pid service = repositoriesPageH pid (OverviewPage Nothing $ Just service)
 
 
 data RepositoryView = OverviewPage (Maybe Text) (Maybe Text) | ReviewsPage | FixesPage | UsagePage
 
 
-repositoriesPageH :: Projects.ProjectId -> RepositoryView -> ATAuthCtx (RespHeaders (Html ()))
+repositoriesPageH :: Projects.ProjectId -> RepositoryView -> ATAuthCtx (RespHeaders (PageCtx RepositoriesGet))
 repositoriesPageH pid selection = do
   (session, _, bw) <- mkPageCtx pid
   canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
@@ -749,7 +761,7 @@ repositoriesPageH pid selection = do
         when (null runs) $ p_ [class_ "text-sm text-textWeak"] "No completed issue fixes available."
         ul_ [class_ "divide-y divide-strokeWeak"] $ for_ runs \run -> li_ [class_ "py-3"] $ a_ [href_ ("/p/" <> pid.toText <> "/issue-fixes/" <> run.runId.toText), class_ "text-sm text-textBrand hover:underline"] $ toHtml run.summary
     UsagePage -> usage_ <$> ImpactReviews.customerUsage session.user.id
-  addRespHeaders $ bodyWrapper (repositoryBWConfig bw pid tab serviceM canEdit canReadWiki) $ repositoryLayout_ serviceM content
+  addRespHeaders $ PageCtx (repositoryBWConfig bw pid tab serviceM canEdit canReadWiki) $ RepositoryContent serviceM content
   where
     usage_ :: [ImpactReviews.ProjectUsage] -> Html ()
     usage_ rows = div_ [class_ "space-y-4"] do
@@ -948,11 +960,11 @@ withRepositoryPullRequest pid observed action = case observed.pullRequestNumber 
       sync <- ExceptT $ maybeToRight "This sync connection is unavailable." <$> GitSync.getGitSyncByIdDecrypted (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) pid observed.id GitSync.ExportDashboards
       credentials <- hoistEither $ maybeToRight "Reconnect the repository account." $ GitSync.syncCreds sync
       token <- ExceptT $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey credentials
-      conn <- hoistEither $ GitSync.syncConn sync token
+      conn <- hoistEither $ first Git.gitConnErrorMessage $ GitSync.syncConn sync token
       ExceptT $ action conn (GitSync.syncRepoRef sync) (fromIntegral number)
 
 
-repositoryDeleteH :: Projects.ProjectId -> GitSync.RepositoryId -> ATAuthCtx (RespHeaders (Html ()))
+repositoryDeleteH :: Projects.ProjectId -> GitSync.RepositoryId -> ATAuthCtx (RespHeaders (Done RepositoryRemoval))
 repositoryDeleteH pid rid = do
   requireReviewWrite pid
   page <- repositoryGetH pid rid
@@ -964,16 +976,36 @@ repositoryDeleteH pid rid = do
           when (pr.state == "open") $ ExceptT $ Git.closeConfigurationPullRequest conn repo number
       )
       (getResponse page).content.dashboardSync
-  case closed of
-    Left err -> addRespHeaders $ p_ [role_ "alert", class_ "text-sm text-textError"] $ toHtml $ "Could not close the configuration PR. The repository is still connected. " <> err
+  done =<< case closed of
+    Left err -> pure $ PullRequestNotClosed err
     Right () ->
       GitSync.removeRepository pid rid >>= \case
         Left GitSync.ConnectionMissing -> throwError err404
-        Left GitSync.SyncRunning -> addRespHeaders $ p_ [role_ "alert", class_ "text-sm text-textWarning"] "A sync is running. Try removing the repository again when it finishes."
-        Right () -> do
-          addSuccessToast "Repository removed" (Just "Dashboards, monitors, and review history are retained.")
-          redirectCS $ "/p/" <> pid.toText <> "/repositories"
-          addRespHeaders mempty
+        Left GitSync.SyncRunning -> pure RemovalBlockedBySync
+        Right () -> pure $ RepositoryRemoved pid
+
+
+-- | A blocked removal answers 200 with its reason, rendered inside the still-open confirmation dialog.
+data RepositoryRemoval = RepositoryRemoved Projects.ProjectId | RemovalBlockedBySync | PullRequestNotClosed Text
+  deriving stock (Eq, Show)
+
+
+instance ToHtml RepositoryRemoval where
+  toHtmlRaw = toHtml
+  toHtml = \case
+    RepositoryRemoved _ -> mempty
+    RemovalBlockedBySync -> p_ [role_ "alert", class_ "text-sm text-textWarning"] "A sync is running. Try removing the repository again when it finishes."
+    PullRequestNotClosed err -> p_ [role_ "alert", class_ "text-sm text-textError"] $ toHtml $ "Could not close the configuration PR. The repository is still connected. " <> err
+
+
+instance Outcome RepositoryRemoval where
+  outcomeBody = toHtml
+  outcomeRedirect = \case
+    RepositoryRemoved pid -> Just $ "/p/" <> pid.toText <> "/repositories"
+    (RemovalBlockedBySync; PullRequestNotClosed _) -> Nothing
+  outcomeToast = \case
+    RepositoryRemoved _ -> Just $ Toast SuccessToast "Repository removed" (Just "Dashboards, monitors, and review history are retained.")
+    (RemovalBlockedBySync; PullRequestNotClosed _) -> Nothing
 
 
 instance ToHtml RepositoryGet where
@@ -1103,16 +1135,24 @@ mappingInRepository credentials repository mapping =
     && any (\c -> c.id == mapping.credentialId && (c.host, c.apiBase) == (repository.host, repository.apiBase)) credentials
 
 
-repositorySourceGetH :: Projects.ProjectId -> GitSync.RepositoryId -> Maybe GitSync.GitHubCredentialId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+repositorySourceGetH :: Projects.ProjectId -> GitSync.RepositoryId -> Maybe GitSync.GitHubCredentialId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx RepositorySourceGet))
 repositorySourceGetH pid rid cid sample = do
   (_, _, bw) <- mkPageCtx pid
   repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
   content <- codeMappingsContent pid sample cid (Just repository)
-  addRespHeaders $ bodyWrapper bw{prePageTitle = Just "Repositories", pageTitle = repository.owner <> "/" <> repository.repo, pageTitleUrl = Just $ "/p/" <> pid.toText <> "/repositories/" <> rid.toText, pageTitleSuffix = Just "Source context", menuItem = Just "Repositories"} $ section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
+  addRespHeaders $ PageCtx bw{prePageTitle = Just "Repositories", pageTitle = repository.owner <> "/" <> repository.repo, pageTitleUrl = Just $ "/p/" <> pid.toText <> "/repositories/" <> rid.toText, pageTitleSuffix = Just "Source context", menuItem = Just "Repositories"} $ RepositorySourceGet $ MappingsPanel content
+
+
+newtype RepositorySourceGet = RepositorySourceGet MappingsPanel
+
+
+instance ToHtml RepositorySourceGet where
+  toHtmlRaw = toHtml
+  toHtml (RepositorySourceGet panel) = section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
     header_ [class_ "space-y-2"] do
       h1_ [class_ "text-xl font-semibold text-textStrong"] "Source context"
       p_ [class_ "text-sm text-textWeak max-w-2xl"] "Link this repository to the services it builds. Stack traces and pull request reviews use these mappings to find the right code and production telemetry."
-    div_ [id_ "code-mappings-content"] content
+    div_ [id_ "code-mappings-content"] $ toHtml panel
 
 
 repositorySourcePostH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeMappingForm -> ATAuthCtx (ActionResult MappingRejection MappingsPanel)
@@ -1123,7 +1163,7 @@ repositorySourcePostH pid rid form = act do
   account <- codeContextCredential pid (Just cid) >>= maybe (throwError err403) pure
   unless ((account.host, account.apiBase) == (repository.host, repository.apiBase)) $ throwError err403
   saved <- saveCodeMapping pid form{repo = Just (repository.owner <> "/" <> repository.repo), credentialId = Just account.id}
-  forM saved \() -> MappingsPanel . getResponse <$> repositorySourceGetH pid rid (Just account.id) (nonEmptyT form.samplePath)
+  forM saved \() -> MappingsPanel . toHtml . getResponse <$> repositorySourceGetH pid rid (Just account.id) (nonEmptyT form.samplePath)
 
 
 newtype SourceContextForm = SourceContextForm {enabled :: Bool}
@@ -1139,18 +1179,28 @@ repositorySourceEnabledPostH pid rid form = do
   repositoryGetH pid rid
 
 
-repositoryReviewsPostH :: Projects.ProjectId -> GitSync.RepositoryId -> ImpactReviews.ReviewSettings -> ATAuthCtx (RespHeaders (Html ()))
+repositoryReviewsPostH :: Projects.ProjectId -> GitSync.RepositoryId -> ImpactReviews.ReviewSettings -> ATAuthCtx (RespHeaders (Done (ReviewChange (PageCtx RepositoryGet))))
 repositoryReviewsPostH pid rid settings = do
   requireReviewWrite pid
   repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
   unless (repository.host == Git.GitHub && isNothing repository.apiBase) $ throwError err403
   ImpactReviews.updateSettings pid settings{ImpactReviews.owner = T.toLower repository.owner, ImpactReviews.repo = T.toLower repository.repo}
-  addSuccessToast "Review settings saved" Nothing
-  page <- repositoryGetH pid rid
-  addRespHeaders $ toHtml $ getResponse page
+  done . SettingsSaved . getResponse =<< repositoryGetH pid rid
 
 
-repositorySourceDeleteH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Html ()))
+-- | The view re-rendered after a review change.
+data ReviewChange a = SettingsSaved a | RerunQueued a
+  deriving stock (Foldable, Show)
+
+
+instance ToHtml a => Outcome (ReviewChange a) where
+  outcomeBody = foldMap toHtml
+  outcomeToast = \case
+    SettingsSaved _ -> Just "Review settings saved"
+    RerunQueued _ -> Nothing
+
+
+repositorySourceDeleteH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Done MappingsPanel))
 repositorySourceDeleteH pid rid mid = do
   requireReviewWrite pid
   repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
@@ -1158,7 +1208,7 @@ repositorySourceDeleteH pid rid mid = do
   mappings <- CodeContext.getCodeMappings pid
   unless (any (\m -> m.id == mid && mappingInRepository credentials repository m) mappings) $ throwError err404
   CodeContext.deleteCodeMapping pid mid
-  repositorySourceGetH pid rid Nothing Nothing
+  done . MappingsPanel . toHtml . getResponse =<< repositorySourceGetH pid rid Nothing Nothing
 
 
 -- | The panel, rebuilt from scratch after every change. Listing the account's repositories is
@@ -1166,10 +1216,10 @@ repositorySourceDeleteH pid rid mid = do
 --
 -- Without a linked account there is nothing to map onto, so the page says so and offers the
 -- one control that fixes it rather than a form whose every submission would be discarded.
-codeMappingsEditorGetH :: Projects.ProjectId -> Maybe GitSync.GitHubCredentialId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+codeMappingsEditorGetH :: Projects.ProjectId -> Maybe GitSync.GitHubCredentialId -> Maybe Text -> ATAuthCtx (RespHeaders MappingsPanel)
 codeMappingsEditorGetH pid credentialM sampleM = do
   _ <- Projects.sessionAndProject pid
-  addRespHeaders =<< codeMappingsContent pid sampleM credentialM Nothing
+  addRespHeaders . MappingsPanel =<< codeMappingsContent pid sampleM credentialM Nothing
 
 
 codeMappingsContent :: Projects.ProjectId -> Maybe Text -> Maybe GitSync.GitHubCredentialId -> Maybe GitSync.Repository -> ATAuthCtx (Html ())
@@ -1510,7 +1560,7 @@ repositoryTokenPostH pid form = do
       token = T.strip form.accessToken
       safePage = page{content = (page.content :: RepositoryTokenGet){host = form.host, apiBase = form.apiBase, repoFullName = fullName}}
   result <- runExceptT do
-    conn <- hoistEither $ Git.mkGitConn form.host form.apiBase token
+    conn <- hoistEither $ first Git.gitConnErrorMessage $ Git.mkGitConn form.host form.apiBase token
     let (owner, name) = Git.splitFullName fullName
     when (T.null owner || T.null name) $ hoistEither $ Left "Enter the full repository name, such as team/checkout."
     repository <- ExceptT $ first (const "Could not access this repository. Check its name, server URL, and token permissions.") <$> Git.fetchRepository conn (Git.RepoRef owner name "HEAD")
@@ -1592,7 +1642,7 @@ repoConn :: (IOE :> es, W.HTTP :> es) => EnvConfig -> GitSync.GitHubCredential -
 repoConn cfg cred = do
   creds <- hoistEither $ maybeToRight "That credential has neither an installation nor a token." $ GitSync.credentialCreds cred
   token <- ExceptT $ GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
-  hoistEither $ GitSync.credentialConn cred token
+  hoistEither $ first Git.gitConnErrorMessage $ GitSync.credentialConn cred token
 
 
 -- | Save a mapping. The two path fields are derived from the sample frame path when one is
@@ -1667,11 +1717,11 @@ saveCodeMapping pid form = do
           <$> CodeContext.deriveMapping (map (.path) entries) sample
 
 
-codeMappingsDeleteH :: Projects.ProjectId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Html ()))
+codeMappingsDeleteH :: Projects.ProjectId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Done MappingsPanel))
 codeMappingsDeleteH pid mid = do
   requireReviewWrite pid
   CodeContext.deleteCodeMapping pid mid
-  addRespHeaders =<< codeMappingsContent pid Nothing Nothing Nothing
+  done . MappingsPanel =<< codeMappingsContent pid Nothing Nothing Nothing
 
 
 -- | What a mapping covers, in the terms the reader has: frame paths, not columns.
@@ -1688,19 +1738,18 @@ scopeLabel cm = from <> " → " <> to
     to = if T.null cm.sourceRoot then "repo root" else T.dropWhileEnd (== '/') cm.sourceRoot <> "/"
 
 
-impactReviewSettingsPostH :: Projects.ProjectId -> ImpactReviews.ReviewSettings -> ATAuthCtx (RespHeaders (Html ()))
+impactReviewSettingsPostH :: Projects.ProjectId -> ImpactReviews.ReviewSettings -> ATAuthCtx (RespHeaders (Done (ReviewChange MappingsPanel)))
 impactReviewSettingsPostH pid settings = do
   requireReviewWrite pid
   ImpactReviews.updateSettings pid settings{ImpactReviews.owner = T.toLower settings.owner, ImpactReviews.repo = T.toLower settings.repo}
-  addSuccessToast "Review settings saved" Nothing
-  addRespHeaders =<< codeMappingsContent pid Nothing Nothing Nothing
+  done . SettingsSaved . MappingsPanel =<< codeMappingsContent pid Nothing Nothing Nothing
 
 
-impactReviewRetryH :: Projects.ProjectId -> ImpactReviews.ReviewId -> ATAuthCtx (RespHeaders (Html ()))
+impactReviewRetryH :: Projects.ProjectId -> ImpactReviews.ReviewId -> ATAuthCtx (RespHeaders (Done (ReviewChange (PageCtx RepositoriesGet))))
 impactReviewRetryH pid rid = do
   requireReviewWrite pid
   ImpactReviews.retryRun pid rid
-  repositoriesGetH pid (Just PullRequests) Nothing
+  done . RerunQueued . getResponse =<< repositoriesPageH pid ReviewsPage
 
 
 requireReviewWrite :: Projects.ProjectId -> ATAuthCtx ()

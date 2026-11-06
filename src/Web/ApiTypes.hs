@@ -5,6 +5,9 @@
 module Web.ApiTypes (
   ApiActor (..),
   principalUser,
+  ApiProblem (..),
+  ApiProblemBody (..),
+  problem,
   -- Monitor types
   MonitorInput (..),
   MonitorPatch (..),
@@ -84,7 +87,7 @@ import Pages.Charts.Types qualified as Charts
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (CamelSchema (..), JsonValueSchema (..), SnakeJSON (..), SnakeSchema (..), WrappedEnumSC (..))
 import Relude
-import Servant (FromHttpApiData)
+import Servant (FromHttpApiData, ServerError (..))
 import Web.Wire (Paged (..))
 
 
@@ -95,6 +98,30 @@ data ApiActor = ApiKeyPrincipal | MemberPrincipal Projects.UserId
 principalUser :: ApiActor -> Maybe Projects.UserId
 principalUser ApiKeyPrincipal = Nothing
 principalUser (MemberPrincipal userId) = Just userId
+
+
+-- | The one error body JSON endpoints refuse with. @code@ is the stable snake_case
+-- identifier clients branch on; @details@ carries raw backend text for debugging.
+data ApiProblem = ApiProblem
+  { code :: Text
+  , message :: Text
+  , field :: Maybe Text
+  , suggestion :: Maybe Text
+  , details :: Maybe Text
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving (ToSchema) via CamelSchema ApiProblem
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] ApiProblem
+
+
+-- | Wire shape: @{"error": ApiProblem}@.
+newtype ApiProblemBody = ApiProblemBody {error :: ApiProblem}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, ToSchema)
+
+
+problem :: ServerError -> ApiProblem -> ServerError
+problem status p = status{errBody = AE.encode (ApiProblemBody p), errHeaders = [("Content-Type", "application/json")]}
 
 
 -- | Patch: all fields optional; only provided fields are updated.

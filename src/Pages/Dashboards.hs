@@ -39,6 +39,7 @@ module Pages.Dashboards (
   dashboardDuplicateWidgetPostH,
   dashboardWidgetNewGetH,
   dashboardWidgetExpandGetH,
+  WidgetEditor (..),
   processEagerWidget,
   lazyWidget,
   widgetMetrics,
@@ -62,11 +63,14 @@ module Pages.Dashboards (
   WidgetMonitorStatus (..),
   -- SQL debug preview
   widgetSqlPreviewGetH,
+  SqlPreview (..),
   widgetSqlTextGetH,
   -- YAML schema editing
   YamlForm (..),
   dashboardYamlGetH,
+  DashboardYaml (..),
   dashboardYamlPutH,
+  YamlSave (..),
   apiDashboardData,
 ) where
 
@@ -156,7 +160,8 @@ import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
 -- uses to paint charts in a terminal.
 apiDashboardData :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx ApiT.DashboardData
 apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
-  vm <- Dashboards.getDashboardByProjectId pid did `whenNothingM` throwError err404{errBody = "Dashboard not found"}
+  let notFound msg = throwError $ ApiT.problem err404 $ ApiT.ApiProblem "not_found" msg Nothing Nothing Nothing
+  vm <- Dashboards.getDashboardByProjectId pid did `whenNothingM` notFound "Dashboard not found"
   (_, dash) <- getDashAndVM pid did Nothing
   now <- Time.currentTime
   let timeParams = (sinceM, fromM, toM)
@@ -169,7 +174,7 @@ apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
     (t : _, Nothing) -> pure (Just t.name, t.widgets)
     (_, Just wanted) ->
       findTabBySlug allTabs wanted
-        & maybe (throwError err404{errBody = "Tab not found: " <> encodeUtf8 wanted}) (\(_, t) -> pure (Just t.name, t.widgets))
+        & maybe (notFound $ "Tab not found: " <> wanted) (\(_, t) -> pure (Just t.name, t.widgets))
   -- Most dashboards leave widget ids unset, so --widget also matches a
   -- slugified title ("p95-latency"); otherwise there'd be no way to name one.
   let matches wanted w = w.id == Just wanted || (slugify <$> w.title) == Just (slugify wanted)
@@ -2773,7 +2778,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
   addRespHeaders widgetCopy
 
 
-dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders WidgetEditor)
 dashboardWidgetExpandGetH pid dashId widgetId editorTabM = do
   (_, project) <- Projects.sessionAndProject pid
   (_, dash) <- getDashAndVM pid dashId Nothing
@@ -2785,19 +2790,38 @@ dashboardWidgetExpandGetH pid dashId widgetId editorTabM = do
   processedWidget <- processWidget PrefillWidgets pid now timeParams allParamsWithConstants widgetToExpand
   monitorM <- Monitors.queryMonitorByWidgetId pid (Just dashId) widgetId
   teams <- V.fromList <$> ManageMembers.getTeams pid
-  addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan dashId tabSlugM Nothing (Just processedWidget) monitorM teams $ if editorTabM == Just "alerts" then "alerts" else "edit"
+  addRespHeaders $ WidgetEditor pid project.paymentPlan dashId tabSlugM Nothing (Just processedWidget) monitorM teams $ if editorTabM == Just "alerts" then "alerts" else "edit"
+
+
+-- | The arguments of 'widgetViewerEditor_': an existing widget to edit, or none for a new one.
+data WidgetEditor = WidgetEditor
+  { pid :: Projects.ProjectId
+  , paymentPlan :: Text
+  , dashId :: Dashboards.DashboardId
+  , tabSlug :: Maybe Text
+  , range :: Maybe (Text, Text)
+  , widget :: Maybe Widget.Widget
+  , monitor :: Maybe Monitors.QueryMonitor
+  , teams :: V.Vector ManageMembers.Team
+  , activeTab :: Text
+  }
+
+
+instance ToHtml WidgetEditor where
+  toHtmlRaw = toHtml
+  toHtml e = toHtml $ widgetViewerEditor_ e.pid e.paymentPlan e.dashId e.tabSlug e.range e.widget e.monitor e.teams e.activeTab
 
 
 -- | Lazy content for the new-widget drawer. Keeping this out of the initial
 -- dashboard response removes the editor form and its skeletons from both the
 -- transferred HTML and the live DOM until the user opens the drawer.
-dashboardWidgetNewGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+dashboardWidgetNewGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders WidgetEditor)
 dashboardWidgetNewGetH pid dashId tabSlugM rangeStartM rangeEndM = do
   (_, project) <- Projects.sessionAndProject pid
   _ <- getDashAndVM pid dashId Nothing
   teams <- V.fromList <$> ManageMembers.getTeams pid
   let currentRange = (,) <$> rangeStartM <*> rangeEndM
-  addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan dashId tabSlugM currentRange Nothing Nothing teams "edit"
+  addRespHeaders $ WidgetEditor pid project.paymentPlan dashId tabSlugM currentRange Nothing Nothing teams "edit"
 
 
 -- | Query scope shared by SQL preview and copy: dashboards own service filtering through
@@ -2822,18 +2846,26 @@ widgetSqlTextGetH pid queryM dashboardIdM sinceStr fromDStr toDStr = do
 
 
 -- | SQL preview endpoint for debugging KQL queries (shows generated SQL)
-widgetSqlPreviewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+widgetSqlPreviewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders SqlPreview)
 widgetSqlPreviewGetH pid queryM dashboardIdM sinceStr fromDStr toDStr = do
   (session, _) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   let cfg = widgetSqlCfg pid now (TimePicker.TimePicker sinceStr fromDStr toDStr) session dashboardIdM
-  addRespHeaders case queryM of
-    Nothing -> emptyState_ def{size = ESCompact} "No query provided" ""
-    Just query -> case parseQueryToComponents cfg query of
-      Left err -> div_ [class_ "p-3 space-y-2"] do
+  addRespHeaders $ maybe NoPreviewQuery (either PreviewParseError (GeneratedSql . snd) . parseQueryToComponents cfg) queryM
+
+
+data SqlPreview = NoPreviewQuery | PreviewParseError Text | GeneratedSql QueryComponents
+
+
+instance ToHtml SqlPreview where
+  toHtmlRaw = toHtml
+  toHtml sqlPreview =
+    toHtml @(Html ()) case sqlPreview of
+      NoPreviewQuery -> emptyState_ def{size = ESCompact} "No query provided" ""
+      PreviewParseError err -> div_ [class_ "p-3 space-y-2"] do
         div_ [class_ "text-textError text-xs font-medium"] "Parse Error"
         pre_ [class_ "whitespace-pre-wrap break-all bg-fillError/10 p-2 rounded text-xs overflow-x-auto"] $ toHtml err
-      Right (_, qc) -> div_ [class_ "space-y-3 p-3 bg-fillWeaker rounded-lg text-xs sql-preview-container"] do
+      GeneratedSql qc -> div_ [class_ "space-y-3 p-3 bg-fillWeaker rounded-lg text-xs sql-preview-container"] do
         sqlBlock_ "Widget Query" $ fromMaybe qc.finalSqlQuery qc.finalSummarizeQuery
         sqlBlock_ "Table Query" qc.finalSqlQuery
         whenJust qc.finalAlertQuery $ sqlBlock_ "Alert Query"
@@ -2874,18 +2906,18 @@ widgetSqlPreviewGetH pid queryM dashboardIdM sinceStr fromDStr toDStr = do
             })();
           })();
           |]
-  where
-    sqlBlock_ :: Text -> Text -> Html ()
-    sqlBlock_ label sql =
-      div_ [class_ "space-y-1"] do
-        div_ [class_ "flex justify-between items-center"] do
-          span_ [class_ "text-textWeak font-sans"] $ toHtml label
-          button_
-            [ class_ "text-textBrand hover:underline font-sans text-xs"
-            , Components.copySourceAttr_ "this.parentElement.nextElementSibling"
-            ]
-            "Copy"
-        pre_ [class_ "bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ code_ [class_ "language-sql text-xs !bg-transparent"] $ toHtml sql
+    where
+      sqlBlock_ :: Text -> Text -> Html ()
+      sqlBlock_ label sql =
+        div_ [class_ "space-y-1"] do
+          div_ [class_ "flex justify-between items-center"] do
+            span_ [class_ "text-textWeak font-sans"] $ toHtml label
+            button_
+              [ class_ "text-textBrand hover:underline font-sans text-xs"
+              , Components.copySourceAttr_ "this.parentElement.nextElementSibling"
+              ]
+              "Copy"
+          pre_ [class_ "bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ code_ [class_ "language-sql text-xs !bg-transparent"] $ toHtml sql
 
 
 -- | Find a tab by its slug, returns (index, tab) if found
@@ -3184,39 +3216,69 @@ newtype YamlForm = YamlForm {yaml :: Text}
 
 
 -- | Get dashboard schema as YAML (returns HTML with yaml-editor component)
-dashboardYamlGetH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Html ()))
+dashboardYamlGetH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardYaml)
 dashboardYamlGetH pid dashId = do
   _ <- Projects.sessionAndProject pid
   (dashVM, dash) <- getDashAndVM pid dashId Nothing
   teams <- ManageMembers.getTeamsById pid (coerce dashVM.teams)
   let schema = GitSync.buildSchemaWithMeta (Just dash) dashVM.title (V.toList dashVM.tags) (map (.handle) teams)
-  addRespHeaders $ term "yaml-editor" [class_ "h-full w-full block", id_ "yaml-editor-instance", data_ "initial-value" $ decodeUtf8 $ GitSync.dashboardToYaml schema] ""
+  addRespHeaders $ DashboardYaml schema
+
+
+newtype DashboardYaml = DashboardYaml Dashboards.Dashboard
+
+
+instance ToHtml DashboardYaml where
+  toHtmlRaw = toHtml
+  toHtml (DashboardYaml schema) = term "yaml-editor" [class_ "h-full w-full block", id_ "yaml-editor-instance", data_ "initial-value" $ decodeUtf8 $ GitSync.dashboardToYaml schema] ""
 
 
 -- | Save dashboard schema from YAML (validates and saves)
-dashboardYamlPutH :: Projects.ProjectId -> Dashboards.DashboardId -> YamlForm -> ATAuthCtx (RespHeaders (Html ()))
+dashboardYamlPutH :: Projects.ProjectId -> Dashboards.DashboardId -> YamlForm -> ATAuthCtx (RespHeaders (Done YamlSave))
 dashboardYamlPutH pid dashId form = do
   _ <- Projects.sessionAndProject pid
-  case GitSync.yamlToDashboard (encodeUtf8 form.yaml) of
-    Left err -> addRespHeaders $ div_ [id_ "yaml-status", class_ "text-textError"] do
-      div_ [class_ "flex items-center gap-2 font-semibold mb-2"] do
-        faSprite_ "circle-exclamation" "solid" "w-4 h-4"
-        "Invalid YAML"
-      pre_ [class_ "text-xs bg-fillError-weak p-3 rounded overflow-x-auto whitespace-pre-wrap"] $ toHtml err
+  done =<< case GitSync.yamlToDashboard (encodeUtf8 form.yaml) of
+    Left err -> pure $ YamlRejected err
     Right dashboard -> do
       now <- Time.currentTime
       _ <- Dashboards.updateSchema dashId dashboard (Just now)
       whenJust dashboard.title $ \t -> void $ Dashboards.updateTitle pid dashId t
       syncDashboardAndQueuePush pid dashId
-      addSuccessToast "Dashboard schema updated" Nothing
       addTriggerEvent "closeYamlDrawer" ""
-      redirectCS $ dashboardUrl pid dashId
-      addRespHeaders $ div_ [id_ "yaml-status", class_ "text-textBrand"] do
-        div_ [class_ "flex items-center gap-2"] do
-          faSprite_ "circle-check" "solid" "w-4 h-4"
-          "Schema saved successfully"
-        ul_ [class_ "text-xs text-textWeak mt-2 list-disc pl-5"] do
-          li_ $ toHtml $ show (length dashboard.widgets) <> " widgets"
-          whenJust dashboard.variables \vs -> li_ $ toHtml $ show (length vs) <> " variables"
-          whenJust dashboard.tabs \ts -> li_ $ toHtml $ show (length ts) <> " tabs"
-          whenJust dashboard.constants \cs -> li_ $ toHtml $ show (length cs) <> " constants"
+      pure $ YamlSaved pid dashId dashboard
+
+
+-- | Both answer 200: the rejection is shown in the drawer's status area, beside the editor.
+data YamlSave = YamlSaved Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard | YamlRejected GitSync.DashboardYamlError
+  deriving stock (Show)
+
+
+instance ToHtml YamlSave where
+  toHtmlRaw = toHtml
+  toHtml = \case
+    YamlRejected err -> div_ [id_ "yaml-status", class_ "text-textError"] do
+      div_ [class_ "flex items-center gap-2 font-semibold mb-2"] do
+        faSprite_ "circle-exclamation" "solid" "w-4 h-4"
+        "Invalid YAML"
+      pre_ [class_ "text-xs bg-fillError-weak p-3 rounded overflow-x-auto whitespace-pre-wrap"] $ toHtml case err of
+        GitSync.YamlUnparseable msg -> msg
+        GitSync.DashboardInvalid msg -> msg
+    YamlSaved _ _ dashboard -> div_ [id_ "yaml-status", class_ "text-textBrand"] do
+      div_ [class_ "flex items-center gap-2"] do
+        faSprite_ "circle-check" "solid" "w-4 h-4"
+        "Schema saved successfully"
+      ul_ [class_ "text-xs text-textWeak mt-2 list-disc pl-5"] do
+        li_ $ toHtml $ show @Text (length dashboard.widgets) <> " widgets"
+        whenJust dashboard.variables \vs -> li_ $ toHtml $ show @Text (length vs) <> " variables"
+        whenJust dashboard.tabs \ts -> li_ $ toHtml $ show @Text (length ts) <> " tabs"
+        whenJust dashboard.constants \cs -> li_ $ toHtml $ show @Text (length cs) <> " constants"
+
+
+instance Outcome YamlSave where
+  outcomeBody = toHtml
+  outcomeRedirect = \case
+    YamlSaved pid dashId _ -> Just $ dashboardUrl pid dashId
+    YamlRejected _ -> Nothing
+  outcomeToast = \case
+    YamlSaved{} -> Just "Dashboard schema updated"
+    YamlRejected _ -> Nothing

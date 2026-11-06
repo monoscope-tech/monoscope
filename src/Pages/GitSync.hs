@@ -157,14 +157,13 @@ gitSyncSettingsUpdateH pid sid form = do
   saveGitSyncH pid (Just sync) form{owner = sync.owner, repo = sync.repo, host = Just sync.host, apiBase = sync.apiBase}
 
 
--- | Why a connection was not saved; the host's own reason is the detail.
-data GitSyncRejection = ConnectionFailed Git.GitHost Text
+-- | Why a connection was not saved: the form cannot describe one, so no host was asked.
+newtype GitSyncRejection = InvalidConnection Git.GitConnError
   deriving stock (Eq, Show)
 
 
 instance Refusal GitSyncRejection where
-  refusalMessage (ConnectionFailed host _) = "Could not connect to " <> Git.hostLabel host
-  refusalDetail (ConnectionFailed _ err) = Just err
+  refusalMessage (InvalidConnection err) = Git.gitConnErrorMessage err
 
 
 saveGitSyncH :: Projects.ProjectId -> Maybe GitSync.GitHubSync -> GitSyncForm -> ATAuthCtx (ActionResult GitSyncRejection GitSyncSettings)
@@ -178,7 +177,7 @@ saveGitSyncH pid existingM form = act do
   -- The host/origin pair is vetted on its own: an update that keeps the stored token has no
   -- token to build a connection with, and 'Git.validateOrigin' is the half of the check that
   -- never needed one.
-  forM (first (ConnectionFailed host) validation) \() -> do
+  forM (first InvalidConnection validation) \() -> do
     -- Detecting the default branch needs a token, so a form that kept the stored one falls
     -- back to "main" rather than asking the host with a credential it does not have.
     branch <- case (T.null form.branch, Git.mkGitConn host form.apiBase form.accessToken) of
@@ -547,7 +546,7 @@ repositoryDashboardPostH pid rid form = do
           if T.null (T.strip form.branch)
             then do
               token <- ExceptT $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey credentials
-              conn <- hoistEither $ GitSync.credentialConn account token
+              conn <- hoistEither $ first Git.gitConnErrorMessage $ GitSync.credentialConn account token
               ExceptT $ first (const "Could not detect the default branch. Enter a branch or check this account’s repository access.") <$> Git.fetchDefaultBranch conn (Git.RepoRef page.content.repository.owner page.content.repository.repo "HEAD")
             else pure $ T.strip form.branch
         secret <-
@@ -842,7 +841,7 @@ githubAppSelectRepoH pid form = act do
       Just available -> pure available
       Nothing -> withExceptT RepositoryListFailed do
         token <- ExceptT $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey creds
-        conn <- hoistEither $ Git.mkGitConn Git.GitHub Nothing token
+        conn <- hoistEither $ first Git.gitConnErrorMessage $ Git.mkGitConn Git.GitHub Nothing token
         available <- ExceptT $ Git.listRepos conn
         lift $ liftIO $ Cache.insert ctx.repoListCache account.id available
         pure available

@@ -31,6 +31,7 @@ import Models.Apis.Issues qualified as ApiIssues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
+import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Dashboards (DashboardVM (savedViews, schema))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -262,6 +263,11 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         titles slug = map (.title) <$> tabWidgets slug
     yaml "title: Tabbed\nwidgets: []\ntabs:\n  - name: First Tab\n    widgets:\n      - { type: timeseries, id: first-widget, title: First, layout: { x: 0, y: 0, w: 3, h: 3 } }\n  - name: Second Tab\n    widgets:\n      - { type: stat, id: second-widget, title: Second, layout: { x: 0, y: 0, w: 3, h: 3 } }\n"
     (,) <$> (map (.id) <$> tabWidgets "first-tab") <*> (map (.id) <$> tabWidgets "second-tab") `shouldReturn` ([Just "first-widget"], [Just "second-widget"])
+    Done rejected <- call tr $ Dashboards.dashboardYamlPutH testPid dashId $ Dashboards.YamlForm "widgets: ["
+    rejected `shouldSatisfy` \case
+      Dashboards.YamlRejected (GitSync.YamlUnparseable _) -> True
+      Dashboards.YamlRejected (GitSync.DashboardInvalid _) -> False
+      Dashboards.YamlSaved{} -> False
     write $ Dashboards.dashboardWidgetPutH testPid dashId Nothing (Just "second-tab") (widgetOf Widget.WTStat "Added To Second")
     write $ Dashboards.dashboardDuplicateWidgetPostH testPid dashId "second-widget" Nothing
     write $ Dashboards.dashboardWidgetReorderPatchH testPid dashId (Just "first-tab") (reorder [("first-widget", (6, 4, 6, 2))])

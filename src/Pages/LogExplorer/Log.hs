@@ -6,9 +6,11 @@ module Pages.LogExplorer.Log (
   logExplorerValidateH,
   QueryValidation (..),
   logExplorerFacetsH,
+  FacetsView (..),
   logPatternsH,
   logSessionsH,
   alertFormH,
+  AlertForm (..),
   apiLogExpandH,
   queryEvents,
   LogsGet (..),
@@ -100,7 +102,7 @@ import Utils (FieldAction (..), FieldMenuCtx (..), encodeText, explorerNavTabs_,
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 
-import Web.ApiTypes (LogResult (..), TraceTreeEntry (..))
+import Web.ApiTypes (ApiProblem (ApiProblem), LogResult (..), TraceTreeEntry (..), problem)
 
 
 data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text, isQueryResult :: Bool, rowIdx :: Int}
@@ -653,9 +655,8 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
     =<< LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing environmentM serviceM
 
 
--- | Every refusal the explorer's JSON endpoints answer with. The @Kql*@ cases are the
--- structured @{"error": {code, message, field?, suggestion?, details?}}@ body the CLI's
--- @renderAPIError@ decodes; the @Expand*@ cases keep their plain-text bodies.
+-- | Every refusal the explorer's JSON endpoints answer with, as a 400 'ApiProblem' (which the CLI's
+-- @renderAPIError@ decodes).
 data LogError
   = KqlInvalid Text
   | -- | Column name, then the raw database error.
@@ -663,19 +664,17 @@ data LogError
   | KqlFailed Text
   | ExpandMissingKey
   | ExpandUnknownKind
-  | ExpandInvalidQuery Text
   deriving stock (Eq, Show)
 
 
 refuse :: Error Servant.ServerError :> es => LogError -> Eff es a
 refuse =
-  throwError . \case
-    KqlInvalid err -> kql "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing
-    KqlUnknownField col raw -> kql "unknown_field" ("Unknown field \"" <> col <> "\"") (Just col) (Just $ "quote it as \"" <> col <> "\" to search text, or use 'field == value' for equality") (Just raw)
-    KqlFailed raw -> kql "query_failed" (summary raw) Nothing Nothing (Just raw)
-    ExpandMissingKey -> Servant.err400{Servant.errBody = "Missing key"}
-    ExpandUnknownKind -> Servant.err400{Servant.errBody = "kind must be session or pattern"}
-    ExpandInvalidQuery err -> Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}
+  throwError . problem Servant.err400 . \case
+    KqlInvalid err -> ApiProblem "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing
+    KqlUnknownField col raw -> ApiProblem "unknown_field" ("Unknown field \"" <> col <> "\"") (Just col) (Just $ "quote it as \"" <> col <> "\" to search text, or use 'field == value' for equality") (Just raw)
+    KqlFailed raw -> ApiProblem "query_failed" (summary raw) Nothing Nothing (Just raw)
+    ExpandMissingKey -> ApiProblem "required" "Missing key" (Just "key") Nothing Nothing
+    ExpandUnknownKind -> ApiProblem "invalid_value" "kind must be session or pattern" (Just "kind") Nothing Nothing
   where
     -- The first line only, so the user doesn't see raw Haskell record syntax.
     summary raw
@@ -684,20 +683,6 @@ refuse =
       | otherwise = firstLine
       where
         firstLine = T.strip $ T.takeWhile (/= '\n') raw
-    kql :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Servant.ServerError
-    kql code msg fieldM suggestionM detailsM =
-      Servant.err400
-        { Servant.errBody =
-            AE.encode
-              $ AE.object
-                [ "error"
-                    AE..= AE.object
-                      ( ["code" AE..= code, "message" AE..= msg]
-                          <> catMaybes [("field" AE..=) <$> fieldM, ("suggestion" AE..=) <$> suggestionM, ("details" AE..=) <$> detailsM]
-                      )
-                ]
-        , Servant.errHeaders = [("Content-Type", "application/json")]
-        }
 
 
 -- | Classify the raw exception string from 'LogQueries.selectLogTable': a missing column
@@ -966,7 +951,7 @@ explorerUrl pid endpoint u = "/p/" <> pid.toText <> "/log_explorer/" <> display 
 -- | Lazy facet fragments for collapsed groups and per-field overflow values.
 -- Common facets render in the initial page from the summary already read by
 -- 'mkPageCtx'; this endpoint keeps the rest off the critical rendering path.
-logExplorerFacetsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+logExplorerFacetsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders FacetsView)
 logExplorerFacetsH pid fieldM groupM = do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
@@ -977,20 +962,29 @@ logExplorerFacetsH pid fieldM groupM = do
   when (isNothing facetSummary) $ BackgroundJobs.enqueueJobs authCtx [BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now]
   addRespHeaders
     $ maybe
-      (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
+      FacetsPending
       ( \summary -> case (fieldM, facetGroupM) of
-          (Just field, _) -> renderFacetTail field summary
-          (_, Just facetGroup) -> facetNode_ $ facetGroupNode True facetGroup summary
-          _ -> renderFacets summary
+          (Just field, _) -> FacetTail field summary
+          (Nothing, Just facetGroup) -> FacetGroupFacets facetGroup summary
+          (Nothing, Nothing) -> AllFacets summary
       )
       facetSummary
-  where
-    renderFacetTail :: Text -> FacetSummary -> Html ()
-    renderFacetTail field facetSummary =
-      whenJust (find ((== field) . (.path)) facetDefs) \facet -> do
-        let (FacetData facetMap) = facetSummary.facetJson
-            values = drop facetHeadCount $ HM.lookupDefault [] field facetMap
-        facetTail_ True $ map (facetChoice facet) values
+
+
+-- | What 'logExplorerFacetsH' answers: one field's overflow values, one collapsed group, or the whole sidebar.
+data FacetsView = FacetsPending | FacetTail Text FacetSummary | FacetGroupFacets FacetGroup FacetSummary | AllFacets FacetSummary
+
+
+instance ToHtml FacetsView where
+  toHtml =
+    toHtml . \case
+      FacetsPending -> div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project."
+      FacetTail field summary -> whenJust (find ((== field) . (.path)) facetDefs) \facet -> do
+        let (FacetData facetMap) = summary.facetJson
+        facetTail_ True $ map (facetChoice facet) $ drop facetHeadCount $ HM.lookupDefault [] field facetMap
+      FacetGroupFacets facetGroup summary -> facetNode_ $ facetGroupNode True facetGroup summary
+      AllFacets summary -> renderFacets summary
+  toHtmlRaw = toHtml
 
 
 -- | Structured verdict for the query editor. It underlines @column@..@width@ and
@@ -1070,12 +1064,20 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM cursorM = do
 
 -- | Lazily-loaded alert configuration form (HTMX partial). Kept off the shell's
 -- hot path — the shell no longer forks a teams query or renders this every load.
-alertFormH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+alertFormH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders AlertForm)
 alertFormH pid alertM = do
   (session, project) <- Projects.sessionAndProject pid
   alertDM <- lookupAlert alertM
   teams <- V.fromList <$> ManageMembers.getTeams pid
-  addRespHeaders $ alertConfigurationForm_ project session.environment alertDM teams
+  addRespHeaders $ AlertForm project session.environment alertDM teams
+
+
+data AlertForm = AlertForm Projects.Project (Maybe Text) (Maybe Monitors.QueryMonitor) (V.Vector ManageMembers.Team)
+
+
+instance ToHtml AlertForm where
+  toHtml (AlertForm project env alertM teams) = toHtml $ alertConfigurationForm_ project env alertM teams
+  toHtmlRaw = toHtml
 
 
 -- | Resolve an @?alert=<uuid>@ query param to its monitor, if it parses and exists.
@@ -1767,7 +1769,7 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
     Just "pattern" -> pure (LogQueries.ExpandPattern key, 20)
     _ -> refuse ExpandUnknownKind
 
-  queryAST <- either (refuse . ExpandInvalidQuery) pure (parseQueryToAST (maybeToMonoid queryM))
+  queryAST <- either (refuse . KqlInvalid) pure (parseQueryToAST (maybeToMonoid queryM))
 
   (rows, cols) <- LogQueries.fetchEventExamples authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) expandKind (fromMaybe 0 skipM) (limitN + 1)
 

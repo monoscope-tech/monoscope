@@ -5,6 +5,7 @@
 module Main (main) where
 
 import CLI.Chart
+import CLI.Core (APIError (..), renderAPIError)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView
 import Data.Aeson qualified as AE
@@ -52,6 +53,13 @@ main = hspec do
     it "pads and truncates to an exact visible width despite ANSI escapes" do
       visibleWidth (padTo 10 (colorize True (seriesColor 0) "abc")) `shouldBe` 10
       visibleWidth (padTo 4 "abcdefgh") `shouldBe` 4
+
+  describe "CLI.Core" do
+    it "prints a structured error's message, never its raw JSON" do
+      let render code = renderAPIError . APIError code . decodeUtf8 . AE.encode
+      render 404 [aesonQQ|{"error": {"code": "not_found", "message": "Issue not found"}}|] `shouldBe` "HTTP 404: Issue not found"
+      render 400 [aesonQQ|{"error": {"code": "unknown_field", "message": "Unknown field \"x\"", "suggestion": "quote it", "details": "raw sql"}}|] `shouldBe` "Unknown field \"x\" (quote it)"
+      renderAPIError (APIError 502 "Bad gateway") `shouldBe` "HTTP 502: Bad gateway"
 
   describe "CLI.LogView" do
     it "renders one line per event, within the width budget" do
