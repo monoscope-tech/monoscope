@@ -51,11 +51,10 @@ import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
-import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
+import System.Types (Done, ATAuthCtx, DB, RespHeaders, addRespHeaders, Outcome (..), done)
 import UnliftIO (tryAny)
 import UnliftIO qualified
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, formatUTCMicros, hostPath, loadingIndicatorWith_)
-import Web.Outcome (HxOutcome (..), NoBody (..), hxDone)
 
 
 data PerformanceReport = PerformanceReport
@@ -326,19 +325,18 @@ startLivePreview pid token = do
     Nothing -> void $ forkIO guardedWorker
 
 
-reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHeaders ReportsPost)
+reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHeaders (Done ReportsPost))
 reportsPostH pid t = do
   _ <- Projects.sessionAndProject pid
   _ <- Projects.updateProjectReportNotif pid t
-  hxDone ReportsPost
+  done ReportsPost
 
 
 data ReportsPost = ReportsPost
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody ReportsPost
 
 
-instance HxOutcome ReportsPost where hxSuccess _ = Just "Report notifications updated successfully"
+instance Outcome ReportsPost where outcomeToast _ = Just "Report notifications updated successfully"
 
 
 singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)

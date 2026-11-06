@@ -147,11 +147,10 @@ import Servant (Header, Headers, NoContent (..), ServerError (errBody), addHeade
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, useTfReads)
+import System.Types (successToast, Rendered (..), Done, ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, useTfReads, Outcome (..), ActionResult, Refusal (..), act, done)
 import Utils (LoadingSize (..), LoadingType (..), countNoun, faSprite_, fmtDate, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..), parseQueryParamMaybe)
-import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 
 
 newtype IssueBulkForm = IssueBulk
@@ -228,8 +227,8 @@ data AssigneeRejection = MalformedAssignee Text | NotAMember
   deriving stock (Eq, Show)
 
 
-instance Rejection AssigneeRejection where
-  rejectionMessage = \case
+instance Refusal AssigneeRejection where
+  refusalMessage = \case
     MalformedAssignee t -> "Not a user id: " <> t
     NotAMember -> "Assignee must be an active project member"
 
@@ -238,14 +237,14 @@ data TriageRejection = UnknownIssue | TriageAssignee AssigneeRejection
   deriving stock (Eq, Show)
 
 
-instance Rejection TriageRejection where
-  rejectionMessage = \case
+instance Refusal TriageRejection where
+  refusalMessage = \case
     UnknownIssue -> "Issue not found"
-    TriageAssignee a -> rejectionMessage a
+    TriageAssignee a -> refusalMessage a
 
 
 data IssueTriage = IssueTriage Projects.ProjectId Issues.Issue [ProjectMembers.ProjectMemberVM]
-  deriving anyclass (HxOutcome)
+  deriving (Outcome) via Rendered IssueTriage
 
 
 instance ToHtml IssueTriage where
@@ -254,8 +253,8 @@ instance ToHtml IssueTriage where
 
 
 -- | Priority and assignee, set from the issue header on any issue type. A refused assignee saves neither.
-triagePostH :: Projects.ProjectId -> Issues.IssueId -> TriageForm -> ATAuthCtx (HxResult TriageRejection IssueTriage)
-triagePostH pid issueId form = hxAction do
+triagePostH :: Projects.ProjectId -> Issues.IssueId -> TriageForm -> ATAuthCtx (ActionResult TriageRejection IssueTriage)
+triagePostH pid issueId form = act do
   (sess, _) <- Projects.sessionAndProject pid
   members <- ProjectMembers.selectActiveProjectMembers pid
   Issues.selectIssueById pid issueId >>= \case
@@ -711,8 +710,8 @@ issueSampleCard_ pid snapshot result = case result of
 -- must be able to tell apart from "loaded, found nothing", so the timeout and the
 -- exception are reported here rather than being flattened into an empty panel.
 tryWithin :: Maybe Int -> Text -> [Pair] -> ATAuthCtx a -> ATAuthCtx (Maybe a)
-tryWithin limitM what ctx act =
-  trySync (maybe (Just <$> act) (`timeout` act) limitM) >>= \case
+tryWithin limitM what ctx run =
+  trySync (maybe (Just <$> run) (`timeout` run) limitM) >>= \case
     Right res -> res <$ when (isNothing res) (Log.logAttention (what <> "_TIMEOUT") (AE.object ctx))
     Left e -> Nothing <$ Log.logAttention (what <> "_FAILED") (AE.object $ ctx <> ["error" AE..= show @Text e])
 
@@ -1952,10 +1951,10 @@ data ErrorPatternRejection = ErrorNotFound | ErrorAssignee AssigneeRejection | R
   deriving stock (Eq, Show)
 
 
-instance Rejection ErrorPatternRejection where
-  rejectionMessage = \case
+instance Refusal ErrorPatternRejection where
+  refusalMessage = \case
     ErrorNotFound -> "Error not found"
-    ErrorAssignee a -> rejectionMessage a
+    ErrorAssignee a -> refusalMessage a
     ResolveDenied -> "You do not have permission to resolve this error"
     IncidentChanged -> "The incident changed. Refresh and try resolving again."
 
@@ -1964,8 +1963,9 @@ instance Rejection ErrorPatternRejection where
 data AssigneeChanged = AssigneeChanged Projects.ProjectId ErrorPatterns.ErrorPatternId (Maybe Projects.UserId, Maybe Projects.UserId) [ProjectMembers.ProjectMemberVM]
 
 
-instance HxOutcome AssigneeChanged where
-  hxSuccess (AssigneeChanged _ _ (before, after) _) = Just $ bool "Assignee updated" "Assignee unchanged" (before == after)
+instance Outcome AssigneeChanged where
+  outcomeBody = toHtml
+  outcomeToast (AssigneeChanged _ _ (before, after) _) = Just $ bool "Assignee updated" "Assignee unchanged" (before == after)
 
 
 instance ToHtml AssigneeChanged where
@@ -1978,8 +1978,8 @@ instance ToHtml AssigneeChanged where
   toHtmlRaw = toHtml
 
 
-assignErrorPostH :: Projects.ProjectId -> UUID.UUID -> AssignErrorForm -> ATAuthCtx (HxResult ErrorPatternRejection AssigneeChanged)
-assignErrorPostH pid errUuid form = hxAction do
+assignErrorPostH :: Projects.ProjectId -> UUID.UUID -> AssignErrorForm -> ATAuthCtx (ActionResult ErrorPatternRejection AssigneeChanged)
+assignErrorPostH pid errUuid form = act do
   (sess, _) <- Projects.sessionAndProject pid
   members <- ProjectMembers.selectActiveProjectMembers pid
   withErrorPattern pid errUuid \err -> forM (first ErrorAssignee $ parseAssignee members form.assigneeId) \assigneeIdM -> do
@@ -2000,8 +2000,9 @@ withErrorPattern pid errUuid found =
 data ErrorResolved = ErrorResolved Projects.ProjectId ErrorPatterns.ErrorPattern Bool
 
 
-instance HxOutcome ErrorResolved where
-  hxSuccess (ErrorResolved _ err nextRelease) = Just $ maybe "Error resolved" ("Resolved in the release after " <>) (err.lastRelease <* guard nextRelease)
+instance Outcome ErrorResolved where
+  outcomeBody = toHtml
+  outcomeToast (ErrorResolved _ err nextRelease) = Just $ successToast $ maybe "Error resolved" ("Resolved in the release after " <>) (err.lastRelease <* guard nextRelease)
 
 
 instance ToHtml ErrorResolved where
@@ -2009,8 +2010,8 @@ instance ToHtml ErrorResolved where
   toHtmlRaw = toHtml
 
 
-resolveErrorPostH :: Projects.ProjectId -> UUID.UUID -> Bool -> ATAuthCtx (HxResult ErrorPatternRejection ErrorResolved)
-resolveErrorPostH pid errUuid inNextRelease = hxAction do
+resolveErrorPostH :: Projects.ProjectId -> UUID.UUID -> Bool -> ATAuthCtx (ActionResult ErrorPatternRejection ErrorResolved)
+resolveErrorPostH pid errUuid inNextRelease = act do
   (sess, _) <- Projects.sessionAndProject pid
   userPermission <- ProjectMembers.getUserPermission pid sess.user.id
   withErrorPattern pid errUuid \err -> do
@@ -2039,8 +2040,9 @@ resolveErrorAs user err now = do
 data ErrorSubscribed = ErrorSubscribed Projects.ProjectId ErrorPatterns.ErrorPattern
 
 
-instance HxOutcome ErrorSubscribed where
-  hxSuccess (ErrorSubscribed _ err) = Just $ bool "Notifications disabled" "Notifications enabled" err.subscribed
+instance Outcome ErrorSubscribed where
+  outcomeBody = toHtml
+  outcomeToast (ErrorSubscribed _ err) = Just $ bool "Notifications disabled" "Notifications enabled" err.subscribed
 
 
 instance ToHtml ErrorSubscribed where
@@ -2048,8 +2050,8 @@ instance ToHtml ErrorSubscribed where
   toHtmlRaw = toHtml
 
 
-errorSubscriptionPostH :: Projects.ProjectId -> UUID.UUID -> ErrorSubscriptionForm -> ATAuthCtx (HxResult ErrorPatternRejection ErrorSubscribed)
-errorSubscriptionPostH pid errUuid form = hxAction do
+errorSubscriptionPostH :: Projects.ProjectId -> UUID.UUID -> ErrorSubscriptionForm -> ATAuthCtx (ActionResult ErrorPatternRejection ErrorSubscribed)
+errorSubscriptionPostH pid errUuid form = act do
   _ <- Projects.sessionAndProject pid
   withErrorPattern pid errUuid \err -> do
     let notifyEveryRaw = fromMaybe 0 form.notifyEveryMinutes
@@ -3013,23 +3015,22 @@ data UnnamedView = UnnamedView
   deriving stock (Eq, Show)
 
 
-instance Rejection UnnamedView where rejectionMessage _ = "Name the view"
+instance Refusal UnnamedView where refusalMessage _ = "Name the view"
 
 
 -- | A saved view changed; the browser goes to the issue list, filtered by a saved view's query.
 data ViewChanged = ViewSaved Projects.ProjectId Text | ViewDeleted Projects.ProjectId
-  deriving (ToHtml) via NoBody ViewChanged
 
 
-instance HxOutcome ViewChanged where
-  hxRedirect =
+instance Outcome ViewChanged where
+  outcomeRedirect =
     Just . \case
       ViewSaved pid query -> "/p/" <> pid.toText <> "/issues?" <> query
       ViewDeleted pid -> "/p/" <> pid.toText <> "/issues"
 
 
-saveViewPostH :: Projects.ProjectId -> SaveViewForm -> ATAuthCtx (HxResult UnnamedView ViewChanged)
-saveViewPostH pid form = hxAction do
+saveViewPostH :: Projects.ProjectId -> SaveViewForm -> ATAuthCtx (ActionResult UnnamedView ViewChanged)
+saveViewPostH pid form = act do
   (sess, _) <- Projects.sessionAndProject pid
   let name = T.strip form.name
   if T.null name
@@ -3037,11 +3038,11 @@ saveViewPostH pid form = hxAction do
     else Right (ViewSaved pid form.query) <$ Issues.saveIssueView pid sess.user.id name form.query
 
 
-deleteViewPostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders ViewChanged)
+deleteViewPostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Done ViewChanged))
 deleteViewPostH pid vid = do
   _ <- Projects.sessionAndProject pid
   void $ Issues.deleteIssueView pid vid
-  hxDone $ ViewDeleted pid
+  done $ ViewDeleted pid
 
 
 -- | The tracker an external issue URL points at, by host.
@@ -3066,8 +3067,8 @@ data TimelineRejection = TimelineIssueMissing | EmptyComment | NotAnHttpLink
   deriving stock (Eq, Show)
 
 
-instance Rejection TimelineRejection where
-  rejectionMessage = \case
+instance Refusal TimelineRejection where
+  refusalMessage = \case
     TimelineIssueMissing -> "Issue not found"
     EmptyComment -> "Write a comment first"
     NotAnHttpLink -> "Enter an http(s) link to the external issue"
@@ -3075,25 +3076,24 @@ instance Rejection TimelineRejection where
 
 -- | An entry landed on the issue's timeline.
 data TimelineLogged = TimelineLogged
-  deriving anyclass (HxOutcome)
-  deriving (ToHtml) via NoBody TimelineLogged
+  deriving anyclass (Outcome)
 
 
 -- | Log that the user opened the issue (at most once a day), for the People list.
-issueViewedPostH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders TimelineLogged)
+issueViewedPostH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Done TimelineLogged))
 issueViewedPostH pid issueId = do
   (sess, _) <- Projects.sessionAndProject pid
   Issues.selectIssueById pid issueId >>= traverse_ \_ -> Issues.recordIssueView issueId sess.user.id
-  hxDone TimelineLogged
+  done TimelineLogged
 
 
 -- | A comment on the issue's timeline.
-commentPostH :: Projects.ProjectId -> Issues.IssueId -> CommentForm -> ATAuthCtx (HxResult TimelineRejection TimelineLogged)
+commentPostH :: Projects.ProjectId -> Issues.IssueId -> CommentForm -> ATAuthCtx (ActionResult TimelineRejection TimelineLogged)
 commentPostH pid issueId form = logTimelineEntry pid issueId $ maybeToRight EmptyComment $ guarded (not . T.null) (T.strip form.body) <&> \body -> (Issues.IECommented, ["body" AE..= body])
 
 
 -- | Attach an external issue (GitHub, Jira, Linear, ...) by URL.
-linkPostH :: Projects.ProjectId -> Issues.IssueId -> LinkForm -> ATAuthCtx (HxResult TimelineRejection TimelineLogged)
+linkPostH :: Projects.ProjectId -> Issues.IssueId -> LinkForm -> ATAuthCtx (ActionResult TimelineRejection TimelineLogged)
 linkPostH pid issueId form =
   logTimelineEntry pid issueId
     $ maybeToRight NotAnHttpLink
@@ -3102,8 +3102,8 @@ linkPostH pid issueId form =
 
 
 -- | Log a user's timeline entry on an existing issue.
-logTimelineEntry :: Projects.ProjectId -> Issues.IssueId -> Either TimelineRejection (Issues.IssueEvent, [(AE.Key, AE.Value)]) -> ATAuthCtx (HxResult TimelineRejection TimelineLogged)
-logTimelineEntry pid issueId entry = hxAction do
+logTimelineEntry :: Projects.ProjectId -> Issues.IssueId -> Either TimelineRejection (Issues.IssueEvent, [(AE.Key, AE.Value)]) -> ATAuthCtx (ActionResult TimelineRejection TimelineLogged)
+logTimelineEntry pid issueId entry = act do
   (sess, _) <- Projects.sessionAndProject pid
   Issues.selectIssueById pid issueId >>= \case
     Nothing -> pure $ Left TimelineIssueMissing
@@ -3145,15 +3145,14 @@ errorGroupMembersGetH pid errorId = do
 
 
 data PatternUnmerged = PatternUnmerged
-  deriving (ToHtml) via NoBody PatternUnmerged
 
 
-instance HxOutcome PatternUnmerged where hxSuccess _ = Just "Pattern unmerged"
+instance Outcome PatternUnmerged where outcomeToast _ = Just "Pattern unmerged"
 
 
-errorUnmergePostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders PatternUnmerged)
+errorUnmergePostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Done PatternUnmerged))
 errorUnmergePostH pid errorId = do
   _ <- Projects.sessionAndProject pid
   void $ PatternMerge.unmergePattern pid (ErrorPatternId errorId)
   addTriggerEvent "issuePatternGroupChanged" AE.Null
-  hxDone PatternUnmerged
+  done PatternUnmerged

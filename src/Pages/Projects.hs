@@ -117,10 +117,9 @@ import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, err500, err503, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS)
+import System.Types (Done, ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS, Outcome (..), ActionResult, Refusal (..), act, done)
 import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
-import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 
 
 --------------------------------------------------------------------------------
@@ -345,8 +344,9 @@ instance ToHtml IntegrationsSaved where
   toHtmlRaw = toHtml
 
 
-instance HxOutcome IntegrationsSaved where
-  hxSuccess (IntegrationsSaved change _) = Just case change of
+instance Outcome IntegrationsSaved where
+  outcomeBody = toHtml
+  outcomeToast (IntegrationsSaved change _) = Just case change of
     ChannelsUpdated -> "Updated Notification Channels successfully"
     PagerdutyConnected -> "PagerDuty connected"
     PagerdutyDisconnected -> "PagerDuty disconnected"
@@ -361,8 +361,8 @@ data ChannelsRejection = UnknownChannel | DiscordNotConnected | SlackNotConnecte
   deriving stock (Eq, Show)
 
 
-instance Rejection ChannelsRejection where
-  rejectionMessage = \case
+instance Refusal ChannelsRejection where
+  refusalMessage = \case
     UnknownChannel -> "Invalid notification channels. Reload this page and try again."
     DiscordNotConnected -> "You need to connect Discord to this project first."
     SlackNotConnected -> "You need to connect Slack to this project first."
@@ -373,18 +373,18 @@ data PagerdutyKeyTooShort = PagerdutyKeyTooShort
   deriving stock (Eq, Show)
 
 
-instance Rejection PagerdutyKeyTooShort where rejectionMessage PagerdutyKeyTooShort = "PagerDuty integration key is too short"
+instance Refusal PagerdutyKeyTooShort where refusalMessage PagerdutyKeyTooShort = "PagerDuty integration key is too short"
 
 
 data SlackNotInstalled = SlackNotInstalled
   deriving stock (Eq, Show)
 
 
-instance Rejection SlackNotInstalled where rejectionMessage SlackNotInstalled = "Failed to disconnect Slack"
+instance Refusal SlackNotInstalled where refusalMessage SlackNotInstalled = "Failed to disconnect Slack"
 
 
-updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (HxResult ChannelsRejection IntegrationsSaved)
-updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = hxAction do
+updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (ActionResult ChannelsRejection IntegrationsSaved)
+updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = act do
   void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   validateNotificationChannels pid enabledChannels phones >>= traverse \() -> do
     projectM <- Projects.projectById pid
@@ -493,8 +493,8 @@ logIntegrationAudit pid event name = do
   Projects.logAuditS pid event sess $ Just $ AE.object ["integration" AE..= name]
 
 
-pagerdutyConnectH :: Projects.ProjectId -> PagerdutyConnectForm -> ATAuthCtx (HxResult PagerdutyKeyTooShort IntegrationsSaved)
-pagerdutyConnectH pid form = hxAction do
+pagerdutyConnectH :: Projects.ProjectId -> PagerdutyConnectForm -> ATAuthCtx (ActionResult PagerdutyKeyTooShort IntegrationsSaved)
+pagerdutyConnectH pid form = act do
   void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   let key = T.strip form.integrationKey
   if T.length key < 20
@@ -505,16 +505,16 @@ pagerdutyConnectH pid form = hxAction do
       Right <$> integrationsSaved pid PagerdutyConnected
 
 
-pagerdutyDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders IntegrationsSaved)
+pagerdutyDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Done IntegrationsSaved))
 pagerdutyDisconnectH pid = do
   void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   ProjectMembers.removePagerdutyServicesFromEveryoneTeam pid
   logIntegrationAudit pid Projects.AEIntegrationDisconnected "pagerduty"
-  hxDone =<< integrationsSaved pid PagerdutyDisconnected
+  done =<< integrationsSaved pid PagerdutyDisconnected
 
 
-slackDisconnectH :: Projects.ProjectId -> ATAuthCtx (HxResult SlackNotInstalled IntegrationsSaved)
-slackDisconnectH pid = hxAction do
+slackDisconnectH :: Projects.ProjectId -> ATAuthCtx (ActionResult SlackNotInstalled IntegrationsSaved)
+slackDisconnectH pid = act do
   void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   deleted <- Integrations.deleteSlackData pid
   if deleted > 0
@@ -841,8 +841,8 @@ data TeamRejection
   deriving stock (Eq, Show)
 
 
-instance Rejection TeamRejection where
-  rejectionMessage = \case
+instance Refusal TeamRejection where
+  refusalMessage = \case
     NonMemberInTeam -> "Some team members are not project members"
     DuplicateHandle -> "Team handle already exists for this project."
     TeamNameRequired -> "Team name is required"
@@ -860,15 +860,14 @@ instance Rejection TeamRejection where
 -- | The page a team save lands on: the team itself when edited from its own view.
 data TeamSaved = TeamCreated Projects.ProjectId | TeamUpdated Projects.ProjectId (Maybe Text)
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody TeamSaved
 
 
-instance HxOutcome TeamSaved where
-  hxRedirect =
+instance Outcome TeamSaved where
+  outcomeRedirect =
     Just . \case
       TeamCreated pid -> "/p/" <> pid.toText <> "/manage_teams"
       TeamUpdated pid handleM -> "/p/" <> pid.toText <> "/manage_teams" <> foldMap ("/" <>) handleM
-  hxSuccess =
+  outcomeToast =
     Just . \case
       TeamCreated _ -> "Team saved successfully"
       TeamUpdated _ _ -> "Team updated successfully"
@@ -895,8 +894,8 @@ validateTeamDetails name handle notifEmails = validateName name >> validateHandl
       _ -> Left $ InvalidTeamEmail email
 
 
-manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (HxResult TeamRejection TeamSaved)
-manageTeamPostH pid form tmView = hxAction do
+manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (ActionResult TeamRejection TeamSaved)
+manageTeamPostH pid form tmView = act do
   (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   let validMemberIds = V.map (.userId) projMembers
@@ -924,25 +923,24 @@ newtype TBulkActionForm = TBulkActionForm
 -- | Outside the team list view, the browser goes back to it.
 data TeamsDeleted = TeamsDeleted Projects.ProjectId (Maybe Text)
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody TeamsDeleted
 
 
-instance HxOutcome TeamsDeleted where
-  hxRedirect (TeamsDeleted pid listViewM) = ("/p/" <> pid.toText <> "/manage_teams") <$ guard (isNothing listViewM)
+instance Outcome TeamsDeleted where
+  outcomeRedirect (TeamsDeleted pid listViewM) = ("/p/" <> pid.toText <> "/manage_teams") <$ guard (isNothing listViewM)
 
 
 data TeamsDeleteRejection = TeamsNotOwned | UnknownTeamAction
   deriving stock (Eq, Show)
 
 
-instance Rejection TeamsDeleteRejection where
-  rejectionMessage = \case
+instance Refusal TeamsDeleteRejection where
+  refusalMessage = \case
     TeamsNotOwned -> "You may only delete teams you own"
     UnknownTeamAction -> "Invalid action"
 
 
-manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (HxResult TeamsDeleteRejection TeamsDeleted)
-manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = hxAction do
+manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (ActionResult TeamsDeleteRejection TeamsDeleted)
+manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = act do
   (sess, _) <- Projects.sessionAndProject pid
   case action of
     "delete" -> do
@@ -1244,24 +1242,23 @@ memberRowWithStatus pid canManage idx prM = do
 -- | The member's row is swapped for this empty body.
 data MemberRemoved = MemberRemoved
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody MemberRemoved
 
 
-instance HxOutcome MemberRemoved where hxSuccess MemberRemoved = Just "Member removed"
+instance Outcome MemberRemoved where outcomeToast MemberRemoved = Just "Member removed"
 
 
 data MemberRejection = MemberNotFound | CannotRemoveSelf
   deriving stock (Eq, Show)
 
 
-instance Rejection MemberRejection where
-  rejectionMessage = \case
+instance Refusal MemberRejection where
+  refusalMessage = \case
     MemberNotFound -> "Member not found"
     CannotRemoveSelf -> "You cannot remove yourself"
 
 
-deleteMemberH :: Projects.ProjectId -> ProjectMembers.ProjectMemberId -> ATAuthCtx (HxResult MemberRejection MemberRemoved)
-deleteMemberH pid memberId = hxAction do
+deleteMemberH :: Projects.ProjectId -> ProjectMembers.ProjectMemberId -> ATAuthCtx (ActionResult MemberRejection MemberRemoved)
+deleteMemberH pid memberId = act do
   (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
@@ -1277,18 +1274,17 @@ deleteMemberH pid memberId = hxAction do
 -- | A billing provider page (portal or checkout) the browser is sent to.
 newtype BillingRedirect = BillingRedirect Text
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody BillingRedirect
 
 
-instance HxOutcome BillingRedirect where hxRedirect (BillingRedirect url) = Just url
+instance Outcome BillingRedirect where outcomeRedirect (BillingRedirect url) = Just url
 
 
 data BillingRejection = PortalSessionFailed | CustomerIdMissing | SubscriptionIdMissing | NoActiveSubscription | CheckoutSessionFailed
   deriving stock (Eq, Show)
 
 
-instance Rejection BillingRejection where
-  rejectionMessage = \case
+instance Refusal BillingRejection where
+  refusalMessage = \case
     PortalSessionFailed -> "Failed to create billing portal"
     CustomerIdMissing -> "Customer ID not found"
     SubscriptionIdMissing -> "Subscription ID not found"
@@ -1296,8 +1292,8 @@ instance Rejection BillingRejection where
     CheckoutSessionFailed -> "Failed to create checkout session"
 
 
-manageSubGetH :: Projects.ProjectId -> ATAuthCtx (HxResult BillingRejection BillingRedirect)
-manageSubGetH pid = hxAction do
+manageSubGetH :: Projects.ProjectId -> ATAuthCtx (ActionResult BillingRejection BillingRedirect)
+manageSubGetH pid = act do
   (_, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -1318,8 +1314,8 @@ newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
   deriving anyclass (FromForm)
 
 
-stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (HxResult BillingRejection BillingRedirect)
-stripeCheckoutInitH pid form = hxAction do
+stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (ActionResult BillingRejection BillingRedirect)
+stripeCheckoutInitH pid form = act do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -1487,23 +1483,22 @@ projectSettingsGetH pid = do
 
 data ProjectDeleted = ProjectDeleted
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody ProjectDeleted
 
 
-instance HxOutcome ProjectDeleted where
-  hxRedirect ProjectDeleted = Just "/"
-  hxSuccess ProjectDeleted = Just "Deleted Project successfully"
+instance Outcome ProjectDeleted where
+  outcomeRedirect ProjectDeleted = Just "/"
+  outcomeToast ProjectDeleted = Just "Deleted Project successfully"
 
 
 data DemoProjectProtected = DemoProjectProtected
   deriving stock (Eq, Show)
 
 
-instance Rejection DemoProjectProtected where rejectionMessage DemoProjectProtected = "Can't perform this action on the demo project"
+instance Refusal DemoProjectProtected where refusalMessage DemoProjectProtected = "Can't perform this action on the demo project"
 
 
-deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (HxResult DemoProjectProtected ProjectDeleted)
-deleteProjectGetH pid = hxAction do
+deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (ActionResult DemoProjectProtected ProjectDeleted)
+deleteProjectGetH pid = act do
   (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
   if isDemoAndNotSudo pid sess.user.isSudo
@@ -1555,14 +1550,13 @@ data PricingUpdateForm = PricingUpdateForm
 -- | Onboarding continues into the project; elsewhere the pricing modal closes.
 data PricingUpdated = PricingOnboarded Projects.ProjectId | PricingSaved
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody PricingUpdated
 
 
-instance HxOutcome PricingUpdated where
-  hxRedirect = \case
+instance Outcome PricingUpdated where
+  outcomeRedirect = \case
     PricingOnboarded pid -> Just $ "/p/" <> pid.toText <> "/"
     PricingSaved -> Nothing
-  hxSuccess = \case
+  outcomeToast = \case
     PricingOnboarded _ -> Nothing
     PricingSaved -> Just "Pricing updated successfully"
 
@@ -1571,11 +1565,11 @@ data SubscriptionLookupFailed = SubscriptionLookupFailed
   deriving stock (Eq, Show)
 
 
-instance Rejection SubscriptionLookupFailed where rejectionMessage SubscriptionLookupFailed = "Something went wrong while fetching subscription id"
+instance Refusal SubscriptionLookupFailed where refusalMessage SubscriptionLookupFailed = "Something went wrong while fetching subscription id"
 
 
-pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (HxResult SubscriptionLookupFailed PricingUpdated)
-pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = hxAction do
+pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (ActionResult SubscriptionLookupFailed PricingUpdated)
+pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = act do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config

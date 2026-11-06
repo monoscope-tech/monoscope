@@ -145,7 +145,6 @@ import Utils
 import Web.ApiTypes qualified as ApiT
 import Web.FormUrlEncoded (FromForm (..), parseUnique, toListStable)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
-import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 
 
 -- | Server-rendered dashboard data: one request returns every widget on the
@@ -402,13 +401,13 @@ data InvalidViewName = InvalidViewName
   deriving stock (Eq, Show)
 
 
-instance Rejection InvalidViewName where
-  rejectionMessage _ = "View name must contain 1–100 characters."
+instance Refusal InvalidViewName where
+  refusalMessage _ = "View name must contain 1–100 characters."
 
 
 -- | The saved-views menu, re-rendered after every change.
 data SavedViews = SavedViews Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard Dashboards.DashboardVM [(Text, Maybe Text)]
-  deriving anyclass (HxOutcome)
+  deriving (Outcome) via Rendered SavedViews
 
 
 instance ToHtml SavedViews where
@@ -416,8 +415,8 @@ instance ToHtml SavedViews where
   toHtmlRaw = toHtml
 
 
-dashboardViewPostH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardViewForm -> ATAuthCtx (HxResult InvalidViewName SavedViews)
-dashboardViewPostH pid did form = hxAction do
+dashboardViewPostH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardViewForm -> ATAuthCtx (ActionResult InvalidViewName SavedViews)
+dashboardViewPostH pid did form = act do
   _ <- Projects.sessionAndProject pid
   let name = T.strip form.name
   if T.null name || T.length name > 100
@@ -1243,15 +1242,15 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
       widget & #dataset ?~ if widget.wType == Widget.WTStat then def{Widget.source = AE.Null, Widget.value = md.dataFloat} else Widget.toWidgetDataset md
 
 
-dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (HxResult WidgetMonitorRejection Widget.Widget)
+dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (ActionResult WidgetMonitorRejection Widget.Widget)
 dashboardWidgetPutH pid dashId widgetIdM tabSlugM = dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM Nothing
 
 
-instance HxOutcome Widget.Widget
+instance Outcome Widget.Widget
 
 
-dashboardWidgetPutWithMonitorH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (HxResult WidgetMonitorRejection Widget.Widget)
-dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM widget = hxAction do
+dashboardWidgetPutWithMonitorH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (ActionResult WidgetMonitorRejection Widget.Widget)
+dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM widget = act do
   _ <- Projects.sessionAndProject pid
   (dashVM, dash) <- getDashAndVM pid dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
@@ -1907,14 +1906,14 @@ data WidgetMonitorRejection = RawSqlWidget | MissingThreshold | InvalidWarningTh
   deriving stock (Eq, Show)
 
 
-instance Rejection WidgetMonitorRejection where
-  rejectionMessage = \case
+instance Refusal WidgetMonitorRejection where
+  refusalMessage = \case
     RawSqlWidget -> "This widget can't be monitored: monitors need a KQL query, and this widget is built from raw SQL."
     MissingThreshold -> "Enter an alert threshold before creating a monitor"
     InvalidWarningThreshold -> "Warning threshold must be a number"
     MonitorNeedsThreshold -> "Set an alert threshold or remove the monitor before saving"
     MonitorQueryInvalid _ -> "Monitor query is invalid"
-  rejectionDetail = \case
+  refusalDetail = \case
     MonitorQueryInvalid err -> Just err
     RawSqlWidget -> Nothing
     MissingThreshold -> Nothing
@@ -1924,15 +1923,14 @@ instance Rejection WidgetMonitorRejection where
 
 data WidgetMonitorResult = WidgetMonitorSaved
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody WidgetMonitorResult
 
 
-instance HxOutcome WidgetMonitorResult where
-  hxSuccess WidgetMonitorSaved = Just "Widget monitor configured successfully"
+instance Outcome WidgetMonitorResult where
+  outcomeToast WidgetMonitorSaved = Just "Widget monitor configured successfully"
 
 
-widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> WidgetAlertForm -> ATAuthCtx (HxResult WidgetMonitorRejection WidgetMonitorResult)
-widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = hxAction do
+widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> WidgetAlertForm -> ATAuthCtx (ActionResult WidgetMonitorRejection WidgetMonitorResult)
+widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
   (session, _) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   let chartThresholdM = form.alertThreshold >>= readMaybe . toString
@@ -2008,18 +2006,17 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = hxAction do
 
 data WidgetMonitorRemoved = WidgetMonitorRemoved
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody WidgetMonitorRemoved
 
 
-instance HxOutcome WidgetMonitorRemoved where
-  hxSuccess _ = Just "Monitor removed from widget"
+instance Outcome WidgetMonitorRemoved where
+  outcomeToast _ = Just "Monitor removed from widget"
 
 
-widgetAlertDeleteH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders WidgetMonitorRemoved)
+widgetAlertDeleteH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Done WidgetMonitorRemoved))
 widgetAlertDeleteH pid widgetId dashboardIdM = do
   _ <- Projects.sessionAndProject pid
   _ <- Monitors.deleteMonitorsByWidgetIds pid dashboardIdM [widgetId]
-  hxDone WidgetMonitorRemoved
+  done WidgetMonitorRemoved
 
 
 -- | A widget's monitor badge after a pause/resume.
@@ -2031,16 +2028,17 @@ instance ToHtml WidgetMonitorStatus where
   toHtmlRaw = toHtml
 
 
-instance HxOutcome WidgetMonitorStatus where
-  hxSuccess (WidgetMonitorStatus _ _ _ monitorM) = (\m -> if isJust m.deactivatedAt then "Monitor paused" else "Monitor resumed") <$> monitorM
+instance Outcome WidgetMonitorStatus where
+  outcomeBody = toHtml
+  outcomeToast (WidgetMonitorStatus _ _ _ monitorM) = (\m -> if isJust m.deactivatedAt then "Monitor paused" else "Monitor resumed") <$> monitorM
 
 
-widgetAlertToggleH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders WidgetMonitorStatus)
+widgetAlertToggleH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Done WidgetMonitorStatus))
 widgetAlertToggleH pid widgetId dashboardIdM = do
   _ <- Projects.sessionAndProject pid
   monitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId `whenNothingM` throwError err404{errBody = "Widget monitor not found"}
   void $ Monitors.monitorToggleActiveById pid monitor.id
-  hxDone . WidgetMonitorStatus pid widgetId dashboardIdM =<< Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId
+  done . WidgetMonitorStatus pid widgetId dashboardIdM =<< Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId
 
 
 --------------------------------------------------------------------
@@ -2630,18 +2628,19 @@ instance ToHtml StarButton where
   toHtmlRaw = toHtml
 
 
-instance HxOutcome StarButton where
-  hxSuccess (StarButton _ _ starred) = Just $ if starred then "Dashboard starred" else "Dashboard unstarred"
+instance Outcome StarButton where
+  outcomeBody = toHtml
+  outcomeToast (StarButton _ _ starred) = Just $ if starred then "Dashboard starred" else "Dashboard unstarred"
 
 
-dashboardStarPostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders StarButton)
+dashboardStarPostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Done StarButton))
 dashboardStarPostH pid dashId = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
   dashVM <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404{errBody = "Dashboard not found"}
   let newStarredSince = if isJust dashVM.starredSince then Nothing else Just now
   _ <- Dashboards.updateStarredSince pid dashId newStarredSince
-  hxDone $ StarButton pid dashId (isJust newStarredSince)
+  done $ StarButton pid dashId (isJust newStarredSince)
 
 
 -- | Handler for deleting a dashboard.

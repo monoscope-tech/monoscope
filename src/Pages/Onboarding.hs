@@ -51,10 +51,9 @@ import Pages.Components
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, addTriggerEvent)
+import System.Types (Done, ATAuthCtx, HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, addTriggerEvent, Outcome (..), ActionResult, Refusal (..), act, done)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
-import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 
 
 -- | Builds a @/p/PID/onboarding@-rooted path; @path@ is the suffix (@?step=X@, @/info@, …).
@@ -178,16 +177,14 @@ instance ToHtml OnboardingGet where
 -- | A step finished or skipped: the browser moves on to the given step.
 data OnboardingStepPost = OnboardingStepPost Projects.ProjectId OnboardingStep
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody OnboardingStepPost
 
 
-instance HxOutcome OnboardingStepPost where hxRedirect (OnboardingStepPost pid step) = Just $ stepUrl pid step
+instance Outcome OnboardingStepPost where outcomeRedirect (OnboardingStepPost pid step) = Just $ stepUrl pid step
 
 
 data ChecklistDismissed = ChecklistDismissed
   deriving stock (Eq, Show)
-  deriving anyclass (HxOutcome)
-  deriving (ToHtml) via NoBody ChecklistDismissed
+  deriving anyclass (Outcome)
 
 
 -- | What an integration check answers while the docs page is open.
@@ -210,8 +207,9 @@ instance ToHtml IntegrationCheck where
   toHtmlRaw = toHtml
 
 
-instance HxOutcome IntegrationCheck where
-  hxRedirect = \case
+instance Outcome IntegrationCheck where
+  outcomeBody = toHtml
+  outcomeRedirect = \case
     ProceedToPricing pid -> Just $ stepUrl pid Pricing
     AwaitingEvents{} -> Nothing
     Verified -> Nothing
@@ -221,7 +219,7 @@ data NoEventsYet = NoEventsYet
   deriving stock (Eq, Show)
 
 
-instance Rejection NoEventsYet where rejectionMessage NoEventsYet = "No events found yet"
+instance Refusal NoEventsYet where refusalMessage NoEventsYet = "No events found yet"
 
 
 -- | The landing site's markup, with its root-relative links pointed back at it.
@@ -246,18 +244,18 @@ instance ToHtml OnboardingPhoneEmailsPost where
   toHtmlRaw = toHtml
 
 
-onboardingStepSkipped :: Projects.ProjectId -> Maybe OnboardingStep -> ATAuthCtx (RespHeaders OnboardingStepPost)
+onboardingStepSkipped :: Projects.ProjectId -> Maybe OnboardingStep -> ATAuthCtx (RespHeaders (Done OnboardingStepPost))
 onboardingStepSkipped pid stepM = do
   void $ Projects.sessionAndProject pid -- membership check
   whenJust stepM $ markStepCompleted pid . show
-  hxDone $ OnboardingStepPost pid $ bool Info Pricing (stepM == Just Integration)
+  done $ OnboardingStepPost pid $ bool Info Pricing (stepM == Just Integration)
 
 
-dismissChecklistH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ChecklistDismissed)
+dismissChecklistH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Done ChecklistDismissed))
 dismissChecklistH pid = do
   void $ Projects.sessionAndProject pid
   markStepCompleted pid "checklist_dismissed"
-  hxDone ChecklistDismissed
+  done ChecklistDismissed
 
 
 -- | Appends atomically, so concurrent step completions can't lose one.
@@ -276,8 +274,8 @@ phoneEmailPostH pid form = do
   addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ form.emails <> memberEmails) appCtx.config.enableFreetier
 
 
-checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (HxResult NoEventsYet IntegrationCheck)
-checkIntegrationGet pid languageM = hxAction do
+checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (ActionResult NoEventsYet IntegrationCheck)
+checkIntegrationGet pid languageM = act do
   void $ Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   v :: Maybe Text <- Hasql.withHasqlTimefusion appCtx.env.enableTimefusionReads $ Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} LIMIT 1|]
@@ -291,23 +289,23 @@ checkIntegrationGet pid languageM = hxAction do
       pure $ Right $ maybe (ProceedToPricing pid) (const Verified) languageM
 
 
-onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingStepPost)
+onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders (Done OnboardingStepPost))
 onboardingInfoPostH pid form = do
   (sess, _) <- Projects.sessionAndProject pid
   let answers = HI.AsJsonb $ AE.object ["companyName" AE..= form.companyName, "companySize" AE..= form.companySize, "foundUsFrom" AE..= form.whereDidYouHearAboutUs]
   Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName}, questions = COALESCE(questions, '{}'::jsonb) || #{answers} where id=#{pid} |]
   markStepCompleted pid $ show Info
   Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{form.firstName}, last_name=#{form.lastName} where id=#{sess.user.id} |]
-  hxDone $ OnboardingStepPost pid Survey
+  done $ OnboardingStepPost pid Survey
 
 
-onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingStepPost)
+onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders (Done OnboardingStepPost))
 onboardingConfPostH pid form = do
   void $ Projects.sessionAndProject pid -- membership check
   let answers = HI.AsJsonb $ AE.object ["functionality" AE..= form.functionality, "location" AE..= form.location]
   Hasql.interpExecute_ [HI.sql| update projects.projects set questions = COALESCE(questions, '{}'::jsonb) || #{answers} where id=#{pid} |]
   markStepCompleted pid $ show Survey
-  hxDone $ OnboardingStepPost pid NotifChannel
+  done $ OnboardingStepPost pid NotifChannel
 
 
 onboardingCompleteBody :: Projects.ProjectId -> Html ()

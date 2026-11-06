@@ -37,12 +37,11 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC)
 import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders)
+import System.Types (Done, ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, Outcome (..), ActionResult, Refusal (..), act, done)
 import Utils (faSprite_, renderMarkdownTocWithPrefix)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
 import Web.MCP qualified as MCP
-import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 
 
 -- | Refusals of the JSON search endpoint; status and body are what the query box reads.
@@ -153,11 +152,10 @@ data NewThread = NewChat Text | NewRoutine Text Issues.RoutineInterval
 -- | The AI page an action leaves the browser on.
 data AIPage = ThreadPage Projects.ProjectId (UUIDId "conversation") | RoutinesPage Projects.ProjectId | ThreadsPage Projects.ProjectId
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody AIPage
 
 
-instance HxOutcome AIPage where
-  hxRedirect =
+instance Outcome AIPage where
+  outcomeRedirect =
     Just . \case
       ThreadPage pid convId -> threadUrl pid convId
       RoutinesPage pid -> "/p/" <> pid.toText <> "/ai/routines"
@@ -168,8 +166,8 @@ data PromptError = EmptyPrompt | PromptTooLong
   deriving stock (Eq, Show)
 
 
-instance Rejection PromptError where
-  rejectionMessage = \case
+instance Refusal PromptError where
+  refusalMessage = \case
     EmptyPrompt -> "Enter a prompt to start."
     PromptTooLong -> "Prompt is limited to 4,000 characters."
 
@@ -178,9 +176,9 @@ data NewThreadError = NewThreadPrompt PromptError | ChatWithInterval | RoutineWi
   deriving stock (Eq, Show)
 
 
-instance Rejection NewThreadError where
-  rejectionMessage = \case
-    NewThreadPrompt e -> rejectionMessage e
+instance Refusal NewThreadError where
+  refusalMessage = \case
+    NewThreadPrompt e -> refusalMessage e
     ChatWithInterval -> "Chat mode does not accept a routine interval."
     RoutineWithoutInterval -> "Choose a routine interval."
 
@@ -189,9 +187,9 @@ data TurnError = TurnPrompt PromptError | ConversationGone
   deriving stock (Eq, Show)
 
 
-instance Rejection TurnError where
-  rejectionMessage = \case
-    TurnPrompt e -> rejectionMessage e
+instance Refusal TurnError where
+  refusalMessage = \case
+    TurnPrompt e -> refusalMessage e
     ConversationGone -> "This conversation no longer exists."
 
 
@@ -199,21 +197,21 @@ data EmptyTitle = EmptyTitle
   deriving stock (Eq, Show)
 
 
-instance Rejection EmptyTitle where rejectionMessage EmptyTitle = "Enter a title."
+instance Refusal EmptyTitle where refusalMessage EmptyTitle = "Enter a title."
 
 
 data UnknownTemplate = UnknownTemplate
   deriving stock (Eq, Show)
 
 
-instance Rejection UnknownTemplate where rejectionMessage UnknownTemplate = "Unknown routine template."
+instance Refusal UnknownTemplate where refusalMessage UnknownTemplate = "Unknown routine template."
 
 
 data NoReviewClasses = NoReviewClasses
   deriving stock (Eq, Show)
 
 
-instance Rejection NoReviewClasses where rejectionMessage NoReviewClasses = "Choose at least one action class for review."
+instance Refusal NoReviewClasses where refusalMessage NoReviewClasses = "Choose at least one action class for review."
 
 
 newtype TitleForm = TitleForm {conversationTitle :: Text}
@@ -734,8 +732,8 @@ threadPageGetH pid convId docM runM hxTarget = do
               else "This routine is paused. Resume its schedule to produce a new result."
 
 
-routineInstallPostH :: Projects.ProjectId -> RoutineTemplateForm -> ATAuthCtx (HxResult UnknownTemplate AIPage)
-routineInstallPostH pid form = hxAction do
+routineInstallPostH :: Projects.ProjectId -> RoutineTemplateForm -> ATAuthCtx (ActionResult UnknownTemplate AIPage)
+routineInstallPostH pid form = act do
   (_, project, _) <- mkAIPageCtx pid
   (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   forM (maybeToRight UnknownTemplate $ find ((== form.templateKey) . (.key)) Issues.routineTemplates) \template ->
@@ -745,8 +743,8 @@ routineInstallPostH pid form = hxAction do
         Right (convId, scheduled) -> convId <$ enqueue (pure scheduled)
 
 
-startThreadPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> AIChatForm -> ATAuthCtx (HxResult NewThreadError AIPage)
-startThreadPostHWithTools projectTools pid form = hxAction do
+startThreadPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> AIChatForm -> ATAuthCtx (ActionResult NewThreadError AIPage)
+startThreadPostHWithTools projectTools pid form = act do
   authorizeProject pid
   forM newThread \request -> do
     origin <- case request of
@@ -765,8 +763,8 @@ startThreadPostHWithTools projectTools pid form = hxAction do
         (ModeRoutine, Just interval) -> Right $ NewRoutine prompt interval
 
 
-threadPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> UUIDId "conversation" -> AIChatForm -> ATAuthCtx (HxResult TurnError AIPage)
-threadPostHWithTools projectTools pid convId form = hxAction do
+threadPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> UUIDId "conversation" -> AIChatForm -> ATAuthCtx (ActionResult TurnError AIPage)
+threadPostHWithTools projectTools pid convId form = act do
   authorizeConversation pid convId
   authorizeProject pid
   case normalizeQuery form.query of
@@ -782,8 +780,8 @@ threadPostHWithTools projectTools pid convId form = hxAction do
         <&> maybeToRight ConversationGone
 
 
-threadTitlePostH :: Projects.ProjectId -> UUIDId "conversation" -> TitleForm -> ATAuthCtx (HxResult EmptyTitle AIPage)
-threadTitlePostH pid convId form = hxAction do
+threadTitlePostH :: Projects.ProjectId -> UUIDId "conversation" -> TitleForm -> ATAuthCtx (ActionResult EmptyTitle AIPage)
+threadTitlePostH pid convId form = act do
   authorizeConversation pid convId
   authorizeProject pid
   let title = T.strip form.conversationTitle
@@ -792,8 +790,8 @@ threadTitlePostH pid convId form = hxAction do
     else Right (ThreadPage pid convId) <$ Issues.renameConversation pid convId title
 
 
-threadDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders AIPage)
-threadDeleteH pid convId = authorizeConversation pid convId >> authorizeProject pid >> Issues.deleteConversation pid convId >> hxDone (ThreadsPage pid)
+threadDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Done AIPage))
+threadDeleteH pid convId = authorizeConversation pid convId >> authorizeProject pid >> Issues.deleteConversation pid convId >> done (ThreadsPage pid)
 
 
 submitTurn :: Maybe AI.ProjectTools -> Issues.InteractiveOrigin -> UUIDId "ai_routine_run" -> Bool -> Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
@@ -839,41 +837,41 @@ enqueue write = do
   whenJustM write \routine -> BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
 
 
-routinePostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineForm -> ATAuthCtx (RespHeaders AIPage)
+routinePostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineForm -> ATAuthCtx (RespHeaders (Done AIPage))
 routinePostH pid convId form = do
   authorizeConversation pid convId
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
   whenJustM (Issues.getConversation pid convId) \conversation ->
     when (conversation.conversationType == Issues.CTWeb) $ enqueue (Issues.upsertRoutine sess.user.id pid convId form.intervalMinutes)
-  hxDone $ ThreadPage pid convId
+  done $ ThreadPage pid convId
 
 
-routinePausePostH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders AIPage)
-routinePausePostH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> hxDone (ThreadPage pid convId)
+routinePausePostH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Done AIPage))
+routinePausePostH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> done (ThreadPage pid convId)
 
 
-routineCancelPostH, routineResumePostH, routineDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders AIPage)
-routineCancelPostH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.cancelRoutineRun pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> hxDone (RoutinesPage pid)
+routineCancelPostH, routineResumePostH, routineDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Done AIPage))
+routineCancelPostH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.cancelRoutineRun pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> done (RoutinesPage pid)
 routineResumePostH pid convId = do
   authorizeConversation pid convId
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   (sess, _) <- Projects.sessionAndProject pid
   enqueue (Issues.resumeRoutine sess.user.id pid convId)
-  hxDone (RoutinesPage pid)
-routineDeleteH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> Issues.deleteRoutine pid convId >> hxDone (RoutinesPage pid)
+  done (RoutinesPage pid)
+routineDeleteH pid convId = authorizeConversation pid convId >> void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid) >> Issues.pauseRoutine pid convId >> Jobs.wakeStoppedReviews (Issues.StopRoutine pid convId) >> Issues.deleteRoutine pid convId >> done (RoutinesPage pid)
 
 
-routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (RespHeaders AIPage)
+routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (RespHeaders (Done AIPage))
 routineDestinationPostH pid convId form = do
   authorizeConversation pid convId
   void (ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid)
   Issues.setRoutineDestination pid convId form.destination
-  hxDone (RoutinesPage pid)
+  done (RoutinesPage pid)
 
 
-routinePolicyPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutinePolicyForm -> ATAuthCtx (HxResult NoReviewClasses PolicySaved)
-routinePolicyPostH pid conversation form = hxAction do
+routinePolicyPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutinePolicyForm -> ATAuthCtx (ActionResult NoReviewClasses PolicySaved)
+routinePolicyPostH pid conversation form = act do
   authorizeConversation pid conversation
   (session, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   case form of
@@ -883,10 +881,9 @@ routinePolicyPostH pid conversation form = hxAction do
 
 data PolicySaved = PolicySaved
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody PolicySaved
 
 
-instance HxOutcome PolicySaved where hxSuccess _ = Just "Execution policy saved."
+instance Outcome PolicySaved where outcomeToast _ = Just "Execution policy saved."
 
 
 operationGetH :: Projects.ProjectId -> UUIDId "agent_operation" -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
@@ -904,21 +901,22 @@ instance ToHtml OperationReviewed where
   toHtmlRaw = toHtml
 
 
-instance HxOutcome OperationReviewed where
-  hxSuccess r = case r.response of
+instance Outcome OperationReviewed where
+  outcomeBody = toHtml
+  outcomeToast r = case r.response of
     Investigations.ReviewSaved{} -> Just "Decision saved."
     Investigations.ReviewAlreadyDecided{} -> Just "This action already has a decision."
     Investigations.ReviewExpired -> Nothing
     Investigations.ReviewUnavailable -> Nothing
 
 
-operationReviewPostH :: Projects.ProjectId -> UUIDId "agent_operation" -> OperationReviewForm -> ATAuthCtx (RespHeaders OperationReviewed)
+operationReviewPostH :: Projects.ProjectId -> UUIDId "agent_operation" -> OperationReviewForm -> ATAuthCtx (RespHeaders (Done OperationReviewed))
 operationReviewPostH pid identifier form = do
   (session, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   response <- Jobs.reviewOperation pid session.user.id identifier form.decision
   when (response == Investigations.ReviewUnavailable) $ throwError Servant.err403
   when (response == Investigations.ReviewExpired) $ addErrorToast "This action's review deadline has passed." Nothing
-  hxDone . OperationReviewed response . (.content) . Servant.getResponse =<< operationGetH pid identifier
+  done . OperationReviewed response . (.content) . Servant.getResponse =<< operationGetH pid identifier
 
 
 runStatus :: Issues.RoutineRunStatus -> (BadgeColor, Text)
@@ -941,8 +939,8 @@ runUrl :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Text
 runUrl pid runId = "/p/" <> pid.toText <> "/ai/runs/" <> runId.toText
 
 
-routineInstructionsPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineInstructionsForm -> ATAuthCtx (HxResult PromptError AIPage)
-routineInstructionsPostH pid convId form = hxAction do
+routineInstructionsPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineInstructionsForm -> ATAuthCtx (ActionResult PromptError AIPage)
+routineInstructionsPostH pid convId form = act do
   authorizeConversation pid convId
   void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   forM (normalizeQuery form.instructions) \instructions -> ThreadPage pid convId <$ Issues.setRoutineInstructions pid convId instructions

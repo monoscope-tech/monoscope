@@ -28,6 +28,19 @@ module System.Types (
   atAuthToBaseTest,
   useTfReads,
   ApiPrincipal (..),
+  Done (..),
+  Refused (..),
+  Refusal (..),
+  Outcome (..),
+  Rendered (..),
+  Toast (..),
+  successToast,
+  ToastLevel (..),
+  Action,
+  Unrefusable,
+  ActionResult,
+  act,
+  done,
 )
 where
 
@@ -59,7 +72,9 @@ import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (DB)
 import Relude
-import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
+import Lucid (Html, ToHtml (..))
+import Servant (AuthProtect, HasStatus (..), Header, Headers, ServerError, StdMethod, UVerb, Union, Verb, addHeader, noHeader, respond)
+import Servant.HTML.Lucid (HTML)
 import Servant qualified
 import Servant.Htmx (HXRedirect, HXTrigger)
 import Servant.Server.Experimental.Auth (AuthServerData)
@@ -362,3 +377,103 @@ toastError msg payload = addErrorToast msg Nothing *> addRespHeaders payload
 -- Add widget JSON for inclusion in response headers
 addWidgetJSON :: State.State XWidgetJSON :> es => Text -> Eff es ()
 addWidgetJSON widgetJson = State.modify $ \_ -> Just (WidgetJSON widgetJson)
+
+
+-- * Typed answers to browser actions
+--
+-- A form or button action answers with a domain value instead of opaque HTML. Its route
+-- lists every alternative ('Action' = 200 'Done' outcome | 422 'Refused' reason), so the
+-- API type, tests and handler signature all name what the endpoint does and how it can fail.
+-- 'Outcome' says how a success is presented (body, redirect, toast); 'Refusal' says what a
+-- refusal tells the user. Handlers build answers with 'act' (may be refused) or 'done'.
+
+
+-- | The action succeeded; the body is the outcome's 'outcomeBody'.
+newtype Done a = Done a
+
+
+instance Outcome a => ToHtml (Done a) where
+  toHtml (Done a) = toHtml $ outcomeBody a
+  toHtmlRaw = toHtml
+
+
+instance HasStatus (Done a) where type StatusOf (Done a) = 200
+
+
+-- | The request was understood but refused: 422, the reason as an error toast, and no swap, so the form keeps its input.
+newtype Refused e = Refused e
+
+
+instance ToHtml (Refused e) where
+  toHtml _ = mempty
+  toHtmlRaw _ = mempty
+
+
+instance HasStatus (Refused e) where type StatusOf (Refused e) = 422
+
+
+-- | Expected, user-correctable failures, one constructor per case.
+class Refusal e where
+  refusalMessage :: e -> Text
+  refusalDetail :: e -> Maybe Text
+  refusalDetail = const Nothing
+
+
+data ToastLevel = SuccessToast | ErrorToast
+  deriving stock (Eq, Show)
+
+
+data Toast = Toast ToastLevel Text (Maybe Text)
+  deriving stock (Eq, Show)
+
+
+-- | A literal is a success toast with no detail.
+instance IsString Toast where fromString = successToast . toText
+
+
+successToast :: Text -> Toast
+successToast t = Toast SuccessToast t Nothing
+
+
+-- | How a successful outcome is presented: its body, where the browser goes next, and what it is told.
+class Outcome a where
+  outcomeBody :: a -> Html ()
+  outcomeBody = const mempty
+  outcomeRedirect :: a -> Maybe Text
+  outcomeRedirect = const Nothing
+  outcomeToast :: a -> Maybe Toast
+  outcomeToast = const Nothing
+
+
+-- | An outcome that is just its rendering: @deriving (Outcome) via Rendered T@.
+newtype Rendered a = Rendered a
+
+
+instance ToHtml a => Outcome (Rendered a) where outcomeBody (Rendered a) = toHtml a
+
+
+type Action :: StdMethod -> Type -> Type -> Type
+type Action method e a = UVerb method '[HTML] '[RespHeaders (Done a), RespHeaders (Refused e)]
+type Unrefusable :: StdMethod -> Type -> Type
+type Unrefusable method a = Verb method 200 '[HTML] (RespHeaders (Done a))
+type ActionResult :: Type -> Type -> Type
+type ActionResult e a = Union '[RespHeaders (Done a), RespHeaders (Refused e)]
+
+
+type AnswerState es = (State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es)
+
+
+-- | Answer with an outcome that cannot be refused.
+done :: (AnswerState es, Outcome a) => a -> Eff es (RespHeaders (Done a))
+done a = do
+  traverse_ redirectCS (outcomeRedirect a)
+  for_ (outcomeToast a) \(Toast level title detail) -> addToast (case level of SuccessToast -> "success"; ErrorToast -> "error") title detail
+  addRespHeaders (Done a)
+
+
+-- | Run an action that may be refused.
+act :: (AnswerState es, Outcome a, Refusal e) => Eff es (Either e a) -> Eff es (ActionResult e a)
+act run =
+  run >>= \case
+    Left e -> addToast "error" (refusalMessage e) (refusalDetail e) >> addReswap "none" >> (respond =<< addRespHeaders (Refused e))
+    Right a -> respond =<< done a

@@ -56,7 +56,7 @@ import System.Config qualified as Config
 import System.Types (RespHeaders)
 import System.IO.Error (userError)
 import UnliftIO.Exception (bracket, throwIO)
-import Web.Outcome (Ok (..))
+import System.Types (Done (..))
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -91,7 +91,7 @@ spec = around withTestResources do
       _ -> expectationFailure "expected NotifChannelStep"
 
     -- No events yet: the automatic check stays silent and swaps in a fresh poller; Confirm & Proceed toasts.
-    let checked lang = runAuthHandler tr (Onboarding.checkIntegrationGet pid lang) >>= maybe (fail "integration check refused") (\h -> let Ok c = getResponse h in pure (h, c)) . matchUnion @(RespHeaders (Ok Onboarding.IntegrationCheck))
+    let checked lang = runAuthHandler tr (Onboarding.checkIntegrationGet pid lang) >>= maybe (fail "integration check refused") (\h -> let Done c = getResponse h in pure (h, c)) . matchUnion @(RespHeaders (Done Onboarding.IntegrationCheck))
     (automatic, waiting) <- checked (Just "Javascript")
     (waiting, trigger automatic, redirect automatic) `shouldBe` (Onboarding.AwaitingEvents pid "Javascript", Header ("{}" :: Text), noRedirect)
     goldenHtml "onboarding-integration-waiting" waiting

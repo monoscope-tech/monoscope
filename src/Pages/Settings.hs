@@ -122,11 +122,10 @@ import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), err400, err503, errBody)
 import System.Config
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent)
+import System.Types (successToast, Done, ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, Outcome (..), ActionResult, Refusal (..), act, done)
 import Text.Printf (printf)
 import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
-import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -283,7 +282,7 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
   deriving anyclass (FromForm)
 
 
-apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders ApiMut)
+apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders (Done ApiMut))
 apiPostH pid apiKeyForm = do
   sess <- requireSettingsWrite pid
   authCtx <- ask @AuthContext
@@ -297,14 +296,14 @@ apiPostH pid apiKeyForm = do
     $ AE.object ["key_title" AE..= apiKeyForm.title]
   addTriggerEvent "closeModal" ""
   let newKey = (pApiKey, encryptedKeyB64)
-  hxDone $ maybe (ApiPost pid apiKeys (Just newKey)) (const $ ApiPostCopy newKey) apiKeyForm.from
+  done $ maybe (ApiPost pid apiKeys (Just newKey)) (const $ ApiPostCopy newKey) apiKeyForm.from
 
 
-apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (HxResult ApiKeyNotFound ApiMut)
+apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (ActionResult ApiKeyNotFound ApiMut)
 apiDeleteH pid = apiKeySetActive pid RevokeApiKey
 
 
-apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (HxResult ApiKeyNotFound ApiMut)
+apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (ActionResult ApiKeyNotFound ApiMut)
 apiActivateH pid = apiKeySetActive pid ActivateApiKey
 
 
@@ -315,18 +314,18 @@ data ApiKeyNotFound = ApiKeyNotFound
   deriving stock (Eq, Show)
 
 
-instance Rejection ApiKeyNotFound where rejectionMessage ApiKeyNotFound = "API key not found"
+instance Refusal ApiKeyNotFound where refusalMessage ApiKeyNotFound = "API key not found"
 
 
-apiKeySetActive :: Projects.ProjectId -> ApiKeyMutation -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (HxResult ApiKeyNotFound ApiMut)
-apiKeySetActive pid mutation keyid = hxAction do
+apiKeySetActive :: Projects.ProjectId -> ApiKeyMutation -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (ActionResult ApiKeyNotFound ApiMut)
+apiKeySetActive pid mutation keyid = act do
   sess <- requireSettingsWrite pid
   currentKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
   let ownedKey = find ((== keyid) . (.id)) currentKeys
-      (act, event, cachedProject) = case mutation of
+      (apply, event, cachedProject) = case mutation of
         ActivateApiKey -> (ProjectApiKeys.activateApiKey, Projects.AEApiKeyActivated, Just pid)
         RevokeApiKey -> (ProjectApiKeys.revokeApiKey, Projects.AEApiKeyRevoked, Nothing)
-  res <- maybe (pure 0) (const $ act keyid) ownedKey
+  res <- maybe (pure 0) (const $ apply keyid) ownedKey
   if res > 0
     then do
       appCtx <- ask @AuthContext
@@ -349,8 +348,9 @@ instance ToHtml ApiMut where
   toHtmlRaw = toHtml
 
 
-instance HxOutcome ApiMut where
-  hxSuccess =
+instance Outcome ApiMut where
+  outcomeBody = toHtml
+  outcomeToast =
     Just . \case
       ApiPost{} -> "Created API Key successfully"
       ApiPostCopy _ -> "Created API Key successfully"
@@ -453,7 +453,7 @@ makeApiKeysTable pid canEdit apiKeys elemId =
                 span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 font-mono text-textStrong hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
                 div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
                   -- Wrappers carry the toggle: .tap-target's display (custom layer) outranks `hidden`.
-                  forM_ [("group-has-[:checked]:hidden", "Show"), ("hidden group-has-[:checked]:inline", "Hide") :: (Text, Text)] \(wrapCls, verb) ->
+                  forM_ ([("group-has-[:checked]:hidden", "Show"), ("hidden group-has-[:checked]:inline", "Hide")] :: [(Text, Text)]) \(wrapCls, verb) ->
                     span_ [class_ wrapCls]
                       $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ verb <> " value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" (verb <> " key"), keyboardActivateAttr_]
                       $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
@@ -534,8 +534,8 @@ data ScrapeRejection = ScrapeUrlRequired | ScrapeUrlNotPublic | ScrapeNameRequir
   deriving stock (Eq, Show)
 
 
-instance Rejection ScrapeRejection where
-  rejectionMessage = \case
+instance Refusal ScrapeRejection where
+  refusalMessage = \case
     ScrapeUrlRequired -> "A /metrics URL is required"
     ScrapeUrlNotPublic -> "URL must be a public http:// or https:// endpoint"
     ScrapeNameRequired -> "A name is required — it groups the scraped metrics under service.name"
@@ -545,7 +545,7 @@ instance Rejection ScrapeRejection where
 
 instance ToHtml PrometheusMut where
   toHtml (PrometheusMut settings) = toHtml $ prometheusTargetsList settings
-  toHtml (PrometheusRejected rejection) = div_ [hxSwapOob_ "innerHTML target:'dialog[open] .prom-save-result'"] $ div_ [role_ "alert", class_ "rounded-lg border border-strokeError-weak bg-fillError-weak p-3 text-sm text-textError break-words"] $ toHtml $ rejectionMessage rejection
+  toHtml (PrometheusRejected rejection) = div_ [hxSwapOob_ "innerHTML target:'dialog[open] .prom-save-result'"] $ div_ [role_ "alert", class_ "rounded-lg border border-strokeError-weak bg-fillError-weak p-3 text-sm text-textError break-words"] $ toHtml $ refusalMessage rejection
   toHtmlRaw = toHtml
 
 
@@ -646,7 +646,7 @@ prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeader
 prometheusTestH pid form = do
   void $ requireSettingsWrite pid
   case validateScrapeUrl form.url of
-    Left err -> addRespHeaders $ prometheusTestResult $ Just $ Left $ rejectionMessage err
+    Left err -> addRespHeaders $ prometheusTestResult $ Just $ Left $ refusalMessage err
     Right url -> do
       let opts = PromCfg.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
       t0 <- Time.currentTime
@@ -920,16 +920,15 @@ instance ToHtml NotificationTestHistoryGet where
 -- | A test send that reached its channel, or the reason it was skipped (recorded in the history either way).
 data TestOutcome = TestSent TestChannel | TestSkipped Text
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody TestOutcome
 
 
-instance HxOutcome TestOutcome where
-  hxSuccess = \case
-    TestSent channel -> Just $ bool ("Test " <> display channel <> " notification sent!") "Test notification sent to all channels!" (channel == TCAll)
+instance Outcome TestOutcome where
+  outcomeToast = \case
+    TestSent channel -> Just $ successToast $ bool ("Test " <> display channel <> " notification sent!") "Test notification sent to all channels!" (channel == TCAll)
     TestSkipped _ -> Nothing
 
 
-notificationsTestPostH :: Projects.ProjectId -> TestForm -> ATAuthCtx (RespHeaders TestOutcome)
+notificationsTestPostH :: Projects.ProjectId -> TestForm -> ATAuthCtx (RespHeaders (Done TestOutcome))
 notificationsTestPostH pid TestForm{..} = do
   -- Rate limit: check if test was sent in last 60 seconds
   now <- Time.currentTime
@@ -1001,7 +1000,7 @@ notificationsTestPostH pid TestForm{..} = do
   when (status == TSSent) $ Activation.recordActivationMilestone pid Activation.NotificationTestSent
 
   Log.logTrace "Test notification complete" (channel, pid, status, attempts)
-  hxDone =<< case status of
+  done =<< case status of
     TSSent -> pure $ TestSent channel
     TSSkipped -> let reason = fromMaybe "unknown" err in TestSkipped reason <$ addErrorToast ("Test skipped: " <> reason) Nothing
 

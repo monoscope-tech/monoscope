@@ -24,11 +24,10 @@ import Pkg.QueryCache qualified as QueryCache
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addTriggerEvent)
+import System.Types (successToast, ATAuthCtx, RespHeaders, addRespHeaders, addTriggerEvent, Outcome (..), ActionResult, Refusal (..), act)
 import Utils (faSprite_, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
-import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction)
 
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (TableResponse HostEventsVM))
@@ -570,22 +569,21 @@ newtype HostBulkActionForm = HostBulk {itemId :: [Text]}
 
 data CatalogBulkAction = CatalogBulkDone {action :: HostBulkAction, touched :: Int, requested :: Int}
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody CatalogBulkAction
 
 
-instance HxOutcome CatalogBulkAction where
-  hxSuccess r = Just $ actionPast r.action <> " " <> show r.touched <> bool (" of " <> show r.requested) "" (r.touched == r.requested) <> " " <> hostNoun r.requested
+instance Outcome CatalogBulkAction where
+  outcomeToast r = Just $ successToast $ actionPast r.action <> " " <> show r.touched <> bool (" of " <> show r.requested) "" (r.touched == r.requested) <> " " <> hostNoun r.requested
 
 
 data CatalogBulkRejection = NoHostsSelected | NothingChanged HostBulkAction Int
   deriving stock (Eq, Show)
 
 
-instance Rejection CatalogBulkRejection where
-  rejectionMessage = \case
+instance Refusal CatalogBulkRejection where
+  refusalMessage = \case
     NoHostsSelected -> "No hosts selected"
     NothingChanged action requested -> "Could not " <> bulkActionSlug action <> " " <> hostNoun requested
-  rejectionDetail = \case
+  refusalDetail = \case
     NoHostsSelected -> Nothing
     NothingChanged{} -> Just "Already in that state, or rows were removed"
 
@@ -611,8 +609,8 @@ actionPast BAUnarchive = "Unarchived"
 
 
 apiCatalogBulkActionH
-  :: Projects.ProjectId -> HostBulkAction -> Maybe Text -> HostBulkActionForm -> ATAuthCtx (HxResult CatalogBulkRejection CatalogBulkAction)
-apiCatalogBulkActionH pid action currentTabM items = hxAction do
+  :: Projects.ProjectId -> HostBulkAction -> Maybe Text -> HostBulkActionForm -> ATAuthCtx (ActionResult CatalogBulkRejection CatalogBulkAction)
+apiCatalogBulkActionH pid action currentTabM items = act do
   -- TODO: emit a host-activity log entry per item once the activity feed
   -- accepts non-issue events (mirrors issueBulkActionsPostH's per-item
   -- Issues.logIssueActivity). Keeps archive/unarchive auditable.

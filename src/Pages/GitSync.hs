@@ -62,11 +62,10 @@ import Relude hiding (ask)
 import Servant (ServerError (..), err401, err403, err404, err503)
 import System.Config qualified as Config
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
+import System.Types (Rendered (..), Done, ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS, Outcome (..), ActionResult, Refusal (..), act, done)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, renderMarkdown)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
-import Web.Outcome (HxOutcome (..), HxResult, Rejection (..), hxAction, hxDone)
 
 
 data GitSyncForm = GitSyncForm
@@ -140,7 +139,7 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
 -- | Connect or update the config-sync repository. The connection is vetted before anything is
 -- written — storing first and discovering a bad origin on the next background job would leave a
 -- row that looks connected and never syncs.
-gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (HxResult GitSyncRejection GitSyncSettings)
+gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (ActionResult GitSyncRejection GitSyncSettings)
 gitSyncSettingsPostH pid submitted = do
   requireGitWrite pid
   syncs <- GitSync.getGitSyncs pid
@@ -151,7 +150,7 @@ gitSyncSettingsPostH pid submitted = do
   saveGitSyncH pid (matched <|> legacy) form
 
 
-gitSyncSettingsUpdateH :: Projects.ProjectId -> GitSync.GitHubSyncId -> GitSyncForm -> ATAuthCtx (HxResult GitSyncRejection GitSyncSettings)
+gitSyncSettingsUpdateH :: Projects.ProjectId -> GitSync.GitHubSyncId -> GitSyncForm -> ATAuthCtx (ActionResult GitSyncRejection GitSyncSettings)
 gitSyncSettingsUpdateH pid sid form = do
   requireGitWrite pid
   sync <- GitSync.getGitSyncById pid sid >>= maybe (throwError err404) pure
@@ -163,13 +162,13 @@ data GitSyncRejection = ConnectionFailed Git.GitHost Text
   deriving stock (Eq, Show)
 
 
-instance Rejection GitSyncRejection where
-  rejectionMessage (ConnectionFailed host _) = "Could not connect to " <> Git.hostLabel host
-  rejectionDetail (ConnectionFailed _ err) = Just err
+instance Refusal GitSyncRejection where
+  refusalMessage (ConnectionFailed host _) = "Could not connect to " <> Git.hostLabel host
+  refusalDetail (ConnectionFailed _ err) = Just err
 
 
-saveGitSyncH :: Projects.ProjectId -> Maybe GitSync.GitHubSync -> GitSyncForm -> ATAuthCtx (HxResult GitSyncRejection GitSyncSettings)
-saveGitSyncH pid existingM form = hxAction do
+saveGitSyncH :: Projects.ProjectId -> Maybe GitSync.GitHubSync -> GitSyncForm -> ATAuthCtx (ActionResult GitSyncRejection GitSyncSettings)
+saveGitSyncH pid existingM form = act do
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
       host = fromMaybe Git.GitHub form.host
@@ -215,36 +214,37 @@ instance ToHtml GitSyncRemoval where
   toHtmlRaw = toHtml
 
 
-instance HxOutcome GitSyncRemoval where
-  hxRedirect = \case
+instance Outcome GitSyncRemoval where
+  outcomeBody = toHtml
+  outcomeRedirect = \case
     ChooseRepository pid -> Just $ "/p/" <> pid.toText <> "/repositories"
     Disconnected _ -> Nothing
     Kept _ -> Nothing
 
 
-gitSyncSettingsDeleteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders GitSyncRemoval)
+gitSyncSettingsDeleteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Done GitSyncRemoval))
 gitSyncSettingsDeleteH pid = do
   requireGitWrite pid
   GitSync.getGitSyncs pid >>= \case
     [sync] -> gitSyncRepositoryDeleteH pid sync.id
     [] -> do
       ctx <- ask @Config.AuthContext
-      hxDone $ Kept $ GitSyncSettings ctx.env.hostUrl pid Nothing Nothing
-    _ -> addErrorToast "Choose a repository to disconnect" Nothing >> hxDone (ChooseRepository pid)
+      done $ Kept $ GitSyncSettings ctx.env.hostUrl pid Nothing Nothing
+    _ -> addErrorToast "Choose a repository to disconnect" Nothing >> done (ChooseRepository pid)
 
 
-gitSyncRepositoryDeleteH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders GitSyncRemoval)
+gitSyncRepositoryDeleteH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders (Done GitSyncRemoval))
 gitSyncRepositoryDeleteH pid sid = do
   requireGitWrite pid
   sync <- GitSync.getGitSyncById pid sid >>= maybe (throwError err404) pure
   ctx <- ask @Config.AuthContext
   GitSync.deleteGitHubSync sid >>= \case
     Left GitSync.ConnectionMissing -> throwError err404
-    Left GitSync.SyncRunning -> hxDone $ Kept $ GitSyncSettings ctx.env.hostUrl pid (Just sync) (Just SyncRunning)
-    Right () -> hxDone $ Disconnected sid
+    Left GitSync.SyncRunning -> done $ Kept $ GitSyncSettings ctx.env.hostUrl pid (Just sync) (Just SyncRunning)
+    Right () -> done $ Disconnected sid
 
 
-gitSyncRepositoryRetryH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders GitSyncSettings)
+gitSyncRepositoryRetryH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders (Done GitSyncSettings))
 gitSyncRepositoryRetryH pid sid = do
   requireGitWrite pid
   sync <- GitSync.getGitSyncById pid sid >>= maybe (throwError err404) pure
@@ -261,15 +261,15 @@ gitSyncRepositoryRetryH pid sid = do
   whenRight_ job \retry -> do
     BackgroundJobs.enqueueJobs ctx [retry]
     addSuccessToast "Retry queued" (Just "The error stays visible until this operation succeeds.")
-  hxDone $ GitSyncSettings ctx.env.hostUrl pid (Just sync) (leftToMaybe job)
+  done $ GitSyncSettings ctx.env.hostUrl pid (Just sync) (leftToMaybe job)
 
 
-gitSyncRepositoryPauseH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders GitSyncSettings)
+gitSyncRepositoryPauseH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders (Done GitSyncSettings))
 gitSyncRepositoryPauseH pid sid = do
   requireGitWrite pid
   sync <- GitSync.pauseGitSync pid sid >>= maybe (throwError err404) pure
   ctx <- ask @Config.AuthContext
-  hxDone $ GitSyncSettings ctx.env.hostUrl pid (Just sync) Nothing
+  done $ GitSyncSettings ctx.env.hostUrl pid (Just sync) Nothing
 
 
 requireGitWrite :: Projects.ProjectId -> ATAuthCtx ()
@@ -288,7 +288,7 @@ data GitSyncSettings = GitSyncSettings
   , sync :: Maybe GitSync.GitHubSync
   , failure :: Maybe GitSyncFailure
   }
-  deriving anyclass (HxOutcome)
+  deriving (Outcome) via Rendered GitSyncSettings
 
 
 instance ToHtml GitSyncSettings where
@@ -806,19 +806,19 @@ data SelectRejection = NoRepositorySelected | RepositoryListFailed Text | Reposi
   deriving stock (Eq, Show)
 
 
-instance Rejection SelectRejection where
-  rejectionMessage = \case
+instance Refusal SelectRejection where
+  refusalMessage = \case
     NoRepositorySelected -> "Select at least one repository"
     RepositoryListFailed _ -> "Could not connect repositories"
     RepositoryUnavailable _ -> "Could not connect repositories"
-  rejectionDetail = \case
+  refusalDetail = \case
     NoRepositorySelected -> Nothing
     RepositoryListFailed err -> Just err
     RepositoryUnavailable name -> Just $ "Repository access is unavailable: " <> name
 
 
 newtype SyncPanels = SyncPanels [GitSyncSettings]
-  deriving anyclass (HxOutcome)
+  deriving (Outcome) via Rendered SyncPanels
 
 
 instance ToHtml SyncPanels where
@@ -827,8 +827,8 @@ instance ToHtml SyncPanels where
 
 
 -- | Handle repo selection from GitHub App
-githubAppSelectRepoH :: Projects.ProjectId -> RepoSelectForm -> ATAuthCtx (HxResult SelectRejection SyncPanels)
-githubAppSelectRepoH pid form = hxAction do
+githubAppSelectRepoH :: Projects.ProjectId -> RepoSelectForm -> ATAuthCtx (ActionResult SelectRejection SyncPanels)
+githubAppSelectRepoH pid form = act do
   requireGitWrite pid
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey

@@ -33,7 +33,7 @@ import Pkg.Mail qualified as Mail
 import Pkg.TestUtils
 import Servant (getResponse)
 import System.Config qualified as Config
-import System.Types (ATBackgroundCtx)
+import System.Types (ATBackgroundCtx, Done (..))
 
 
 -- | Set one text[] column of the project's @everyone team.
@@ -127,7 +127,7 @@ spec = around withTestResources do
     let keyActive kid = fmap (.active) . find ((== kid) . (.id))
     Settings.ApiGet (PageCtx _ settings) <- call tr $ Settings.apiGetH testPid
     length settings.keys `shouldBe` 1
-    Settings.ApiPost pid created (Just (apiKey, keyText)) <- call tr $ Settings.apiPostH testPid Settings.GenerateAPIKeyForm{title = "Test", from = Nothing}
+    Done (Settings.ApiPost pid created (Just (apiKey, keyText))) <- call tr $ Settings.apiPostH testPid Settings.GenerateAPIKeyForm{title = "Test", from = Nothing}
     (pid, length created, apiKey.title, apiKey.active, apiKey.keyPrefix) `shouldBe` (testPid, 2, "Test", True, keyText)
     ingestLog tr keyText "accepted before revoke" frozenTime
     Right (Settings.ApiKeyToggled _ _ revoked) <- call tr $ Settings.apiDeleteH testPid apiKey.id

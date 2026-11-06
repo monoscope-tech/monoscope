@@ -70,7 +70,7 @@ import Relude
 import Servant (Header, Headers, ServerError (errHeaders), addHeader, err403, err404, err503, getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, DB, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
+import System.Types (Rendered (..), ATAuthCtx, DB, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS, Outcome, ActionResult, Refusal (..), act)
 import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Parsec qualified as Parsec
 import Text.Slugify (slugify)
@@ -78,7 +78,6 @@ import Utils (LoadingSize (..), TabStrip (..), faSprite_, htmxIndicator_, navTab
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
-import Web.Outcome (HxOutcome, HxResult, Rejection (..), hxAction)
 
 
 issueFixForViewer :: (DB es, Error ServerError :> es) => Projects.ProjectId -> IssueFixes.FixId -> Projects.Session -> Eff es (Agent.FixResult, Agent.Explanation)
@@ -1116,8 +1115,8 @@ repositorySourceGetH pid rid cid sample = do
     div_ [id_ "code-mappings-content"] content
 
 
-repositorySourcePostH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeMappingForm -> ATAuthCtx (HxResult MappingRejection MappingsPanel)
-repositorySourcePostH pid rid form = hxAction do
+repositorySourcePostH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeMappingForm -> ATAuthCtx (ActionResult MappingRejection MappingsPanel)
+repositorySourcePostH pid rid form = act do
   requireReviewWrite pid
   repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
   cid <- maybe (throwError err403) pure (form.credentialId <|> repository.credentialId)
@@ -1599,8 +1598,8 @@ repoConn cfg cred = do
 -- | Save a mapping. The two path fields are derived from the sample frame path when one is
 -- given and they were left blank, which is the path most users take — nobody knows offhand
 -- that their container mounts the app at @\/srv\/app@.
-codeMappingsPostH :: Projects.ProjectId -> CodeMappingForm -> ATAuthCtx (HxResult MappingRejection MappingsPanel)
-codeMappingsPostH pid form = hxAction do
+codeMappingsPostH :: Projects.ProjectId -> CodeMappingForm -> ATAuthCtx (ActionResult MappingRejection MappingsPanel)
+codeMappingsPostH pid form = act do
   saved <- saveCodeMapping pid form
   forM saved \() -> MappingsPanel <$> codeMappingsContent pid (nonEmptyT form.samplePath) form.credentialId Nothing
 
@@ -1608,7 +1607,7 @@ codeMappingsPostH pid form = hxAction do
 -- | The mappings panel or page as re-rendered after a mapping is saved.
 newtype MappingsPanel = MappingsPanel (Html ())
   deriving newtype (ToHtml)
-  deriving anyclass (HxOutcome)
+  deriving (Outcome) via Rendered MappingsPanel
 
 
 -- | Why a code mapping was not saved.
@@ -1616,13 +1615,13 @@ data MappingRejection = NoAccount | NoRepository | RepositoryUnreadable Text Tex
   deriving stock (Eq, Show)
 
 
-instance Rejection MappingRejection where
-  rejectionMessage = \case
+instance Refusal MappingRejection where
+  refusalMessage = \case
     NoAccount -> "Choose a repository account"
     NoRepository -> "Pick a repository"
     RepositoryUnreadable{} -> "Could not work out the mapping"
     NoFileMatches{} -> "Could not work out the mapping"
-  rejectionDetail = \case
+  refusalDetail = \case
     NoAccount -> Just "Select an account connected to this project, or connect another account."
     NoRepository -> Nothing
     RepositoryUnreadable repo err -> Just $ "Could not read " <> repo <> ": " <> err

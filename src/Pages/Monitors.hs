@@ -91,7 +91,6 @@ import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (FormWithOptional (..), encodeText, faSprite_, formatWithCommas, popoverPanel_, popoverTrigger_, toUriStr)
 import Web.FormUrlEncoded (FromForm)
-import Web.Outcome (HxOutcome (..), HxResult, NoBody (..), Rejection (..), hxAction, hxDone)
 
 
 data AlertUpsertForm = AlertUpsertForm
@@ -478,8 +477,8 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                 , rowId = Just (.monitorId)
                 , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                 , bulkActions =
-                    [ BulkAction (Just icon) label ("/p/" <> pid.toText <> "/monitors/alerts/bulk_action/" <> bulkActionSlug act) []
-                    | (icon, label, act) <- case tab of
+                    [ BulkAction (Just icon) label ("/p/" <> pid.toText <> "/monitors/alerts/bulk_action/" <> bulkActionSlug bulkAction) []
+                    | (icon, label, bulkAction) <- case tab of
                         TabActive -> [("pause", "Deactivate", BADeactivate), ("bell-slash", "Mute", BAMute), ("bell", "Unmute", BAUnmute), ("check", "Resolve", BAResolve), ("trash", "Delete", BADelete)]
                         TabInactive -> [("play", "Reactivate", BAReactivate), ("trash", "Delete", BADelete)]
                     ]
@@ -601,12 +600,11 @@ buildTeamMap pid = Map.fromList . map (\t -> (t.id, t.handle)) <$> ManageMembers
 -- | A single-monitor action, answered by returning to the monitor list.
 data MonitorActed = MonitorActed Projects.ProjectId MonitorBulkAction (Maybe Int)
   deriving stock (Eq, Show)
-  deriving (ToHtml) via NoBody MonitorActed
 
 
-instance HxOutcome MonitorActed where
-  hxRedirect (MonitorActed pid _ _) = Just $ "/p/" <> pid.toText <> "/monitors"
-  hxSuccess (MonitorActed _ action durationM) = Just case action of
+instance Outcome MonitorActed where
+  outcomeRedirect (MonitorActed pid _ _) = Just $ "/p/" <> pid.toText <> "/monitors"
+  outcomeToast (MonitorActed _ action durationM) = Just case action of
     BAMute -> maybe "Monitor muted indefinitely" (const "Monitor muted") durationM
     BAUnmute -> "Monitor unmuted"
     BAResolve -> "Monitor resolved"
@@ -616,19 +614,19 @@ instance HxOutcome MonitorActed where
 
 
 -- | One bulk action on a single monitor; deletes are also audited.
-monitorActionH :: MonitorBulkAction -> Maybe Int -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders MonitorActed)
+monitorActionH :: MonitorBulkAction -> Maybe Int -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Done MonitorActed))
 monitorActionH action durationM pid monitorId = do
   (sess, _) <- Projects.sessionAndProject pid
   void $ Monitors.monitorsBulkUpdate pid action durationM [monitorId]
   when (action == BADelete) $ Projects.logAuditS pid Projects.AEMonitorDeleted sess Nothing
-  hxDone $ MonitorActed pid action durationM
+  done $ MonitorActed pid action durationM
 
 
-alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders MonitorActed)
+alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Done MonitorActed))
 alertMuteH pid monitorId durationMinsM = monitorActionH BAMute durationMinsM pid monitorId
 
 
-alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders MonitorActed)
+alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Done MonitorActed))
 alertUnmuteH = monitorActionH BAUnmute Nothing
 alertResolveH = monitorActionH BAResolve Nothing
 alertDeleteH = monitorActionH BADelete Nothing
@@ -951,15 +949,15 @@ data UptimeRejection = UnnamedCheck | UnsafeUrl
   deriving stock (Eq, Show)
 
 
-instance Rejection UptimeRejection where
-  rejectionMessage = \case
+instance Refusal UptimeRejection where
+  refusalMessage = \case
     UnnamedCheck -> "Name the check"
     UnsafeUrl -> "URL must be a public http:// or https:// endpoint"
 
 
 -- | The uptime form above the project's checks, re-rendered after every change.
 data UptimeList = UptimeList Projects.ProjectId (V.Vector PromCfg.PrometheusScrapeConfig)
-  deriving anyclass (HxOutcome)
+  deriving (Outcome) via Rendered UptimeList
 
 
 instance ToHtml UptimeList where
@@ -967,8 +965,8 @@ instance ToHtml UptimeList where
   toHtmlRaw = toHtml
 
 
-uptimeCheckPostH :: Projects.ProjectId -> UptimeForm -> ATAuthCtx (HxResult UptimeRejection UptimeList)
-uptimeCheckPostH pid form = hxAction do
+uptimeCheckPostH :: Projects.ProjectId -> UptimeForm -> ATAuthCtx (ActionResult UptimeRejection UptimeList)
+uptimeCheckPostH pid form = act do
   _ <- Projects.sessionAndProject pid
   let url = T.strip form.url
       name = T.strip form.name
@@ -1051,8 +1049,8 @@ data CronRejection = MissingSlugOrName | InvalidSlug | DuplicateSlug Text
   deriving stock (Eq, Show)
 
 
-instance Rejection CronRejection where
-  rejectionMessage = \case
+instance Refusal CronRejection where
+  refusalMessage = \case
     MissingSlugOrName -> "Slug and name are required"
     InvalidSlug -> "Slug may only contain a-z, 0-9, _, . and -"
     DuplicateSlug slug -> "A monitor with slug " <> slug <> " already exists"
@@ -1060,7 +1058,7 @@ instance Rejection CronRejection where
 
 -- | The cron form above the project's monitors, re-rendered after every change.
 data CronList = CronList Projects.ProjectId [Monitors.CronMonitor]
-  deriving anyclass (HxOutcome)
+  deriving (Outcome) via Rendered CronList
 
 
 instance ToHtml CronList where
@@ -1068,8 +1066,8 @@ instance ToHtml CronList where
   toHtmlRaw = toHtml
 
 
-cronMonitorPostH :: Projects.ProjectId -> CronForm -> ATAuthCtx (HxResult CronRejection CronList)
-cronMonitorPostH pid form = hxAction do
+cronMonitorPostH :: Projects.ProjectId -> CronForm -> ATAuthCtx (ActionResult CronRejection CronList)
+cronMonitorPostH pid form = act do
   _ <- Projects.sessionAndProject pid
   let slug = T.toLower (T.strip form.slug)
       name = T.strip form.name
