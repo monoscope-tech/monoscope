@@ -108,6 +108,8 @@ getOrInitKafkaProducer envCfg =
     Nothing -> modifyMVar sharedKafkaProducer $ \case
       Just p -> pure (Just p, p)
       Nothing -> do
+        -- librdkafka builds a producer with no brokers and then silently drops what it enqueues.
+        when (all T.null envCfg.kafkaBrokers) $ throwIO (K.KafkaBadSpecification "no Kafka brokers configured")
         p <- either throwIO pure =<< KP.newProducer (kafkaProducerProps envCfg)
         pure (Just p, p)
   where

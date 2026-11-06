@@ -957,7 +957,8 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
       -- ENABLE_TIMEFUSION_READS=True would have queries emit TimeFusion-only SQL (the
       -- `variant_get` resource accessor) against Postgres, which errors outright.
       -- Bot ingress verifies signatures made with the test keys (signSlackBody, signDiscordPayload).
-      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = True, slackSigningSecret = testSlackSigningSecret, discordPublicKey = testDiscordPublicKeyHex}
+      -- Tests never use a Kafka broker, whatever KAFKA_BROKERS the local .env sets.
+      envConfig = envConfig1{kafkaBrokers = [], enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = True, slackSigningSecret = testSlackSigningSecret, discordPublicKey = testDiscordPublicKeyHex}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- QueryCache.newTraceSessionCache

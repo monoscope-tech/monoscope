@@ -86,12 +86,11 @@ spec = around withTestResources do
     (rawAlloc * 20) `shouldSatisfy` (< decAlloc)
 
   it "upload, kafka parsing and the merge lease: valid messages are never counted as corrupt, one merge per session" \tr -> do
-    -- "warning" (with a reason) where no rrweb topic is configured or publishing fails.
     sid <- nextRandom
     for_ @[] [V.singleton (AE.object ["type" AE..= ("click" :: Text), "timestamp" AE..= (1000 :: Int)]), V.empty] \events -> do
       res <- toBaseServantResponse tr $ replayPostH testPid ReplayPost{events = AE.Array events, sessionId = sid, timestamp = frozenTime, userId = Nothing, userEmail = Nothing, userName = Nothing}
       let field k = case res of AE.Object o -> AEKM.lookup k o; _ -> Nothing
-      (field "sessionId", field "status") `shouldSatisfy` \(s, st) -> s == Just (AE.toJSON sid) && st `elem` map (Just . AE.String) ["ok", "warning"]
+      (field "sessionId", field "status") `shouldBe` (Just (AE.toJSON sid), Just "warning")
     unknown <- call tr . replaySessionGetH testPid =<< nextRandom
     (AE.decode @AE.Object (AE.encode unknown) >>= AEKM.lookup "events") `shouldBe` Just (AE.Array V.empty)
 
