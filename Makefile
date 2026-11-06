@@ -73,11 +73,16 @@ kill-live-reload:
 
 # ghcid gives up for good ("No files loaded, nothing to wait for") when a branch switch
 # changes the module graph under it, so both watchers restart it and say so in the log.
+# Each ghcid restart orphans its old GHCi (5-50 GB, sometimes still holding :8080), so
+# reap before every start and after every load. -M caps a runaway session's heap.
+REAP_GHCI = scripts/reap-ghci.sh
+GHCI_RTS = -M16g
 GHCID_RESTART = echo "── ghcid exited at $$(date +%T) (a branch switch or cabal change usually does this); restarting"; sleep 2
 
 live-reload: kill-live-reload
 	@trap 'exit 130' INT TERM; while :; do \
-	  ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' $(RELOAD_ASSETS) $(RELOAD_ENV) --warnings; \
+	  $(REAP_GHCI); \
+	  ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --repl-options="+RTS $(GHCI_RTS) -RTS" --with-compiler=$(GHC)' --test ':! $(REAP_GHCI)' --test ':run Start.startApp' $(RELOAD_ASSETS) $(RELOAD_ENV) --warnings; \
 	  $(GHCID_RESTART); \
 	done
 
@@ -138,9 +143,10 @@ live-test-dev: build-chart-cli
 	@$(if $(TEST_MATCH),echo '--match "$(TEST_MATCH)"' > .test-args,touch .test-args)
 	@echo "live-test-dev: hspec args from .test-args: [$$(cat .test-args)] (empty = whole suite)" | tee build-test-dev.log
 	@trap 'exit 130' INT TERM; while :; do \
+	  $(REAP_GHCI); \
 	  USE_EXTERNAL_DB=true LOG_LEVEL=attention \
-	  ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi +RTS -T -RTS" --with-compiler=$(GHC)' \
-		--test ':cmd Prelude.fmap (":main " Prelude.++) (Prelude.readFile ".test-args")' --reload=.test-args $(RELOAD_ENV) --warnings 2>&1; \
+	  ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi +RTS -T $(GHCI_RTS) -RTS" --with-compiler=$(GHC)' \
+		--test ':! $(REAP_GHCI)' --test ':cmd Prelude.fmap (":main " Prelude.++) (Prelude.readFile ".test-args")' --reload=.test-args $(RELOAD_ENV) --warnings 2>&1; \
 	  $(GHCID_RESTART); \
 	done | tee -a build-test-dev.log
 
