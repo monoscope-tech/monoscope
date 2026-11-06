@@ -143,7 +143,7 @@ spec = describe "Monitoring" do
           _ -> fail "the dashboard list did not load"
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
       isNothing <$> runTestBgNoReset tr (DashboardModel.getDashboardByProjectId otherPid dashboardId) `shouldReturn` True
-      savedWidget <- fromRightShow <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId Nothing Nothing def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\""})
+      savedWidget <- (.widget) . fromRightShow <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId Nothing Nothing def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\""})
       widgetId <- maybe (fail "the saved widget has no id") pure savedWidget.id
       let widgetMonitor pid = runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId pid (Just dashboardId) widgetId
           widgetUrl = "/p/" <> testPid.toText <> "/dashboards/" <> dashboardId.toText <> "?expand=" <> widgetId
@@ -151,6 +151,8 @@ spec = describe "Monitoring" do
           putWidget w = (void <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing w)) `shouldReturn` Right ()
           upsertAlert = call tr . Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId)
           check = advanceMinutes tr 1 >> deliverySummary . fst <$> captureNotifs tr checkTriggeredQueryMonitors
+          invalidQuery :: Either Dashboards.WidgetMonitorRejection a -> Bool
+          invalidQuery = \case Left (Dashboards.MonitorQueryInvalid _) -> True; _ -> False
           alertForm' =
             Dashboards.WidgetAlertForm
               { widgetId
@@ -181,6 +183,11 @@ spec = describe "Monitoring" do
       -- A raw-SQL widget posts an empty query, which compiled to an all-traffic count.
       upsertAlert alertForm'{Dashboards.query = ""} `shouldReturn` Left Dashboards.RawSqlWidget
       upsertAlert alertForm'{Dashboards.alertThreshold = Nothing} `shouldReturn` Left Dashboards.MissingThreshold
+      -- A refused monitor form used to have already written its threshold onto the widget.
+      let storedThreshold = runTestBgNoReset tr (DashboardModel.getDashboardByProjectId testPid dashboardId) <&> \d -> d >>= (.schema) >>= find ((== Just widgetId) . (.id)) . DashboardModel.allWidgets >>= (.alertThreshold)
+      thresholdBefore <- storedThreshold
+      upsertAlert alertForm'{Dashboards.query = "name ==", Dashboards.alertThreshold = Just "7"} >>= (`shouldSatisfy` invalidQuery)
+      storedThreshold `shouldReturn` thresholdBefore
       isNothing <$> widgetMonitor testPid `shouldReturn` True
       upsertAlert alertForm' `shouldReturn` Right Dashboards.WidgetMonitorSaved
       createdMonitor <- widgetMonitor testPid
@@ -225,6 +232,10 @@ spec = describe "Monitoring" do
       (void <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.alertThreshold = Nothing})) `shouldReturn` Left Dashboards.MonitorNeedsThreshold
       putWidget savedWidget{Widget.query = Just "name == \"search\"", Widget.alertThreshold = Just 2}
       fmap (\m -> (m.logQuery, m.alertThreshold)) <$> widgetMonitor testPid `shouldReturn` Just ("name == \"search\"", 2)
+      -- A query that doesn't parse used to store the new KQL beside the old SQL, which kept alerting.
+      stored <- fmap (\m -> (m.logQuery, m.logQueryAsSql)) <$> widgetMonitor testPid
+      call tr (Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.query = Just "name ==", Widget.alertThreshold = Just 2}) >>= (`shouldSatisfy` invalidQuery)
+      fmap (\m -> (m.logQuery, m.logQueryAsSql)) <$> widgetMonitor testPid `shouldReturn` stored
       advanceMinutes tr 1
       recovered <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
       deliverySummary recovered `shouldBe` ["discord:C_MONITOR", "email:alerts@example.com", "pagerduty:widget-monitor-test:PDResolve", "slack-update:C_NOTIF_CHANNEL", "slack:C_NOTIF_CHANNEL", "whatsapp:+15550001111"]

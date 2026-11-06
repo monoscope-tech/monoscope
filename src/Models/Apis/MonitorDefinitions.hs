@@ -145,13 +145,13 @@ defaultVisualizationType = "timeseries"
 -- | The compiled form of a monitor's KQL, which is what alert evaluation actually
 -- runs. Shared by the create/PUT path and by PATCH: PATCH used to build its merged
 -- monitor from the stored row, so it updated @log_query@ and inherited the previous
--- @log_query_as_sql@ — the monitor kept alerting on its old query. Falls back to
--- @prev@ when the query doesn't parse, so a bad edit cannot blank the compiled SQL.
-compileAlertSql :: Projects.ProjectId -> Int -> Maybe Text -> Maybe Text -> Text -> Text -> Text
-compileAlertSql pid windowMins environment service q prev =
+-- @log_query_as_sql@ — the monitor kept alerting on its old query. A query that doesn't
+-- compile is a 'Left', so a bad edit cannot blank the compiled SQL.
+compileAlertSql :: Projects.ProjectId -> Int -> Maybe Text -> Maybe Text -> Text -> Either Text Text
+compileAlertSql pid windowMins environment service q =
   let scope = Parser.mkScopedQuery pid (Nothing, Nothing) environment service
       cfg = (Parser.applyScopedQuery scope $ Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = windowMins}
-   in fromMaybe prev $ (.finalAlertQuery) . snd =<< rightToMaybe (Parser.parseQueryToComponents cfg q)
+   in Parser.parseQueryToComponents cfg q >>= maybeToRight "The query produced no alert SQL" . (.finalAlertQuery) . snd
 
 
 -- | Build a 'QueryMonitor' from a 'MonitorInput'. Shared by create/update.
@@ -166,7 +166,7 @@ monitorFromInput pid now mid existingM inp =
     , alertThreshold = inp.alertThreshold
     , warningThreshold = inp.warningThreshold
     , logQuery = inp.query
-    , logQueryAsSql = compileAlertSql pid inp.timeWindowMins inp.environment inp.service inp.query (foldMap (.logQueryAsSql) existingM)
+    , logQueryAsSql = fromRight (foldMap (.logQueryAsSql) existingM) $ compileAlertSql pid inp.timeWindowMins inp.environment inp.service inp.query
     , lastEvaluated = Just now
     , warningLastTriggered = existingM >>= (.warningLastTriggered)
     , alertLastTriggered = existingM >>= (.alertLastTriggered)

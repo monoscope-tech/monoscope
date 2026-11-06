@@ -40,6 +40,7 @@ import Data.Aeson.Key qualified as AEKey
 import Data.Char (isDigit)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.IntMap.Monoidal.Strict (MonoidalIntMap (..))
 import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
 import Data.Semigroup qualified as SG
@@ -98,14 +99,7 @@ inferredKind = \case
 newtype LatencyHist = LatencyHist (IntMap Int64)
   deriving stock (Eq, Generic, Show)
   deriving newtype (NFData)
-
-
-instance Semigroup LatencyHist where
-  LatencyHist a <> LatencyHist b = LatencyHist $ IntMap.unionWith (+) a b
-
-
-instance Monoid LatencyHist where
-  mempty = LatencyHist IntMap.empty
+  deriving (Monoid, Semigroup) via MonoidalIntMap (Sum Int64)
 
 
 singletonLatency :: Int64 -> LatencyHist

@@ -63,8 +63,7 @@ import System.Directory (withCurrentDirectory)
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, addRespHeaders)
-import Test.Hspec (anyIOException)
+import System.Types (ATAuthCtx, Done (..), addRespHeaders)
 import Text.Slugify (slugify)
 import UnliftIO.Async (mapConcurrently_, wait, withAsync)
 import Utils qualified
@@ -226,7 +225,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
 
     -- Edit in place: an omitted query is retained, and the render-time tab slug is not stored.
     let edited = (widgetOf Widget.WTStat "renamed"){Widget.query = Nothing, Widget.rawQuery = Nothing, Widget._tabSlug = Just "stale-tab", Widget.layout = Just def{Widget.x = Just 6, Widget.y = Just 6, Widget.w = Just 3, Widget.h = Just 3}}
-    _ <- call tr $ Dashboards.dashboardWidgetPutH testPid dashId (Just w1) Nothing edited
+    call tr (Dashboards.dashboardWidgetPutH testPid dashId (Just w1) Nothing edited) >>= either (fail . show) (const pass)
     after <- storedWidgets tr dashId
     [(w.title, show @Text w.wType, w.query, w._tabSlug, geometry w) | w <- after, w.id == Just w1]
       `shouldBe` [(Just "renamed", "WTStat", Just "name != null", Nothing, (Just w1, Just 6, Just 6, Just 3, Just 3))]
@@ -245,6 +244,12 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     sort (map (show @Text . (.wType)) reloaded) `shouldBe` sort ("WTStat" : map show allWidgetTypes)
     filter (`elem` drop 1 numbered) (mapMaybe (.id) reloaded) `shouldBe` []
     length (ordNub (mapMaybe (.id) reloaded)) `shouldBe` length reloaded
+
+  -- The editor adopts the saved widget from the PUT body; an empty body left it off the grid.
+  it "dashboardWidgetPut_returnsWidgetMarkup" \tr -> do
+    dashId <- newDashboard tr "overview.yaml" "Widget Body"
+    body <- renderT . Done . fromRightShow <$> call tr (Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTStat "Body Check"))
+    ("data-widget=" `T.isInfixOf` body, "Body Check" `T.isInfixOf` body) `shouldBe` (True, True)
 
   it "tabs and groups: every write lands on the canvas it addresses; the list counts them" \tr -> do
     dashId <- newDashboard tr "overview.yaml" "Tabbed"
@@ -270,7 +275,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     titles "second-tab" `shouldReturn` [Just "Renamed Second", Just "Added To Second", Just "Second (Copy)"]
     save "second-widget" (Just "first-tab") "Still Second"
     titles "second-tab" `shouldReturn` [Just "Still Second", Just "Added To Second", Just "Second (Copy)"]
-    save "no-such-widget" Nothing "Ghost" `shouldThrow` anyIOException
+    (void <$> call tr (Dashboards.dashboardWidgetPutH testPid dashId (Just "no-such-widget") Nothing (widgetOf Widget.WTStat "Ghost"))) `shouldReturn` Left Dashboards.WidgetNotFound
     -- Ids repeat across tabs (slugified template titles), so a sent tab that holds the id wins.
     yaml "title: Dup\nwidgets: []\ntabs:\n  - name: First Tab\n    widgets:\n      - { type: stat, id: dup, title: One, layout: { x: 0, y: 0, w: 3, h: 3 } }\n  - name: Second Tab\n    widgets:\n      - { type: stat, id: dup, title: Two, layout: { x: 0, y: 0, w: 3, h: 3 } }\n"
     save "dup" (Just "second-tab") "Renamed Two"

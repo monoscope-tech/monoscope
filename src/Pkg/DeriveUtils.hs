@@ -37,7 +37,6 @@ module Pkg.DeriveUtils (
 
 import Control.Exception (throwIO)
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.CaseInsensitive (CI)
@@ -93,6 +92,8 @@ type DB es = Hasql :> es
 newtype AesonText a = AesonText a
   deriving (Eq, Generic, Show)
   deriving newtype (AE.FromJSON, AE.ToJSON, NFData)
+  deriving (ToField) via Aeson a
+  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb a
 
 
 instance (AE.FromJSON a, Typeable a) => FromField (AesonText a) where
@@ -102,18 +103,6 @@ instance (AE.FromJSON a, Typeable a) => FromField (AesonText a) where
       tryJsonb = (\(Aeson v) -> AesonText v) <$> fromField f mdata
       tryDecode bs src =
         bs >>= either (\err -> returnError ConversionFailed f ("Failed to parse JSON from " <> src <> ": " <> err)) (pure . AesonText) . AE.eitherDecodeStrict
-
-
-instance AE.ToJSON a => ToField (AesonText a) where
-  toField (AesonText v) = toField (Aeson v)
-
-
-instance AE.FromJSON a => HI.DecodeValue (AesonText a) where
-  decodeValue = coerce (HI.decodeValue @(HI.AsJsonb a))
-
-
-instance AE.ToJSON a => HI.EncodeValue (AesonText a) where
-  encodeValue = coerce (HI.encodeValue @(HI.AsJsonb a))
 
 
 -- | Unwrap an AesonText value
@@ -126,8 +115,7 @@ unAesonTextMaybe :: Maybe (AesonText a) -> Maybe a
 unAesonTextMaybe = fmap unAesonText
 
 
-instance HI.DecodeValue a => HI.DecodeValue (Sum a) where
-  decodeValue = Sum <$> HI.decodeValue
+deriving newtype instance HI.DecodeValue a => HI.DecodeValue (Sum a)
 
 
 deriving newtype instance FromField (UUIDId name)
@@ -442,36 +430,7 @@ showPGFloatArray :: [Float] -> Text
 showPGFloatArray xs = "{" <> T.intercalate "," (map show xs) <> "}"
 
 
--- Types without Generic need explicit DecodeRow via OneColumn.
-instance HI.DecodeRow UUID.UUID where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
-
-
 instance HI.DecodeValue a => HI.DecodeRow (V.Vector a) where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
-
-
-instance HI.DecodeRow Text where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
-
-
-instance HI.DecodeRow Int64 where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
-
-
-instance HI.DecodeRow Int where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
-
-
-instance HI.DecodeRow Bool where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
-
-
-instance HI.DecodeRow UTCTime where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
-
-
-instance HI.DecodeRow Double where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
 
@@ -496,35 +455,12 @@ instance HI.EncodeValue Integer where
   encodeValue = contramap (fromIntegral @Integer @Int64) E.int8
 
 
-instance HI.DecodeValue AET.Value where
-  decodeValue = D.jsonb
-
-
-instance HI.DecodeRow AET.Value where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
-
-
-instance HI.EncodeValue AET.Value where
-  encodeValue = E.jsonb
-
-
-instance HI.DecodeValue (Map Text AET.Value) where
-  decodeValue = D.refine toMap D.jsonb
-    where
-      toMap (AET.Object o) = Right $ KEM.toMapText o
-      toMap other = Left $ "Expected JSON object, got: " <> show other
-
-
-instance HI.EncodeValue (Map Text AET.Value) where
-  encodeValue = contramap (AET.Object . KEM.fromMapText) E.jsonb
-
-
-instance AET.FromJSON a => HI.DecodeValue (Aeson a) where
-  decodeValue = D.refine (bimap toText Aeson . AET.parseEither AET.parseJSON) D.jsonb
-
-
-instance AET.ToJSON a => HI.EncodeValue (Aeson a) where
-  encodeValue = contramap (\(Aeson a) -> AET.toJSON a) E.jsonb
+deriving via HI.Jsonb instance HI.DecodeValue AET.Value
+deriving via HI.Jsonb instance HI.EncodeValue AET.Value
+deriving via HI.AsJsonb (Map Text AET.Value) instance HI.DecodeValue (Map Text AET.Value)
+deriving via HI.AsJsonb (Map Text AET.Value) instance HI.EncodeValue (Map Text AET.Value)
+deriving via HI.AsJsonb a instance AET.FromJSON a => HI.DecodeValue (Aeson a)
+deriving via HI.AsJsonb a instance AET.ToJSON a => HI.EncodeValue (Aeson a)
 
 
 -- | Decode @CITEXT@ (and the @email@ domain over it, which Postgres reports as
@@ -697,3 +633,8 @@ internalIds = go
         let valueStart = T.drop (T.length "id=\"") rest
             (value, afterValue) = T.breakOn "\"" valueStart
          in value : go (T.drop 1 afterValue)
+
+
+-- Types without Generic decode a one-column row via OneColumn.
+concat <$> forM [[t|UUID.UUID|], [t|Text|], [t|Int64|], [t|Int|], [t|Bool|], [t|UTCTime|], [t|Double|], [t|AET.Value|]] \t ->
+  [d|instance HI.DecodeRow $t where decodeRow = HI.getOneColumn <$> HI.decodeRow|]

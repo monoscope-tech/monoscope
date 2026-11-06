@@ -147,7 +147,7 @@ import Servant (Header, Headers, NoContent (..), ServerError (errBody), addHeade
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, successToast, useTfReads)
+import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, successToast, useTfReads)
 import Utils (LoadingSize (..), LoadingType (..), countNoun, faSprite_, fmtDate, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..), parseQueryParamMaybe)
@@ -3012,10 +3012,8 @@ data SaveViewForm = SaveViewForm {name :: Text, query :: Text}
 
 
 data UnnamedView = UnnamedView
-  deriving stock (Eq, Show)
-
-
-instance Refusal UnnamedView where refusalMessage _ = "Name the view"
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Name the view" UnnamedView
 
 
 -- | A saved view changed; the browser goes to the issue list, filtered by a saved view's query.
@@ -3145,9 +3143,8 @@ errorGroupMembersGetH pid errorId = do
 
 
 data PatternUnmerged = PatternUnmerged
-
-
-instance Outcome PatternUnmerged where outcomeToast _ = Just "Pattern unmerged"
+  deriving stock (Generic)
+  deriving (Outcome) via Says "Pattern unmerged" PatternUnmerged
 
 
 errorUnmergePostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Done PatternUnmerged))

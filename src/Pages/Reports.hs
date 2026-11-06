@@ -51,7 +51,7 @@ import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
-import System.Types (ATAuthCtx, DB, Done, Outcome (..), RespHeaders, addRespHeaders, done)
+import System.Types (ATAuthCtx, DB, Done, Outcome (..), RespHeaders, Says (..), addRespHeaders, done)
 import UnliftIO (tryAny)
 import UnliftIO qualified
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, formatUTCMicros, hostPath, loadingIndicatorWith_)
@@ -333,10 +333,8 @@ reportsPostH pid t = do
 
 
 data ReportsPost = ReportsPost
-  deriving stock (Eq, Show)
-
-
-instance Outcome ReportsPost where outcomeToast _ = Just "Report notifications updated successfully"
+  deriving stock (Eq, Generic, Show)
+  deriving (Outcome) via Says "Report notifications updated successfully" ReportsPost
 
 
 singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)

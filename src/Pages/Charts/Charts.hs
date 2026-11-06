@@ -40,7 +40,6 @@ import GHC.Clock (getMonotonicTimeNSec)
 import Log qualified
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Media ((//))
 import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
@@ -56,6 +55,7 @@ import Servant.Server (ServerError (errBody), err400)
 import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (Tracing, withSpan_)
+import System.Types (Mime)
 import Text.Megaparsec (parseMaybe)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Async qualified
@@ -843,10 +843,7 @@ chunkableChart sections = case reverse sections of
 
 -- | NewlineFraming separates each JSON message on the wire.
 data ChartStream
-
-
-instance Servant.Accept ChartStream where
-  contentType _ = "application" // "x-ndjson"
+  deriving (Servant.Accept) via Mime "application/x-ndjson"
 
 
 instance Servant.MimeRender ChartStream AE.Value where

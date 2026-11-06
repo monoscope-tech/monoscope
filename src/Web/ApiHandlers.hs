@@ -681,13 +681,13 @@ apiMonitorPatch pid mid patch = do
               -- evaluation runs, and inheriting it from `existing` left the monitor
               -- alerting on its previous query.
               Monitors.logQueryAsSql =
-                compileAlertSql
-                  pid
-                  (fromMaybe existing.timeWindowMins patch.timeWindowMins)
-                  (patch.environment <|> existing.environment)
-                  (patch.service <|> existing.service)
-                  (fromMaybe existing.logQuery patch.query)
-                  existing.logQueryAsSql
+                fromRight existing.logQueryAsSql
+                  $ compileAlertSql
+                    pid
+                    (fromMaybe existing.timeWindowMins patch.timeWindowMins)
+                    (patch.environment <|> existing.environment)
+                    (patch.service <|> existing.service)
+                    (fromMaybe existing.logQuery patch.query)
             , Monitors.alertThreshold = fromMaybe existing.alertThreshold patch.alertThreshold
             , Monitors.warningThreshold = patch.warningThreshold <|> existing.warningThreshold
             , Monitors.triggerLessThan = fromMaybe existing.triggerLessThan patch.triggerLessThan

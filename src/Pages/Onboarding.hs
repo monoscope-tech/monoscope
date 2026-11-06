@@ -51,7 +51,7 @@ import Pages.Components
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, ActionResult, Done, HXRedirectDest, HXReswap, Outcome (..), Refusal (..), RespHeaders, TriggerEvents, XWidgetJSON, act, addRespHeaders, addTriggerEvent, done)
+import System.Types (ATAuthCtx, ActionResult, Done, HXRedirectDest, HXReswap, Outcome (..), Refusal (..), RespHeaders, Says (..), TriggerEvents, XWidgetJSON, act, addRespHeaders, addTriggerEvent, done)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
@@ -216,10 +216,8 @@ instance Outcome IntegrationCheck where
 
 
 data NoEventsYet = NoEventsYet
-  deriving stock (Eq, Show)
-
-
-instance Refusal NoEventsYet where refusalMessage NoEventsYet = "No events found yet"
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "No events found yet" NoEventsYet
 
 
 -- | The landing site's markup, with its root-relative links pointed back at it.

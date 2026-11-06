@@ -117,7 +117,7 @@ import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, err500, err503, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, redirectCS)
+import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, redirectCS)
 import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
@@ -370,17 +370,13 @@ instance Refusal ChannelsRejection where
 
 
 data PagerdutyKeyTooShort = PagerdutyKeyTooShort
-  deriving stock (Eq, Show)
-
-
-instance Refusal PagerdutyKeyTooShort where refusalMessage PagerdutyKeyTooShort = "PagerDuty integration key is too short"
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "PagerDuty integration key is too short" PagerdutyKeyTooShort
 
 
 data SlackNotInstalled = SlackNotInstalled
-  deriving stock (Eq, Show)
-
-
-instance Refusal SlackNotInstalled where refusalMessage SlackNotInstalled = "Failed to disconnect Slack"
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Failed to disconnect Slack" SlackNotInstalled
 
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (ActionResult ChannelsRejection IntegrationsSaved)
@@ -1241,10 +1237,8 @@ memberRowWithStatus pid canManage idx prM = do
 
 -- | The member's row is swapped for this empty body.
 data MemberRemoved = MemberRemoved
-  deriving stock (Eq, Show)
-
-
-instance Outcome MemberRemoved where outcomeToast MemberRemoved = Just "Member removed"
+  deriving stock (Eq, Generic, Show)
+  deriving (Outcome) via Says "Member removed" MemberRemoved
 
 
 data MemberRejection = MemberNotFound | CannotRemoveSelf
@@ -1491,10 +1485,8 @@ instance Outcome ProjectDeleted where
 
 
 data DemoProjectProtected = DemoProjectProtected
-  deriving stock (Eq, Show)
-
-
-instance Refusal DemoProjectProtected where refusalMessage DemoProjectProtected = "Can't perform this action on the demo project"
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Can't perform this action on the demo project" DemoProjectProtected
 
 
 deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (ActionResult DemoProjectProtected ProjectDeleted)
@@ -1562,10 +1554,8 @@ instance Outcome PricingUpdated where
 
 
 data SubscriptionLookupFailed = SubscriptionLookupFailed
-  deriving stock (Eq, Show)
-
-
-instance Refusal SubscriptionLookupFailed where refusalMessage SubscriptionLookupFailed = "Something went wrong while fetching subscription id"
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Something went wrong while fetching subscription id" SubscriptionLookupFailed
 
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (ActionResult SubscriptionLookupFailed PricingUpdated)

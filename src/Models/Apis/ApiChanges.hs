@@ -27,7 +27,7 @@ module Models.Apis.ApiChanges (
 where
 
 import Data.Aeson qualified as AE
-import Data.Default (Default, def)
+import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Text.Display (Display)
@@ -185,8 +185,7 @@ ORDER BY an.created_at, an.target_hash
 deriving newtype instance NFData a => NFData (Aeson a)
 
 
-instance Default (Aeson [a]) where
-  def = Aeson []
+deriving newtype instance Default (Aeson [a])
 
 
 data PayloadChange = PayloadChange

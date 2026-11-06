@@ -634,6 +634,7 @@ library
     , mmark
     , modern-uri
     , monad-time-effectful
+    , monoidal-containers
     , monoscope-cli
     , monoscope-shared
     , mtl
@@ -1275,6 +1276,7 @@ test-suite test-dev
     , mmark
     , modern-uri
     , monad-time-effectful
+    , monoidal-containers
     , monoscope-cli
     , monoscope-shared
     , mtl

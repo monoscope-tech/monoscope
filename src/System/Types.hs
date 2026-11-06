@@ -33,6 +33,8 @@ module System.Types (
   Refusal (..),
   Outcome (..),
   Rendered (..),
+  Says (..),
+  Mime,
   Toast (..),
   successToast,
   ToastLevel (..),
@@ -67,13 +69,15 @@ import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runTime)
 import Effectful.Timeout (Timeout, runTimeout)
+import GHC.Generics (C1, D1, Rep, U1)
+import GHC.TypeLits (ErrorMessage (..), KnownSymbol, Symbol, TypeError, symbolVal)
 import Log qualified
 import Lucid (Html, ToHtml (..))
 import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (DB)
 import Relude
-import Servant (AuthProtect, HasStatus (..), Header, Headers, ServerError, StdMethod, UVerb, Union, Verb, addHeader, noHeader, respond)
+import Servant (Accept (..), AuthProtect, HasStatus (..), Header, Headers, ServerError, StdMethod, UVerb, Union, Verb, addHeader, noHeader, respond)
 import Servant qualified
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx (HXRedirect, HXTrigger)
@@ -449,6 +453,31 @@ newtype Rendered a = Rendered a
 
 
 instance ToHtml a => Outcome (Rendered a) where outcomeBody (Rendered a) = toHtml a
+
+
+-- | A fixed message: @deriving (Refusal) via Says "API key not found" ApiKeyNotFound@.
+-- Only for a type with one constructor and no fields, so adding a case cannot silently reuse the message.
+newtype Says (msg :: Symbol) a = Says a
+
+
+type OneCase :: (Type -> Type) -> Constraint
+type family OneCase f where
+  OneCase (D1 _ (C1 _ U1)) = ()
+  OneCase _ = TypeError ('Text "Says needs a type with exactly one constructor and no fields")
+
+
+instance (Generic a, KnownSymbol msg, OneCase (Rep a)) => Refusal (Says msg a) where refusalMessage _ = toText $ symbolVal (Proxy @msg)
+
+
+instance (Generic a, KnownSymbol msg, OneCase (Rep a)) => Outcome (Says msg a) where outcomeToast _ = Just $ successToast $ toText $ symbolVal (Proxy @msg)
+
+
+-- | A content type named by its MIME string: @data PNG deriving (Accept) via Mime "image/png"@.
+type Mime :: Symbol -> Type
+data Mime ct
+
+
+instance KnownSymbol ct => Accept (Mime ct) where contentType _ = fromString $ symbolVal (Proxy @ct)
 
 
 type Action :: StdMethod -> Type -> Type -> Type

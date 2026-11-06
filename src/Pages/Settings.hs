@@ -122,7 +122,7 @@ import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), err400, err503, errBody)
 import System.Config
-import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
+import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
 import Text.Printf (printf)
 import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
@@ -311,10 +311,8 @@ data ApiKeyMutation = ActivateApiKey | RevokeApiKey
 
 
 data ApiKeyNotFound = ApiKeyNotFound
-  deriving stock (Eq, Show)
-
-
-instance Refusal ApiKeyNotFound where refusalMessage ApiKeyNotFound = "API key not found"
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "API key not found" ApiKeyNotFound
 
 
 apiKeySetActive :: Projects.ProjectId -> ApiKeyMutation -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (ActionResult ApiKeyNotFound ApiMut)
@@ -868,7 +866,7 @@ prometheusTargetRow pid canEdit cfg = div_ [class_ "itemsListItem flex flex-col 
 -- >>> map (display @TestChannel) [minBound .. maxBound]
 -- ["all","email","slack","discord","whatsapp","pagerduty"]
 -- >>> parseUrlPiece "sms" :: Either Text TestChannel
--- Left "Invalid TC value: sms"
+-- Left "Invalid value: sms"
 data TestChannel = TCAll | TCEmail | TCSlack | TCDiscord | TCWhatsapp | TCPagerduty
   deriving (Bounded, Enum, Eq, Generic, Read, Show)
   deriving (AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "TC" TestChannel
@@ -879,7 +877,7 @@ data TestChannel = TCAll | TCEmail | TCSlack | TCDiscord | TCWhatsapp | TCPagerd
 -- >>> map (display @TestStatus) [TSSent, TSSkipped]
 -- ["sent","skipped"]
 -- >>> parseUrlPiece "delivered" :: Either Text TestStatus
--- Left "Invalid TS value: delivered"
+-- Left "Invalid value: delivered"
 data TestStatus = TSSent | TSSkipped
   deriving (Eq, Generic, Read, Show)
   deriving (AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "TS" TestStatus

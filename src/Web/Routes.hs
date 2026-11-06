@@ -104,7 +104,7 @@ import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, Action, ApiPrincipal (..), HXRedirectDest, HXReswap (..), ProjectToolCtx, RespHeaders, TriggerEvents, Unrefusable, XWidgetJSON, addRespHeaders, atAuthToBase)
+import System.Types (ATAuthCtx, ATBaseCtx, Action, ApiPrincipal (..), HXRedirectDest, HXReswap (..), Mime, ProjectToolCtx, RespHeaders, TriggerEvents, Unrefusable, XWidgetJSON, addRespHeaders, atAuthToBase)
 import UnliftIO (withRunInIO)
 import UnliftIO.Exception (handle)
 import Utils qualified
@@ -154,10 +154,7 @@ type instance Eval (LogDataFieldExp sym) = LogDataField sym
 
 
 data RawJSON
-
-
-instance Accept RawJSON where
-  contentType _ = "application/json"
+  deriving (Accept) via Mime "application/json"
 
 
 instance MimeUnrender RawJSON BS.ByteString where
@@ -175,10 +172,7 @@ instance MimeUnrender RawForm BS.ByteString where
 
 -- | OTLP/HTTP wire format (raw protobuf bytes; decoding happens in the handler).
 data OTLPProto
-
-
-instance Accept OTLPProto where
-  contentType _ = "application/x-protobuf"
+  deriving (Accept) via Mime "application/x-protobuf"
 
 
 instance MimeUnrender OTLPProto BS.ByteString where
@@ -195,10 +189,7 @@ instance MimeRender OTLPProto BS.ByteString where
 -- chart Slack refuses to download — which rejects the whole alert message
 -- (invalid_attachments), not just the image.
 data PNG
-
-
-instance Accept PNG where
-  contentType _ = "image/png"
+  deriving (Accept) via Mime "image/png"
 
 
 instance MimeRender PNG LBS.ByteString where
@@ -208,10 +199,7 @@ instance MimeRender PNG LBS.ByteString where
 -- | The learned OpenAPI spec, served as YAML. Response-only, so no
 -- 'MimeUnrender'.
 data YAML
-
-
-instance Accept YAML where
-  contentType _ = "application/yaml"
+  deriving (Accept) via Mime "application/yaml"
 
 
 instance MimeRender YAML Text where
@@ -316,7 +304,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardSettledPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "settled" :> ReqBody '[JSON] Dashboards.DashboardSettleSample :> Post '[JSON] NoContent
   , dashboardRepositoryGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "repository" :> Get '[HTML] (RespHeaders (PageCtx GitSync.DashboardRepositoryGet))
   , dashboardRepositoryPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "repository" :> ReqBody '[FormUrlEncoded] GitSync.DashboardRepositoryForm :> Post '[HTML] (RespHeaders (PageCtx GitSync.DashboardRepositoryGet))
-  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> QPT "tab" :> QPT "configure_monitor" :> ReqBody '[JSON] Widget.Widget :> Action 'PUT Dashboards.WidgetMonitorRejection Widget.Widget
+  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> QPT "tab" :> QPT "configure_monitor" :> ReqBody '[JSON] Widget.Widget :> Action 'PUT Dashboards.WidgetMonitorRejection Dashboards.WidgetSaved
   , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> QPT "tab" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
   , dashboardDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardRenameForm :> Patch '[HTML] (RespHeaders Dashboards.DashboardRes)
@@ -326,7 +314,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardWidgetNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "new" :> QPT "tab" :> QPT "range_start" :> QPT "range_end" :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> QPT "editor_tab" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Widget alert routes
-    widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Action 'POST Dashboards.WidgetMonitorRejection Dashboards.WidgetMonitorResult
+    widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Action 'POST Dashboards.WidgetMonitorRejection Dashboards.WidgetMonitorSaved
   , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Unrefusable 'DELETE Dashboards.WidgetMonitorRemoved
   , widgetAlertToggle :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> "toggle_active" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Unrefusable 'POST Dashboards.WidgetMonitorStatus
   , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Dashboards.DashboardBulkAction :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)

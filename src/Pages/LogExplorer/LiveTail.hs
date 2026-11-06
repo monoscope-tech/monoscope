@@ -38,7 +38,6 @@ import Effectful.Time qualified as Time
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Network.HTTP.Media qualified as M
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pkg.DeriveUtils (idFromText)
 import Pkg.LiveTail qualified as LT
@@ -48,7 +47,7 @@ import Servant qualified
 import Servant.API (Accept (..), Headers, MimeRender (..), addHeader)
 import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import System.Types (ATAuthCtx, Mime, RespHeaders, addRespHeaders)
 import Utils (explorerNavTabs_)
 
 
@@ -62,10 +61,7 @@ import Utils (explorerNavTabs_)
 -- 'Accept' instance and one 'MimeRender', and a dependency whose whole value is those few
 -- lines is a dependency that will one day block a Servant upgrade.
 data EventStream
-
-
-instance Accept EventStream where
-  contentType _ = "text" M.// "event-stream"
+  deriving (Accept) via Mime "text/event-stream"
 
 
 instance MimeRender EventStream Builder where

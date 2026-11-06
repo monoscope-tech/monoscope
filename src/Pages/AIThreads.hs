@@ -37,7 +37,7 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC)
 import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addErrorToast, addRespHeaders, done)
+import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, done)
 import Utils (faSprite_, renderMarkdownTocWithPrefix)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
@@ -194,24 +194,18 @@ instance Refusal TurnError where
 
 
 data EmptyTitle = EmptyTitle
-  deriving stock (Eq, Show)
-
-
-instance Refusal EmptyTitle where refusalMessage EmptyTitle = "Enter a title."
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Enter a title." EmptyTitle
 
 
 data UnknownTemplate = UnknownTemplate
-  deriving stock (Eq, Show)
-
-
-instance Refusal UnknownTemplate where refusalMessage UnknownTemplate = "Unknown routine template."
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Unknown routine template." UnknownTemplate
 
 
 data NoReviewClasses = NoReviewClasses
-  deriving stock (Eq, Show)
-
-
-instance Refusal NoReviewClasses where refusalMessage NoReviewClasses = "Choose at least one action class for review."
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Choose at least one action class for review." NoReviewClasses
 
 
 newtype TitleForm = TitleForm {conversationTitle :: Text}
@@ -880,10 +874,8 @@ routinePolicyPostH pid conversation form = act do
 
 
 data PolicySaved = PolicySaved
-  deriving stock (Eq, Show)
-
-
-instance Outcome PolicySaved where outcomeToast _ = Just "Execution policy saved."
+  deriving stock (Eq, Generic, Show)
+  deriving (Outcome) via Says "Execution policy saved." PolicySaved
 
 
 operationGetH :: Projects.ProjectId -> UUIDId "agent_operation" -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
