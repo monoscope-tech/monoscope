@@ -123,8 +123,9 @@ type RecentDelivery = 'manual' | 'auto-refresh';
  * and re-measures on each tick instead of the existing rows simply moving down.
  */
 // `'id' in item` and not `'type' in item`: an EventLine carries a `type` of its own ('log' | 'span').
-export const virtualItemKey = (item: VirtualListItem) =>
-  'id' in item ? item.id : item.type === 'aggregateChildren' ? `aggregateChildren:${item.parentKey}` : item.type;
+// `item` is undefined when lit-virtualizer (2.1.1) renders a range measured before the list shrank.
+export const virtualItemKey = (item: VirtualListItem | undefined, index: number) =>
+  !item ? `stale:${index}` : 'id' in item ? item.id : item.type === 'aggregateChildren' ? `aggregateChildren:${item.parentKey}` : item.type;
 
 /**
  * Retained rows are still virtualizer input: FlowLayout tracks their geometry even when their
@@ -3709,7 +3710,8 @@ export class LogList extends LitElement {
     return this.tableHeadingWrapper(title, column, classes, width);
   }
 
-  renderVirtualItem = (item: VirtualListItem) => {
+  renderVirtualItem = (item: VirtualListItem | undefined) => {
+    if (!item) return nothing;
     // Handle special item types efficiently
     if ('type' in item && item.type === 'fetchRecent') {
       return this.renderFetchRecentButton();
