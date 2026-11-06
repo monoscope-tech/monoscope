@@ -125,7 +125,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
-import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, durationQuery, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
+import Pages.Components (resetFormOnRefusalAttr_, BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), SavedView (..), SavedViewsMenu (..), agoText, codeContextUrl, colorChip_, copyButton_, curlCommand, detailsClosedBelowAttr_, disclosure_, durationMenu_, durationQuery, emptyState_, eventsCountCell_, externalLink_, fieldLabel_, filterInputAttr_, inlineIconBtn_, kvList_, lastSeenCell_, metadataChip_, options_, periodToggle_, resizer_, savedViewsMenu_, sectionLabel_, silenceBadge_, sparkline_, stackFrames_, statFigure_, tonePill_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Replay qualified as Replay
 import Pages.Telemetry (traceFragmentUrl)
@@ -253,17 +253,17 @@ instance ToHtml IssueTriage where
   toHtmlRaw = toHtml
 
 
--- | Priority and assignee, set from the issue header on any issue type. A refused assignee still keeps the priority.
+-- | Priority and assignee, set from the issue header on any issue type. A refused assignee saves neither.
 triagePostH :: Projects.ProjectId -> Issues.IssueId -> TriageForm -> ATAuthCtx (HxResult TriageRejection IssueTriage)
 triagePostH pid issueId form = hxAction do
   (sess, _) <- Projects.sessionAndProject pid
   members <- ProjectMembers.selectActiveProjectMembers pid
   Issues.selectIssueById pid issueId >>= \case
     Nothing -> pure $ Left UnknownIssue
-    Just issue -> do
-      whenJust form.severity $ void . Issues.setIssuePriority pid [issueId]
-      addTriggerEvent "issuesListChanged" AE.Null
+    Just issue ->
       forM (first TriageAssignee $ parseAssignee members form.assigneeId) \assigneeM -> do
+        whenJust form.severity $ void . Issues.setIssuePriority pid [issueId]
+        addTriggerEvent "issuesListChanged" AE.Null
         assignIssues pid sess.user.id [issue] assigneeM
         saved <- fromMaybe issue <$> Issues.selectIssueById pid issueId
         pure $ IssueTriage pid saved members
@@ -272,7 +272,7 @@ triagePostH pid issueId form = hxAction do
 -- | The header's Priority and Assignee selects; one form, re-rendered on change.
 issueTriage_ :: Projects.ProjectId -> Issues.Issue -> [ProjectMembers.ProjectMemberVM] -> Html ()
 issueTriage_ pid issue members =
-  form_ [id_ "issue-triage", class_ "ml-auto max-md:w-full flex flex-wrap items-center gap-3 text-xs text-textWeak", hxPost_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/triage", hxTrigger_ "change", hxSwap_ "outerHTML"] do
+  form_ [id_ "issue-triage", class_ "ml-auto max-md:w-full flex flex-wrap items-center gap-3 text-xs text-textWeak", hxPost_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/triage", hxTrigger_ "change", hxSwap_ "outerHTML", resetFormOnRefusalAttr_] do
     label_ [class_ "flex items-center gap-1.5 max-md:flex-1 min-w-0"] do
       "Priority"
       select_ [id_ "issue-triage-priority", class_ "select select-sm md:w-28 max-md:flex-1 min-w-0", name_ "severity", Aria.label_ "Priority"]
@@ -1136,7 +1136,7 @@ issueHeader_ v@IssueView{..} = header_ [class_ "max-md:px-3 px-4 max-md:pt-4 pt-
         errorSubscriptionAction pid errL.base
       Nothing ->
         unless (isJust issue.archivedAt)
-          $ button_ [type_ "button", class_ "btn btn-sm btn-ghost gap-1.5 text-textSuccess hover:bg-fillSuccess-weak", hxPost_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/resolve", hxTarget_ $ "#archive-ctl-" <> issue.id.toText, hxSwap_ "outerHTML", Aria.label_ "Resolve issue", [__|on htmx:afterRequest[detail.successful] remove me|]] do
+          $ button_ [type_ "button", class_ "btn btn-sm btn-ghost gap-1.5 text-textSuccess hover:bg-fillSuccess-weak", hxPost_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/resolve", hxTarget_ $ "#archive-ctl-" <> issue.id.toText, hxSwap_ "outerHTML", Aria.label_ "Resolve issue", [__|on htmx:after:request[detail.ctx.response.status < 400] remove me|]] do
             faSprite_ "circle-check" "regular" "w-4 h-4"
             span_ [class_ "max-md:hidden"] "Resolve"
     issueTriage_ pid issue members
@@ -1970,7 +1970,7 @@ instance ToHtml AssigneeChanged where
   toHtml (AssigneeChanged pid eid (_, aidM) mems) = toHtml @(Html ()) do
     div_ [id_ "error-assignee", class_ "flex flex-col gap-2 border-t border-strokeWeak pt-3"] do
       span_ [class_ "text-xs text-textWeak"] "Assignee"
-      form_ [hxPost_ $ "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText eid.unErrorPatternId <> "/assign", hxTarget_ "#error-assignee", hxSwap_ "outerHTML", hxTrigger_ "change"]
+      form_ [hxPost_ $ "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText eid.unErrorPatternId <> "/assign", hxTarget_ "#error-assignee", hxSwap_ "outerHTML", hxTrigger_ "change", resetFormOnRefusalAttr_]
         $ select_ ([class_ "select select-sm w-full", name_ "assigneeId"] <> [disabled_ "true" | null mems])
         $ options_ (Just $ maybe "" (.toText) aidM) (("", "Unassigned") : [(m.userId.toText, memberLabel m) | m <- mems])
   toHtmlRaw = toHtml

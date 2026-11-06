@@ -1866,7 +1866,7 @@ widgetViewerEditor_ pid paymentPlan dashId tabSlugM currentRange existingWidgetM
               Alerts.notificationSettingsSection_ teams (maybe V.empty (.teams) monitorM) alertFormId monitorM
 
               unless isNewWidget $ div_ [class_ "flex flex-wrap items-center justify-between gap-3 border-t border-strokeWeak pt-4"] do
-                when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm text-textError", hxDelete_ alertEndpoint, hxSwap_ "none", term "_" [text|on htmx:afterRequest[detail.successful] set #${drawerStateCheckbox}.checked to false then trigger change on #${drawerStateCheckbox}|]] "Remove monitor"
+                when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm text-textError", hxDelete_ alertEndpoint, hxSwap_ "none", term "_" [text|on htmx:after:request[detail.ctx.response.status < 400] set #${drawerStateCheckbox}.checked to false then trigger change on #${drawerStateCheckbox}|]] "Remove monitor"
                 button_ [type_ "submit", class_ "btn btn-primary btn-sm ml-auto max-md:min-h-11"] $ if hasAlert then "Save monitor" else "Create monitor"
 
 
@@ -1902,7 +1902,7 @@ data WidgetAlertForm = WidgetAlertForm
 
 
 -- | Refusals shared by the widget save and the widget monitor form.
-data WidgetMonitorRejection = RawSqlWidget | MissingThreshold | InvalidWarningThreshold | MonitorNeedsThreshold
+data WidgetMonitorRejection = RawSqlWidget | MissingThreshold | InvalidWarningThreshold | MonitorNeedsThreshold | MonitorQueryInvalid Text
   deriving stock (Eq, Show)
 
 
@@ -1912,18 +1912,22 @@ instance Rejection WidgetMonitorRejection where
     MissingThreshold -> "Enter an alert threshold before creating a monitor"
     InvalidWarningThreshold -> "Warning threshold must be a number"
     MonitorNeedsThreshold -> "Set an alert threshold or remove the monitor before saving"
+    MonitorQueryInvalid _ -> "Monitor query is invalid"
+  rejectionDetail = \case
+    MonitorQueryInvalid err -> Just err
+    RawSqlWidget -> Nothing
+    MissingThreshold -> Nothing
+    InvalidWarningThreshold -> Nothing
+    MonitorNeedsThreshold -> Nothing
 
 
--- | An invalid compiled query still answers 200: the new-widget form closes its drawer on any status below 400.
-data WidgetMonitorResult = WidgetMonitorSaved | WidgetMonitorQueryInvalid Text
+data WidgetMonitorResult = WidgetMonitorSaved
   deriving stock (Eq, Show)
   deriving (ToHtml) via NoBody WidgetMonitorResult
 
 
 instance HxOutcome WidgetMonitorResult where
-  hxSuccess = \case
-    WidgetMonitorSaved -> Just "Widget monitor configured successfully"
-    WidgetMonitorQueryInvalid _ -> Nothing
+  hxSuccess WidgetMonitorSaved = Just "Widget monitor configured successfully"
 
 
 widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> WidgetAlertForm -> ATAuthCtx (HxResult WidgetMonitorRejection WidgetMonitorResult)
@@ -1937,7 +1941,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = hxAction do
     (True, _, _) -> pure $ Left RawSqlWidget
     (_, Nothing, _) -> pure $ Left MissingThreshold
     (_, _, Left e) -> pure $ Left e
-    (_, Just chartThreshold, Right warningThreshold) -> Right <$> do
+    (_, Just chartThreshold, Right warningThreshold) -> do
       -- Reuse the widget's existing monitor id when there is one
       existingMonitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM form.widgetId
       everyoneM <- ManageMembers.getEveryoneTeam pid
@@ -1995,10 +1999,10 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = hxAction do
               }
 
       case Alerts.convertToQueryMonitor pid now queryMonitorId alertForm of
-        Left err -> WidgetMonitorQueryInvalid err <$ addToast "error" "Monitor query is invalid" (Just err)
+        Left err -> pure $ Left $ MonitorQueryInvalid err
         Right monitor -> do
           _ <- Monitors.queryMonitorUpsert monitor{Monitors.deactivatedAt = existingMonitor >>= (.deactivatedAt)}
-          WidgetMonitorSaved <$ addTriggerEvent "closeModal" ""
+          Right WidgetMonitorSaved <$ addTriggerEvent "closeModal" ""
 
 
 data WidgetMonitorRemoved = WidgetMonitorRemoved

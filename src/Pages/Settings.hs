@@ -315,7 +315,7 @@ data ApiKeyNotFound = ApiKeyNotFound
   deriving stock (Eq, Show)
 
 
-instance Rejection ApiKeyNotFound where rejectionMessage ApiKeyNotFound = "Something went wrong"
+instance Rejection ApiKeyNotFound where rejectionMessage ApiKeyNotFound = "API key not found"
 
 
 apiKeySetActive :: Projects.ProjectId -> ApiKeyMutation -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (HxResult ApiKeyNotFound ApiMut)
