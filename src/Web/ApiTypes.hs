@@ -5,6 +5,14 @@
 module Web.ApiTypes (
   ApiActor (..),
   principalUser,
+  ApiProblem (..),
+  ApiProblemBody (..),
+  ProblemCode (..),
+  problem,
+  ApiError (..),
+  Resource (..),
+  refusal,
+  refuse,
   -- Monitor types
   MonitorInput (..),
   MonitorPatch (..),
@@ -70,6 +78,8 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
+import Effectful (Eff, (:>))
+import Effectful.Error.Static (Error, throwError)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
@@ -84,8 +94,8 @@ import Pages.Charts.Types qualified as Charts
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (CamelSchema (..), JsonValueSchema (..), SnakeJSON (..), SnakeSchema (..), WrappedEnumSC (..))
 import Relude
-import Servant (FromHttpApiData)
-import Web.Wire (Paged (..))
+import Servant (FromHttpApiData, ServerError (..), err400, err401, err403, err404)
+import Web.Wire (ApiProblem (..), ApiProblemBody (..), Paged (..), ProblemCode (..))
 
 
 data ApiActor = ApiKeyPrincipal | MemberPrincipal Projects.UserId
@@ -95,6 +105,80 @@ data ApiActor = ApiKeyPrincipal | MemberPrincipal Projects.UserId
 principalUser :: ApiActor -> Maybe Projects.UserId
 principalUser ApiKeyPrincipal = Nothing
 principalUser (MemberPrincipal userId) = Just userId
+
+
+-- | The one error body JSON endpoints refuse with. @code@ is the stable snake_case
+-- identifier clients branch on; @details@ carries raw backend text for debugging.
+problem :: ServerError -> ApiProblem -> ServerError
+problem status p = status{errBody = AE.encode (ApiProblemBody p), errHeaders = [("Content-Type", "application/json")]}
+
+
+data Resource = RMonitor | RDashboard | RApiKey | REvent | RProject | REndpoint | RLogPattern | RIncident | RIssue | RTeam | RMember | RUser
+  deriving stock (Eq, Show)
+
+
+-- | Every refusal @/api/v1@ answers with; 'refusal' fixes each one's status, 'ProblemCode' and message.
+data ApiError
+  = NotFound Resource
+  | TabNotFound Text
+  | NoRoute
+  | NoActiveIngestionKey
+  | UserNotCreated
+  | UnknownBulkAction Text
+  | NonPositiveTimeWindow
+  | Required Text
+  | EveryoneTeamNotUpdatable
+  | EveryoneTeamNotDeletable
+  | ReservedHandle
+  | HandleInUse Text
+  | MemberIdentityMissing
+  | AuthenticationRequired
+  | MissingAuthorization
+  | InvalidCredentials
+  | ProjectInactive
+  | InvalidRequest Text
+  deriving stock (Eq, Show)
+
+
+refusal :: ApiError -> ServerError
+refusal e = problem status ApiProblem{code = c, message = msg, field = fieldM, suggestion = Nothing, details = Nothing}
+  where
+    (status, c, msg, fieldM) = case e of
+      NotFound r -> (err404, PNotFound, resource r <> " not found", Nothing)
+      TabNotFound t -> (err404, PNotFound, "Tab not found: " <> t, Nothing)
+      NoRoute -> (err404, PNotFound, "No route matches this path", Nothing)
+      NoActiveIngestionKey -> (err404, PNoActiveIngestionKey, "No active ingestion key; create one in project settings", Nothing)
+      UserNotCreated -> (err404, PUserNotCreated, "Could not create user", Nothing)
+      UnknownBulkAction a -> (err400, PUnknownBulkAction, "Unknown bulk action: " <> a, Just "action")
+      NonPositiveTimeWindow -> (err400, PNonPositiveTimeWindow, "time_window_mins must be positive", Just "time_window_mins")
+      Required f -> (err400, PRequired, f <> " is required", Just f)
+      EveryoneTeamNotUpdatable -> (err400, PEveryoneTeamNotUpdatable, "The everyone team cannot be updated via this endpoint", Nothing)
+      EveryoneTeamNotDeletable -> (err400, PEveryoneTeamNotDeletable, "The everyone team cannot be deleted", Nothing)
+      ReservedHandle -> (err400, PReservedHandle, "Handle \"everyone\" is reserved", Just "handle")
+      HandleInUse h -> (err400, PHandleInUse, "Handle \"" <> h <> "\" is already in use", Just "handle")
+      MemberIdentityMissing -> (err400, PMemberIdentityMissing, "Either email or user_id is required", Nothing)
+      AuthenticationRequired -> (err401, PAuthenticationRequired, "Authentication required to retrieve an ingestion key", Nothing)
+      MissingAuthorization -> (err401, PUnauthorized, "Missing Authorization header", Nothing)
+      InvalidCredentials -> (err401, PUnauthorized, "Invalid API key, session, or project access", Nothing)
+      ProjectInactive -> (err403, PProjectInactive, "Project is deactivated or deleted", Nothing)
+      InvalidRequest m -> (err400, PInvalidRequest, m, Nothing)
+    resource = \case
+      RMonitor -> "Monitor"
+      RDashboard -> "Dashboard"
+      RApiKey -> "API key"
+      REvent -> "event"
+      RProject -> "Project"
+      REndpoint -> "Endpoint"
+      RLogPattern -> "Log pattern"
+      RIncident -> "Incident"
+      RIssue -> "Issue"
+      RTeam -> "Team"
+      RMember -> "Member"
+      RUser -> "User"
+
+
+refuse :: Error ServerError :> es => ApiError -> Eff es a
+refuse = throwError . refusal
 
 
 -- | Patch: all fields optional; only provided fields are updated.

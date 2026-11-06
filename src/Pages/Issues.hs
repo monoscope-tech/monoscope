@@ -50,11 +50,14 @@ module Pages.Issues (
   AIChatForm (..),
   aiChatPostHWithTools,
   aiChatHistoryGetH,
+  IssueChatHistory (..),
   -- Activity
   issueActivityGetH,
+  IssueActivityFeed (..),
   issueSampleGetH,
   -- Pattern group members
   errorGroupMembersGetH,
+  ErrorGroupMembers (..),
   errorUnmergePostH,
   PatternUnmerged,
   -- Shared rendering helpers
@@ -2102,19 +2105,31 @@ aiChatPostHWithTools projectTools pid issueId form = do
     aiChatForm_ pid issueId nextRequestId [term "hx-swap-oob" "outerHTML"]
 
 
+data IssueChatHistory
+  = IssueChatMissing Projects.ProjectId
+  | -- | The 'Bool' is whether a run is still in flight, which keeps the panel polling.
+    IssueChatHistory Projects.ProjectId Issues.IssueId Bool Text [Issues.AIChatMessage]
+
+
+instance ToHtml IssueChatHistory where
+  toHtml (IssueChatMissing pid) = toHtml $ aiChatHistoryView_ (pure . href_) pid []
+  toHtml (IssueChatHistory pid issueId running systemPrompt messages) = toHtml $ issueChatHistory_ pid issueId running systemPrompt messages
+  toHtmlRaw = toHtml
+
+
 -- | Handle AI chat history GET request
-aiChatHistoryGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Html ()))
+aiChatHistoryGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders IssueChatHistory)
 aiChatHistoryGetH pid issueId = do
   (session, _) <- Projects.sessionAndProject pid
   unlessM (AI.canReadEvidence (AI.MemberAccess AI.WebSession session.user.id) pid (UUIDId issueId.unUUIDId)) $ throwError err403
   now <- Time.currentTime
   Issues.selectIssueById pid issueId >>= \case
-    Nothing -> addRespHeaders $ aiChatHistoryView_ (pure . href_) pid []
+    Nothing -> addRespHeaders $ IssueChatMissing pid
     Just issue -> do
       systemPrompt <- Bots.buildIssuePrompt pid issue now
       messages <- Issues.selectChatHistory pid (UUIDId issueId.unUUIDId :: UUIDId "conversation")
       runs <- Issues.listConversationRuns pid (UUIDId issueId.unUUIDId) 10
-      addRespHeaders $ issueChatHistory_ pid issueId (any ((== Issues.RunRunning) . (.status)) runs) systemPrompt messages
+      addRespHeaders $ IssueChatHistory pid issueId (any ((== Issues.RunRunning) . (.status)) runs) systemPrompt messages
 
 
 issueChatHistory_ :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> [Issues.AIChatMessage] -> Html ()
@@ -2896,69 +2911,85 @@ logLevelChip_ logLevel pat =
    in colorChip_ tone icon label
 
 
-issueActivityGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe UTCTime -> ATAuthCtx (RespHeaders (Html ()))
-issueActivityGetH pid issueId traceIdM traceTsM = do
-  (_sess, _project) <- Projects.sessionAndProject pid
-  activities <- Issues.selectIssueActivity pid issueId
+data IssueActivityFeed = IssueActivityFeed
+  { projectId :: Projects.ProjectId
+  , issueId :: Issues.IssueId
+  , now :: UTCTime
+  , activities :: [Issues.IssueActivity]
+  , users :: Map.Map Projects.UserId Projects.User
+  , journey :: V.Vector Telemetry.SpanRecord
+  }
+
+
+instance ToHtml IssueActivityFeed where
+  toHtml f = toHtml feed
+    where
+      -- Issue events first: it is the short, high-signal section (often a single
+      -- "Created" row) and was buried under a journey scrollbox. The journey renders
+      -- last at natural height so the page scroll carries it instead of a nested box.
+      feed :: Html ()
+      feed = do
+        form_ [class_ "mx-4 mb-3 p-2 rounded-lg border border-strokeWeak bg-fillWeaker/40 flex flex-col gap-2 focus-within:border-strokeBrand-strong", hxPost_ $ issueUrl <> "/comment", hxSwap_ "none"] do
+          textarea_ [name_ "body", required_ "", rows_ "2", placeholder_ "Add a comment\x2026", Aria.label_ "Comment", class_ "textarea textarea-ghost textarea-sm w-full min-h-16 border-0 bg-transparent shadow-none focus:outline-none text-base sm:text-sm"] ""
+          button_ [type_ "submit", class_ "btn btn-xs btn-ghost bg-fillWeak border-0 shadow-none self-end"] "Comment"
+        unless (null links) $ div_ [class_ "px-4 pb-3 space-y-1"] do
+          h4_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "External links"
+          forM_ links \(url, title) -> a_ [href_ url, target_ "_blank", rel_ "noopener", class_ "flex items-center gap-1.5 text-sm text-textBrand hover:underline truncate"] do
+            faSprite_ "link" "regular" "w-3 h-3 shrink-0"
+            span_ [class_ "text-xs text-textWeak shrink-0"] $ toHtml $ linkProvider url
+            span_ [class_ "truncate"] $ toHtml title
+        details_ [class_ "px-4 pb-3"] do
+          summary_ [class_ "text-xs text-textBrand cursor-pointer list-none [&::-webkit-details-marker]:hidden"] "+ Link issue"
+          form_ [class_ "mt-2 flex flex-col gap-2", hxPost_ $ issueUrl <> "/link", hxSwap_ "none"] do
+            input_ [type_ "url", name_ "url", required_ "", placeholder_ "https://github.com/org/repo/issues/42", Aria.label_ "Issue URL", class_ "input input-sm w-full"]
+            input_ [type_ "text", name_ "title", placeholder_ "Title (optional)", Aria.label_ "Link title", class_ "input input-sm w-full"]
+            button_ [type_ "submit", class_ "btn btn-xs self-end"] "Link"
+        unless (null participants && null viewers) $ div_ [class_ "px-4 pb-3 space-y-1 text-xs leading-relaxed text-textWeak break-words"] do
+          h4_ [class_ "text-2xs font-semibold uppercase tracking-wide"] "People"
+          details_ [class_ "group/people"] do
+            summary_ [class_ "flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden rounded focus-visible:outline-2 focus-visible:outline-offset-2"] do
+              span_ [class_ "flex -space-x-1"] $ forM_ (take 5 $ participants <> viewers) \uid ->
+                img_ [src_ $ "/api/avatar/" <> uid.toText, alt_ $ name uid, title_ $ name uid, loading_ "lazy", width_ "24", height_ "24", class_ "h-6 w-6 rounded-full bg-fillWeak outline outline-1 outline-black/10 dark:outline-white/10"]
+              span_ $ toHtml $ let n = length participants + length viewers in show n <> bool " people" " person" (n == 1)
+              faSprite_ "chevron-down" "regular" "w-3 h-3 group-open/people:rotate-180"
+            div_ [class_ "pt-2 space-y-1"] do
+              unless (null participants) $ p_ $ toHtml $ "Participating: " <> T.intercalate ", " (name <$> participants)
+              unless (null viewers) $ p_ $ toHtml $ "Viewed: " <> T.intercalate ", " (name <$> viewers)
+        div_ [class_ "border-t border-strokeWeak"] do
+          div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
+            faSprite_ "circle-info" "regular" "w-3 h-3 text-textWeak"
+            fieldLabel_ "" "Timeline"
+        issueActivityTimeline_ f.users f.now timeline
+        userJourneySection_ f.journey
+      isView a = a.event == Issues.Lifecycle Issues.IEViewed
+      (views, timeline) = partition isView f.activities
+      name uid = maybe "Someone" (\u -> bool (u.firstName <> " " <> u.lastName) (CI.original u.email) (T.null u.firstName)) (Map.lookup uid f.users)
+      participants = ordNub $ mapMaybe (.createdBy) timeline
+      viewers = filter (`notElem` participants) $ ordNub $ mapMaybe (.createdBy) views
+      links = [(url, fromMaybe url (lookupValueText m "title")) | a <- timeline, a.event == Issues.Lifecycle Issues.IELinked, Just m <- [a.metadata], Just url <- [lookupValueText m "url"]]
+      issueUrl = "/p/" <> f.projectId.toText <> "/issues/" <> f.issueId.toText
+  toHtmlRaw = toHtml
+
+
+issueActivityGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe UTCTime -> ATAuthCtx (RespHeaders IssueActivityFeed)
+issueActivityGetH projectId issueId traceIdM traceTsM = do
+  (_sess, _project) <- Projects.sessionAndProject projectId
+  activities <- Issues.selectIssueActivity projectId issueId
   now <- Time.currentTime
   env <- (.env) <$> ask @AuthContext
   -- The journey comes out of the issue's trace, the one read on this page big
   -- enough to time out; it is bounded here so a slow trace costs the journey, not
   -- the issue-events timeline beside it.
-  journeySpans <- flip foldMapM ((,) <$> traceIdM <*> traceTsM) \(tId, tTs) ->
+  journey <- flip foldMapM ((,) <$> traceIdM <*> traceTsM) \(tId, tTs) ->
     foldMap (\(_, spans, _) -> spans)
       . join
       <$> tryWithin
         (Just $ env.traceViewTimeoutSecs * 1_000_000)
         "ISSUE_JOURNEY_FETCH"
         ["issue_id" AE..= issueId, "trace_id" AE..= tId]
-        (Telemetry.getTraceDetailsForView env.enableTimefusionReads pid tId (Just tTs) now Nothing)
-  let userIds = ordNub $ mapMaybe (.createdBy) activities
-  users <- Projects.usersByIds (V.fromList userIds)
-  let userMap = Map.fromList $ map (\u -> (u.id, u)) users
-  -- Issue events first: it is the short, high-signal section (often a single
-  -- "Created" row) and was buried under a journey scrollbox. The journey renders
-  -- last at natural height so the page scroll carries it instead of a nested box.
-  let isView a = a.event == Issues.Lifecycle Issues.IEViewed
-      (views, timeline) = partition isView activities
-      name uid = maybe "Someone" (\u -> bool (u.firstName <> " " <> u.lastName) (CI.original u.email) (T.null u.firstName)) (Map.lookup uid userMap)
-      participants = ordNub $ mapMaybe (.createdBy) timeline
-      viewers = filter (`notElem` participants) $ ordNub $ mapMaybe (.createdBy) views
-      links = [(url, fromMaybe url (lookupValueText m "title")) | a <- timeline, a.event == Issues.Lifecycle Issues.IELinked, Just m <- [a.metadata], Just url <- [lookupValueText m "url"]]
-      issueUrl = "/p/" <> pid.toText <> "/issues/" <> issueId.toText
-  addRespHeaders do
-    form_ [class_ "mx-4 mb-3 p-2 rounded-lg border border-strokeWeak bg-fillWeaker/40 flex flex-col gap-2 focus-within:border-strokeBrand-strong", hxPost_ $ issueUrl <> "/comment", hxSwap_ "none"] do
-      textarea_ [name_ "body", required_ "", rows_ "2", placeholder_ "Add a comment\x2026", Aria.label_ "Comment", class_ "textarea textarea-ghost textarea-sm w-full min-h-16 border-0 bg-transparent shadow-none focus:outline-none text-base sm:text-sm"] ""
-      button_ [type_ "submit", class_ "btn btn-xs btn-ghost bg-fillWeak border-0 shadow-none self-end"] "Comment"
-    unless (null links) $ div_ [class_ "px-4 pb-3 space-y-1"] do
-      h4_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "External links"
-      forM_ links \(url, title) -> a_ [href_ url, target_ "_blank", rel_ "noopener", class_ "flex items-center gap-1.5 text-sm text-textBrand hover:underline truncate"] do
-        faSprite_ "link" "regular" "w-3 h-3 shrink-0"
-        span_ [class_ "text-xs text-textWeak shrink-0"] $ toHtml $ linkProvider url
-        span_ [class_ "truncate"] $ toHtml title
-    details_ [class_ "px-4 pb-3"] do
-      summary_ [class_ "text-xs text-textBrand cursor-pointer list-none [&::-webkit-details-marker]:hidden"] "+ Link issue"
-      form_ [class_ "mt-2 flex flex-col gap-2", hxPost_ $ issueUrl <> "/link", hxSwap_ "none"] do
-        input_ [type_ "url", name_ "url", required_ "", placeholder_ "https://github.com/org/repo/issues/42", Aria.label_ "Issue URL", class_ "input input-sm w-full"]
-        input_ [type_ "text", name_ "title", placeholder_ "Title (optional)", Aria.label_ "Link title", class_ "input input-sm w-full"]
-        button_ [type_ "submit", class_ "btn btn-xs self-end"] "Link"
-    unless (null participants && null viewers) $ div_ [class_ "px-4 pb-3 space-y-1 text-xs leading-relaxed text-textWeak break-words"] do
-      h4_ [class_ "text-2xs font-semibold uppercase tracking-wide"] "People"
-      details_ [class_ "group/people"] do
-        summary_ [class_ "flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden rounded focus-visible:outline-2 focus-visible:outline-offset-2"] do
-          span_ [class_ "flex -space-x-1"] $ forM_ (take 5 $ participants <> viewers) \uid ->
-            img_ [src_ $ "/api/avatar/" <> uid.toText, alt_ $ name uid, title_ $ name uid, loading_ "lazy", width_ "24", height_ "24", class_ "h-6 w-6 rounded-full bg-fillWeak outline outline-1 outline-black/10 dark:outline-white/10"]
-          span_ $ toHtml $ let n = length participants + length viewers in show n <> bool " people" " person" (n == 1)
-          faSprite_ "chevron-down" "regular" "w-3 h-3 group-open/people:rotate-180"
-        div_ [class_ "pt-2 space-y-1"] do
-          unless (null participants) $ p_ $ toHtml $ "Participating: " <> T.intercalate ", " (name <$> participants)
-          unless (null viewers) $ p_ $ toHtml $ "Viewed: " <> T.intercalate ", " (name <$> viewers)
-    div_ [class_ "border-t border-strokeWeak"] do
-      div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
-        faSprite_ "circle-info" "regular" "w-3 h-3 text-textWeak"
-        fieldLabel_ "" "Timeline"
-    issueActivityTimeline_ userMap now timeline
-    userJourneySection_ journeySpans
+        (Telemetry.getTraceDetailsForView env.enableTimefusionReads projectId tId (Just tTs) now Nothing)
+  users <- Projects.usersByIds (V.fromList $ ordNub $ mapMaybe (.createdBy) activities)
+  addRespHeaders IssueActivityFeed{projectId, issueId, now, activities, users = Map.fromList $ map (\u -> (u.id, u)) users, journey}
 
 
 issueActivityTimeline_ :: Map.Map Projects.UserId Projects.User -> UTCTime -> [Issues.IssueActivity] -> Html ()
@@ -3108,38 +3139,47 @@ logTimelineEntry pid issueId entry = act do
     Just _ -> forM entry \(ev, meta) -> TimelineLogged <$ (Issues.logIssueActivity issueId ev (Just sess.user.id) (Just $ AE.object meta) >> addTriggerEvent "issueActivityChanged" AE.Null)
 
 
-errorGroupMembersGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
-errorGroupMembersGetH pid errorId = do
-  _ <- Projects.sessionAndProject pid
-  members <- PatternMerge.getPatternGroupMembers pid (ErrorPatternId errorId)
-  addRespHeaders
-    $ unless (null members)
-    $ railSection_ ("Merged patterns · " <> show (length members))
-    $ div_ [class_ "flex flex-col gap-2"] do
-      forM_ members \member -> do
-        let memberId = UUID.toText member.id.unErrorPatternId
-            unmergeUrl = "/p/" <> pid.toText <> "/issues/errors/" <> memberId <> "/unmerge"
-        div_ [class_ "p-3 bg-fillWeaker rounded-lg space-y-2", id_ $ "member-" <> memberId] do
-          div_ [class_ "flex items-center justify-between gap-2"] do
-            span_ [class_ "text-xs font-medium text-textWeak min-w-0 break-words"] $ toHtml member.errorType
-            button_
-              [ type_ "button"
-              , class_ "btn btn-xs btn-ghost tap-target shrink-0"
-              , Aria.label_ $ "Unmerge pattern " <> member.hash
-              , hxPost_ unmergeUrl
-              , hxSwap_ "none"
-              ]
-              do
-                faSprite_ "code-branch" "regular" "w-3 h-3"
-                "Unmerge"
-          details_ [class_ "group/pattern"] do
-            summary_ [class_ "cursor-pointer list-none [&::-webkit-details-marker]:hidden rounded focus-visible:outline-2 focus-visible:outline-offset-2"] do
-              span_ [class_ "text-sm text-textStrong break-normal [overflow-wrap:anywhere] line-clamp-2 group-open/pattern:hidden"] $ toHtml member.message
-              span_ [class_ "block mt-1 text-xs text-textBrand"] do
-                span_ [class_ "group-open/pattern:hidden"] "Read full message"
-                span_ [class_ "hidden group-open/pattern:inline"] "Show less"
-            p_ [class_ "mt-2 text-sm text-textStrong whitespace-pre-wrap break-normal [overflow-wrap:anywhere]"] $ toHtml member.message
-          span_ [class_ "block font-mono text-2xs text-textWeak"] $ toHtml $ "Hash: " <> member.hash
+data ErrorGroupMembers = ErrorGroupMembers {projectId :: Projects.ProjectId, members :: [ErrorPatterns.ErrorPattern]}
+
+
+instance ToHtml ErrorGroupMembers where
+  toHtml g =
+    toHtml
+      $ unless (null g.members)
+      $ railSection_ ("Merged patterns · " <> show (length g.members))
+      $ div_ [class_ "flex flex-col gap-2"] do
+        forM_ g.members \member -> do
+          let memberId = UUID.toText member.id.unErrorPatternId
+              unmergeUrl = "/p/" <> g.projectId.toText <> "/issues/errors/" <> memberId <> "/unmerge"
+          div_ [class_ "p-3 bg-fillWeaker rounded-lg space-y-2", id_ $ "member-" <> memberId] do
+            div_ [class_ "flex items-center justify-between gap-2"] do
+              span_ [class_ "text-xs font-medium text-textWeak min-w-0 break-words"] $ toHtml member.errorType
+              button_
+                [ type_ "button"
+                , class_ "btn btn-xs btn-ghost tap-target shrink-0"
+                , Aria.label_ $ "Unmerge pattern " <> member.hash
+                , hxPost_ unmergeUrl
+                , hxSwap_ "none"
+                ]
+                do
+                  faSprite_ "code-branch" "regular" "w-3 h-3"
+                  "Unmerge"
+            details_ [class_ "group/pattern"] do
+              summary_ [class_ "cursor-pointer list-none [&::-webkit-details-marker]:hidden rounded focus-visible:outline-2 focus-visible:outline-offset-2"] do
+                span_ [class_ "text-sm text-textStrong break-normal [overflow-wrap:anywhere] line-clamp-2 group-open/pattern:hidden"] $ toHtml member.message
+                span_ [class_ "block mt-1 text-xs text-textBrand"] do
+                  span_ [class_ "group-open/pattern:hidden"] "Read full message"
+                  span_ [class_ "hidden group-open/pattern:inline"] "Show less"
+              p_ [class_ "mt-2 text-sm text-textStrong whitespace-pre-wrap break-normal [overflow-wrap:anywhere]"] $ toHtml member.message
+            span_ [class_ "block font-mono text-2xs text-textWeak"] $ toHtml $ "Hash: " <> member.hash
+  toHtmlRaw = toHtml
+
+
+errorGroupMembersGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders ErrorGroupMembers)
+errorGroupMembersGetH projectId errorId = do
+  _ <- Projects.sessionAndProject projectId
+  members <- PatternMerge.getPatternGroupMembers projectId (ErrorPatternId errorId)
+  addRespHeaders ErrorGroupMembers{projectId, members}
 
 
 data PatternUnmerged = PatternUnmerged

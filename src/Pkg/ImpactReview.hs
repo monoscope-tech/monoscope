@@ -306,7 +306,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       let credentialM = listToMaybe [(c, installationId) | c <- credentials, c.host == Git.GitHub, isNothing c.apiBase, any ((== c.id) . (.credentialId)) mappings, Just installationId <- [c.installationId]]
       (credential, installationId) <- maybe (throwError $ ReviewFailure "Repository installation is no longer linked") pure credentialM
       token <- require =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation installationId)
-      conn <- require $ GitSync.credentialConn credential token
+      conn <- require $ first Git.gitConnErrorMessage $ GitSync.credentialConn credential token
       pr <- require =<< Git.getPullRequest conn ref run.number
       if pr.head.revision /= run.revision || pr.state /= "open" || pr.draft
         then do
@@ -781,7 +781,7 @@ fixIssue pid fid = bracket (Fixes.claimJob pid fid) (traverse_ Fixes.releaseJob)
           recordUsage receipt = unlessM (Usage.recordUsage pid target receipt) $ throwError $ ReviewFailure "Usage receipt conflicts with the fix attempt"
       credential <- maybe (throwError $ ReviewFailure "Repository installation is no longer linked") pure . find ((== setup.credentialId) . (.id)) =<< GitSync.getGitHubCredentials pid
       token <- require =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation setup.installationId)
-      conn <- require $ GitSync.credentialConn credential token
+      conn <- require $ first Git.gitConnErrorMessage $ GitSync.credentialConn credential token
       issue <- maybe (throwError $ ReviewFailure "Issue is no longer available") pure =<< Issues.selectIssueById pid run.issueId
       unlessM (Fixes.currentJob lease) $ throwError $ ReviewFailure "Fix authorization is no longer available"
       saved <- require =<< Agent.readSessionContext (Agent.FixSubject fid) context.rootId

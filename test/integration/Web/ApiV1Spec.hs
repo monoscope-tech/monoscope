@@ -129,6 +129,10 @@ spec = describe "API v1" do
     [p | p <- words "/events /metrics /metrics/catalog /schema /monitors /monitors/{monitor_id} /monitors/{monitor_id}/mute /monitors/{monitor_id}/unmute /monitors/{monitor_id}/resolve /monitors/{monitor_id}/toggle_active /monitors/{monitor_id}/yaml /monitors/apply /monitors/bulk /dashboards /dashboards/{dashboard_id} /dashboards/apply /dashboards/{dashboard_id}/duplicate /dashboards/{dashboard_id}/star /dashboards/{dashboard_id}/yaml /dashboards/{dashboard_id}/widgets /dashboards/{dashboard_id}/widgets/{widget_id} /dashboards/{dashboard_id}/widgets/order /dashboards/bulk /api_keys /api_keys/{key_id} /api_keys/{key_id}/activate /api_keys/{key_id}/deactivate /events/query /share /me /project /issues /issues/{issue_id} /issues/{issue_id}/ack /issues/{issue_id}/unack /issues/{issue_id}/archive /issues/{issue_id}/unarchive /issues/bulk /incidents /incidents/{incident_id} /endpoints /endpoints/{endpoint_id} /log_patterns /log_patterns/{pattern_id} /log_patterns/{pattern_id}/ack /log_patterns/bulk /teams /teams/{team_id} /teams/bulk /members /members/{user_id}", isNothing (specJson ^? key "paths" . key (AEK.fromText p))]
       `shouldBe` []
     [s | s <- words "LogResult TraceTreeEntry MetricsData Schema QueryMonitor", isNothing (at ("components.schemas." <> s))] `shouldBe` []
+    -- Refusals are declared per route (Refuses), 400 and 401 once for the whole API, all with the ApiProblem body.
+    let refusal p m c = at ("paths." <> p <> "." <> m <> ".responses." <> c <> ".content.application/json.schema.$ref") ^? _Just . _String
+    [refusal p m c | (p, m, c) <- [("/monitors/{monitor_id}", "get", "404"), ("/teams", "post", "400"), ("/schema", "get", "401")]] `shouldBe` replicate 3 (Just "#/components/schemas/ApiProblemBody")
+    refusal "/schema" "get" "404" `shouldBe` Nothing
     let schema = Schema.telemetrySchema
     [f | f <- ["timestamp", "status_code", "body"], not (Map.member f schema.fields)] `shouldBe` []
     AE.eitherDecode @Schema.Schema (AE.encode schema) `shouldBe` Right schema
@@ -153,7 +157,6 @@ spec = describe "API v1" do
             , ("mcp, no key", H.methodPost, "/api/v1/mcp", [json], AE.encode (rpc "tools/list" []), 401)
             , -- /chart_data_shot predated signed PNG export and ran the caller's KQL/SQL against any pid, unauthenticated.
               ("chart_data_shot", H.methodGet, "/chart_data_shot?data_type=text&pid=" <> encodeUtf8 testPid.toText <> "&query=summarize%20count()", [], "", 404)
-            , ("strict JSON API sort", H.methodGet, "/api/v1/dashboards?sort=bogus", [demo], "", 400)
             , ("widget JSON", H.methodPost, "/p/00000000-0000-0000-0000-000000000000/widget", [json], widgetBody Nothing, 200)
             , ("widget JSON, legacy field", H.methodPost, "/p/00000000-0000-0000-0000-000000000000/widget", [json], widgetBody (Just "arning_threshold"), 400)
             , ("widget JSON, unknown field", H.methodPost, "/p/00000000-0000-0000-0000-000000000000/widget", [json], widgetBody (Just "unexpected_field"), 400)
@@ -161,6 +164,13 @@ spec = describe "API v1" do
       responses <- forM cases \(_, m, p, h, b, _) -> request app m p h b
       [(l, status r) | ((l, _, _, _, _, _), r) <- zip cases responses] `shouldBe` [(l, s) | (l, _, _, _, _, s) <- cases]
       [l | ((l, _, _, _, _, s), r) <- zip cases responses, s == 401, apiKey `T.isInfixOf` decodeUtf8 (WT.simpleBody r)] `shouldBe` []
+      missing <- request app H.methodGet "/api/v1/monitors/00000000-0000-0000-0000-000000000000" [demo] ""
+      badKql <- request app H.methodGet "/api/v1/events?since=1h&query=%7C%7C%20invalid%20%7B%7B" [demo] ""
+      -- Servant's own rejections (unparseable query param, no such route) answer with the envelope too.
+      badSort <- request app H.methodGet "/api/v1/dashboards?sort=bogus" [demo] ""
+      noRoute <- request app H.methodGet "/api/v1/no-such-route" [demo] ""
+      [(status r, (\p -> (p.error.code, p.error.field)) <$> AE.decode @ApiT.ApiProblemBody (WT.simpleBody r)) | r <- take 1 responses <> [missing, badKql, badSort, noRoute]]
+        `shouldBe` [(401, Just (ApiT.PUnauthorized, Nothing)), (404, Just (ApiT.PNotFound, Nothing)), (400, Just (ApiT.PInvalidQuery, Nothing)), (400, Just (ApiT.PInvalidRequest, Nothing)), (404, Just (ApiT.PNotFound, Nothing))]
       accepted <- getPath tr "/api/v1/ingestion-key" [demo, bearer apiKey]
       status accepted `shouldBe` 200
       List.lookup "Cache-Control" (WT.simpleHeaders accepted) `shouldBe` Just "no-store"

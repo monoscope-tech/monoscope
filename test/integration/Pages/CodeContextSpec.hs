@@ -63,7 +63,7 @@ import System.Directory (doesFileExist)
 import System.Environment (getEnvironment)
 import System.Process.Typed (proc, readProcessStdout_, setEnv)
 import System.Timeout (timeout)
-import System.Types (ATBackgroundCtx)
+import System.Types (ATBackgroundCtx, Done (..))
 import UnliftIO.Async (cancel, concurrently, wait, waitCatch, withAsync)
 import UnliftIO.Exception (bracket, throwIO, try)
 import Web.Routes qualified as Routes
@@ -163,7 +163,7 @@ getOnly expected body = interpose @W.HTTP \_ -> \case
 onHost :: Git.GitHost -> Maybe Text -> [([Text], LBS.ByteString)] -> (Git.GitConn -> Eff '[W.HTTP, IOE] a) -> IO (a, [(Text, Text)])
 onHost host origin routes act = do
   seen <- newIORef []
-  conn <- either (fail . toString) pure $ Git.mkGitConn host origin "tok"
+  conn <- either (fail . show) pure $ Git.mkGitConn host origin "tok"
   let matches url fragment = maybe (fragment `T.isInfixOf` url) (`T.isSuffixOf` url) (T.stripSuffix "$" fragment)
       reply method endpoint = liftIO do
         modifyIORef' seen ((method, toText endpoint) :)
@@ -523,8 +523,8 @@ spec = do
         details `shouldSatisfy` T.isInfixOf "View source context"
         details `shouldNotSatisfy` T.isInfixOf "Configure source context"
         let noProvider = interpose @W.HTTP \_ _ -> liftIO $ expectationFailure "Read-only repository settings must not contact the provider" >> throwIO (InvalidUrlException "https://git.invalid" "Unexpected provider call")
-        for_ [PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing, PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing, PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing] \handler -> do
-          html <- renderT <$> call tr (noProvider handler)
+        for_ [renderT <$> call tr (noProvider $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing), renderT <$> call tr (noProvider $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing), renderT <$> call tr (noProvider $ PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing)] \rendered -> do
+          html <- rendered
           html `shouldSatisfy` T.isInfixOf "team/checkout"
           html `shouldNotSatisfy` T.isInfixOf "name=\"credentialId\""
           for_ ["Unlink", "Link repository", "Save review settings", "Install GitHub App", "Connect with token"] \control -> html `shouldNotSatisfy` T.isInfixOf control
@@ -698,19 +698,18 @@ spec = do
         renderT connection.content `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/connect/token\"")
         -- Without a credential there is nothing to read repos through, so the page points at the
         -- control that fixes that rather than a form whose every submission is discarded.
-        mappings <- renderT <$> call tr (PageCodeContext.codeMappingsGetH testPid Nothing)
+        mappings <- renderT <$> call tr (PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing)
         for_ ["href=\"/p/" <> testPid.toText <> "/repositories\"", "href=\"/p/" <> testPid.toText <> "/repositories/connect\"", "Pull requests", "Repositories", "Connect repositories"] \part -> mappings `shouldSatisfy` T.isInfixOf part
         mappings `shouldNotSatisfy` T.isInfixOf "Link repository"
         -- An unresolvable frame explains which of the two problems it has instead of failing the panel.
         unmapped <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
-        renderT unmapped `shouldSatisfy` T.isInfixOf "No linked repository covers /srv/app/checkout.py"
-        noLine <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") Nothing Nothing Nothing
-        renderT noLine `shouldSatisfy` T.isInfixOf "no file and line"
+        unmapped `shouldBe` PageCodeContext.SnippetUnavailable testPid (CodeContext.NoMapping "/srv/app/checkout.py")
+        call tr (PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") Nothing Nothing Nothing) `shouldReturn` PageCodeContext.NoFrameLine
         -- Once an account exists, the unmapped frame's path is carried into the mapping form.
         void $ syncOf tr testPid Nothing "acme" "monoscope-config" (GitSync.PersonalToken "ghp_test") ""
         linkable <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
         renderT linkable `shouldSatisfy` T.isInfixOf "repositories?sample=%2Fsrv%2Fapp%2Fcheckout.py"
-        form <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsGetH testPid (Just "/srv/app/checkout.py")
+        form <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) (Just "/srv/app/checkout.py")
         renderT form `shouldSatisfy` T.isInfixOf "sample=%2Fsrv%2Fapp%2Fcheckout.py"
 
       it "maps several services onto several repos, and resolves each frame to its own" \tr -> do
@@ -1235,7 +1234,7 @@ spec = do
       it "tokenConnection_rejectsMissingTokenAndQueuesOnlyFirstImport" \tr -> do
         let form owner repo branch token prefix = GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
         for_ ["", " "] \token -> do
-          (void <$> call tr (GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing))) `shouldReturn` Left (GitSyncPage.ConnectionFailed Git.GitHub "Enter an access token.")
+          (void <$> call tr (GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing))) `shouldReturn` Left Git.TokenMissing
           runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
           pendingJobs tr >>= (`shouldSatisfy` null)
         void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
@@ -1526,8 +1525,8 @@ spec = do
                   else pure $ Just $ if "/git/trees/" `T.isInfixOf` path then treeOf [("dashboards/overview.yaml", "blob"), ("dashboards/local.yaml", "blob-local")] else "{\"sha\":\"head\"}"
           withAsync (runJob tr provider job) \worker -> do
             timeout 5000000 (takeMVar fetching) `shouldReturn` Just ()
-            refused <- call tr $ PageCodeContext.repositoryDeleteH testPid repository.id
-            renderT refused `shouldSatisfy` T.isInfixOf "A sync is running"
+            Done refused <- call tr $ PageCodeContext.repositoryDeleteH testPid repository.id
+            refused `shouldBe` PageCodeContext.RemovalBlockedBySync
             runQueryEffect tr (GitSync.getRepository testPid repository.id) >>= (`shouldSatisfy` isJust)
             disconnected <- call tr $ GitSyncPage.gitSyncRepositoryDeleteH testPid sync.id
             renderT disconnected `shouldSatisfy` T.isInfixOf "A dashboard sync is running"

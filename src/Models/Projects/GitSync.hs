@@ -59,6 +59,7 @@ module Models.Projects.GitSync (
   buildSyncPlan,
   dashboardToYaml,
   yamlToDashboard,
+  DashboardYamlError (..),
   titleToFilePath,
   buildSchemaWithMeta,
   getDashboardsPath,
@@ -402,11 +403,11 @@ syncCreds s = mkGitCreds s.installationId s.accessToken
 -- The token is resolved separately — for GitHub it may be minted from an App installation,
 -- which is an HTTP round trip — so this stays pure and total: given the token, either the row
 -- describes a reachable host or it says why not.
-syncConn :: GitHubSync -> Text -> Either Text Git.GitConn
+syncConn :: GitHubSync -> Text -> Either Git.GitConnError Git.GitConn
 syncConn s = Git.mkGitConn s.host s.apiBase
 
 
-credentialConn :: GitHubCredential -> Text -> Either Text Git.GitConn
+credentialConn :: GitHubCredential -> Text -> Either Git.GitConnError Git.GitConn
 credentialConn c = Git.mkGitConn c.host c.apiBase
 
 
@@ -735,8 +736,13 @@ dashboardToYaml :: Dashboard -> ByteString
 dashboardToYaml = Yaml.encode
 
 
-yamlToDashboard :: ByteString -> Either Text Dashboard
-yamlToDashboard bytes = first (toText . show) (Yaml.decodeEither' bytes) >>= Dashboards.validateDashboard
+-- | Why YAML did not become a dashboard: it did not parse, or the dashboard it describes is invalid.
+data DashboardYamlError = YamlUnparseable Text | DashboardInvalid Text
+  deriving stock (Eq, Show)
+
+
+yamlToDashboard :: ByteString -> Either DashboardYamlError Dashboard
+yamlToDashboard bytes = first (YamlUnparseable . show) (Yaml.decodeEither' bytes) >>= first DashboardInvalid . Dashboards.validateDashboard
 
 
 -- | Convert dashboard title to a kebab-case file path.

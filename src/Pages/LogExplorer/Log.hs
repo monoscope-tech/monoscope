@@ -6,9 +6,11 @@ module Pages.LogExplorer.Log (
   logExplorerValidateH,
   QueryValidation (..),
   logExplorerFacetsH,
+  FacetsView (..),
   logPatternsH,
   logSessionsH,
   alertFormH,
+  AlertForm (..),
   apiLogExpandH,
   queryEvents,
   LogsGet (..),
@@ -100,7 +102,7 @@ import Utils (FieldAction (..), FieldMenuCtx (..), encodeText, explorerNavTabs_,
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 
-import Web.ApiTypes (LogResult (..), TraceTreeEntry (..))
+import Web.ApiTypes (ApiProblem (ApiProblem), LogResult (..), ProblemCode (..), TraceTreeEntry (..), problem)
 
 
 data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text, isQueryResult :: Bool, rowIdx :: Int}
@@ -653,9 +655,8 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
     =<< LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing environmentM serviceM
 
 
--- | Every refusal the explorer's JSON endpoints answer with. The @Kql*@ cases are the
--- structured @{"error": {code, message, field?, suggestion?, details?}}@ body the CLI's
--- @renderAPIError@ decodes; the @Expand*@ cases keep their plain-text bodies.
+-- | Every refusal the explorer's JSON endpoints answer with, as a 400 'ApiProblem' (which the CLI's
+-- @renderAPIError@ decodes).
 data LogError
   = KqlInvalid Text
   | -- | Column name, then the raw database error.
@@ -663,19 +664,17 @@ data LogError
   | KqlFailed Text
   | ExpandMissingKey
   | ExpandUnknownKind
-  | ExpandInvalidQuery Text
   deriving stock (Eq, Show)
 
 
 refuse :: Error Servant.ServerError :> es => LogError -> Eff es a
 refuse =
-  throwError . \case
-    KqlInvalid err -> kql "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing
-    KqlUnknownField col raw -> kql "unknown_field" ("Unknown field \"" <> col <> "\"") (Just col) (Just $ "quote it as \"" <> col <> "\" to search text, or use 'field == value' for equality") (Just raw)
-    KqlFailed raw -> kql "query_failed" (summary raw) Nothing Nothing (Just raw)
-    ExpandMissingKey -> Servant.err400{Servant.errBody = "Missing key"}
-    ExpandUnknownKind -> Servant.err400{Servant.errBody = "kind must be session or pattern"}
-    ExpandInvalidQuery err -> Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}
+  throwError . problem Servant.err400 . \case
+    KqlInvalid err -> ApiProblem PInvalidQuery ("Invalid query: " <> err) Nothing Nothing Nothing
+    KqlUnknownField col raw -> ApiProblem PUnknownField ("Unknown field \"" <> col <> "\"") (Just col) (Just $ "quote it as \"" <> col <> "\" to search text, or use 'field == value' for equality") (Just raw)
+    KqlFailed raw -> ApiProblem PQueryFailed (summary raw) Nothing Nothing (Just raw)
+    ExpandMissingKey -> ApiProblem PRequired "Missing key" (Just "key") Nothing Nothing
+    ExpandUnknownKind -> ApiProblem PInvalidValue "kind must be session or pattern" (Just "kind") Nothing Nothing
   where
     -- The first line only, so the user doesn't see raw Haskell record syntax.
     summary raw
@@ -684,20 +683,6 @@ refuse =
       | otherwise = firstLine
       where
         firstLine = T.strip $ T.takeWhile (/= '\n') raw
-    kql :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Servant.ServerError
-    kql code msg fieldM suggestionM detailsM =
-      Servant.err400
-        { Servant.errBody =
-            AE.encode
-              $ AE.object
-                [ "error"
-                    AE..= AE.object
-                      ( ["code" AE..= code, "message" AE..= msg]
-                          <> catMaybes [("field" AE..=) <$> fieldM, ("suggestion" AE..=) <$> suggestionM, ("details" AE..=) <$> detailsM]
-                      )
-                ]
-        , Servant.errHeaders = [("Content-Type", "application/json")]
-        }
 
 
 -- | Classify the raw exception string from 'LogQueries.selectLogTable': a missing column
@@ -966,7 +951,7 @@ explorerUrl pid endpoint u = "/p/" <> pid.toText <> "/log_explorer/" <> display 
 -- | Lazy facet fragments for collapsed groups and per-field overflow values.
 -- Common facets render in the initial page from the summary already read by
 -- 'mkPageCtx'; this endpoint keeps the rest off the critical rendering path.
-logExplorerFacetsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+logExplorerFacetsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders FacetsView)
 logExplorerFacetsH pid fieldM groupM = do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
@@ -977,20 +962,29 @@ logExplorerFacetsH pid fieldM groupM = do
   when (isNothing facetSummary) $ BackgroundJobs.enqueueJobs authCtx [BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now]
   addRespHeaders
     $ maybe
-      (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
+      FacetsPending
       ( \summary -> case (fieldM, facetGroupM) of
-          (Just field, _) -> renderFacetTail field summary
-          (_, Just facetGroup) -> facetNode_ $ facetGroupNode True facetGroup summary
-          _ -> renderFacets summary
+          (Just field, _) -> FacetTail field summary
+          (Nothing, Just facetGroup) -> FacetGroupFacets facetGroup summary
+          (Nothing, Nothing) -> AllFacets summary
       )
       facetSummary
-  where
-    renderFacetTail :: Text -> FacetSummary -> Html ()
-    renderFacetTail field facetSummary =
-      whenJust (find ((== field) . (.path)) facetDefs) \facet -> do
-        let (FacetData facetMap) = facetSummary.facetJson
-            values = drop facetHeadCount $ HM.lookupDefault [] field facetMap
-        facetTail_ True $ map (facetChoice facet) values
+
+
+-- | What 'logExplorerFacetsH' answers: one field's overflow values, one collapsed group, or the whole sidebar.
+data FacetsView = FacetsPending | FacetTail Text FacetSummary | FacetGroupFacets FacetGroup FacetSummary | AllFacets FacetSummary
+
+
+instance ToHtml FacetsView where
+  toHtml =
+    toHtml . \case
+      FacetsPending -> div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project."
+      FacetTail field summary -> whenJust (find ((== field) . (.path)) facetDefs) \facet -> do
+        let (FacetData facetMap) = summary.facetJson
+        facetTail_ True $ map (facetChoice facet) $ drop facetHeadCount $ HM.lookupDefault [] field facetMap
+      FacetGroupFacets facetGroup summary -> facetNode_ $ facetGroupNode True facetGroup summary
+      AllFacets summary -> renderFacets summary
+  toHtmlRaw = toHtml
 
 
 -- | Structured verdict for the query editor. It underlines @column@..@width@ and
@@ -1070,12 +1064,15 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM cursorM = do
 
 -- | Lazily-loaded alert configuration form (HTMX partial). Kept off the shell's
 -- hot path — the shell no longer forks a teams query or renders this every load.
-alertFormH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+alertFormH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders AlertForm)
 alertFormH pid alertM = do
   (session, project) <- Projects.sessionAndProject pid
   alertDM <- lookupAlert alertM
   teams <- V.fromList <$> ManageMembers.getTeams pid
-  addRespHeaders $ alertConfigurationForm_ project session.environment alertDM teams
+  addRespHeaders $ AlertForm project session.environment alertDM teams
+
+
+data AlertForm = AlertForm Projects.Project (Maybe Text) (Maybe Monitors.QueryMonitor) (V.Vector ManageMembers.Team)
 
 
 -- | Resolve an @?alert=<uuid>@ query param to its monitor, if it parses and exists.
@@ -1767,7 +1764,7 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
     Just "pattern" -> pure (LogQueries.ExpandPattern key, 20)
     _ -> refuse ExpandUnknownKind
 
-  queryAST <- either (refuse . ExpandInvalidQuery) pure (parseQueryToAST (maybeToMonoid queryM))
+  queryAST <- either (refuse . KqlInvalid) pure (parseQueryToAST (maybeToMonoid queryM))
 
   (rows, cols) <- LogQueries.fetchEventExamples authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) expandKind (fromMaybe 0 skipM) (limitN + 1)
 
@@ -1817,70 +1814,71 @@ curateCols addCols removeCols = sortOn rank . filter keep
 
 
 -- | Render alert configuration form for creating log-based alerts
-alertConfigurationForm_ :: Projects.Project -> Maybe Text -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Html ()
-alertConfigurationForm_ project selectedEnvironment alertM teams = do
-  let pid = project.id
-      monitorEnvironment = maybe selectedEnvironment (.environment) alertM
-      monitorService = alertM >>= (.service)
-  div_ [class_ "surface-raised h-full flex flex-col group/alt"] do
-    div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
-      div_ [class_ "flex items-center gap-2.5"] do
-        div_ [class_ "w-8 h-8 rounded-full bg-fillBrand-weak flex items-center justify-center shrink-0"]
-          $ faSprite_ "bell" "regular" "w-4 h-4 text-iconBrand"
-        div_ [] do
-          h3_ [class_ "text-base font-semibold text-textStrong"] $ if isJust alertM then "Edit monitor" else "Create monitor"
-          p_ [class_ "text-xs text-textWeak hidden sm:block"] "Get notified when your query matches specific conditions"
-      label_
-        [ Lucid.for_ "create-alert-toggle"
-        , class_ "inline-flex h-8 w-8 items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-1"
-        , Aria.label_ "Close monitor editor"
-        , role_ "button"
-        , tabindex_ "0"
-        , keyboardActivateAttr_
-        ]
-        $ faSprite_ "xmark" "regular" "w-3.5 h-3.5"
+instance ToHtml AlertForm where
+  toHtmlRaw = toHtml
+  toHtml (AlertForm project selectedEnvironment alertM teams) = toHtml @(Html ()) do
+    let pid = project.id
+        monitorEnvironment = maybe selectedEnvironment (.environment) alertM
+        monitorService = alertM >>= (.service)
+    div_ [class_ "surface-raised h-full flex flex-col group/alt"] do
+      div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
+        div_ [class_ "flex items-center gap-2.5"] do
+          div_ [class_ "w-8 h-8 rounded-full bg-fillBrand-weak flex items-center justify-center shrink-0"]
+            $ faSprite_ "bell" "regular" "w-4 h-4 text-iconBrand"
+          div_ [] do
+            h3_ [class_ "text-base font-semibold text-textStrong"] $ if isJust alertM then "Edit monitor" else "Create monitor"
+            p_ [class_ "text-xs text-textWeak hidden sm:block"] "Get notified when your query matches specific conditions"
+        label_
+          [ Lucid.for_ "create-alert-toggle"
+          , class_ "inline-flex h-8 w-8 items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-1"
+          , Aria.label_ "Close monitor editor"
+          , role_ "button"
+          , tabindex_ "0"
+          , keyboardActivateAttr_
+          ]
+          $ faSprite_ "xmark" "regular" "w-3.5 h-3.5"
 
-    div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
-      form_
-        [ id_ "alert-form"
-        , hxPost_ $ "/p/" <> pid.toText <> "/monitors/alerts"
-        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
-        , hxSwap_ "none"
-        , class_ "flex flex-col gap-3"
-        , resetFormOnSuccessAttr_
-        ]
-        do
-          input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" (.id.toText) alertM]
-          let title = maybe "" (.alertConfig.title) alertM
-          if maybe False (isJust . (.widgetId)) alertM
-            then input_ [type_ "hidden", name_ "title", value_ title]
-            else formField_ FieldSm def{value = title, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
+      div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
+        form_
+          [ id_ "alert-form"
+          , hxPost_ $ "/p/" <> pid.toText <> "/monitors/alerts"
+          , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
+          , hxSwap_ "none"
+          , class_ "flex flex-col gap-3"
+          , resetFormOnSuccessAttr_
+          ]
+          do
+            input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" (.id.toText) alertM]
+            let title = maybe "" (.alertConfig.title) alertM
+            if maybe False (isJust . (.widgetId)) alertM
+              then input_ [type_ "hidden", name_ "title", value_ title]
+              else formField_ FieldSm def{value = title, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
 
-          let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
-              conditionType = bool "has_matches" "threshold_exceeded" $ maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM
-          AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 (AlertUI.SelectCondition $ Just conditionType)
+            let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
+                conditionType = bool "has_matches" "threshold_exceeded" $ maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM
+            AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 (AlertUI.SelectCondition $ Just conditionType)
 
-          AlertUI.thresholdsSection_ (alertM >>= (.alertConfig.unit)) Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
+            AlertUI.thresholdsSection_ (alertM >>= (.alertConfig.unit)) Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
 
-          div_ [class_ "border-y border-strokeWeak py-3"] do
-            p_ [class_ "text-sm font-medium text-textStrong"] "Scope"
-            p_ [class_ "mb-2 text-xs text-textWeak"] "Evaluate this monitor only for this environment or service. Leave a field empty to include all."
-            div_ [class_ "flex gap-2 max-sm:flex-col"] do
-              div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorEnvironment, placeholder = "e.g. production"} "Environment" "environment" False Nothing
-              div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorService, placeholder = "e.g. checkout"} "Service" "service" False Nothing
+            div_ [class_ "border-y border-strokeWeak py-3"] do
+              p_ [class_ "text-sm font-medium text-textStrong"] "Scope"
+              p_ [class_ "mb-2 text-xs text-textWeak"] "Evaluate this monitor only for this environment or service. Leave a field empty to include all."
+              div_ [class_ "flex gap-2 max-sm:flex-col"] do
+                div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorEnvironment, placeholder = "e.g. production"} "Environment" "environment" False Nothing
+                div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorService, placeholder = "e.g. checkout"} "Service" "service" False Nothing
 
-          let selectedTeamIds = maybe V.empty (.teams) alertM
-          AlertUI.notificationSettingsSection_ teams selectedTeamIds "alert-form" alertM
+            let selectedTeamIds = maybe V.empty (.teams) alertM
+            AlertUI.notificationSettingsSection_ teams selectedTeamIds "alert-form" alertM
 
-          div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
-            label_
-              [ Lucid.for_ "create-alert-toggle"
-              , class_ "btn btn-sm"
-              , role_ "button"
-              , tabindex_ "0"
-              , keyboardActivateAttr_
-              ]
-              "Cancel"
-            button_
-              [type_ "submit", class_ "btn btn-primary btn-sm"]
-              (faSprite_ "plus" "regular" "w-3.5 h-3.5" >> if isJust alertM then "Update monitor" else "Create monitor")
+            div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
+              label_
+                [ Lucid.for_ "create-alert-toggle"
+                , class_ "btn btn-sm"
+                , role_ "button"
+                , tabindex_ "0"
+                , keyboardActivateAttr_
+                ]
+                "Cancel"
+              button_
+                [type_ "submit", class_ "btn btn-primary btn-sm"]
+                (faSprite_ "plus" "regular" "w-3.5 h-3.5" >> if isJust alertM then "Update monitor" else "Create monitor")

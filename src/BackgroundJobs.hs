@@ -414,7 +414,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         account <- ExceptT $ maybeToRight "Reconnect the repository account." <$> GitSync.getGitHubCredential (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) pid cid
         credentials <- hoistEither $ maybeToRight "Reconnect the repository account." $ GitSync.credentialCreds account
         token <- ExceptT $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey credentials
-        conn <- hoistEither $ GitSync.credentialConn account token
+        conn <- hoistEither $ first Git.gitConnErrorMessage $ GitSync.credentialConn account token
         metadata <- ExceptT $ Git.fetchRepository conn (Git.RepoRef repository.owner repository.repo "HEAD")
         (_, tree) <- ExceptT $ Git.fetchTree conn (Git.RepoRef repository.owner repository.repo metadata.defaultBranch) ""
         now <- lift Time.currentTime
@@ -4718,7 +4718,7 @@ withGitSync pid sidM operation k = do
             GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey creds >>= \case
               Left err -> failWith "Failed to get git host token" err
               Right token -> case GitSync.syncConn sync token of
-                Left err -> failWith "Git sync row does not describe a reachable host" err
+                Left err -> failWith "Git sync row does not describe a reachable host" (Git.gitConnErrorMessage err)
                 Right conn -> k conn sync
       where
         failWith message err = void (GitSync.recordSyncError sync.id operation err) *> Log.logAttention message (pid, sync.id, err)

@@ -24,6 +24,10 @@ module Pkg.Git (
   unBaseUrl,
   Sensitive (..),
   GitConn (..),
+  GitConnError (..),
+  EndpointError (..),
+  OriginError (..),
+  gitConnErrorMessage,
   mkGitConn,
   validateOrigin,
   normalizeOrigin,
@@ -268,6 +272,40 @@ hostOriginRule = \case
   Bitbucket -> OriginRejected "https://api.bitbucket.org/2.0" -- Server is EOL; Cloud only
 
 
+-- | Why a host, origin and token cannot make a connection — decided locally, before any request.
+data GitConnError = TokenMissing | BadEndpoint EndpointError
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+-- | Why a host and origin name no API base.
+data EndpointError = SelfHostedOnly GitHost | CloudOnly GitHost | BadOrigin OriginError
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+-- | Why a user-supplied origin is not a usable server address.
+data OriginError = OriginMissing | OriginInsecure | OriginHasCredentials | OriginHasQuery | OriginUnparseable | OriginNoHost
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+-- | >>> gitConnErrorMessage (BadEndpoint (SelfHostedOnly Gitea))
+-- "Gitea is always self-hosted \8212 enter the URL of your server."
+gitConnErrorMessage :: GitConnError -> Text
+gitConnErrorMessage = \case
+  TokenMissing -> "Enter an access token."
+  BadEndpoint (SelfHostedOnly h) -> hostLabel h <> " is always self-hosted — enter the URL of your server."
+  BadEndpoint (CloudOnly h) -> hostLabel h <> " Cloud only; a server URL is not supported here."
+  BadEndpoint (BadOrigin e) -> case e of
+    OriginMissing -> "Enter the URL of your server."
+    OriginInsecure -> "Use https:// — an http:// server would receive your access token in clear text."
+    OriginHasCredentials -> "Remove the username and password from the URL; the access token is the credential."
+    OriginHasQuery -> "Remove the query string and fragment; this is a server address, not a link."
+    OriginUnparseable -> "That is not a URL we can parse."
+    OriginNoHost -> "That URL has no server name in it."
+
+
 -- | Normalise and vet a user-supplied origin.
 --
 -- Everything a self-hosted origin is allowed to be: an @https@ scheme, a host, an optional
@@ -293,31 +331,30 @@ hostOriginRule = \case
 -- automatic upgrade would hide a misconfiguration that matters:
 --
 -- >>> normalizeOrigin "http://git.acme.dev"
--- Left "Use https:// \8212 an http:// server would receive your access token in clear text."
+-- Left OriginInsecure
 --
 -- >>> normalizeOrigin "https://user:pw@git.acme.dev"
--- Left "Remove the username and password from the URL; the access token is the credential."
+-- Left OriginHasCredentials
 -- >>> normalizeOrigin "https://git.acme.dev?x=1"
--- Left "Remove the query string and fragment; this is a server address, not a link."
+-- Left OriginHasQuery
 -- >>> normalizeOrigin ""
--- Left "Enter the URL of your server."
-normalizeOrigin :: Text -> Either Text Text
+-- Left OriginMissing
+normalizeOrigin :: Text -> Either OriginError Text
 normalizeOrigin raw
-  | T.null trimmed = Left "Enter the URL of your server."
-  | any (`T.isInfixOf` trimmed) ["?", "#"] = Left "Remove the query string and fragment; this is a server address, not a link."
-  | "http://" `T.isPrefixOf` T.toLower trimmed = Left insecure
+  | T.null trimmed = Left OriginMissing
+  | any (`T.isInfixOf` trimmed) ["?", "#"] = Left OriginHasQuery
+  | "http://" `T.isPrefixOf` T.toLower trimmed = Left OriginInsecure
   | otherwise = do
-      uri <- maybeToRight "That is not a URL we can parse." $ parseURI (toString withScheme)
-      auth <- maybeToRight "That URL has no server name in it." uri.uriAuthority
-      unless (uri.uriScheme == "https:") $ Left insecure
-      unless (null auth.uriUserInfo) $ Left "Remove the username and password from the URL; the access token is the credential."
-      unless (null uri.uriQuery && null uri.uriFragment) $ Left "Remove the query string and fragment; this is a server address, not a link."
-      when (null auth.uriRegName) $ Left "That URL has no server name in it."
+      uri <- maybeToRight OriginUnparseable $ parseURI (toString withScheme)
+      auth <- maybeToRight OriginNoHost uri.uriAuthority
+      unless (uri.uriScheme == "https:") $ Left OriginInsecure
+      unless (null auth.uriUserInfo) $ Left OriginHasCredentials
+      unless (null uri.uriQuery && null uri.uriFragment) $ Left OriginHasQuery
+      when (null auth.uriRegName) $ Left OriginNoHost
       pure $ T.dropWhileEnd (== '/') $ toText (uri.uriScheme <> "//" <> auth.uriRegName <> auth.uriPort <> uri.uriPath)
   where
     trimmed = T.strip raw
     withScheme = if "https://" `T.isPrefixOf` T.toLower trimmed then trimmed else "https://" <> trimmed
-    insecure = "Use https:// — an http:// server would receive your access token in clear text." :: Text
 
 
 -- | Build a connection, or say why the host and origin cannot make one.
@@ -339,19 +376,19 @@ normalizeOrigin raw
 -- The two host-shaped errors:
 --
 -- >>> unBaseUrl . (.apiBase) <$> mkGitConn Gitea Nothing "t"
--- Left "Gitea is always self-hosted \8212 enter the URL of your server."
+-- Left (BadEndpoint (SelfHostedOnly Gitea))
 -- >>> unBaseUrl . (.apiBase) <$> mkGitConn Bitbucket (Just "https://bb.acme.dev") "t"
--- Left "Bitbucket Cloud only; a server URL is not supported here."
+-- Left (BadEndpoint (CloudOnly Bitbucket))
 --
 -- A blank token cannot authenticate anything, and failing here beats a 401 from four
 -- different hosts in four different shapes:
 --
 -- >>> unBaseUrl . (.apiBase) <$> mkGitConn GitHub Nothing "  "
--- Left "Enter an access token."
-mkGitConn :: GitHost -> Maybe Text -> Text -> Either Text GitConn
+-- Left TokenMissing
+mkGitConn :: GitHost -> Maybe Text -> Text -> Either GitConnError GitConn
 mkGitConn h originM tok = do
-  when (T.null $ T.strip tok) $ Left "Enter an access token."
-  base <- validateOrigin h originM
+  when (T.null $ T.strip tok) $ Left TokenMissing
+  base <- first BadEndpoint $ validateOrigin h originM
   pure $ GitConn h base (Sensitive tok)
 
 
@@ -364,16 +401,16 @@ mkGitConn h originM tok = do
 -- >>> unBaseUrl <$> validateOrigin GitLab (Just "https://git.acme.dev/")
 -- Right "https://git.acme.dev/api/v4"
 -- >>> unBaseUrl <$> validateOrigin Gitea Nothing
--- Left "Gitea is always self-hosted \8212 enter the URL of your server."
-validateOrigin :: GitHost -> Maybe Text -> Either Text BaseUrl
+-- Left (SelfHostedOnly Gitea)
+validateOrigin :: GitHost -> Maybe Text -> Either EndpointError BaseUrl
 validateOrigin h originM =
   BaseUrl <$> case (hostOriginRule h, mfilter (not . T.null . T.strip) originM) of
     (OriginOptional saas _, Nothing) -> Right saas
-    (OriginOptional _ path, Just o) -> (<> path) <$> normalizeOrigin o
-    (OriginRequired _, Nothing) -> Left $ hostLabel h <> " is always self-hosted — enter the URL of your server."
-    (OriginRequired path, Just o) -> (<> path) <$> normalizeOrigin o
+    (OriginOptional _ path, Just o) -> bimap BadOrigin (<> path) $ normalizeOrigin o
+    (OriginRequired _, Nothing) -> Left $ SelfHostedOnly h
+    (OriginRequired path, Just o) -> bimap BadOrigin (<> path) $ normalizeOrigin o
     (OriginRejected saas, Nothing) -> Right saas
-    (OriginRejected _, Just _) -> Left $ hostLabel h <> " Cloud only; a server URL is not supported here."
+    (OriginRejected _, Just _) -> Left $ CloudOnly h
 
 
 -- | Which repo, at which revision.

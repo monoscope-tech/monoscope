@@ -112,7 +112,7 @@ import Web.ApiHandlers (AllQueryParams, ApiV1Routes (..), apiV1OpenApiSpec)
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes (ApiActor (..))
 import Web.ApiTypes qualified as ApiT
-import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
+import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, servantRejection)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.MCP qualified as MCP
@@ -311,8 +311,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardStarPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Unrefusable 'POST Dashboards.StarButton
   , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> QueryParam "source_dashboard_id" Dashboards.DashboardId :> Post '[HTML] (RespHeaders Widget.Widget)
-  , dashboardWidgetNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "new" :> QPT "tab" :> QPT "range_start" :> QPT "range_end" :> Get '[HTML] (RespHeaders (Html ()))
-  , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> QPT "editor_tab" :> Get '[HTML] (RespHeaders (Html ()))
+  , dashboardWidgetNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "new" :> QPT "tab" :> QPT "range_start" :> QPT "range_end" :> Get '[HTML] (RespHeaders Dashboards.WidgetEditor)
+  , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> QPT "editor_tab" :> Get '[HTML] (RespHeaders Dashboards.WidgetEditor)
   , -- Widget alert routes
     widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Action 'POST Dashboards.WidgetMonitorRejection Dashboards.WidgetMonitorSaved
   , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Unrefusable 'DELETE Dashboards.WidgetMonitorRemoved
@@ -321,8 +321,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Dashboard tab routes (htmx lazy loading)
     dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Header "HX-Target" Text :> AllQueryParams :> Get '[HTML] (RespHeaders (NavigationResponse Dashboards.DashboardGet))
   , dashboardTabRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.TabRenameForm :> Patch '[HTML] (RespHeaders Dashboards.TabRenameRes)
-  , dashboardYamlGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[HTML] (RespHeaders (Html ()))
-  , dashboardYamlPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> ReqBody '[FormUrlEncoded] Dashboards.YamlForm :> Put '[HTML] (RespHeaders (Html ()))
+  , dashboardYamlGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[HTML] (RespHeaders Dashboards.DashboardYaml)
+  , dashboardYamlPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> ReqBody '[FormUrlEncoded] Dashboards.YamlForm :> Unrefusable 'PUT Dashboards.YamlSave
   , -- API routes
     apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Settings.ApiGet)
   , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Action 'DELETE Settings.ApiKeyNotFound Settings.ApiMut
@@ -333,7 +333,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QueryParam "db_source" Hasql.SqlSource :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
-  , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
+  , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders Dashboards.SqlPreview)
   , widgetSqlText :: mode :- "p" :> ProjectId :> "widget" :> "sql-text" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[PlainText] (RespHeaders Text)
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders (Table.TableResponse ApiCatalog.EnpReqStatsVM))
@@ -359,18 +359,18 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , bringS3 :: mode :- "p" :> ProjectId :> "byob_s3" :> Get '[HTML] (RespHeaders (PageCtx Settings.StorageGet))
   , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders Settings.StorageGet)
   , bringS3Remove :: mode :- "p" :> ProjectId :> "byob_s3" :> Delete '[HTML] (RespHeaders Settings.StorageGet)
-  , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (Html ()))
+  , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoriesGet))
   , projectWikiGet :: mode :- "p" :> ProjectId :> "wiki" :> CaptureAll "path" Text :> QueryParam "after" ProjectMemory.PagePath :> QueryParam "q" Text :> QueryParam "folder" Text :> QueryFlag "edit" :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
   , projectMemoryGet :: mode :- "p" :> ProjectId :> "memories" :> QueryParam "page" (UUIDId "memory_page") :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
   , projectMemoryPost :: mode :- "p" :> ProjectId :> "memories" :> ReqBody '[FormUrlEncoded] PageCodeContext.MemoryForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
-  , repositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> QueryParam "tab" PageCodeContext.RepositoryTab :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
-  , serviceRepositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> "services" :> Capture "service" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , repositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> QueryParam "tab" PageCodeContext.RepositoryTab :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoriesGet))
+  , serviceRepositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> "services" :> Capture "service" Text :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoriesGet))
   , repositoryConnectGet :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryConnectGet))
   , repositoryConnectPost :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> ReqBody '[FormUrlEncoded] PageCodeContext.RepositoryConnectForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryConnectGet))
   , repositoryTokenGet :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> "token" :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryTokenGet))
   , repositoryTokenPost :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> "token" :> ReqBody '[FormUrlEncoded] PageCodeContext.RepositoryTokenForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryTokenGet))
   , repositoryGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
-  , repositoryDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> Delete '[HTML] (RespHeaders (Html ()))
+  , repositoryDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> Unrefusable 'DELETE PageCodeContext.RepositoryRemoval
   , repositoryDashboardGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx GitSync.RepositoryDashboardGet))
   , repositoryDashboardPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "dashboards" :> ReqBody '[FormUrlEncoded] GitSync.RepositoryDashboardForm :> Post '[HTML] (RespHeaders (PageCtx GitSync.RepositoryDashboardGet))
   , repositoryAnalyzePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "analyze" :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
@@ -378,28 +378,28 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , repositoryFolderPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "folder" :> ReqBody '[FormUrlEncoded] PageCodeContext.FolderForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
   , repositoryConflictPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "resources" :> Capture "resource_id" (UUIDId "repository_resource") :> "conflict" :> ReqBody '[FormUrlEncoded] PageCodeContext.ConflictForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
   , repositorySourceEnabledPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> "enabled" :> ReqBody '[FormUrlEncoded] PageCodeContext.SourceContextForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
-  , repositorySourceGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , repositorySourceGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositorySourceGet))
   , repositorySourcePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Action 'POST PageCodeContext.MappingRejection PageCodeContext.MappingsPanel
-  , repositorySourceDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> Capture "mapping_id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
-  , repositoryReviewsPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> "reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST GitSync.GitSyncRejection GitSync.GitSyncSettings
+  , repositorySourceDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> Capture "mapping_id" CodeContext.CodeMappingId :> Unrefusable 'DELETE PageCodeContext.MappingsPanel
+  , repositoryReviewsPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> "reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Unrefusable 'POST (PageCodeContext.ReviewChange (PageCtx PageCodeContext.RepositoryGet))
+  , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST Git.GitConnError GitSync.GitSyncSettings
   , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Unrefusable 'DELETE GitSync.GitSyncRemoval
-  , gitSyncRepositoryUpdate :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST GitSync.GitSyncRejection GitSync.GitSyncSettings
+  , gitSyncRepositoryUpdate :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST Git.GitConnError GitSync.GitSyncSettings
   , gitSyncRepositoryRetry :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "retry" :> Unrefusable 'POST GitSync.GitSyncSettings
   , gitSyncRepositoryPause :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "pause" :> Unrefusable 'POST GitSync.GitSyncSettings
   , gitSyncRepositoryDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> Unrefusable 'DELETE GitSync.GitSyncRemoval
-  , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
-  , codeMappingsEditor :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> "editor" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoriesGet))
+  , codeMappingsEditor :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> "editor" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders PageCodeContext.MappingsPanel)
   , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Action 'POST PageCodeContext.MappingRejection PageCodeContext.MappingsPanel
-  , impactReviewSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Post '[HTML] (RespHeaders (Html ()))
+  , impactReviewSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Unrefusable 'POST (PageCodeContext.ReviewChange PageCodeContext.MappingsPanel)
   , issueFixGet :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> Get '[HTML] (Headers '[Header "Cache-Control" Text] (Html ()))
   , issueFixPackage :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> "publication.tar" :> RawM
   , issueFixMedia :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> "media" :> Capture "asset" Artifacts.Asset :> RawM
-  , impactReviewRetry :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> Capture "id" ImpactReviews.ReviewId :> "rerun" :> Post '[HTML] (RespHeaders (Html ()))
-  , codeMappingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Capture "id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
+  , impactReviewRetry :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> Capture "id" ImpactReviews.ReviewId :> "rerun" :> Unrefusable 'POST (PageCodeContext.ReviewChange (PageCtx PageCodeContext.RepositoriesGet))
+  , codeMappingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Capture "id" CodeContext.CodeMappingId :> Unrefusable 'DELETE PageCodeContext.MappingsPanel
   , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders Settings.PrometheusGet)
   , prometheusSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders Settings.PrometheusMut)
-  , prometheusSettingsTest :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> "test" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders (Html ()))
+  , prometheusSettingsTest :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> "test" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Unrefusable 'POST Settings.ScrapeProbe
   , prometheusSettingsEdit :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> "edit" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders Settings.PrometheusMut)
   , prometheusSettingsToggle :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Patch '[HTML] (RespHeaders Settings.PrometheusMut)
   , prometheusSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Delete '[HTML] (RespHeaders Settings.PrometheusMut)
@@ -457,13 +457,13 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
     -- against otel_logs_and_spans squiggles the metrics table's own columns. Every sibling
     -- endpoint here already takes it.
     logExplorerValidateGet :: mode :- "log_explorer" :> "validate" :> QPT "query" :> QPT "source" :> Get '[JSON] (RespHeaders Log.QueryValidation)
-  , logExplorerFacetsGet :: mode :- "log_explorer" :> "facets" :> QPT "field" :> QPT "group" :> Get '[HTML] (RespHeaders (Html ()))
+  , logExplorerFacetsGet :: mode :- "log_explorer" :> "facets" :> QPT "field" :> QPT "group" :> Get '[HTML] (RespHeaders Log.FacetsView)
   , queryLibraryGet :: mode :- "log_explorer" :> "queries" :> Get '[HTML] (RespHeaders QueryLibrary.QueryLibraryView)
   , saveQueryPost :: mode :- "log_explorer" :> "queries" :> ReqBody '[FormUrlEncoded] QueryLibrary.SaveQueryForm :> Post '[HTML] (RespHeaders QueryLibrary.QueryLibraryView)
   , deleteQueryPost :: mode :- "log_explorer" :> "queries" :> Capture "id" Text :> Delete '[HTML] (RespHeaders QueryLibrary.QueryLibraryView)
-  , alertFormGet :: mode :- "log_explorer" :> "alert_form" :> QPT "alert" :> Get '[HTML] (RespHeaders (Html ()))
+  , alertFormGet :: mode :- "log_explorer" :> "alert_form" :> QPT "alert" :> Get '[HTML] (RespHeaders Log.AlertForm)
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> QPT "tab" :> QPT "subtab" :> QueryFlag "partial" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
-  , logExplorerRelatedMetricsGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "related_metrics" :> Get '[HTML] (RespHeaders (Html ()))
+  , logExplorerRelatedMetricsGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "related_metrics" :> Get '[HTML] (RespHeaders Metrics.RelatedMetrics)
   , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
   , liveTailGet :: mode :- "live_tail" :> Get '[HTML] (RespHeaders LiveTail.LiveTailGet)
@@ -477,7 +477,7 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , -- Source around one stack frame. Its own endpoint rather than part of the detail panel
     -- because resolving it is a call out to the SCM API: a thirty-frame trace must not make
     -- the error panel wait on thirty round trips it may never need.
-    codeContextGet :: mode :- "code_context" :> QPT "file" :> QPI "line" :> QPT "service" :> QPT "revision" :> Get '[HTML] (RespHeaders (Html ()))
+    codeContextGet :: mode :- "code_context" :> QPT "file" :> QPI "line" :> QPT "service" :> QPT "revision" :> Get '[HTML] (RespHeaders PageCodeContext.FrameSource)
   }
   deriving stock (Generic)
 
@@ -507,10 +507,10 @@ data IssuesRoutes' mode = IssuesRoutes'
   , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> QueryFlag "next_release" :> Action 'POST IssuesPage.ErrorPatternRejection IssuesPage.ErrorResolved
   , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] IssuesPage.ErrorSubscriptionForm :> Action 'POST IssuesPage.ErrorPatternRejection IssuesPage.ErrorSubscribed
   , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] IssuesPage.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiChatHistoryGet :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
+  , aiChatHistoryGet :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders IssuesPage.IssueChatHistory)
   , sampleGet :: mode :- Capture "issueID" Issues.IssueId :> "sample" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders IssuesPage.IssueSample)
-  , activityGet :: mode :- Capture "issueID" Issues.IssueId :> "activity" :> QPT "trace_id" :> QPU "trace_ts" :> Get '[HTML] (RespHeaders (Html ()))
-  , errorGroupMembersGet :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "group_members" :> Get '[HTML] (RespHeaders (Html ()))
+  , activityGet :: mode :- Capture "issueID" Issues.IssueId :> "activity" :> QPT "trace_id" :> QPU "trace_ts" :> Get '[HTML] (RespHeaders IssuesPage.IssueActivityFeed)
+  , errorGroupMembersGet :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "group_members" :> Get '[HTML] (RespHeaders IssuesPage.ErrorGroupMembers)
   , errorUnmergePost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "unmerge" :> Unrefusable 'POST IssuesPage.PatternUnmerged
   }
   deriving stock (Generic)
@@ -523,16 +523,16 @@ type TelemetryRoutes' :: Type -> Type
 data TelemetryRoutes' mode = TelemetryRoutes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPU "timestamp" :> QPT "span_id" :> QPT "nav" :> QPT "embed" :> QueryParam "spans" Int :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> QPT "q" :> QueryParam "append" Bool :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
-  , dataPointCountsGetH :: mode :- "metrics" :> "datapoints" :> "counts" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
-  , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
-  , metricRelatedGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "related" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
-  , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
+  , dataPointCountsGetH :: mode :- "metrics" :> "datapoints" :> "counts" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Metrics.DataPointCounts)
+  , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricDetailsGet)
+  , metricRelatedGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "related" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricFragment)
+  , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricFragment)
   , -- HTML for the metric page's Exemplars tab, JSON for the chart's diamond overlay:
     -- one query, so the list and the markers can't disagree.
     metricExemplarsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "exemplars" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML, JSON] (RespHeaders Metrics.MetricExemplarsGet)
-  , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
+  , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricFragment)
   , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> QPT "endpoint_hash" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
-  , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "service_search" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
+  , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "service_search" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricServices)
   , hostsGetH :: mode :- "infrastructure" :> "hosts" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "integration" :> QPT "group" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.HostsGet)
   , hostDetailGetH :: mode :- "infrastructure" :> "hosts" :> "detail" :> QPT "host" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.DetailGet)
   , infrastructureContainersGetH :: mode :- "infrastructure" :> "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
@@ -718,7 +718,7 @@ mcpProjectTools =
           Just tool -> withRunInIO \run ->
             run
               $ Error.runErrorNoCallStack @ServerError (Eff.inject $ MCP.runTool (apiV1App run principal (Authenticated pid)) pid tool $ KM.fromMapText args)
-              <&> either (MCP.toolError . decodeUtf8 . errBody) id
+              <&> either (MCP.toolError . MCP.problemText . errBody) id
     }
 
 
@@ -816,8 +816,8 @@ cookieProtectedServer projectTools =
     , gitSyncRepositoryRetry = GitSync.gitSyncRepositoryRetryH
     , gitSyncRepositoryPause = GitSync.gitSyncRepositoryPauseH
     , gitSyncRepositoryDelete = GitSync.gitSyncRepositoryDeleteH
-    , codeMappingsSettings = PageCodeContext.codeMappingsGetH
-    , codeMappingsEditor = \pid _ sample -> PageCodeContext.repositoriesGetH pid Nothing sample
+    , codeMappingsSettings = \pid -> PageCodeContext.repositoriesGetH pid (Just PageCodeContext.Overview)
+    , codeMappingsEditor = PageCodeContext.codeMappingsEditorGetH
     , codeMappingsPost = PageCodeContext.codeMappingsPostH
     , impactReviewSettingsPost = PageCodeContext.impactReviewSettingsPostH
     , impactReviewRetry = PageCodeContext.impactReviewRetryH
@@ -1318,7 +1318,7 @@ genAuthServerContext logger env = authHandler logger env :. apiKeyAuthHandler lo
 errorFormatters :: AuthContext -> Servant.ErrorFormatters
 errorFormatters env =
   Servant.defaultErrorFormatters
-    { Servant.notFoundErrorFormatter = \_ -> htmlServerError env.config 404
-    , Servant.bodyParserErrorFormatter = \_ _ _ -> htmlServerError env.config 400
-    , Servant.urlParseErrorFormatter = \_ _ _ -> htmlServerError env.config 400
+    { Servant.notFoundErrorFormatter = servantRejection env.config ApiT.NoRoute
+    , Servant.bodyParserErrorFormatter = \_ req msg -> servantRejection env.config (ApiT.InvalidRequest $ toText msg) req
+    , Servant.urlParseErrorFormatter = \_ req msg -> servantRejection env.config (ApiT.InvalidRequest $ toText msg) req
     }

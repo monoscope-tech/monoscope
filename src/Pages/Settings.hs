@@ -21,6 +21,7 @@ module Pages.Settings (
   prometheusPostH,
   prometheusUpdateH,
   prometheusTestH,
+  ScrapeProbe (..),
   prometheusDeleteH,
   prometheusToggleH,
   PrometheusForm (..),
@@ -640,23 +641,31 @@ promSave pid form verb persist = do
 -- | One-shot scrape used by the form's Test button: fetch + parse, no DB write, no ingest.
 -- Reports sample count + latency, or a (truncated) error, so a user validates a target
 -- before saving instead of saving blind and squinting at last_status a minute later.
-prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders (Html ()))
+prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders (Done ScrapeProbe))
 prometheusTestH pid form = do
   void $ requireSettingsWrite pid
-  case validateScrapeUrl form.url of
-    Left err -> addRespHeaders $ prometheusTestResult $ Just $ Left $ refusalMessage err
+  done =<< case validateScrapeUrl form.url of
+    Left err -> pure $ ProbeRefused err
     Right url -> do
       let opts = PromCfg.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
       t0 <- Time.currentTime
       res <- trySync (W.getWith opts (toString url))
       t1 <- Time.currentTime
       let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
-      addRespHeaders $ prometheusTestResult $ Just $ case res of
-        Left e -> Left (T.take 300 (show e))
+      pure $ case res of
+        Left e -> ProbeFailed (T.take 300 (show e))
         Right resp ->
           -- Count only the samples ingestScrapedBody would store (shared isFiniteSample).
           let finite = filter Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody)))
-           in Right (length finite, ms)
+           in ProbeScraped{samples = length finite, latencyMs = ms}
+
+
+-- | A scrape test's result, shown in the form beside the endpoint it tested.
+data ScrapeProbe = ProbeRefused ScrapeRejection | ProbeFailed Text | ProbeScraped {samples :: Int, latencyMs :: Int}
+  deriving stock (Eq, Show)
+
+
+instance Outcome ScrapeProbe where outcomeBody = prometheusTestResult . Just
 
 
 prometheusDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
@@ -800,10 +809,13 @@ promTargetModal_ pid mcfg = do
 
 
 -- | @Nothing@ is the not-yet-tested placeholder the form renders on first paint.
-prometheusTestResult :: Maybe (Either Text (Int, Int)) -> Html ()
+prometheusTestResult :: Maybe ScrapeProbe -> Html ()
 prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ whenJust res \case
-  Right (n, ms) -> statusBadge_ True $ toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
-  Left err -> statusBadge_ False $ span_ [class_ "break-all"] (toHtml err)
+  ProbeScraped{samples, latencyMs} -> statusBadge_ True $ toHtml ("Scraped " <> show samples <> " samples · " <> show latencyMs <> "ms" :: Text)
+  ProbeRefused err -> failed $ refusalMessage err
+  ProbeFailed err -> failed err
+  where
+    failed err = statusBadge_ False $ span_ [class_ "break-all"] (toHtml err)
 
 
 -- | Success/error pill; the icon repeats the state so colour is never the only signal.

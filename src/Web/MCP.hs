@@ -16,6 +16,7 @@ module Web.MCP (
   handleJsonRpc,
   runTool,
   toolError,
+  problemText,
 ) where
 
 import Control.Lens (cosmos, over, preview, transform, (^.), (^..))
@@ -56,6 +57,7 @@ import System.Types (ATBaseCtx)
 import UnliftIO qualified
 import Utils (encodeText, toUriStr)
 import Web.ApiHandlers qualified as ApiH
+import Web.ApiTypes (ApiProblem (..), ApiProblemBody (..))
 import Web.Operations (Operation (..))
 
 
@@ -277,7 +279,7 @@ runTool app pid t args = do
         ViaComposite run -> run pid args
       caught =
         action
-          `Error.catchError` (\_cs (e :: Servant.ServerError) -> pure $ toolError $ decodeUtf8 $ Servant.errBody e)
+          `Error.catchError` (\_cs (e :: Servant.ServerError) -> pure $ toolError $ problemText $ Servant.errBody e)
           `UnliftIO.catchAny` (\e -> pure $ toolError $ "Internal error: " <> show e)
   fromMaybe (toolError $ "Timed out after " <> show (toolCallTimeoutMicros `div` 1_000_000) <> "s")
     <$> UnliftIO.timeout toolCallTimeoutMicros caught
@@ -293,6 +295,11 @@ toolResult isErr txt structured =
 
 toolError :: Text -> AE.Value
 toolError msg = toolResult True msg Nothing
+
+
+-- | A refusal's @error.message@ (+ suggestion) for a tool's text content; the raw body when it isn't an 'ApiProblemBody'.
+problemText :: LByteString -> Text
+problemText body = maybe (decodeUtf8 body) (\(ApiProblemBody p) -> p.message <> foldMap (\s -> " (" <> s <> ")") p.suggestion) (AE.decode body)
 
 
 okResult :: AE.Value -> AE.Value
@@ -318,7 +325,8 @@ callOpenApi app b args = do
       -- Deliberately not valid JSON once truncated: this is the human-readable
       -- @content@ side; the structured side carries the full payload.
       truncated = if T.length bodyT <= maxToolBodyChars then bodyT else T.take maxToolBodyChars bodyT <> "\n…[truncated, full payload in structuredContent]"
-  pure $ toolResult (H.statusCode (WT.simpleStatus resp) >= 400) truncated (AE.decode bodyLBS)
+      refused = H.statusCode (WT.simpleStatus resp) >= 400
+  pure $ toolResult refused (if refused then problemText bodyLBS else truncated) (AE.decode bodyLBS)
   where
     jsonToText = \case
       AE.String s -> s

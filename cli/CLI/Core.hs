@@ -38,7 +38,6 @@ import CLI.Config (CLIConfig (..), Credential (..), credentialText)
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty qualified as AE
-import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Wreq (HTTP, deleteWith, getWith, patchWith, postWith, putWith, responseBody)
 import Data.Effectful.Wreq qualified as W
@@ -235,29 +234,16 @@ data APIError = APIError {statusCode :: Int, message :: Text}
 
 -- | Human-readable rendering for end-user error messages.
 -- - Connection-level errors (statusCode == 0) print the bare message.
--- - When the server returns a structured @{"error": {...}}@ body (A2),
---   surface just the one-line @message@ + @suggestion@; the SQL/Hasql
---   blob lives in @details@ which is only shown under @--debug@.
+-- - A structured @{"error": {code, message, suggestion?, ...}}@ body prints its
+--   @message@ (+ @suggestion@); query codes drop the @HTTP N:@ prefix.
+--   The raw @details@ blob is only shown under @--debug@.
 -- - Otherwise, falls back to @HTTP N: <body>@.
 renderAPIError :: APIError -> Text
 renderAPIError e
   | e.statusCode == 0 = e.message
-  | otherwise = case decodeStructured e.message of
-      Just (code, msg, suggestionM)
-        | code == "unknown_field" || code == "invalid_query" || code == "validation" ->
-            msg <> maybe "" (\s -> " (" <> s <> ")") suggestionM
-      _ -> "HTTP " <> show e.statusCode <> ": " <> e.message
-  where
-    decodeStructured txt = case AE.eitherDecodeStrict @AE.Value (encodeUtf8 txt) of
-      Right (AE.Object o)
-        | Just (AE.Object err) <- KM.lookup "error" o
-        , Just (AE.String c) <- KM.lookup "code" err
-        , Just (AE.String m) <- KM.lookup "message" err ->
-            let s = case KM.lookup "suggestion" err of
-                  Just (AE.String x) -> Just x
-                  _ -> Nothing
-             in Just (c, m, s)
-      _ -> Nothing
+  | otherwise = case AE.decodeStrict @Wire.ApiProblemBody (encodeUtf8 e.message) of
+      Just (Wire.ApiProblemBody p) -> bool ("HTTP " <> show e.statusCode <> ": ") "" (p.code `elem` [Wire.PUnknownField, Wire.PInvalidQuery]) <> p.message <> foldMap (\s -> " (" <> s <> ")") p.suggestion
+      Nothing -> "HTTP " <> show e.statusCode <> ": " <> e.message
 
 
 -- | Build common request options (auth + project header + query params).

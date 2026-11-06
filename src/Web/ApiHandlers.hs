@@ -118,7 +118,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField)
@@ -148,7 +147,7 @@ import Pkg.MonitorConfig (MonitorConfig)
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude hiding (ask, id)
-import Servant (Capture, Delete, Description, Get, HasServer (..), Header, Headers, JSON, NamedRoutes, NoContent (..), Optional, Patch, Post, Put, QueryParam, QueryParam', ReqBody, ServerError (..), Strict, addHeader, err400, err401, err403, err404, (:-), (:>))
+import Servant (Capture, Delete, Description, Get, HasServer (..), Header, Headers, JSON, NamedRoutes, NoContent (..), Optional, Patch, Post, Put, QueryParam, QueryParam', ReqBody, Strict, addHeader, (:-), (:>))
 import Servant.OpenApi (HasOpenApi (..), toOpenApi)
 import Servant.Server.Internal.Delayed (passToServer)
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -165,16 +164,22 @@ type QPT a = QueryParam a Text
 data AllQueryParams
 
 
+-- | Declares an 'ApiProblem' status a route refuses with (stack one per status), for the OpenAPI spec (and the
+-- MCP/CLI clients built from it). It documents; the handler's 'refuse' calls are not checked against it.
+data Refuses (status :: Nat)
+
+
 -- =============================================================================
 -- Public API v1 Routes
 -- =============================================================================
 
 type ApiV1Routes :: Type -> Type
 data ApiV1Routes mode = ApiV1Routes
-  { ingestionKey :: mode :- "ingestion-key" :> Get '[JSON] (Headers '[Header "Cache-Control" Text] Wire.IngestionKey)
+  { ingestionKey :: mode :- Refuses 401 :> Refuses 403 :> Refuses 404 :> "ingestion-key" :> Get '[JSON] (Headers '[Header "Cache-Control" Text] Wire.IngestionKey)
   , eventsSearch
       :: mode
-        :- "events"
+        :- Refuses 400
+          :> "events"
           :> QPT "query"
           :> QPT "since"
           :> QPT "from"
@@ -188,7 +193,8 @@ data ApiV1Routes mode = ApiV1Routes
           :> Get '[JSON] LogResult
   , eventGet
       :: mode
-        :- "events"
+        :- Refuses 404
+          :> "events"
           :> Capture "event_id" UUID.UUID
           :> "time"
           :> Capture "timestamp" UTCTime
@@ -227,24 +233,24 @@ data ApiV1Routes mode = ApiV1Routes
   , rrwebPost :: mode :- "rrweb" :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , -- Monitors (CRUD + lifecycle)
     monitorsList :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
-  , monitorGet :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Get '[JSON] Monitors.QueryMonitor
-  , monitorCreate :: mode :- "monitors" :> ReqBody '[JSON] MonitorInput :> Post '[JSON] Monitors.QueryMonitor
-  , monitorApply :: mode :- "monitors" :> "apply" :> ReqBody '[JSON] MonitorInput :> Post '[JSON] Monitors.QueryMonitor
-  , monitorYaml :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] MonitorConfig
+  , monitorGet :: mode :- Refuses 404 :> "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Get '[JSON] Monitors.QueryMonitor
+  , monitorCreate :: mode :- Refuses 400 :> "monitors" :> ReqBody '[JSON] MonitorInput :> Post '[JSON] Monitors.QueryMonitor
+  , monitorApply :: mode :- Refuses 400 :> Refuses 404 :> "monitors" :> "apply" :> ReqBody '[JSON] MonitorInput :> Post '[JSON] Monitors.QueryMonitor
+  , monitorYaml :: mode :- Refuses 404 :> "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] MonitorConfig
   -- ^ /yaml returns the applyable configuration as JSON (same for dashboards);
   -- the CLI renders it as YAML client-side via runYamlDump.
-  , monitorUpdate :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] MonitorInput :> Put '[JSON] Monitors.QueryMonitor
-  , monitorPatch :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] MonitorPatch :> Patch '[JSON] Monitors.QueryMonitor
-  , monitorDelete :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Delete '[JSON] NoContent
-  , monitorToggleActive :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[JSON] Monitors.QueryMonitor
-  , monitorMute :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration_minutes" Int :> Post '[JSON] Monitors.QueryMonitor
-  , monitorUnmute :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "unmute" :> Post '[JSON] Monitors.QueryMonitor
-  , monitorResolve :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "resolve" :> Post '[JSON] Monitors.QueryMonitor
-  , monitorBulk :: mode :- "monitors" :> "bulk" :> ReqBody '[JSON] (BulkAction UUID.UUID) :> Post '[JSON] (BulkResult UUID.UUID)
+  , monitorUpdate :: mode :- Refuses 400 :> Refuses 404 :> "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] MonitorInput :> Put '[JSON] Monitors.QueryMonitor
+  , monitorPatch :: mode :- Refuses 400 :> Refuses 404 :> "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] MonitorPatch :> Patch '[JSON] Monitors.QueryMonitor
+  , monitorDelete :: mode :- Refuses 404 :> "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Delete '[JSON] NoContent
+  , monitorToggleActive :: mode :- Refuses 404 :> "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[JSON] Monitors.QueryMonitor
+  , monitorMute :: mode :- Refuses 404 :> "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration_minutes" Int :> Post '[JSON] Monitors.QueryMonitor
+  , monitorUnmute :: mode :- Refuses 404 :> "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "unmute" :> Post '[JSON] Monitors.QueryMonitor
+  , monitorResolve :: mode :- Refuses 404 :> "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "resolve" :> Post '[JSON] Monitors.QueryMonitor
+  , monitorBulk :: mode :- Refuses 400 :> "monitors" :> "bulk" :> ReqBody '[JSON] (BulkAction UUID.UUID) :> Post '[JSON] (BulkResult UUID.UUID)
   , -- Events body variant (avoids URL length limits)
-    eventsQuery :: mode :- "events" :> "query" :> ReqBody '[JSON] EventsQuery :> Post '[JSON] LogResult
+    eventsQuery :: mode :- Refuses 400 :> "events" :> "query" :> ReqBody '[JSON] EventsQuery :> Post '[JSON] LogResult
   , -- Share links
-    shareLinkCreate :: mode :- "share" :> ReqBody '[JSON] ShareLinkCreate :> Post '[JSON] ShareLinkCreated
+    shareLinkCreate :: mode :- Refuses 404 :> "share" :> ReqBody '[JSON] ShareLinkCreate :> Post '[JSON] ShareLinkCreated
   , -- Dashboards (CRUD + IaC apply + widgets)
     dashboardsList
       :: mode
@@ -252,12 +258,13 @@ data ApiV1Routes mode = ApiV1Routes
           :> QueryParam "sort" Dashboards.DashboardSort
           :> QPT "team_id"
           :> Get '[JSON] [DashboardSummary]
-  , dashboardGet :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Get '[JSON] DashboardFull
+  , dashboardGet :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Get '[JSON] DashboardFull
   , -- Widget data resolved server-side, for clients that can't run the widget JS
     -- (the CLI renders these straight into the terminal).
     dashboardData
       :: mode
-        :- "dashboards"
+        :- Refuses 404
+          :> "dashboards"
           :> Capture "dashboard_id" Dashboards.DashboardId
           :> "data"
           :> QPT "tab"
@@ -267,30 +274,30 @@ data ApiV1Routes mode = ApiV1Routes
           :> QPT "to"
           :> AllQueryParams
           :> Get '[JSON] DashboardData
-  , dashboardCreate :: mode :- "dashboards" :> ReqBody '[JSON] DashboardInput :> Post '[JSON] DashboardFull
-  , dashboardApply :: mode :- "dashboards" :> "apply" :> ReqBody '[JSON] DashboardYAMLDoc :> Post '[JSON] DashboardFull
-  , dashboardUpdate :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] DashboardInput :> Put '[JSON] DashboardFull
-  , dashboardPatch :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] DashboardPatch :> Patch '[JSON] DashboardFull
-  , dashboardDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[JSON] NoContent
-  , dashboardDuplicate :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[JSON] DashboardFull
-  , dashboardStar :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[JSON] DashboardFull
-  , dashboardUnstar :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Delete '[JSON] NoContent
-  , dashboardYaml :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[JSON] DashboardYAMLDoc
-  , dashboardWidgetUpsert :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> ReqBody '[JSON] Widget.Widget :> Put '[JSON] Widget.Widget
-  , dashboardWidgetDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> Delete '[JSON] NoContent
-  , dashboardWidgetsReorder :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "order" :> ReqBody '[JSON] (Map Text WidgetPosition) :> Patch '[JSON] NoContent
-  , dashboardBulk :: mode :- "dashboards" :> "bulk" :> ReqBody '[JSON] (BulkAction UUID.UUID) :> Post '[JSON] (BulkResult UUID.UUID)
+  , dashboardCreate :: mode :- Refuses 400 :> "dashboards" :> ReqBody '[JSON] DashboardInput :> Post '[JSON] DashboardFull
+  , dashboardApply :: mode :- Refuses 404 :> "dashboards" :> "apply" :> ReqBody '[JSON] DashboardYAMLDoc :> Post '[JSON] DashboardFull
+  , dashboardUpdate :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] DashboardInput :> Put '[JSON] DashboardFull
+  , dashboardPatch :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] DashboardPatch :> Patch '[JSON] DashboardFull
+  , dashboardDelete :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[JSON] NoContent
+  , dashboardDuplicate :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[JSON] DashboardFull
+  , dashboardStar :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[JSON] DashboardFull
+  , dashboardUnstar :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Delete '[JSON] NoContent
+  , dashboardYaml :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[JSON] DashboardYAMLDoc
+  , dashboardWidgetUpsert :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> ReqBody '[JSON] Widget.Widget :> Put '[JSON] Widget.Widget
+  , dashboardWidgetDelete :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> Delete '[JSON] NoContent
+  , dashboardWidgetsReorder :: mode :- Refuses 404 :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "order" :> ReqBody '[JSON] (Map Text WidgetPosition) :> Patch '[JSON] NoContent
+  , dashboardBulk :: mode :- Refuses 400 :> "dashboards" :> "bulk" :> ReqBody '[JSON] (BulkAction UUID.UUID) :> Post '[JSON] (BulkResult UUID.UUID)
   , -- API keys
     apiKeysList :: mode :- "api_keys" :> Get '[JSON] [ApiKeySummary]
-  , apiKeyGet :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Get '[JSON] ApiKeySummary
+  , apiKeyGet :: mode :- Refuses 404 :> "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Get '[JSON] ApiKeySummary
   , apiKeyCreate :: mode :- "api_keys" :> ReqBody '[JSON] ApiKeyCreate :> Post '[JSON] ApiKeyCreated
-  , apiKeyActivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "activate" :> Post '[JSON] ApiKeySummary
-  , apiKeyDeactivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "deactivate" :> Post '[JSON] ApiKeySummary
-  , apiKeyDelete :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Delete '[JSON] NoContent
+  , apiKeyActivate :: mode :- Refuses 404 :> "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "activate" :> Post '[JSON] ApiKeySummary
+  , apiKeyDeactivate :: mode :- Refuses 404 :> "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "deactivate" :> Post '[JSON] ApiKeySummary
+  , apiKeyDelete :: mode :- Refuses 404 :> "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Delete '[JSON] NoContent
   , -- /me + /project (singular) + /issues + /endpoints + /log_patterns
-    meGet :: mode :- "me" :> Get '[JSON] MeResponse
-  , projectGet :: mode :- "project" :> Get '[JSON] ProjectFull
-  , projectPatch :: mode :- "project" :> ReqBody '[JSON] Projects.ProjectPatch :> Patch '[JSON] ProjectFull
+    meGet :: mode :- Refuses 404 :> "me" :> Get '[JSON] MeResponse
+  , projectGet :: mode :- Refuses 404 :> "project" :> Get '[JSON] ProjectFull
+  , projectPatch :: mode :- Refuses 404 :> "project" :> ReqBody '[JSON] Projects.ProjectPatch :> Patch '[JSON] ProjectFull
   , endpointsList
       :: mode
         :- "endpoints"
@@ -299,16 +306,16 @@ data ApiV1Routes mode = ApiV1Routes
           :> QueryParam "page" Int
           :> QueryParam "per_page" Int
           :> Get '[JSON] (Paged EndpointSummary)
-  , endpointGet :: mode :- "endpoints" :> Capture "endpoint_id" Endpoints.EndpointId :> Get '[JSON] EndpointFull
+  , endpointGet :: mode :- Refuses 404 :> "endpoints" :> Capture "endpoint_id" Endpoints.EndpointId :> Get '[JSON] EndpointFull
   , logPatternsList
       :: mode
         :- "log_patterns"
           :> QueryParam "page" Int
           :> QueryParam "per_page" Int
           :> Get '[JSON] (Paged LogPatternSummary)
-  , logPatternGet :: mode :- "log_patterns" :> Capture "pattern_id" Int64 :> Get '[JSON] LogPatternFull
-  , logPatternAck :: mode :- "log_patterns" :> Capture "pattern_id" Int64 :> "ack" :> Post '[JSON] LogPatternFull
-  , logPatternsBulk :: mode :- "log_patterns" :> "bulk" :> ReqBody '[JSON] (BulkAction Int64) :> Post '[JSON] (BulkResult Int64)
+  , logPatternGet :: mode :- Refuses 404 :> "log_patterns" :> Capture "pattern_id" Int64 :> Get '[JSON] LogPatternFull
+  , logPatternAck :: mode :- Refuses 404 :> "log_patterns" :> Capture "pattern_id" Int64 :> "ack" :> Post '[JSON] LogPatternFull
+  , logPatternsBulk :: mode :- Refuses 400 :> "log_patterns" :> "bulk" :> ReqBody '[JSON] (BulkAction Int64) :> Post '[JSON] (BulkResult Int64)
   , -- Issues
     issuesList
       :: mode
@@ -319,27 +326,27 @@ data ApiV1Routes mode = ApiV1Routes
           :> QueryParam "page" Int
           :> QueryParam "per_page" Int
           :> Get '[JSON] (Paged IssueApiSummary)
-  , issueGet :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> Get '[JSON] IssueApiFull
-  , issueAck :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "ack" :> QueryParam "duration_minutes" Int :> Post '[JSON] IssueApiFull
-  , issueUnack :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unack" :> Post '[JSON] IssueApiFull
-  , issueArchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "archive" :> Post '[JSON] IssueApiFull
-  , issueUnarchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unarchive" :> Post '[JSON] IssueApiFull
-  , issuesBulk :: mode :- "issues" :> "bulk" :> ReqBody '[JSON] (BulkAction Issues.IssueId) :> Post '[JSON] (BulkResult Issues.IssueId)
+  , issueGet :: mode :- Refuses 404 :> "issues" :> Capture "issue_id" Issues.IssueId :> Get '[JSON] IssueApiFull
+  , issueAck :: mode :- Refuses 404 :> "issues" :> Capture "issue_id" Issues.IssueId :> "ack" :> QueryParam "duration_minutes" Int :> Post '[JSON] IssueApiFull
+  , issueUnack :: mode :- Refuses 404 :> "issues" :> Capture "issue_id" Issues.IssueId :> "unack" :> Post '[JSON] IssueApiFull
+  , issueArchive :: mode :- Refuses 404 :> "issues" :> Capture "issue_id" Issues.IssueId :> "archive" :> Post '[JSON] IssueApiFull
+  , issueUnarchive :: mode :- Refuses 404 :> "issues" :> Capture "issue_id" Issues.IssueId :> "unarchive" :> Post '[JSON] IssueApiFull
+  , issuesBulk :: mode :- Refuses 400 :> "issues" :> "bulk" :> ReqBody '[JSON] (BulkAction Issues.IssueId) :> Post '[JSON] (BulkResult Issues.IssueId)
   , incidentsList :: mode :- "incidents" :> QueryParam "phase" Incidents.EpisodePhase :> QueryParam "limit" Int :> Get '[JSON] [IncidentSummary]
-  , incidentGet :: mode :- "incidents" :> Capture "incident_id" Incidents.EpisodeId :> Get '[JSON] IncidentSummary
+  , incidentGet :: mode :- Refuses 404 :> "incidents" :> Capture "incident_id" Incidents.EpisodeId :> Get '[JSON] IncidentSummary
   , -- Teams + Members
     teamsList :: mode :- "teams" :> Get '[JSON] [TeamSummary]
-  , teamGet :: mode :- "teams" :> Capture "team_id" TeamId :> Get '[JSON] TeamFull
-  , teamCreate :: mode :- "teams" :> ReqBody '[JSON] TeamInput :> Post '[JSON] TeamFull
-  , teamUpdate :: mode :- "teams" :> Capture "team_id" TeamId :> ReqBody '[JSON] TeamInput :> Put '[JSON] TeamFull
-  , teamPatch :: mode :- "teams" :> Capture "team_id" TeamId :> ReqBody '[JSON] TeamPatch :> Patch '[JSON] TeamFull
-  , teamDelete :: mode :- "teams" :> Capture "team_id" TeamId :> Delete '[JSON] NoContent
-  , teamsBulk :: mode :- "teams" :> "bulk" :> ReqBody '[JSON] (BulkAction TeamId) :> Post '[JSON] (BulkResult TeamId)
+  , teamGet :: mode :- Refuses 404 :> "teams" :> Capture "team_id" TeamId :> Get '[JSON] TeamFull
+  , teamCreate :: mode :- Refuses 400 :> "teams" :> ReqBody '[JSON] TeamInput :> Post '[JSON] TeamFull
+  , teamUpdate :: mode :- Refuses 400 :> Refuses 404 :> "teams" :> Capture "team_id" TeamId :> ReqBody '[JSON] TeamInput :> Put '[JSON] TeamFull
+  , teamPatch :: mode :- Refuses 400 :> Refuses 404 :> "teams" :> Capture "team_id" TeamId :> ReqBody '[JSON] TeamPatch :> Patch '[JSON] TeamFull
+  , teamDelete :: mode :- Refuses 400 :> Refuses 404 :> "teams" :> Capture "team_id" TeamId :> Delete '[JSON] NoContent
+  , teamsBulk :: mode :- Refuses 400 :> "teams" :> "bulk" :> ReqBody '[JSON] (BulkAction TeamId) :> Post '[JSON] (BulkResult TeamId)
   , membersList :: mode :- "members" :> Get '[JSON] [MemberSummary]
-  , memberGet :: mode :- "members" :> Capture "user_id" Projects.UserId :> Get '[JSON] MemberSummary
-  , memberAdd :: mode :- "members" :> ReqBody '[JSON] MemberAdd :> Post '[JSON] MemberSummary
-  , memberPatch :: mode :- "members" :> Capture "user_id" Projects.UserId :> ReqBody '[JSON] MemberPatch :> Patch '[JSON] MemberSummary
-  , memberRemove :: mode :- "members" :> Capture "user_id" Projects.UserId :> Delete '[JSON] NoContent
+  , memberGet :: mode :- Refuses 404 :> "members" :> Capture "user_id" Projects.UserId :> Get '[JSON] MemberSummary
+  , memberAdd :: mode :- Refuses 400 :> Refuses 404 :> "members" :> ReqBody '[JSON] MemberAdd :> Post '[JSON] MemberSummary
+  , memberPatch :: mode :- Refuses 404 :> "members" :> Capture "user_id" Projects.UserId :> ReqBody '[JSON] MemberPatch :> Patch '[JSON] MemberSummary
+  , memberRemove :: mode :- Refuses 404 :> "members" :> Capture "user_id" Projects.UserId :> Delete '[JSON] NoContent
   , -- Model Context Protocol endpoint (JSON-RPC; tools derived from this OpenAPI spec)
     mcp :: mode :- "mcp" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
   }
@@ -348,7 +355,7 @@ data ApiV1Routes mode = ApiV1Routes
 
 apiV1OpenApiSpec :: OpenApi
 apiV1OpenApiSpec =
-  toOpenApi (Proxy @(NamedRoutes ApiV1Routes))
+  toOpenApi (Proxy @(Refuses 400 :> Refuses 401 :> NamedRoutes ApiV1Routes))
     & OA.info
     .~ (mempty & OA.title .~ "Monoscope API" & OA.version .~ "1.0" & OA.description ?~ "Observability API for querying logs, traces, and metrics. Requires a Bearer API key and X-Project-Id header.")
       & OA.servers
@@ -394,6 +401,16 @@ instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
 -- instead of forcing them out of it.
 instance HasOpenApi api => HasOpenApi (AllQueryParams :> api) where
   toOpenApi _ = toOpenApi (Proxy @api)
+
+
+instance HasServer api ctx => HasServer (Refuses s :> api) ctx where
+  type ServerT (Refuses s :> api) m = ServerT api m
+  route _ = route (Proxy @api)
+  hoistServerWithContext _ = hoistServerWithContext (Proxy @api)
+
+
+instance (HasOpenApi api, KnownNat s) => HasOpenApi (Refuses s :> api) where
+  toOpenApi _ = OA.setResponse (fromIntegral $ natVal $ Proxy @s) (OA.declareResponse "application/json" (Proxy @ApiProblemBody) <&> OA.description .~ "Refused; error.code says why") (toOpenApi (Proxy @api))
 
 
 type EventsSearchHandler = Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Text -> ATBaseCtx LogResult
@@ -501,60 +518,6 @@ apiV1Server actor principal queryEvents dashboardRenderer mcpHandler =
     }
   where
     pid = principal.projectId
-
-
-data Resource = RMonitor | RDashboard | RApiKey | REvent | RProject | REndpoint | RLogPattern | RIncident | RIssue | RTeam | RMember | RUser
-  deriving stock (Eq, Show)
-
-
--- | Every refusal @/api/v1@ answers with; 'refuse' fixes each one's status and body.
-data ApiError
-  = NotFound Resource
-  | NoActiveIngestionKey
-  | UserNotCreated
-  | UnknownBulkAction Text
-  | NonPositiveTimeWindow
-  | Required Text
-  | EveryoneTeamNotUpdatable
-  | EveryoneTeamNotDeletable
-  | ReservedHandle
-  | HandleInUse Text
-  | MemberIdentityMissing
-  | AuthenticationRequired
-  | ProjectInactive
-  deriving stock (Eq, Show)
-
-
-refuse :: ApiError -> ATBaseCtx a
-refuse e = throwError status{errBody = encodeUtf8 body}
-  where
-    (status, body) = case e of
-      NotFound r -> (err404, resource r <> " not found")
-      NoActiveIngestionKey -> (err404, "No active ingestion key; create one in project settings")
-      UserNotCreated -> (err404, "Could not create user")
-      UnknownBulkAction a -> (err400, "Unknown bulk action: " <> a)
-      NonPositiveTimeWindow -> (err400, "time_window_mins must be positive")
-      Required field -> (err400, field <> " is required")
-      EveryoneTeamNotUpdatable -> (err400, "The everyone team cannot be updated via this endpoint")
-      EveryoneTeamNotDeletable -> (err400, "The everyone team cannot be deleted")
-      ReservedHandle -> (err400, "Handle \"everyone\" is reserved")
-      HandleInUse h -> (err400, "Handle \"" <> h <> "\" is already in use")
-      MemberIdentityMissing -> (err400, "Either email or user_id is required")
-      AuthenticationRequired -> (err401, "Authentication required to retrieve an ingestion key")
-      ProjectInactive -> (err403, "Project is deactivated or deleted")
-    resource = \case
-      RMonitor -> "Monitor"
-      RDashboard -> "Dashboard"
-      RApiKey -> "API key"
-      REvent -> "event"
-      RProject -> "Project"
-      REndpoint -> "Endpoint"
-      RLogPattern -> "Log pattern"
-      RIncident -> "Incident"
-      RIssue -> "Issue"
-      RTeam -> "Team"
-      RMember -> "Member"
-      RUser -> "User"
 
 
 -- | Return the value or refuse with a 404 for @r@.
