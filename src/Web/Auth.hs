@@ -83,7 +83,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), DB, RespHeaders, addRespHeaders)
 import Utils (escapedQueryPartial, hostPath, nonEmptyT, toUriStr)
-import Web.ApiTypes (ApiProblem (ApiProblem), problem)
+import Web.ApiTypes (ApiError (..), refusal)
 import Web.Cookie (SetCookie, parseCookies)
 import Web.I18n qualified as I18n
 import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
@@ -308,7 +308,7 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
     -- Demo project: world-readable, mirrors the web UI bypass in `sessionByID`.
     (Just pid, _) | pid == Projects.demoProjectId -> pure $ bool DemoReader Authenticated (authed == Just pid) pid
     (_, Just pid) -> pure $ Authenticated pid
-    _ -> T.throwError $ problem err401 $ ApiProblem "unauthorized" (maybe "Missing Authorization header" (const "Invalid API key, session, or project access") mbAuth) Nothing Nothing Nothing
+    _ -> T.throwError $ refusal $ maybe MissingAuthorization (const InvalidCredentials) mbAuth
 
 
 logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -428,14 +428,13 @@ htmlServerError envCfg code = ServerError{errHTTPCode = code, errBody = errorPag
 
 -- | Servant's own rejections (no route, unparseable capture/query/body): the 'ApiProblem'
 -- envelope under @/api/v1@, the HTML error page elsewhere. Gated on @rawPathInfo@: routing has
--- already consumed @pathInfo@. Servant names a bad query parameter only inside its message,
--- so @field@ is read back from there.
-servantRejection :: EnvConfig -> ServerError -> Text -> Text -> Request -> ServerError
-servantRejection envCfg status code msg req
-  | "/api/v1/" `BS.isPrefixOf` (rawPathInfo req <> "/") = problem status $ ApiProblem code msg param Nothing Nothing
-  | otherwise = htmlServerError envCfg status.errHTTPCode
+-- already consumed @pathInfo@.
+servantRejection :: EnvConfig -> ApiError -> Request -> ServerError
+servantRejection envCfg e req
+  | "/api/v1/" `BS.isPrefixOf` (rawPathInfo req <> "/") = err
+  | otherwise = htmlServerError envCfg err.errHTTPCode
   where
-    param = listToMaybe [T.takeWhile (/= ' ') rest | Just rest <- (`T.stripPrefix` msg) <$> ["Error parsing query parameter ", "Query parameter "]]
+    err = refusal e
 
 
 errorPageHtml :: EnvConfig -> Int -> LByteString

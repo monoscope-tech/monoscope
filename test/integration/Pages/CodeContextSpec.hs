@@ -698,7 +698,7 @@ spec = do
         renderT connection.content `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/connect/token\"")
         -- Without a credential there is nothing to read repos through, so the page points at the
         -- control that fixes that rather than a form whose every submission is discarded.
-        mappings <- renderT <$> call tr (PageCodeContext.codeMappingsGetH testPid Nothing)
+        mappings <- renderT <$> call tr (PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) Nothing)
         for_ ["href=\"/p/" <> testPid.toText <> "/repositories\"", "href=\"/p/" <> testPid.toText <> "/repositories/connect\"", "Pull requests", "Repositories", "Connect repositories"] \part -> mappings `shouldSatisfy` T.isInfixOf part
         mappings `shouldNotSatisfy` T.isInfixOf "Link repository"
         -- An unresolvable frame explains which of the two problems it has instead of failing the panel.
@@ -709,7 +709,7 @@ spec = do
         void $ syncOf tr testPid Nothing "acme" "monoscope-config" (GitSync.PersonalToken "ghp_test") ""
         linkable <- call tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
         renderT linkable `shouldSatisfy` T.isInfixOf "repositories?sample=%2Fsrv%2Fapp%2Fcheckout.py"
-        form <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsGetH testPid (Just "/srv/app/checkout.py")
+        form <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Overview) (Just "/srv/app/checkout.py")
         renderT form `shouldSatisfy` T.isInfixOf "sample=%2Fsrv%2Fapp%2Fcheckout.py"
 
       it "maps several services onto several repos, and resolves each frame to its own" \tr -> do
@@ -1234,7 +1234,7 @@ spec = do
       it "tokenConnection_rejectsMissingTokenAndQueuesOnlyFirstImport" \tr -> do
         let form owner repo branch token prefix = GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
         for_ ["", " "] \token -> do
-          (void <$> call tr (GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing))) `shouldReturn` Left (GitSyncPage.InvalidConnection Git.TokenMissing)
+          (void <$> call tr (GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing))) `shouldReturn` Left Git.TokenMissing
           runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
           pendingJobs tr >>= (`shouldSatisfy` null)
         void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)

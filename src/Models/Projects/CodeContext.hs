@@ -111,6 +111,8 @@ data SnippetError
     CredentialGone
   | -- | Reaching GitHub failed: repo\/path\/ref, and what went wrong.
     ReadFailed Text Text
+  | -- | The grant's stored host\/origin\/token cannot make a connection: repo, and why.
+    ConnectionInvalid Text Git.GitConnError
   | -- | The line is past the end of the file at that revision — almost always a build\/source mismatch.
     LineOutOfRange Text Int Text
   deriving stock (Eq, Generic, Show)
@@ -128,6 +130,7 @@ snippetErrorMessage = \case
   NoMapping path -> "No linked repository covers " <> path <> "."
   CredentialGone -> "The GitHub credential this repository was linked with is no longer configured."
   ReadFailed what err -> "Could not read " <> what <> ": " <> err
+  ConnectionInvalid what err -> "Could not read " <> what <> ": " <> Git.gitConnErrorMessage err
   LineOutOfRange path n ref -> "Line " <> show n <> " is past the end of " <> path <> " at " <> ref <> " — the build that threw is probably not this revision."
 
 
@@ -304,7 +307,7 @@ mappingConnection cfg pid mapping = runExceptT do
   creds <- hoistEither $ maybeToRight CredentialGone $ credentialCreds cred
   let located = mapping.owner <> "/" <> mapping.repo
   token <- ExceptT $ first (ReadFailed located) <$> githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
-  conn <- hoistEither $ first (ReadFailed located . Git.gitConnErrorMessage) $ credentialConn cred token
+  conn <- hoistEither $ first (ConnectionInvalid located) $ credentialConn cred token
   pure (cred, conn)
 
 

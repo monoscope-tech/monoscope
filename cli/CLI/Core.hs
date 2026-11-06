@@ -38,7 +38,6 @@ import CLI.Config (CLIConfig (..), Credential (..), credentialText)
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty qualified as AE
-import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Wreq (HTTP, deleteWith, getWith, patchWith, postWith, putWith, responseBody)
 import Data.Effectful.Wreq qualified as W
@@ -236,24 +235,15 @@ data APIError = APIError {statusCode :: Int, message :: Text}
 -- | Human-readable rendering for end-user error messages.
 -- - Connection-level errors (statusCode == 0) print the bare message.
 -- - A structured @{"error": {code, message, suggestion?, ...}}@ body prints its
---   @message@ (+ @suggestion@); query/validation codes drop the @HTTP N:@ prefix.
+--   @message@ (+ @suggestion@); query codes drop the @HTTP N:@ prefix.
 --   The raw @details@ blob is only shown under @--debug@.
 -- - Otherwise, falls back to @HTTP N: <body>@.
 renderAPIError :: APIError -> Text
 renderAPIError e
   | e.statusCode == 0 = e.message
-  | otherwise = case decodeStructured of
-      Just (code, msg, suggestionM) ->
-        bool ("HTTP " <> show e.statusCode <> ": ") "" (code `elem` ["unknown_field", "invalid_query", "validation"]) <> msg <> foldMap (\s -> " (" <> s <> ")") suggestionM
+  | otherwise = case AE.decodeStrict @Wire.ApiProblemBody (encodeUtf8 e.message) of
+      Just (Wire.ApiProblemBody p) -> bool ("HTTP " <> show e.statusCode <> ": ") "" (p.code `elem` [Wire.PUnknownField, Wire.PInvalidQuery]) <> p.message <> foldMap (\s -> " (" <> s <> ")") p.suggestion
       Nothing -> "HTTP " <> show e.statusCode <> ": " <> e.message
-  where
-    decodeStructured = case AE.eitherDecodeStrict @AE.Value (encodeUtf8 e.message) of
-      Right (AE.Object o)
-        | Just (AE.Object err) <- KM.lookup "error" o
-        , Just (AE.String c) <- KM.lookup "code" err
-        , Just (AE.String m) <- KM.lookup "message" err ->
-            Just (c, m, case KM.lookup "suggestion" err of Just (AE.String x) -> Just x; _ -> Nothing)
-      _ -> Nothing
 
 
 -- | Build common request options (auth + project header + query params).

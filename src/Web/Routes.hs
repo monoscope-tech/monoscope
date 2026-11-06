@@ -382,14 +382,14 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , repositorySourcePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Action 'POST PageCodeContext.MappingRejection PageCodeContext.MappingsPanel
   , repositorySourceDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> Capture "mapping_id" CodeContext.CodeMappingId :> Unrefusable 'DELETE PageCodeContext.MappingsPanel
   , repositoryReviewsPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> "reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Unrefusable 'POST (PageCodeContext.ReviewChange (PageCtx PageCodeContext.RepositoryGet))
-  , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST GitSync.GitSyncRejection GitSync.GitSyncSettings
+  , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST Git.GitConnError GitSync.GitSyncSettings
   , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Unrefusable 'DELETE GitSync.GitSyncRemoval
-  , gitSyncRepositoryUpdate :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST GitSync.GitSyncRejection GitSync.GitSyncSettings
+  , gitSyncRepositoryUpdate :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST Git.GitConnError GitSync.GitSyncSettings
   , gitSyncRepositoryRetry :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "retry" :> Unrefusable 'POST GitSync.GitSyncSettings
   , gitSyncRepositoryPause :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "pause" :> Unrefusable 'POST GitSync.GitSyncSettings
   , gitSyncRepositoryDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> Unrefusable 'DELETE GitSync.GitSyncRemoval
   , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoriesGet))
-  , codeMappingsEditor :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> "editor" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoriesGet))
+  , codeMappingsEditor :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> "editor" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders PageCodeContext.MappingsPanel)
   , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Action 'POST PageCodeContext.MappingRejection PageCodeContext.MappingsPanel
   , impactReviewSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Unrefusable 'POST (PageCodeContext.ReviewChange PageCodeContext.MappingsPanel)
   , issueFixGet :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> Get '[HTML] (Headers '[Header "Cache-Control" Text] (Html ()))
@@ -525,12 +525,12 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> QPT "q" :> QueryParam "append" Bool :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , dataPointCountsGetH :: mode :- "metrics" :> "datapoints" :> "counts" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Metrics.DataPointCounts)
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricDetailsGet)
-  , metricRelatedGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "related" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricRelated)
-  , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricBreakdown)
+  , metricRelatedGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "related" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricFragment)
+  , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricFragment)
   , -- HTML for the metric page's Exemplars tab, JSON for the chart's diamond overlay:
     -- one query, so the list and the markers can't disagree.
     metricExemplarsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "exemplars" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML, JSON] (RespHeaders Metrics.MetricExemplarsGet)
-  , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricCard)
+  , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricFragment)
   , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> QPT "endpoint_hash" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
   , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "service_search" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricServices)
   , hostsGetH :: mode :- "infrastructure" :> "hosts" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "integration" :> QPT "group" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.HostsGet)
@@ -718,7 +718,7 @@ mcpProjectTools =
           Just tool -> withRunInIO \run ->
             run
               $ Error.runErrorNoCallStack @ServerError (Eff.inject $ MCP.runTool (apiV1App run principal (Authenticated pid)) pid tool $ KM.fromMapText args)
-              <&> either (MCP.toolError . decodeUtf8 . errBody) id
+              <&> either (MCP.toolError . MCP.problemText . errBody) id
     }
 
 
@@ -816,8 +816,8 @@ cookieProtectedServer projectTools =
     , gitSyncRepositoryRetry = GitSync.gitSyncRepositoryRetryH
     , gitSyncRepositoryPause = GitSync.gitSyncRepositoryPauseH
     , gitSyncRepositoryDelete = GitSync.gitSyncRepositoryDeleteH
-    , codeMappingsSettings = PageCodeContext.codeMappingsGetH
-    , codeMappingsEditor = \pid _ sample -> PageCodeContext.repositoriesGetH pid Nothing sample
+    , codeMappingsSettings = \pid -> PageCodeContext.repositoriesGetH pid (Just PageCodeContext.Overview)
+    , codeMappingsEditor = PageCodeContext.codeMappingsEditorGetH
     , codeMappingsPost = PageCodeContext.codeMappingsPostH
     , impactReviewSettingsPost = PageCodeContext.impactReviewSettingsPostH
     , impactReviewRetry = PageCodeContext.impactReviewRetryH
@@ -1318,7 +1318,7 @@ genAuthServerContext logger env = authHandler logger env :. apiKeyAuthHandler lo
 errorFormatters :: AuthContext -> Servant.ErrorFormatters
 errorFormatters env =
   Servant.defaultErrorFormatters
-    { Servant.notFoundErrorFormatter = servantRejection env.config err404 "not_found" "No route matches this path"
-    , Servant.bodyParserErrorFormatter = \_ req msg -> servantRejection env.config err400 "invalid_request" (toText msg) req
-    , Servant.urlParseErrorFormatter = \_ req msg -> servantRejection env.config err400 "invalid_request" (toText msg) req
+    { Servant.notFoundErrorFormatter = servantRejection env.config ApiT.NoRoute
+    , Servant.bodyParserErrorFormatter = \_ req msg -> servantRejection env.config (ApiT.InvalidRequest $ toText msg) req
+    , Servant.urlParseErrorFormatter = \_ req msg -> servantRejection env.config (ApiT.InvalidRequest $ toText msg) req
     }

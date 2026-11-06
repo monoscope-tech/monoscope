@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH) where
+module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, FrameSource (..), repositoriesGetH, RepositoriesGet (..), serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, RepositoryRemoval (..), repositorySourceGetH, RepositorySourceGet, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, ReviewChange (..), repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
@@ -211,7 +211,7 @@ instance ToHtml FrameSource where
     -- that gets a control — carrying the path, so the form it opens is already filled in.
     SnippetUnavailable pid err -> note_ (CodeContext.snippetErrorMessage err) case err of
       CodeContext.NoMapping path -> Just $ "/p/" <> pid.toText <> "/repositories?sample=" <> toUriStr path
-      (CodeContext.CredentialGone; CodeContext.ReadFailed{}; CodeContext.LineOutOfRange{}) -> Nothing
+      (CodeContext.CredentialGone; CodeContext.ReadFailed{}; CodeContext.ConnectionInvalid{}; CodeContext.LineOutOfRange{}) -> Nothing
     -- No empty-body arm: 'fetchSnippet' returns a 'Left' for a line past the end of the
     -- file, so a 'Snippet' that reaches here has source in it.
     SnippetFound s ->
@@ -253,10 +253,6 @@ data CodeMappingForm = CodeMappingForm
 -- | The mapping editor. @sample@ carries a stack-frame path in from the frame that had no
 -- mapping, so arriving from an unmapped trace lands on a form already holding the example it
 -- needs.
-codeMappingsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx RepositoriesGet))
-codeMappingsGetH pid = repositoriesGetH pid (Just Overview)
-
-
 data MemoryForm = MemoryForm {pageId :: Memory.PageId, version :: Word32, path :: Maybe Text, title :: Text, body :: Text}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -990,16 +986,11 @@ data RepositoryRemoval = RepositoryRemoved Projects.ProjectId | RemovalBlockedBy
   deriving stock (Eq, Show)
 
 
-instance ToHtml RepositoryRemoval where
-  toHtmlRaw = toHtml
-  toHtml = \case
+instance Outcome RepositoryRemoval where
+  outcomeBody = \case
     RepositoryRemoved _ -> mempty
     RemovalBlockedBySync -> p_ [role_ "alert", class_ "text-sm text-textWarning"] "A sync is running. Try removing the repository again when it finishes."
     PullRequestNotClosed err -> p_ [role_ "alert", class_ "text-sm text-textError"] $ toHtml $ "Could not close the configuration PR. The repository is still connected. " <> err
-
-
-instance Outcome RepositoryRemoval where
-  outcomeBody = toHtml
   outcomeRedirect = \case
     RepositoryRemoved pid -> Just $ "/p/" <> pid.toText <> "/repositories"
     (RemovalBlockedBySync; PullRequestNotClosed _) -> Nothing

@@ -10,9 +10,8 @@ module Pages.Telemetry (
   MetricServices (..),
   MetricDetailsGet (..),
   MetricDetails (..),
-  MetricRelated (..),
-  MetricBreakdown (..),
-  MetricCard (..),
+  MetricFragment (..),
+  MetricPart (..),
   RelatedMetrics (..),
   metricBreakdownGetH,
   metricCardGetH,
@@ -142,7 +141,9 @@ newtype DataPointCounts = DataPointCounts [Telemetry.MetricDataPoint]
 
 
 instance ToHtml DataPointCounts where
-  toHtml (DataPointCounts dps) = toHtml $ dataPointCountCells_ dps
+  toHtml (DataPointCounts dps) = toHtml @(Html ()) do
+    forM_ dps \metric -> metricDataPointCount_ True metric.metricName metric.dataPointsCount
+    span_ [id_ "metric-datapoint-count-status", role_ "status", class_ "text-xs text-textWeak", term "hx-swap-oob" "true"] "Datapoint counts loaded."
   toHtmlRaw = toHtml
 
 
@@ -154,31 +155,30 @@ instance ToHtml MetricServices where
   toHtmlRaw = toHtml
 
 
--- | 'metric' is 'Nothing' when the name matched no metric.
-data MetricRelated = MetricRelated {projectId :: Projects.ProjectId, source :: Text, metric :: Maybe Telemetry.MetricDataPoint, candidates :: V.Vector Telemetry.MetricChartListData}
+-- | One lazily loaded piece of a metric's drawer or card; 'metric' is 'Nothing' when the name matched no metric.
+data MetricFragment = MetricFragment {projectId :: Projects.ProjectId, source :: Text, label :: Maybe Text, metric :: Maybe Telemetry.MetricDataPoint, part :: MetricPart}
 
 
-instance ToHtml MetricRelated where
-  toHtml r = maybe "Metric not found" (\metric -> toHtml $ relatedMetrics r.projectId r.source metric r.candidates) r.metric
+data MetricPart = Card | Breakdown | Related (V.Vector Telemetry.MetricChartListData)
+
+
+instance ToHtml MetricFragment where
+  toHtml f = case (f.part, f.metric) of
+    (Card, Just metric) -> toHtml $ metricCard f.projectId f.source metric.metricName metric.metricType metric.metricUnit metric.metricLabels $ mfilter (\l -> l == "all" || l `elem` metric.metricLabels) f.label
+    (Breakdown, Just metric) -> toHtml $ metricDetailChart f.projectId metric f.source (mfilter (`elem` metric.metricLabels) f.label)
+    (Related candidates, Just metric) -> toHtml $ relatedMetrics f.projectId f.source metric candidates
+    (Related _, Nothing) -> "Metric not found"
+    (Card, Nothing) -> mempty
+    (Breakdown, Nothing) -> mempty
   toHtmlRaw = toHtml
 
 
-data MetricBreakdown = MetricBreakdown {projectId :: Projects.ProjectId, metric :: Maybe Telemetry.MetricDataPoint, label :: Maybe Text}
-
-
-instance ToHtml MetricBreakdown where
-  toHtml b = flip foldMap b.metric \metric -> toHtml $ metricDetailChart b.projectId metric "all" (mfilter (`elem` metric.metricLabels) b.label)
-  toHtmlRaw = toHtml
-
-
-data MetricCard = MetricCard {projectId :: Projects.ProjectId, source :: Text, metric :: Maybe Telemetry.MetricDataPoint, label :: Maybe Text}
-
-
-instance ToHtml MetricCard where
-  toHtml c = flip foldMap c.metric \metric ->
-    let selected = mfilter (\l -> l == "all" || l `elem` metric.metricLabels) c.label
-     in toHtml $ metricCard c.projectId c.source metric.metricName metric.metricType metric.metricUnit metric.metricLabels selected
-  toHtmlRaw = toHtml
+metricFragmentH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx MetricPart -> ATAuthCtx (RespHeaders MetricFragment)
+metricFragmentH projectId metricName sourceM label partM = do
+  void $ Projects.sessionAndProject projectId
+  metric <- Telemetry.getMetricData projectId metricName
+  part <- partM
+  addRespHeaders MetricFragment{projectId, source = fromMaybe "all" sourceM, label, metric, part}
 
 
 -- | A span/log record's metrics: @window@ is the padded range charted, @subject@ the record's own extent shaded inside it.
@@ -189,7 +189,28 @@ data RelatedMetrics
 
 instance ToHtml RelatedMetrics where
   toHtml RelatedRecordMissing = toHtml $ Components.emptyState_ def{size = ESCompact} "Record not found" ""
-  toHtml (RelatedMetrics pid service window subject exemplars serviceMetrics) = toHtml $ relatedMetrics_ pid service window subject exemplars serviceMetrics
+  toHtml (RelatedMetrics pid service (lo, hi) (subLo, subHi) exemplars serviceMetrics) = toHtml @(Html ()) $ div_ [class_ "flex flex-col gap-6 py-2"] do
+    section "Recorded in this trace" $ case exemplars of
+      [] -> hint "No metric reported a datapoint from this trace. Only metrics recorded inside a sampled span carry an exemplar."
+      xs -> linkList_ Nothing $ xs <&> \x -> ([href_ $ metricDetailUrl pid x.metricName "all" Nothing], span_ [class_ "block truncate text-textStrong"] $ toHtml x.metricName, toHtml $ exemplarValueText x)
+    section (if T.null service then "Service metrics" else "Metrics from " <> service) $ case serviceMetrics of
+      [] -> hint $ if T.null service then "This record names no service, so there is nothing to scope metrics to." else "No metrics reported by " <> service <> "."
+      ms -> div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] $ forM_ ms \m ->
+        div_ [class_ "h-40 rounded-xl border border-strokeWeak p-1"]
+          $ toHtml
+          $ (metricWidget pid m.metricName m.metricType m.metricUnit service Nothing (Just m.metricName) (Just $ "rel_" <> T.replace "." "_" m.metricName) Nothing)
+            { Widget.timeFrom = Just $ formatUTC lo
+            , Widget.timeTo = Just $ formatUTC hi
+            , Widget.highlightFrom = Just $ formatUTC subLo
+            , Widget.highlightTo = Just $ formatUTC subHi
+            }
+    where
+      hint :: Text -> Html ()
+      hint t = div_ [class_ "px-3 py-4 text-sm text-textWeak"] $ toHtml t
+      section :: Text -> Html () -> Html ()
+      section title body = div_ [class_ "flex flex-col gap-2"] do
+        span_ [class_ "px-3 text-xs font-medium text-textWeak"] $ toHtml title
+        body
   toHtmlRaw = toHtml
 
 
@@ -488,12 +509,8 @@ metricDetailsGetH pid metricName fromM toM sinceM source labelM = do
 
 -- | The full catalogue is only needed to rank this opt-in tab; never make a drawer
 -- click wait for it.
-metricRelatedGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricRelated)
-metricRelatedGetH projectId metricName sourceM = do
-  void $ Projects.sessionAndProject projectId
-  metric <- Telemetry.getMetricData projectId metricName
-  candidates <- V.fromList <$> Telemetry.getMetricChartListData projectId (mfilter (/= "all") sourceM) Nothing
-  addRespHeaders MetricRelated{projectId, source = fromMaybe "all" sourceM, metric, candidates}
+metricRelatedGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricFragment)
+metricRelatedGetH pid metricName sourceM = metricFragmentH pid metricName sourceM Nothing $ Related . V.fromList <$> Telemetry.getMetricChartListData pid (mfilter (/= "all") sourceM) Nothing
 
 
 -- | Deep link that opens a trace in the log explorer's trace overlay. @Log.hs@'s
@@ -621,36 +638,8 @@ relatedMetricsGetH pid rdId timestamp = withSpan_ "log-explorer.related-metrics"
       addRespHeaders $ RelatedMetrics pid service (lo, hi) subject exemplars serviceMetrics
 
 
-relatedMetrics_ :: Projects.ProjectId -> Text -> (UTCTime, UTCTime) -> (UTCTime, UTCTime) -> [Telemetry.MetricExemplar] -> [Telemetry.MetricChartListData] -> Html ()
-relatedMetrics_ pid service (lo, hi) (subLo, subHi) exemplars serviceMetrics = div_ [class_ "flex flex-col gap-6 py-2"] do
-  section "Recorded in this trace" $ case exemplars of
-    [] -> hint "No metric reported a datapoint from this trace. Only metrics recorded inside a sampled span carry an exemplar."
-    xs -> linkList_ Nothing $ xs <&> \x -> ([href_ $ metricDetailUrl pid x.metricName "all" Nothing], span_ [class_ "block truncate text-textStrong"] $ toHtml x.metricName, toHtml $ exemplarValueText x)
-  section (if T.null service then "Service metrics" else "Metrics from " <> service) $ case serviceMetrics of
-    [] -> hint $ if T.null service then "This record names no service, so there is nothing to scope metrics to." else "No metrics reported by " <> service <> "."
-    ms -> div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] $ forM_ ms \m ->
-      div_ [class_ "h-40 rounded-xl border border-strokeWeak p-1"]
-        $ toHtml
-        $ (metricWidget pid m.metricName m.metricType m.metricUnit service Nothing (Just m.metricName) (Just $ "rel_" <> T.replace "." "_" m.metricName) Nothing)
-          { Widget.timeFrom = Just $ formatUTC lo
-          , Widget.timeTo = Just $ formatUTC hi
-          , Widget.highlightFrom = Just $ formatUTC subLo
-          , Widget.highlightTo = Just $ formatUTC subHi
-          }
-  where
-    hint :: Text -> Html ()
-    hint t = div_ [class_ "px-3 py-4 text-sm text-textWeak"] $ toHtml t
-    section :: Text -> Html () -> Html ()
-    section title body = div_ [class_ "flex flex-col gap-2"] do
-      span_ [class_ "px-3 text-xs font-medium text-textWeak"] $ toHtml title
-      body
-
-
-metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricBreakdown)
-metricBreakdownGetH projectId metricName label = do
-  void $ Projects.sessionAndProject projectId
-  metric <- Telemetry.getMetricData projectId metricName
-  addRespHeaders MetricBreakdown{projectId, metric, label}
+metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricFragment)
+metricBreakdownGetH pid metricName label = metricFragmentH pid metricName Nothing label $ pure Breakdown
 
 
 -- | The URL 'traceH' answers. Shared so an embedder's @hx-get@ and the failure
@@ -894,11 +883,8 @@ chartList pid source metricList nextUrl = do
         span_ [class_ "hidden [.htmx-request_&]:inline-flex text-sm text-textWeak", role_ "status"] "Loading more metrics…"
 
 
-metricCardGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricCard)
-metricCardGetH projectId metricName label sourceM = do
-  void $ Projects.sessionAndProject projectId
-  metric <- Telemetry.getMetricData projectId metricName
-  addRespHeaders MetricCard{projectId, source = fromMaybe "all" sourceM, metric, label}
+metricCardGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricFragment)
+metricCardGetH pid metricName label sourceM = metricFragmentH pid metricName sourceM label $ pure Card
 
 
 metricCard :: Projects.ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Maybe Text -> Html ()
@@ -1066,12 +1052,6 @@ metricDataPointCount_ oob metricName countM =
     )
     $ toHtml
     $ maybe "…" prettyPrintCount countM
-
-
-dataPointCountCells_ :: [Telemetry.MetricDataPoint] -> Html ()
-dataPointCountCells_ dataPoints = do
-  forM_ dataPoints \metric -> metricDataPointCount_ True metric.metricName metric.dataPointsCount
-  span_ [id_ "metric-datapoint-count-status", role_ "status", class_ "text-xs text-textWeak", term "hx-swap-oob" "true"] "Datapoint counts loaded."
 
 
 -- | Prefer datapoint attributes, then service identity, then other resource fields.

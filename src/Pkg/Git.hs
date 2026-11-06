@@ -25,6 +25,8 @@ module Pkg.Git (
   Sensitive (..),
   GitConn (..),
   GitConnError (..),
+  EndpointError (..),
+  OriginError (..),
   gitConnErrorMessage,
   mkGitConn,
   validateOrigin,
@@ -271,32 +273,37 @@ hostOriginRule = \case
 
 
 -- | Why a host, origin and token cannot make a connection — decided locally, before any request.
-data GitConnError
-  = TokenMissing
-  | OriginMissing
-  | OriginInsecure
-  | OriginHasCredentials
-  | OriginHasQuery
-  | OriginUnparseable
-  | OriginNoHost
-  | SelfHostedOnly GitHost
-  | CloudOnly GitHost
-  deriving stock (Eq, Show)
+data GitConnError = TokenMissing | BadEndpoint EndpointError
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
 
 
--- | >>> gitConnErrorMessage (SelfHostedOnly Gitea)
+-- | Why a host and origin name no API base.
+data EndpointError = SelfHostedOnly GitHost | CloudOnly GitHost | BadOrigin OriginError
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+-- | Why a user-supplied origin is not a usable server address.
+data OriginError = OriginMissing | OriginInsecure | OriginHasCredentials | OriginHasQuery | OriginUnparseable | OriginNoHost
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+-- | >>> gitConnErrorMessage (BadEndpoint (SelfHostedOnly Gitea))
 -- "Gitea is always self-hosted \8212 enter the URL of your server."
 gitConnErrorMessage :: GitConnError -> Text
 gitConnErrorMessage = \case
   TokenMissing -> "Enter an access token."
-  OriginMissing -> "Enter the URL of your server."
-  OriginInsecure -> "Use https:// — an http:// server would receive your access token in clear text."
-  OriginHasCredentials -> "Remove the username and password from the URL; the access token is the credential."
-  OriginHasQuery -> "Remove the query string and fragment; this is a server address, not a link."
-  OriginUnparseable -> "That is not a URL we can parse."
-  OriginNoHost -> "That URL has no server name in it."
-  SelfHostedOnly h -> hostLabel h <> " is always self-hosted — enter the URL of your server."
-  CloudOnly h -> hostLabel h <> " Cloud only; a server URL is not supported here."
+  BadEndpoint (SelfHostedOnly h) -> hostLabel h <> " is always self-hosted — enter the URL of your server."
+  BadEndpoint (CloudOnly h) -> hostLabel h <> " Cloud only; a server URL is not supported here."
+  BadEndpoint (BadOrigin e) -> case e of
+    OriginMissing -> "Enter the URL of your server."
+    OriginInsecure -> "Use https:// — an http:// server would receive your access token in clear text."
+    OriginHasCredentials -> "Remove the username and password from the URL; the access token is the credential."
+    OriginHasQuery -> "Remove the query string and fragment; this is a server address, not a link."
+    OriginUnparseable -> "That is not a URL we can parse."
+    OriginNoHost -> "That URL has no server name in it."
 
 
 -- | Normalise and vet a user-supplied origin.
@@ -332,7 +339,7 @@ gitConnErrorMessage = \case
 -- Left OriginHasQuery
 -- >>> normalizeOrigin ""
 -- Left OriginMissing
-normalizeOrigin :: Text -> Either GitConnError Text
+normalizeOrigin :: Text -> Either OriginError Text
 normalizeOrigin raw
   | T.null trimmed = Left OriginMissing
   | any (`T.isInfixOf` trimmed) ["?", "#"] = Left OriginHasQuery
@@ -369,9 +376,9 @@ normalizeOrigin raw
 -- The two host-shaped errors:
 --
 -- >>> unBaseUrl . (.apiBase) <$> mkGitConn Gitea Nothing "t"
--- Left (SelfHostedOnly Gitea)
+-- Left (BadEndpoint (SelfHostedOnly Gitea))
 -- >>> unBaseUrl . (.apiBase) <$> mkGitConn Bitbucket (Just "https://bb.acme.dev") "t"
--- Left (CloudOnly Bitbucket)
+-- Left (BadEndpoint (CloudOnly Bitbucket))
 --
 -- A blank token cannot authenticate anything, and failing here beats a 401 from four
 -- different hosts in four different shapes:
@@ -381,7 +388,7 @@ normalizeOrigin raw
 mkGitConn :: GitHost -> Maybe Text -> Text -> Either GitConnError GitConn
 mkGitConn h originM tok = do
   when (T.null $ T.strip tok) $ Left TokenMissing
-  base <- validateOrigin h originM
+  base <- first BadEndpoint $ validateOrigin h originM
   pure $ GitConn h base (Sensitive tok)
 
 
@@ -395,13 +402,13 @@ mkGitConn h originM tok = do
 -- Right "https://git.acme.dev/api/v4"
 -- >>> unBaseUrl <$> validateOrigin Gitea Nothing
 -- Left (SelfHostedOnly Gitea)
-validateOrigin :: GitHost -> Maybe Text -> Either GitConnError BaseUrl
+validateOrigin :: GitHost -> Maybe Text -> Either EndpointError BaseUrl
 validateOrigin h originM =
   BaseUrl <$> case (hostOriginRule h, mfilter (not . T.null . T.strip) originM) of
     (OriginOptional saas _, Nothing) -> Right saas
-    (OriginOptional _ path, Just o) -> (<> path) <$> normalizeOrigin o
+    (OriginOptional _ path, Just o) -> bimap BadOrigin (<> path) $ normalizeOrigin o
     (OriginRequired _, Nothing) -> Left $ SelfHostedOnly h
-    (OriginRequired path, Just o) -> (<> path) <$> normalizeOrigin o
+    (OriginRequired path, Just o) -> bimap BadOrigin (<> path) $ normalizeOrigin o
     (OriginRejected saas, Nothing) -> Right saas
     (OriginRejected _, Just _) -> Left $ CloudOnly h
 

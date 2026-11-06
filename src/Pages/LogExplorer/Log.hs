@@ -102,7 +102,7 @@ import Utils (FieldAction (..), FieldMenuCtx (..), encodeText, explorerNavTabs_,
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 
-import Web.ApiTypes (ApiProblem (ApiProblem), LogResult (..), TraceTreeEntry (..), problem)
+import Web.ApiTypes (ApiProblem (ApiProblem), LogResult (..), ProblemCode (..), TraceTreeEntry (..), problem)
 
 
 data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text, isQueryResult :: Bool, rowIdx :: Int}
@@ -670,11 +670,11 @@ data LogError
 refuse :: Error Servant.ServerError :> es => LogError -> Eff es a
 refuse =
   throwError . problem Servant.err400 . \case
-    KqlInvalid err -> ApiProblem "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing
-    KqlUnknownField col raw -> ApiProblem "unknown_field" ("Unknown field \"" <> col <> "\"") (Just col) (Just $ "quote it as \"" <> col <> "\" to search text, or use 'field == value' for equality") (Just raw)
-    KqlFailed raw -> ApiProblem "query_failed" (summary raw) Nothing Nothing (Just raw)
-    ExpandMissingKey -> ApiProblem "required" "Missing key" (Just "key") Nothing Nothing
-    ExpandUnknownKind -> ApiProblem "invalid_value" "kind must be session or pattern" (Just "kind") Nothing Nothing
+    KqlInvalid err -> ApiProblem PInvalidQuery ("Invalid query: " <> err) Nothing Nothing Nothing
+    KqlUnknownField col raw -> ApiProblem PUnknownField ("Unknown field \"" <> col <> "\"") (Just col) (Just $ "quote it as \"" <> col <> "\" to search text, or use 'field == value' for equality") (Just raw)
+    KqlFailed raw -> ApiProblem PQueryFailed (summary raw) Nothing Nothing (Just raw)
+    ExpandMissingKey -> ApiProblem PRequired "Missing key" (Just "key") Nothing Nothing
+    ExpandUnknownKind -> ApiProblem PInvalidValue "kind must be session or pattern" (Just "kind") Nothing Nothing
   where
     -- The first line only, so the user doesn't see raw Haskell record syntax.
     summary raw
@@ -1073,11 +1073,6 @@ alertFormH pid alertM = do
 
 
 data AlertForm = AlertForm Projects.Project (Maybe Text) (Maybe Monitors.QueryMonitor) (V.Vector ManageMembers.Team)
-
-
-instance ToHtml AlertForm where
-  toHtml (AlertForm project env alertM teams) = toHtml $ alertConfigurationForm_ project env alertM teams
-  toHtmlRaw = toHtml
 
 
 -- | Resolve an @?alert=<uuid>@ query param to its monitor, if it parses and exists.
@@ -1819,70 +1814,71 @@ curateCols addCols removeCols = sortOn rank . filter keep
 
 
 -- | Render alert configuration form for creating log-based alerts
-alertConfigurationForm_ :: Projects.Project -> Maybe Text -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Html ()
-alertConfigurationForm_ project selectedEnvironment alertM teams = do
-  let pid = project.id
-      monitorEnvironment = maybe selectedEnvironment (.environment) alertM
-      monitorService = alertM >>= (.service)
-  div_ [class_ "surface-raised h-full flex flex-col group/alt"] do
-    div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
-      div_ [class_ "flex items-center gap-2.5"] do
-        div_ [class_ "w-8 h-8 rounded-full bg-fillBrand-weak flex items-center justify-center shrink-0"]
-          $ faSprite_ "bell" "regular" "w-4 h-4 text-iconBrand"
-        div_ [] do
-          h3_ [class_ "text-base font-semibold text-textStrong"] $ if isJust alertM then "Edit monitor" else "Create monitor"
-          p_ [class_ "text-xs text-textWeak hidden sm:block"] "Get notified when your query matches specific conditions"
-      label_
-        [ Lucid.for_ "create-alert-toggle"
-        , class_ "inline-flex h-8 w-8 items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-1"
-        , Aria.label_ "Close monitor editor"
-        , role_ "button"
-        , tabindex_ "0"
-        , keyboardActivateAttr_
-        ]
-        $ faSprite_ "xmark" "regular" "w-3.5 h-3.5"
+instance ToHtml AlertForm where
+  toHtmlRaw = toHtml
+  toHtml (AlertForm project selectedEnvironment alertM teams) = toHtml @(Html ()) do
+    let pid = project.id
+        monitorEnvironment = maybe selectedEnvironment (.environment) alertM
+        monitorService = alertM >>= (.service)
+    div_ [class_ "surface-raised h-full flex flex-col group/alt"] do
+      div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
+        div_ [class_ "flex items-center gap-2.5"] do
+          div_ [class_ "w-8 h-8 rounded-full bg-fillBrand-weak flex items-center justify-center shrink-0"]
+            $ faSprite_ "bell" "regular" "w-4 h-4 text-iconBrand"
+          div_ [] do
+            h3_ [class_ "text-base font-semibold text-textStrong"] $ if isJust alertM then "Edit monitor" else "Create monitor"
+            p_ [class_ "text-xs text-textWeak hidden sm:block"] "Get notified when your query matches specific conditions"
+        label_
+          [ Lucid.for_ "create-alert-toggle"
+          , class_ "inline-flex h-8 w-8 items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-1"
+          , Aria.label_ "Close monitor editor"
+          , role_ "button"
+          , tabindex_ "0"
+          , keyboardActivateAttr_
+          ]
+          $ faSprite_ "xmark" "regular" "w-3.5 h-3.5"
 
-    div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
-      form_
-        [ id_ "alert-form"
-        , hxPost_ $ "/p/" <> pid.toText <> "/monitors/alerts"
-        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
-        , hxSwap_ "none"
-        , class_ "flex flex-col gap-3"
-        , resetFormOnSuccessAttr_
-        ]
-        do
-          input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" (.id.toText) alertM]
-          let title = maybe "" (.alertConfig.title) alertM
-          if maybe False (isJust . (.widgetId)) alertM
-            then input_ [type_ "hidden", name_ "title", value_ title]
-            else formField_ FieldSm def{value = title, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
+      div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
+        form_
+          [ id_ "alert-form"
+          , hxPost_ $ "/p/" <> pid.toText <> "/monitors/alerts"
+          , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
+          , hxSwap_ "none"
+          , class_ "flex flex-col gap-3"
+          , resetFormOnSuccessAttr_
+          ]
+          do
+            input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" (.id.toText) alertM]
+            let title = maybe "" (.alertConfig.title) alertM
+            if maybe False (isJust . (.widgetId)) alertM
+              then input_ [type_ "hidden", name_ "title", value_ title]
+              else formField_ FieldSm def{value = title, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
 
-          let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
-              conditionType = bool "has_matches" "threshold_exceeded" $ maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM
-          AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 (AlertUI.SelectCondition $ Just conditionType)
+            let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
+                conditionType = bool "has_matches" "threshold_exceeded" $ maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM
+            AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 (AlertUI.SelectCondition $ Just conditionType)
 
-          AlertUI.thresholdsSection_ (alertM >>= (.alertConfig.unit)) Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
+            AlertUI.thresholdsSection_ (alertM >>= (.alertConfig.unit)) Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
 
-          div_ [class_ "border-y border-strokeWeak py-3"] do
-            p_ [class_ "text-sm font-medium text-textStrong"] "Scope"
-            p_ [class_ "mb-2 text-xs text-textWeak"] "Evaluate this monitor only for this environment or service. Leave a field empty to include all."
-            div_ [class_ "flex gap-2 max-sm:flex-col"] do
-              div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorEnvironment, placeholder = "e.g. production"} "Environment" "environment" False Nothing
-              div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorService, placeholder = "e.g. checkout"} "Service" "service" False Nothing
+            div_ [class_ "border-y border-strokeWeak py-3"] do
+              p_ [class_ "text-sm font-medium text-textStrong"] "Scope"
+              p_ [class_ "mb-2 text-xs text-textWeak"] "Evaluate this monitor only for this environment or service. Leave a field empty to include all."
+              div_ [class_ "flex gap-2 max-sm:flex-col"] do
+                div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorEnvironment, placeholder = "e.g. production"} "Environment" "environment" False Nothing
+                div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorService, placeholder = "e.g. checkout"} "Service" "service" False Nothing
 
-          let selectedTeamIds = maybe V.empty (.teams) alertM
-          AlertUI.notificationSettingsSection_ teams selectedTeamIds "alert-form" alertM
+            let selectedTeamIds = maybe V.empty (.teams) alertM
+            AlertUI.notificationSettingsSection_ teams selectedTeamIds "alert-form" alertM
 
-          div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
-            label_
-              [ Lucid.for_ "create-alert-toggle"
-              , class_ "btn btn-sm"
-              , role_ "button"
-              , tabindex_ "0"
-              , keyboardActivateAttr_
-              ]
-              "Cancel"
-            button_
-              [type_ "submit", class_ "btn btn-primary btn-sm"]
-              (faSprite_ "plus" "regular" "w-3.5 h-3.5" >> if isJust alertM then "Update monitor" else "Create monitor")
+            div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
+              label_
+                [ Lucid.for_ "create-alert-toggle"
+                , class_ "btn btn-sm"
+                , role_ "button"
+                , tabindex_ "0"
+                , keyboardActivateAttr_
+                ]
+                "Cancel"
+              button_
+                [type_ "submit", class_ "btn btn-primary btn-sm"]
+                (faSprite_ "plus" "regular" "w-3.5 h-3.5" >> if isJust alertM then "Update monitor" else "Create monitor")

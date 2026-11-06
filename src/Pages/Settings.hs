@@ -123,7 +123,7 @@ import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), err400, err503, errBody)
 import System.Config
-import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
+import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
 import Text.Printf (printf)
 import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
@@ -657,21 +657,15 @@ prometheusTestH pid form = do
         Right resp ->
           -- Count only the samples ingestScrapedBody would store (shared isFiniteSample).
           let finite = filter Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody)))
-           in ProbeScraped (length finite) ms
+           in ProbeScraped{samples = length finite, latencyMs = ms}
 
 
 -- | A scrape test's result, shown in the form beside the endpoint it tested.
-data ScrapeProbe = ProbeRefused ScrapeRejection | ProbeFailed Text | ProbeScraped Int Int
+data ScrapeProbe = ProbeRefused ScrapeRejection | ProbeFailed Text | ProbeScraped {samples :: Int, latencyMs :: Int}
   deriving stock (Eq, Show)
-  deriving (Outcome) via Rendered ScrapeProbe
 
 
-instance ToHtml ScrapeProbe where
-  toHtmlRaw = toHtml
-  toHtml probe = toHtml $ prometheusTestResult $ Just case probe of
-    ProbeRefused err -> Left $ refusalMessage err
-    ProbeFailed err -> Left err
-    ProbeScraped samples ms -> Right (samples, ms)
+instance Outcome ScrapeProbe where outcomeBody = prometheusTestResult . Just
 
 
 prometheusDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
@@ -815,10 +809,13 @@ promTargetModal_ pid mcfg = do
 
 
 -- | @Nothing@ is the not-yet-tested placeholder the form renders on first paint.
-prometheusTestResult :: Maybe (Either Text (Int, Int)) -> Html ()
+prometheusTestResult :: Maybe ScrapeProbe -> Html ()
 prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ whenJust res \case
-  Right (n, ms) -> statusBadge_ True $ toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
-  Left err -> statusBadge_ False $ span_ [class_ "break-all"] (toHtml err)
+  ProbeScraped{samples, latencyMs} -> statusBadge_ True $ toHtml ("Scraped " <> show samples <> " samples · " <> show latencyMs <> "ms" :: Text)
+  ProbeRefused err -> failed $ refusalMessage err
+  ProbeFailed err -> failed err
+  where
+    failed err = statusBadge_ False $ span_ [class_ "break-all"] (toHtml err)
 
 
 -- | Success/error pill; the icon repeats the state so colour is never the only signal.

@@ -170,7 +170,7 @@ spec = describe "API v1" do
       badSort <- request app H.methodGet "/api/v1/dashboards?sort=bogus" [demo] ""
       noRoute <- request app H.methodGet "/api/v1/no-such-route" [demo] ""
       [(status r, (\p -> (p.error.code, p.error.field)) <$> AE.decode @ApiT.ApiProblemBody (WT.simpleBody r)) | r <- take 1 responses <> [missing, badKql, badSort, noRoute]]
-        `shouldBe` [(401, Just ("unauthorized", Nothing)), (404, Just ("not_found", Nothing)), (400, Just ("invalid_query", Nothing)), (400, Just ("invalid_request", Just "sort")), (404, Just ("not_found", Nothing))]
+        `shouldBe` [(401, Just (ApiT.PUnauthorized, Nothing)), (404, Just (ApiT.PNotFound, Nothing)), (400, Just (ApiT.PInvalidQuery, Nothing)), (400, Just (ApiT.PInvalidRequest, Nothing)), (404, Just (ApiT.PNotFound, Nothing))]
       accepted <- getPath tr "/api/v1/ingestion-key" [demo, bearer apiKey]
       status accepted `shouldBe` 200
       List.lookup "Cache-Control" (WT.simpleHeaders accepted) `shouldBe` Just "no-store"

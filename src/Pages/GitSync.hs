@@ -2,7 +2,6 @@ module Pages.GitSync (
   gitWebhookPostH,
   GitSyncSettings (..),
   GitSyncFailure (..),
-  GitSyncRejection (..),
   GitSyncRemoval (..),
   repositoryDashboardGetH,
   repositoryDashboardPostH,
@@ -139,7 +138,7 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
 -- | Connect or update the config-sync repository. The connection is vetted before anything is
 -- written — storing first and discovering a bad origin on the next background job would leave a
 -- row that looks connected and never syncs.
-gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (ActionResult GitSyncRejection GitSyncSettings)
+gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (ActionResult Git.GitConnError GitSyncSettings)
 gitSyncSettingsPostH pid submitted = do
   requireGitWrite pid
   syncs <- GitSync.getGitSyncs pid
@@ -150,7 +149,7 @@ gitSyncSettingsPostH pid submitted = do
   saveGitSyncH pid (matched <|> legacy) form
 
 
-gitSyncSettingsUpdateH :: Projects.ProjectId -> GitSync.GitHubSyncId -> GitSyncForm -> ATAuthCtx (ActionResult GitSyncRejection GitSyncSettings)
+gitSyncSettingsUpdateH :: Projects.ProjectId -> GitSync.GitHubSyncId -> GitSyncForm -> ATAuthCtx (ActionResult Git.GitConnError GitSyncSettings)
 gitSyncSettingsUpdateH pid sid form = do
   requireGitWrite pid
   sync <- GitSync.getGitSyncById pid sid >>= maybe (throwError err404) pure
@@ -158,26 +157,22 @@ gitSyncSettingsUpdateH pid sid form = do
 
 
 -- | Why a connection was not saved: the form cannot describe one, so no host was asked.
-newtype GitSyncRejection = InvalidConnection Git.GitConnError
-  deriving stock (Eq, Show)
+instance Refusal Git.GitConnError where
+  refusalMessage = Git.gitConnErrorMessage
 
 
-instance Refusal GitSyncRejection where
-  refusalMessage (InvalidConnection err) = Git.gitConnErrorMessage err
-
-
-saveGitSyncH :: Projects.ProjectId -> Maybe GitSync.GitHubSync -> GitSyncForm -> ATAuthCtx (ActionResult GitSyncRejection GitSyncSettings)
+saveGitSyncH :: Projects.ProjectId -> Maybe GitSync.GitHubSync -> GitSyncForm -> ATAuthCtx (ActionResult Git.GitConnError GitSyncSettings)
 saveGitSyncH pid existingM form = act do
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
       host = fromMaybe Git.GitHub form.host
       validation = case existingM of
         Nothing -> void $ Git.mkGitConn host form.apiBase form.accessToken
-        Just _ -> void $ Git.validateOrigin host form.apiBase
+        Just _ -> bimap Git.BadEndpoint (const ()) $ Git.validateOrigin host form.apiBase
   -- The host/origin pair is vetted on its own: an update that keeps the stored token has no
   -- token to build a connection with, and 'Git.validateOrigin' is the half of the check that
   -- never needed one.
-  forM (first InvalidConnection validation) \() -> do
+  forM validation \() -> do
     -- Detecting the default branch needs a token, so a form that kept the stored one falls
     -- back to "main" rather than asking the host with a credential it does not have.
     branch <- case (T.null form.branch, Git.mkGitConn host form.apiBase form.accessToken) of

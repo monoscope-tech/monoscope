@@ -160,8 +160,7 @@ import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
 -- uses to paint charts in a terminal.
 apiDashboardData :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx ApiT.DashboardData
 apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
-  let notFound msg = throwError $ ApiT.problem err404 $ ApiT.ApiProblem "not_found" msg Nothing Nothing Nothing
-  vm <- Dashboards.getDashboardByProjectId pid did `whenNothingM` notFound "Dashboard not found"
+  vm <- Dashboards.getDashboardByProjectId pid did `whenNothingM` ApiT.refuse (ApiT.NotFound ApiT.RDashboard)
   (_, dash) <- getDashAndVM pid did Nothing
   now <- Time.currentTime
   let timeParams = (sinceM, fromM, toM)
@@ -174,7 +173,7 @@ apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
     (t : _, Nothing) -> pure (Just t.name, t.widgets)
     (_, Just wanted) ->
       findTabBySlug allTabs wanted
-        & maybe (notFound $ "Tab not found: " <> wanted) (\(_, t) -> pure (Just t.name, t.widgets))
+        & maybe (ApiT.refuse $ ApiT.TabNotFound wanted) (\(_, t) -> pure (Just t.name, t.widgets))
   -- Most dashboards leave widget ids unset, so --widget also matches a
   -- slugified title ("p95-latency"); otherwise there'd be no way to name one.
   let matches wanted w = w.id == Just wanted || (slugify <$> w.title) == Just (slugify wanted)
@@ -1546,344 +1545,345 @@ widgetMonitorStatus_ pid statusId widgetId dashboardIdM monitorM = div_ [id_ sta
       $ if isJust monitor.deactivatedAt then "Resume monitor" else "Pause monitor"
 
 
-widgetViewerEditor_ :: Projects.ProjectId -> Text -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Maybe Widget.Widget -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Text -> Html ()
-widgetViewerEditor_ pid paymentPlan dashId tabSlugM currentRange existingWidgetM monitorM teams activeTab = div_ [class_ "widget-editor group/wgtexp min-h-full pb-6"] do
-  let isNewWidget = isNothing existingWidgetM
-      effectiveActiveTab = if isNewWidget then "edit" else activeTab
-      defaultWidget =
-        (def :: Widget.Widget)
-          { Widget.wType = Widget.WTTimeseries
-          , Widget.id = Just "newWidget"
-          , Widget.standalone = Just True
-          , Widget.naked = Just True
-          , Widget.title = Just "New Widget"
-          , Widget.hideSubtitle = Just True
-          , Widget.query = Nothing
-          , Widget.unit = Just "ms"
-          , Widget._projectId = Just pid
-          , Widget._dashboardId = Just dashId.toText
-          , Widget.layout = Just $ def{Widget.w = Just 3, Widget.h = Just 3}
-          }
-      widgetBase = fromMaybe defaultWidget existingWidgetM
-      widgetToUse = widgetBase{Widget.id = Just $ maybeToMonoid widgetBase.id <> "Expanded", Widget.standalone = Just True, Widget.naked = Just True}
-      isThresholdChart = widgetToUse.wType `elem` [Widget.WTTimeseries, Widget.WTTimeseriesLine, Widget.WTTimeseriesStat]
-      -- Element ids are derived from the widget id to prevent conflicts
-      wid = maybeToMonoid widgetToUse.id
-      sourceWid = normalizeWidgetId wid
-      widPrefix = "id" <> T.take 8 wid
-      widgetFormId = widPrefix <> "-widget-form"
-      monitorToggleId = widPrefix <> "-monitor-toggle"
-      monitorSectionId = widPrefix <> "-monitor-settings"
-      widgetPreviewId = widPrefix <> "-widget-preview"
-      widgetTitleInputId = widPrefix <> "-widget-title-input"
-      drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
-      alertFormId = widPrefix <> "-alert-form"
-      alertEndpoint = "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
-      widgetJSON = encodeText widgetToUse
-      thresholdField_ key label inputName value color required =
-        Components.formField_
-          Components.FieldSm
-          def
-            { Components.inputType = "number"
-            , Components.value = maybe "" show value
-            , Components.dot = Just color
-            , Components.extraAttrs =
-                [ step_ "any"
-                , term "hx-on:input" $ "widgetJSON." <> key <> " = this.value || null"
-                , term "hx-on:change" $ "widgetJSON." <> key <> " = this.value === '' ? null : Number(this.value); htmx.trigger(document.getElementById('" <> widgetPreviewId <> "'), 'update-widget')"
-                ]
-                  <> [term "hx-live:value" $ "widgetJSON." <> key <> " ?? ''" | not isNewWidget]
+instance ToHtml WidgetEditor where
+  toHtmlRaw = toHtml
+  toHtml (WidgetEditor pid paymentPlan dashId tabSlugM currentRange existingWidgetM monitorM teams activeTab) = toHtml @(Html ()) $ div_ [class_ "widget-editor group/wgtexp min-h-full pb-6"] do
+    let isNewWidget = isNothing existingWidgetM
+        effectiveActiveTab = if isNewWidget then EditTab else activeTab
+        defaultWidget =
+          (def :: Widget.Widget)
+            { Widget.wType = Widget.WTTimeseries
+            , Widget.id = Just "newWidget"
+            , Widget.standalone = Just True
+            , Widget.naked = Just True
+            , Widget.title = Just "New Widget"
+            , Widget.hideSubtitle = Just True
+            , Widget.query = Nothing
+            , Widget.unit = Just "ms"
+            , Widget._projectId = Just pid
+            , Widget._dashboardId = Just dashId.toText
+            , Widget.layout = Just $ def{Widget.w = Just 3, Widget.h = Just 3}
             }
-          label
-          inputName
-          required
-          Nothing
-      widgetTitleValue = "document.getElementById('" <> widgetTitleInputId <> "').value"
-      numberedStep_ :: Int -> Text -> Html () -> Html ()
-      numberedStep_ n title content = section_ [class_ "space-y-2.5"] do
-        div_ [class_ "flex items-center gap-3"] do
-          span_ [class_ "inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong"] $ toHtml (show n)
-          strong_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
-        content
+        widgetBase = fromMaybe defaultWidget existingWidgetM
+        widgetToUse = widgetBase{Widget.id = Just $ maybeToMonoid widgetBase.id <> "Expanded", Widget.standalone = Just True, Widget.naked = Just True}
+        isThresholdChart = widgetToUse.wType `elem` [Widget.WTTimeseries, Widget.WTTimeseriesLine, Widget.WTTimeseriesStat]
+        -- Element ids are derived from the widget id to prevent conflicts
+        wid = maybeToMonoid widgetToUse.id
+        sourceWid = normalizeWidgetId wid
+        widPrefix = "id" <> T.take 8 wid
+        widgetFormId = widPrefix <> "-widget-form"
+        monitorToggleId = widPrefix <> "-monitor-toggle"
+        monitorSectionId = widPrefix <> "-monitor-settings"
+        widgetPreviewId = widPrefix <> "-widget-preview"
+        widgetTitleInputId = widPrefix <> "-widget-title-input"
+        drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
+        alertFormId = widPrefix <> "-alert-form"
+        alertEndpoint = "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
+        widgetJSON = encodeText widgetToUse
+        thresholdField_ key label inputName value color required =
+          Components.formField_
+            Components.FieldSm
+            def
+              { Components.inputType = "number"
+              , Components.value = maybe "" show value
+              , Components.dot = Just color
+              , Components.extraAttrs =
+                  [ step_ "any"
+                  , term "hx-on:input" $ "widgetJSON." <> key <> " = this.value || null"
+                  , term "hx-on:change" $ "widgetJSON." <> key <> " = this.value === '' ? null : Number(this.value); htmx.trigger(document.getElementById('" <> widgetPreviewId <> "'), 'update-widget')"
+                  ]
+                    <> [term "hx-live:value" $ "widgetJSON." <> key <> " ?? ''" | not isNewWidget]
+              }
+            label
+            inputName
+            required
+            Nothing
+        widgetTitleValue = "document.getElementById('" <> widgetTitleInputId <> "').value"
+        numberedStep_ :: Int -> Text -> Html () -> Html ()
+        numberedStep_ n title content = section_ [class_ "space-y-2.5"] do
+          div_ [class_ "flex items-center gap-3"] do
+            span_ [class_ "inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong"] $ toHtml (show n)
+            strong_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
+          content
 
-  form_
-    [ class_ "hidden"
-    , id_ widgetFormId
-    , hxPut_ $ dashboardUrl pid dashId <> queryStringFrom (catMaybes [("widget_id",) . Just . fold . (.id) <$> existingWidgetM, ("tab",) . Just <$> tabSlugM, ("configure_monitor", Just "true") <$ guard isNewWidget])
-    , hxVals_ $ "js:{...widgetJSON, title: " <> widgetTitleValue <> ", query: document.querySelector('#filterElement').getValue()" <> if isThresholdChart then ", unit: document.getElementById('widgetUnit').value || null, warning_threshold: document.getElementById('widgetWarningThreshold').value === '' ? null : Number(document.getElementById('widgetWarningThreshold').value), alert_threshold: document.getElementById('widgetAlertThreshold').value === '' ? null : Number(document.getElementById('widgetAlertThreshold').value), show_threshold_lines: document.getElementById('widgetShowThresholdLines').value}" else "}"
-    , hxExt_ "json-enc"
-    , data_ "form-mode" $ if isNewWidget then "new" else "edit"
-    , hxTarget_ ("#" <> widgetFormId)
-    , hxTrigger_ "submit"
-    , term
-        "_"
-        [text| on htmx:before:request 
-            set widgetJSON.title to #{'${widgetTitleInputId}'}.value then 
-            if not widgetJSON.id
-              gridStackInstance.removeWidget('#add_a_widget_label', true, false)
-            end
+    form_
+      [ class_ "hidden"
+      , id_ widgetFormId
+      , hxPut_ $ dashboardUrl pid dashId <> queryStringFrom (catMaybes [("widget_id",) . Just . fold . (.id) <$> existingWidgetM, ("tab",) . Just <$> tabSlugM, ("configure_monitor", Just "true") <$ guard isNewWidget])
+      , hxVals_ $ "js:{...widgetJSON, title: " <> widgetTitleValue <> ", query: document.querySelector('#filterElement').getValue()" <> if isThresholdChart then ", unit: document.getElementById('widgetUnit').value || null, warning_threshold: document.getElementById('widgetWarningThreshold').value === '' ? null : Number(document.getElementById('widgetWarningThreshold').value), alert_threshold: document.getElementById('widgetAlertThreshold').value === '' ? null : Number(document.getElementById('widgetAlertThreshold').value), show_threshold_lines: document.getElementById('widgetShowThresholdLines').value}" else "}"
+      , hxExt_ "json-enc"
+      , data_ "form-mode" $ if isNewWidget then "new" else "edit"
+      , hxTarget_ ("#" <> widgetFormId)
+      , hxTrigger_ "submit"
+      , term
+          "_"
+          [text| on htmx:before:request 
+              set widgetJSON.title to #{'${widgetTitleInputId}'}.value then 
+              if not widgetJSON.id
+                gridStackInstance.removeWidget('#add_a_widget_label', true, false)
+              end
+          |]
+      , term
+          "hx-on:htmx:before:swap"
+          [text|
+          if (event.detail.ctx.response.status >= 400) return;
+          event.preventDefault();
+          const isNew = this.dataset.formMode === 'new';
+          const configureMonitor = isNew && this.closest('.widget-editor').querySelector('.new-widget-monitor:checked');
+          const saved = window.adoptDashboardWidget(event.detail.ctx.text, isNew ? null : document.getElementById('${sourceWid}_widgetEl'));
+          if (configureMonitor && saved) {
+            const id = JSON.parse(saved.dataset.widget).id;
+            const form = document.getElementById('${alertFormId}');
+            form.querySelector('[name="widgetId"]').value = id;
+            form.querySelector('[name="query"]').value = document.querySelector('#filterElement').getValue();
+            form.dataset.widgetSaved = 'true';
+            setTimeout(() => form.requestSubmit(), 0);
+          } else {
+            const drawer = document.getElementById('${drawerStateCheckbox}');
+            drawer.checked = false;
+            drawer.dispatchEvent(new Event('change', {bubbles: true}));
+          }
         |]
-    , term
-        "hx-on:htmx:before:swap"
-        [text|
-        if (event.detail.ctx.response.status >= 400) return;
-        event.preventDefault();
-        const isNew = this.dataset.formMode === 'new';
-        const configureMonitor = isNew && this.closest('.widget-editor').querySelector('.new-widget-monitor:checked');
-        const saved = window.adoptDashboardWidget(event.detail.ctx.text, isNew ? null : document.getElementById('${sourceWid}_widgetEl'));
-        if (configureMonitor && saved) {
-          const id = JSON.parse(saved.dataset.widget).id;
-          const form = document.getElementById('${alertFormId}');
-          form.querySelector('[name="widgetId"]').value = id;
-          form.querySelector('[name="query"]').value = document.querySelector('#filterElement').getValue();
-          form.dataset.widgetSaved = 'true';
-          setTimeout(() => form.requestSubmit(), 0);
-        } else {
-          const drawer = document.getElementById('${drawerStateCheckbox}');
-          drawer.checked = false;
-          drawer.dispatchEvent(new Event('change', {bubbles: true}));
-        }
-      |]
-    ]
-    ""
-
-  -- Keep the task controls available while the editor scrolls. The preview belongs to
-  -- the workspace below rather than this toolbar, so its height is independent of the
-  -- drawer width.
-  let widgetTypeAttr = case widgetToUse.wType of
-        Widget.WTTable -> "table"
-        Widget.WTStat -> "stat"
-        Widget.WTTimeseriesStat -> "stat"
-        _ -> "chart"
-  div_
-    [class_ "widget-editor-header sticky top-0 z-20 -mx-8 border-b border-strokeWeak bg-bgRaised px-8 py-2.5 shadow-xs max-lg:-mx-6 max-lg:px-6 max-md:-mx-4 max-md:px-4 [@media(max-height:48rem)]:py-2"]
-    do
-      div_ [class_ "flex min-h-8 items-center justify-between gap-4 max-md:flex-wrap max-md:gap-2"] do
-        if isNewWidget
-          then h2_ [class_ "text-base font-semibold text-textStrong max-md:order-1 max-md:w-full"] "Add a widget"
-          else div_ [class_ "min-w-0 max-md:order-1 max-md:w-full"] do
-            div_ [class_ "tabs tabs-box tabs-outline"] do
-              let mkTab tabName isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-strokeFocus"] do
-                    input_
-                      $ [ type_ "radio"
-                        , value_ tabName
-                        , class_ $ "sr-only page-drawer-tab-" <> T.toLower tabName
-                        , id_ $ widPrefix <> "-tab-" <> T.toLower tabName
-                        , name_ $ wid <> "-drawer-tab"
-                        ]
-                      <> [checked_ | isActive]
-                    toHtml tabName
-              mkTab "Edit" (effectiveActiveTab /= "alerts")
-              mkTab "Monitors" (effectiveActiveTab == "alerts")
-
-        div_ [class_ "ml-auto flex shrink-0 items-center gap-3 max-md:contents"] do
-          div_ [class_ "flex shrink-0 items-center gap-3 max-md:order-3 max-md:w-full max-md:overflow-x-auto"] do
-            TimePicker.liveDataControls_ Nothing currentRange (Just "widget") TimePicker.RefreshOnly
-            div_ [class_ "h-5 w-px bg-strokeWeak max-md:hidden"] ""
-          div_ [class_ "flex shrink-0 items-center gap-2 max-md:order-2 max-md:w-full max-md:justify-between"] do
-            if isNewWidget
-              then do
-                button_ [class_ "btn btn-primary btn-sm max-md:min-h-11 group-has-[.new-widget-monitor:checked]/wgtexp:hidden", type_ "submit", form_ widgetFormId] "Add widget"
-                button_ [id_ $ widPrefix <> "-add-monitor-button", class_ "btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.new-widget-monitor:checked]/wgtexp:inline-flex", type_ "button", term "hx-on:click" $ "const form = document.getElementById('" <> alertFormId <> "'); if (!document.querySelector('#filterElement').getValue().trim()) { document.getElementById('" <> widPrefix <> "-monitor-query-hint').hidden = false; document.querySelector('#filterElement .cm-content').focus(); return; } if (form.reportValidity()) { if (form.dataset.widgetSaved === 'true') { form.requestSubmit(); return; } for (const [from, to] of [[\"alertThreshold\", \"widgetAlertThreshold\"], [\"warningThreshold\", \"widgetWarningThreshold\"], [\"unit\", \"widgetUnit\"]]) document.getElementById(to).value = form.querySelector(\"[name=\" + from + \"]\").value; document.getElementById('" <> widgetFormId <> "').requestSubmit(); }"] "Add widget and monitor"
-              else button_ [class_ "btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:inline-flex", type_ "submit", form_ widgetFormId] "Save widget"
-            unless isNewWidget $ when (maybe False (not . T.null . T.strip) widgetToUse.query) $ button_ [class_ "btn btn-primary btn-sm hidden group-has-[.page-drawer-tab-monitors:checked]/wgtexp:inline-flex max-md:min-h-11", type_ "submit", form_ $ widPrefix <> "-alert-form"] $ if isJust monitorM then "Save monitor" else "Create monitor"
-            button_
-              [ type_ "button"
-              , Aria.label_ "Close drawer"
-              , data_ "drawer-close-primary" ""
-              , class_ "btn btn-sm btn-square btn-ghost text-iconNeutral transition-[color,background-color,scale] hover:bg-fillWeak hover:text-iconBrand active:scale-[0.96] max-md:min-h-11 max-md:min-w-11"
-              , term "_" [text|on click set #${drawerStateCheckbox}.checked to false then trigger change on #${drawerStateCheckbox}|]
-              ]
-              $ faSprite_ "xmark" "regular" "size-3.5"
-
-  div_ [class_ "mt-4 grid items-start gap-4 pb-4 [@media(max-height:48rem)]:mt-3 [@media(max-height:48rem)]:gap-3"] do
-    section_ [class_ "widget-preview sticky z-10 min-w-0 rounded-xl border border-strokeWeak bg-bgRaised p-3 shadow-sm [@media(max-height:48rem)]:p-2"] do
-      div_ [class_ "widget-preview-heading flex items-center justify-between gap-4"] do
-        h3_ [class_ "text-sm font-semibold text-textStrong"] "Preview"
-      -- Budget the preview from the remaining viewport height. The lower bound keeps
-      -- charts legible on short screens; the panel can still scroll when logs need more.
-      div_ [class_ "widget-preview-container h-[clamp(10rem,calc(100dvh-32rem),18rem)] group-has-[#viz-logs:checked]/wgtexp:h-[clamp(14rem,calc(100dvh-28rem),23rem)] w-full overflow-hidden rounded-lg border border-strokeWeak bg-fillWeaker", data_ "widget-type" widgetTypeAttr] do
-        div_
-          [ id_ widgetPreviewId
-          , class_ "h-full w-full overflow-hidden"
-          , hxPost_ ("/p/" <> pid.toText <> "/widget")
-          , hxTrigger_ "intersect once, update-widget"
-          , term "hx-sync" "this:replace"
-          , hxTarget_ "this"
-          , hxSwap_ "innerHTML"
-          , hxVals_ "js:{...widgetJSON}"
-          , hxExt_ "json-enc"
-          , term
-              "_"
-              [text| on 'update-widget-query'
-                   set widgetJSON.query to event.detail.value then
-                   set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
-                   trigger 'update-widget' on me |]
-          ]
-          Components.chartSkeleton_
-        script_
-          [text| var widgetJSON = ${widgetJSON};
-                 { const p = new URLSearchParams(location.search), since = p.get('since'), from = p.get('from'), to = p.get('to');
-                   if (since || (from && to)) window.updateTimePicker({since, from, to}, {targetPr: 'widget', skipSetParams: true}); } |]
-
-    script_
-      [text|{ const editor = document.getElementById('${widgetPreviewId}').closest('.widget-editor');
-                    const pane = editor.closest('[role="dialog"]');
-                    const header = editor.querySelector('.widget-editor-header');
-                    const update = () => {
-                      const compact = editor.classList.contains('is-compact');
-                      const next = pane.scrollTop > 0;
-                      if (next === compact) return;
-                      editor.classList.toggle('is-compact', next);
-                    };
-                    const resize = () => editor.style.setProperty('--widget-header-height', header.offsetHeight + 'px');
-                    pane.onscroll = update;
-                    pane._widgetPreviewResize?.disconnect();
-                    pane._widgetPreviewResize = new ResizeObserver(resize);
-                    pane._widgetPreviewResize.observe(header);
-                    pane._widgetPreviewAbort?.abort();
-                    pane._widgetPreviewAbort = new AbortController();
-                    const initialHeight = window.visualViewport?.height;
-                    window.visualViewport?.addEventListener('resize', () => {
-                      const keyboardOpen = initialHeight - window.visualViewport.height > 140;
-                      editor.classList.toggle('keyboard-open', keyboardOpen);
-                      pane.style.height = keyboardOpen ? window.visualViewport.height + 'px' : '';
-                    }, {signal: pane._widgetPreviewAbort.signal});
-                    editor.addEventListener('change', e => { if (e.target.matches('.page-drawer-tab-edit, .page-drawer-tab-monitors')) requestAnimationFrame(update); });
-                    resize(); update(); }|]
-
-    div_
-      [ class_
-          $ "rounded-xl border border-strokeWeak bg-bgRaised p-4 [@media(max-height:48rem)]:p-3"
-          <> if isNewWidget then "" else " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"
       ]
+      ""
+
+    -- Keep the task controls available while the editor scrolls. The preview belongs to
+    -- the workspace below rather than this toolbar, so its height is independent of the
+    -- drawer width.
+    let widgetTypeAttr = case widgetToUse.wType of
+          Widget.WTTable -> "table"
+          Widget.WTStat -> "stat"
+          Widget.WTTimeseriesStat -> "stat"
+          _ -> "chart"
+    div_
+      [class_ "widget-editor-header sticky top-0 z-20 -mx-8 border-b border-strokeWeak bg-bgRaised px-8 py-2.5 shadow-xs max-lg:-mx-6 max-lg:px-6 max-md:-mx-4 max-md:px-4 [@media(max-height:48rem)]:py-2"]
       do
-        div_ [class_ "space-y-5 [@media(max-height:48rem)]:space-y-4"] do
-          numberedStep_ 1 "Configure query" $ div_ [class_ "flex min-w-0 flex-col gap-3"] do
-            when isNewWidget $ p_ [id_ $ widPrefix <> "-monitor-query-hint", hidden_ "", class_ "text-xs text-textError"] "Enter a KQL query to create a monitor."
-            logQueryBox_
-              LogQueryBoxConfig
-                { pid = pid
-                , currentRange = Nothing
-                , source = Nothing
-                , targetSpan = Nothing
-                , query = widgetToUse.rawQuery <|> widgetToUse.query
-                , -- Non-chart types (table, stat, …) match no viz tab, so none is checked
-                  -- and the widget keeps its own type instead of saving as a bar chart.
-                  vizType = if isNewWidget then Nothing else Just $ display widgetToUse.wType
-                , updateUrl = False
-                , targetWidgetPreview = Just widgetPreviewId
-                , alert = False
-                , sessionSort = LogQueries.SortLastSeen
-                , patternSelected = Nothing
-                , mobileExtra = Nothing
-                , parseError = Nothing
-                }
-            details_ [class_ "text-xs text-textWeak"] do
-              summary_ [class_ "cursor-pointer select-none transition-colors hover:text-textStrong"] "Show generated SQL"
-              div_
-                [ id_ $ widPrefix <> "-sql-preview"
-                , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview?dashboard_id=" <> dashId.toText
-                , hxVals_ "js:{query: widgetJSON.raw_query || widgetJSON.query}"
-                , hxTrigger_ "toggle from:closest details"
-                , hxSwap_ "innerHTML"
+        div_ [class_ "flex min-h-8 items-center justify-between gap-4 max-md:flex-wrap max-md:gap-2"] do
+          if isNewWidget
+            then h2_ [class_ "text-base font-semibold text-textStrong max-md:order-1 max-md:w-full"] "Add a widget"
+            else div_ [class_ "min-w-0 max-md:order-1 max-md:w-full"] do
+              div_ [class_ "tabs tabs-box tabs-outline"] do
+                let mkTab tabName isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-strokeFocus"] do
+                      input_
+                        $ [ type_ "radio"
+                          , value_ tabName
+                          , class_ $ "sr-only page-drawer-tab-" <> T.toLower tabName
+                          , id_ $ widPrefix <> "-tab-" <> T.toLower tabName
+                          , name_ $ wid <> "-drawer-tab"
+                          ]
+                        <> [checked_ | isActive]
+                      toHtml tabName
+                mkTab "Edit" (effectiveActiveTab == EditTab)
+                mkTab "Monitors" (effectiveActiveTab == AlertsTab)
+
+          div_ [class_ "ml-auto flex shrink-0 items-center gap-3 max-md:contents"] do
+            div_ [class_ "flex shrink-0 items-center gap-3 max-md:order-3 max-md:w-full max-md:overflow-x-auto"] do
+              TimePicker.liveDataControls_ Nothing currentRange (Just "widget") TimePicker.RefreshOnly
+              div_ [class_ "h-5 w-px bg-strokeWeak max-md:hidden"] ""
+            div_ [class_ "flex shrink-0 items-center gap-2 max-md:order-2 max-md:w-full max-md:justify-between"] do
+              if isNewWidget
+                then do
+                  button_ [class_ "btn btn-primary btn-sm max-md:min-h-11 group-has-[.new-widget-monitor:checked]/wgtexp:hidden", type_ "submit", form_ widgetFormId] "Add widget"
+                  button_ [id_ $ widPrefix <> "-add-monitor-button", class_ "btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.new-widget-monitor:checked]/wgtexp:inline-flex", type_ "button", term "hx-on:click" $ "const form = document.getElementById('" <> alertFormId <> "'); if (!document.querySelector('#filterElement').getValue().trim()) { document.getElementById('" <> widPrefix <> "-monitor-query-hint').hidden = false; document.querySelector('#filterElement .cm-content').focus(); return; } if (form.reportValidity()) { if (form.dataset.widgetSaved === 'true') { form.requestSubmit(); return; } for (const [from, to] of [[\"alertThreshold\", \"widgetAlertThreshold\"], [\"warningThreshold\", \"widgetWarningThreshold\"], [\"unit\", \"widgetUnit\"]]) document.getElementById(to).value = form.querySelector(\"[name=\" + from + \"]\").value; document.getElementById('" <> widgetFormId <> "').requestSubmit(); }"] "Add widget and monitor"
+                else button_ [class_ "btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:inline-flex", type_ "submit", form_ widgetFormId] "Save widget"
+              unless isNewWidget $ when (maybe False (not . T.null . T.strip) widgetToUse.query) $ button_ [class_ "btn btn-primary btn-sm hidden group-has-[.page-drawer-tab-monitors:checked]/wgtexp:inline-flex max-md:min-h-11", type_ "submit", form_ $ widPrefix <> "-alert-form"] $ if isJust monitorM then "Save monitor" else "Create monitor"
+              button_
+                [ type_ "button"
+                , Aria.label_ "Close drawer"
+                , data_ "drawer-close-primary" ""
+                , class_ "btn btn-sm btn-square btn-ghost text-iconNeutral transition-[color,background-color,scale] hover:bg-fillWeak hover:text-iconBrand active:scale-[0.96] max-md:min-h-11 max-md:min-w-11"
+                , term "_" [text|on click set #${drawerStateCheckbox}.checked to false then trigger change on #${drawerStateCheckbox}|]
                 ]
-                $ loadingIndicator_ LdXS LdSpinner
+                $ faSprite_ "xmark" "regular" "size-3.5"
 
-          numberedStep_ 2 "Name your widget"
-            $ div_ [class_ "max-w-xl"]
-            $ Components.formField_
-              Components.FieldSm
-              def
-                { Components.value = fromMaybe "" widgetToUse.title
-                , Components.placeholder = "Throughput"
-                , Components.extraAttrs =
-                    [ term
-                        "_"
-                        [text|on input set widgetJSON.title to my value
-                   on change trigger 'update-widget' on #{'${widgetPreviewId}'}|]
-                    ]
-                }
-              "Widget name"
-              widgetTitleInputId
-              True
-              Nothing
+    div_ [class_ "mt-4 grid items-start gap-4 pb-4 [@media(max-height:48rem)]:mt-3 [@media(max-height:48rem)]:gap-3"] do
+      section_ [class_ "widget-preview sticky z-10 min-w-0 rounded-xl border border-strokeWeak bg-bgRaised p-3 shadow-sm [@media(max-height:48rem)]:p-2"] do
+        div_ [class_ "widget-preview-heading flex items-center justify-between gap-4"] do
+          h3_ [class_ "text-sm font-semibold text-textStrong"] "Preview"
+        -- Budget the preview from the remaining viewport height. The lower bound keeps
+        -- charts legible on short screens; the panel can still scroll when logs need more.
+        div_ [class_ "widget-preview-container h-[clamp(10rem,calc(100dvh-32rem),18rem)] group-has-[#viz-logs:checked]/wgtexp:h-[clamp(14rem,calc(100dvh-28rem),23rem)] w-full overflow-hidden rounded-lg border border-strokeWeak bg-fillWeaker", data_ "widget-type" widgetTypeAttr] do
+          div_
+            [ id_ widgetPreviewId
+            , class_ "h-full w-full overflow-hidden"
+            , hxPost_ ("/p/" <> pid.toText <> "/widget")
+            , hxTrigger_ "intersect once, update-widget"
+            , term "hx-sync" "this:replace"
+            , hxTarget_ "this"
+            , hxSwap_ "innerHTML"
+            , hxVals_ "js:{...widgetJSON}"
+            , hxExt_ "json-enc"
+            , term
+                "_"
+                [text| on 'update-widget-query'
+                     set widgetJSON.query to event.detail.value then
+                     set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
+                     trigger 'update-widget' on me |]
+            ]
+            Components.chartSkeleton_
+          script_
+            [text| var widgetJSON = ${widgetJSON};
+                   { const p = new URLSearchParams(location.search), since = p.get('since'), from = p.get('from'), to = p.get('to');
+                     if (since || (from && to)) window.updateTimePicker({since, from, to}, {targetPr: 'widget', skipSetParams: true}); } |]
 
-          when isThresholdChart
-            $ section_ [class_ $ "max-w-3xl" <> if isNewWidget then " group-has-[.new-widget-monitor:checked]/wgtexp:hidden" else ""]
-            $ details_ ([class_ "group/thresholds rounded-lg border border-strokeWeak bg-fillWeaker"] <> [open_ "" | isJust widgetToUse.warningThreshold || isJust widgetToUse.alertThreshold || isJust monitorM]) do
-              summary_ [class_ "flex min-h-11 cursor-pointer list-none items-center gap-3 rounded-lg px-3 hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong transition-colors motion-reduce:transition-none"] do
-                span_ [class_ "inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong"] "3"
-                strong_ [class_ "text-sm font-semibold text-textStrong"] "Chart thresholds"
-                span_ [class_ "text-xs text-textWeak"] "Optional"
-                faSprite_ "chevron-down" "regular" "ml-auto size-3.5 shrink-0 text-iconNeutral transition-transform group-open/thresholds:rotate-180 motion-reduce:transition-none"
-              div_ [class_ "space-y-3 border-t border-strokeWeak p-3"] do
-                p_ [class_ "text-xs text-textWeak"] "Limits shown on the chart, even without a monitor."
-                when (isJust monitorM) $ p_ [class_ "text-xs text-textWarning"] "This monitor uses these thresholds. Saving changes will also change when it alerts."
-                div_ [class_ "max-w-xs"]
-                  $ Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. ms, requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "widgetUnit" False Nothing
-                div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
-                  thresholdField_ "warning_threshold" "Warning threshold" "widgetWarningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
-                  thresholdField_ "alert_threshold" "Alert threshold" "widgetAlertThreshold" widgetToUse.alertThreshold "bg-fillError-strong" False
-                div_ [class_ "max-w-xs", term "hx-on:change" [text|widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]
-                  $ Components.formSelectField_ Components.FieldSm "Show threshold lines" "widgetShowThresholdLines" False
-                  $ Components.options_ (Just $ maybe "always" display widgetToUse.showThresholdLines) [("always", "Always"), ("on_breach", "Only when breached"), ("never", "Never")]
+      script_
+        [text|{ const editor = document.getElementById('${widgetPreviewId}').closest('.widget-editor');
+                      const pane = editor.closest('[role="dialog"]');
+                      const header = editor.querySelector('.widget-editor-header');
+                      const update = () => {
+                        const compact = editor.classList.contains('is-compact');
+                        const next = pane.scrollTop > 0;
+                        if (next === compact) return;
+                        editor.classList.toggle('is-compact', next);
+                      };
+                      const resize = () => editor.style.setProperty('--widget-header-height', header.offsetHeight + 'px');
+                      pane.onscroll = update;
+                      pane._widgetPreviewResize?.disconnect();
+                      pane._widgetPreviewResize = new ResizeObserver(resize);
+                      pane._widgetPreviewResize.observe(header);
+                      pane._widgetPreviewAbort?.abort();
+                      pane._widgetPreviewAbort = new AbortController();
+                      const initialHeight = window.visualViewport?.height;
+                      window.visualViewport?.addEventListener('resize', () => {
+                        const keyboardOpen = initialHeight - window.visualViewport.height > 140;
+                        editor.classList.toggle('keyboard-open', keyboardOpen);
+                        pane.style.height = keyboardOpen ? window.visualViewport.height + 'px' : '';
+                      }, {signal: pane._widgetPreviewAbort.signal});
+                      editor.addEventListener('change', e => { if (e.target.matches('.page-drawer-tab-edit, .page-drawer-tab-monitors')) requestAnimationFrame(update); });
+                      resize(); update(); }|]
 
-          when isNewWidget $ label_ [Lucid.for_ monitorToggleId, class_ "flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-strokeWeak bg-fillWeaker p-4 hover:bg-fillWeak has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak"] do
-            div_ [class_ "space-y-1"] do
-              strong_ [class_ "text-sm font-semibold text-textStrong"] "Create a monitor"
-              p_ [class_ "text-xs text-textWeak"] "Get alerts when this widget crosses a threshold."
-            input_ [type_ "checkbox", id_ monitorToggleId, class_ "toggle toggle-sm toggle-primary new-widget-monitor", Aria.label_ "Create a monitor", onchange_ $ "for (const [widget, monitor] of [['widgetAlertThreshold', 'alertThreshold'], ['widgetWarningThreshold', 'warningThreshold'], ['widgetUnit', 'unit']]) document.getElementById(this.checked ? monitor : widget).value = document.getElementById(this.checked ? widget : monitor).value; if (this.checked) requestAnimationFrame(() => document.getElementById('" <> monitorSectionId <> "').scrollIntoView({block: 'start'}))"]
+      div_
+        [ class_
+            $ "rounded-xl border border-strokeWeak bg-bgRaised p-4 [@media(max-height:48rem)]:p-3"
+            <> if isNewWidget then "" else " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"
+        ]
+        do
+          div_ [class_ "space-y-5 [@media(max-height:48rem)]:space-y-4"] do
+            numberedStep_ 1 "Configure query" $ div_ [class_ "flex min-w-0 flex-col gap-3"] do
+              when isNewWidget $ p_ [id_ $ widPrefix <> "-monitor-query-hint", hidden_ "", class_ "text-xs text-textError"] "Enter a KQL query to create a monitor."
+              logQueryBox_
+                LogQueryBoxConfig
+                  { pid = pid
+                  , currentRange = Nothing
+                  , source = Nothing
+                  , targetSpan = Nothing
+                  , query = widgetToUse.rawQuery <|> widgetToUse.query
+                  , -- Non-chart types (table, stat, …) match no viz tab, so none is checked
+                    -- and the widget keeps its own type instead of saving as a bar chart.
+                    vizType = if isNewWidget then Nothing else Just $ display widgetToUse.wType
+                  , updateUrl = False
+                  , targetWidgetPreview = Just widgetPreviewId
+                  , alert = False
+                  , sessionSort = LogQueries.SortLastSeen
+                  , patternSelected = Nothing
+                  , mobileExtra = Nothing
+                  , parseError = Nothing
+                  }
+              details_ [class_ "text-xs text-textWeak"] do
+                summary_ [class_ "cursor-pointer select-none transition-colors hover:text-textStrong"] "Show generated SQL"
+                div_
+                  [ id_ $ widPrefix <> "-sql-preview"
+                  , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview?dashboard_id=" <> dashId.toText
+                  , hxVals_ "js:{query: widgetJSON.raw_query || widgetJSON.query}"
+                  , hxTrigger_ "toggle from:closest details"
+                  , hxSwap_ "innerHTML"
+                  ]
+                  $ loadingIndicator_ LdXS LdSpinner
 
-    script_ [text|widgetJSON.type = document.getElementById('${widgetPreviewId}')?.closest('[class~="group/wgtexp"]')?.querySelector('#visualizationTabs input:checked')?.value || widgetJSON.type|]
+            numberedStep_ 2 "Name your widget"
+              $ div_ [class_ "max-w-xl"]
+              $ Components.formField_
+                Components.FieldSm
+                def
+                  { Components.value = fromMaybe "" widgetToUse.title
+                  , Components.placeholder = "Throughput"
+                  , Components.extraAttrs =
+                      [ term
+                          "_"
+                          [text|on input set widgetJSON.title to my value
+                     on change trigger 'update-widget' on #{'${widgetPreviewId}'}|]
+                      ]
+                  }
+                "Widget name"
+                widgetTitleInputId
+                True
+                Nothing
 
-  -- Monitor settings
-  do
-    div_ [id_ monitorSectionId, class_ $ "group/walert hidden scroll-mt-24 max-md:scroll-mt-72 flex-col gap-4 rounded-xl border border-strokeWeak bg-bgRaised p-4 [@media(max-height:48rem)]:p-3" <> if isNewWidget then " group-has-[.new-widget-monitor:checked]/wgtexp:flex" else " group-has-[.page-drawer-tab-monitors:checked]/wgtexp:flex"] do
-      let hasAlert = isJust monitorM
-          canMonitor = isNewWidget || maybe False (not . T.null . T.strip) widgetToUse.query
-      when (canMonitor && not isNewWidget) $ widgetMonitorStatus_ pid "widget-monitor-status" sourceWid (Just dashId) monitorM
-      if not canMonitor
-        then emptyState_ def{icon = Just "bell", size = ESCompact} "This widget can't be monitored" "Monitors evaluate a KQL query, and this widget is built from raw SQL."
-        else do
-          when isNewWidget $ div_ [class_ "max-w-2xl space-y-1"] do
-            h3_ [class_ "text-base font-semibold text-textStrong"] "Set up a monitor"
-            p_ [class_ "text-sm text-textWeak"] "Choose when to alert and who to notify."
-          form_
-            ( [ id_ alertFormId
-              , hxPost_ alertEndpoint
-              , hxSwap_ "none"
-              , hxTrigger_ "submit"
-              , hxVals_ $ "js:{teams: window.getTagValues('#" <> alertFormId <> "-teams')}"
-              , class_ "flex max-w-4xl flex-col gap-4 pb-6 [&>details]:bg-fillWeaker"
-              ]
-                <> [term "hx-on:htmx:after:request" ("if (event.detail.ctx.response.status < 400) { const drawer = document.getElementById('page-data-drawer'); drawer.checked = false; drawer.dispatchEvent(new Event('change', {bubbles: true})); } else document.getElementById('" <> widPrefix <> "-add-monitor-button').textContent = 'Retry monitor';") | isNewWidget]
-            )
-            do
-              input_ [type_ "hidden", name_ "widgetId", value_ sourceWid]
-              input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widgetToUse.query]
-              input_ [type_ "hidden", name_ "vizType", value_ $ case widgetToUse.wType of Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
+            when isThresholdChart
+              $ section_ [class_ $ "max-w-3xl" <> if isNewWidget then " group-has-[.new-widget-monitor:checked]/wgtexp:hidden" else ""]
+              $ details_ ([class_ "group/thresholds rounded-lg border border-strokeWeak bg-fillWeaker"] <> [open_ "" | isJust widgetToUse.warningThreshold || isJust widgetToUse.alertThreshold || isJust monitorM]) do
+                summary_ [class_ "flex min-h-11 cursor-pointer list-none items-center gap-3 rounded-lg px-3 hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong transition-colors motion-reduce:transition-none"] do
+                  span_ [class_ "inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong"] "3"
+                  strong_ [class_ "text-sm font-semibold text-textStrong"] "Chart thresholds"
+                  span_ [class_ "text-xs text-textWeak"] "Optional"
+                  faSprite_ "chevron-down" "regular" "ml-auto size-3.5 shrink-0 text-iconNeutral transition-transform group-open/thresholds:rotate-180 motion-reduce:transition-none"
+                div_ [class_ "space-y-3 border-t border-strokeWeak p-3"] do
+                  p_ [class_ "text-xs text-textWeak"] "Limits shown on the chart, even without a monitor."
+                  when (isJust monitorM) $ p_ [class_ "text-xs text-textWarning"] "This monitor uses these thresholds. Saving changes will also change when it alerts."
+                  div_ [class_ "max-w-xs"]
+                    $ Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. ms, requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "widgetUnit" False Nothing
+                  div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
+                    thresholdField_ "warning_threshold" "Warning threshold" "widgetWarningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
+                    thresholdField_ "alert_threshold" "Alert threshold" "widgetAlertThreshold" widgetToUse.alertThreshold "bg-fillError-strong" False
+                  div_ [class_ "max-w-xs", term "hx-on:change" [text|widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]
+                    $ Components.formSelectField_ Components.FieldSm "Show threshold lines" "widgetShowThresholdLines" False
+                    $ Components.options_ (Just $ maybe "always" display widgetToUse.showThresholdLines) [("always", "Always"), ("on_breach", "Only when breached"), ("never", "Never")]
 
-              -- Monitor Schedule section (shared component)
-              Alerts.monitorScheduleSection_ paymentPlan (maybe 5 (.checkIntervalMins) monitorM) (maybe 5 (.timeWindowMins) monitorM) Alerts.FixedThreshold
-              section_ [class_ "space-y-3 rounded-xl border border-strokeWeak bg-fillWeaker p-4"] do
-                h4_ [class_ "text-sm font-semibold text-textStrong"] "Alert condition"
-                p_ [class_ "text-xs text-textWeak"] "These limits also appear on the widget chart. Saving the monitor updates both."
-                div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
-                  thresholdField_ "alert_threshold" "Alert threshold" "alertThreshold" widgetToUse.alertThreshold "bg-fillError-strong" True
-                  thresholdField_ "warning_threshold" "Warning threshold" "warningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
-                div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
-                  Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "unit" False Nothing
-                  Components.formSelectField_ Components.FieldSm "Trigger direction" "direction" False $ Components.options_ (Just $ bool "above" "below" (maybe False (.triggerLessThan) monitorM)) [("above", "Above threshold"), ("below", "Below threshold")]
-                div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
-                  Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.alertRecoveryThreshold)), Components.placeholder = "Same as alert threshold", Components.extraAttrs = [step_ "any"]} "Alert recovery (optional)" "alertRecoveryThreshold" False Nothing
-                  Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.warningRecoveryThreshold)), Components.placeholder = "Same as warning threshold", Components.extraAttrs = [step_ "any"]} "Warning recovery (optional)" "warningRecoveryThreshold" False Nothing
+            when isNewWidget $ label_ [Lucid.for_ monitorToggleId, class_ "flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-strokeWeak bg-fillWeaker p-4 hover:bg-fillWeak has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak"] do
+              div_ [class_ "space-y-1"] do
+                strong_ [class_ "text-sm font-semibold text-textStrong"] "Create a monitor"
+                p_ [class_ "text-xs text-textWeak"] "Get alerts when this widget crosses a threshold."
+              input_ [type_ "checkbox", id_ monitorToggleId, class_ "toggle toggle-sm toggle-primary new-widget-monitor", Aria.label_ "Create a monitor", onchange_ $ "for (const [widget, monitor] of [['widgetAlertThreshold', 'alertThreshold'], ['widgetWarningThreshold', 'warningThreshold'], ['widgetUnit', 'unit']]) document.getElementById(this.checked ? monitor : widget).value = document.getElementById(this.checked ? widget : monitor).value; if (this.checked) requestAnimationFrame(() => document.getElementById('" <> monitorSectionId <> "').scrollIntoView({block: 'start'}))"]
 
-              Alerts.notificationSettingsSection_ teams (maybe V.empty (.teams) monitorM) alertFormId monitorM
+      script_ [text|widgetJSON.type = document.getElementById('${widgetPreviewId}')?.closest('[class~="group/wgtexp"]')?.querySelector('#visualizationTabs input:checked')?.value || widgetJSON.type|]
 
-              unless isNewWidget $ div_ [class_ "flex flex-wrap items-center justify-between gap-3 border-t border-strokeWeak pt-4"] do
-                when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm text-textError", hxDelete_ alertEndpoint, hxSwap_ "none", term "_" [text|on htmx:after:request[detail.ctx.response.status < 400] set #${drawerStateCheckbox}.checked to false then trigger change on #${drawerStateCheckbox}|]] "Remove monitor"
-                button_ [type_ "submit", class_ "btn btn-primary btn-sm ml-auto max-md:min-h-11"] $ if hasAlert then "Save monitor" else "Create monitor"
+    -- Monitor settings
+    do
+      div_ [id_ monitorSectionId, class_ $ "group/walert hidden scroll-mt-24 max-md:scroll-mt-72 flex-col gap-4 rounded-xl border border-strokeWeak bg-bgRaised p-4 [@media(max-height:48rem)]:p-3" <> if isNewWidget then " group-has-[.new-widget-monitor:checked]/wgtexp:flex" else " group-has-[.page-drawer-tab-monitors:checked]/wgtexp:flex"] do
+        let hasAlert = isJust monitorM
+            canMonitor = isNewWidget || maybe False (not . T.null . T.strip) widgetToUse.query
+        when (canMonitor && not isNewWidget) $ widgetMonitorStatus_ pid "widget-monitor-status" sourceWid (Just dashId) monitorM
+        if not canMonitor
+          then emptyState_ def{icon = Just "bell", size = ESCompact} "This widget can't be monitored" "Monitors evaluate a KQL query, and this widget is built from raw SQL."
+          else do
+            when isNewWidget $ div_ [class_ "max-w-2xl space-y-1"] do
+              h3_ [class_ "text-base font-semibold text-textStrong"] "Set up a monitor"
+              p_ [class_ "text-sm text-textWeak"] "Choose when to alert and who to notify."
+            form_
+              ( [ id_ alertFormId
+                , hxPost_ alertEndpoint
+                , hxSwap_ "none"
+                , hxTrigger_ "submit"
+                , hxVals_ $ "js:{teams: window.getTagValues('#" <> alertFormId <> "-teams')}"
+                , class_ "flex max-w-4xl flex-col gap-4 pb-6 [&>details]:bg-fillWeaker"
+                ]
+                  <> [term "hx-on:htmx:after:request" ("if (event.detail.ctx.response.status < 400) { const drawer = document.getElementById('page-data-drawer'); drawer.checked = false; drawer.dispatchEvent(new Event('change', {bubbles: true})); } else document.getElementById('" <> widPrefix <> "-add-monitor-button').textContent = 'Retry monitor';") | isNewWidget]
+              )
+              do
+                input_ [type_ "hidden", name_ "widgetId", value_ sourceWid]
+                input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widgetToUse.query]
+                input_ [type_ "hidden", name_ "vizType", value_ $ case widgetToUse.wType of Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
+
+                -- Monitor Schedule section (shared component)
+                Alerts.monitorScheduleSection_ paymentPlan (maybe 5 (.checkIntervalMins) monitorM) (maybe 5 (.timeWindowMins) monitorM) Alerts.FixedThreshold
+                section_ [class_ "space-y-3 rounded-xl border border-strokeWeak bg-fillWeaker p-4"] do
+                  h4_ [class_ "text-sm font-semibold text-textStrong"] "Alert condition"
+                  p_ [class_ "text-xs text-textWeak"] "These limits also appear on the widget chart. Saving the monitor updates both."
+                  div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
+                    thresholdField_ "alert_threshold" "Alert threshold" "alertThreshold" widgetToUse.alertThreshold "bg-fillError-strong" True
+                    thresholdField_ "warning_threshold" "Warning threshold" "warningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
+                  div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
+                    Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "unit" False Nothing
+                    Components.formSelectField_ Components.FieldSm "Trigger direction" "direction" False $ Components.options_ (Just $ bool "above" "below" (maybe False (.triggerLessThan) monitorM)) [("above", "Above threshold"), ("below", "Below threshold")]
+                  div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
+                    Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.alertRecoveryThreshold)), Components.placeholder = "Same as alert threshold", Components.extraAttrs = [step_ "any"]} "Alert recovery (optional)" "alertRecoveryThreshold" False Nothing
+                    Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.warningRecoveryThreshold)), Components.placeholder = "Same as warning threshold", Components.extraAttrs = [step_ "any"]} "Warning recovery (optional)" "warningRecoveryThreshold" False Nothing
+
+                Alerts.notificationSettingsSection_ teams (maybe V.empty (.teams) monitorM) alertFormId monitorM
+
+                unless isNewWidget $ div_ [class_ "flex flex-wrap items-center justify-between gap-3 border-t border-strokeWeak pt-4"] do
+                  when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm text-textError", hxDelete_ alertEndpoint, hxSwap_ "none", term "_" [text|on htmx:after:request[detail.ctx.response.status < 400] set #${drawerStateCheckbox}.checked to false then trigger change on #${drawerStateCheckbox}|]] "Remove monitor"
+                  button_ [type_ "submit", class_ "btn btn-primary btn-sm ml-auto max-md:min-h-11"] $ if hasAlert then "Save monitor" else "Create monitor"
 
 
 --------------------------------------------------------------------
@@ -2790,10 +2790,10 @@ dashboardWidgetExpandGetH pid dashId widgetId editorTabM = do
   processedWidget <- processWidget PrefillWidgets pid now timeParams allParamsWithConstants widgetToExpand
   monitorM <- Monitors.queryMonitorByWidgetId pid (Just dashId) widgetId
   teams <- V.fromList <$> ManageMembers.getTeams pid
-  addRespHeaders $ WidgetEditor pid project.paymentPlan dashId tabSlugM Nothing (Just processedWidget) monitorM teams $ if editorTabM == Just "alerts" then "alerts" else "edit"
+  addRespHeaders $ WidgetEditor pid project.paymentPlan dashId tabSlugM Nothing (Just processedWidget) monitorM teams $ if editorTabM == Just "alerts" then AlertsTab else EditTab
 
 
--- | The arguments of 'widgetViewerEditor_': an existing widget to edit, or none for a new one.
+-- | The widget editor drawer: an existing widget to edit, or none for a new one.
 data WidgetEditor = WidgetEditor
   { pid :: Projects.ProjectId
   , paymentPlan :: Text
@@ -2803,13 +2803,12 @@ data WidgetEditor = WidgetEditor
   , widget :: Maybe Widget.Widget
   , monitor :: Maybe Monitors.QueryMonitor
   , teams :: V.Vector ManageMembers.Team
-  , activeTab :: Text
+  , activeTab :: EditorTab
   }
 
 
-instance ToHtml WidgetEditor where
-  toHtmlRaw = toHtml
-  toHtml e = toHtml $ widgetViewerEditor_ e.pid e.paymentPlan e.dashId e.tabSlug e.range e.widget e.monitor e.teams e.activeTab
+data EditorTab = EditTab | AlertsTab
+  deriving stock (Eq)
 
 
 -- | Lazy content for the new-widget drawer. Keeping this out of the initial
@@ -2821,7 +2820,7 @@ dashboardWidgetNewGetH pid dashId tabSlugM rangeStartM rangeEndM = do
   _ <- getDashAndVM pid dashId Nothing
   teams <- V.fromList <$> ManageMembers.getTeams pid
   let currentRange = (,) <$> rangeStartM <*> rangeEndM
-  addRespHeaders $ WidgetEditor pid project.paymentPlan dashId tabSlugM currentRange Nothing Nothing teams "edit"
+  addRespHeaders $ WidgetEditor pid project.paymentPlan dashId tabSlugM currentRange Nothing Nothing teams EditTab
 
 
 -- | Query scope shared by SQL preview and copy: dashboards own service filtering through
@@ -3253,9 +3252,8 @@ data YamlSave = YamlSaved Projects.ProjectId Dashboards.DashboardId Dashboards.D
   deriving stock (Show)
 
 
-instance ToHtml YamlSave where
-  toHtmlRaw = toHtml
-  toHtml = \case
+instance Outcome YamlSave where
+  outcomeBody = \case
     YamlRejected err -> div_ [id_ "yaml-status", class_ "text-textError"] do
       div_ [class_ "flex items-center gap-2 font-semibold mb-2"] do
         faSprite_ "circle-exclamation" "solid" "w-4 h-4"
@@ -3272,10 +3270,6 @@ instance ToHtml YamlSave where
         whenJust dashboard.variables \vs -> li_ $ toHtml $ show @Text (length vs) <> " variables"
         whenJust dashboard.tabs \ts -> li_ $ toHtml $ show @Text (length ts) <> " tabs"
         whenJust dashboard.constants \cs -> li_ $ toHtml $ show @Text (length cs) <> " constants"
-
-
-instance Outcome YamlSave where
-  outcomeBody = toHtml
   outcomeRedirect = \case
     YamlSaved pid dashId _ -> Just $ dashboardUrl pid dashId
     YamlRejected _ -> Nothing
