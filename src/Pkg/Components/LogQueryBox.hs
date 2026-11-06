@@ -20,6 +20,7 @@ import Pages.Components (dialogField_, filterInputAttr_, floatingDialog_, keyboa
 import Pkg.SchemaLearning (FacetData (..), FacetValue (..))
 import Relude
 import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_)
+import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), urls)
 
 
 data LogQueryBoxConfig = LogQueryBoxConfig
@@ -53,7 +54,7 @@ logQueryBox_ config = do
     "Save query"
     ("Save", ["↵"])
     [ id_ "saveQueryForm"
-    , hxPost_ $ "/p/" <> config.pid.toText <> "/log_explorer/queries"
+    , hxPost_ (urls.logExplorer config.pid).saveQueryPost
     , hxVals_ "js:{query: document.getElementById('saveQueryMdl').dataset.pendingQuery || window.getQueryFromEditor()}"
     , hxTarget_ "#queryLibraryPopover"
     , hxSwap_ "innerHTML"
@@ -120,7 +121,7 @@ logQueryBox_ config = do
               , id_ "ai-search-input"
               , name_ "input"
               , Aria.label_ "Describe the events to find"
-              , hxPost_ $ "/p/" <> config.pid.toText <> "/log_explorer/ai_search"
+              , hxPost_ (urls.logExplorer config.pid).aiSearchPost
               , -- `htmx:trigger` is not special-cased by htmx; it only fires a request because
                 -- it is listed here. Enter and the Generate query button both dispatch it to skip the debounce.
                 hxTrigger_ "input[this.value.trim().length > 0] changed delay:1s, htmx:trigger"
@@ -412,7 +413,7 @@ logQueryBox_ config = do
           , class_ "inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-fillWeaker px-2 text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale]"
           , term "popovertarget" "queryLibraryPopover"
           , style_ "anchor-name: --querylib-anchor"
-          , hxGet_ $ "/p/" <> config.pid.toText <> "/log_explorer/queries"
+          , hxGet_ (urls.logExplorer config.pid).queryLibraryGet
           , hxTrigger_ "click once"
           , hxTarget_ "#queryLibraryPopover"
           , hxSwap_ "innerHTML"
@@ -506,7 +507,7 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
                   actionBtn_
                     "Delete query"
                     "trash"
-                    [ hxDelete_ $ "/p/" <> qli.projectId.toText <> "/log_explorer/queries/" <> qli.id.toText
+                    [ hxDelete_ $ (urls.logExplorer qli.projectId).deleteQueryPost qli.id.toText
                     , hxTarget_ "#queryLibraryPopover"
                     , hxSwap_ "innerHTML"
                     , hxPushUrl_ "false"

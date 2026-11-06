@@ -55,6 +55,7 @@ import System.Types (ATAuthCtx, DB, Done, Outcome (..), RespHeaders, Says (..), 
 import UnliftIO (tryAny)
 import UnliftIO qualified
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, formatUTCMicros, hostPath, loadingIndicatorWith_)
+import Web.Links (CookieProtectedRoutes (..), urls)
 
 
 data PerformanceReport = PerformanceReport
@@ -249,7 +250,7 @@ renderWeeklyEmail reportType reportUrl project userName startTime endTime fullRe
               }
   eventsUrl <- chartUrl ("Events" :: Text) (.events) eventsWidget
   errorsUrl <- chartUrl "Errors" (.errors) errorsWidget
-  let projectUrl = hostPath ctx.env.hostUrl ("p/" <> pid.toText)
+  let projectUrl = hostPath ctx.env.hostUrl (urls.dashboardRedirectGet pid [])
       reportData =
         ET.WeeklyReportData
           { reportType
@@ -293,7 +294,7 @@ reportToEmailHtml report project userName =
                 }
         dropSubject <$> renderWeeklyEmail report.reportType reportUrl project userName report.startTime report.endTime True (ET.HistoricalEvidence historical)
   where
-    reportUrl = "/p/" <> project.id.toText <> "/reports/" <> report.id.toText
+    reportUrl = urls.reportsSingleGet project.id report.id
     invalid err = ("", "Error: Could not parse report data") <$ Log.logAttention "Unparseable stored report json" (report.id.toText, err)
 
 
@@ -359,7 +360,7 @@ reportsLiveGetH pid hxRequestM = do
     Nothing ->
       Report.getPreview pid >>= \case
         Just (Report.PreviewReady snapshot) -> do
-          (dateLabel, emailHtml) <- dropSubject <$> renderSystemEmail Projects.RTWeekly ("/p/" <> pid.toText <> "/reports/live") project sess.user.firstName True snapshot
+          (dateLabel, emailHtml) <- dropSubject <$> renderSystemEmail Projects.RTWeekly (urls.reportsLiveGet pid) project sess.user.firstName True snapshot
           pure $ LiveReportReady ("weekly", dateLabel, emailHtml)
         Just Report.PreviewFailed -> pure $ LiveReportFailed pid
         Just Report.PreviewBuilding -> pure $ LiveReportBuilding pid
@@ -378,7 +379,7 @@ reportsGetH pid page hxRequest hxBoosted = do
   let pg = fromMaybe 0 (readMaybe . toString =<< page) :: Int
   reports <- V.fromList <$> Issues.reportHistoryByProject pid pg
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
-  let nextUrl = ("/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)) <$ guard (V.length reports >= 20)
+  let nextUrl = urls.reportsGet pid (Just $ show (pg + 1)) <$ guard (V.length reports >= 20)
   case (hxRequest, hxBoosted) of
     (Just "true", Nothing) -> addRespHeaders $ ReportsGetList pid reports nextUrl
     _ -> addRespHeaders $ ReportsGetMain $ PageCtx bw{pageTitle = "Reports", freeTierStatus} (pid, reports, nextUrl)
@@ -413,13 +414,13 @@ liveReportPage view = div_ ([id_ "live-report-preview", class_ "w-full h-full mi
     span_ [class_ "loading loading-spinner text-textBrand"] ""
     h3_ [class_ "font-medium text-textStrong"] "Preparing your system report"
     p_ [class_ "text-sm text-textWeak max-w-md"] "Collecting the last seven days across your services, infrastructure, issues, and monitors. This page will update when the report is ready."
-  LiveReportFailed pid -> emptyState_ def{icon = Just "circle-exclamation", action = ESLink ("/p/" <> pid.toText <> "/reports") "View saved reports"} "The report could not be prepared" "Some report data could not be collected. We’ll retry in a minute. Your saved reports are still available."
+  LiveReportFailed pid -> emptyState_ def{icon = Just "circle-exclamation", action = ESLink (urls.reportsGet pid Nothing) "View saved reports"} "The report could not be prepared" "Some report data could not be collected. We’ll retry in a minute. Your saved reports are still available."
   where
     polling = case view of
       LiveReportReady{} -> []
       LiveReportBuilding pid -> poll pid "every 2s"
       LiveReportFailed pid -> poll pid "every 60s"
-    poll pid trigger = [term "hx-preload" "false", hxGet_ $ "/p/" <> pid.toText <> "/reports/live", hxTrigger_ trigger, hxTarget_ "this", hxSelect_ "#live-report-preview", hxSwap_ "outerHTML"]
+    poll pid trigger = [term "hx-preload" "false", hxGet_ $ urls.reportsLiveGet pid, hxTrigger_ trigger, hxTarget_ "this", hxSelect_ "#live-report-preview", hxSwap_ "outerHTML"]
 
 
 -- | (reportType, dateLabel, emailHtml)
@@ -468,11 +469,11 @@ reportsPage pid reports nextUrl =
     if V.null reports
       then
         div_ [class_ "flex h-full w-full justify-center items-center"]
-          $ emptyState_ def{action = ESCustom $ a_ [href_ $ "/p/" <> pid.toText <> "/reports/live", class_ "btn btn-primary w-max mx-auto", term "hx-preload" "false"] "Generate live report"} "No reports generated yet" "Scheduled reports will appear here after the first report is generated."
+          $ emptyState_ def{action = ESCustom $ a_ [href_ $ urls.reportsLiveGet pid, class_ "btn btn-primary w-max mx-auto", term "hx-preload" "false"] "Generate live report"} "No reports generated yet" "Scheduled reports will appear here after the first report is generated."
       else do
         div_ [class_ "w-full md:w-1/3 md:border-r border-b md:border-b-0 border-strokeWeak p-4 overflow-x-auto md:overflow-y-auto"]
           $ div_ [class_ "mt-4 flex flex-row md:flex-col gap-4 w-full"] do
-            reportCard_ "border-strokeBrand-weak bg-fillBrand-weak/10" ("/p/" <> pid.toText <> "/reports/live") do
+            reportCard_ "border-strokeBrand-weak bg-fillBrand-weak/10" (urls.reportsLiveGet pid) do
               reportCardHead_ "bg-fillBrand-weak" "Weekly report"
                 $ span_ [class_ "bg-fillSuccess-strong text-textInverse-strong text-2xs font-bold px-1.5 py-0.5 rounded-full uppercase"] "Live"
               reportCardTitle_ "Generate live report"
@@ -480,7 +481,7 @@ reportsPage pid reports nextUrl =
             reportListItems pid reports nextUrl
         div_ [class_ "w-full md:w-2/3 overflow-y-auto"]
           $ div_ [class_ "flex h-full", id_ "detailSidebar"]
-          $ a_ (class_ "w-full text-center cursor-pointer" : hxTrigger_ "intersect once" : detailPaneAttrs ("/p/" <> pid.toText <> "/reports/" <> maybe "live" ((.toText) . (.id)) (reports V.!? 0)))
+          $ a_ (class_ "w-full text-center cursor-pointer" : hxTrigger_ "intersect once" : detailPaneAttrs (maybe (urls.reportsLiveGet pid) (urls.reportsSingleGet pid . (.id)) (reports V.!? 0)))
           $ div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"]
           $ loadingIndicatorWith_ LdSM LdDots "text-textWeak"
 
@@ -489,7 +490,7 @@ reportListItems :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe
 reportListItems pid reports nextUrl =
   div_ [class_ "flex flex-row md:flex-col gap-4 w-full"] do
     forM_ reports \report ->
-      reportCard_ "border-strokeWeak" ("/p/" <> pid.toText <> "/reports/" <> report.id.toText) do
+      reportCard_ "border-strokeWeak" (urls.reportsSingleGet pid report.id) do
         reportCardHead_ (if report.reportType == Projects.RTWeekly then "bg-fillBrand-weak capitalize" else "bg-fillWeak capitalize") (toHtml (display report.reportType) <> " report") mempty
         reportCardTitle_ $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
     whenJust nextUrl \url ->

@@ -1,6 +1,7 @@
 {-# LANGUAGE OrPatterns #-}
 
 module Pages.Settings (
+  billingUrl,
   -- S3
   bringS3GetH,
   brings3PostH,
@@ -61,7 +62,6 @@ module Pages.Settings (
   lemonSqueezyOpts,
   verifyLemonSqueezySignature,
   notifyPlanChange,
-  billingUrl,
 ) where
 
 import Control.Lens ((.~), (?~), (^.))
@@ -110,7 +110,6 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (urlEncode)
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
@@ -125,8 +124,9 @@ import Servant (FromHttpApiData (..), err400, err503, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
 import Text.Printf (printf)
-import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, hostPath, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
+import Web.Links
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -229,7 +229,7 @@ instance ToHtml StorageGet where
           when (isJust page.savedBucket) $ p_ [class_ "text-sm text-textStrong"] "The saved connection is unchanged."
         p_ [class_ "text-sm text-textWeak max-w-2xl"] "Connect your own S3-compatible bucket to store telemetry in your infrastructure. Validate the connection before saving."
 
-        form_ [class_ "space-y-4", hxPost_ ("/p/" <> pid.toText <> "/byob_s3"), hxSwap_ "outerHTML", hxTarget_ "#storage-connection-content", hxIndicator_ "#indicator"] do
+        form_ [class_ "space-y-4", hxPost_ (urls.bringS3Post pid), hxSwap_ "outerHTML", hxTarget_ "#storage-connection-content", hxIndicator_ "#indicator"] do
           div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
             formField_ FieldSm def{value = form.accessKey, placeholder = "Access Key ID"} "Access Key ID" "accessKey" True Nothing
             formField_ FieldSm def{inputType = "password", value = form.secretKey, placeholder = "Secret Access Key"} "Secret Access Key" "secretKey" True Nothing
@@ -243,7 +243,7 @@ instance ToHtml StorageGet where
               button_ [type_ "submit", class_ "btn btn-sm btn-primary gap-1"] do
                 "Validate & Save"
                 htmxIndicator_ "indicator" LdXS
-            when (isJust page.savedBucket) $ dangerAction_ "remove-modal" "trash" "Remove" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ ("/p/" <> pid.toText <> "/byob_s3"), hxSwap_ "outerHTML", hxTarget_ "#storage-connection-content"] "Remove bucket"
+            when (isJust page.savedBucket) $ dangerAction_ "remove-modal" "trash" "Remove" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ (urls.bringS3Remove pid), hxSwap_ "outerHTML", hxTarget_ "#storage-connection-content"] "Remove bucket"
     where
       pid = page.projectId
       canEdit = maybe False (>= ProjectMembers.PEdit) page.permission
@@ -396,7 +396,7 @@ apiKeysPage settings = do
           div_ [class_ "flex flex-col gap-1"] do
             h3_ [class_ "text-xl font-semibold text-textStrong"] "Generate an API key"
             p_ [class_ "text-sm text-textWeak text-pretty"] "Keys authenticate the telemetry your services send to this project."
-        form_ [hxPost_ $ "/p/" <> pid.toText <> "/apis", class_ "flex flex-col gap-6 pt-4", hxTarget_ settingsContentTarget] do
+        form_ [hxPost_ $ urls.apiPost pid, class_ "flex flex-col gap-6 pt-4", hxTarget_ settingsContentTarget] do
           div_ [class_ "flex flex-col gap-1.5"] do
             label_ [Lucid.for_ "api-key-title", class_ "text-sm font-medium text-textStrong"] "Key title"
             input_ [id_ "api-key-title", class_ "input w-full", type_ "text", placeholder_ "Production collector", name_ "title", required_ "true", maxlength_ "100", autocomplete_ "off", Aria.describedby_ "api-key-title-hint"]
@@ -473,7 +473,7 @@ makeApiKeysTable pid canEdit apiKeys elemId =
                     [ class_ $ "group/act p-1 rounded cursor-pointer tooltip tooltip-left tap-target " <> bool "hover:bg-fillSuccess-weak" "hover:bg-fillError-weak" apiKey.active
                     , type_ "button"
                     , Aria.label_ $ bool "Activate " "Revoke " apiKey.active <> apiKey.title
-                    , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
+                    , hxMethod $ bool urls.apiPatch urls.apiDelete apiKey.active pid apiKey.id
                     , hxConfirm_ confirmMsg
                     , hxTarget_ settingsContentTarget
                     , data_ "tip" tip
@@ -783,7 +783,7 @@ promTargetModal_ pid mcfg = do
           button_
             [ type_ "button"
             , class_ "btn btn-ghost gap-1.5"
-            , hxPost_ (base <> "/test")
+            , hxPost_ (urls.prometheusSettingsTest pid)
             , term "hx-include" "closest form"
             , hxTarget_ "next .prom-test-result"
             , hxSwap_ "outerHTML"
@@ -794,11 +794,10 @@ promTargetModal_ pid mcfg = do
             button_ [type_ "submit", class_ "btn btn-primary"] (toHtml submitLabel)
         prometheusTestResult Nothing
   where
-    base = "/p/" <> pid.toText <> "/settings/prometheus"
     modalId, heading, desc, action, submitLabel :: Text
     (modalId, heading, desc, action, submitLabel) = case mcfg of
-      Nothing -> ("prometheus-modal", "Scrape a Prometheus endpoint", "We poll this endpoint on your schedule, parse the metrics exposition format, and ingest the samples as series you can chart and alert on.", base, "Add scrape target")
-      Just cfg -> ("prom-edit-" <> cfg.id.toText, "Edit Prometheus target", "Update how Monoscope scrapes this endpoint. Changes take effect on the next scrape.", base <> "/" <> cfg.id.toText <> "/edit", "Save changes")
+      Nothing -> ("prometheus-modal", "Scrape a Prometheus endpoint", "We poll this endpoint on your schedule, parse the metrics exposition format, and ingest the samples as series you can chart and alert on.", urls.prometheusSettingsPost pid, "Add scrape target")
+      Just cfg -> ("prom-edit-" <> cfg.id.toText, "Edit Prometheus target", "Update how Monoscope scrapes this endpoint. Changes take effect on the next scrape.", urls.prometheusSettingsEdit pid cfg.id, "Save changes")
     -- Inverse of 'parseLabelsText', to prefill the edit form.
     labelsToText :: AE.Value -> Text
     labelsToText (AE.Object o) = T.intercalate ", " [AEK.toText k <> "=" <> v | (k, AE.String v) <- AEKM.toList o]
@@ -851,13 +850,12 @@ prometheusTargetRow pid canEdit cfg = div_ [class_ "itemsListItem flex flex-col 
   div_ [class_ "flex flex-wrap items-center gap-1 shrink-0"] do
     -- Filter the metrics explorer to this target's series (metric_source = service_name,
     -- which sampleToMetricRecord sets to the config name).
-    a_ [class_ "btn btn-xs btn-ghost", href_ $ "/p/" <> pid.toText <> "/metrics?metric_source=" <> decodeUtf8 (urlEncode True (encodeUtf8 cfg.name))] "View metrics"
-    let cfgUrl = "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText
-        swapList = [hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
+    a_ [class_ "btn btn-xs btn-ghost", href_ $ (urls.traces pid).metricsOVGetH Nothing Nothing Nothing Nothing (Just cfg.name) Nothing Nothing Nothing Nothing Nothing Nothing] "View metrics"
+    let swapList = [hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
     when canEdit do
       promTargetModal_ pid (Just cfg)
-      button_ ([class_ "btn btn-xs btn-ghost", hxPatch_ cfgUrl] <> swapList) $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
-      button_ ([class_ "btn btn-xs btn-ghost text-textError", hxDelete_ cfgUrl, hxConfirm_ "Remove this Prometheus target?"] <> swapList) "Delete"
+      button_ ([class_ "btn btn-xs btn-ghost", hxPatch_ $ urls.prometheusSettingsToggle pid cfg.id] <> swapList) $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
+      button_ ([class_ "btn btn-xs btn-ghost text-textError", hxDelete_ $ urls.prometheusSettingsDelete pid cfg.id, hxConfirm_ "Remove this Prometheus target?"] <> swapList) "Delete"
   where
     -- Scrape health derived from last_status ("ok: …" / "error: …"). Distinct from the
     -- on/off state so a target that's enabled-but-failing never shows a reassuring green.
@@ -962,13 +960,13 @@ notificationsTestPostH pid TestForm{..} = do
 
   Log.logTrace "Sending test notification" (channel, pid, issueType)
 
-  let projectUrl = "/p/" <> pid.toText
-      fullProjectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
+  let projectUrl = urls.dashboardRedirectGet pid []
+      issuesUrl = hostPath appCtx.env.hostUrl $ (urls.issues pid).listGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] []
       testTemplate
         | Just mk <- lookup issueType [("runtime_exception", ET.runtimeErrorsEmail), ("escalating_errors", ET.escalatingErrorsEmail), ("regressed_errors", ET.regressedErrorsEmail), ("error_spike", ET.errorSpikesEmail)] =
-            mk project.title fullProjectUrl (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
+            mk project.title (hostPath appCtx.env.hostUrl projectUrl) issuesUrl [] Nothing Nothing Nothing
         | issueType == "report" = ET.sampleWeeklyReport Nothing Nothing
-        | otherwise = ET.anomalyEndpointEmail "Test User" project.title (fullProjectUrl <> "/issues") [ET.EndpointAlertRow "GET /api/v1/test" (Just "api.example.com") (Just "api-service") (Just "production")]
+        | otherwise = ET.anomalyEndpointEmail "Test User" project.title issuesUrl [ET.EndpointAlertRow "GET /api/v1/test" (Just "api.example.com") (Just "api-service") (Just "production")]
       sendTestEmail email = let (subj, html) = testTemplate; subj' = "[Test] " <> subj in sendRenderedEmail email subj' (ET.renderEmail subj' html)
 
   -- The @everyone team is the single source of truth for project notification settings,
@@ -1137,12 +1135,8 @@ verifyLemonSqueezySignature sigHeader payload secret =
 -- (e.g. @ET.planDowngradedEmail reason@).
 notifyPlanChange :: (DB es, Notify.Notify :> es) => EnvConfig -> Projects.Project -> (Text -> Text -> (Text, Html ())) -> Eff es ()
 notifyPlanChange envCfg project mk = do
-  let (subj, html) = mk project.title (billingUrl envCfg project.id)
+  let (subj, html) = mk project.title (billingUrl envCfg.hostUrl project.id)
   Projects.usersByProjectId project.id >>= traverse_ \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-
-
-billingUrl :: EnvConfig -> Projects.ProjectId -> Text
-billingUrl envConfig pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
 
 
 webhookPostH :: Maybe Text -> ByteString -> ATBaseCtx (Html ())
@@ -1426,7 +1420,7 @@ billingPage d = div_ [] do
     div_ [class_ "border-t border-strokeWeak pt-6 flex items-center gap-3"] do
       label_ [Lucid.for_ "pricing-modal", class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
       when (d.provider /= Projects.NoBillingProvider)
-        $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", term "hx-preload" "false", hxGet_ $ "/p/" <> d.pid.toText <> "/manage_subscription"] "Manage subscription"
+        $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", term "hx-preload" "false", hxGet_ $ urls.projects.manageSubscriptionGet d.pid] "Manage subscription"
 
     -- Daily breakdown
     dailyUsageBreakdown_ isFree d.cycleStart d.aiInputRate d.aiOutputRate d.dailyUsage
@@ -1654,8 +1648,8 @@ createStripeCheckoutSession trialEligible customerM debts apiKey hostUrl pid pla
              , ("client_reference_id", encodeUtf8 pid.toText)
              , ("metadata[project_id]", encodeUtf8 pid.toText)
              , ("metadata[plan]", encodeUtf8 plan)
-             , ("success_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing?stripe_success=1")
-             , ("cancel_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing")
+             , ("success_url", encodeUtf8 $ billingUrl hostUrl pid <> "?stripe_success=1")
+             , ("cancel_url", encodeUtf8 $ billingUrl hostUrl pid)
              ]
   stripeSessionUrl apiKey "checkout/sessions" params
 
@@ -1864,3 +1858,7 @@ handleStripePaymentFailed envConfig obj = do
       Log.logAttention "Stripe invoice.payment_failed" (project.id, attemptCount, nextAttempt)
       Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.paymentFailedEmail
   pure "payment failed handled"
+
+
+billingUrl :: Text -> Projects.ProjectId -> Text
+billingUrl hostUrl = hostPath hostUrl . urls.manageBillingGet

@@ -9,11 +9,10 @@
 -- happen here in Haskell over that result. That keeps the store doing exactly one short-window
 -- read per page view, which matters because wide aggregates over @otel_metrics@ are the query
 -- shape that has repeatedly OOM-killed TimeFusion.
-module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, matchesAny, matchesFilter, infraUrl, deferUrl, mkWindow, infraSnapshot, infrastructureBW, pctText, runtimeLabel, formatBytes, coresText, freshnessLabel, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
+module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, matchesAny, matchesFilter, mkWindow, windowed, infraSnapshot, infrastructureBW, pctText, runtimeLabel, formatBytes, coresText, freshnessLabel, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
 
 import Data.Default (def)
 import Data.Text qualified as T
-import Data.Text.Display (display)
 import Data.Time (NominalDiffTime, diffUTCTime)
 import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as Reader
@@ -22,14 +21,15 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, withDeferredBody)
+import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, infrastructureNavTabs_, metaChip_, pivotLinks_, tableSkeleton_, withDeferredBody)
 import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, kqlQuoted, showFFloat')
+import Utils (drawerRowAttrs_, faSprite_, formatBytes, kqlQuoted, showFFloat')
+import Web.Links
 
 
 -- | A row plus the project it belongs to, so column renderers can build pivot links without
@@ -90,17 +90,6 @@ matchesFilter :: Maybe Text -> Maybe Text -> Bool
 matchesFilter selected = matchesAny selected . maybeToList
 
 
-infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
-infraUrl pid path = TimePicker.windowUrl ("/p/" <> pid.toText <> path)
-
-
--- | The URL a shell re-fetches itself with: the request it was serving, plus @deferred@.
--- Every filter has to survive the round trip, or the rows that arrive would not be the rows
--- the visible filter chips claim.
-deferUrl :: Projects.ProjectId -> Text -> [(Text, Maybe Text)] -> TimePicker.TimeWindow -> Text
-deferUrl pid path params = infraUrl pid path $ mapMaybe sequenceA params <> [("deferred", "1")]
-
-
 mkWindow :: Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx TimePicker.TimeWindow
 mkWindow fromParam toParam sinceParam = (\now -> TimePicker.mkTimeWindow now fromParam toParam sinceParam) <$> Time.currentTime
 
@@ -137,7 +126,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
   (_, _, bw) <- mkPageCtx pid
   window <- mkWindow fromParam toParam sinceParam
   let filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
-      deferredUrl = deferUrl pid "/infrastructure/containers" [("runtime", runtimeM), ("namespace", namespaceM), ("node", nodeM), ("image", imageM), ("cluster", clusterM)] window
+      deferredUrl = windowed window ((urls.traces pid).infrastructureContainersGetH runtimeM namespaceM nodeM imageM clusterM) (Just "1")
   body <- withDeferredBody deferredM "containersContainer" deferredUrl (tableSkeleton_ 10) do
     allRows <- infraSnapshot pid window
     let
@@ -157,7 +146,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
               , facets =
                   Just
                     $ facetActions
-                      (infraUrl pid "/infrastructure/containers" [] window)
+                      (windowed window ((urls.traces pid).infrastructureContainersGetH Nothing Nothing Nothing Nothing Nothing) Nothing)
                       "containersContainer"
                       [ menu "Runtime" "runtime" filters.runtime (Just . runtimeLabel . runtimeOf)
                       , -- Falls back to k8s.cluster.uid, so the menu is populated even
@@ -248,11 +237,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
     -- row does and hits the same cached snapshot the list already fetched.
     detailUrl :: ContainerVM -> Text
     detailUrl vm =
-      infraUrl
-        vm.pid
-        "/infrastructure/containers/detail"
-        ([("container", vm.row.containerName), ("scope", display vm.row.scope)] <> mapMaybe sequenceA [("pod", vm.row.podName), ("cluster", vm.row.cluster), ("namespace", vm.row.namespace), ("node", vm.row.nodeName)])
-        vm.window
+      windowed vm.window ((urls.traces vm.pid).infrastructureContainerDetailGetH (Just vm.row.containerName) vm.row.podName (Just vm.row.scope) vm.row.cluster vm.row.namespace vm.row.nodeName)
 
 
 newtype ContainersGet = ContainersPage (PageCtx (Deferred (Table ContainerVM)))
@@ -314,7 +299,7 @@ containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromPar
   addRespHeaders $ case V.toList found of
     [r] -> containerDetail_ window r
     [] -> emptyState_ def{icon = Just "cube", action = ESNone} "This container is no longer reporting." ""
-    _ -> emptyState_ def{icon = Just "cube", action = ESLink (infraUrl pid "/infrastructure/containers" [] window) "View containers"} "Several containers match this link." "Select a container from the list to view its metrics."
+    _ -> emptyState_ def{icon = Just "cube", action = ESLink (windowed window ((urls.traces pid).infrastructureContainersGetH Nothing Nothing Nothing Nothing Nothing) Nothing) "View containers"} "Several containers match this link." "Select a container from the list to view its metrics."
   where
     containerDetail_ :: TimePicker.TimeWindow -> ContainerRow -> Html ()
     containerDetail_ window r = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
@@ -359,8 +344,8 @@ containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromPar
             <> if r.scope == ScopeHost then [] else [("resource.k8s.namespace.name", r.namespace), (clusterField, r.cluster), (nodeField, r.nodeName)]
         metricQuery metric = "metrics | where metric_name == \"" <> metric <> "\" and " <> subject <> " | summarize avg(value) by bin_auto(timestamp)"
         pivots =
-          [ ("View logs", infraUrl pid "/log_explorer" [("query", subject)] window)
-          , ("View metrics", infraUrl pid "/metrics" [("metric_prefix", maybe "container." (const "k8s.") r.podName)] window)
+          [ ("View logs", (urls.logExplorer pid).logExplorerGet (Just subject) Nothing window.sinceQuery window.fromQuery window.toQuery Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
+          , ("View metrics", (urls.traces pid).metricsOVGetH Nothing window.fromQuery window.toQuery window.sinceQuery Nothing (Just $ maybe "container." (const "k8s.") r.podName) Nothing Nothing Nothing Nothing Nothing)
           ]
 
 
@@ -384,3 +369,8 @@ clusterField = "coalesce(resource.k8s.cluster.name, resource.k8s.cluster.uid)"
 -- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 -- >>> let noFilters = ContainerFilters Nothing Nothing Nothing Nothing Nothing
 -- >>> let nsFilter ns = ContainerFilters Nothing ns Nothing Nothing Nothing
+
+
+-- | Feeds a time window's @from@, @to@ and @since@ to a route link that takes them next.
+windowed :: TimePicker.TimeWindow -> (Maybe Text -> Maybe Text -> Maybe Text -> r) -> r
+windowed w link = link w.fromQuery w.toQuery w.sinceQuery

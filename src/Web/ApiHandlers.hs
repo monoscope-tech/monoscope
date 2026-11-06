@@ -9,7 +9,6 @@
 -- stay untouched.
 module Web.ApiHandlers (
   ApiV1Routes (..),
-  AllQueryParams,
   apiV1OpenApiSpec,
   apiV1Server,
   -- Monitors
@@ -136,7 +135,6 @@ import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Network.Wai (Request, queryString)
 import Pages.Charts.Charts qualified as ChartsPage
 import Pages.Charts.Types qualified as Charts
 import Pages.Replay qualified as Replay
@@ -147,21 +145,15 @@ import Pkg.MonitorConfig (MonitorConfig)
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.SchemaLearning qualified as SchemaLearning
 import Relude hiding (ask, id)
-import Servant (Capture, Delete, Description, Get, HasServer (..), Header, Headers, JSON, NamedRoutes, NoContent (..), Optional, Patch, Post, Put, QueryParam, QueryParam', ReqBody, Strict, addHeader, (:-), (:>))
+import Servant (Capture, Delete, Description, Get, HasServer (..), Header, Headers, JSON, NamedRoutes, NoContent (..), Optional, Patch, Post, Put, QueryParam, QueryParam', ReqBody, ServerT, Strict, addHeader, (:-), (:>))
 import Servant.OpenApi (HasOpenApi (..), toOpenApi)
-import Servant.Server.Internal.Delayed (passToServer)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx, ApiPrincipal (..), useTfReads)
 import Utils (hostPath)
 import Web.ApiTypes hiding (count)
 import Web.FacetsFallback (facetsFallback)
+import Web.Links (AllQueryParams, QPT)
 import Web.Wire qualified as Wire
-
-
-type QPT a = QueryParam a Text
-
-
-data AllQueryParams
 
 
 -- | Declares an 'ApiProblem' status a route refuses with (stack one per status), for the OpenAPI spec (and the
@@ -365,42 +357,6 @@ apiV1OpenApiSpec =
     .~ SecurityDefinitions (fromList [("BearerAuth", SecurityScheme (SecuritySchemeApiKey (OA.ApiKeyParams "Authorization" OA.ApiKeyHeader)) Nothing)])
       & OA.security
     .~ [OA.SecurityRequirement (fromList [("BearerAuth", [])])]
-
-
--- =============================================================================
--- Custom HasServer instances
--- =============================================================================
-
--- | We add a HasServer instance that says:
---   - The handler will receive a list of (Text, Maybe Text).
---   - We pull that out of the WAI `Request` in `route`.
-instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
-  type ServerT (AllQueryParams :> api) m = [(Text, Maybe Text)] -> ServerT api m
-
-
-  route _ ctx subserver = route (Proxy :: Proxy api) ctx $ passToServer subserver grabAllParams
-    where
-      grabAllParams :: Request -> [(Text, Maybe Text)]
-      grabAllParams = map (bimap dec (fmap dec)) . queryString
-      dec = decodeUtf8With lenientDecode
-
-
-  hoistServerWithContext
-    :: Proxy (AllQueryParams :> api)
-    -> Proxy ctx
-    -> (forall x. m x -> n x)
-    -> ([(Text, Maybe Text)] -> ServerT api m)
-    -> ([(Text, Maybe Text)] -> ServerT api n)
-  hoistServerWithContext _ pc nat s = hoistServerWithContext (Proxy :: Proxy api) pc nat . s
-
-
--- | @AllQueryParams@ is a catch-all: it grabs whatever query string arrives, so
--- there is nothing specific to advertise. Documenting it as the identity keeps
--- routes that use it (currently @/dashboards/{id}/data@, which forwards
--- @var-*@/@const-*@ dashboard variables) inside the generated OpenAPI spec
--- instead of forcing them out of it.
-instance HasOpenApi api => HasOpenApi (AllQueryParams :> api) where
-  toOpenApi _ = toOpenApi (Proxy @api)
 
 
 instance HasServer api ctx => HasServer (Refuses s :> api) ctx where

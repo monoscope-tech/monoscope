@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, grantsTrial, paymentPlanPicker) where
+module Pages.Components (codeContextUrl, drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, segmentedWith_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, SavedView (..), SavedViewsMenu (..), savedViewsMenu_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, resetFormOnRefusalAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, stackTrace_, stackFrames_, curlCommand, getTargetPage, logExplorerUrl, explorerTabs, explorerNavTabs_, infrastructureTabs, infrastructureNavTabs_, abbreviateUnit, agoText, untilLabel, grantsTrial, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -16,7 +16,8 @@ import Pkg.ErrorFingerprint qualified as EF
 import PyF qualified
 import Relude
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, formatUTC, formatWithCommas, loadingIndicator_, navTabAttrs, popoverPanel_, popoverTrigger_, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, formatUTC, formatWithCommas, loadingIndicator_, navTabAttrs, navTabStrip_, nonEmptyT, popoverPanel_, popoverTrigger_)
+import Web.Links
 
 
 data EmptyStateSize = ESFull | ESCompact
@@ -118,9 +119,50 @@ metaChip_ label value = span_ [class_ "inline-flex items-center gap-1 rounded-md
   toHtml value
 
 
--- | The section path a breadcrumb page title links back to, when it has one.
-getTargetPage :: Text -> Maybe Text
-getTargetPage = (`lookup` [("Requests", "/log_explorer"), ("Issues", "/issues"), ("Endpoints", "/endpoints")])
+-- | The section page a breadcrumb page title links back to, when it has one.
+getTargetPage :: Text -> Maybe (Projects.ProjectId -> Text)
+getTargetPage =
+  (`lookup` [("Requests", logExplorerUrl), ("Issues", \pid -> (urls.issues pid).listGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] []), ("Endpoints", \pid -> urls.endpointListGet pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)])
+
+
+logExplorerUrl :: Projects.ProjectId -> Text
+logExplorerUrl pid = (urls.logExplorer pid).logExplorerGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+
+
+-- | The Explorer section's tab strip, shared by every page in the section so a new tab is
+-- added in one place. @active@ is the label of the current page.
+explorerNavTabs_ :: Projects.ProjectId -> Text -> Html ()
+explorerNavTabs_ pid active = navTabStrip_ NavLinks "Explorer views" "bg-fillWeaker" [(toHtml label, link pid, label == active) | (label, link) <- explorerTabs]
+
+
+-- | Single source of truth for the Explorer section, used by both the tab strip and the
+-- sidebar flyout so the two can't drift.
+-- Events is both the section landing route and the first tab: the visual order should
+-- reinforce that investigating what happened is primary, while watching a stream is opt-in.
+explorerTabs :: [(Text, Projects.ProjectId -> Text)]
+explorerTabs =
+  [ ("Events", logExplorerUrl)
+  , ("Live Tail", \pid -> (urls.logExplorer pid).liveTailGet)
+  , ("Metrics", \pid -> (urls.traces pid).metricsOVGetH Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
+  , ("Service Map", \pid -> (urls.traces pid).serviceMapGetH Nothing Nothing Nothing Nothing Nothing)
+  ]
+
+
+-- | Infrastructure is one inventory with sibling views. Keeping this list shared by the
+-- page tabs and sidebar flyout prevents Containers drifting back into Explorer.
+infrastructureNavTabs_ :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Html ()
+infrastructureNavTabs_ pid active fromM toM sinceM = navTabStrip_ NavLinks "Infrastructure views" "" [(toHtml label, link pid (nonEmptyT fromM) (nonEmptyT toM) (nonEmptyT sinceM), label == active) | (label, link) <- infrastructureTabs]
+
+
+-- | Each view's link, taking @from@, @to@ and @since@.
+infrastructureTabs :: [(Text, Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text)]
+infrastructureTabs =
+  [ ("Hosts", \pid f t s -> (urls.traces pid).hostsGetH Nothing Nothing Nothing Nothing Nothing f t s Nothing)
+  , ("Containers", \pid f t s -> (urls.traces pid).infrastructureContainersGetH Nothing Nothing Nothing Nothing Nothing f t s Nothing)
+  , ("Images", \pid f t s -> (urls.traces pid).imagesGetH Nothing Nothing f t s Nothing)
+  , ("Kubernetes", \pid f t s -> (urls.traces pid).kubernetesGetH Nothing Nothing Nothing Nothing f t s Nothing)
+  , ("Host Map", \pid f t s -> (urls.traces pid).hostMapGetH Nothing Nothing Nothing Nothing Nothing f t s Nothing)
+  ]
 
 
 -- | Element with a non-standard tag name (custom elements, SVG), which Lucid has no builder for.
@@ -311,7 +353,7 @@ priceDisplay_ extraAttrs amount subtext = do
 pricingPostAttrs :: Projects.ProjectId -> Text -> Text -> [Attribute] -> [Attribute]
 pricingPostAttrs pid cardId outlineCls extras =
   [ class_ $ "relative bg-bgRaised rounded-2xl py-11 px-4 outline overflow-hidden " <> outlineCls
-  , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
+  , hxPost_ $ urls.projects.onboardingPricingUpdate pid
   , id_ cardId
   , hxSwap_ "none"
   ]
@@ -345,7 +387,7 @@ pricingCta_ pid plan normalCls lemonUrl isCurrent trialEligible useStripe =
     attrs :: [Attribute]
     attrs
       | isCurrent = []
-      | useStripe = [hxPost_ $ "/p/" <> pid.toText <> "/stripe_checkout", hxVals_ $ "{\"plan\": \"" <> plan <> "\"}", hxSwap_ "none"]
+      | useStripe = [hxPost_ $ urls.projects.stripeCheckout pid, hxVals_ $ "{\"plan\": \"" <> plan <> "\"}", hxSwap_ "none"]
       | otherwise = [term "hx-on:click" $ "window.payLemon(\"" <> plan <> "\", \"" <> lemonUrl <> "\")"]
 
 
@@ -1274,17 +1316,6 @@ durationMenu_ popId heading extras req trigger = div_ [class_ "inline-block"] do
     forM_ (extras <> [("Indefinitely", "")]) \(label, q) -> button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak"] <> req q) $ toHtml label
 
 
--- | Query suffix for a 'durationMenu_' choice: @?param=minutes@, or nothing at
--- all for the indefinite option (absent duration means "no end").
---
--- >>> durationQuery "duration" "240"
--- "?duration=240"
--- >>> durationQuery "duration" ""
--- ""
-durationQuery :: Text -> Text -> Text
-durationQuery param q = if T.null q then "" else "?" <> param <> "=" <> q
-
-
 -- | Human label for a silence window. Anything more than a year out is the
 -- indefinite sentinel; anything already past reads as expired rather than
 -- rounding up to a misleading "1m left".
@@ -1404,10 +1435,6 @@ stackTrace_ pid svcM attr resAttr stack =
   stackFrames_ (codeContextUrl pid svcM (EF.revisionFor resAttr)) stack (EF.framesFor attr stack)
 
 
-codeContextUrl :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Text -> Int -> Text
-codeContextUrl pid svcM revM path n = "/p/" <> pid.toText <> "/code_context?file=" <> toUriStr path <> "&line=" <> show n <> foldMap (("&service=" <>) . toUriStr) svcM <> foldMap (("&revision=" <>) . toUriStr) revM
-
-
 -- | A stack trace as frames rather than a blob, the way Sentry renders one. Each frame is a
 -- native @\<details\>@; its source snippet loads on @intersect once@ inside it, so only when
 -- opened — resolving it is an SCM call the panel must not block on. The first in-app frame
@@ -1457,3 +1484,7 @@ disclosure_ attrs summaryCls title body = details_ attrs do
     faSprite_ "chevron-right" "regular" "w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]>summary>&]:rotate-90"
     title
   body
+
+
+codeContextUrl :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Text -> Int -> Text
+codeContextUrl pid svcM revM path n = (urls.logExplorer pid).codeContextGet (Just path) (Just n) svcM revM

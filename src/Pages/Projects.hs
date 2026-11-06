@@ -96,10 +96,11 @@ import Models.Apis.Integrations qualified as Integrations
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects (OnboardingStep (Integration, Pricing))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), OnboardingStep (Integration, Pricing), PageCtx (..), mkPageCtx, settingsContentTarget, stepUrl)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, stepUrl)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
@@ -120,6 +121,7 @@ import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, redirectCS)
 import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
+import Web.Links qualified as Links
 
 
 --------------------------------------------------------------------------------
@@ -142,7 +144,7 @@ listProjectsGetH = do
           }
 
   if V.null projects && null restrictedProjectTitles && not appCtx.env.showDemoProject
-    then throwError $ err302{errHeaders = [("Location", "/p/new")]}
+    then throwError $ err302{errHeaders = [("Location", encodeUtf8 Links.urls.projects.onboardingProject)]}
     else addRespHeaders $ ListProjectsGet (PageCtx bwconf (projects, demoProject, appCtx.env.showDemoProject)) restrictedProjectTitles
 
 
@@ -162,7 +164,7 @@ listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.ProjectListItem 
 listProjectsBody sessM projects demoProject showDemoProject restrictedProjectTitles = do
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
     div_ [class_ "flex items-center justify-between px-4 py-3"] do
-      a_ [href_ "/", class_ "flex items-center"] $ brandLogo_ "h-6"
+      a_ [href_ Links.urls.projects.listGet, class_ "flex items-center"] $ brandLogo_ "h-6"
       div_ [class_ "flex items-center gap-3"] do
         label_ [class_ "swap swap-rotate"] do
           input_
@@ -181,7 +183,7 @@ listProjectsBody sessM projects demoProject showDemoProject restrictedProjectTit
   section_ [id_ "main-content", class_ "mx-auto max-md:px-2 px-4 py-6 pb-36 pt-20 overflow-y-auto h-full"] do
     headerRow_ [class_ "mb-8"] do
       h2_ [class_ "text-textStrong text-3xl font-semibold"] "Projects"
-      a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
+      a_ [class_ "btn btn-primary btn-sm", href_ Links.urls.projects.onboardingProject] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
 
     forM_ restrictedProjectTitles \title -> div_ [class_ "mb-4"] $ callout_ BrandBadge Nothing do
       strong_ $ toHtml title
@@ -199,7 +201,7 @@ listProjectsBody sessM projects demoProject showDemoProject restrictedProjectTit
 projectCard_ :: Projects.ProjectListItem -> Html ()
 projectCard_ project = do
   div_ [class_ "surface-raised hover:shadow-md transition-shadow duration-200 overflow-hidden group"] do
-    a_ [href_ ("/p/" <> project.id.toText), class_ "block"] do
+    a_ [href_ (Links.urls.dashboardRedirectGet project.id []), class_ "block"] do
       div_ [class_ "p-5 pb-3"] do
         div_ [class_ "flex justify-between items-start mb-3"] do
           div_ [class_ "flex-1 min-w-0"] do
@@ -547,12 +549,11 @@ data IntegrationsConfig = IntegrationsConfig
 integrationsBody :: IntegrationsConfig -> Html ()
 integrationsBody IntegrationsConfig{..} = do
   settingsSection_ do
-    let pid = projectId.toText
     settingsH2_ "Integrations"
 
     callout_ BrandBadge Nothing do
       "Channels configured here are automatically included in the "
-      a_ [href_ ("/p/" <> pid <> "/manage_teams/everyone"), class_ "font-medium text-textBrand underline"] "@everyone"
+      a_ [href_ (Links.urls.projects.teamGet projectId "everyone" Nothing), class_ "font-medium text-textBrand underline"] "@everyone"
       " team."
 
     -- Form posts `enabledChannels` (the set of channel types whose toggles are checked);
@@ -566,10 +567,10 @@ integrationsBody IntegrationsConfig{..} = do
             disabledSet = S.fromList $ V.toList disabledChannels
             integrations =
               [ ("email", Settings.TCEmail, "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
-              , ("slack", Settings.TCSlack, "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration pid slackData slackChannels extraSlackChannels existingSlackChannels slackChannelsError alertsOff)
-              , ("discord", Settings.TCDiscord, "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
+              , ("slack", Settings.TCSlack, "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration projectId slackData slackChannels extraSlackChannels existingSlackChannels slackChannelsError alertsOff)
+              , ("discord", Settings.TCDiscord, "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig projectId)
               , ("phone", Settings.TCWhatsapp, "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
-              , ("pagerduty", Settings.TCPagerduty, "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration pid (isJust pagerdutyKey))
+              , ("pagerduty", Settings.TCPagerduty, "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId (isJust pagerdutyKey))
               ]
                 :: [(Text, Settings.TestChannel, Text, Bool, Html (), Html ())]
 
@@ -581,7 +582,7 @@ integrationsBody IntegrationsConfig{..} = do
             ( [ class_ "btn btn-primary shrink-0"
               , type_ "button"
               , id_ "integrations-save"
-              , hxPost_ [text|/p/$pid/notifications-channels|]
+              , hxPost_ $ Links.urls.projects.notificationsUpdateChannelPost projectId
               , hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input'), includeUserIdentityInAlerts: document.querySelector('#include-user-identity-in-alerts').checked}"
               , [__| on input or change from #notifsForm
                   if event.target.matches('[data-tagify]') and JSON.stringify(window.getTagValues('#' + event.target.id)) is JSON.stringify(JSON.parse(event.target.getAttribute('data-tagify-initial') or '[]')) exit end
@@ -594,7 +595,7 @@ integrationsBody IntegrationsConfig{..} = do
 
         div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
           forM_ integrations \(val, testCh, title, configured, icon, content) ->
-            renderNotificationOption pid everyoneTeamId title val testCh (S.notMember val disabledSet) configured icon content
+            renderNotificationOption projectId everyoneTeamId title val testCh (S.notMember val disabledSet) configured icon content
 
         div_ [class_ "mt-4 rounded-xl border border-strokeWeak p-3"]
           $ toggleRow_ "include-user-identity-in-alerts" "Include affected user identity in alerts" "Includes the telemetry user name and email in Slack error alerts. Enabled by default; turn it off if alerts for this project must not contain PII. Tenant or project context is always included."
@@ -604,7 +605,7 @@ integrationsBody IntegrationsConfig{..} = do
     -- Test History
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
       sectionLabel_ "Test History"
-      div_ [id_ "test-history", hxGet_ [text|/p/$pid/settings/integrations/history|], hxTrigger_ "load, testSent from:body", hxSwap_ "innerHTML"] do
+      div_ [id_ "test-history", hxGet_ $ Links.urls.projects.notificationsTestHistoryGet projectId, hxTrigger_ "load, testSent from:body", hxSwap_ "innerHTML"] do
         p_ [class_ "text-textWeak text-sm py-4"] "Loading..."
 
 
@@ -619,9 +620,9 @@ integrationsSwapAttrs_ = [hxTarget_ "#integrations-form-section", hxSelect_ "#in
 
 
 -- | @enabled@ is False until a channel is configured.
-renderInlineTestButton :: Text -> Settings.TestChannel -> Maybe ProjectMembers.TeamId -> Bool -> Bool -> Html ()
+renderInlineTestButton :: Projects.ProjectId -> Settings.TestChannel -> Maybe ProjectMembers.TeamId -> Bool -> Bool -> Html ()
 renderInlineTestButton pid channel teamIdM primary enabled =
-  form_ [hxPost_ [text|/p/$pid/settings/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
+  form_ [hxPost_ $ Links.urls.projects.notificationsTestPost pid, hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
     input_ [type_ "hidden", name_ "channel", value_ (display channel)]
     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
     whenJust teamIdM \tid -> input_ [type_ "hidden", name_ "teamId", value_ tid.toText]
@@ -632,7 +633,7 @@ renderInlineTestButton pid channel teamIdM primary enabled =
 
 -- | @value@ is the notification-channel toggle key (@phone@ for WhatsApp);
 -- @testCh@ is the separate channel name the test endpoint expects.
-renderNotificationOption :: Text -> Maybe ProjectMembers.TeamId -> Text -> Text -> Settings.TestChannel -> Bool -> Bool -> Html () -> Html () -> Html ()
+renderNotificationOption :: Projects.ProjectId -> Maybe ProjectMembers.TeamId -> Text -> Text -> Settings.TestChannel -> Bool -> Bool -> Html () -> Html () -> Html ()
 renderNotificationOption pid teamIdM title value testCh isChecked isConfigured icon extraContent = do
   let isActive = isChecked && isConfigured
   div_ [] do
@@ -658,9 +659,9 @@ renderWhatsappIntegration :: Text -> Html ()
 renderWhatsappIntegration tgs = formField_ FieldSm def "Phone numbers" "phones_input" False $ Just $ tagInput_ "phones_input" "Enter phone numbers" [data_ "tagify-initial" tgs]
 
 
-renderSlackIntegration :: Text -> Maybe SlackData -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector Text -> Maybe Text -> [Text] -> Html ()
+renderSlackIntegration :: Projects.ProjectId -> Maybe SlackData -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector Text -> Maybe Text -> [Text] -> Html ()
 renderSlackIntegration pid slackData channels extraChannels existingChannels channelsError alertsOff = do
-  let oauthUrl = "/p/" <> pid <> "/slack/install"
+  let oauthUrl = Links.urls.slackInstallGet pid False
 
   case slackData of
     Just sd -> do
@@ -684,7 +685,7 @@ renderSlackIntegration pid slackData channels extraChannels existingChannels cha
               else "Slack rejected this app's token (" <> err <> "). No alerts are being delivered — click Reconnect to restore them."
         unless (null alertsOff) $ p_ [class_ "text-textWeak ml-5 mt-1"] do
           toHtml (T.intercalate " and " alertsOff <> " are switched off for this project — those alerts never reach Slack. ")
-          a_ [href_ ("/p/" <> pid <> "/settings"), class_ "font-medium text-textBrand underline"] "Project settings"
+          a_ [href_ (Links.urls.projects.settingsGet pid), class_ "font-medium text-textBrand underline"] "Project settings"
 
       -- Always include saved channels in the whitelist so enforceWhitelist + resolve
       -- render the chip. `extraChannels` covers names we could fetch via
@@ -701,28 +702,28 @@ renderSlackIntegration pid slackData channels extraChannels existingChannels cha
 
       div_ [class_ "flex items-center gap-2"] do
         a_ [target_ "_blank", class_ "btn btn-xs", href_ oauthUrl] "Reconnect"
-        form_ ([hxDelete_ [text|/p/$pid/settings/integrations/slack|], hxConfirm_ "Are you sure you want to disconnect Slack?", hxTrigger_ "submit"] <> integrationsSwapAttrs_) do
+        form_ ([hxDelete_ $ Links.urls.projects.slackDisconnect pid, hxConfirm_ "Are you sure you want to disconnect Slack?", hxTrigger_ "submit"] <> integrationsSwapAttrs_) do
           button_ [class_ "btn btn-xs btn-ghost text-textError", type_ "submit"] "Disconnect"
     Nothing -> do
       a_ [target_ "_blank", class_ "btn btn-xs", href_ oauthUrl] "Connect Slack agent"
 
 
-renderDiscordIntegration :: EnvConfig -> Text -> Html ()
+renderDiscordIntegration :: EnvConfig -> Projects.ProjectId -> Html ()
 renderDiscordIntegration envCfg pid = do
-  let addQueryParams = "&state=" <> pid <> "&redirect_uri=" <> envCfg.discordRedirectUri
+  let addQueryParams = "&state=" <> pid.toText <> "&redirect_uri=" <> envCfg.discordRedirectUri
   a_ [target_ "_blank", class_ "btn btn-xs gap-1.5", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> envCfg.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
     faSprite_ "discord" "solid" "h-3.5 w-3.5"
     "Add to Discord"
 
 
-renderPagerdutyIntegration :: Text -> Bool -> Html ()
+renderPagerdutyIntegration :: Projects.ProjectId -> Bool -> Html ()
 renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . bool disconnectedUI connectedUI
   where
     connectedUI = do
       div_ [class_ "flex items-center gap-2"] do
         connectionBadge_ True
-        button_ ([class_ "btn btn-xs btn-ghost text-textError", hxPost_ [text|/p/$pid/settings/integrations/pagerduty/disconnect|]] <> integrationsSwapAttrs_) "Disconnect"
-    disconnectedUI = form_ ([class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/settings/integrations/pagerduty|]] <> integrationsSwapAttrs_) do
+        button_ ([class_ "btn btn-xs btn-ghost text-textError", hxPost_ $ Links.urls.projects.pagerdutyDisconnect pid] <> integrationsSwapAttrs_) "Disconnect"
+    disconnectedUI = form_ ([class_ "flex flex-col gap-2", hxPost_ $ Links.urls.projects.pagerdutyConnect pid] <> integrationsSwapAttrs_) do
       formField_ FieldSm def{placeholder = "Events API v2 Integration Key", hint = Just "Get from: PagerDuty → Services → Integrations → Events API v2"} "Integration Key" "integrationKey" False Nothing
       button_ [class_ "btn btn-sm w-max", type_ "submit"] "Connect"
 
@@ -861,8 +862,8 @@ data TeamSaved = TeamCreated Projects.ProjectId | TeamUpdated Projects.ProjectId
 instance Outcome TeamSaved where
   outcomeRedirect =
     Just . \case
-      TeamCreated pid -> "/p/" <> pid.toText <> "/manage_teams"
-      TeamUpdated pid handleM -> "/p/" <> pid.toText <> "/manage_teams" <> foldMap ("/" <>) handleM
+      TeamCreated pid -> Links.urls.projects.teamsManageGet pid Nothing
+      TeamUpdated pid handleM -> maybe (Links.urls.projects.teamsManageGet pid Nothing) (\h -> Links.urls.projects.teamGet pid h Nothing) handleM
   outcomeToast =
     Just . \case
       TeamCreated _ -> "Team saved successfully"
@@ -922,7 +923,7 @@ data TeamsDeleted = TeamsDeleted Projects.ProjectId (Maybe Text)
 
 
 instance Outcome TeamsDeleted where
-  outcomeRedirect (TeamsDeleted pid listViewM) = ("/p/" <> pid.toText <> "/manage_teams") <$ guard (isNothing listViewM)
+  outcomeRedirect (TeamsDeleted pid listViewM) = Links.urls.projects.teamsManageGet pid Nothing <$ guard (isNothing listViewM)
 
 
 data TeamsDeleteRejection = TeamsNotOwned | UnknownTeamAction
@@ -1012,7 +1013,7 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
 nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Html ()
 nameCell pid name description handle isEveryone = do
   span_ [class_ "flex items-center gap-2 min-w-0"] do
-    a_ [href_ ("/p/" <> pid.toText <> "/manage_teams/" <> handle), class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml name
+    a_ [href_ (Links.urls.projects.teamGet pid handle Nothing), class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml name
     when isEveryone $ tonePill_ BrandBadge "Default"
     span_ [class_ "text-textWeak text-sm overflow-ellipsis truncate"] $ toHtml description
 
@@ -1083,7 +1084,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
           emptyState_ def{icon = Just icon, size = ESCompact} ("No " <> T.toLower title <> " linked") ""
   section_ [id_ "main-content", class_ "w-full py-8"] $ div_ [class_ "max-md:px-2 px-4 w-full"] do
     div_ [class_ "mb-6 flex items-center gap-3"] do
-      a_ [href_ ("/p/" <> pid.toText <> "/manage_teams"), class_ "text-iconNeutral hover:text-iconBrand"] $ faSprite_ "arrow-left" "regular" "h-4 w-4"
+      a_ [href_ (Links.urls.projects.teamsManageGet pid Nothing), class_ "text-iconNeutral hover:text-iconBrand"] $ faSprite_ "arrow-left" "regular" "h-4 w-4"
       h2_ [class_ "text-textStrong text-3xl font-semibold flex items-center gap-2"] do
         toHtml team.name
         when isEveryone $ span_ [class_ "badge badge-primary"] "Default"
@@ -1092,7 +1093,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
       $ callout_ BrandBadge Nothing do
         "@everyone automatically includes all project members. "
         "Channels configured on the "
-        a_ [href_ ("/p/" <> pid.toText <> "/settings/integrations"), class_ "text-textBrand underline"] "Integrations page"
+        a_ [href_ (Links.urls.projects.integrationGet pid), class_ "text-textBrand underline"] "Integrations page"
         " are automatically included in @everyone."
     div_ [class_ "flex gap-4 h-full"] do
       div_ [class_ "w-4/12 space-y-4"] do
@@ -1115,11 +1116,11 @@ teamPage pid team projMembers slackChannels discordChannels = do
             div_ [class_ "px-4 pt-3 pb-2"] do
               callout_ BrandBadge (Just "Test your notification setup") $ div_ [class_ "flex items-center justify-between gap-3"] do
                 "Sends a test alert to all configured channels"
-                renderInlineTestButton pid.toText Settings.TCAll (Just team.id) True hasAnyChannel
-              div_ [id_ $ "team-test-history-" <> team.id.toText, hxGet_ ("/p/" <> pid.toText <> "/settings/integrations/history"), hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
+                renderInlineTestButton pid Settings.TCAll (Just team.id) True hasAnyChannel
+              div_ [id_ $ "team-test-history-" <> team.id.toText, hxGet_ (Links.urls.projects.notificationsTestHistoryGet pid), hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
       div_ [class_ "flex-1 space-y-4"] do
-        lazySection_ "monitors-section" "bell" "Monitors" "Search monitors..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> team.id.toText)
-        lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> team.id.toText)
+        lazySection_ "monitors-section" "bell" "Monitors" "Search monitors..." ((Links.urls.monitors pid).teamAlertsGetH team.id)
+        lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." (Links.urls.dashboardsGetList pid Nothing Nothing (Just team.id) Nothing Nothing Nothing def)
         lazySection_ "services-section" "server" "Services" "Search services..." ""
     unless isEveryone $ teamModal pid (Just team) projMembers slackChannels discordChannels True mempty
 
@@ -1154,7 +1155,7 @@ instance ToHtml ManageMembers where
 teamTabsHeader_ :: Projects.ProjectId -> Text -> Int -> Int -> Html ()
 teamTabsHeader_ pid active membersCount teamsCount = do
   let tab label key count = do
-        let url = "/p/" <> pid.toText <> (if key == "members" then "/manage_members" else "/manage_teams")
+        let url = if key == "members" then Links.urls.projects.membersManageGet pid else Links.urls.projects.teamsManageGet pid Nothing
         a_
           [ class_ $ "flex items-center gap-2 a-tab border-b border-b-strokeWeak px-3 py-2 text-sm" <> (if active == key then " t-tab-active" else "")
           , href_ url
@@ -1183,7 +1184,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount permission =
       when (Projects.isFreeTier paymentPlan && V.length projMembers > 1)
         $ callout_ WarningBadge (Just "Free projects are limited to the project owner") "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
-      form_ [class_ "space-y-6", hxPost_ $ "/p/" <> pid.toText <> "/manage_members", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
+      form_ [class_ "space-y-6", hxPost_ $ Links.urls.projects.membersManagePost pid Nothing, hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
         when canManage $ div_ [class_ "space-y-2"] do
           label_ [class_ "text-sm font-medium text-textStrong block", Lucid.for_ "new-member-email"] "Invite new member"
           div_ [class_ "flex flex-wrap gap-2"] do
@@ -1232,7 +1233,7 @@ memberRowWithStatus pid canManage idx prM = do
       when isDisabled $ tonePill_ WarningBadge "Disabled"
     div_ [class_ "flex items-center gap-2"] do
       select_ ([name_ "permissions", Aria.label_ ("Role for " <> email), class_ $ "select select-sm select-bordered text-sm" <> if isDisabled then " opacity-50" else ""] <> [disabled_ "" | not canManage]) $ roleOptions_ (Just $ display prM.permission)
-      when (canManage && not isOwner) $ button_ [class_ "btn btn-sm btn-ghost text-iconNeutral hover:text-iconError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
+      when (canManage && not isOwner) $ button_ [class_ "btn btn-sm btn-ghost text-iconNeutral hover:text-iconError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ Links.urls.projects.membersDeleteH pid prM.id, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
 -- | The member's row is swapped for this empty body.
@@ -1295,7 +1296,7 @@ manageSubGetH pid = act do
     Projects.StripeProvider ->
       case project.customerId <|> project.orderId of
         Just customerId | not (T.null customerId) -> do
-          maybeToRight PortalSessionFailed . fmap BillingRedirect <$> Settings.createStripePortalSession envCfg.stripeSecretKey customerId (Settings.billingUrl envCfg pid)
+          maybeToRight PortalSessionFailed . fmap BillingRedirect <$> Settings.createStripePortalSession envCfg.stripeSecretKey customerId (Settings.billingUrl envCfg.hostUrl pid)
         _ -> pure $ Left CustomerIdMissing
     Projects.LemonSqueezyProvider -> do
       sub <- maybe (pure Nothing) (lsGet @SubPortalDataVals envCfg.lemonSqueezyApiKey . ("https://api.lemonsqueezy.com/v1/subscriptions/" <>)) project.subId
@@ -1421,7 +1422,7 @@ projectOnboardingH = do
       _ <- ProjectMembers.insertProjectMembers [ProjectMembers.CreateProjectMembers pid sess.user.id ProjectMembers.PAdmin]
       Projects.logAuditS pid Projects.AEProjectCreated sess Nothing
       pure pid
-  pure $ addHeader ("/p/" <> pid.toText <> "/onboarding") $ PageCtx bwconf ""
+  pure $ addHeader (Links.urls.projects.onboading pid Nothing) $ PageCtx bwconf ""
 
 
 data CreateProjectResp = CreateProjectResp
@@ -1546,7 +1547,7 @@ data PricingUpdated = PricingOnboarded Projects.ProjectId | PricingSaved
 
 instance Outcome PricingUpdated where
   outcomeRedirect = \case
-    PricingOnboarded pid -> Just $ "/p/" <> pid.toText <> "/"
+    PricingOnboarded pid -> Just $ Links.urls.dashboardRedirectGet pid []
     PricingSaved -> Nothing
   outcomeToast = \case
     PricingOnboarded _ -> Nothing
@@ -1633,7 +1634,7 @@ createProjectBody pid cp = do
 
     form_
       [ class_ "space-y-5 sm:space-y-8"
-      , hxPost_ $ "/p/update/" <> pid.toText
+      , hxPost_ $ Links.urls.projects.createPost pid
       , hxTarget_ settingsContentTarget
       , hxSwap_ "innerHTML"
       , id_ "createUpdateBodyForm"
@@ -1665,7 +1666,7 @@ createProjectBody pid cp = do
         div_ [class_ "min-w-0"] do
           h3_ [class_ "text-sm font-medium text-textStrong"] "Delete project"
           p_ [class_ "text-xs text-textWeak"] "Permanently remove this project and all associated data."
-      dangerAction_ "delete-project-modal" "trash" "Delete Project" "Delete project?" "This permanently removes the project and all associated data. This action cannot be undone." [hxDelete_ $ "/p/" <> pid.toText <> "/delete"] "Delete project"
+      dangerAction_ "delete-project-modal" "trash" "Delete Project" "Delete project?" "This permanently removes the project and all associated data. This action cannot be undone." [hxDelete_ $ Links.urls.projects.deleteGet pid] "Delete project"
 
 
 alertConfiguration :: CreateProjectForm -> Html ()
@@ -1709,7 +1710,7 @@ teamModal pid team projMembers slackChans discordChans isInTeamView trigger = do
       field_ lbl fid attrs = formField_ FieldSm def lbl (mkId fid) False $ Just $ input_ $ [class_ "input w-full", type_ "text", id_ $ mkId fid, name_ fid] <> attrs
 
   modalWith_ modalId def{boxClass = "p-6 max-w-lg w-full"} (Just trigger) do
-    form_ [hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> if isInTeamView then "teamView=true" else "", hxExt_ "json-enc", hxVals_ [text|js:{teamMembers: window.getTagValues('#$prefix-team-members-input'), notifEmails: window.getTagValues('#$prefix-notif-emails-input'), slackChannels: window.getTagValues('#$prefix-slack-channels-input'), discordChannels: window.getTagValues('#$prefix-discord-channels-input'), pagerdutyServices: window.getTagValues('#$prefix-pagerduty-services-input'), phoneNumbers: []}|], hxSwap_ "none", class_ "flex flex-col gap-0 w-full"] do
+    form_ [hxPost_ $ Links.urls.projects.teamsManagePost pid (guard isInTeamView $> "true"), hxExt_ "json-enc", hxVals_ [text|js:{teamMembers: window.getTagValues('#$prefix-team-members-input'), notifEmails: window.getTagValues('#$prefix-notif-emails-input'), slackChannels: window.getTagValues('#$prefix-slack-channels-input'), discordChannels: window.getTagValues('#$prefix-discord-channels-input'), pagerdutyServices: window.getTagValues('#$prefix-pagerduty-services-input'), phoneNumbers: []}|], hxSwap_ "none", class_ "flex flex-col gap-0 w-full"] do
       whenJust ((.id) <$> team) \tid -> input_ [type_ "hidden", name_ "teamId", value_ tid.toText]
       h2_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml (if isJust team then "Edit Team" else "Create Team" :: Text)
 
@@ -1737,7 +1738,7 @@ teamModal pid team projMembers slackChans discordChans isInTeamView trigger = do
           $ div_ [class_ "py-4"]
           $ callout_ BrandBadge Nothing do
             "The @everyone team automatically includes all project members. Use the "
-            a_ [href_ ("/p/" <> pid.toText <> "/settings/integrations"), class_ "text-textBrand underline"] "Integrations page"
+            a_ [href_ (Links.urls.projects.integrationGet pid), class_ "text-textBrand underline"] "Integrations page"
             " for project-wide channels."
 
         -- Notifications

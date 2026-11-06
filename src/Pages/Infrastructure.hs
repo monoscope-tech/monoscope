@@ -30,11 +30,12 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Aria qualified as Aria
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), cpuPctOfLimit, memPctOfLimit, ratio, runtimeOf)
 import Pages.BodyWrapper (PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, timeRefreshListener_, tonePill_, withDeferredBody)
-import Pages.Containers (deferUrl, infraSnapshot, infraUrl, infrastructureBW, matchesAny, matchesFilter, mkWindow, pctText)
+import Pages.Containers (infraSnapshot, infrastructureBW, matchesAny, matchesFilter, mkWindow, pctText, windowed)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Table (Features (..), SelectControl (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, inventoryTable, selectControl_, sidebar_, withAttrs)
@@ -43,7 +44,8 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, showFFloat')
+import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, nonEmptyT, showFFloat')
+import Web.Links
 
 
 -- | Group by an optional key, dropping rows without one. Per-key lists come out in reverse
@@ -158,7 +160,7 @@ hostsGetH pid providerM regionM osM integrationM groupM fromParam toParam sinceP
   window <- mkWindow fromParam toParam sinceParam
   let filters = HostFilters providerM regionM osM integrationM
       grouping = parseParam GroupNone hostGroupParam groupM
-      url = deferUrl pid "/infrastructure/hosts" [("provider", providerM), ("region", regionM), ("os", osM), ("integration", integrationM), ("group", groupM)] window
+      url = windowed window ((urls.traces pid).hostsGetH providerM regionM osM integrationM groupM) (Just "1")
   body <- withDeferredBody deferredM "hostsContainer" url (tableSkeleton_ 8) do
     allHosts <- hostsFromRows <$> infraSnapshot pid window
     pure $ hostsTable pid window url filters grouping (applyHostFilters filters allHosts) allHosts
@@ -176,14 +178,14 @@ hostsTable pid window url filters grouping hosts allHosts =
     , rows = V.fromList $ sortOn (\h -> (hostGroupLabel grouping h, h.name)) $ V.toList hosts
     , features =
         table.features
-          { rowAttrs = Just $ drawerRowAttrs_ . hostDetailUrl pid window . (.name)
+          { rowAttrs = Just \h -> drawerRowAttrs_ $ windowed window ((urls.traces pid).hostDetailGetH (Just h.name))
           , rowGroup = if grouping == GroupNone then Nothing else Just $ Just . hostGroupLabel grouping
           , grouping = Just $ SelectControl "group" "Group by" (hostGroupParam grouping) (map hostGroupOption [minBound ..]) url "hostsContainer"
           , resultSummary = Just $ "Showing " <> show (V.length hosts) <> " of " <> show (V.length allHosts) <> " hosts"
           , facets =
               Just
                 $ facetActions
-                  (infraUrl pid "/infrastructure/hosts" [("group", hostGroupParam grouping) | grouping /= GroupNone] window)
+                  (windowed window ((urls.traces pid).hostsGetH Nothing Nothing Nothing Nothing (guard (grouping /= GroupNone) $> hostGroupParam grouping)) Nothing)
                   "hostsContainer"
                   [ countedFilter "Provider" "provider" filters.provider (maybeToList . (.provider)) allHosts
                   , countedFilter "Region" "region" filters.region (maybeToList . (.region)) allHosts
@@ -234,10 +236,6 @@ hostsTable pid window url filters grouping hosts allHosts =
         metadataChip icon value = span_ [class_ "inline-flex items-center gap-1 rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] $ faSprite_ icon "regular" "h-3 w-3" >> toHtml value
 
 
-hostDetailUrl :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> Text
-hostDetailUrl pid window name = infraUrl pid "/infrastructure/hosts/detail" [("host", name)] window
-
-
 -- | Drawer payload shared by the three infrastructure detail routes: the rendered
 -- detail, or the section's empty state when the entity left the time window.
 newtype DetailGet = DetailGet (Html ())
@@ -256,7 +254,7 @@ hostDetailGetH pid hostM fromParam toParam sinceParam = do
   window <- mkWindow fromParam toParam sinceParam
   hosts <- hostsFromRows <$> infraSnapshot pid window
   addRespHeaders
-    $ detailFrom def{icon = Just "server", action = ESLink (infraUrl pid "/infrastructure/hosts" [] window) "Return to Hosts"} "Host not found in this time range" "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range." (hostDetail_ pid window)
+    $ detailFrom def{icon = Just "server", action = ESLink (windowed window ((urls.traces pid).hostsGetH Nothing Nothing Nothing Nothing Nothing) Nothing) "Return to Hosts"} "Host not found in this time range" "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range." (hostDetail_ pid window)
     $ V.find ((== hostM) . Just . (.name)) hosts
 
 
@@ -265,7 +263,7 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
   entityHeader_
     (faSprite_ "server" "solid" "h-4 w-4 text-iconNeutral")
     host.name
-    ( a_ ([href_ containersUrl, class_ "btn btn-xs ms-auto gap-1.5 text-textBrand max-sm:h-11"] <> navTabAttrs) do
+    ( a_ ([href_ containersHref, class_ "btn btn-xs ms-auto gap-1.5 text-textBrand max-sm:h-11"] <> navTabAttrs) do
         faSprite_ "cube" "regular" "h-3.5 w-3.5"
         "View containers"
     )
@@ -285,20 +283,20 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
       when (availableSignals > 0 && availableSignals < 4) $ callout_ WarningBadge Nothing do
         "Some host metrics are missing from this time range. Available signals remain visible below. "
         a_ [href_ "https://monoscopehq.com/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "font-medium text-textBrand hover:underline"] "Set up host metrics"
-    detailSection_ [id_ "host-logs"] "Recent logs" (a_ ([href_ logExplorerUrl, class_ "btn btn-xs max-sm:hidden"] <> navTabAttrs) "View logs in Explorer") do
+    detailSection_ [id_ "host-logs"] "Recent logs" (a_ ([href_ logsHref, class_ "btn btn-xs max-sm:hidden"] <> navTabAttrs) "View logs in Explorer") do
       p_ [class_ "text-xs text-textWeak"] "Latest events reported by this host."
-      div_ [class_ "flex flex-col max-h-64 overflow-auto rounded-lg border border-strokeWeak bg-bgBase max-sm:hidden"] $ Log.virtualTable pid (Just logDataUrl) Nothing
+      div_ [class_ "flex flex-col max-h-64 overflow-auto rounded-lg border border-strokeWeak bg-bgBase max-sm:hidden"] $ Log.virtualTable pid (Just logRowsHref) Nothing
       div_ [class_ "hidden flex-col items-start gap-3 rounded-lg border border-strokeWeak bg-bgBase p-4 max-sm:flex"] do
         p_ [class_ "text-sm text-textWeak"] "Open this host in Explorer to search, filter, and inspect its logs."
-        a_ ([href_ logExplorerUrl, class_ "btn btn-sm btn-outline max-sm:h-11"] <> navTabAttrs) "Open logs in Explorer"
-    detailSection_ [id_ "host-metrics"] "Metrics" (when (availableSignals > 0) $ a_ ([href_ metricsUrl, class_ "btn btn-xs"] <> navTabAttrs) "View in Metrics")
+        a_ ([href_ logsHref, class_ "btn btn-sm btn-outline max-sm:h-11"] <> navTabAttrs) "Open logs in Explorer"
+    detailSection_ [id_ "host-metrics"] "Metrics" (when (availableSignals > 0) $ a_ ([href_ metricsHref, class_ "btn btn-xs"] <> navTabAttrs) "View in Metrics")
       $ if availableSignals == 0
         then div_ [role_ "status"] do
           emptyState_
             def
               { icon = Just "chart-line"
               , action = ESCustom $ div_ [class_ "flex flex-wrap justify-center gap-2"] do
-                  button_ ([type_ "button", class_ "btn btn-sm max-sm:h-11"] <> drawerLoadAttrs_ (hostDetailUrl pid window{TimePicker.fromQuery = Nothing, TimePicker.toQuery = Nothing, TimePicker.sinceQuery = Just "1H"} host.name)) "Try last 1 hour"
+                  button_ ([type_ "button", class_ "btn btn-sm max-sm:h-11"] <> drawerLoadAttrs_ (windowed window{TimePicker.fromQuery = Nothing, TimePicker.toQuery = Nothing, TimePicker.sinceQuery = Just "1H"} ((urls.traces pid).hostDetailGetH (Just host.name)))) "Try last 1 hour"
                   a_ [href_ "https://monoscopehq.com/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary max-sm:h-11"] "Set up host metrics"
               }
             "No host metrics in this time range"
@@ -319,10 +317,10 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
           ]
     pct = maybe "—" pctText
     query = Containers.kqlFilter [(Containers.nodeField, Just host.name)]
-    logExplorerUrl = infraUrl pid "/log_explorer" [("query", query), ("source", "logs")] window
-    logDataUrl = infraUrl pid "/log_explorer/data" [("query", query), ("source", "logs")] window
-    metricsUrl = infraUrl pid "/metrics" [("metric_prefix", "system.")] window
-    containersUrl = infraUrl pid "/infrastructure/containers" [("node", host.name)] window
+    logsHref = (urls.logExplorer pid).logExplorerGet (Just query) Nothing window.sinceQuery window.fromQuery window.toQuery (Just "logs") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+    logRowsHref = explorerUrl pid LogQueries.Data LogQueries.ExplorerUrl{query = Just query, cols = Nothing, cursor = Nothing, since = window.sinceQuery, from = window.fromQuery, to = window.toQuery, layout = Nothing, source = Just "logs", environment = Nothing, serviceScope = Nothing, recent = False}
+    metricsHref = (urls.traces pid).metricsOVGetH Nothing window.fromQuery window.toQuery window.sinceQuery Nothing (Just "system.") Nothing Nothing Nothing Nothing Nothing
+    containersHref = windowed window ((urls.traces pid).infrastructureContainersGetH Nothing Nothing (Just host.name) Nothing Nothing) Nothing
     sectionLink anchor icon label = a_ [href_ $ "#" <> anchor, class_ "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm text-textWeak hover:bg-fillBrand-weak hover:text-textBrand max-sm:min-h-11"] $ faSprite_ icon "regular" "h-3.5 w-3.5" >> toHtml label
     hostWidgets =
       catMaybes
@@ -369,7 +367,7 @@ imagesGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Ma
 imagesGetH pid runtimeM registryM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
   window <- mkWindow fromParam toParam sinceParam
-  let url = deferUrl pid "/infrastructure/images" [("runtime", runtimeM), ("registry", registryM)] window
+  let url = windowed window ((urls.traces pid).imagesGetH runtimeM registryM) (Just "1")
   body <- withDeferredBody deferredM "imagesContainer" url (tableSkeleton_ 8) do
     allImages <- imagesFromRows <$> infraSnapshot pid window
     let images = V.filter (\image -> matchesAny runtimeM (map Containers.runtimeLabel image.runtimes) && matchesFilter registryM (Just image.registry)) allImages
@@ -397,11 +395,11 @@ imagesTable pid window url runtimeM registryM images allImages =
     , rows = images
     , features =
         table.features
-          { rowAttrs = Just \image -> drawerRowAttrs_ $ infraUrl pid "/infrastructure/images/detail" [("image", image.image)] window
+          { rowAttrs = Just \image -> drawerRowAttrs_ $ windowed window ((urls.traces pid).imageDetailGetH (Just image.image))
           , facets =
               Just
                 $ facetActions
-                  (infraUrl pid "/infrastructure/images" [] window)
+                  (windowed window ((urls.traces pid).imagesGetH Nothing Nothing) Nothing)
                   "imagesContainer"
                   [ countedFilter "Runtime" "runtime" runtimeM (map Containers.runtimeLabel . (.runtimes)) allImages
                   , countedFilter "Registry" "registry" registryM (one . (.registry)) allImages
@@ -444,7 +442,7 @@ imageDetail_ pid window image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
     detailSection_ [] "Image tags" pass
       $ if null image.tags then emptyState_ def{size = ESCompact, icon = Just "hashtag"} "No image tags were reported." "" else div_ [class_ "flex flex-wrap gap-1.5"] $ forM_ image.tags $ \tag -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml tag
     detailSection_ [] "Security coverage" pass $ callout_ BrandBadge Nothing "No SBOM or vulnerability findings are connected for this image. Monoscope will not infer a clean result from missing scanner data."
-    pivotLinks_ [("View containers", infraUrl pid "/infrastructure/containers" [("image", image.image)] window), ("View metrics", infraUrl pid "/metrics" [("metric_prefix", "container.")] window)]
+    pivotLinks_ [("View containers", windowed window ((urls.traces pid).infrastructureContainersGetH Nothing Nothing Nothing (Just image.image) Nothing) Nothing), ("View metrics", (urls.traces pid).metricsOVGetH Nothing window.fromQuery window.toQuery window.sinceQuery Nothing (Just "container.") Nothing Nothing Nothing Nothing Nothing)]
 
 
 -- | Constructor order is tab order: @[minBound ..]@ is what the resource tab strip renders,
@@ -535,7 +533,7 @@ kubernetesGetH pid resourceM clusterM namespaceM statusM fromParam toParam since
   (_, _, bw) <- mkPageCtx pid
   window <- mkWindow fromParam toParam sinceParam
   let resource = parseParam KubePods display resourceM
-      url = deferUrl pid "/infrastructure/kubernetes" [("resource", resourceM), ("cluster", clusterM), ("namespace", namespaceM), ("status", statusM)] window
+      url = windowed window ((urls.traces pid).kubernetesGetH resourceM clusterM namespaceM statusM) (Just "1")
   body <- withDeferredBody deferredM "kubernetesContainer" url (tableSkeleton_ 8) do
     snapshot <- infraSnapshot pid window
     let allRows = kubeRowsFromRows resource snapshot
@@ -569,13 +567,13 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
         table.features
           { searchPlaceholder = Just $ "Search " <> display resource
           , rowAttrs = Just $ drawerRowAttrs_ . kubeDetailUrl
-          , tabs = Just $ TableTabs "Kubernetes resource" [(resourceLabel r <> "s", infraUrl pid "/infrastructure/kubernetes" ([("resource", display r)] <> mapMaybe sequenceA [("cluster", clusterM), ("namespace", namespaceM), ("status", statusM)]) window, r == resource) | r <- [minBound ..]]
+          , tabs = Just $ TableTabs "Kubernetes resource" [(resourceLabel r <> "s", windowed window ((urls.traces pid).kubernetesGetH (Just $ display r) clusterM namespaceM statusM) Nothing, r == resource) | r <- [minBound ..]]
           , resultSummary = Just $ "Showing " <> show (V.length rows) <> " resources"
           , exportName = Just $ "kubernetes-" <> display resource
           , facets =
               Just
                 $ facetActions
-                  (infraUrl pid "/infrastructure/kubernetes" [("resource", display resource)] window)
+                  (windowed window ((urls.traces pid).kubernetesGetH (Just $ display resource) Nothing Nothing Nothing) Nothing)
                   "kubernetesContainer"
                   [ countedFilter "Cluster" "cluster" clusterM (maybeToList . (.cluster)) allRows
                   , countedFilter "Namespace" "namespace" namespaceM (maybeToList . (.namespace)) allRows
@@ -586,7 +584,7 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
     }
   where
     table = inventoryTable "kubernetes" url
-    kubeDetailUrl row = infraUrl pid "/infrastructure/kubernetes/detail" ([("resource", display resource), ("name", row.name)] <> mapMaybe sequenceA [("cluster", row.cluster), ("namespace", row.namespace)]) window
+    kubeDetailUrl row = windowed window ((urls.traces pid).kubernetesDetailGetH (Just (display resource)) (Just row.name) row.cluster row.namespace)
 
 
 kubernetesDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders DetailGet)
@@ -614,8 +612,8 @@ kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full
         ]
       when (isNothing row.cpuCores || isNothing row.memoryBytes) $ callout_ BrandBadge Nothing "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."
     pivotLinks_
-      $ [("View containers", infraUrl pid "/infrastructure/containers" ([("namespace", namespace)] <> [("cluster", cluster) | cluster <- toList row.cluster]) window) | namespace <- toList row.namespace]
-      <> [("View logs", infraUrl pid "/log_explorer" [("query", kubeQuery)] window), ("View metrics", infraUrl pid "/metrics" [("metric_prefix", "k8s.")] window)]
+      $ [("View containers", windowed window ((urls.traces pid).infrastructureContainersGetH Nothing (Just namespace) Nothing Nothing row.cluster) Nothing) | namespace <- toList row.namespace]
+      <> [("View logs", (urls.logExplorer pid).logExplorerGet (Just kubeQuery) Nothing window.sinceQuery window.fromQuery window.toQuery Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing), ("View metrics", (urls.traces pid).metricsOVGetH Nothing window.fromQuery window.toQuery window.sinceQuery Nothing (Just "k8s.") Nothing Nothing Nothing Nothing Nothing)]
   where
     metadata = [(label, value) | (label, Just value) <- [("Cluster", row.cluster), ("Namespace", row.namespace), ("Node", row.node), ("Workload", row.workload)]]
     kubeQuery =
@@ -667,7 +665,7 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
   window <- mkWindow fromParam toParam sinceParam
   let filters = HostFilters providerM regionM osM Nothing
       grouping = parseParam GroupNone hostGroupParam groupM
-      url = deferUrl pid "/infrastructure/host-map" [("fill", fillM), ("group", groupM), ("provider", providerM), ("region", regionM), ("os", osM)] window
+      url = windowed window ((urls.traces pid).hostMapGetH fillM groupM providerM regionM osM) (Just "1")
   body <- withDeferredBody deferredM "hostMapContainer" url hostMapSkeleton_ do
     allHosts <- hostsFromRows <$> infraSnapshot pid window
     let groups = groupRows (Just . hostGroupLabel grouping) $ applyHostFilters filters allHosts
@@ -681,7 +679,7 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
 
 hostMap_ :: HostMapData -> Html ()
 hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col bg-bgBase"] do
-  timeRefreshListener_ "hostMapContainer" (deferUrl page.pid "/infrastructure/host-map" [("fill", Just $ display page.fill), ("group", Just $ hostGroupParam page.grouping), ("provider", page.filters.provider), ("region", page.filters.region), ("os", page.filters.osType)] page.window)
+  timeRefreshListener_ "hostMapContainer" (windowed page.window ((urls.traces page.pid).hostMapGetH (Just $ display page.fill) (nonEmptyT $ Just $ hostGroupParam page.grouping) page.filters.provider page.filters.region page.filters.osType) (Just "1"))
   div_ [class_ "flex flex-wrap items-center gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3 max-sm:grid max-sm:grid-cols-2"] do
     selectControl_ $ SelectControl "fill" "Fill by" (display page.fill) [(display f, case f of { FillCPU -> "CPU usage"; FillMemory -> "Memory usage"; FillStorage -> "Storage usage" }) | f <- [minBound ..]] mapUrl "hostMapContainer"
     selectControl_ $ SelectControl "group" "Group by" (hostGroupParam page.grouping) (map hostGroupOption [minBound ..]) mapUrl "hostMapContainer"
@@ -714,7 +712,7 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
                 h2_ [class_ "mb-3 flex items-center gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "badge badge-xs badge-ghost"] (toHtml $ show (length hosts) <> " hosts")
                 div_ [class_ $ "flex flex-wrap " <> bool "gap-1" "gap-2" enlarged] $ forM_ (sortOn (.name) hosts) $ hostHex enlarged
   where
-    mapUrl = infraUrl page.pid "/infrastructure/host-map" ([("fill", display page.fill), ("group", hostGroupParam page.grouping)] <> mapMaybe sequenceA [("provider", page.filters.provider), ("region", page.filters.region), ("os", page.filters.osType)]) page.window
+    mapUrl = windowed page.window ((urls.traces page.pid).hostMapGetH (Just $ display page.fill) (nonEmptyT $ Just $ hostGroupParam page.grouping) page.filters.provider page.filters.region page.filters.osType) Nothing
     legend colour label = span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ $ "h-3 w-3 " <> colour, style_ hexClipPath] mempty >> toHtml label
     hostHex enlarged host = div_ [class_ $ "flex flex-col items-center gap-1 " <> bool "" "w-24" enlarged] do
       let value = case page.fill of FillCPU -> host.cpuPct; FillMemory -> host.memoryPct; FillStorage -> host.storagePct
@@ -725,7 +723,7 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
           , term "data-tippy-content" $ host.name <> " · " <> maybe "No data" pctText value
           , Aria.label_ $ host.name <> ", " <> (case page.fill of FillCPU -> "CPU usage"; FillMemory -> "memory usage"; FillStorage -> "storage usage") <> ": " <> maybe "no data" (\v -> showFFloat' 0 (v * 100) <> " percent") value
           ]
-            <> drawerLoadAttrs_ (hostDetailUrl page.pid page.window host.name)
+            <> drawerLoadAttrs_ (windowed page.window ((urls.traces page.pid).hostDetailGetH (Just host.name)))
         )
         $ faSprite_ "server" "solid"
         $ bool "h-3 w-3" "h-4 w-4" enlarged

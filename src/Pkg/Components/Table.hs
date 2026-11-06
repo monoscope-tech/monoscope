@@ -58,13 +58,13 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Vector qualified as V
-import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.BodyWrapper (PageCtx)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, filterInputAttr_, keyboardActivateAttr_, searchInput_, timeRefreshListener_)
+import Pkg.DeriveUtils (SortField (..), SortOrder (..))
 import Relude
 import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), deleteParam, faSprite_, loadingIndicator_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr)
 
@@ -268,22 +268,6 @@ data TreeConfig a = TreeConfig
   , rowPath :: a -> Text
   , isGroupRow :: a -> Bool
   }
-
-
--- Sorting types for database queries
-data SortOrder = Asc | Desc deriving stock (Eq, Show)
-
-
-data SortField = SortField
-  { fieldName :: Text
-  , order :: SortOrder
-  }
-  deriving stock (Eq, Show)
-
-
-instance HasField "toSql" SortField Text where
-  getField (SortField name Asc) = name <> " ASC NULLS FIRST"
-  getField (SortField name Desc) = name <> " DESC NULLS LAST"
 
 
 -- Header Actions (sort/filter dropdowns in table header)
@@ -770,11 +754,12 @@ filterChoice actions menu opt = FacetChoice{label = opt.label, multiSelect = men
         <> [checked_ | opt.isActive]
 
 
--- | Remove a specific param=value pair from a URL (for multi-select filter toggle)
+-- | Remove a specific param=value pair from a URL (for multi-select filter toggle), in both
+-- the plain and servant's list (@key[]=@) spelling.
 deleteParamValue :: Text -> Text -> Text -> Text
-deleteParamValue key val url = fixQueryStart $ T.replace ("&" <> pair) "" $ T.replace ("?" <> pair) "?" url
+deleteParamValue key val url = fixQueryStart $ foldl' strip url [key <> "=", key <> "[]="]
   where
-    pair = key <> "=" <> toUriStr val
+    strip u k = let pair = k <> toUriStr val in T.replace ("&" <> pair) "" $ T.replace ("?" <> pair) "?" u
     fixQueryStart t = case T.breakOn "&" t of
       (before, after) | not (T.null after) && not ("?" `T.isInfixOf` before) -> before <> "?" <> T.drop 1 after
       _ -> t

@@ -28,7 +28,8 @@ import System.Config (AuthContext (env))
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (DB)
-import Utils (countNoun, fmtDate, nonEmptyT, toUriStr)
+import Utils (countNoun, fmtDate, hostPath, nonEmptyT)
+import Web.Links (CookieProtectedRoutes (..), IssuesRoutes' (..), LogExplorerRoutes' (..), logExplorerLinks, urls)
 
 
 sendRenderedEmail :: Notify.Notify :> es => Text -> Text -> Text -> Eff es ()
@@ -113,10 +114,11 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
   case channelIdM of
     Nothing -> Nothing <$ Log.logAttention "Discord alert skipped: no channel configured" (AE.object ["project_id" AE..= pid])
     Just cid -> do
-      let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
+      let projectUrl = hostPath appCtx.env.hostUrl $ urls.dashboardRedirectGet pid []
+          byHash h = hostPath appCtx.env.hostUrl $ (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing
           mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData pTitle projectUrl chartUrl occurrenceText firstSeenText ongoingFor
-            EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints endpointHash projectUrl
+            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData pTitle projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
+            EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints (byHash endpointHash) projectUrl
             ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ discordMonitorAlert monitorTitle monitorUrl chartUrl
             MonitorsRecoveryAlert{..} -> Just $ AE.object ["text" AE..= ("✅ *Alert resolved for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
@@ -142,10 +144,11 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
   slackData <- getProjectSlackData pid
   case (channelM, slackData) of
     (Just cid, Just sd) -> do
-      let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
+      let projectUrl = hostPath appCtx.env.hostUrl $ urls.dashboardRedirectGet pid []
+          byHash h = hostPath appCtx.env.hostUrl $ (urls.issues pid).detailHashGet h Nothing Nothing Nothing Nothing Nothing
           mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl chartUrl occurrenceText firstSeenText ongoingFor
-            EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
+            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl (byHash errorData.hash) chartUrl occurrenceText firstSeenText ongoingFor
+            EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid (byHash endpointHash) projectUrl
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ slackMonitorAlert monitorTitle monitorUrl chartUrl cid
             MonitorsRecoveryAlert{..} -> Just $ slackAttachment cid "#22c55e" [slackSection ("✅ *Resolved:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]
@@ -225,14 +228,13 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
     sumr = take 10 $ V.toList breakDown <&> \(name, errCount, evCount) -> "*" <> name <> ":* " <> show evCount <> " events · " <> show errCount <> " errors"
 
 
-slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
-slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM firstSeenM ongoingForM =
+slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
+slackErrorAlert alertType err project channelId projectUrl targetUrl chartUrlM occTextM firstSeenM ongoingForM =
   slackAttachment
     channelId
     msgs.color
     [slackSection title, slackSection body, slackContext [errorMetaLine err occTextM ("First seen " <> firstSeen)], chartBlock, slackActions buttons]
   where
-    targetUrl = projectUrl <> "/issues/by_hash/" <> err.hash
     msgs = runtimeAlertMessages alertType
     -- When ongoingForM is set, downgrade the headline from "New error/Escalating/etc."
     -- to "Still firing · <duration>": re-notify cadence implies operators already know
@@ -456,12 +458,11 @@ bulletList = T.intercalate "\n" . fmap (\x -> "• `" <> x <> "`")
 
 
 slackNewEndpointsAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> Text -> AE.Value
-slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
+slackNewEndpointsAlert projectName endpoints channelId targetUrl projectUrl =
   slackAttachment channelId "#3b82f6" $ [headlineBlock] <> bodyBlocks <> [actionsBlock]
   where
     n = V.length endpoints
     headline = countNoun n "new endpoint"
-    targetUrl = projectUrl <> "/issues/by_hash/" <> hash
     explorerUrl = newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints)
     headlineBlock = slackSection ("<" <> targetUrl <> "|:large_blue_circle: *" <> headline <> "* · " <> projectName <> ">")
     actionsBlock = slackActions [slackButton "Open issue" (Just "primary") targetUrl, slackButton "View in Explorer" Nothing explorerUrl]
@@ -494,7 +495,7 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
 -- "(attributes.http.route in (\"/home\",\"/users\") OR attributes.url.path in (\"/home\",\"/users\"))"
 newEndpointsExplorerUrl :: Text -> V.Vector Text -> Text
 newEndpointsExplorerUrl projectUrl endpoints =
-  projectUrl <> "/log_explorer?query=" <> toUriStr expr
+  projectUrl <> logExplorerLinks.logExplorerGet (Just expr) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   where
     paths = (\x -> "\"" <> T.drop 1 (T.dropWhile (/= ' ') x) <> "\"") <$> V.toList endpoints
     clause field = case paths of
@@ -590,8 +591,8 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
       T.intercalate "\n" $ take 10 $ V.toList breakDown <&> \(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount
 
 
-discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
-discordErrorAlert alertType err project projectUrl chartUrlM occTextM firstSeenM ongoingForM =
+discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
+discordErrorAlert alertType err project projectUrl url chartUrlM occTextM firstSeenM ongoingForM =
   discordEmbedMsg (maybe msgs.discordContent (\d -> "⏳ **Still firing · " <> d <> "**") ongoingForM)
     $ AE.object
     $ [ "title" AE..= (err.errorType <> " · " <> project)
@@ -603,7 +604,6 @@ discordErrorAlert alertType err project projectUrl chartUrlM occTextM firstSeenM
     <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
   where
     msgs = runtimeAlertMessages alertType
-    url = projectUrl <> "/issues/by_hash/" <> err.hash
     firstSeen = fromMaybe (errFirstSeen err) firstSeenM
     -- Trace is a masked link (renders in embed *field values*): same Log Explorer jump
     -- as Slack's "View trace" button, since Discord embeds have no button affordance.
@@ -621,7 +621,7 @@ discordMonitorAlert monitorTitle monitorUrl chartUrlM =
 
 
 discordNewEndpointAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> AE.Value
-discordNewEndpointAlert projectName endpoints hash projectUrl =
+discordNewEndpointAlert projectName endpoints url projectUrl =
   discordEmbedMsg content
     $ AE.object
       [ "title" AE..= title
@@ -634,7 +634,6 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     n = V.length endpoints
     title = "🔵 " <> countNoun n "new endpoint" <> " · " <> projectName
     content = if n == 1 then "🔵 **New endpoint detected**" else "🔵 **" <> show n <> " new endpoints detected**"
-    url = projectUrl <> "/issues/by_hash/" <> hash
     explorerLink = "[View in Explorer](" <> newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints) <> ")"
     -- Group header: bold globe-prefixed host then dimmed "service · env" caption, each
     -- on its own line, then the bullets.

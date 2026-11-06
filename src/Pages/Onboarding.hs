@@ -1,5 +1,6 @@
 module Pages.Onboarding (
   onboardingGetH,
+  OnboardingStep (..),
   onboardingInfoPostH,
   onboardingConfPostH,
   phoneEmailPostH,
@@ -12,7 +13,6 @@ module Pages.Onboarding (
   OnboardingConfForm (..),
   OnboardingGet (..),
   OnboardingStepData (..),
-  OnboardingStep (..),
   OnboardingStepPost (..),
   OnboardingPhoneEmailsPost (..),
   ChecklistDismissed (..),
@@ -44,9 +44,10 @@ import Models.Apis.Integrations (getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects (OnboardingStep (..))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), OnboardingStep (..), PageCtx (..), mkPageCtx, stepUrl)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, stepUrl)
 import Pages.Components
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
@@ -54,11 +55,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Done, HXRedirectDest, HXReswap, Outcome (..), Refusal (..), RespHeaders, Says (..), TriggerEvents, XWidgetJSON, act, addRespHeaders, addTriggerEvent, done)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
-
-
--- | Builds a @/p/PID/onboarding@-rooted path; @path@ is the suffix (@?step=X@, @/info@, …).
-onboardingUrl :: Projects.ProjectId -> Text -> Text
-onboardingUrl pid path = "/p/" <> pid.toText <> "/onboarding" <> path
+import Web.Links
 
 
 onboardingGetH :: Projects.ProjectId -> Maybe OnboardingStep -> ATAuthCtx (RespHeaders OnboardingGet)
@@ -75,7 +72,7 @@ onboardingGetH pid stepM = do
       hasDiscord <- isJust <$> getDiscordDataByProjectId pid
       everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
       let phone = fromMaybe "" $ everyoneTeamM >>= (V.!? 0) . (.phone_numbers)
-          slackUrl = "/p/" <> pid.toText <> "/slack/install?onboarding"
+          slackUrl = urls.slackInstallGet pid True
           discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands&state=" <> pid.toText <> "__onboarding&redirect_uri=" <> appCtx.env.discordRedirectUri
       pure $ NotifChannelStep pid slackUrl discordUrl phone (maybe mempty (.notify_emails) everyoneTeamM) hasSlack hasDiscord
     Integration -> IntegrationStep pid . maybe "<API_KEY>" (.keyPrefix) . listToMaybe <$> ProjectApiKeys.projectApiKeysByProjectId pid
@@ -315,7 +312,7 @@ onboardingCompleteBody pid = do
       div_ [class_ "flex flex-col gap-2"] do
         h3_ [class_ " text-textStrong  text-2xl"] "Onboarding completed!"
         p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start exploring the monoscope dashboard by clicking the button below."
-      a_ [class_ "btn-primary py-2  rounded-lg text-center mt-1", href_ $ "/p/" <> pid.toText <> "/"] "Go to your dashboard"
+      a_ [class_ "btn-primary py-2  rounded-lg text-center mt-1", href_ $ urls.dashboardRedirectGet pid []] "Go to your dashboard"
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
@@ -641,8 +638,8 @@ integrationsPage pid apikey =
 
     -- "Confirm & Proceed" + "Skip" pair; classes differ between the desktop inline and mobile sticky bars.
     integrationCta_ wrapCls btnCls skipCls = div_ [class_ wrapCls] do
-      button_ [class_ btnCls, hxGet_ $ onboardingUrl pid "/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
-      a_ [class_ skipCls, type_ "button", hxPost_ $ onboardingUrl pid $ "/skip?step=" <> show Integration] "Skip"
+      button_ [class_ btnCls, hxGet_ $ urls.projects.onboardingIntegrationCheck pid Nothing, hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
+      a_ [class_ skipCls, type_ "button", hxPost_ $ urls.projects.onboardingSkipped pid (Just Integration)] "Skip"
 
     languageItem l =
       label_ [class_ "group/li h-12 px-3 py-2 bg-transparent rounded-xl border border-strokeWeak justify-start items-center gap-3 inline-flex cursor-pointer"] do
@@ -668,7 +665,7 @@ integrationPoller_ :: Projects.ProjectId -> Text -> Html ()
 integrationPoller_ pid language =
   div_
     [ class_ "flex items-center gap-1 shrink-0"
-    , hxGet_ $ onboardingUrl pid $ "/integration-check?language=" <> language
+    , hxGet_ $ urls.projects.onboardingIntegrationCheck pid (Just language)
     , hxSwap_ "outerHTML"
     , hxTrigger_ "intersect delay:5s"
     ]
@@ -692,7 +689,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
         integrationCard "Discord" "/public/assets/svgs/discord.svg" hasDiscord discordUrl
       form_
         [ class_ "flex flex-col gap-8"
-        , hxPost_ $ onboardingUrl pid "/phone-emails"
+        , hxPost_ $ urls.projects.onboardingPhoneEmailsPost pid
         , hxExt_ "json-enc"
         , hxVals_ "js:{phoneNumber: document.getElementById('phoneNumber').value , emails: window.getTagValues('#emails')}"
         , hxTarget_ "#inviteModalContainer"
@@ -733,7 +730,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
 onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()
 onboardingInfoBody pid firstName lastName cName cSize fUsFrm =
   onboardingStepWrapper_ 1 "Tell us a little bit about you" ""
-    $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ onboardingUrl pid "/info", hxIndicator_ "#loadingIndicator"]
+    $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ urls.projects.onboardingInfoPost pid, hxIndicator_ "#loadingIndicator"]
     $ do
       div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
         forM_ ([("First Name", "firstName", firstName), ("Last Name", "lastName", lastName), ("Company Name", "companyName", cName)] :: [(Text, Text, Text)]) \(label, name, val) ->
@@ -747,7 +744,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm =
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
 onboardingConfigBody pid loca func =
   onboardingStepWrapper_ 2 "Let's configure your project" (stepUrl pid Info)
-    $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ onboardingUrl pid "/survey", hxIndicator_ "#loadingIndicator"]
+    $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ urls.projects.onboardingConfPost pid, hxIndicator_ "#loadingIndicator"]
     $ do
       div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
         formField_ FieldMd def "Where should your project be hosted?" "location" True $ Just $ div_ [class_ "pt-2 flex-col gap-4 flex"] do
@@ -793,7 +790,7 @@ inviteTeamMemberModal pid emails enableFreetier =
           form_
             [ class_ "flex-col flex"
             , id_ "members-container"
-            , hxPost_ $ "/p/" <> pid.toText <> "/manage_members?onboarding=true"
+            , hxPost_ $ urls.projects.membersManagePost pid (Just "true")
             , hxIndicator_ "#loadingIndicator"
             ]
             $ do

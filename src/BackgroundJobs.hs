@@ -141,7 +141,8 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny, withException)
-import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierUsageStatus, hostPath, nonEmptyT, toUriStr, toXXHash, truncateHour, usageWindowStart)
+import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierUsageStatus, hostPath, nonEmptyT, toXXHash, truncateHour, usageWindowStart)
+import Web.Links
 
 
 sendMessageToDiscord :: Config.AuthContext -> Text -> ATBackgroundCtx ()
@@ -202,14 +203,18 @@ enqueueAIRoutine ctx routineId at = enqueueAt ctx at [Jobs.AIRoutineRun routineI
 
 -- | URL for a project's main view.
 projectUrl :: Config.AuthContext -> Projects.ProjectId -> Text
-projectUrl ctx pid = hostPath ctx.env.hostUrl $ "p/" <> pid.toText
+projectUrl ctx pid = hostPath ctx.env.hostUrl $ urls.dashboardRedirectGet pid []
+
+
+issuePageUrl :: Config.AuthContext -> Projects.ProjectId -> Issues.IssueId -> Text
+issuePageUrl ctx pid iid = hostPath ctx.env.hostUrl $ (urls.issues pid).detailGet iid Nothing Nothing Nothing Nothing Nothing
 
 
 widgetMonitorUrl :: Text -> Monitors.QueryMonitor -> Maybe Text
-widgetMonitorUrl baseUrl monitor = do
+widgetMonitorUrl hostUrl monitor = do
   dashboardId <- monitor.dashboardId
   widgetId <- monitor.widgetId
-  pure $ baseUrl <> "/dashboards/" <> dashboardId.toText <> "?expand=" <> toUriStr widgetId
+  pure $ hostPath hostUrl $ urls.dashboardsGet monitor.projectId dashboardId Nothing Nothing Nothing Nothing [("expand", Just widgetId)]
 
 
 -- | Render a (subject, body) pair and send it to the given address.
@@ -233,7 +238,7 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
         -- Invitees usually have no Auth0 identity yet: send them to /login with
         -- signup + email hints so they land on the sign-up tab, pre-filled.
         let enc = decodeUtf8 . urlEncode True . encodeUtf8
-            inviteUrl = authCtx.env.hostUrl <> "login?screen_hint=signup&login_hint=" <> enc reciever <> "&redirect_to=" <> enc ("/p/" <> projectId.toText)
+            inviteUrl = authCtx.env.hostUrl <> "login?screen_hint=signup&login_hint=" <> enc reciever <> "&redirect_to=" <> enc (urls.dashboardRedirectGet projectId [])
         recipients <- Projects.projectEmailRecipients projectId [reciever]
         forM_ recipients \to -> renderAndSend to (ET.projectInviteEmail user.firstName projectTitle' inviteUrl)
     SendDiscordData userId projectId fullName stack foundUsFrom -> sendDiscordData authCtx userId projectId fullName stack foundUsFrom
@@ -258,9 +263,9 @@ processBackgroundJobWithTools projectTools authCtx bgJob =
               userName = if T.null user.firstName then userEmail else user.firstName
           issueM <- Issues.selectIssueByHash pid err.hash Issues.AnyIssue
           let (issueTitle, issuePath) = case issueM of
-                Just issue -> (issue.title, issue.id.toText)
-                Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
-              issueUrl = projectUrl authCtx pid <> "/issues/" <> issuePath
+                Just issue -> (issue.title, (urls.issues pid).detailGet issue.id Nothing Nothing Nothing Nothing Nothing)
+                Nothing -> (err.errorType <> ": " <> err.message, (urls.issues pid).detailHashGet err.hash Nothing Nothing Nothing Nothing Nothing)
+              issueUrl = hostPath authCtx.env.hostUrl issuePath
           recipients <- Projects.projectEmailRecipients pid [userEmail]
           forM_ recipients \to -> renderAndSend to (ET.issueAssignedEmail userName project.title issueTitle issueUrl err.errorType err.message)
         -- The error exists but belongs to a different project than the job names. That is
@@ -782,7 +787,7 @@ sendTrialEndingReminder authCtx pid scheduledDaysLeft =
                   let actualDaysLeft =
                         maybe scheduledDaysLeft (\epoch -> max 0 $ ceiling $ (fromIntegral epoch - utcTimeToPOSIXSeconds now :: POSIXTime) / 86400) trialEnd
                   users <- Projects.usersByProjectId pid
-                  let mail = ET.trialEndingEmail project.title actualDaysLeft (projectUrl authCtx pid <> "/manage_billing")
+                  let mail = ET.trialEndingEmail project.title actualDaysLeft (hostPath authCtx.env.hostUrl $ urls.manageBillingGet pid)
                   forM_ users \u -> whenLeftM_ (tryAny $ renderAndSend (CI.original u.email) mail) \e ->
                     Log.logAttention "TrialEndingReminder: email send failed" (pid.toText, CI.original u.email, displayException e)
                 _ -> Log.logInfo "TrialEndingReminder: sub not trialing, skipping" (pid.toText, scheduledDaysLeft, subId, status)
@@ -1544,7 +1549,7 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryStep "free-tier
       let attrs = Map.fromList [("seen", AE.toJSON seen), ("kept", AE.toJSON kept), ("limit", AE.toJSON limit), ("payment_plan", AE.String project.paymentPlan)]
       insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
       users <- Projects.usersByProjectId pid
-      let mail = ET.freeTierUsageEmail project.title (projectUrl ctx pid <> "/manage_billing") seen kept limit n
+      let mail = ET.freeTierUsageEmail project.title (hostPath ctx.env.hostUrl $ urls.manageBillingGet pid) seen kept limit n
       forM_ users \user -> renderAndSend (CI.original user.email) mail
 
 
@@ -1908,7 +1913,7 @@ runNotificationDigest _scheduledTime = do
           let idsVec = V.fromList [i | (i, _, _) <- rows]
               summary = unlines ["• [" <> reason <> "] " <> title | (_, reason, title) <- take 10 rows]
               subj = "[" <> project.title <> "] " <> show (length rows) <> " batched notifications"
-              url = projectUrl ctx pid <> "/issues?filter=Inbox"
+              url = hostPath ctx.env.hostUrl $ (urls.issues pid).listGet (Just "Inbox") Nothing Nothing Nothing Nothing Nothing Nothing [] []
           Log.logInfo "notification_digest_flushing"
             $ AE.object ["project_id" AE..= pid.toText, "count" AE..= length rows, "url" AE..= url]
           -- Email-only delivery today; Slack/Discord templates TBD.
@@ -2032,7 +2037,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
                 AESNew -> NewRuntimeError
                 AESOngoing -> NewRuntimeError
               baseUrl = projectUrl ctx pid
-              errorsUrl = baseUrl <> "/issues/" <> sub.issueId.toText
+              errorsUrl = issuePageUrl ctx pid sub.issueId
               occText = (show sub.occurrences1h <> "/hr") <$ guard (sub.occurrences1h > 0)
               ongoingFor = humanDuration now sub.createdAt <$ guard (isJust sub.lastNotifiedAt && sub.errorState /= AESRegressed)
               source = Incidents.ErrorIncident sub.errorId
@@ -2066,7 +2071,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
                   else do
                     previous <- Incidents.latestEpisodeTx pid source
                     let active = mfilter ((== Incidents.EpisodeActive) . (.phase)) previous
-                        incidentUrl = baseUrl <> "/issues/" <> (fromMaybe sub.issueId (active >>= (.issueId))).toText
+                        incidentUrl = issuePageUrl ctx pid $ fromMaybe sub.issueId (active >>= (.issueId))
                         impact =
                           Mail.AlertImpact
                             { Mail.projectName = project.title
@@ -3153,9 +3158,8 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
         $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
       targetTeams <- if null teams then maybeToList <$> ProjectMembers.getEveryoneTeam monitor.projectId else pure teams
       installation <- Integrations.getProjectSlackData monitor.projectId
-      let baseUrl = projectUrl appCtx monitor.projectId
-          widgetUrlM = widgetMonitorUrl baseUrl monitor
-          monitorUrl = fromMaybe (baseUrl <> "/monitors/" <> monitor.id.toText <> "/overview") widgetUrlM
+      let widgetUrlM = widgetMonitorUrl appCtx.env.hostUrl monitor
+          monitorUrl = fromMaybe (hostPath appCtx.env.hostUrl $ (urls.monitors monitor.projectId).overviewGet monitor.id.toText) widgetUrlM
           chartMins = clamp (15, 240) (4 * monitor.checkIntervalMins)
           chartFrom = addUTCTime (negate $ fromIntegral (chartMins * 60)) observedAt
           destinations = slackDestinations installation targetTeams
@@ -3183,7 +3187,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
                 then traverse (Issues.reopenOrInsertIssueTx observedAt) issue
                 else pure Nothing
             let issueId = persistedId <|> (active >>= (.issueId))
-                issueUrl = maybe monitorUrl (\iid -> baseUrl <> "/issues/" <> iid.toText) issueId
+                issueUrl = maybe monitorUrl (issuePageUrl appCtx monitor.projectId) issueId
                 alertUrl = fromMaybe issueUrl widgetUrlM
                 (rootPayload, replyPayload) = Mail.monitorIncidentMessages monitor value status observedAt active issueUrl monitorUrl chartUrlM
                 change
@@ -3362,7 +3366,7 @@ sendReportForProject pid rType = do
       Log.logInfo "Sending report notifications for" pid
       let stmTxt = formatUTCMicros startTime
           currentTimeTxt = formatUTCMicros currentTime
-          reportUrl = projectUrl ctx pid <> "/reports/" <> report.id.toText
+          reportUrl = hostPath ctx.env.hostUrl $ urls.reportsSingleGet pid report.id
           png w = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just stmTxt) (Just currentTimeTxt)
       allQ <- png RP.eventsWidget
       errQ <- png RP.errorsWidget
@@ -3375,7 +3379,7 @@ sendReportForProject pid rType = do
           (_, subj, rendered) <-
             RP.renderSystemEmail
               rType
-              ("p/" <> pid.toText <> "/reports/" <> report.id.toText)
+              (urls.reportsSingleGet pid report.id)
               pr
               user.firstName
               False
@@ -3557,7 +3561,7 @@ runHostRetentionSweep authCtx pid = do
     projectM <- Projects.projectById pid
     whenJust projectM \project -> unless authCtx.config.pauseNotifications do
       users <- Projects.usersByProjectId pid
-      let catalogUrl = projectUrl authCtx pid <> "/api_catalog"
+      let catalogUrl = hostPath authCtx.env.hostUrl $ urls.apiCatalogGet pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       forM_ users \u -> renderAndSend (CI.original u.email) (ET.hostsUnarchivedEmail u.firstName project.title catalogUrl unarchived)
 
 
@@ -3623,7 +3627,7 @@ sendNewEndpointAlerts pid alertHash candidates = do
           teamM <- ProjectMembers.getEveryoneTeam pid
           broadcastToEveryone teamM alert pid project.title (projectUrl authCtx pid)
           when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM)
-            $ forM_ users \u -> renderAndSend (CI.original u.email) (ET.anomalyEndpointEmail u.firstName project.title (projectUrl authCtx pid <> "/issues") notifiableRows)
+            $ forM_ users \u -> renderAndSend (CI.original u.email) (ET.anomalyEndpointEmail u.firstName project.title (hostPath authCtx.env.hostUrl $ (urls.issues pid).listGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] []) notifiableRows)
 
 
 -- | Announce the new endpoints template discovery has just confirmed are
@@ -5081,8 +5085,7 @@ recordMonitorDataGap :: Monitors.QueryMonitor -> UTCTime -> Monitors.Measurement
 recordMonitorDataGap monitor at reason = do
   ctx <- ask @Config.AuthContext
   let source = Incidents.MonitorIncident monitor.id
-      baseUrl = projectUrl ctx monitor.projectId
-      monitorUrl = fromMaybe (baseUrl <> "/monitors/" <> monitor.id.toText <> "/overview") $ widgetMonitorUrl baseUrl monitor
+      monitorUrl = fromMaybe (hostPath ctx.env.hostUrl $ (urls.monitors monitor.projectId).overviewGet monitor.id.toText) $ widgetMonitorUrl ctx.env.hostUrl monitor
       suppressed = ctx.config.pauseNotifications || maybe False (> at) monitor.mutedUntil || maybe False (monitor.notificationCount >=) monitor.stopAfterCount
   committed <- Hasql.transaction TxS.ReadCommitted TxS.Write do
     HI.RowsAffected changed <-
@@ -5107,7 +5110,7 @@ recordMonitorDataGap monitor at reason = do
           Hasql.oneTx @Bool
             [HI.sql|SELECT NOT EXISTS (SELECT 1 FROM apis.incident_events WHERE episode_id = #{episode.id} AND observed_at = #{episode.lastEventAt} AND event_kind = 'data_unavailable')|]
         let publish = firstGap && not suppressed
-            incidentUrl = maybe monitorUrl (\iid -> baseUrl <> "/issues/" <> iid.toText) episode.issueId
+            incidentUrl = maybe monitorUrl (issuePageUrl ctx monitor.projectId) episode.issueId
             payload = Mail.monitorDataUnavailableMessage monitor reason at (listToMaybe readings) incidentUrl monitorUrl
         result <-
           Incidents.recordIncidentEventTx
@@ -5501,7 +5504,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
     issue <- Issues.createLogPatternRateChangeIssue pid lpRate sr
     Issues.insertIssue issue
     whenJust projectM \project -> do
-      let issueUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
+      let issueUrl = hostPath authCtx.env.hostUrl $ (urls.issues pid).detailGet issue.id Nothing Nothing Nothing Nothing Nothing
           changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
           alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError}
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
@@ -5548,7 +5551,7 @@ processNewLogPatterns pid authCtx = do
           Issues.insertIssue issue
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
           whenJust projectM \project -> do
-            let issueUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
+            let issueUrl = hostPath authCtx.env.hostUrl $ (urls.issues pid).detailGet issue.id Nothing Nothing Nothing Nothing Nothing
                 alert = ET.NewLogPattern{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = fromIntegral lp.occurrenceCount, isError = lp.isError}
                 (subj, html) = ET.logPatternEmail project.title alert
             void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" (LogPatternAlert alert) issueUrl subj html

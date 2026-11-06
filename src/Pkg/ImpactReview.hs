@@ -44,7 +44,6 @@ import Models.Projects.IssueFixes qualified as Fixes
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types.URI (urlEncode)
 import OpenAI.V1.Chat.Completions qualified as OpenAI
 import Pkg.AI qualified as AI
 import Pkg.AgentCatalog qualified as Catalog
@@ -60,6 +59,8 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
+import Utils (hostPath)
+import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), urls)
 
 
 -- $setup
@@ -454,7 +455,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
               current <- require =<< Git.getPullRequest conn ref run.number
               unless (sameRevision pr current) $ throwError $ ReviewFailure "PR changed before publication"
               void $ require . first AI.toolDenialMessage =<< AI.authorizeRunOperation context Catalog.ExternalPublication
-              let runLink = "\n\n[Run and artifacts](" <> T.dropWhileEnd (== '/') cfg.hostUrl <> "/p/" <> run.projectId.toText <> "/ai/runs/" <> context.rootId.toText <> ")"
+              let runLink = "\n\n[Run and artifacts](" <> hostPath cfg.hostUrl (urls.aiRoutineRunGet run.projectId context.rootId Nothing) <> ")"
                   body = marker <> "\n" <> renderReview cfg.hostUrl run includeEvidence result <> runLink
                   comment = Catalog.ReviewComment run.id body
               response <-
@@ -498,7 +499,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           maxEvidence = 20 :: Int
           evidenceLimit = maxEvidence + 1
           services = nubOrd $ mapMaybe (.service) mappings
-          projectPath = T.dropWhileEnd (== '/') ctx.config.hostUrl <> "/p/" <> run.projectId.toText
+          link = hostPath ctx.config.hostUrl
       stats <-
         if null services
           then pure []
@@ -518,10 +519,9 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           ORDER BY id LIMIT #{evidenceLimit}|]
       dashboards <-
         Hasql.interp
-          [HI.sql|SELECT id::text, q #>> '{}' FROM projects.dashboards,
+          [HI.sql|SELECT id, q #>> '{}' FROM projects.dashboards,
           LATERAL jsonb_path_query(schema, '$.**.query') q
           WHERE project_id = #{run.projectId} AND jsonb_typeof(q) = 'string' ORDER BY id LIMIT #{evidenceLimit}|]
-      let encode = decodeUtf8 . urlEncode True . encodeUtf8
       telemetry <- forM (zip [1 :: Int ..] (take maxEvidence stats)) \(n, (service, environment, count, errors)) -> do
         let selector = "resource.service.name == " <> decodeUtf8 (AE.encode service) <> if T.null environment then "" else " and resource.deployment.environment.name == " <> decodeUtf8 (AE.encode environment)
             widget = (def :: Widget.Widget){Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just (selector <> " and " <> toQText (evidenceWindow from until) <> " | summarize events = count() by bin_auto(timestamp)"), Widget.pngProfile = Just Widget.PngSlack}
@@ -532,20 +532,20 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
             Telemetry
             (Just service)
             (guarded (not . T.null) environment)
-            (projectPath <> "/log_explorer?query=" <> encode selector <> "&from=" <> encode (toText $ iso8601Show from) <> "&to=" <> encode (toText $ iso8601Show until))
+            (link $ (urls.logExplorer run.projectId).logExplorerGet (Just selector) Nothing Nothing (Just $ toText $ iso8601Show from) (Just $ toText $ iso8601Show until) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
             Nothing
             (Just $ Observation count errors)
             chart
             Nothing
       let references kind rows =
             zipWith
-              ( \n (referenceId, query) ->
+              ( \n (url, query) ->
                   Evidence
                     (T.toLower (show kind) <> "-" <> show n)
                     kind
                     Nothing
                     Nothing
-                    (projectPath <> if kind == Monitor then "/monitors/" <> referenceId <> "/overview" else "/dashboards/" <> referenceId)
+                    url
                     (Just $ T.take maxQueryChars query)
                     Nothing
                     Nothing
@@ -559,7 +559,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
               <> ["Evidence is capped at " <> show maxEvidence <> " service/environment groups, monitors and dashboard queries." | length stats > maxEvidence || length monitors > maxEvidence || length dashboards > maxEvidence]
               <> ["Telemetry describes the mapped service, not a proven changed-path or deployed-revision match."]
               <> ["Monitor and dashboard references are project-wide; their relationship to the mapped service is unverified." | not (null monitors && null dashboards)]
-      pure (telemetry <> references Monitor monitors <> references Dashboard dashboards, gaps)
+      pure (telemetry <> references Monitor [(link $ (urls.monitors run.projectId).overviewGet i, q) | (i, q) <- monitors] <> references Dashboard [(link $ urls.dashboardsGet run.projectId d Nothing Nothing Nothing Nothing [], q) | (d, q) <- dashboards], gaps)
 
 
 renderReview :: Text -> Reviews.ReviewRun -> Bool -> ReviewResult -> Text
@@ -572,7 +572,7 @@ renderReview host run includeEvidence result =
     <> concatMap findingText result.findings
     <> ["![" <> (if isJust item.queryResult then "Review query results" else "Observed service events") <> "](" <> url <> ")" | includeEvidence, item <- take 3 $ filter (\e -> any (elem e.key . (.evidenceKeys)) result.findings) result.evidence, Just url <- [item.chartUrl]]
     <> ["**Coverage:** " <> (if includeEvidence then plain $ T.intercalate " " result.coverage else "Open Monoscope for evidence and coverage details.") | not $ null result.coverage]
-    <> ["[Review history and settings](" <> T.dropWhileEnd (== '/') host <> "/p/" <> run.projectId.toText <> "/settings/code-mappings)"]
+    <> ["[Review history and settings](" <> hostPath host (urls.codeMappingsSettings run.projectId Nothing) <> ")"]
   where
     label = \case
       WorthChecking -> "Worth checking"
@@ -627,7 +627,7 @@ requestEvidence pid currentServices windowStart windowEnd request = do
                             widget = (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.title = Just "Review query", Widget.dataset = Just dataset, Widget.pngProfile = Just Widget.PngSlack}
                         Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.config.hostUrl pid widget Nothing (Just $ toText $ iso8601Show windowStart) (Just $ toText $ iso8601Show windowEnd)
                       else pure Nothing
-                  let url = T.dropWhileEnd (== '/') ctx.config.hostUrl <> "/p/" <> pid.toText <> "/settings/code-mappings"
+                  let url = hostPath ctx.config.hostUrl $ urls.codeMappingsSettings pid Nothing
                       evidence = Evidence ("query-" <> show (Map.size queried + 1)) Telemetry (Just request.service) Nothing url (Just query) Nothing chart (Just observation)
                   permitted <- elem request.service <$> currentServices
                   if not permitted

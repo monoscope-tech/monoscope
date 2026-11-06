@@ -31,7 +31,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers qualified as Containers
 import Models.Telemetry.Report qualified as Report
-import Network.HTTP.Types.URI (parseQueryText)
+import Network.HTTP.Types.URI (parseQueryText, urlDecode)
 import OddJobs.Types (pgEventName)
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.LogExplorer.Log qualified as Log
@@ -256,7 +256,7 @@ spec = around withTestResources do
     email <- render False snapshot
     full <- render True snapshot
     charts <- forM (drop 1 $ T.splitOn "widgetZ=" email) \suffix -> do
-      compressed <- either (fail . toString) pure $ B64URL.decodeBase64Untyped $ encodeUtf8 $ T.takeWhile (/= '&') suffix
+      compressed <- either (fail . toString) pure $ B64URL.decodeBase64Untyped $ urlDecode True $ encodeUtf8 $ T.takeWhile (/= '&') suffix
       either fail pure $ AE.eitherDecode @Widget.Widget $ GZip.decompress $ fromStrict compressed
     map (.query) charts `shouldBe` replicate 4 Nothing
     map (fmap (.source) . (.dataset)) charts `shouldBe` concatMap (replicate 2 . Just) [[aesonQQ|[["Time","Events"],[1735689600000,100]]|], [aesonQQ|[["Time","Errors"],[1735689600000,7]]|]]

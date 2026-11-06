@@ -14,12 +14,12 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes, endpointDependencyGraphForRange, serviceGraphForRange)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (searchInput_)
+import Pages.Components (explorerNavTabs_, searchInput_)
 import Pkg.Components.ServiceMap (endpointDependencyMapPanel_, serviceMapPanel_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (explorerNavTabs_, faSprite_, getServiceColors, nonEmptyT, parseTime)
+import Utils (faSprite_, getServiceColors, nonEmptyT, parseTime)
 
 
 newtype ServiceMapGet = ServiceMapPage (PageCtx ServiceMapPageData)

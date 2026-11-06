@@ -19,6 +19,7 @@ import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge 
 import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), disclosure_, emptyState_)
 import Relude
 import Utils (faSprite_, getDurationNSMS, prettyPrintCount, showFFloat')
+import Web.Links (CookieProtectedRoutes (..), TelemetryRoutes' (..), urls)
 
 
 -- | Render the map shell for @graph@ into a container with id @elId@. The graph travels
@@ -121,7 +122,7 @@ envFacet_ pid graph selected =
         [ class_
             $ "rounded-md border px-2 py-0.5 "
             <> bool "border-strokeWeak text-textWeak hover:bg-fillWeak" "border-strokeBrand-strong bg-fillBrand-weak text-textStrong font-medium" (opt == selected)
-        , href_ $ "/p/" <> pid.toText <> "/service_map" <> maybe "" ("?env=" <>) opt
+        , href_ $ (urls.traces pid).serviceMapGetH Nothing Nothing Nothing opt Nothing
         ]
         $ toHtml
         $ fromMaybe "All" opt

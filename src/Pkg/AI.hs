@@ -141,6 +141,7 @@ import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (throwIO, withException)
 import Utils (encodeText, hostPath, nonEmptyT, unwrapJsonPrimValue)
 import Web.ApiTypes (ApiActor (..))
+import Web.Links (CookieProtectedRoutes (..), urls)
 import Web.MCP qualified as MCP
 
 
@@ -1759,7 +1760,7 @@ executeToolAt cursor config tc = do
       _ -> pure "Wiki writes require a durable run, pageId, version and bounded document."
     memoryResult page = encodeText $ AE.toJSON page & _Object %~ KM.insert "url" (AE.String url)
       where
-        path = "/p/" <> config.projectId.toText <> "/wiki/" <> Memory.pagePathText page.path
+        path = urls.projectWikiGet config.projectId (T.splitOn "/" $ Memory.pagePathText page.path) Nothing Nothing Nothing False
         url = maybe path (\cfg -> hostPath cfg.hostUrl path) config.sourceConfig
     memoryError = \case
       Memory.StaleRevision -> "Wiki page changed; read the current revision before retrying."

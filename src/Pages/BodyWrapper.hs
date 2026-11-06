@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), OnboardingStep (..), stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus, externalHeadScripts_) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -24,29 +24,20 @@ import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects (OnboardingStep (..))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem qualified as LogItem
-import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumShow (..), assetUrl, viteAssetFile)
+import Pkg.DeriveUtils (DB, UUIDId (..), assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
 import System.Types (ATAuthCtx)
-import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), explorerTabs, faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, freeTierUsageStatus, infrastructureTabs, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_)
-import Web.HttpApiData (FromHttpApiData)
+import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, freeTierUsageStatus, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.I18n qualified as I18n
-
-
--- | Constructor names are the @?step=@ URL values and the stored @onboarding_steps_completed@ entries.
-data OnboardingStep = Info | Survey | NotifChannel | Integration | Pricing | Complete
-  deriving stock (Eq, Read, Show)
-  deriving (FromHttpApiData) via WrappedEnumShow OnboardingStep
-
-
-stepUrl :: Projects.ProjectId -> OnboardingStep -> Text
-stepUrl pid step = "/p/" <> pid.toText <> "/onboarding?step=" <> show step
+import Web.Links
 
 
 -- | Page-handler bootstrap. Loads (session, project), reads AuthContext, and seeds
@@ -127,29 +118,39 @@ tippyRight_ content = [term "data-tippy-placement" "right", term "data-tippy-con
 
 menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]
 menu lang pid =
-  [ (I18n.t lang "nav.dashboards", p "/dashboards", "dashboard")
-  , (I18n.t lang "nav.explorer", p "/log_explorer", "explore")
-  , (I18n.t lang "nav.issues", p "/issues", "bug")
-  , (I18n.t lang "nav.monitors", p "/monitors", "list-check")
-  , ("Real User Monitoring", p "/rum", "web")
-  , (I18n.t lang "nav.infrastructure", p "/infrastructure/hosts", "server")
-  , (I18n.t lang "nav.api_catalog", p "/api_catalog", "swap")
-  , ("Repositories", p "/repositories", "code-branch")
-  , (I18n.t lang "nav.reports", p "/reports", "chart-simple")
+  [ (I18n.t lang "nav.dashboards", dashboardsUrl pid, "dashboard")
+  , (I18n.t lang "nav.explorer", Components.logExplorerUrl pid, "explore")
+  , (I18n.t lang "nav.issues", issuesUrl pid Nothing, "bug")
+  , (I18n.t lang "nav.monitors", (urls.monitors pid).listGet Nothing Nothing, "list-check")
+  , ("Real User Monitoring", urls.rumRedirect pid [] [], "web")
+  , (I18n.t lang "nav.infrastructure", (urls.traces pid).hostsGetH Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "server")
+  , (I18n.t lang "nav.api_catalog", apiCatalogUrl pid Nothing, "swap")
+  , ("Repositories", urls.repositoriesGet pid Nothing Nothing, "code-branch")
+  , (I18n.t lang "nav.reports", urls.reportsGet pid Nothing, "chart-simple")
   ]
-  where
-    p path = "/p/" <> pid.toText <> path
+
+
+dashboardsUrl :: Projects.ProjectId -> Text
+dashboardsUrl pid = urls.dashboardsGetList pid Nothing Nothing Nothing Nothing Nothing Nothing def
+
+
+issuesUrl :: Projects.ProjectId -> Maybe Text -> Text
+issuesUrl pid tabM = (urls.issues pid).listGet tabM Nothing Nothing Nothing Nothing Nothing Nothing [] []
+
+
+apiCatalogUrl :: Projects.ProjectId -> Maybe Text -> Text
+apiCatalogUrl pid requestTypeM = urls.apiCatalogGet pid Nothing Nothing requestTypeM Nothing Nothing Nothing Nothing
 
 
 -- | Onboarding checklist widget for the sidenav
 onboardingChecklist_ :: Projects.Project -> ActivationProgress -> Html ()
 onboardingChecklist_ project progressState = do
-  let pid = project.id.toText
+  let pid = project.id
       items =
-        [ (progressState.ingestionVerified, ("Verify ingestion", stepUrl project.id Integration, "paper-plane"))
-        , (progressState.hasDashboard, ("Create a dashboard", "/p/" <> pid <> "/dashboards", "dashboard"))
-        , (progressState.hasMonitor, ("Create a monitor", "/p/" <> pid <> "/monitors", "bell"))
-        , (progressState.hasTestNotification, ("Send a test notification", "/p/" <> pid <> "/settings/integrations", "envelope"))
+        [ (progressState.ingestionVerified, ("Verify ingestion", stepUrl pid Integration, "paper-plane"))
+        , (progressState.hasDashboard, ("Create a dashboard", dashboardsUrl pid, "dashboard"))
+        , (progressState.hasMonitor, ("Create a monitor", (urls.monitors pid).listGet Nothing Nothing, "bell"))
+        , (progressState.hasTestNotification, ("Send a test notification", urls.projects.integrationGet pid, "envelope"))
         ]
           :: [(Bool, (Text, Text, Text))]
       doneCount = length $ filter fst items
@@ -159,7 +160,7 @@ onboardingChecklist_ project progressState = do
     $ div_ [id_ "onboarding-checklist", class_ "mt-5 pt-3 border-t border-strokeWeak"] do
       -- Collapsed state: rocket icon
       div_ [class_ "flex justify-center group-has-[#sidenav-toggle:checked]/pg:hidden"] do
-        a_ ([href_ $ "/p/" <> pid <> "/onboarding", class_ "relative tap-target"] <> tippyRight_ ("Getting Started (" <> progress <> ")")) do
+        a_ ([href_ $ urls.projects.onboading pid Nothing, class_ "relative tap-target"] <> tippyRight_ ("Getting Started (" <> progress <> ")")) do
           faSprite_ "rocket" "regular" "w-4 h-4 text-textWeak"
       -- Expanded state: full checklist
       div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block bg-fillWeaker rounded-lg p-2.5"] do
@@ -172,7 +173,7 @@ onboardingChecklist_ project progressState = do
             button_
               [ class_ "text-textWeak opacity-50 hover:opacity-100 hover:text-textStrong tap-target cursor-pointer"
               , Aria.label_ "Dismiss getting started checklist"
-              , hxPost_ $ "/p/" <> pid <> "/onboarding/dismiss-checklist"
+              , hxPost_ $ urls.projects.onboardingDismissChecklist pid
               , hxTarget_ "#onboarding-checklist"
               , hxSwap_ "delete"
               ]
@@ -489,10 +490,10 @@ bodyWrapper bcfg child = do
               when (Projects.isFreeTier project.paymentPlan && Projects.projectProvider project /= Projects.NoBillingProvider)
                 $ div_ [id_ "billing-downgrade-banner", role_ "alert", class_ "flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-strokeWarning-strong bg-fillWarning-weak px-4 py-2 text-xs text-textStrong"] do
                   span_ "Your paid subscription is no longer active. This project has been downgraded to Free."
-                  a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", class_ "font-medium text-textBrand underline underline-offset-2"] "Review billing or change plan"
+                  a_ [href_ $ urls.manageBillingGet project.id, class_ "font-medium text-textBrand underline underline-offset-2"] "Review billing or change plan"
                   -- A cancelled Stripe sub can't be revived from the portal; checkout starts a new one and collects what's owed.
                   let stripe = Projects.projectProvider project == Projects.StripeProvider
-                  a_ ([href_ $ "/p/" <> project.id.toText <> "/manage_billing", class_ "font-medium text-textBrand underline underline-offset-2"] <> bool [hxGet_ $ "/p/" <> project.id.toText <> "/manage_subscription", term "hx-preload" "false"] [] stripe)
+                  a_ ([href_ $ urls.manageBillingGet project.id, class_ "font-medium text-textBrand underline underline-offset-2"] <> bool [hxGet_ $ urls.projects.manageSubscriptionGet project.id, term "hx-preload" "false"] [] stripe)
                     $ bool "Update payment method" "Reactivate subscription" stripe
             -- Keep fixed fullscreen panels and drawers below the project notices.
             section_ [class_ "relative flex flex-row flex-1 min-h-0 overflow-hidden", style_ "contain: layout"] do
@@ -506,7 +507,7 @@ bodyWrapper bcfg child = do
                   then nav_ [id_ "main-navbar", class_ "hidden"] ""
                   else navbar bcfg (foldMap (\p -> menu sess.lang p.id) bcfg.currProject)
                 main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
-                  whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
+                  whenJust bcfg.currProject (\p -> freeTierUsageBanner (urls.manageBillingGet p.id) bcfg.freeTierStatus)
                   if bcfg.isSettingsPage
                     then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                     else child
@@ -524,7 +525,7 @@ bodyWrapper bcfg child = do
                     div_
                       [ id_ "dashboards-modal-content"
                       , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
-                      , hxGet_ ("/p/" <> foldMap (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
+                      , hxGet_ (foldMap (\p -> urls.dashboardsGetList p.id Nothing (Just "true") Nothing Nothing Nothing Nothing def) bcfg.currProject)
                       , hxTrigger_ "loadDashboards"
                       , hxSelect_ "#itemsListPage"
                       , hxSwap_ "innerHTML"
@@ -644,7 +645,7 @@ bodyWrapper bcfg child = do
         "ai-composer-modal"
         (span_ [class_ "group-has-[#ai-composer-routine:checked]/dialog:hidden"] "New chat" >> span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:inline"] "New routine")
         ("Start", ["⌘/Ctrl", "↵"])
-        [id_ "ai-composer-panel", hxPost_ $ "/p/" <> pid.toText <> "/ai", hxSwap_ "none", term "hx-disabled-elt" "find button[type='submit']"]
+        [id_ "ai-composer-panel", hxPost_ $ urls.aiThreadsPost pid, hxSwap_ "none", term "hx-disabled-elt" "find button[type='submit']"]
         do
           forM_ bcfg.composerRequestId $ \requestId -> input_ [type_ "hidden", name_ "requestId", value_ requestId.toText]
           Components.segmented_ "m-2 grid w-fit grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs" "Conversation type" "mode" "ai-composer-" [("chat", "Chat"), ("routine", "Routine")]
@@ -680,7 +681,6 @@ bodyWrapper bcfg child = do
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects = do
-  let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
     , class_ "origin-top-right z-40 bg-bgRaised p-2 w-[18rem] rounded-xl shadow-lg border border-strokeWeak"
@@ -692,16 +692,16 @@ projectsDropDown currProject projects = do
       div_ [class_ "space-y-0.5 max-h-[50vh] overflow-y-auto", id_ "projectsContainer"] do
         projects & mapM_ \project -> do
           let isActive = currProject.id == project.id
-          a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> bool " hover:bg-fillHover" " bg-fillWeak font-medium" isActive, href_ $ "/p/" <> project.id.toText] do
+          a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> bool " hover:bg-fillHover" " bg-fillWeak font-medium" isActive, href_ $ urls.dashboardRedirectGet project.id []] do
             span_ [class_ "truncate"] $ toHtml project.title
             when isActive $ faSprite_ "check" "regular" "h-3.5 w-3.5 text-textBrand shrink-0"
         p_ [class_ "hidden text-textWeak text-sm text-center py-4", term "hx-live:.hidden" "q('.project_item:not(.hidden) in #projectsContainer').count > 0"] "No matching projects"
       let actionLink attrs icon label = a_ (class_ "flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-fillHover cursor-pointer text-sm" : attrs) $ faSprite_ icon "regular" "h-3.5 w-3.5 text-textWeak" >> span_ label
       div_ [class_ "border-t border-strokeWeak mt-1 pt-1"] do
-        actionLink [href_ "/"] "grid" "All projects"
-        actionLink [href_ "/p/new"] "plus" "New project"
+        actionLink [href_ urls.projects.listGet] "grid" "All projects"
+        actionLink [href_ urls.projects.onboardingProject] "plus" "New project"
         when (currProject.paymentPlan `elem` ["UsageBased", "GraduatedPricing"])
-          $ actionLink [term "hx-preload" "false", hxGet_ [text| /p/$pidTxt/manage_subscription |]] "dollar-sign" "Manage billing"
+          $ actionLink [term "hx-preload" "false", hxGet_ $ urls.projects.manageSubscriptionGet currProject.id] "dollar-sign" "Manage billing"
 
 
 sideNav :: Projects.Session -> Projects.Project -> BWConfig -> Html ()
@@ -766,8 +766,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       | (view, label) <- [("menu", "Navigate"), ("ai", "Agents")]
       ]
     nav_ [id_ "main-sidenav", class_ "mt-2 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col gap-1 text-textWeak group-has-[#nav-view-ai:checked]/nav:hidden [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
-      let pidTxt = project.id.toText
-          flyoutLink (linkText, link) =
+      let flyoutLink (linkText, link) =
             a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs)
               $ span_ [] (toHtml linkText)
           renderNavItem mTitle mUrl fIcon = do
@@ -775,7 +774,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             let sectionTitle = fromMaybe mTitle $ lookup mUrl [(url, title) | (title, url, _) <- menu I18n.En project.id]
                 isActive = fromMaybe pageTitle menuItem == sectionTitle
                 activeCls = bool "" " active" isActive
-                flyoutItems = navFlyoutItems pidTxt sectionTitle
+                flyoutItems = navFlyoutItems project.id sectionTitle
                 hasFlyout = not (null flyoutItems)
             ( if hasFlyout
                 then
@@ -819,7 +818,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       mapM_ (uncurry3 renderNavItem) secondary
       whenJust bcfg.activationProgressM $ onboardingChecklist_ project
       div_ [class_ "border-t border-strokeWeak my-2"] ""
-      renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear"
+      renderNavItem "Settings" (urls.projects.settingsGet project.id) "gear"
       a_
         ( [ href_ "https://monoscopehq.com/docs/"
           , target_ "blank"
@@ -855,7 +854,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             ]
         p_ [class_ "hidden px-2 py-2 text-xs text-textWeak", term "hx-live:.hidden" "q('.ai-thread-item:not(.hidden) in #ai-conversation-nav').count > 0"] "No matching conversations"
       let (routines, chats) = partition (isJust . (.routineKind)) bcfg.conversations
-          conversationHref c = "/p/" <> project.id.toText <> "/ai/" <> c.conversationId.toText
+          conversationHref c = urls.aiThreadGet project.id c.conversationId Nothing
           scheduleLabel c
             | isJust c.routineRunningSince = "Running now"
             | not c.routineActive = "Paused"
@@ -897,17 +896,17 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                       $ button_
                         [ type_ "button"
                         , data_ "thread-title" c.title
-                        , data_ "thread-url" href
+                        , data_ "title-url" $ urls.aiThreadTitlePost project.id c.conversationId
                         , [__|on click
                             set #ai-thread-rename-input.value to my.dataset.threadTitle
-                            set the @hx-post of #ai-thread-rename-form to `${my.dataset.threadUrl}/title`
+                            set the @hx-post of #ai-thread-rename-form to my.dataset.titleUrl
                             call #ai-thread-rename-modal.showModal()|]
                         ]
                         "Rename"
-                    when (c.conversationType == Issues.CTWeb && isNothing c.routineKind) $ li_ [] $ form_ [class_ "w-full", hxPost_ $ href <> "/routine", hxSwap_ "none", hxConfirm_ "Turn this chat into a daily routine?"] do
+                    when (c.conversationType == Issues.CTWeb && isNothing c.routineKind) $ li_ [] $ form_ [class_ "w-full", hxPost_ $ urls.aiRoutinePost project.id c.conversationId, hxSwap_ "none", hxConfirm_ "Turn this chat into a daily routine?"] do
                       input_ [type_ "hidden", name_ "intervalMinutes", value_ "1440"]
                       button_ [type_ "submit", class_ "w-full text-start"] "Make daily routine"
-                    li_ [] $ button_ [type_ "button", class_ "text-textError", hxDelete_ href, hxSwap_ "none", hxConfirm_ "Delete this chat and its message history? This cannot be undone."] "Delete chat"
+                    li_ [] $ button_ [type_ "button", class_ "text-textError", hxDelete_ $ urls.aiThreadDelete project.id c.conversationId, hxSwap_ "none", hxConfirm_ "Delete this chat and its message history? This cannot be undone."] "Delete chat"
           routineCard c = do
             let isActive = bcfg.activeConversationId == Just c.conversationId
                 cadenceLabel = foldMap Issues.routineKindLabel c.routineKind
@@ -957,9 +956,9 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                     span_ [Aria.hidden_ "true"] "·"
                     span_ [class_ "truncate"] $ toHtml cadenceLabel
                     whenJust nextRunLabel $ span_ [class_ "ms-auto shrink-0 tabular-nums text-textDisabled", title_ statusLabel] . toHtml
-      sectionLink ("/p/" <> project.id.toText <> "/ai/routines") "Routines" (length routines)
+      sectionLink (urls.aiRoutinesGet project.id) "Routines" (length routines)
       unless (null routines) $ div_ [class_ "flex flex-col gap-px px-0.5 group-has-[#sidenav-toggle:not(:checked)]/pg:px-0"] $ mapM_ routineCard routines
-      sectionLink ("/p/" <> project.id.toText <> "/ai") "Conversations" (length chats)
+      sectionLink (urls.aiThreadsGet project.id) "Conversations" (length chats)
       unless (null chats) do
         let ageInDays c = diffDays (utctDay bcfg.shellNow) (utctDay c.updatedAt)
             (today, beforeToday) = partition ((<= 0) . ageInDays) chats
@@ -1042,7 +1041,7 @@ navbar bcfg menuL =
             toHtml pt
           faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
         h1_ [class_ "flex min-w-0 items-center text-textStrong"] do
-          let targetPageM = bcfg.pageTitleUrl <|> ((\p path -> "/p/" <> p.id.toText <> path) <$> bcfg.currProject <*> (Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix))
+          let targetPageM = bcfg.pageTitleUrl <|> ((\p link -> link p.id) <$> bcfg.currProject <*> (Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix))
           case targetPageM of
             Just targetPage -> a_ ([class_ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong hover:bg-fillWeak max-md:max-w-24 max-md:text-sm", href_ targetPage, id_ "pageTitleText", title_ bcfg.pageTitle] <> navTabAttrs) $ toHtml bcfg.pageTitle
             Nothing -> case bcfg.pageTitleModalId of
@@ -1192,7 +1191,7 @@ settingsWrapper pid current pageHtml =
         li_ [class_ "md:hidden shrink-0"]
           $ label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", Components.keyboardActivateAttr_]
           $ faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
-        forM_ (navBottomList pid.toText) \(linkText, link, iconName) ->
+        forM_ (navBottomList pid) \(linkText, link, iconName) ->
           li_ []
             $ a_
               ( [ class_ $ "settings-nav-link flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap" <> bool "" " active" (current == linkText)
@@ -1219,32 +1218,30 @@ settingsWrapper pid current pageHtml =
 
 -- | Settings nav entries as @(title, url, icon)@ — the same shape as 'menu', so a
 -- reader never has to check which of the three strings is which.
-navBottomList :: Text -> [(Text, Text, Text)]
-navBottomList pidTxt =
-  [ ("Project", "/p/" <> pidTxt <> "/settings", "gear")
-  , ("API Keys", "/p/" <> pidTxt <> "/apis", "key")
-  , ("Team", "/p/" <> pidTxt <> "/manage_members", "users")
-  , ("Integrations", "/p/" <> pidTxt <> "/settings/integrations", "arrows-turn-right")
-  , ("Prometheus", "/p/" <> pidTxt <> "/settings/prometheus", "objects-column")
-  , ("Storage", "/p/" <> pidTxt <> "/byob_s3", "bucket")
-  , ("Billing", "/p/" <> pidTxt <> "/manage_billing", "dollar")
+navBottomList :: Projects.ProjectId -> [(Text, Text, Text)]
+navBottomList pid =
+  [ ("Project", urls.projects.settingsGet pid, "gear")
+  , ("API Keys", urls.apiGet pid, "key")
+  , ("Team", urls.projects.membersManageGet pid, "users")
+  , ("Integrations", urls.projects.integrationGet pid, "arrows-turn-right")
+  , ("Prometheus", urls.prometheusSettingsGet pid, "objects-column")
+  , ("Storage", urls.bringS3 pid, "bucket")
+  , ("Billing", urls.manageBillingGet pid, "dollar")
   ]
 
 
-navFlyoutItems :: Text -> Text -> [(Text, Text)]
-navFlyoutItems pidTxt = \case
-  "Explorer" -> [(label, p path) | (label, path) <- explorerTabs]
-  "Infrastructure" -> [(label, p path) | (label, path) <- infrastructureTabs]
-  "Real User Monitoring" -> [("Dashboard", p "/rum"), ("Sessions", p "/rum/sessions")]
+navFlyoutItems :: Projects.ProjectId -> Text -> [(Text, Text)]
+navFlyoutItems pid = \case
+  "Explorer" -> [(label, link pid) | (label, link) <- Components.explorerTabs]
+  "Infrastructure" -> [(label, link pid Nothing Nothing Nothing) | (label, link) <- Components.infrastructureTabs]
+  "Real User Monitoring" -> [("Dashboard", urls.rumRedirect pid [] []), ("Sessions", urls.rumRedirect pid ["sessions"] [])]
   -- API Docs carries no host: it is the whole project's learned spec. The
   -- per-host and per-endpoint scopes are reached from the catalog rows.
-  "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing"), ("API Docs", p "/api_catalog/docs?request_type=Incoming")]
-  "Issues" -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", p "/issues?filter=Acknowledged"), ("Archived", p "/issues?filter=Archived")]
-  "Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", p "/monitors?filter=Inactive"), ("New Monitor", p "/log_explorer#create-alert-toggle")]
-  "Settings" -> [(t, l) | (t, l, _) <- navBottomList pidTxt]
+  "API Catalog" -> [("Incoming", apiCatalogUrl pid (Just "Incoming")), ("Outgoing", apiCatalogUrl pid (Just "Outgoing")), ("API Docs", urls.apiCatalogDocs pid Nothing (Just "Incoming") Nothing)]
+  "Issues" -> [(f, issuesUrl pid (Just f)) | f <- ["Inbox", "Acknowledged", "Archived"]]
+  "Monitors" -> [("Active", (urls.monitors pid).listGet (Just "Active") Nothing), ("Inactive", (urls.monitors pid).listGet (Just "Inactive") Nothing), ("New Monitor", Components.logExplorerUrl pid <> "#create-alert-toggle")]
+  "Settings" -> [(t, l) | (t, l, _) <- navBottomList pid]
   _ -> []
-  where
-    p path = "/p/" <> pidTxt <> path
 
 
 settingsContentTarget :: Text
@@ -1366,3 +1363,7 @@ checkFreeTierStatus pid paymentPlan = do
   case Projects.freeTierDailyLimit enabled paymentPlan of
     Nothing -> pure NotFreeTier
     Just limit -> freeTierUsageStatus limit <$> (Projects.samplingToday pid =<< Time.currentTime)
+
+
+stepUrl :: Projects.ProjectId -> OnboardingStep -> Text
+stepUrl pid = urls.projects.onboading pid . Just

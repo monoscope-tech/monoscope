@@ -14,13 +14,13 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, WrappedEnumSC (..))
 import Relude
-import Servant (FromHttpApiData)
+import Servant (FromHttpApiData, ToHttpApiData (..))
 
 
 -- | What a share link points at; only 'ShareLog' renders without a trace breakdown.
 data ShareKind = ShareRequest | ShareLog | ShareSpan
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToSchema) via WrappedEnumSC 'Nothing "Share" ShareKind
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToHttpApiData, ToSchema) via WrappedEnumSC 'Nothing "Share" ShareKind
 
 
 createShareLink

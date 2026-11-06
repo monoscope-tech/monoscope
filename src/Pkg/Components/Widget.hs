@@ -19,6 +19,7 @@ import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Format (formatTime)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -32,13 +33,14 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
 import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
+import Models.Apis.LogQueries qualified as LogQueries (ExplorerUrl (..), LogEndpoint (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (copyButton_, headerRow_, searchInput_)
 import Pkg.Components.TimePicker qualified as TimePicker
-import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (JsonValueSchema (..), UUIDId (..), WrappedEnumSC (..))
 import Pkg.Parser (ToQueryText (..), parseQueryToAST, replacePlaceholders)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
@@ -51,6 +53,7 @@ import Text.Slugify (slugify)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
+import Web.Links
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptonite" Crypto.Hash (SHA256)
@@ -503,6 +506,11 @@ projectIdText :: Widget -> Text
 projectIdText w = foldMap (.toText) w._projectId
 
 
+-- | The project and dashboard a saved widget lives on, as route ids.
+dashboardIds :: Widget -> Maybe (Projects.ProjectId, UUIDId "dashboard")
+dashboardIds w = (,) <$> w._projectId <*> (UUIDId <$> (UUID.fromText =<< w._dashboardId))
+
+
 -- | HTMX fetch URL for a (already eager-prepared) widget: the project-scoped
 -- /widget endpoint carrying the widget as a compressed @widgetZ@ blob.
 --
@@ -512,7 +520,7 @@ projectIdText w = foldMap (.toText) w._projectId
 -- onto the same connection — which is what made dashboard charts fail in scattered,
 -- retry-able subsets. Compression keeps these an order of magnitude under the limit.
 widgetFetchUrl :: Widget -> Text
-widgetFetchUrl w = "/p/" <> projectIdText w <> "/widget?widgetZ=" <> encodeWidgetZ (encodeText w)
+widgetFetchUrl w = foldMap (\pid -> urls.widgetGet pid Nothing (Just $ encodeWidgetZ $ encodeText w) Nothing Nothing Nothing []) w._projectId
 
 
 -- | gzip + base64url, the wire form of a widget on a request line. 'decodeWidgetZ' inverts it.
@@ -542,8 +550,7 @@ widgetPngUrl secret hostUrl pid widget since fromM toM =
   let widgetJson = encodeText widget
       compressed = encodeWidgetZ widgetJson
       sig = signWidgetUrl secret pid widgetJson
-      timeParams = mconcat $ catMaybes [("&since=" <>) . toUriStr <$> since, ("&from=" <>) . toUriStr <$> fromM, ("&to=" <>) . toUriStr <$> toM]
-      url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetZ=" <> compressed <> timeParams <> "&sig=" <> sig
+      url = hostPath hostUrl $ widgetPngPath pid compressed since fromM toM sig
    in if T.length url > 8000 then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) $> Nothing else pure (Just url)
 
 
@@ -609,7 +616,7 @@ infraTimeseries pid wid title unit query =
 widget_ :: Widget -> Html ()
 widget_ w' = case w.wType of
   WTAnomalies ->
-    wgtCard_ $ withCardFrame False w (Just ("View all", "/p/" <> projectIdText w <> "/issues")) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
+    wgtCard_ $ withCardFrame False w (w._projectId <&> \pid -> ("View all", (urls.issues pid).listGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [])) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-lg surface-raised overflow-hidden group/wgt"] do
     -- Header: auto height (no flex), group-header class for CSS targeting when collapsed
     div_ [class_ $ "group-header py-2 px-4 flex items-center justify-between " <> gridStackHandleClassFor w] do
@@ -1003,25 +1010,24 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
                ]
         )
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
-    whenJust widget._dashboardId \dashId ->
-      let pid = projectIdText widget
-       in button_
-            ( [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 focus-visible:opacity-100 touch:opacity-100 tap-target transition-opacity"
-              , Aria.label_ "Expand widget"
-              , data_ "tippy-content" "Expand widget"
-              , data_ "expand-btn" wId
-              , -- Only the URL stamp is genuinely client-side; drawerLoadAttrs_ owns the
-                -- fetch, the target, the loading skeleton and opening the drawer (and
-                -- installs the focus trap the old hand-rolled chain skipped). The stamp
-                -- has to stay hyperscript because it appends to whatever query string the
-                -- page already has, which the server can't know. Reloading that URL now
-                -- reopens the drawer server-side — Pages.Dashboards renders the trigger.
-                term "_" [text|on click js { const url = new URL(window.location); url.searchParams.set('expand', '${wId}'); history.replaceState({}, '', url); } end|]
-              , term "hx-disabled-elt" "this"
-              ]
-                <> Utils.drawerLoadAttrs_ ("/p/" <> pid <> "/dashboards/" <> dashId <> "/widgets/" <> wId <> "/expand")
-            )
-            $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
+    whenJust (dashboardIds widget) \(p, d) ->
+      button_
+        ( [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 focus-visible:opacity-100 touch:opacity-100 tap-target transition-opacity"
+          , Aria.label_ "Expand widget"
+          , data_ "tippy-content" "Expand widget"
+          , data_ "expand-btn" wId
+          , -- Only the URL stamp is genuinely client-side; drawerLoadAttrs_ owns the
+            -- fetch, the target, the loading skeleton and opening the drawer (and
+            -- installs the focus trap the old hand-rolled chain skipped). The stamp
+            -- has to stay hyperscript because it appends to whatever query string the
+            -- page already has, which the server can't know. Reloading that URL now
+            -- reopens the drawer server-side — Pages.Dashboards renders the trigger.
+            term "_" [text|on click js { const url = new URL(window.location); url.searchParams.set('expand', '${wId}'); history.replaceState({}, '', url); } end|]
+          , term "hx-disabled-elt" "this"
+          ]
+            <> Utils.drawerLoadAttrs_ (urls.dashboardWidgetExpandGet p d wId Nothing)
+        )
+        $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     let widgetMenuPop = wId <> "-widget-menu"
     div_ [class_ "inline-block"] do
       button_ ([type_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"] <> Utils.popoverTrigger_ widgetMenuPop)
@@ -1085,20 +1091,21 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
         when onDashboard do
           menuItem_
             "Create a copy of this widget"
-            [ hxPost_ ("/p/" <> pid <> "/dashboards/" <> dashId <> "/widgets/" <> wId <> "/duplicate")
-            , hxTarget_ "closest .grid-stack"
-            , hxSwap_ "beforeend"
-            , -- htmx appends the rendered widget and processes it (scripts, hx-*, and
-              -- hyperscript, which hooks htmx:load itself); only the grid adoption is
-              -- left to do. No size is passed: makeWidget reads the gs-w/gs-h the
-              -- widget already renders, and addWidget's options are dropped since v11.
-              -- after:swap, not after:request — under htmx 4 afterRequest fires before
-              -- the swap, when the new element is not yet in the DOM.
-              [__|on click call (the closest <[popover]/>).hidePopover()
+            ( [hxPost_ (urls.dashboardDuplicateWidget p d wId Nothing) | (p, d) <- toList (dashboardIds widget)]
+                <> [ hxTarget_ "closest .grid-stack"
+                   , hxSwap_ "beforeend"
+                   , -- htmx appends the rendered widget and processes it (scripts, hx-*, and
+                     -- hyperscript, which hooks htmx:load itself); only the grid adoption is
+                     -- left to do. No size is passed: makeWidget reads the gs-w/gs-h the
+                     -- widget already renders, and addWidget's options are dropped since v11.
+                     -- after:swap, not after:request — under htmx 4 afterRequest fires before
+                     -- the swap, when the new element is not yet in the DOM.
+                     [__|on click call (the closest <[popover]/>).hidePopover()
                     on htmx:after:swap
                        set g to the closest <.grid-stack/> then call g.gridstack.makeWidget(g.lastElementChild)
                  |]
-            ]
+                   ]
+            )
             "Duplicate widget"
           li_
             $ button_
@@ -1147,9 +1154,8 @@ renderLogsWidget :: Widget -> Html ()
 renderLogsWidget widget = do
   let wId = maybeToMonoid widget.id
       pid = projectIdText widget
-      queryParam = foldMap (\q -> "&query=" <> toUriStr q) widget.query
-      fetchUrl = "/p/" <> pid <> "/log_explorer/data?json=true&layout=1" <> queryParam
-      action = Just ("Open in Explorer", "/p/" <> pid <> "/log_explorer" <> foldMap ("?query=" <>) widget.query)
+      fetchUrl = foldMap (\p -> explorerUrl p LogQueries.Data def{LogQueries.query = widget.query, LogQueries.layout = Just "1"}) widget._projectId
+      action = widget._projectId <&> \p -> ("Open in Explorer", (urls.logExplorer p).logExplorerGet widget.query Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
   withCardFrame False widget action
     $ termRaw
       "log-list"
@@ -1672,13 +1678,12 @@ renderTableWithDataAndParams widget dataRows params = do
       -- (or the whole tabless dashboard), with the row's variable set.
       rowNavAttrs value = fold do
         action <- widget.onRowClick
-        pid <- widget._projectId
-        dashId <- widget._dashboardId
+        (pid, did) <- dashboardIds widget
         let tabM = slugify <$> action.navigateToTab <|> widget._tabSlug
             varKey = ("var-" <>) <$> action.setVariable
             vars = [(k, v) | (k, Just v) <- params, "var-" `T.isPrefixOf` k, Just k /= varKey] <> [(k, value) | k <- toList varKey]
         pure
-          $ dashboardContentNavAttrs (maybe WholePage (const TabPanel) tabM) ("/p/" <> pid.toText <> "/dashboards/" <> dashId <> foldMap ("/tab/" <>) tabM <> "?" <> T.intercalate "&" [k <> "=" <> toUriStr v | (k, v) <- vars])
+          $ dashboardContentNavAttrs (maybe WholePage (const TabPanel) tabM) (maybe (urls.dashboardsGet pid did) (urls.dashboardTabGet pid did) tabM Nothing Nothing Nothing Nothing (second Just <$> vars))
           <> [term "hx-preload" "mousedown"]
           <> foldMap (\var -> [name_ "dashboard-variable-option", data_ "variable-key" var, data_ "variable-value" value, data_ "variable-label" value, term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)", term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"]) action.setVariable
 

@@ -12,7 +12,9 @@ import Models.Apis.Investigations qualified as Investigations
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId, encodeEnumSC)
 import Relude
+import Utils (hostPath)
 import Web.HttpApiData (parseUrlPiece)
+import Web.Links (CookieProtectedRoutes (..), urls)
 
 
 -- $setup
@@ -163,7 +165,7 @@ payload hostUrl project progress =
                      in V.singleton
                           $ AE.object
                             [ "type" AE..= ("actions" :: Text)
-                            , "elements" AE..= AE.Array ([AE.object ["type" AE..= ("button" :: Text), "action_id" AE..= ("monoscope_review_details" :: Text), "url" AE..= (T.dropWhileEnd (== '/') hostUrl <> "/p/" <> project.toText <> "/ai/operations/" <> identifier.toText), "text" AE..= AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= ("Review details" :: Text)]]] <> decisions)
+                            , "elements" AE..= AE.Array ([AE.object ["type" AE..= ("button" :: Text), "action_id" AE..= ("monoscope_review_details" :: Text), "url" AE..= hostPath hostUrl (urls.aiOperationGet project identifier), "text" AE..= AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= ("Review details" :: Text)]]] <> decisions)
                             ]
                 )
                 progress.review

@@ -1,7 +1,7 @@
 module Pages.LogExplorer.Log (
   apiLogH,
   logExplorerDataH,
-  LogDataQuery (..),
+  LogQueries.LogDataQuery (..),
   logExplorerSchemaH,
   logExplorerValidateH,
   QueryValidation (..),
@@ -37,7 +37,7 @@ where
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
-import Data.Default (Default, def)
+import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
@@ -46,7 +46,6 @@ import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema (..))
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Text.Display (display)
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
@@ -64,6 +63,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Models.Apis.LogQueries (ExplorerUrl (..))
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
@@ -74,7 +74,7 @@ import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, pageActions, pageTitle)
-import Pages.Components (FieldCfg (..), FieldSize (..), formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), explorerNavTabs_, formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), VizSurface (..), VizType (..), enrichSchemaWithFacets, logQueryBox_, visTypes)
@@ -98,11 +98,11 @@ import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
 import Text.Slugify (slugify)
-import Utils (FieldAction (..), FieldMenuCtx (..), encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
-import Web.FormUrlEncoded (FromForm)
+import Utils (FieldAction (..), FieldMenuCtx (..), encodeText, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
 import Web.HttpApiData (parseUrlPiece)
 
 import Web.ApiTypes (ApiProblem (ApiProblem), LogResult (..), ProblemCode (..), TraceTreeEntry (..), problem)
+import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), explorerUrl, urls)
 
 
 data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text, isQueryResult :: Bool, rowIdx :: Int}
@@ -855,25 +855,7 @@ withSortSection :: Maybe Text -> [Section] -> [Section]
 withSortSection sortM ast = ast <> maybeToList (parseMaybe pSortSection . ("sort by " <>) =<< nonEmptyT sortM)
 
 
--- | Log-row data endpoint. The log-list web component fetches this; the shell
--- (apiLogH) renders only chrome. Returns the trace-tree-expanded 'LogResult'.
-data LogDataQuery = LogDataQuery
-  { query :: Maybe Text
-  , cols :: Maybe Text
-  , cursor :: Maybe UTCTime
-  , direction :: Maybe PageDirection
-  , since :: Maybe Text
-  , from :: Maybe Text
-  , to :: Maybe Text
-  , source :: Maybe Text
-  , targetSpans :: Maybe Text
-  , sort :: Maybe Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (Default, FromForm)
-
-
-logExplorerDataH :: Projects.ProjectId -> LogDataQuery -> ATAuthCtx (RespHeaders LogResult)
+logExplorerDataH :: Projects.ProjectId -> LogQueries.LogDataQuery -> ATAuthCtx (RespHeaders LogResult)
 logExplorerDataH pid q = withSpan_ "log-explorer.data" [] do
   (authCtx, now, fromD, toD, envM, serviceM) <- logDataEnv pid q.since q.from q.to
   -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide defaults.
@@ -915,37 +897,6 @@ logExplorerDataH pid q = withSpan_ "log-explorer.data" [] do
       , resetLogsUrl = explorerUrl pid LogQueries.Data page{since = Nothing, from = Nothing, to = Nothing, layout = Nothing}
       , recentUrl = explorerUrl pid LogQueries.Data page{recent = True}
       }
-
-
--- | A log-explorer data URL's parameters. 'recent' polls for rows newer than 'cursor'.
--- Environment and service scope keep generated URLs in the page request's telemetry scope.
-data ExplorerUrl = ExplorerUrl
-  { query, cols, cursor, since, from, to, layout, source, environment, serviceScope :: Maybe Text
-  , recent :: Bool
-  }
-  deriving stock (Generic)
-  deriving anyclass (Default)
-
-
-explorerUrl :: Projects.ProjectId -> LogQueries.LogEndpoint -> ExplorerUrl -> Text
-explorerUrl pid endpoint u = "/p/" <> pid.toText <> "/log_explorer/" <> display endpoint <> "?" <> T.intercalate "&" params
-  where
-    param k v = ((k <> "=") <>) . toUriStr <$> v
-    unlessRecent v = if u.recent then Nothing else v
-    params =
-      "json=true"
-        : catMaybes
-          [ param "query" u.query
-          , param "cols" u.cols
-          , param "cursor" (unlessRecent u.cursor)
-          , param "since" (unlessRecent u.since)
-          , param "from" u.from
-          , param "to" (if u.recent then LogQueries.nudgeCursorBy LogQueries.cursorEpsilon =<< u.cursor else u.to)
-          , param "layout" u.layout
-          , param "source" u.source
-          , param "environment" u.environment
-          , param "service_scope" u.serviceScope
-          ]
 
 
 -- | Lazy facet fragments for collapsed groups and per-field overflow values.
@@ -1685,7 +1636,7 @@ apiLogsPage page = do
         [ id_ "visualization-widget-container"
         , class_ " w-full"
         , style_ "aspect-ratio: 4 / 2;"
-        , hxPost_ ("/p/" <> pidTxt <> "/widget")
+        , hxPost_ $ urls.widgetPost page.pid Nothing Nothing Nothing
         , hxTrigger_ "intersect once, update-widget"
         , hxTarget_ "this"
         , hxSwap_ "innerHTML"
@@ -1733,13 +1684,12 @@ apiLogsPage page = do
     -- Lazily loaded (HTMX) the first time this container is revealed, so the
     -- shell never renders it or forks a teams query per load.
     alertPanel = div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
-      let aurl = "/p/" <> pidTxt <> "/log_explorer/alert_form" <> maybe "" (\a -> "?alert=" <> a.id.toText) page.alert
       -- Container is display:none until checked, so IntersectionObserver can't drive
       -- the load — fire off the toggle's change instead (and at init if deep-linked open).
       -- innerHTML, not morph: idiomorph mutates nodes in place, so hyperscript never
       -- processes `install FieldMenuDelegate` on morphed-in content.
       lazyPanel_
-        aurl
+        ((urls.logExplorer page.pid).alertFormGet $ (.id.toText) <$> page.alert)
         "loadAlertForm once"
         "Loading alert form"
         [ [__|init if #create-alert-toggle.checked then trigger loadAlertForm on me end
@@ -1841,7 +1791,7 @@ instance ToHtml AlertForm where
       div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
         form_
           [ id_ "alert-form"
-          , hxPost_ $ "/p/" <> pid.toText <> "/monitors/alerts"
+          , hxPost_ (urls.monitors pid).alertUpsertPost
           , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
           , hxSwap_ "none"
           , class_ "flex flex-col gap-3"

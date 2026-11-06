@@ -551,7 +551,7 @@ spec = do
       firstPage <- traceAt Nothing Nothing Nothing (Just 50)
       fullPage <- traceAt Nothing Nothing Nothing (Just 100)
       -- The next page asks for a bigger one; following it yields the whole trace and the offer goes.
-      traverse loaded [firstPage, fullPage] `shouldReturn` [(50 :: Int, Just ("/p/" <> pid.toText <> "/traces/" <> paged <> "/?timestamp=2025-01-01T00:00:00Z&spans=100")), (60, Nothing)]
+      traverse loaded [firstPage, fullPage] `shouldReturn` [(50 :: Int, Just ("/p/" <> pid.toText <> "/traces/" <> paged <> "?timestamp=2025-01-01T00%3A00%3A00Z&spans=100")), (60, Nothing)]
       renderT firstPage `shouldContainAll` [">50+<", "Load more spans"]
       renderT fullPage `shouldNotSatisfy` T.isInfixOf "Load more spans"
       -- Nav looks a span up by id, so one past the first page is still findable.
@@ -564,7 +564,7 @@ spec = do
 
     it "metrics overview: datapoint counts in the shared drawer, source overflow, pagination, deferred related metrics, server-side service search" \tr -> do
       [Trace.metricDetailUrl testPid "system.cpu.utilization" "accounting" Nothing, Trace.metricDetailUrl testPid "container.cpu.time" "accounting" (Just "attributes.service.name"), Trace.metricExpandUrl testPid "container.cpu.time" "accounting" (Just "attributes.service.name")]
-        `shouldBe` map (("/p/" <> testPid.toText) <>) ["/metrics/details/system.cpu.utilization/?metric_source=accounting", "/metrics/details/container.cpu.time/?metric_source=accounting&label=attributes.service.name", "/metrics?tab=charts&metric_source=accounting&expand=container.cpu.time&label=attributes.service.name"]
+        `shouldBe` map (("/p/" <> testPid.toText) <>) ["/metrics/details/system.cpu.utilization?metric_source=accounting", "/metrics/details/container.cpu.time?metric_source=accounting&label=attributes.service.name", "/metrics?tab=charts&metric_source=accounting&expand=container.cpu.time&label=attributes.service.name"]
       let overview pid tab range cursor expand q = call tr $ Trace.metricsOverViewGetH pid (Just tab) range range range Nothing Nothing cursor expand Nothing q Nothing
           datapointsOf = \case
             Trace.MetricsOVDataPointMain (PageCtx _ (_, dps, _, countUrl, page, pageUrl, _)) -> pure (dps, countUrl, page, pageUrl)
@@ -671,7 +671,7 @@ spec = do
           card <- shellHtml tr $ Trace.metricCardGetH cards "request.duration" requested (Just "checkout")
           query <- fromMaybe "" . (.query) <$> renderedWidget card
           card `shouldContainAll` ["sum(distribution_sum) / sum(distribution_count)", "distribution_count &gt; 0", "resource.service.name", "checkout", "&quot;hideValue&quot;:true"]
-          (T.isInfixOf "by bin_auto(timestamp)," query, ordNub (mapMaybe (lookup "label") (linkParams "/metrics/details/request.duration/" card)))
+          (T.isInfixOf "by bin_auto(timestamp)," query, ordNub (mapMaybe (lookup "label") (linkParams "/metrics/details/request.duration" card)))
             `shouldBe` (isJust expected, maybeToList expected)
           for_ expected \label -> query `shouldSatisfy` T.isInfixOf ("by bin_auto(timestamp)," <> label)
           (T.isInfixOf (">" <> fromMaybe "All values" expected <> "</span>") card, T.isInfixOf ">Group by</span>" card) `shouldBe` (not (null labels), not (null labels))
@@ -707,7 +707,7 @@ spec = do
       item <- shellHtml tr $ LogItem.expandAPIlogItemH pid rid ts Nothing Nothing Nothing False
       metricsTab <- shellHtml tr $ LogItem.expandAPIlogItemH pid rid ts Nothing (Just "tab-metrics") Nothing True
       (T.isInfixOf exemplarMetric item, T.isInfixOf exemplarMetric metricsTab, T.isInfixOf "/related_metrics" metricsTab) `shouldBe` (False, False, True)
-      goldenParts "exemplar-metrics-tab" . ordNub $ tagsWith ["group-has-[.tab-metrics:checked]/dtab:block", "tab=tab-metrics&amp;partial=true"] item
+      goldenParts "exemplar-metrics-tab" . ordNub $ tagsWith ["group-has-[.tab-metrics:checked]/dtab:block", "tab=tab-metrics&amp;partial"] item
 
       -- A log carries no trace context: still the service tier. A metric without exemplars reports none.
       logs <- createTestProject tr "exemplar-logs"

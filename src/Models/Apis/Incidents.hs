@@ -79,7 +79,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), enumLit, rawSql)
 import Relude
-import Servant (FromHttpApiData)
+import Servant (FromHttpApiData, ToHttpApiData (..))
 import System.Types (DB)
 
 
@@ -105,7 +105,7 @@ data IncidentDelivery = PublishIncident | RefreshIncident
 
 data EpisodePhase = EpisodeActive | EpisodeRecovered | EpisodeResolved
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "Episode" EpisodePhase
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "Episode" EpisodePhase
 
 
 data Episode = Episode

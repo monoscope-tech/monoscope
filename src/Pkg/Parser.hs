@@ -20,7 +20,7 @@ import Relude
 import Relude.Extra.Foldable1 (minimumOn1)
 import Text.Megaparsec (parse)
 import Utils (formatUTC, kqlQuoted, nonEmptyT)
-import Web.HttpApiData (FromHttpApiData (..))
+import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 
 
 data QueryComponents = QueryComponents
@@ -225,7 +225,7 @@ displaySortFieldWith aliases (SortField field dirM) =
 
 data PageDirection = PageOlder | PageNewer
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "Page" PageDirection
+  deriving (FromHttpApiData, ToHttpApiData) via WrappedEnumSC 'Nothing "Page" PageDirection
 
 
 data PageCursor = PageCursor PageDirection UTCTime
@@ -748,6 +748,10 @@ binDensityFor = \case
 -- fall back to bar density, not 400 the whole chart.
 instance FromHttpApiData BinDensity where
   parseQueryParam = Right . binDensityFor . Just
+
+
+instance ToHttpApiData BinDensity where
+  toQueryParam = \case BarDensity -> "bar"; LineDensity -> "line"
 
 
 -- | Nice bucket widths, as @time_bucket@-ready PostgreSQL intervals.

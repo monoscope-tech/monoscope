@@ -31,6 +31,7 @@ import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Types.URI (urlDecode)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Slack qualified as SlackPage
@@ -460,7 +461,7 @@ spec = describe "Monitoring" do
       evalMonitorValueAt earlier tr snapshot 84
       notifications <- evalMonitorValueWithNotifs t0 tr snapshot 100
       suffix <- maybe (fail "monitor notification had no chart snapshot") pure $ listToMaybe [s | EmailNotification email <- notifications, s <- drop 1 $ T.splitOn "widgetZ=" email.htmlBody]
-      compressed <- either (fail . toString) pure $ B64URL.decodeBase64Untyped $ encodeUtf8 $ T.takeWhile (/= '&') suffix
+      compressed <- either (fail . toString) pure $ B64URL.decodeBase64Untyped $ urlDecode True $ encodeUtf8 $ T.takeWhile (/= '&') suffix
       widget <- either fail pure $ AE.eitherDecode @Widget.Widget $ GZip.decompress $ fromStrict compressed
       (widget.query, widget.unit, widget.alertThreshold, widget.pngProfile, Widget.mapWidgetTypeToChartType widget.wType) `shouldBe` (Nothing, Just "s", Just 60, Just Widget.PngSlack, "line")
       Widget.pngExportSize widget.pngProfile `shouldBe` (960, 320)

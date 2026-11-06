@@ -1004,7 +1004,7 @@ runMockConsumer topics bVar = interpret \_ -> \case
 -- | Run decoupledLoop against the in-memory broker until @done@ fires (15s backstop); returns the final broker.
 drive :: TestResources -> TVar Broker -> [Text] -> Queue.KafkaRole -> ([(Text, ByteString)] -> HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))) -> STM () -> IO Broker
 drive tr bVar topics role fn done = do
-  let loop = runBackground tr.trLogger tr.trATCtx tr.trTracerProvider $ void $ runErrorNoCallStack @K.KafkaError $ runMockProducer bVar $ runMockConsumer topics bVar $ Queue.decoupledLoop tr.trLogger tr.trATCtx tr.trTracerProvider role 1000 "test-client" "otlp_deadletter" fn
+  let loop = runBackground tr.trLogger tr.trATCtx tr.trTracerProvider $ void $ runErrorNoCallStack @K.KafkaError $ runMockProducer bVar $ runMockConsumer topics bVar $ Queue.decoupledLoop tr.trATCtx role 1000 "test-client" "otlp_deadletter" fn
   void $ timeout 15_000_000 $ race_ loop (atomically done)
   readTVarIO bVar
 

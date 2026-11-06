@@ -1,4 +1,6 @@
 module Pages.Telemetry (
+  metricDetailUrl,
+  traceFragmentUrl,
   -- Metrics
   metricsOverViewGetH,
   metricDetailsGetH,
@@ -15,14 +17,12 @@ module Pages.Telemetry (
   RelatedMetrics (..),
   metricBreakdownGetH,
   metricCardGetH,
-  metricDetailUrl,
   metricExpandUrl,
   metricExemplarsGetH,
   MetricExemplarsGet (..),
   relatedMetricsGetH,
   -- Trace
   traceH,
-  traceFragmentUrl,
   TraceDetailsGet (..),
   TraceUnavailableReason (..),
   tracePage,
@@ -37,7 +37,6 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale)
 import Data.Time.Format (formatTime)
-import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful (Eff)
@@ -58,7 +57,7 @@ import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..))
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), explorerNavTabs_)
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getRequestDetails, getServiceColor, getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -67,13 +66,15 @@ import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, nonEmptyT, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Web.Links hiding (explorerUrl)
 
 
 -- Shared URL/form state: search is applied before pagination in both views.
@@ -86,15 +87,11 @@ data MetricFilters = MetricFilters
   }
 
 
-metricPageUrl :: Projects.ProjectId -> Text -> MetricFilters -> Text
-metricPageUrl pid tab filters =
-  "/p/"
-    <> pid.toText
-    <> "/metrics?tab="
-    <> tab
-    <> foldMap
-      (\(k, v) -> "&" <> k <> "=" <> toUriStr v)
-      (filters.timeParams <> [(k, v) | (k, v) <- [("metric_source", filters.source), ("metric_prefix", filters.prefix)], v /= "all", not $ T.null v] <> [("q", filters.query) | not $ T.null filters.query])
+metricPageUrl :: Projects.ProjectId -> Text -> MetricFilters -> Maybe Int -> Maybe Text -> Text
+metricPageUrl pid tab filters cursor expand = (urls.traces pid).metricsOVGetH (Just tab) (time "from") (time "to") (time "since") (scoped filters.source) (scoped filters.prefix) cursor expand Nothing (guarded (not . T.null) filters.query) Nothing
+  where
+    time k = L.lookup k filters.timeParams
+    scoped = guarded (\v -> v /= "all" && not (T.null v))
 
 
 hasMetricFilters :: MetricFilters -> Bool
@@ -221,7 +218,7 @@ data MetricsOverViewGet
 
 
 instance ToHtml MetricsOverViewGet where
-  toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints, refCounts, countsUrl, page, pageUrl, filters))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints refCounts countsUrl page pageUrl filters
+  toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints, refCounts, countsUrl, page, _, filters))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints refCounts countsUrl page filters
   toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, inactive, filters, activeCount, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList inactive filters activeCount nextUrl
   toHtml (MetricsOVChartsPaginated (pid, mList, source, nextUrl)) = toHtml $ chartList pid source mList nextUrl
   toHtmlRaw = toHtml
@@ -362,7 +359,7 @@ instance ToHtml TraceDetailsGet where
       -- Preload only when details fit inline; a drawer must wait for a span click.
       -- KeepCurrent: the panel opens when content lands rather than flashing a
       -- skeleton, so a re-fired preload can't wipe rendered details back to a loader.
-      div_ (spanDetailAttrs_ KeepCurrent pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[document.getElementById('trace_span_container').clientWidth >= 64 * parseFloat(getComputedStyle(document.documentElement).fontSize)]", term "hx-sync" "this:replace"]) pass
+      div_ (spanDetailAttrs_ KeepCurrent pid sr.uSpanId sr.timestamp <> [hxTrigger_ "load[document.getElementById('trace_span_container').clientWidth >= 64 * parseFloat(getComputedStyle(document.documentElement).fontSize)]", term "hx-sync" "this:replace"]) pass
   toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn Nothing
   toHtml (TraceDetailsUnavailable selfUrl explorerUrl embedded reason) =
     -- The id is what Retry swaps: `closest div` would only replace the button row.
@@ -444,8 +441,9 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
       drawerM <- forM expandM $ fmap (fmap (metricsDetailsPage pid dashboards monitors filters.source labelM currentRange)) . Telemetry.getMetricData pid
       -- (dashboards, widgets, monitors) referencing each metric
       let refCounts = Map.fromList [(m.metricName, (length ds, sum (maybe 0 (countWidgetsWithMetric m.metricName) . (.schema) <$> ds), length ms)) | m <- dataPoints, let (ds, ms) = metricReferences m.metricName dashboards monitors]
-          pageUrl = metricPageUrl pid "datapoints" filters
-          countsUrl = "/p/" <> pid.toText <> "/metrics/datapoints/counts?" <> T.intercalate "&" [k <> "=" <> v | (k, v) <- filters.timeParams]
+          pageUrl = metricPageUrl pid "datapoints" filters Nothing Nothing
+          countsUrl = (urls.traces pid).dataPointCountsGetH (time "from") (time "to") (time "since")
+          time k = L.lookup k filters.timeParams
           bwconf' = bwconf{globalDrawerContent = join drawerM}
       addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf' (pid, V.fromList dataPoints, refCounts, countsUrl, cursor, pageUrl, filters)
     else do
@@ -457,7 +455,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
       let metricList = page.active
           nextFetchUrl = do
             guard $ cursor + pageSize < page.activeTotal
-            pure $ metricPageUrl pid "charts" filters <> "&cursor=" <> show (cursor + pageSize)
+            pure $ metricPageUrl pid "charts" filters (Just $ cursor + pageSize) Nothing
       if appendM /= Just True
         then do
           -- References are only needed by the drawer, not the chart catalog.
@@ -523,7 +521,7 @@ metricRelatedGetH pid metricName sourceM = metricFragmentH pid metricName source
 -- an exemplar it must be the exemplar's own timestamp, which a cumulative
 -- histogram can place weeks before the row that carried it.
 traceOverlayUrl :: Projects.ProjectId -> Text -> UTCTime -> Text
-traceOverlayUrl pid trId ts = "/p/" <> pid.toText <> "/log_explorer?showTrace=" <> toUriStr (trId <> "/?timestamp=" <> formatUTC ts)
+traceOverlayUrl pid trId ts = (urls.logExplorer pid).logExplorerGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just $ trId <> "/?timestamp=" <> formatUTC ts) Nothing Nothing Nothing Nothing
 
 
 -- | Representative traces for one metric. Rendered as a list for the Exemplars tab
@@ -642,20 +640,6 @@ metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Re
 metricBreakdownGetH pid metricName label = metricFragmentH pid metricName Nothing label $ pure Breakdown
 
 
--- | The URL 'traceH' answers. Shared so an embedder's @hx-get@ and the failure
--- state's Retry are the same request by construction. @timestamp@ is not
--- optional in practice: without it the fetch widens from a +/-5min window to a
--- 3-day scan, which is what OOM-killed TimeFusion on 2026-07-21.
---
--- @spanIdM@ opens the fragment focused on one span. 'traceH' already resolves a
--- span by id for nav — it looks past the render page to find it — so an issue whose
--- error is buried deep in a large trace can point straight at the failing span
--- instead of dropping the reader at the root to hunt for it.
-traceFragmentUrl :: Projects.ProjectId -> Text -> Maybe UTCTime -> Bool -> Maybe Int -> Maybe Text -> Text
-traceFragmentUrl pid trId tsM embedded spansM spanIdM =
-  "/p/" <> pid.toText <> "/traces/" <> trId <> "/?" <> T.intercalate "&" (foldMap (\ts -> ["timestamp=" <> formatUTC ts]) tsM <> ["embed=true" | embedded] <> foldMap (\n -> ["spans=" <> show n]) spansM <> foldMap (\sid -> ["span_id=" <> toUriStr sid]) spanIdM)
-
-
 -- Trace handler
 traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders TraceDetailsGet)
 traceH pid trId timestamp spanIdM nav embedM spansM = do
@@ -668,12 +652,8 @@ traceH pid trId timestamp spanIdM nav embedM spansM = do
       -- whenever the clicked span sits past it. Take the clamp maximum instead —
       -- still bounded, and the trace is warm by the time anyone navigates it.
       lookupLimit = Just 5000
-      explorerUrl =
-        "/p/"
-          <> pid.toText
-          <> "/log_explorer?query="
-          <> toUriStr ("context___trace_id==" <> decodeUtf8 @Text (AE.encode trId))
-          <> maybe "&since=3D" (\ts -> "&from=" <> formatUTC (addUTCTime (-300) ts) <> "&to=" <> formatUTC (addUTCTime 300 ts)) timestamp
+      around d = formatUTC . addUTCTime d <$> timestamp
+      explorerUrl = (urls.logExplorer pid).logExplorerGet (Just $ "context___trace_id==" <> decodeUtf8 @Text (AE.encode trId)) Nothing (maybe (Just "3D") (const Nothing) timestamp) (around (-300)) (around 300) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       unavailable = TraceDetailsUnavailable (traceFragmentUrl pid trId timestamp embedded spansM spanIdM) explorerUrl embedded
   withSpan_ "trace.load" [] do
     now <- Time.currentTime
@@ -717,12 +697,12 @@ metricsToolbar_ pid tab filters status =
   div_ [id_ "metrics-toolbar", class_ "sticky top-0 z-20 bg-bgBase py-1 border-b border-strokeWeak flex flex-wrap items-center gap-3"] do
     div_ [class_ "flex items-center gap-2 shrink-0"] do
       span_ [class_ "text-xs font-medium text-textWeak"] "View"
-      navTabStrip_ ViewTabs "Metric view" "tabs-sm" [(label, metricPageUrl pid view filters, tab == view) | (label, view) <- [("Charts", "charts"), ("Table", "datapoints")]]
+      navTabStrip_ ViewTabs "Metric view" "tabs-sm" [(label, metricPageUrl pid view filters Nothing Nothing, tab == view) | (label, view) <- [("Charts", "charts"), ("Table", "datapoints")]]
     form_
       [ id_ "metric-filters"
-      , action_ $ "/p/" <> pid.toText <> "/metrics"
+      , action_ metricsUrl
       , method_ "get"
-      , hxGet_ $ "/p/" <> pid.toText <> "/metrics"
+      , hxGet_ metricsUrl
       , hxTarget_ "#main-content"
       , hxSelect_ "#main-content"
       , hxSwap_ "outerHTML settle:0 show:top"
@@ -738,8 +718,10 @@ metricsToolbar_ pid tab filters status =
           Components.options_ (Just filters.prefix) $ ("all", "All metric groups") : [(g, T.dropWhileEnd (`elem` ['.', '_']) g) | g <- filters.groups]
         Components.searchInput_ "grow min-w-32 bg-bgBase" "Search metrics" [name_ "q", id_ "search-input", value_ filters.query]
         button_ [type_ "submit", class_ "btn btn-sm"] "Search"
-        when (hasMetricFilters filters) $ a_ ([href_ $ metricPageUrl pid tab (clearedFilters filters), class_ "text-sm link"] <> navTabAttrs) "Clear filters"
+        when (hasMetricFilters filters) $ a_ ([href_ $ metricPageUrl pid tab (clearedFilters filters) Nothing Nothing, class_ "text-sm link"] <> navTabAttrs) "Clear filters"
     status
+  where
+    metricsUrl = (urls.traces pid).metricsOVGetH Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 
 -- | Service picker for the metric catalogue. A project can have thousands of services, so
@@ -756,7 +738,7 @@ servicePicker_ pid current = do
     Components.searchInput_
       "w-full"
       "Search services"
-      [ hxGet_ $ "/p/" <> pid.toText <> "/metrics/services"
+      [ hxGet_ $ (urls.traces pid).metricServicesGetH Nothing Nothing
       , hxTrigger_ "input changed delay:200ms, toggle from:#metric-service-picker once"
       , hxTarget_ "#metric-service-options"
       , hxSwap_ "outerHTML"
@@ -795,7 +777,7 @@ chartsPage pid metricList inactive filters activeCount nextUrl =
     if V.null metricList && V.null inactive
       then
         if hasMetricFilters filters
-          then Components.emptyState_ def{icon = Just "filter", action = ESCustom $ a_ ([class_ "btn btn-sm w-max mx-auto", href_ $ metricPageUrl pid "charts" (clearedFilters filters)] <> navTabAttrs) "Clear filters"} "No metrics match these filters" ""
+          then Components.emptyState_ def{icon = Just "filter", action = ESCustom $ a_ ([class_ "btn btn-sm w-max mx-auto", href_ $ metricPageUrl pid "charts" (clearedFilters filters) Nothing Nothing] <> navTabAttrs) "Clear filters"} "No metrics match these filters" ""
           else
             div_ [class_ "w-full flex items-center justify-center h-96"]
               $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscopehq.com/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
@@ -807,12 +789,8 @@ chartsPage pid metricList inactive filters activeCount nextUrl =
           $ chartList pid filters.source metricList nextUrl
 
 
-metricDetailUrl :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text
-metricDetailUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics/details/" <> metricName <> "/?metric_source=" <> toUriStr source <> foldMap (("&label=" <>) . toUriStr) labelM
-
-
 metricExpandUrl :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text
-metricExpandUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics?tab=charts&metric_source=" <> toUriStr source <> "&expand=" <> toUriStr metricName <> foldMap (("&label=" <>) . toUriStr) labelM
+metricExpandUrl pid metricName source labelM = (urls.traces pid).metricsOVGetH (Just "charts") Nothing Nothing Nothing (Just source) Nothing Nothing (Just metricName) labelM Nothing Nothing
 
 
 -- | htmx wiring shared by every control that re-renders the metric details drawer.
@@ -828,12 +806,10 @@ data DetailLoading = ShowSkeleton | KeepCurrent
 
 
 -- | htmx wiring for loading a span into the trace details side panel.
-spanDetailAttrs_ :: DetailLoading -> Text -> Text -> UTCTime -> [Attribute]
-spanDetailAttrs_ loading pidT spanUuid ts =
-  [ hxGet_ $ "/p/" <> pidT <> "/log_explorer/" <> spanUuid <> "/" <> toText (iso8601Show ts) <> "/detailed?source=spans"
-  , hxTarget_ "#trace_details_content"
-  , hxSwap_ "innerHTML"
-  ]
+spanDetailAttrs_ :: DetailLoading -> Projects.ProjectId -> Text -> UTCTime -> [Attribute]
+spanDetailAttrs_ loading pid spanUuid ts =
+  [hxGet_ $ (urls.logExplorer pid).logExplorerItemDetailedGet u ts (Just "spans") Nothing Nothing False | u <- toList (UUID.fromText spanUuid)]
+    <> [hxTarget_ "#trace_details_content", hxSwap_ "innerHTML"]
     <> case loading of
       ShowSkeleton -> [hxIndicator_ "#trace_details_container", term "hx-on::before:request" "htmx.find('#trace-details-open').checked = true"]
       -- The panel opens from #trace_details_content's own after:settle hook.
@@ -900,7 +876,7 @@ metricCard pid source metricName metricType metricUnit labels selectedM = do
       { Widget.expandPushUrl = Just $ metricExpandUrl pid metricName source selected
       , Widget.groupByOptions = orderedLabels <$ guard (not $ null orderedLabels)
       , Widget.groupBySelected = Just $ fromMaybe "all" selected
-      , Widget.groupByUrl = Just $ "/p/" <> pid.toText <> "/metrics/card/" <> toUriStr metricName <> "?metric_source=" <> toUriStr source
+      , Widget.groupByUrl = Just $ (urls.traces pid).metricCardGetH metricName Nothing (Just source)
       , Widget.groupByTarget = Just $ "#" <> cardId
       }
 
@@ -924,14 +900,14 @@ inactiveMetricsList pid source metrics = do
         )
 
 
-dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> Text -> MetricFilters -> Html ()
-dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
+dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> MetricFilters -> Html ()
+dataPointsPage pid metrics refCounts countsUrl page filters = do
   -- take/drop, not V.slice: slice is partial and errors unless the whole
   -- window is in range, so a last page shorter than dataPointPageSize — or
   -- any project with fewer metrics than one page — crashed the tab with
   -- "invalid slice (0,25,3)".
   let rows = V.take dataPointPageSize $ V.drop (page * dataPointPageSize) allRows
-      metricRowUrl path = pageUrl <> "&cursor=" <> show page <> "&expand=" <> toUriStr path
+      metricRowUrl = metricPageUrl pid "datapoints" filters (Just page) . Just
   div_ [class_ "flex flex-col gap-4 px-4"] do
     -- Four icons, once each, instead of once per row: this table renders ~540 rows and the
     -- per-row copies were 886 KB of the 5.1 MB document.
@@ -1012,7 +988,7 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
             def
               { Table.search = Nothing
               , Table.treeConfig = Just Table.TreeConfig{rowLevel = (.level), rowPath = (.fullPath), isGroupRow = (.isGroup)}
-              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = if hasMetricFilters filters then "Try another search or clear the filters." else "Metrics will appear here once your application starts sending telemetry data.", action = if hasMetricFilters filters then Table.ESLink (metricPageUrl pid "datapoints" (clearedFilters filters)) "Clear filters" else Table.ESLink "https://monoscopehq.com/docs/sdks/" "View SDK setup guides"}
+              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = if hasMetricFilters filters then "Try another search or clear the filters." else "Metrics will appear here once your application starts sending telemetry data.", action = if hasMetricFilters filters then Table.ESLink (metricPageUrl pid "datapoints" (clearedFilters filters) Nothing Nothing) "Clear filters" else Table.ESLink "https://monoscopehq.com/docs/sdks/" "View SDK setup guides"}
               }
         }
     let total = V.length allRows
@@ -1021,7 +997,7 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
         span_ [class_ "tabular-nums"] $ toHtml $ show (page * dataPointPageSize + 1) <> "-" <> show (min total ((page + 1) * dataPointPageSize)) <> " of " <> show total
         div_ [class_ "join"] do
           let pageLink icon target enabled =
-                (if enabled then a_ ([class_ "btn btn-sm join-item", href_ $ pageUrl <> "&cursor=" <> show target] <> navTabAttrs) else span_ [class_ "btn btn-sm join-item btn-disabled"])
+                (if enabled then a_ ([class_ "btn btn-sm join-item", href_ $ metricPageUrl pid "datapoints" filters (Just target) Nothing] <> navTabAttrs) else span_ [class_ "btn btn-sm join-item btn-disabled"])
                   $ faSprite_ icon "regular" "w-4 h-4"
           pageLink "chevron-left" (page - 1) (page > 0)
           pageLink "chevron-right" (page + 1) ((page + 1) * dataPointPageSize < total)
@@ -1075,7 +1051,6 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
       sources = metric.serviceNames
       (dashboards, monitors) = metricReferences metric.metricName allDashboards allMonitors
       selected = mfilter (`elem` metric.metricLabels) labelM
-      detailsBase = "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
       sortedLabels = metricDimensions metric.metricLabels
       dimensions = maybe sortedLabels (\label -> label : filter (/= label) sortedLabels) selected
       (topDimensions, moreDimensions) = splitAt 4 dimensions
@@ -1088,9 +1063,9 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
               <> metricDetailSwap_
           )
           $ toHtml label
-      lazyTab tabId contentId path lbl = do
+      lazyTab tabId contentId url lbl = do
         input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ lbl, id_ tabId]
-        Components.lazyPanel_ (detailsBase <> path) ("change from:#" <> tabId <> " once") ("Loading " <> T.toLower lbl) [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ contentId, term "hx-ext" "forward-page-params"]
+        Components.lazyPanel_ url ("change from:#" <> tabId <> " once") ("Loading " <> T.toLower lbl) [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ contentId, term "hx-ext" "forward-page-params"]
   div_
     ( [ id_ "metric-details-content"
       , class_ "flex flex-col gap-5 h-full"
@@ -1110,7 +1085,7 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
             select_
               ( [ class_ "select select-sm cursor-pointer bg-bgRaised text-textStrong border border-strokeStrong rounded-lg w-36 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus max-md:h-11"
                 , Aria.label_ "Metric data source"
-                , hxGet_ detailsBase
+                , hxGet_ $ (urls.traces pid).metricDetailsGetH metric.metricName Nothing Nothing Nothing Nothing Nothing
                 , name_ "metric_source"
                 ]
                   <> metricDetailSwap_
@@ -1155,13 +1130,13 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
                   span_ [class_ "text-xs font-medium text-textWeak"] "Used by"
                   div_ [class_ "mt-2"]
                     $ linkList_ Nothing
-                    $ (map (\d -> ("dashboards/" <> d.id.toText, d.title)) dashboards <> map (\m -> ("monitors/alerts/" <> m.id.toText, "Monitor")) monitors)
-                    <&> \(path, label) -> ([href_ $ "/p/" <> pid.toText <> "/" <> path], span_ [class_ "block truncate text-textStrong"] $ toHtml label, pass)
+                    $ (map (\d -> (urls.dashboardsGet pid d.id Nothing Nothing Nothing Nothing [], d.title)) dashboards <> map (\m -> ((urls.monitors pid).alertSingleGet m.id, "Monitor")) monitors)
+                    <&> \(url, label) -> ([href_ url], span_ [class_ "block truncate text-textStrong"] $ toHtml label, pass)
           -- Each fetch hangs off its radio's own `change` (htmx `from:`): an unselected
           -- `.tab-content` is display:none and never fires `intersect`. Fetched on first
           -- reveal: an exemplar lookup is a text scan over raw metric rows.
-          lazyTab "metric-tab-related" "metric-related-content" "related" "Related metrics"
-          lazyTab "metric-tab-ex" "ex-content" "exemplars" "Exemplars"
+          lazyTab "metric-tab-related" "metric-related-content" ((urls.traces pid).metricRelatedGetH metric.metricName Nothing) "Related metrics"
+          lazyTab "metric-tab-ex" "ex-content" ((urls.traces pid).metricExemplarsGetH metric.metricName Nothing Nothing Nothing) "Exemplars"
 
 
 relatedMetrics :: Projects.ProjectId -> Text -> Telemetry.MetricDataPoint -> V.Vector Telemetry.MetricChartListData -> Html ()
@@ -1203,7 +1178,7 @@ metricDetailChart pid metric source selected =
   -- The exemplar overlay is opt-in per chart and declared here, next to the chart it
   -- decorates: widgets.ts looks for this attribute on an ancestor and, finding it,
   -- draws a diamond per representative trace over the series.
-  div_ [class_ "h-72 w-full", id_ $ chartId <> "-container", term "data-exemplars-url" $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/exemplars"]
+  div_ [class_ "h-72 w-full", id_ $ chartId <> "-container", term "data-exemplars-url" $ (urls.traces pid).metricExemplarsGetH metric.metricName Nothing Nothing Nothing]
     $ toHtml
     $ (metricWidget pid metric.metricName metric.metricType metric.metricUnit source selected Nothing (Just chartId) Nothing)
       { Widget.groupByOptions = metricDimensions metric.metricLabels <$ guard (not $ V.null metric.metricLabels)
@@ -1539,7 +1514,7 @@ renderSpanListTable services colors records =
             $ forM_ (["Time", "Span name", "Event type", "Span kind", "Exec. time"] :: [Text]) (td_ [] . toHtml)
           tbody_ $ forM_ filterRecords \spanRecord -> do
             let reqType = foldMap (\(t, _, _, _) -> t) $ getRequestDetails spanRecord.attributes
-            tr_ ([id_ $ "sp-list-" <> spanRecord.spanId, class_ "span-filterble font-medium"] <> spanDetailAttrs_ ShowSkeleton (UUID.toText spanRecord.projectId) spanRecord.uSpanId spanRecord.timestamp) do
+            tr_ ([id_ $ "sp-list-" <> spanRecord.spanId, class_ "span-filterble font-medium"] <> spanDetailAttrs_ ShowSkeleton (UUIDId spanRecord.projectId) spanRecord.uSpanId spanRecord.timestamp) do
               td_ $ Components.localTimeFmt_ "MMM dd yyyy HH:mm:ss.SSS" spanRecord.timestamp
               td_ $ toHtml spanRecord.spanName
               forM_ ([reqType, T.drop 2 $ maybe "" show spanRecord.kind, getDurationNSMS spanRecord.spanDurationNs] :: [Text]) $ td_ [] . span_ [class_ "cbadge-sm badge-neutral"] . toHtml
@@ -1646,7 +1621,7 @@ buildSpanTree_ pid sp level scol = do
                 , [__|on click remove .bg-fillBrand-weak .waterfall-active from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me
                      on keydown[(key is 'Enter' or key is ' ') and target is me] halt the event then call me.click()|]
                 ]
-                  <> spanDetailAttrs_ ShowSkeleton pid.toText uSpanId sp.spanRecord.timestamp
+                  <> spanDetailAttrs_ ShowSkeleton pid uSpanId sp.spanRecord.timestamp
             )
             sp.spanRecord.uSpanId
       )
@@ -1707,3 +1682,11 @@ buildSpanTree_ pid sp level scol = do
       $ div_ [class_ "waterfall-children"] do
         forM_ sp.children \c ->
           buildSpanTree_ pid c (level + 1) scol
+
+
+metricDetailUrl :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text
+metricDetailUrl pid metricName source = (urls.traces pid).metricDetailsGetH metricName Nothing Nothing Nothing (Just source)
+
+
+traceFragmentUrl :: Projects.ProjectId -> Text -> Maybe UTCTime -> Bool -> Maybe Int -> Maybe Text -> Text
+traceFragmentUrl pid trId tsM embedded spansM spanIdM = (urls.traces pid).tracesGet trId tsM spanIdM Nothing (guard embedded $> "true") spansM
