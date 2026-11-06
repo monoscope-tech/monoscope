@@ -51,7 +51,7 @@ import Pages.Components
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (Done, ATAuthCtx, HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, addTriggerEvent, Outcome (..), ActionResult, Refusal (..), act, done)
+import System.Types (ATAuthCtx, ActionResult, Done, HXRedirectDest, HXReswap, Outcome (..), Refusal (..), RespHeaders, TriggerEvents, XWidgetJSON, act, addRespHeaders, addTriggerEvent, done)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 

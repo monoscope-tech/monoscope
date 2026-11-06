@@ -70,7 +70,7 @@ import Relude
 import Servant (Header, Headers, ServerError (errHeaders), addHeader, err403, err404, err503, getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (Rendered (..), ATAuthCtx, DB, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS, Outcome, ActionResult, Refusal (..), act)
+import System.Types (ATAuthCtx, ActionResult, DB, Outcome, Refusal (..), Rendered (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Parsec qualified as Parsec
 import Text.Slugify (slugify)

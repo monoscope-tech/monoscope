@@ -122,7 +122,7 @@ import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), err400, err503, errBody)
 import System.Config
-import System.Types (successToast, Done, ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, Outcome (..), ActionResult, Refusal (..), act, done)
+import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
 import Text.Printf (printf)
 import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)

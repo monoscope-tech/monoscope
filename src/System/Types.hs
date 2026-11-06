@@ -68,14 +68,14 @@ import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runTime)
 import Effectful.Timeout (Timeout, runTimeout)
 import Log qualified
+import Lucid (Html, ToHtml (..))
 import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (DB)
 import Relude
-import Lucid (Html, ToHtml (..))
 import Servant (AuthProtect, HasStatus (..), Header, Headers, ServerError, StdMethod, UVerb, Union, Verb, addHeader, noHeader, respond)
-import Servant.HTML.Lucid (HTML)
 import Servant qualified
+import Servant.HTML.Lucid (HTML)
 import Servant.Htmx (HXRedirect, HXTrigger)
 import Servant.Server.Experimental.Auth (AuthServerData)
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -379,14 +379,13 @@ addWidgetJSON :: State.State XWidgetJSON :> es => Text -> Eff es ()
 addWidgetJSON widgetJson = State.modify $ \_ -> Just (WidgetJSON widgetJson)
 
 
--- * Typed answers to browser actions
+-- Typed answers to browser actions.
 --
 -- A form or button action answers with a domain value instead of opaque HTML. Its route
 -- lists every alternative ('Action' = 200 'Done' outcome | 422 'Refused' reason), so the
 -- API type, tests and handler signature all name what the endpoint does and how it can fail.
 -- 'Outcome' says how a success is presented (body, redirect, toast); 'Refusal' says what a
 -- refusal tells the user. Handlers build answers with 'act' (may be refused) or 'done'.
-
 
 -- | The action succeeded; the body is the outcome's 'outcomeBody'.
 newtype Done a = Done a

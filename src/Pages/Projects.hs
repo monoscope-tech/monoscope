@@ -117,7 +117,7 @@ import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, err500, err503, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (Done, ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS, Outcome (..), ActionResult, Refusal (..), act, done)
+import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, redirectCS)
 import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 

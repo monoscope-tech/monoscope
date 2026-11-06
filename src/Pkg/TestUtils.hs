@@ -256,6 +256,7 @@ import Relude.Extra.Enum (prev)
 import Relude.Extra.Tuple (toSnd)
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
+import Servant.API.UVerb (foldMapUnion)
 import Servant.Server qualified as ServantS
 import Servant.Types.SourceT qualified as Source
 import System.Clock (TimeSpec (TimeSpec))
@@ -278,7 +279,6 @@ import Web.ApiTypes (ApiActor (..))
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.I18n qualified as I18n
-import Servant.API.UVerb (foldMapUnion)
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "cryptonite" Crypto.Error (throwCryptoError)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -1369,6 +1369,8 @@ instance Answer (ActionResult e a) where
 
 -- | Which alternative an action answered with.
 class Settled e a x where settled :: x -> Either e a
+
+
 instance Settled e a (RespHeaders (Done a)) where settled (Servant.getResponse -> Done a) = Right a
 instance Settled e a (RespHeaders (Refused e)) where settled (Servant.getResponse -> Refused e) = Left e
 

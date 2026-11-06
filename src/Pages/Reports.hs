@@ -51,7 +51,7 @@ import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
-import System.Types (Done, ATAuthCtx, DB, RespHeaders, addRespHeaders, Outcome (..), done)
+import System.Types (ATAuthCtx, DB, Done, Outcome (..), RespHeaders, addRespHeaders, done)
 import UnliftIO (tryAny)
 import UnliftIO qualified
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, formatUTCMicros, hostPath, loadingIndicatorWith_)
