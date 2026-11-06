@@ -62,7 +62,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), selectFrom)
 import Relude
-import Servant (FromHttpApiData)
+import Servant (FromHttpApiData, ToHttpApiData (..))
 import System.Types (DB)
 
 
@@ -259,7 +259,7 @@ monitorToggleActiveById pid mid = do
 -- ["deactivate","reactivate","mute","unmute","resolve","delete"]
 data MonitorBulkAction = BADeactivate | BAReactivate | BAMute | BAUnmute | BAResolve | BADelete
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" MonitorBulkAction
+  deriving (FromHttpApiData, ToHttpApiData) via WrappedEnumSC 'Nothing "BA" MonitorBulkAction
 
 
 -- | Apply @action@ to monitors; @durationMinsM@ only matters for 'BAMute'

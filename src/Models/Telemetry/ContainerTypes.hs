@@ -12,7 +12,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
-import Web.HttpApiData (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData, ToHttpApiData (..))
 
 
 data ContainerRow = ContainerRow
@@ -48,7 +48,7 @@ data ContainerRow = ContainerRow
 data Scope = ScopeContainer | ScopePod | ScopeHost
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, ToParamSchema) via WrappedEnumSC 'Nothing "Scope" Scope
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, ToHttpApiData, ToParamSchema) via WrappedEnumSC 'Nothing "Scope" Scope
 
 
 data Runtime = Kubernetes | Docker | Host

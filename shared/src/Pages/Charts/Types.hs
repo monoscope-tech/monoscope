@@ -11,7 +11,7 @@ import Deriving.Aeson.Stock qualified as DAE
 import Language.Haskell.TH.Syntax qualified as THS
 import Pkg.Deriving (SnakeSchema (..), WrappedEnumSC (..))
 import Relude
-import Web.HttpApiData (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData, ToHttpApiData (..))
 
 
 data MetricsStats = MetricsStats
@@ -56,4 +56,4 @@ data DataType = DTMetric | DTJson | DTFloat | DTText
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (Monoid, Semigroup) via (Max DataType)
-  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "DT" DataType
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, ToHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "DT" DataType

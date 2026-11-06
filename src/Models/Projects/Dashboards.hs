@@ -17,7 +17,7 @@ module Models.Projects.Dashboards (
   getDashboardByIdUnscoped,
   getDashboardByProjectId,
   getDashboardByFilePath,
-  readDashboardsFromDirectory,
+  decodeDashboard,
   readDashboardEndpoint,
   validateDashboard,
   allWidgets,
@@ -68,18 +68,16 @@ import Effectful.Error.Static (Error, throwError)
 import GHC.Records (HasField (..))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction.Sessions qualified as TxS
-import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pkg.Components.Table (SortField (..), SortOrder (..))
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), selectFrom)
+import Pkg.DeriveUtils (SortField (..), SortOrder (..), UUIDId (..), WrappedEnumSC (..), selectFrom)
 import Pkg.Parser (TemplateLang (..), fillQueryTemplate, variablePresets, variablePresetsKQL)
 import Relude
-import Servant (FromHttpApiData, ServerError (..), err404)
+import Servant (FromHttpApiData, ServerError (..), ToHttpApiData (..), err404)
 import System.Directory (listDirectory)
 import System.FilePath (isExtensionOf, (</>))
 import System.Types (DB)
@@ -249,28 +247,17 @@ yamlFiles :: FilePath -> IO [FilePath]
 yamlFiles dir = sort . filter ("yaml" `isExtensionOf`) <$> listDirectory dir
 
 
--- | Read dashboard YAML files from directory at compile time via TH
-readDashboardsFromDirectory :: FilePath -> Q Exp
-readDashboardsFromDirectory dir = do
-  files <- runIO $ yamlFiles dir
-  mapM_ (THS.addDependentFile . (dir </>)) files
-  runIO (mapMaybeM (readDashboardFile dir) files) >>= THS.lift
+-- | Decode one dashboard YAML file, stamping it with its file name.
+decodeDashboard :: FilePath -> ByteString -> Either Text Dashboard
+decodeDashboard file = fmap (\d -> d{file = Just $ fromString file}) . (validateDashboard <=< first (("YAML error: " <>) . show) . Yml.decodeEither')
 
 
 -- | Read single dashboard YAML file
 readDashboardFile :: FilePath -> FilePath -> IO (Maybe Dashboard)
-readDashboardFile dir file = do
-  raw <- try @SomeException $ readFileBS path
-  let parsed =
-        first (("read error: " <>) . show) raw
-          >>= first (("YAML error: " <>) . show)
-          . Yml.decodeEither'
-          >>= validateDashboard
-          :: Either Text Dashboard
-  parsed
-    & either
-      (\e -> Nothing <$ putTextLn ("Error loading dashboard " <> toText path <> ": " <> e))
-      (\d -> pure $ Just d{file = Just $ fromString file})
+readDashboardFile dir file =
+  try @SomeException (readFileBS path)
+    <&> (first (("read error: " <>) . show) >=> decodeDashboard file)
+      >>= either (\e -> Nothing <$ putTextLn ("Error loading dashboard " <> toText path <> ": " <> e)) (pure . Just)
   where
     path = dir </> file
 
@@ -381,7 +368,7 @@ selectDashboardsByTeam pid teamId =
 -- ["title","created_at","updated_at"]
 data DashboardSort = DSTitle | DSCreatedAt | DSUpdatedAt
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (Display, FromHttpApiData, ToParamSchema) via WrappedEnumSC 'Nothing "DS" DashboardSort
+  deriving (Display, FromHttpApiData, ToHttpApiData, ToParamSchema) via WrappedEnumSC 'Nothing "DS" DashboardSort
 
 
 selectDashboardsSortedBy :: DB es => Projects.ProjectId -> SortOrder -> DashboardSort -> Eff es [DashboardVM]

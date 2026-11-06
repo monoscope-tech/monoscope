@@ -3,6 +3,8 @@
 -- are re-exported here, so importing this module still gets you everything.
 module Pkg.DeriveUtils (
   module Pkg.Deriving,
+  SortOrder (..),
+  SortField (..),
   AesonText (..),
   SnakeJSON (..),
   BaselineState (..),
@@ -65,6 +67,7 @@ import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (type (:>))
+import GHC.Records (HasField (..))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Hasql.Connection.Settings qualified as HCS
 import Hasql.Decoders qualified as D
@@ -78,7 +81,7 @@ import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.AssetManifestFingerprint (assetManifestFingerprint)
 import Pkg.Deriving
 import Relude
-import Servant (FromHttpApiData (..))
+import Servant (FromHttpApiData (..), ToHttpApiData (..))
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -256,6 +259,10 @@ instance Read a => HI.DecodeValue (WrappedEnumShow a) where
 
 instance Read a => FromHttpApiData (WrappedEnumShow a) where
   parseUrlPiece t = maybeToRight ("Invalid value: " <> t) $ WrappedEnumShow <$> readMaybe (toString t)
+
+
+instance Show a => ToHttpApiData (WrappedEnumShow a) where
+  toUrlPiece (WrappedEnumShow a) = show a
 
 
 data BaselineState = BSLearning | BSEstablished
@@ -638,3 +645,19 @@ internalIds = go
 -- Types without Generic decode a one-column row via OneColumn.
 concat <$> forM [[t|UUID.UUID|], [t|Text|], [t|Int64|], [t|Int|], [t|Bool|], [t|UTCTime|], [t|Double|], [t|AET.Value|]] \t ->
   [d|instance HI.DecodeRow $t where decodeRow = HI.getOneColumn <$> HI.decodeRow|]
+
+
+-- Sorting types for database queries
+data SortOrder = Asc | Desc deriving stock (Eq, Show)
+
+
+data SortField = SortField
+  { fieldName :: Text
+  , order :: SortOrder
+  }
+  deriving stock (Eq, Show)
+
+
+instance HasField "toSql" SortField Text where
+  getField (SortField name Asc) = name <> " ASC NULLS FIRST"
+  getField (SortField name Desc) = name <> " DESC NULLS LAST"

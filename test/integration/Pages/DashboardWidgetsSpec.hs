@@ -38,6 +38,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
 import Network.GRPC.Common.Protobuf (Proto (..))
+import Network.HTTP.Types (urlDecode)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (BWConfig (..), NavigationResponse (..), PageCtx (..))
 import Pages.BodyWrapper qualified as BodyWrapper
@@ -325,7 +326,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         table cols extra rows ps = Widget.renderTableWithDataAndParams ((def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just cols, Widget._projectId = Just testPid} & extra) rows ps
         linked = table [column{Widget.field = "session_id", Widget.title = "Session", Widget.link = Just "/p/{{project_id}}/log_explorer?viz_type=sessions&query={{row.session_id}}"}] id (V.singleton $ V.singleton "session / id") []
         -- Rows on a tabless dashboard had no swap target and ignored clicks.
-        rowNav tabM = table [column{Widget.field = "service", Widget.title = "Service"}] (\w -> w{Widget._dashboardId = Just "d1", Widget._tabSlug = tabM, Widget.onRowClick = Just def{Widget.setVariable = Just "service"}}) (V.singleton $ V.singleton "api") [("var-env", Just "prod")]
+        rowNav tabM = table [column{Widget.field = "service", Widget.title = "Service"}] (\w -> w{Widget._dashboardId = Just "00000000-0000-0000-0000-0000000000d1", Widget._tabSlug = tabM, Widget.onRowClick = Just def{Widget.setVariable = Just "service"}}) (V.singleton $ V.singleton "api") [("var-env", Just "prod")]
     renderT linked `shouldSatisfy` T.isInfixOf "query=session%20%2F%20id"
     goldenHtml "dashboard-widget-tables" do
       table [column{Widget.field = "q", Widget.title = "Query", Widget.copyable = Just True}] id (V.singleton $ V.singleton "select 1") []
@@ -345,7 +346,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let bigSqlWidget = (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.title = Just "Query Optimization Targets", Widget._projectId = Just testPid, Widget.sql = Just $ "SELECT " <> T.intercalate ", " [T.replicate 4 "attributes___db___system___name" <> " AS c" <> show n | n <- [1 :: Int .. 100]] <> " FROM otel_logs_and_spans"}
     T.length ("/p/" <> testPid.toText <> "/widget?widgetJSON=" <> Utils.toUriStr (Utils.encodeText bigSqlWidget)) `shouldSatisfy` (> 9600)
     T.length (Widget.widgetFetchUrl bigSqlWidget) `shouldSatisfy` (< 4000)
-    got <- call tr $ Routes.widgetGetH testPid Nothing (Just $ snd $ T.breakOnEnd "widgetZ=" $ Widget.widgetFetchUrl bigSqlWidget) (Just "24H") Nothing Nothing []
+    got <- call tr $ Routes.widgetGetH testPid Nothing (Just $ decodeUtf8 $ urlDecode True $ encodeUtf8 $ snd $ T.breakOnEnd "widgetZ=" $ Widget.widgetFetchUrl bigSqlWidget) (Just "24H") Nothing Nothing []
     (got.sql, got.title) `shouldBe` (bigSqlWidget.sql, bigSqlWidget.title)
     Widget.decodeWidgetZ "not-a-gzip-blob" `shouldReturn` Nothing
 
@@ -810,7 +811,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     filters [("const-endpointFilter", Just "hashes @> ARRAY['']"), ("const-endpointFilter-kql", Just "hashes[*] in (\"\")"), ("var-endpointHash", Just "faa041ff"), ("var-host", Just "integrations.routelift.com")] `shouldReturn` literal
     dependencies <- tabDashboard <$> getTab tr dashId "dependencies" Nothing [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "endpoint / hash")]
     let mapWidget = find ((== Widget.WTServiceMap) . (.wType)) (renderedWidgets dependencies)
-    ((\c -> (c.title, c.url)) <$> (mapWidget >>= (.cta))) `shouldBe` Just ("Open Service Map", "/p/" <> testPid.toText <> "/service_map?endpoint_hash=endpoint%20%2F%20hash&since=24H")
+    ((\c -> (c.title, c.url)) <$> (mapWidget >>= (.cta))) `shouldBe` Just ("Open Service Map", "/p/" <> testPid.toText <> "/service_map?since=24H&endpoint_hash=endpoint%20%2F%20hash")
 
     -- The picker replaced the tab, yet the handler first ran the whole widget phase with the
     -- required variable as '' (5.4s vs 5.5s for the populated dashboard). Server work shows as
@@ -954,9 +955,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     sessionsUrl <- location ["sessions"] window
     -- A trailing slash captures an empty last segment; it must not 404.
     location ["sessions", ""] window `shouldReturn` sessionsUrl
-    explorerLinkParams testPid sessionsUrl `shouldBe` [[("since", "7D"), ("viz_type", "sessions"), ("query", browserKql)]]
+    explorerLinkParams testPid sessionsUrl `shouldBe` [[("query", browserKql), ("since", "7D"), ("viz_type", "sessions")]]
     -- A link shared from the old page lands on that session.
-    explorerLinkParams testPid <$> location [] [("tab", Just "sessions"), ("session", Just "abc")] `shouldReturn` [[("viz_type", "sessions"), ("query", "attributes.session.id == \"abc\"")]]
+    explorerLinkParams testPid <$> location [] [("tab", Just "sessions"), ("session", Just "abc")] `shouldReturn` [[("query", "attributes.session.id == \"abc\""), ("viz_type", "sessions")]]
 
   it "dashboard list: zero state, template picker, telemetry-free shell, create, tags, rename, delete, duplicate, bulk teams and delete, star and sort" \tr -> do
     let filters = Dashboards.DashboardFilters []

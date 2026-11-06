@@ -57,7 +57,6 @@ module Utils (
   sanitizeBackendError,
   extractMessageFromLog,
   nonEmptyT,
-  timeScopedUrl,
   kqlQuoted,
   -- Fill color helpers
   statusFillColorText,
@@ -69,12 +68,8 @@ module Utils (
   navTabAttrs,
   dashboardContentNavAttrs,
   DashboardSwap (..),
-  explorerNavTabs_,
   navTabStrip_,
   TabStrip (..),
-  explorerTabs,
-  infrastructureNavTabs_,
-  infrastructureTabs,
   popoverTrigger_,
   popoverPanel_,
   fieldMenuPanel_,
@@ -169,25 +164,6 @@ nonEmptyT = mfilter (not . T.null)
 -- "\"C:\\\\tmp\""
 kqlQuoted :: Text -> Text
 kqlQuoted value = "\"" <> T.replace "\"" "\\\"" (T.replace "\\" "\\\\" value) <> "\""
-
-
--- | Append the time-range params (and any extras) to @base@, deciding @?@ vs @&@ once so
--- callers never hand-concatenate a separator onto a URL that may or may not have a query.
--- Empty values are dropped, so \"\" and Nothing behave identically.
---
--- >>> timeScopedUrl "/p/1/hosts" [] (Just "") Nothing (Just "15M")
--- "/p/1/hosts?since=15M"
--- >>> timeScopedUrl "/p/1/hosts" [("group", "region")] Nothing Nothing Nothing
--- "/p/1/hosts?group=region"
--- >>> timeScopedUrl "/p/1/hosts" [] Nothing Nothing Nothing
--- "/p/1/hosts"
-timeScopedUrl :: Text -> [(Text, Text)] -> Maybe Text -> Maybe Text -> Maybe Text -> Text
-timeScopedUrl base extras fromM toM sinceM =
-  case mapMaybe pair ([("from", fromM), ("to", toM), ("since", sinceM)] <> map (second Just) extras) of
-    [] -> base
-    params -> base <> "?" <> T.intercalate "&" params
-  where
-    pair (key, valueM) = (\value -> key <> "=" <> toUriStr value) <$> nonEmptyT valueM
 
 
 onpointerdown_ :: Text -> Attribute
@@ -460,6 +436,8 @@ htmxOverlayIndicator_ elId = span_ [id_ elId, class_ "htmx-indicator query-indic
 -- "/x?filter=old"
 -- >>> deleteParam "period" "/x?filter=old"
 -- "/x?filter=old"
+-- >>> deleteParam "type" "/x?filter=old&type[]=api_change"
+-- "/x?filter=old"
 --
 -- KNOWN LIMIT: the match is not anchored at a parameter boundary, so a key that is a
 -- prefix of another parameter corrupts the URL. Not reachable today — the only keys used
@@ -474,8 +452,8 @@ deleteParam key url
   | otherwise = fixQueryStart $ T.replace needle "" url
   where
     needle = url =~ reg :: Text
-    -- Handle &key= and ?key= patterns
-    reg = "&" <> key <> "(=[^&]*)?|\\?" <> key <> "(=[^&]*)?" :: Text
+    -- Handle &key=, ?key= and servant's list form key[]=
+    reg = "&" <> key <> "(\\[\\])?(=[^&]*)?|\\?" <> key <> "(\\[\\])?(=[^&]*)?" :: Text
     -- If result has path&remaining (no ?), fix to path?remaining
     fixQueryStart t = case T.breakOn "&" t of
       (before, after) | not (T.null after) && not ("?" `T.isInfixOf` before) -> before <> "?" <> T.drop 1 after
@@ -706,7 +684,7 @@ data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierSampled Int Int | FreeT
 
 
 freeTierUsageBanner :: Text -> FreeTierStatus -> Html ()
-freeTierUsageBanner pid = \case
+freeTierUsageBanner billingHref = \case
   FreeTierSampled oneIn limit -> banner "bg-fillWarning-weak text-textWarning" ("Free tier: today\x2019s events are sampled, about 1 in " <> toHtml (formatWithCommas $ fromIntegral oneIn) <> " kept, to stay within " <> toHtml (formatWithCommas $ fromIntegral limit) <> " a day.") "Upgrade to keep every event \x2192"
   FreeTierExceeded{} -> banner "bg-fillError-weak text-textError" "Daily cap reached \x2014 new events are dropped until 00:00 UTC." "Upgrade to keep sending events \x2192"
   NotFreeTier -> pass
@@ -715,7 +693,7 @@ freeTierUsageBanner pid = \case
     banner :: Text -> Html () -> Html () -> Html ()
     banner tone msg cta = div_ [class_ $ "flex w-full text-center items-center px-4 gap-4 py-1 rounded-lg justify-center " <> tone] do
       strong_ msg
-      a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] cta
+      a_ [class_ "underline underline-offset-2 link font-medium", href_ billingHref] cta
 
 
 -- | From today's (seen, kept) under a daily @limit@: sampled once about half or more is left out, and
@@ -1535,30 +1513,6 @@ navTabStrip_ kind label extra tabs = container [class_ $ "tabs tabs-box tabs-out
     (container, mark) = case kind of
       NavLinks -> (nav_, \current -> [term "aria-current" "page" | current])
       ViewTabs -> (div_ . (role_ "tablist" :), \current -> [role_ "tab", Aria.selected_ $ bool "false" "true" current])
-
-
--- | The Explorer section's tab strip, shared by every page in the section so a new tab is
--- added in one place. @active@ is the label of the current page.
-explorerNavTabs_ :: Projects.ProjectId -> Text -> Html ()
-explorerNavTabs_ pid active = navTabStrip_ NavLinks "Explorer views" "bg-fillWeaker" [(toHtml label, "/p/" <> pid.toText <> path, label == active) | (label, path) <- explorerTabs]
-
-
--- | Single source of truth for the Explorer section, used by both the tab strip and the
--- sidebar flyout so the two can't drift.
--- Events is both the section landing route and the first tab: the visual order should
--- reinforce that investigating what happened is primary, while watching a stream is opt-in.
-explorerTabs :: [(Text, Text)]
-explorerTabs = [("Events", "/log_explorer"), ("Live Tail", "/live_tail"), ("Metrics", "/metrics"), ("Service Map", "/service_map")]
-
-
--- | Infrastructure is one inventory with sibling views. Keeping this list shared by the
--- page tabs and sidebar flyout prevents Containers drifting back into Explorer.
-infrastructureNavTabs_ :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Html ()
-infrastructureNavTabs_ pid active fromM toM sinceM = navTabStrip_ NavLinks "Infrastructure views" "" [(toHtml label, timeScopedUrl ("/p/" <> pid.toText <> path) [] fromM toM sinceM, label == active) | (label, path) <- infrastructureTabs]
-
-
-infrastructureTabs :: [(Text, Text)]
-infrastructureTabs = [("Hosts", "/infrastructure/hosts"), ("Containers", "/infrastructure/containers"), ("Images", "/infrastructure/images"), ("Kubernetes", "/infrastructure/kubernetes"), ("Host Map", "/infrastructure/host-map")]
 
 
 -- CSS anchor-positioned popover attrs (DaisyUI popover-target pattern), replacing focus-based `.dropdown`.

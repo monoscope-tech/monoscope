@@ -262,7 +262,7 @@ spec = around withTestResources do
     shell <- hostsTable (Just "Incoming") Nothing Nothing
     stats <- hostsTable (Just "Incoming") Nothing (Just "true")
     let perHost t = sort [(vm.events.host, vm.events.eventCount) | vm <- V.toList t.rows]
-    (perHost shell, shell.config.deferredUrl) `shouldBe` ([("172.31.29.11", 0), ("api.test.com", 0)], Just ("/p/" <> pid.toText <> "/api_catalog?filter=Incoming&sort=-events&period=24h&stats=true"))
+    (perHost shell, shell.config.deferredUrl) `shouldBe` ([("172.31.29.11", 0), ("api.test.com", 0)], Just ("/p/" <> pid.toText <> "/api_catalog?sort=-events&period=24h&filter=Incoming&stats=true"))
     (perHost stats, stats.config.deferredUrl) `shouldBe` ([("172.31.29.11", 100), ("api.test.com", 100)], Nothing)
     listed Nothing `shouldReturn` both
     listed (Just "") `shouldReturn` both
@@ -440,7 +440,7 @@ spec = around withTestResources do
     (isJust (project ^? key "paths" . key "/v1/stores/{store_id}/orders"), project ^? key "servers" . _Array) `shouldBe` (True, Just (V.singleton (AE.object ["url" AE..= ("https://" <> host)])))
 
     ApiCatalog.ApiDocsPage (PageCtx bw vm) <- call tr (ApiCatalog.apiDocsH testPid (Just host) (Just "Incoming") (Just opHash))
-    let specUrl ext = "/p/" <> testPid.toText <> "/api_catalog/openapi." <> ext <> "?request_type=Incoming&host=api.example.com&endpoint=" <> opHash
+    let specUrl ext = "/p/" <> testPid.toText <> "/api_catalog/openapi." <> ext <> "?host=api.example.com&request_type=Incoming&endpoint=" <> opHash
     (vm.specJsonUrl, vm.specYamlUrl, vm.operations, vm.truncated, vm.inlineYaml) `shouldBe` (specUrl "json", specUrl "yaml", 1, False, Just yaml)
     tagsWith ["swagger-ui-bundle"] (foldMap renderT bw.headContent) `shouldBe` ["<script src=\"" <> assetUrl "/public/assets/deps/swagger-ui/swagger-ui-bundle.js" <> "\" defer=\"true\""]
     goldenParts "api-docs-swagger-mount" $ elementsWith ["id=\"swagger-ui\""] (renderT vm)

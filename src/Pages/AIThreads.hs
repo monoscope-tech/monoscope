@@ -41,6 +41,7 @@ import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), 
 import Utils (faSprite_, renderMarkdownTocWithPrefix)
 import Web.FormUrlEncoded (FromForm (..), parseAll, parseUnique)
 import Web.HttpApiData (FromHttpApiData (..))
+import Web.Links
 import Web.MCP qualified as MCP
 
 
@@ -158,8 +159,8 @@ instance Outcome AIPage where
   outcomeRedirect =
     Just . \case
       ThreadPage pid convId -> threadUrl pid convId
-      RoutinesPage pid -> "/p/" <> pid.toText <> "/ai/routines"
-      ThreadsPage pid -> "/p/" <> pid.toText <> "/ai"
+      RoutinesPage pid -> urls.aiRoutinesGet pid
+      ThreadsPage pid -> urls.aiThreadsGet pid
 
 
 data PromptError = EmptyPrompt | PromptTooLong
@@ -280,14 +281,14 @@ routinesGetH pid = do
                   div_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml routine.title
                   div_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml $ maybe "Routine" Issues.routineKindLabel routine.routineKind <> " · " <> bool "Paused" "Active" routine.routineActive
                 when canEdit do
-                  let (toggle, toggleLabel) = bool ("/resume", "Resume") ("/pause", "Pause") routine.routineActive
-                  form_ [hxPost_ $ routineUrl routine <> toggle, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ toHtml @Text toggleLabel
-                  when (isJust routine.routineRunningSince) $ form_ [hxPost_ $ routineUrl routine <> "/cancel", hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost text-textWarning active:scale-[0.96] transition-transform", type_ "submit"] "Stop active runs"
-                  when (isJust routine.routineInterval) $ form_ [hxPost_ $ routineUrl routine <> "/destination", hxSwap_ "none"] do
+                  let (toggle, toggleLabel) = bool (urls.aiRoutineResumePost, "Resume") (urls.aiRoutinePausePost, "Pause") routine.routineActive
+                  form_ [hxPost_ $ toggle pid routine.conversationId, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ toHtml @Text toggleLabel
+                  when (isJust routine.routineRunningSince) $ form_ [hxPost_ $ urls.aiRoutineCancelPost pid routine.conversationId, hxSwap_ "none"] $ button_ [class_ "btn btn-xs btn-ghost text-textWarning active:scale-[0.96] transition-transform", type_ "submit"] "Stop active runs"
+                  when (isJust routine.routineInterval) $ form_ [hxPost_ $ urls.aiRoutineDestinationPost pid routine.conversationId, hxSwap_ "none"] do
                     let slackEnabled = routine.routineDestination == Just Issues.DestinationSlack
                     input_ [type_ "hidden", name_ "destination", value_ $ bool "slack" "conversation" slackEnabled]
                     button_ [class_ "btn btn-xs btn-ghost active:scale-[0.96] transition-transform", type_ "submit"] $ bool "Send results to Slack" "Stop Slack delivery" slackEnabled
-                  button_ [class_ "btn btn-xs btn-ghost text-textError active:scale-[0.96] transition-transform", hxDelete_ $ routineUrl routine, hxConfirm_ "Delete this routine? Its conversation and past results will be kept.", hxSwap_ "none"] "Delete"
+                  button_ [class_ "btn btn-xs btn-ghost text-textError active:scale-[0.96] transition-transform", hxDelete_ $ urls.aiRoutineDelete pid routine.conversationId, hxConfirm_ "Delete this routine? Its conversation and past results will be kept.", hxSwap_ "none"] "Delete"
         unless (null recentRuns) $ section_ [Aria.label_ "Recent routine runs"] do
           h2_ [class_ "mb-3 text-sm font-semibold text-textStrong"] "Recent runs"
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak bg-bgRaised"] $ for_ recentRuns \run ->
@@ -308,7 +309,6 @@ routinesGetH pid = do
             h3_ [class_ "mb-3 text-sm font-semibold text-textStrong"] $ toHtml $ Issues.routineCategoryLabel category
             div_ [class_ "grid gap-4 md:grid-cols-2 xl:grid-cols-3"] $ for_ (filter ((== category) . (.category)) Issues.routineTemplates) templateCard_
       where
-        routineUrl routine = threadUrl pid routine.conversationId <> "/routine"
         categoryId = ("routine-category-" <>) . T.toLower . T.replace " " "-" . Issues.routineCategoryLabel
         templateCard_ template = do
           let added = template.key `elem` mapMaybe (.templateKey) installedRoutines
@@ -317,7 +317,7 @@ routinesGetH pid = do
               span_ [class_ "whitespace-nowrap rounded-md bg-fillWeak px-2 py-0.5 font-mono text-xs text-textStrong"] $ toHtml $ Issues.routineScheduleLabel template.schedule
               if added
                 then span_ [class_ "inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-textSuccess"] $ faSprite_ "check" "solid" "h-3 w-3" >> "Added"
-                else when canEdit $ form_ [hxPost_ $ "/p/" <> pid.toText <> "/ai/routines/install", hxSwap_ "none", class_ "shrink-0"] do
+                else when canEdit $ form_ [hxPost_ $ urls.aiRoutineInstallPost pid, hxSwap_ "none", class_ "shrink-0"] do
                   input_ [type_ "hidden", name_ "templateKey", value_ template.key]
                   button_ [type_ "submit", Aria.label_ $ "Add " <> template.title, class_ "btn btn-sm gap-1.5 hover:border-strokeBrand-strong hover:text-textBrand active:scale-[0.96] transition-[color,border-color,scale]"] $ faSprite_ "plus" "regular" "h-3 w-3" >> "Add routine"
             div_ [class_ "mt-4 flex items-center gap-2"] do
@@ -393,7 +393,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           , conversations
           , pageActions =
               conversationM >>= \conversation -> case Issues.conversationIssueId conversation of
-                Just issueId -> Just $ a_ ([href_ $ "/p/" <> pid.toText <> "/issues/" <> issueId.toText, class_ "btn btn-sm btn-ghost gap-2 active:scale-[0.96] transition-transform", Aria.label_ "View issue"] <> navTabAttrs) do
+                Just issueId -> Just $ a_ ([href_ $ (urls.issues pid).detailGet issueId Nothing Nothing Nothing Nothing Nothing, class_ "btn btn-sm btn-ghost gap-2 active:scale-[0.96] transition-transform", Aria.label_ "View issue"] <> navTabAttrs) do
                   faSprite_ "bug" "regular" "h-3.5 w-3.5"
                   span_ [class_ "max-md:hidden"] "View issue"
                 Nothing -> scheduleControl_ conversation.conversationId routineM <$ guard (canEdit && conversation.conversationType == Issues.CTWeb && (isNothing conversation.routineKind || isJust conversation.routineInterval))
@@ -406,7 +406,7 @@ threadPageGetH pid convId docM runM hxTarget = do
     runView_ :: Bool -> Issues.RoutineRun -> Issues.RoutineRunEvidence -> Maybe Projects.User -> [Issues.AIArtifact] -> ProjectMembers.Permissions -> [Investigations.OperationEntry AI.OperationPolicy] -> Maybe (Html ()) -> Html ()
     runView_ retained run evidence requestedBy artifacts viewerPermission operations fixEvidence =
       section_
-        ([id_ "routine-run", class_ "space-y-5"] <> [attribute | run.status == Issues.RunRunning, attribute <- [hxGet_ $ runUrl pid run.id <> "?conversation=" <> convId.toText, hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxTarget_ "this", hxSwap_ "outerMorph", term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]])
+        ([id_ "routine-run", class_ "space-y-5"] <> [attribute | run.status == Issues.RunRunning, attribute <- [hxGet_ $ urls.aiRoutineRunGet pid run.id (Just convId), hxTrigger_ "every 5s", hxSelect_ "#routine-run", hxTarget_ "this", hxSwap_ "outerMorph", term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]])
         do
           header_ [class_ "space-y-2"] do
             h2_ [class_ "text-base font-semibold text-textStrong break-words"] $ toHtml $ fromMaybe "Run" run.title
@@ -439,7 +439,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           unless (null operations) $ section_ [Aria.label_ "Action history", class_ "space-y-3"] do
             div_ [class_ "flex items-center justify-between gap-3"] do
               h2_ [class_ "text-sm font-semibold text-textStrong"] "Action history"
-              let refresh = runUrl pid run.id <> "?conversation=" <> convId.toText
+              let refresh = urls.aiRoutineRunGet pid run.id (Just convId)
               a_ [href_ refresh, hxGet_ refresh, hxSelect_ "#routine-run", hxTarget_ "#routine-run", hxSwap_ "outerMorph", term "hx-preload" "false", class_ "btn btn-xs btn-ghost"] "Refresh actions"
             p_ [class_ "text-xs text-textWeak"] "Most recent 200 actions for this request, including unresolved earlier actions. A saved response can contain a tool error."
             for_ operations \operation -> article_ [id_ $ "operation-" <> operation.id.toText, class_ "space-y-2 rounded-lg border border-strokeWeak p-3"] do
@@ -480,7 +480,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                       localTimeFmt_ "MMM d, HH:mm" request.expiresAt
                     when (viewerPermission >= max required (Catalog.approverPermission request.approver))
                       $ form_
-                        [ hxPost_ $ "/p/" <> pid.toText <> "/ai/operations/" <> operation.id.toText <> "/review"
+                        [ hxPost_ $ urls.aiOperationReviewPost pid operation.id
                         , hxTarget_ "closest #routine-run"
                         , hxSelect_ "#routine-run"
                         , hxSwap_ "outerMorph"
@@ -526,14 +526,14 @@ threadPageGetH pid convId docM runM hxTarget = do
         faSprite_ "clock" "regular" "h-3.5 w-3.5"
         span_ [class_ "max-md:hidden"] $ toHtml $ maybe "Schedule" (\(conversation, interval) -> bool "Paused" (Issues.routineCadence interval) conversation.routineActive) routineState
       div_ [class_ "absolute end-0 top-full z-30 mt-2 w-64 rounded-xl border border-strokeWeak bg-bgRaised p-3 shadow-lg"] do
-        form_ [class_ "space-y-3", hxPost_ $ threadUrl pid conversationId <> "/routine", hxSwap_ "none"] do
+        form_ [class_ "space-y-3", hxPost_ $ urls.aiRoutinePost pid conversationId, hxSwap_ "none"] do
           label_ [class_ "block text-xs font-medium text-textStrong"] "Run every"
           div_ [class_ "flex items-center gap-2"] do
             input_ [type_ "number", name_ "intervalMinutes", min_ "5", max_ "10080", value_ $ maybe "1440" (show . Issues.routineIntervalMinutes . snd) routineState, class_ "input input-sm min-w-0 grow text-base sm:text-xs", Aria.label_ "Routine interval in minutes"]
             span_ [class_ "text-xs text-textWeak"] "minutes"
           p_ [class_ "text-xs text-textWeak"] "New routines act automatically within your current role. Existing routine policies stay unchanged."
           button_ [type_ "submit", class_ "btn btn-sm btn-primary w-full active:scale-[0.96] transition-transform"] "Save routine"
-        when (any ((.routineActive) . fst) routineState) $ form_ [class_ "mt-3 border-t border-strokeWeak pt-2", hxPost_ $ threadUrl pid conversationId <> "/routine/pause", hxSwap_ "none"] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost w-full active:scale-[0.96] transition-transform"] "Pause routine"
+        when (any ((.routineActive) . fst) routineState) $ form_ [class_ "mt-3 border-t border-strokeWeak pt-2", hxPost_ $ urls.aiRoutinePausePost pid conversationId, hxSwap_ "none"] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost w-full active:scale-[0.96] transition-transform"] "Pause routine"
 
     threadPage_ :: UUIDId "ai_routine_run" -> Bool -> Maybe Text -> [Issues.RoutineRun] -> Maybe (Html ()) -> Maybe Issues.ConversationSummary -> Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Bool -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
     threadPage_ requestId canEdit instructions runs runContent conversationM projectId activeConversationIdM routineM allowActionUi messages docs openDoc = div_ [id_ "ai-conversation", class_ "group/conversation relative h-full min-h-0 flex bg-bgBase"] do
@@ -547,7 +547,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               for_ (conversationM >>= (.routinePolicy)) \policy -> do
                 let selection = case policy of Issues.ReviewSelected selected -> Just selected; (Issues.Observe; Issues.Autonomous) -> Nothing
                 if canEdit
-                  then form_ [hxPost_ $ threadHref <> "/routine/policy", hxSwap_ "none", class_ "group/policy space-y-2 rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
+                  then form_ [hxPost_ $ foldMap (urls.aiRoutinePolicyPost projectId) activeConversationIdM, hxSwap_ "none", class_ "group/policy space-y-2 rounded-xl border border-strokeWeak bg-bgRaised p-4"] do
                     label_ [Lucid.for_ "routine-policy", class_ "block text-sm font-medium text-textStrong"] "Execution policy"
                     select_ [id_ "routine-policy", name_ "policy", class_ "select select-sm w-full text-base sm:text-xs"] do
                       option_ ([value_ "observe"] <> [selected_ "selected" | policy == Issues.Observe]) "Observe"
@@ -577,7 +577,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 p_ [class_ "my-3 text-sm text-textWeak"] "Changes apply to future runs. Past runs keep the instructions they used."
                 if canEdit
                   then do
-                    form_ [hxPost_ $ threadHref <> "/routine/instructions", hxSwap_ "none", class_ "space-y-3"] do
+                    form_ [hxPost_ $ foldMap (urls.aiRoutineInstructionsPost projectId) activeConversationIdM, hxSwap_ "none", class_ "space-y-3"] do
                       label_ [Lucid.for_ "routine-instructions", class_ "block text-sm font-medium text-textStrong"] "Instructions"
                       textarea_ [id_ "routine-instructions", name_ "instructions", required_ "required", maxlength_ "4000", rows_ "8", class_ "textarea w-full text-base sm:text-sm"] $ toHtml $ fromMaybe "" instructions
                       button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save instructions"
@@ -588,7 +588,7 @@ threadPageGetH pid convId docM runM hxTarget = do
               do
                 unless (null runs) $ section_ [class_ "mb-6 space-y-2", Aria.label_ "Routine runs"] do
                   h2_ [class_ "text-sm font-semibold text-textStrong"] "Runs"
-                  for_ runs \run -> a_ ([href_ $ runUrl projectId run.id, class_ "flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-offset-2"] <> inspectorAttrs (runUrl projectId run.id <> foldMap (("?conversation=" <>) . (.toText)) activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
+                  for_ runs \run -> a_ ([href_ $ runUrl projectId run.id, class_ "flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-textStrong hover:bg-fillHover focus-visible:outline-2 focus-visible:outline-offset-2"] <> inspectorAttrs (urls.aiRoutineRunGet projectId run.id activeConversationIdM) <> [term "hx-select-oob" $ "#" <> runStatusId run <> ":outerHTML"]) do
                     time_ [datetime_ $ show run.startedAt, class_ "text-sm text-textStrong"] $ toHtml $ formatTime defaultTimeLocale "%e %b, %H:%M UTC" run.startedAt
                     span_ [id_ $ runStatusId run] $ uncurry tonePill_ $ runStatus run.status
                 if hasVisibleHistory messages
@@ -598,7 +598,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                   else foldMap routineEmpty_ routineM
         unless (isJust runContent && isNothing conversationM) $ form_
           [ class_ "shrink-0 border-t border-strokeWeak bg-bgBase p-4"
-          , hxPost_ $ "/p/" <> projectId.toText <> "/ai" <> foldMap (("/" <>) . (.toText)) activeConversationIdM
+          , hxPost_ $ maybe (urls.aiThreadsPost projectId) (urls.aiThreadPost projectId) activeConversationIdM
           , hxTarget_ "this"
           , hxSwap_ "none"
           , hxIndicator_ "#ai-thread-loader"
@@ -645,7 +645,7 @@ threadPageGetH pid convId docM runM hxTarget = do
                 Just _ -> a_ ([id_ "ai-inspector-close", href_ threadHref, Aria.label_ "Back to conversation", class_ "btn btn-sm btn-ghost gap-2"] <> inspectorAttrs threadHref) do
                   faSprite_ "xmark" "regular" "size-3.5"
                   span_ "Close"
-                Nothing -> a_ ([id_ "ai-inspector-close", href_ $ "/p/" <> projectId.toText <> "/ai/routines", class_ "btn btn-sm btn-ghost gap-2"] <> navTabAttrs) do
+                Nothing -> a_ ([id_ "ai-inspector-close", href_ $ urls.aiRoutinesGet projectId, class_ "btn btn-sm btn-ghost gap-2"] <> navTabAttrs) do
                   faSprite_ "arrow-left" "regular" "size-3.5"
                   span_ "All routines"
             div_ [class_ "min-h-0 grow overflow-y-auto px-5 py-5"] $ maybe (foldMap documentView_ openDoc) identity runContent
@@ -659,7 +659,7 @@ threadPageGetH pid convId docM runM hxTarget = do
           Catalog.ReviewEditors -> "Editors or administrators"
           Catalog.ReviewAdministrators -> "Administrators"
         threadHref = foldMap (threadUrl projectId) activeConversationIdM
-        docHref doc = threadHref <> "?doc=" <> toText doc.key
+        docHref doc = foldMap (\cid -> urls.aiThreadGet projectId cid (Just doc.key)) activeConversationIdM
         (openBody, openToc) = maybe (mempty, []) (renderMarkdownTocWithPrefix $ "ai-document-" <> convId.toText <> "-") $ openDoc >>= (.content)
         inspectorAttrs href =
           [ hxGet_ href
@@ -820,10 +820,6 @@ authorizeProject pid = do
   unlessM (isJust <$> ProjectMembers.getUserPermission pid sess.user.id) $ throwError Servant.err403
 
 
-threadUrl :: Projects.ProjectId -> UUIDId "conversation" -> Text
-threadUrl pid convId = "/p/" <> pid.toText <> "/ai/" <> convId.toText
-
-
 -- | Schedule the routine's next run, if the write produced one.
 enqueue :: ATAuthCtx (Maybe Issues.ScheduledRoutine) -> ATAuthCtx ()
 enqueue write = do
@@ -927,10 +923,6 @@ routineRunGetH pid runId originM = do
   threadPageGetH pid (fromMaybe run.conversationId originM) Nothing (Just run) Nothing
 
 
-runUrl :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Text
-runUrl pid runId = "/p/" <> pid.toText <> "/ai/runs/" <> runId.toText
-
-
 routineInstructionsPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineInstructionsForm -> ATAuthCtx (ActionResult PromptError AIPage)
 routineInstructionsPostH pid convId form = act do
   authorizeConversation pid convId
@@ -961,3 +953,11 @@ authorizeConversation :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCt
 authorizeConversation pid conversation = do
   (session, _) <- Projects.sessionAndProject pid
   unlessM (AI.canReadEvidence (AI.MemberAccess AI.WebSession session.user.id) pid conversation) $ throwError Servant.err403
+
+
+threadUrl :: Projects.ProjectId -> UUIDId "conversation" -> Text
+threadUrl pid conv = urls.aiThreadGet pid conv Nothing
+
+
+runUrl :: Projects.ProjectId -> UUIDId "ai_routine_run" -> Text
+runUrl pid run = urls.aiRoutineRunGet pid run Nothing

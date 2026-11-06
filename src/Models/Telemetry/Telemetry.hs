@@ -183,7 +183,7 @@ import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import Text.Casing (fromAny, toKebab)
 import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
-import Web.HttpApiData (FromHttpApiData (..))
+import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import "cryptonite" Crypto.Hash qualified as Crypto
 
 
@@ -915,7 +915,7 @@ bursts at minCount window evs =
 -- (Sentry's "Recommended": a replay session, then a user, then a URL, newest first).
 data EventStep = Older | Newer | Recommended
   deriving stock (Eq, Read, Show)
-  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "" EventStep
+  deriving (FromHttpApiData, ToHttpApiData) via WrappedEnumSC 'Nothing "" EventStep
 
 
 -- | The traced event carrying @hashKey@ nearest to @from@ in one direction, within a

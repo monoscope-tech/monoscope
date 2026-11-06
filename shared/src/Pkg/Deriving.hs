@@ -42,13 +42,13 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Envy (Var (..))
 import Text.Casing (fromSnake, quietSnake, toPascal)
-import Web.HttpApiData (FromHttpApiData (..))
+import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 
 
 -- | A typed identifier shared by native workers, CLI and server.
 newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
   deriving stock (Generic, Read, Show, TH.Lift)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromHttpApiData, Hashable, NFData, Ord, ToParamSchema, ToSchema)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromHttpApiData, Hashable, NFData, Ord, ToHttpApiData, ToParamSchema, ToSchema)
 
 
 instance HasField "toText" (UUIDId name) Text where
@@ -151,6 +151,10 @@ instance (KnownSymbol prefix, Read a, Show a) => AE.FromJSON (WrappedEnumSC qual
 
 instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC qualType prefix a) where
   parseUrlPiece t = maybe (Left $ "Invalid value: " <> t) (Right . WrappedEnumSC) $ decodeEnumSC @prefix (toString @Text t)
+
+
+instance (KnownSymbol prefix, Show a) => ToHttpApiData (WrappedEnumSC qualType prefix a) where
+  toUrlPiece (WrappedEnumSC a) = toText $ encodeEnumSC @prefix a
 
 
 -- | envy env-var (de)serialization. 'decodeEnumSC' normalizes case via

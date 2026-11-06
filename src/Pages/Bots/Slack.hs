@@ -79,8 +79,9 @@ import System.Config (AuthContext (config, env, pool), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, ProjectToolCtx, RespHeaders, addRespHeaders)
 import UnliftIO (timeout, withRunInIO)
 import UnliftIO.Exception (Handler (..), bracket, catch, catches, finally, throwIO, tryAny)
-import Utils (encodeText, hostPath, toUriStr)
+import Utils (encodeText, hostPath)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
+import Web.Links (CookieProtectedRoutes (..), ProjectsRoutes' (..), urls)
 
 
 -- | Missing slackData is always an anomaly: the caller acts on behalf of an authed project.
@@ -222,7 +223,7 @@ disconnectEvidencePostH :: Projects.ProjectId -> ATAuthCtx (Headers '[Header "Lo
 disconnectEvidencePostH pid = do
   sess <- Projects.getSession
   Integrations.revokeSlackEvidence pid sess.user.id
-  pure $ addHeader ("/p/" <> pid.toText <> "/settings/integrations") Servant.NoContent
+  pure $ addHeader (urls.projects.integrationGet pid) Servant.NoContent
 
 
 newtype SlackLinkForm = SlackLinkForm {projectId :: Projects.ProjectId}
@@ -280,7 +281,7 @@ linkProjectGetH slack_code stateM = do
       case saved of
         Left _ -> refuse EvidenceNotStored
         Right False -> refuse EvidenceGrantMismatch
-        Right True -> pure $ addHeader ("/p/" <> consent.projectId.toText <> "/settings/integrations") $ NoContent $ PageCtx def ()
+        Right True -> pure $ addHeader (urls.projects.integrationGet consent.projectId) $ NoContent $ PageCtx def ()
     linkWorkspace :: Projects.UserId -> Integrations.SlackInstall -> Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
     linkWorkspace installer install code = do
       let pid = install.projectId
@@ -310,7 +311,7 @@ linkProjectGetH slack_code stateM = do
             result <- tryAny $ sendSlackWelcomeViaWebhook token'.incomingWebhook.url project'.title
             whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
           pure $ installedResponse "Slack" pid install.onboarding bwconf
-        _ -> pure $ addHeader ("/p/" <> pid.toText <> "/settings/integrations") $ NoTokenFound $ PageCtx bwconf ()
+        _ -> pure $ addHeader (urls.projects.integrationGet pid) $ NoTokenFound $ PageCtx bwconf ()
 
 
 slackInteractionsH :: SlackInteraction -> ATBaseCtx AE.Value
@@ -346,8 +347,7 @@ slackInteractionsHWithTools projectTools interaction = do
           triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView (SlackDashboardContext principal.projectId interaction.user_id interaction.channel_id Nothing) (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
           traceResp $ textResp "modal opened"
         _ | T.strip interaction.text == "search connect" -> do
-          let consentUrl = T.dropWhileEnd (== '/') authCtx.env.hostUrl <> "/p/" <> principal.projectId.toText <> "/slack/evidence/" <> toUriStr interaction.user_id
-          traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("<" <> consentUrl <> "|Connect your own Slack search access>. Use `" <> interaction.command <> " search disconnect` to remove it. This connection belongs to your account.")]
+          traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("<" <> hostPath authCtx.env.hostUrl (urls.slackEvidenceGet principal.projectId interaction.user_id) <> "|Connect your own Slack search access>. Use `" <> interaction.command <> " search disconnect` to remove it. This connection belongs to your account.")]
         _ | T.strip interaction.text == "search disconnect" -> do
           Integrations.revokeSlackEvidence principal.projectId principal.userId
           traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("Your Slack search access is disconnected. The project's Slack app remains connected." :: Text)]
@@ -370,19 +370,19 @@ slackInteractionsHWithTools projectTools interaction = do
               [ "response_type" AE..= ("ephemeral" :: Text)
               , "text"
                   AE..= if enabled
-                    then "Incident investigations are enabled for this channel. New installations start in Observe. Review the policy and run history: " <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/" <> conversation.toText
+                    then "Incident investigations are enabled for this channel. New installations start in Observe. Review the policy and run history: " <> hostPath authCtx.env.hostUrl (urls.aiThreadGet principal.projectId conversation Nothing)
                     else "Incident investigations are paused for this channel."
               ]
         _ ->
           Issues.getEventRoutine principal.projectId Issues.EventSlackMessage >>= \case
-            Nothing -> traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("Ask a project editor to activate or resume Slack investigation in AI routines: " <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/routines")]
+            Nothing -> traceResp $ AE.object ["response_type" AE..= ("ephemeral" :: Text), "text" AE..= ("Ask a project editor to activate or resume Slack investigation in AI routines: " <> hostPath authCtx.env.hostUrl (urls.aiRoutinesGet principal.projectId))]
             Just routine -> do
               AI.requireAgentAccess access principal.projectId
               let convId = Issues.slackCommandConversationId principal.projectId interaction.team_id interaction.channel_id interaction.trigger_id
               origin <- either (refuse . CommandOriginInvalid) pure $ Issues.commandOrigin interaction.team_id interaction.channel_id interaction.user_id
               execution <- BgJobs.startCommand routine origin convId principal.userId interaction.text >>= maybe (refuse CommandNotAdmitted) pure
               let status = if execution.status == Issues.RunRunning then getLoadingMessage (detectReportIntent interaction.text) else "This request has ended. Its result and history are retained."
-              traceResp $ textResp $ status <> "\n<" <> authCtx.env.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/runs/" <> execution.id.toText <> "|View run and review actions>"
+              traceResp $ textResp $ status <> "\n<" <> hostPath authCtx.env.hostUrl (urls.aiRoutineRunGet principal.projectId execution.id Nothing) <> "|View run and review actions>"
   where
     traceResp resp = resp <$ Log.logTrace ("Slack interaction response" :: Text) resp
 
@@ -578,7 +578,7 @@ slackActionsH action = do
                 [ "channel" AE..= context.channelId
                 , "blocks"
                     AE..= arr
-                      ( [ slackSection $ "<" <> envCfg.hostUrl <> "p/" <> context.projectId.toText <> "/dashboards/" <> did.toText <> "|" <> title <> ">"
+                      ( [ slackSection $ "<" <> hostPath envCfg.hostUrl (urls.dashboardsGet context.projectId did Nothing Nothing Nothing Nothing []) <> "|" <> title <> ">"
                         , slackSection $ "Shared by <@" <> slackAction.user.id <> "> using /dashboard"
                         ]
                           <> maybeToList (slackImage title Nothing <$> chartUrl)
@@ -1115,7 +1115,7 @@ processSlackEventWithTools projectTools receiptId =
         $ AE.object
           [ "channel" AE..= request.channelId
           , "user" AE..= request.slackUserId
-          , "text" AE..= ("Link your Monoscope account and choose a project before investigating: <" <> hostPath envCfg.hostUrl ("slack/link/" <> request.id.toText) <> "|Link account>. This private link expires in 15 minutes.")
+          , "text" AE..= ("Link your Monoscope account and choose a project before investigating: <" <> hostPath envCfg.hostUrl (urls.slackIdentityGet request.id) <> "|Link account>. This private link expires in 15 minutes.")
           ]
       Integrations.markSlackLinkDelivered request.id
 
@@ -1141,17 +1141,15 @@ processSlackEventWithTools projectTools receiptId =
                           $ AE.object
                             [ "channel" AE..= event.channel
                             , "user" AE..= event.user
-                            , "text" AE..= ("Ask a project editor to activate or resume Slack investigation in <" <> envCfg.hostUrl <> "p/" <> principal.projectId.toText <> "/ai/routines|AI routines>. Notifications remain connected.")
+                            , "text" AE..= ("Ask a project editor to activate or resume Slack investigation in <" <> hostPath envCfg.hostUrl (urls.aiRoutinesGet principal.projectId) <> "|AI routines>. Notifications remain connected.")
                             ]
                   else do
                     AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) principal.projectId
                     void
                       $ sendRecoveryNotice "Slack reconnect notice" slackData event.channel event.user
                       $ "Reconnect Slack from <"
-                      <> envCfg.hostUrl
-                      <> "p/"
-                      <> principal.projectId.toText
-                      <> "/settings/integrations|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect."
+                      <> hostPath envCfg.hostUrl (urls.projects.integrationGet principal.projectId)
+                      <> "|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect."
         else Log.logTrace "Slack message is outside an active investigation" (AE.object ["team_id" AE..= workspaceId, "channel_id" AE..= event.channel])
       where
         closeRetained linked threadTs project = do
@@ -1297,7 +1295,7 @@ renderSlackReplies projectTools context envCfg access resolveThread = do
   input <- maybe (throwIO AI.AgentStopped) pure context.input
   (outcome, rendered) <- Writer.runWriter $ runBotQueryWithTools projectTools (AI.DurableRun context) Slack (Writer.tell @[AE.Value] . pure . botReplyPayload) envCfg access context.projectId input (raise resolveThread)
   replies <- maybe (throwIO $ ErrorCall "Slack query produced no reply") pure $ nonEmpty rendered
-  let link = "<" <> hostPath envCfg.hostUrl ("p/" <> context.projectId.toText <> "/ai/" <> context.conversationId.toText) <> "|View runs and artifacts>"
+  let link = "<" <> hostPath envCfg.hostUrl (urls.aiThreadGet context.projectId context.conversationId Nothing) <> "|View runs and artifacts>"
       linked reply = case reply ^? key "blocks" . _Array of
         Just _ -> reply & key "blocks" . _Array %~ (<> V.singleton (slackSection link))
         Nothing -> reply & key "text" . _String %~ (<> "\n\n" <> link)

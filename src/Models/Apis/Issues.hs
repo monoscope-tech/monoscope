@@ -20,6 +20,8 @@
 -- - docs\/anomaly-detection-system.md (architecture overview)
 -- - docs\/anomaly-detection-triggers.sql (database trigger details)
 module Models.Apis.Issues (
+  IssueBulkAction (..),
+  EventRef (..),
   IssuePayload (..),
   payloadType,
   payloadJson,
@@ -333,7 +335,7 @@ import Pkg.AgentCatalog qualified as Catalog
 import Pkg.DeriveUtils (SqlEnum (..), UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Pkg.Parser (ScopedQuery (..))
 import Relude hiding (id)
-import Servant (FromHttpApiData (..))
+import Servant (FromHttpApiData (..), ToHttpApiData (..))
 import System.Logging (logAttention)
 import System.Types (DB)
 import Text.Slugify (slugify)
@@ -1319,14 +1321,24 @@ data ArchiveWindow = ArchiveIndefinite | ArchiveFor Int | ArchiveUntilEscalating
 -- | The @window@ query value: minutes, or @escalating@.
 --
 -- >>> :set -XOverloadedStrings
--- >>> import Servant (parseQueryParam)
+-- >>> import Servant (parseQueryParam, toQueryParam)
 -- >>> map (parseQueryParam @ArchiveWindow) ["240", "escalating", "soon", "-5"]
 -- [Right (ArchiveFor 240),Right ArchiveUntilEscalating,Left "archive window: minutes or 'escalating'",Left "archive window: minutes or 'escalating'"]
+-- >>> map (parseQueryParam . toQueryParam) [ArchiveIndefinite, ArchiveFor 240, ArchiveUntilEscalating] == map Right [ArchiveIndefinite, ArchiveFor 240, ArchiveUntilEscalating]
+-- True
 instance FromHttpApiData ArchiveWindow where
   parseQueryParam = \case
+    "indefinite" -> Right ArchiveIndefinite
     "escalating" -> Right ArchiveUntilEscalating
     t | Just n <- readMaybe (toString t), n > 0 -> Right (ArchiveFor n)
     _ -> Left "archive window: minutes or 'escalating'"
+
+
+instance ToHttpApiData ArchiveWindow where
+  toQueryParam = \case
+    ArchiveIndefinite -> "indefinite"
+    ArchiveFor n -> show n
+    ArchiveUntilEscalating -> "escalating"
 
 
 -- | Apply a @SET@ clause to a batch of one project's issues.
@@ -3284,7 +3296,7 @@ data AIArtifact = AIArtifact
 -- | Lowercase slug, 1-64 characters of @[a-z0-9-]@, not starting with a hyphen.
 newtype ArtifactKey = ArtifactKey Text
   deriving stock (Eq, Show)
-  deriving newtype (AE.ToJSON, HI.DecodeValue, HI.EncodeValue, ToText)
+  deriving newtype (AE.ToJSON, HI.DecodeValue, HI.EncodeValue, ToHttpApiData, ToText)
 
 
 instance FromHttpApiData ArtifactKey where
@@ -4049,3 +4061,35 @@ mkErrorIssue projectId p occurrences mkTitle recommendedAction = do
               , lastSeen = now
               }
       }
+
+
+-- | One event of an issue, as the page links to it: its trace and when it happened.
+--
+-- >>> :set -XOverloadedStrings
+-- >>> parseQueryParam @EventRef "4bf92f3577b34da6@2026-09-25T10:00:00Z"
+-- Right (EventRef {traceId = "4bf92f3577b34da6", at = 2026-09-25 10:00:00 UTC})
+-- >>> isLeft (parseQueryParam @EventRef "no-timestamp")
+-- True
+data EventRef = EventRef {traceId :: Text, at :: UTCTime}
+  deriving stock (Eq, Show)
+
+
+instance FromHttpApiData EventRef where
+  parseQueryParam t = case T.breakOnEnd "@" t of
+    (tid, ts) | Just tid' <- T.stripSuffix "@" tid, not (T.null tid'), Right at <- parseQueryParam ts -> Right (EventRef tid' at)
+    _ -> Left "event: <trace_id>@<iso-8601 timestamp>"
+
+
+instance ToHttpApiData EventRef where
+  toQueryParam e = e.traceId <> "@" <> toQueryParam e.at
+
+
+-- | Bulk lifecycle transitions, triggering a toast and list reload. @duration@
+-- (minutes) applies to @acknowledge@ only; absent acknowledges indefinitely.
+-- The slugs are the existing wire spellings, so live URLs are unchanged:
+--
+-- >>> map toUrlPiece [minBound .. maxBound :: IssueBulkAction]
+-- ["acknowledge","unacknowledge","archive","unarchive","resolve","priority","assign","merge","spam","unspam"]
+data IssueBulkAction = BAAcknowledge | BAUnacknowledge | BAArchive | BAUnarchive | BAResolve | BAPriority | BAAssign | BAMerge | BASpam | BAUnspam
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData, ToHttpApiData) via WrappedEnumSC 'Nothing "BA" IssueBulkAction

@@ -39,16 +39,17 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
+import Pages.Components (explorerNavTabs_)
 import Pkg.DeriveUtils (idFromText)
 import Pkg.LiveTail qualified as LT
 import Pkg.Metrics qualified as Metrics
 import Relude
 import Servant qualified
-import Servant.API (Accept (..), Headers, MimeRender (..), addHeader)
+import Servant.API (Accept (..), MimeRender (..), addHeader)
 import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, Mime, RespHeaders, addRespHeaders)
-import Utils (explorerNavTabs_)
+import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), SseHeaders, urls)
 
 
 -- ---------------------------------------------------------------------------------------
@@ -66,28 +67,6 @@ data EventStream
 
 instance MimeRender EventStream Builder where
   mimeRender _ = toLazyByteString
-
-
--- | The headers that decide whether an SSE response actually streams.
---
--- Every hop between this handler and the browser would rather buffer than forward: a CDN caches
--- it, nginx holds it in a proxy buffer, a "helpful" transforming proxy re-chunks it. The result
--- is the failure that looks like nothing at all — the tab says @live@, the connection is open,
--- and rows arrive in a clump minutes later or never.
---
--- @no-transform@ is the half people forget: @no-cache@ alone still permits an intermediary to
--- re-encode the body, which is what re-introduces buffering. @X-Accel-Buffering@ is nginx's
--- (and several ingress controllers') opt-out, ignored harmlessly everywhere else.
---
--- Heartbeats every ten seconds mask most of this, which is precisely why it went unnoticed:
--- they keep the connection alive but do nothing about a hop that batches what it forwards.
--- See also the @text/event-stream@ exclusion in "System.Server"'s gzip settings — compression
--- is the one buffering hop headers cannot talk us out of.
-type SseHeaders =
-  Headers
-    '[ Servant.Header "Cache-Control" Text
-     , Servant.Header "X-Accel-Buffering" Text
-     ]
 
 
 -- | One SSE frame.
@@ -133,7 +112,7 @@ liveTailRegisterH pid body = do
   addRespHeaders
     RegisterResponse
       { subscriptionId = sid.toText
-      , streamUrl = "/p/" <> pid.toText <> "/live_tail/subscriptions/" <> sid.toText <> "/stream"
+      , streamUrl = (urls.logExplorer pid).liveTailStreamGet sid.toText
       , expiresAt
       }
 

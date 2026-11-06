@@ -82,7 +82,7 @@ import Pkg.Deriving (WrappedEnumSC (..))
 import Relude
 import Text.Show (showString, showsPrec)
 import UnliftIO qualified
-import Web.HttpApiData (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData, ToHttpApiData (..))
 
 
 -- | Which store a statement runs on. One spelling serves the JSON tag, the @db_source@
@@ -94,7 +94,7 @@ import Web.HttpApiData (FromHttpApiData)
 data SqlSource = SqlPostgres | SqlTimefusion
   deriving stock (Eq, Generic, Ord, Read, Show, THS.Lift)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Sql" SqlSource
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData, ToHttpApiData) via WrappedEnumSC 'Nothing "Sql" SqlSource
 
 
 data SecuredSql = SecuredSql

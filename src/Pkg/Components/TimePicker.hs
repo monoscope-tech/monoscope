@@ -9,7 +9,6 @@ module Pkg.Components.TimePicker (
   rangeQuery,
   TimeWindow (..),
   mkTimeWindow,
-  windowUrl,
   cacheTtl,
 ) where
 
@@ -31,7 +30,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, nonEmptyT, parseTime, popoverPanel_, popoverTrigger_, sinceWindows, timeScopedUrl, toUriStr)
+import Utils (faSprite_, nonEmptyT, parseTime, popoverPanel_, popoverTrigger_, sinceWindows, toUriStr)
 
 
 -- $setup
@@ -486,11 +485,6 @@ mkTimeWindow now fromQuery toQuery sinceParam =
 -- TimeSpec {sec = 30, nsec = 0}
 cacheTtl :: TimeWindow -> TimeSpec
 cacheTtl window = TimeSpec (max 30 $ min 300 $ round (diffUTCTime window.toTime window.fromTime) `div` 120) 0
-
-
--- | A URL under @base@ that carries this window's params forward, plus any extras.
-windowUrl :: Text -> [(Text, Text)] -> TimeWindow -> Text
-windowUrl base extras window = timeScopedUrl base extras window.fromQuery window.toQuery window.sinceQuery
 
 
 refreshOptions :: [(Text, Text, Text)]

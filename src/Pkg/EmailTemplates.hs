@@ -65,6 +65,7 @@ import Models.Telemetry.ContainerTypes (Scope (..))
 import Models.Telemetry.Report qualified as Report
 import Relude
 import Utils (fmtDate, formatWithCommas, isoT, kqlQuoted, nonEmptyT, showFFloat', toUriStr)
+import Web.Links (LogExplorerRoutes' (..), logExplorerLinks)
 
 
 -- | One row in a new-endpoint alert. @label@ is "METHOD /path"; @host@ is the
@@ -517,16 +518,9 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName projectUrl erro
 --
 -- >>> import Data.Time (UTCTime(..), fromGregorian, secondsToDiffTime)
 -- >>> traceExplorerUrl "https://app" "abc" (UTCTime (fromGregorian 2026 8 22) (secondsToDiffTime 43200))
--- "https://app/log_explorer?query=trace_id%20%3D%3D%20%22abc%22&from=2026-08-22T11:30:00Z&to=2026-08-22T12:30:00Z"
+-- "https://app/log_explorer?query=trace_id%20%3D%3D%20%22abc%22&from=2026-08-22T11%3A30%3A00Z&to=2026-08-22T12%3A30%3A00Z"
 traceExplorerUrl :: Text -> Text -> UTCTime -> Text
-traceExplorerUrl projectUrl tid when' =
-  projectUrl
-    <> "/log_explorer?query="
-    <> toUriStr ("trace_id == \"" <> tid <> "\"")
-    <> "&from="
-    <> isoT (addUTCTime (-1800) when')
-    <> "&to="
-    <> isoT (addUTCTime 1800 when')
+traceExplorerUrl projectUrl tid when' = projectUrl <> logExplorerLinks.logExplorerGet (Just $ "trace_id == \"" <> tid <> "\"") Nothing Nothing (Just $ isoT $ addUTCTime (-1800) when') (Just $ isoT $ addUTCTime 1800 when') Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 
 errorCard :: Text -> Text -> Maybe Text -> ErrorPatterns.ATError -> Html ()

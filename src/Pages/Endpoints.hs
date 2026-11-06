@@ -12,22 +12,23 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log (logAttention)
 import Lucid
+import Models.Apis.Endpoints (HostBulkAction (..))
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
 import Pages.Components (RowAction (..), copyButton_, detailTab_, eventsCountCell_, lastSeenCell_, periodToggle_, rowActions_, sparkline_, tabPanel_)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableResponse (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
-import Pkg.DeriveUtils (WrappedEnumSC (..), assetUrl, bulkActionSlug)
+import Pkg.DeriveUtils (assetUrl, bulkActionSlug)
 import Pkg.OpenApi qualified as OpenApi
 import Pkg.QueryCache qualified as QueryCache
-import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ActionResult, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, addTriggerEvent, successToast)
-import Utils (faSprite_, toUriStr)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
+import Web.Links
 
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (TableResponse HostEventsVM))
@@ -62,14 +63,15 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
   currTime <- Time.currentTime
 
   let periodT = display period
-      baseUrl = "/p/" <> pid.toText <> "/api_catalog?filter=" <> currentTabT <> "&sort=" <> currentSort <> "&period=" <> periodT
-      statsUrl = baseUrl <> "&stats=true"
+      catalogUrl = urls.apiCatalogGet pid (Just currentSort) Nothing Nothing (Just periodT) Nothing
+      baseUrl = catalogUrl (Just currentTabT) Nothing
+      statsUrl = catalogUrl (Just currentTabT) (Just "true")
       -- On the Archived tab the action spans both directions, so we omit
       -- request_type and let the handler resolve direction per row.
       bulkActionItem =
         if showArchived
-          then BulkAction{icon = Just "rotate-left", title = "Unarchive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/" <> bulkActionSlug BAUnarchive, choices = []}
-          else BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/" <> bulkActionSlug BAArchive <> "?request_type=" <> currentTabT, choices = []}
+          then BulkAction{icon = Just "rotate-left", title = "Unarchive", uri = urls.apiCatalogBulkAction pid BAUnarchive Nothing, choices = []}
+          else BulkAction{icon = Just "archive", title = "Archive", uri = urls.apiCatalogBulkAction pid BAArchive (Just currentTabT), choices = []}
       hostsVM = V.fromList $ map (\events -> HostEventsVM{events, currTime, statsMode}) hostsAndEvents
       cols = catalogColumns pid baseUrl periodT
       hostRowId = Just \(vm :: HostEventsVM) -> vm.events.host
@@ -120,7 +122,7 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                 $ toHtml
                 $ TabFilter
                   { current = currentTabT
-                  , currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&period=" <> periodT
+                  , currentURL = catalogUrl Nothing Nothing
                   , options = [TabFilterOpt{name = tabParam t, count = Nothing} | t <- [minBound .. maxBound]]
                   }
           }
@@ -154,10 +156,6 @@ withStatsCache :: (AE.FromJSON v, AE.ToJSON v, Hashable k, Show k) => Cache.Cach
 withStatsCache cache tag key mode fetch = case mode of
   Endpoints.ShellOnly -> fetch Endpoints.ShellOnly
   Endpoints.WithStats -> Cache.fetchWithCache cache key \_ -> QueryCache.withSharedCache (tag <> show key) 300 (fetch Endpoints.WithStats)
-
-
-logExplorerHref :: Projects.ProjectId -> Text -> Text
-logExplorerHref pid q = "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr q
 
 
 -- | Parse a query param, falling back on anything unrecognised. Query params here
@@ -249,13 +247,13 @@ renderCatalogMainCol pid vm = do
   div_ [class_ "flex items-center justify-between gap-3 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       span_ [class_ "tooltip tooltip-right shrink-0 inline-flex", term "data-tip" $ reqTypeLabel <> " request"] $ faSprite_ arrowIcon "solid" arrowClass
-      a_ ([href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> reqTypeLabel, class_ "font-medium text-textBrand hover:underline underline-offset-2 decoration-from-font truncate min-w-0"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
+      a_ ([href_ $ urls.endpointListGet pid Nothing Nothing Nothing Nothing (Just he.host) (Just reqTypeLabel) Nothing Nothing Nothing Nothing Nothing, class_ "font-medium text-textBrand hover:underline underline-offset-2 decoration-from-font truncate min-w-0"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
       servicesBadges_
         sourceLabel
-        (\svc -> logExplorerHref pid $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\"")
+        (\svc -> logExplorerHref pid ("resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\""))
         (V.toList he.services)
     rowActions_
-      [ RowAction{icon = "explore", label = "Logs", href = logExplorerHref pid $ "attributes.server.address==\"" <> he.host <> "\"", attrs = navTabAttrs}
+      [ RowAction{icon = "explore", label = "Logs", href = logExplorerHref pid ("attributes.server.address==\"" <> he.host <> "\""), attrs = navTabAttrs}
       , -- Plain link: the docs page loads Swagger UI from headContent, which an
         -- HTMX content-only swap would never fetch.
         RowAction{icon = "brackets-curly", label = "API docs", href = docsHref pid he.host reqTypeLabel Nothing, attrs = []}
@@ -306,7 +304,8 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
   (endpointStats, totalCount) <- withStatsCache appCtx.endpointStatsCache "endpointStats:" (pid, endpointQuery) statsMode \mode -> Endpoints.endpointRequestStatsPageByProject mode useTf pid endpointQuery
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
-  let baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={currentTabT}&host={host}&sort={currentSort}&period={periodT}|]
+  let endpointsUrl pageM' perPageM' = urls.endpointListGet pid pageM' perPageM' Nothing (Just currentFilterTab) (Just host) (Just currentTabT) (Just currentSort) (Just periodT) Nothing Nothing
+      baseUrl = endpointsUrl Nothing Nothing Nothing
       bwconf =
         bw
           { prePageTitle = Just "API Catalog"
@@ -323,7 +322,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
           }
 
   currTime <- Time.currentTime
-  let statsUrl = baseUrl <> [PyF.fmt|&stats=true&page={page}&per_page={perPage}|]
+  let statsUrl = endpointsUrl (Just $ show page) (Just $ show perPage) (Just "true")
       endpReqVM = V.map (EnpReqStatsVM currTime statsMode) endpointStats
       cols = endpointColumns pid baseUrl periodT currentTab
       endpRowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
@@ -402,12 +401,12 @@ renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ enp) = do
       q = "attributes.server.address==\"" <> enp.host <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\" AND attributes.http.request.method==\"" <> enp.method <> "\""
   div_ [class_ "flex items-center justify-between gap-3 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
-      a_ ([class_ "inline-flex items-center gap-1.5 font-medium text-textBrand hover:underline underline-offset-2 decoration-from-font truncate min-w-0", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] <> navTabAttrs) $ do
+      a_ ([class_ "inline-flex items-center gap-1.5 font-medium text-textBrand hover:underline underline-offset-2 decoration-from-font truncate min-w-0", href_ (urls.endpointDetailsRedirect pid [("var-endpointHash", Just enp.endpointHash), ("var-host", Just enp.host)])] <> navTabAttrs) $ do
         span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method <> " shrink-0 !w-auto !p-0.5 !px-1.5 !m-0 !text-xs !rounded", data_ "enp-urlMethod" enp.method] $ toHtml enp.method
         span_ [class_ "inconsolata text-sm truncate", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
       servicesBadges_
         sourceLabel
-        (\svc -> logExplorerHref pid $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\"")
+        (\svc -> logExplorerHref pid ("resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\""))
         (V.toList enp.services)
     rowActions_
       [ RowAction{icon = "explore", label = "Logs", href = logExplorerHref pid q, attrs = navTabAttrs}
@@ -429,20 +428,6 @@ docsCap = 200
 -- host's worth of those is megabytes of text no @\<pre\>@ should hold.
 inlineYamlCap :: Int
 inlineYamlCap = 400_000
-
-
--- | Link to the docs page for a host, optionally scoped to one endpoint. Plain
--- @href@ on purpose: the page needs Swagger UI's assets from 'headContent', and
--- the HTMX nav pattern swaps only the content container.
-docsHref :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text
-docsHref pid host reqType endpointM = "/p/" <> pid.toText <> "/api_catalog/docs" <> specQuery host reqType endpointM
-
-
--- | The query string all three learned-spec URLs share. An absent host is the
--- whole project, so it is omitted rather than sent empty.
-specQuery :: Text -> Text -> Maybe Text -> Text
-specQuery host reqType endpointM =
-  "?request_type=" <> reqType <> foldMap (("&host=" <>) . toUriStr) (guarded (not . T.null) host) <> foldMap ("&endpoint=" <>) endpointM
 
 
 -- | The learned OpenAPI document at whatever scope the caller asked for: the
@@ -476,7 +461,6 @@ apiDocsH pid hostM reqTypeM endpointM = do
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   let host = maybeToMonoid hostM
       reqType = tabParam (parseTab reqTypeM)
-      specUrl ext = "/p/" <> pid.toText <> "/api_catalog/openapi." <> ext <> specQuery host reqType endpointM
       yaml = OpenApi.specYaml spec
       bwconf =
         bw
@@ -493,8 +477,8 @@ apiDocsH pid hostM reqTypeM endpointM = do
     $ PageCtx
       bwconf
       ApiDocsVM
-        { specJsonUrl = specUrl "json"
-        , specYamlUrl = specUrl "yaml"
+        { specJsonUrl = urls.apiCatalogSpecJson pid (guarded (not . T.null) host) (Just reqType) endpointM
+        , specYamlUrl = urls.apiCatalogSpecYaml pid (guarded (not . T.null) host) (Just reqType) endpointM
         , inlineYaml = guarded ((<= inlineYamlCap) . T.length) yaml
         , operations
         , truncated = operations >= docsCap
@@ -592,15 +576,6 @@ hostNoun :: Int -> Text
 hostNoun = bool "hosts" "host" . (== 1)
 
 
--- | The slugs are the existing wire spellings, so live URLs are unchanged:
---
--- >>> map bulkActionSlug [minBound .. maxBound :: HostBulkAction]
--- ["archive","unarchive"]
-data HostBulkAction = BAArchive | BAUnarchive
-  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" HostBulkAction
-
-
 -- | Past-tense verb for the success toast. Was built as @action <> "d"@, which only
 -- worked because both slugs happen to end in @e@.
 actionPast :: HostBulkAction -> Text
@@ -635,3 +610,11 @@ apiCatalogBulkActionH pid action currentTabM items = act do
             $ logCtx ["affected_count" AE..= touched]
           addTriggerEvent "apiCatalogChanged" AE.Null
           pure $ Right $ CatalogBulkDone action touched requested
+
+
+logExplorerHref :: Projects.ProjectId -> Text -> Text
+logExplorerHref pid q = (urls.logExplorer pid).logExplorerGet (Just q) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+
+
+docsHref :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text
+docsHref pid host reqType = urls.apiCatalogDocs pid (guarded (not . T.null) host) (Just reqType)

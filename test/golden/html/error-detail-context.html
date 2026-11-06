@@ -106,7 +106,7 @@
 </svg>
 <span class="max-md:hidden">Resolve</span>
 </button>
-<button class="btn btn-sm btn-ghost join-item gap-1.5 text-textSuccess hover:bg-fillSuccess-weak" aria-label="Resolve in the release after 26.3.2" data-tippy-content="Resolve in the release after 26.3.2" data-hx-post="/p/<uuid>/issues/errors/<uuid>/resolve?next_release=true" data-hx-target="#error-resolve-action" data-hx-swap="outerHTML">
+<button class="btn btn-sm btn-ghost join-item gap-1.5 text-textSuccess hover:bg-fillSuccess-weak" aria-label="Resolve in the release after 26.3.2" data-tippy-content="Resolve in the release after 26.3.2" data-hx-post="/p/<uuid>/issues/errors/<uuid>/resolve?next_release" data-hx-target="#error-resolve-action" data-hx-swap="outerHTML">
 <span class="text-xs">in next release</span>
 </button>
 </div>
@@ -1192,7 +1192,7 @@ ContextError: context probe
 <div class="pb-3">
 <div class="max-md:px-1 px-2 w-full overflow-x-clip investigation-content" id="span-content">
 <div id="trace_container" class="w-full h-full min-w-0">
-<div data-hx-get="/p/<uuid>/traces/<hex>/?timestamp=2024-12-31T23:59:45Z&amp;embed=true&amp;span_id=<span-id>" data-hx-trigger="load" data-hx-swap="outerHTML" class="h-48 flex items-center justify-center">
+<div data-hx-get="/p/<uuid>/traces/<hex>?timestamp=2024-12-31T23%3A59%3A45Z&amp;span_id=<span-id>&amp;embed=true" data-hx-trigger="load" data-hx-swap="outerHTML" class="h-48 flex items-center justify-center">
 <span class="loading loading-spinner loading-md" role="status" aria-label="Loading">
 </span>
 </div>

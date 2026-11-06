@@ -24,13 +24,13 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (nullStream, proc, readProcessStdout_, setStderr, setStdin)
 import UnliftIO.Exception (tryAny)
 import UnliftIO.Timeout qualified as Timeout
-import Web.HttpApiData (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData, ToHttpApiData (..))
 import "cryptonite" Crypto.Hash (Digest, SHA256, hashlazy)
 
 
 data Asset = Video | Diagram | Captions | Before | Cause | Change | After
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "" Asset
+  deriving (AE.ToJSON, FromHttpApiData, ToHttpApiData) via WrappedEnumSC 'Nothing "" Asset
 
 
 data ArtifactFailure = StorageUnavailable | ArtifactUnavailable | InvalidArtifact | PublicationUnavailable

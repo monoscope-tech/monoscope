@@ -1,4 +1,5 @@
 module Models.Apis.Endpoints (
+  HostBulkAction (..),
   Endpoint (..),
   EndpointId,
   hashEndpoint,
@@ -84,7 +85,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Relude
 import Utils (toXXHash)
-import Web.HttpApiData (FromHttpApiData (..))
+import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData)
 
 
 type EndpointId = UUIDId "endpoint"
@@ -1046,3 +1047,13 @@ migrateAndDeleteMergedEndpoints pid pairs = do
     <> issueTargets
     <> [HI.sql| ) t WHERE i.id = t.id |]
   Hasql.interpExecute_ [HI.sql| DELETE FROM apis.endpoints WHERE project_id = #{pid} AND hash = ANY(#{oldArr}) |]
+
+
+-- | The slugs are the existing wire spellings, so live URLs are unchanged:
+--
+-- >>> import Web.HttpApiData (toUrlPiece)
+-- >>> map toUrlPiece [minBound .. maxBound :: HostBulkAction]
+-- ["archive","unarchive"]
+data HostBulkAction = BAArchive | BAUnarchive
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData, ToHttpApiData) via WrappedEnumSC 'Nothing "BA" HostBulkAction

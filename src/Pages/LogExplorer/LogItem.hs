@@ -33,6 +33,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.ShareEvents (ShareKind (..))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -46,6 +47,7 @@ import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils
 import Web.HttpApiData (parseUrlPiece)
+import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), TelemetryRoutes' (..), urls)
 
 
 getServiceName :: Maybe (Map Text AE.Value) -> Text
@@ -335,22 +337,23 @@ data DetailTab = DetailTab
 
 
 -- | The @active@ tab renders now; any other is a hidden panel that fetches itself the
--- first time its radio reveals it. @tabQuery@ names the tab server-side: a top-level
--- tab is @tab=\<marker\>@, an HTTP sub-tab is @tab=tab-req&subtab=\<marker\>@.
-detailTabPanel_ :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (Text -> Text) -> Text -> DetailTab -> Html ()
-detailTabPanel_ pid item tabQuery active tab
+-- first time its radio reveals it. @parentTab@ names the tab server-side: a top-level
+-- tab is @tab=\<marker\>@, an HTTP sub-tab is @tab=\<parentTab\>&subtab=\<marker\>@.
+detailTabPanel_ :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Text -> Text -> DetailTab -> Html ()
+detailTabPanel_ pid item parentTab active tab
   | tab.marker == active = tabPanel_ tab.panelClass tab.panelId tab.content
   | otherwise =
       div_
-        [ class_ $ "hidden " <> tab.panelClass
-        , id_ tab.panelId
-        , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/detailed?" <> tabQuery tab.marker <> "&partial=true"
-        , hxTrigger_ "intersect once"
-        , hxTarget_ "this"
-        , hxSwap_ "outerHTML"
-        , term "hx-sync" "this:replace"
-        , Aria.busy_ "true"
-        ]
+        ( [ class_ $ "hidden " <> tab.panelClass
+          , id_ tab.panelId
+          , hxTrigger_ "intersect once"
+          , hxTarget_ "this"
+          , hxSwap_ "outerHTML"
+          , term "hx-sync" "this:replace"
+          , Aria.busy_ "true"
+          ]
+            <> [hxGet_ $ (urls.logExplorer pid).logExplorerItemDetailedGet u item.timestamp Nothing (parentTab <|> Just tab.marker) (tab.marker <$ parentTab) True | u <- toList (UUID.fromText item.id)]
+        )
         $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading details"]
         $ loadingIndicator_ LdSM LdDots
 
@@ -418,14 +421,13 @@ expandedItemView pid item aptSp selectedTabM = do
       -- The selected panel renders now; hidden placeholders fetch and replace
       -- themselves when their radio makes them visible for the first time.
       div_ [class_ "mt-2 py-1 text-textWeak"]
-        $ traverse_ (detailTabPanel_ pid item ("tab=" <>) activeMarker) tabs
+        $ traverse_ (detailTabPanel_ pid item Nothing activeMarker) tabs
   where
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
     isHttp = not isLog && isHttpSpan item
     identityRows = Telemetry.rowIdentity (unAesonTextMaybe item.attributes)
     createdAt = formatUTC item.timestamp
-    pidTxt = pid.toText
     dgrp = "dtab-" <> item.id
     -- Clamp the ?tab= deep link to a marker that actually exists — an unknown
     -- value would check no radio and leave every panel hidden.
@@ -484,29 +486,30 @@ expandedItemView pid item aptSp selectedTabM = do
         -- has to mint a unique selector and the two stay coupled by position.
         button_ [class_ "action-btn", copySourceAttr_ "this.nextElementSibling"] $ actionBtnBody "copy" "Copy as curl"
         pre_ [class_ "hidden"] $ toHtml curl
-      whenJust (Telemetry.traceIdOf item) \trId ->
+      whenJust (Telemetry.traceIdOf item) \trId -> do
         -- A link first, so it works from every shell this view renders in: the details
         -- panel now also opens on dashboards, where the log explorer's trace overlay
         -- doesn't exist and the old button silently did nothing. Where the overlay IS
         -- present the click is intercepted and the trace opens in place — the overlay's
         -- loadTrace handler owns skeleton, fetch and fullscreen (Log.hs traceOverlay).
+        let traceUrl = (urls.traces pid).tracesGet trId (Just item.timestamp) Nothing Nothing Nothing Nothing
         a_
           [ class_ "action-btn"
           , term "data-share-hide" "1"
-          , href_ $ "/p/" <> pidTxt <> "/log_explorer?showTrace=" <> trId <> "/%3Ftimestamp%3D" <> createdAt
+          , href_ $ (urls.logExplorer pid).logExplorerGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just $ trId <> "/?timestamp=" <> createdAt) Nothing Nothing Nothing Nothing
           , term
               "_"
               [text|on click if the first <#trace_expanded_view/> exists
                        halt the event
-                       send loadTrace(url: '/p/${pidTxt}/traces/${trId}/?timestamp=${createdAt}') to #trace_expanded_view
+                       send loadTrace(url: '${traceUrl}') to #trace_expanded_view
                        then call updateUrlState('showTrace', "${trId}/?timestamp=${createdAt}")
                      end|]
           ]
           (actionBtnBody "cross-hair" "View trace")
       when isAlert
-        $ a_ [class_ "action-btn", href_ $ "/p/" <> pid.toText <> "/monitors/" <> fromMaybe "" item.parent_id <> "/overview"]
+        $ a_ [class_ "action-btn", href_ $ (urls.monitors pid).overviewGet (fromMaybe "" item.parent_id)]
         $ actionBtnBody "bell" "View alert"
-      button_ [class_ "action-btn", term "data-share-hide" "1", hxPost_ ("/p/" <> pid.toText <> "/share/" <> item.id <> "/" <> createdAt <> "?event_type=" <> (if isLog then "log" else "span")), hxSwap_ "innerHTML", hxTarget_ "#copy_share_link"]
+      button_ ([class_ "action-btn", term "data-share-hide" "1", hxSwap_ "innerHTML", hxTarget_ "#copy_share_link"] <> [hxPost_ $ urls.shareLinkPost pid u item.timestamp (Just $ if isLog then ShareLog else ShareSpan) | u <- toList (UUID.fromText item.id)])
         $ actionBtnBody "link-simple" "Share link"
 
 
@@ -558,13 +561,14 @@ detailTabs pid item aptSp =
         "group-has-[.tab-metrics:checked]/dtab:block"
         "metrics-content"
         ( div_
-            [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/related_metrics"
-            , hxTrigger_ "intersect once"
-            , hxTarget_ "this"
-            , hxSwap_ "innerHTML"
-            , term "hx-on::after-request" "this.removeAttribute('aria-busy')"
-            , Aria.busy_ "true"
-            ]
+            ( [ hxTrigger_ "intersect once"
+              , hxTarget_ "this"
+              , hxSwap_ "innerHTML"
+              , term "hx-on::after-request" "this.removeAttribute('aria-busy')"
+              , Aria.busy_ "true"
+              ]
+                <> [hxGet_ $ (urls.logExplorer pid).logExplorerRelatedMetricsGet u item.timestamp | u <- toList (UUID.fromText item.id)]
+            )
             $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading related metrics"]
             $ loadingIndicator_ LdSM LdDots
         )
@@ -589,7 +593,7 @@ renderHttpDetails pid item aptSp = div_ [id_ "http-content-container", class_ "g
   div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"]
     $ div_ [class_ "justify-start items-start flex text-sm"]
     $ forM_ tabs \tab -> httpTab_ ("htab-" <> item.id) tab.marker (tab.marker == activeMarker) tab.label
-  div_ [] $ traverse_ (detailTabPanel_ pid item ("tab=tab-req&subtab=" <>) activeMarker) tabs
+  div_ [] $ traverse_ (detailTabPanel_ pid item (Just "tab-req") activeMarker) tabs
 
 
 httpDetailTabs :: Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> (Text, [DetailTab])

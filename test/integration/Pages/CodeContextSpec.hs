@@ -833,7 +833,7 @@ spec = do
         lacks created ["<script>alert('wiki')</script>"]
         nested <- visit $ wiki "/runbooks/retries"
         status nested `shouldBe` 200
-        has nested ["runbooks", "/wiki/runbooks/retries?edit=true", "/wiki/runbooks/retries"]
+        has nested ["runbooks", "/wiki/runbooks/retries?edit", "/wiki/runbooks/retries"]
         lacks nested ["<wiki-editor"]
         editing <- visit $ wiki "/runbooks/retries?edit=true"
         has editing ["<wiki-editor", "form=\"wiki-form\""]

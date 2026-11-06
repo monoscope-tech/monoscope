@@ -24,6 +24,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, freshWebhookTimestamp, installedResponse, parseInstallState, runBotQueryWithTools, withBotThread, withDashboardTemplate)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
+import Pkg.DeriveUtils (idFromText)
 import Pkg.Mail (arr)
 import Relude hiding (ask, asks)
 import Servant.API (Header)
@@ -31,6 +32,8 @@ import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
+import Utils (hostPath)
+import Web.Links (CookieProtectedRoutes (..), urls)
 import "base16-bytestring" Data.ByteString.Base16 qualified as Base16
 import "cryptonite" Crypto.Error qualified as Crypto
 import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
@@ -191,10 +194,10 @@ discordInteractionsH projectTools rawBody signatureM timestampM = do
           "widget-select" -> do
             deferAck envCfg interaction
             case T.splitOn "___" selected of
-              [widget, dashboardId] -> withDashboardTemplate discordData.projectId dashboardId \dashboard ->
+              [widget, dashboardId] | Just did <- idFromText dashboardId -> withDashboardTemplate discordData.projectId dashboardId \dashboard ->
                 whenJust (find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets) \w -> do
                   chartUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w Nothing Nothing Nothing
-                  followup envCfg interaction $ sharedWidgetContent widget chartUrl (envCfg.hostUrl <> "p/" <> discordData.projectId.toText <> "/dashboards/" <> dashboardId)
+                  followup envCfg interaction $ sharedWidgetContent widget chartUrl (hostPath envCfg.hostUrl $ urls.dashboardsGet discordData.projectId did Nothing Nothing Nothing Nothing [])
               _ -> pass
           _ -> pass
         pure $ AE.object []

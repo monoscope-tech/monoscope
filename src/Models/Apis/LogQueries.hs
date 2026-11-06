@@ -17,6 +17,9 @@ module Models.Apis.LogQueries (
   validateSqlQuery,
   hasProjectIdFilter,
   LogEndpoint (..),
+  LogDataQuery (..),
+  BrowserParams (..),
+  ExplorerUrl (..),
   fetchLogPatterns,
   fetchSessions,
   SessionSort (..),
@@ -75,6 +78,7 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
 import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats, truncateHour)
+import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
 
 
@@ -189,6 +193,41 @@ nudgeCursorBy delta = fmap (toText . iso8601Show . addUTCTime delta) . iso8601Pa
 data LogEndpoint = Data | Sessions | Patterns
   deriving stock (Eq, Show)
   deriving (Display) via WrappedEnumSC 'Nothing "" LogEndpoint
+
+
+-- | Log-row data endpoint parameters. The log-list web component fetches the endpoint; the
+-- shell (apiLogH) renders only chrome.
+data LogDataQuery = LogDataQuery
+  { query :: Maybe Text
+  , cols :: Maybe Text
+  , cursor :: Maybe UTCTime
+  , direction :: Maybe PageDirection
+  , since :: Maybe Text
+  , from :: Maybe Text
+  , to :: Maybe Text
+  , source :: Maybe Text
+  , targetSpans :: Maybe Text
+  , sort :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromForm)
+
+
+-- | What the log-list component reads back off a data URL to re-fetch in the same scope;
+-- the data handlers take environment and service from the session instead.
+data BrowserParams = BrowserParams {json :: Maybe Bool, layout, environment, serviceScope :: Maybe Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (Default)
+
+
+-- | A log-explorer data URL's parameters. 'recent' polls for rows newer than 'cursor'.
+-- Environment and service scope keep generated URLs in the page request's telemetry scope.
+data ExplorerUrl = ExplorerUrl
+  { query, cols, cursor, since, from, to, layout, source, environment, serviceScope :: Maybe Text
+  , recent :: Bool
+  }
+  deriving stock (Generic)
+  deriving anyclass (Default)
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
@@ -879,8 +918,8 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
     $ Log.logAttention "fetchSessions: page rows without context"
     $ AE.object ["project_id" AE..= pid, "page" AE..= length page, "context" AE..= length context]
   let contextById = HM.fromList [(sid, (landing, agent, firstError)) | (sid, landing, agent, firstError) <- context]
-      durations = V.fromList $ sort $ map durationNs sessions
-      events = V.fromList $ sort $ map (.eventCount) sessions
+      durations = V.fromList $ Relude.sort $ map durationNs sessions
+      events = V.fromList $ Relude.sort $ map (.eventCount) sessions
       -- Densify the header's over-time buckets across the full picker range so
       -- empty periods render as blanks.
       epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW

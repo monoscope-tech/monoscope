@@ -464,6 +464,7 @@ library
       Web.Auth
       Web.FacetsFallback
       Web.I18n
+      Web.Links
       Web.MCP
       Web.Routes
       Proto.Opentelemetry.Proto.Common.V1.Common
@@ -1076,6 +1077,7 @@ test-suite test-dev
       Web.Auth
       Web.FacetsFallback
       Web.I18n
+      Web.Links
       Web.MCP
       Web.Routes
       BackgroundJobsSpec

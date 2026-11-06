@@ -4,11 +4,9 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
-import Data.ByteString.Builder (Builder)
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
-import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as Wreq
 import Data.List qualified as L
@@ -27,31 +25,17 @@ import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
-import GHC.TypeLits (Symbol)
 import Hasql.Interpolate qualified as HI
 import Log (Logger)
 import Lucid
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
-import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
-import Models.Apis.ShareEvents qualified as ShareEvents
-import Models.Projects.CodeContext qualified as CodeContext
-import Models.Projects.Dashboards qualified as Dashboards
-import Models.Projects.GitSync qualified as ModelGitSync
-import Models.Projects.ImpactReviews qualified as ImpactReviews
-import Models.Projects.IssueFixes qualified as IssueFixes
-import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
-import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.ProjectMemory qualified as ProjectMemory
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.ContainerTypes (Scope)
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Types qualified as H
 import Network.Wai (Request)
 import Network.Wai qualified as Wai
 import Pages.AIThreads qualified as AIThreads
-import Pages.BodyWrapper (NavigationResponse, PageCtx (..))
+import Pages.BodyWrapper (NavigationResponse, PageCtx)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils qualified as BotUtils
@@ -89,68 +73,32 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Git qualified as Git
-import Pkg.LiveTail qualified as LT
 import Pkg.Parser qualified as Parser
 import Relude hiding (ask)
 import Servant
 import Servant.HTML.Lucid (HTML)
-import Servant.Htmx
-import Servant.QueryParam.Record (RecordParam)
 import Servant.QueryParam.Server.Record ()
-import Servant.QueryParam.TypeLevel (Eval, Exp)
 import Servant.Server.Generic (AsServerT, genericServeTWithContext)
 import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, Action, ApiPrincipal (..), HXRedirectDest, HXReswap (..), Mime, ProjectToolCtx, RespHeaders, TriggerEvents, Unrefusable, XWidgetJSON, addRespHeaders, atAuthToBase)
+import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, HXReswap (..), Mime, ProjectToolCtx, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, atAuthToBase)
 import UnliftIO (withRunInIO)
 import UnliftIO.Exception (handle)
 import Utils qualified
-import Web.ApiHandlers (AllQueryParams, ApiV1Routes (..), apiV1OpenApiSpec)
+import Web.ApiHandlers (ApiV1Routes (..), apiV1OpenApiSpec)
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes (ApiActor (..))
 import Web.ApiTypes qualified as ApiT
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, servantRejection)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
+import Web.Links
 import Web.MCP qualified as MCP
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
-
-
-type ProjectId = Capture "projectID" Projects.ProjectId
-type GetRedirect = Verb 'GET 302
-
-
-type LocationRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text] a)
-type SessionRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] a)
-
-
-type QPT a = QueryParam a Text
-
-
-type QPU a = QueryParam a UTCTime
-type QPI a = QueryParam a Int
-
-
--- | Unknown values reach the handler as 'Left' instead of a 400, for links that outlive their enum.
-type LenientQP = QueryParam' '[Optional, Lenient]
-
-
--- Type-level expression for preserving field prefixes in RecordParam
-data KeepPrefixExp :: Symbol -> Exp Symbol
-type instance Eval (KeepPrefixExp sym) = sym
-
-
-type family LogDataField (sym :: Symbol) :: Symbol where
-  LogDataField "targetSpans" = "target-spans"
-  LogDataField sym = sym
-
-
-data LogDataFieldExp :: Symbol -> Exp Symbol
-type instance Eval (LogDataFieldExp sym) = LogDataField sym
 
 
 data RawJSON
@@ -181,29 +129,6 @@ instance MimeUnrender OTLPProto BS.ByteString where
 
 instance MimeRender OTLPProto BS.ByteString where
   mimeRender _ = fromStrict
-
-
--- | PNG responses. Servant renders the Content-Type from this instance, so the
--- handler must NOT add one itself: two Content-Type headers make nginx keep the
--- first and drop the rest, and a chart served as application/octet-stream is a
--- chart Slack refuses to download — which rejects the whole alert message
--- (invalid_attachments), not just the image.
-data PNG
-  deriving (Accept) via Mime "image/png"
-
-
-instance MimeRender PNG LBS.ByteString where
-  mimeRender _ = id
-
-
--- | The learned OpenAPI spec, served as YAML. Response-only, so no
--- 'MimeUnrender'.
-data YAML
-  deriving (Accept) via Mime "application/yaml"
-
-
-instance MimeRender YAML Text where
-  mimeRender _ = fromStrict . encodeUtf8
 
 
 -- | OTLP/HTTP export action, injected from System.Server. Kept abstract here:
@@ -270,7 +195,7 @@ data Routes mode = Routes
           :> ReqBody '[RawJSON] BS.ByteString
           :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> RawM
-  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[PNG] (Headers '[Header "Cache-Control" Text] LBS.ByteString)
+  , widgetPngGet :: mode :- WidgetPngGet
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders Onboarding.ProxiedPage)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
@@ -278,344 +203,6 @@ data Routes mode = Routes
   , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (Html ())
   , apiV1 :: mode :- "api" :> "v1" :> AuthProtect "api-key-auth" :> NamedRoutes ApiV1Routes
   , apiV1OpenApi :: mode :- "api" :> "v1" :> "openapi.json" :> Get '[JSON] OpenApi
-  }
-  deriving stock (Generic)
-
-
-type CookieProtectedRoutes :: Type -> Type
-data CookieProtectedRoutes mode = CookieProtectedRoutes
-  { -- Dashboard routes
-    dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> LocationRedirect NoContent
-  , slackInstallGet :: mode :- "p" :> ProjectId :> "slack" :> "install" :> QueryFlag "onboarding" :> LocationRedirect NoContent
-  , slackEvidenceGet :: mode :- "p" :> ProjectId :> "slack" :> "evidence" :> Capture "slackUser" Text :> LocationRedirect NoContent
-  , slackEvidenceDisconnectPost :: mode :- "p" :> ProjectId :> "slack" :> "evidence" :> "disconnect" :> Verb 'POST 303 '[HTML] (Headers '[Header "Location" Text] NoContent)
-  , slackIdentityGet :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> Get '[HTML] (RespHeaders (Html ()))
-  , slackIdentityPost :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> ReqBody '[FormUrlEncoded] Slack.SlackLinkForm :> Post '[HTML] (RespHeaders (Html ()))
-  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
-  , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
-  , dashboardViewPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardViewForm :> Action 'POST Dashboards.InvalidViewName Dashboards.SavedViews
-  , dashboardViewDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> Capture "name" Text :> AllQueryParams :> Delete '[HTML] (RespHeaders Dashboards.SavedViews)
-  , dashboardViewsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> AllQueryParams :> Get '[HTML] (RespHeaders Dashboards.SavedViews)
-  , rumRedirect :: mode :- "p" :> ProjectId :> "rum" :> CaptureAll "view" Text :> AllQueryParams :> LocationRedirect NoContent
-  , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders Dashboards.DashboardNew)
-  , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
-  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QueryParam "teamId" ApiT.TeamId :> QPT "copy_widget_id" :> QueryParam "source_dashboard_id" Dashboards.DashboardId :> QPT "new" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
-  , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
-  , dashboardSettledPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "settled" :> ReqBody '[JSON] Dashboards.DashboardSettleSample :> Post '[JSON] NoContent
-  , dashboardRepositoryGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "repository" :> Get '[HTML] (RespHeaders (PageCtx GitSync.DashboardRepositoryGet))
-  , dashboardRepositoryPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "repository" :> ReqBody '[FormUrlEncoded] GitSync.DashboardRepositoryForm :> Post '[HTML] (RespHeaders (PageCtx GitSync.DashboardRepositoryGet))
-  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> QPT "tab" :> QPT "configure_monitor" :> ReqBody '[JSON] Widget.Widget :> Action 'PUT Dashboards.WidgetMonitorRejection Dashboards.WidgetSaved
-  , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> QPT "tab" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
-  , dashboardDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders Dashboards.DashboardRes)
-  , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardRenameForm :> Patch '[HTML] (RespHeaders Dashboards.DashboardRes)
-  , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
-  , dashboardStarPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Unrefusable 'POST Dashboards.StarButton
-  , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> QueryParam "source_dashboard_id" Dashboards.DashboardId :> Post '[HTML] (RespHeaders Widget.Widget)
-  , dashboardWidgetNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "new" :> QPT "tab" :> QPT "range_start" :> QPT "range_end" :> Get '[HTML] (RespHeaders Dashboards.WidgetEditor)
-  , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> QPT "editor_tab" :> Get '[HTML] (RespHeaders Dashboards.WidgetEditor)
-  , -- Widget alert routes
-    widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Action 'POST Dashboards.WidgetMonitorRejection Dashboards.WidgetMonitorSaved
-  , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Unrefusable 'DELETE Dashboards.WidgetMonitorRemoved
-  , widgetAlertToggle :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> "toggle_active" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Unrefusable 'POST Dashboards.WidgetMonitorStatus
-  , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Dashboards.DashboardBulkAction :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
-  , -- Dashboard tab routes (htmx lazy loading)
-    dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Header "HX-Target" Text :> AllQueryParams :> Get '[HTML] (RespHeaders (NavigationResponse Dashboards.DashboardGet))
-  , dashboardTabRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.TabRenameForm :> Patch '[HTML] (RespHeaders Dashboards.TabRenameRes)
-  , dashboardYamlGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[HTML] (RespHeaders Dashboards.DashboardYaml)
-  , dashboardYamlPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> ReqBody '[FormUrlEncoded] Dashboards.YamlForm :> Unrefusable 'PUT Dashboards.YamlSave
-  , -- API routes
-    apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Settings.ApiGet)
-  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Action 'DELETE Settings.ApiKeyNotFound Settings.ApiMut
-  , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Action 'PATCH Settings.ApiKeyNotFound Settings.ApiMut
-  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Settings.GenerateAPIKeyForm :> Unrefusable 'POST Settings.ApiMut
-  , -- Charts and widgets
-    chartsDataGet :: mode :- "chart_data" :> QueryParam "db_source" Hasql.SqlSource :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
-  , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QueryParam "db_source" Hasql.SqlSource :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
-  , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
-  , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
-  , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders Dashboards.SqlPreview)
-  , widgetSqlText :: mode :- "p" :> ProjectId :> "widget" :> "sql-text" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[PlainText] (RespHeaders Text)
-  , -- Endpoints and fields
-    endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders (Table.TableResponse ApiCatalog.EnpReqStatsVM))
-  , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPT "period" :> QPI "skip" :> QPT "filter" :> QPT "stats" :> Get '[HTML] (RespHeaders (Table.TableResponse ApiCatalog.HostEventsVM))
-  , apiCatalogBulkAction :: mode :- "p" :> ProjectId :> "api_catalog" :> "bulk_action" :> Capture "action" ApiCatalog.HostBulkAction :> QPT "request_type" :> ReqBody '[FormUrlEncoded] ApiCatalog.HostBulkActionForm :> Action 'POST ApiCatalog.CatalogBulkRejection ApiCatalog.CatalogBulkAction
-  , -- The learned OpenAPI document: rendered reference, plus the raw spec in both
-    -- serialisations. Static ".json"/".yaml" segments rather than content negotiation,
-    -- because these URLs are meant to be pasted into curl, CI, and codegen.
-    apiCatalogDocs :: mode :- "p" :> ProjectId :> "api_catalog" :> "docs" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[HTML] (RespHeaders ApiCatalog.ApiDocsPage)
-  , apiCatalogSpecJson :: mode :- "p" :> ProjectId :> "api_catalog" :> "openapi.json" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[JSON] (RespHeaders AE.Value)
-  , apiCatalogSpecYaml :: mode :- "p" :> ProjectId :> "api_catalog" :> "openapi.yaml" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[YAML] (RespHeaders Text)
-  , -- Slack/Discord integration
-    reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Issues.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Projects.ReportType :> Unrefusable 'POST Reports.ReportsPost
-  , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QueryParam "event_type" ShareEvents.ShareKind :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
-  , -- Billing
-    manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> Get '[HTML] (RespHeaders Settings.BillingGet)
-  , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders Replay.ReplaySessionResp)
-  , replaySessionManifestGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> "manifest" :> Get '[JSON] (RespHeaders Replay.ReplayManifest)
-  , replaySessionShardGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> "shard" :> QueryParam "key" Text :> Get '[JSON] (RespHeaders Replay.RawJson)
-  , bringS3 :: mode :- "p" :> ProjectId :> "byob_s3" :> Get '[HTML] (RespHeaders (PageCtx Settings.StorageGet))
-  , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders Settings.StorageGet)
-  , bringS3Remove :: mode :- "p" :> ProjectId :> "byob_s3" :> Delete '[HTML] (RespHeaders Settings.StorageGet)
-  , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoriesGet))
-  , projectWikiGet :: mode :- "p" :> ProjectId :> "wiki" :> CaptureAll "path" Text :> QueryParam "after" ProjectMemory.PagePath :> QueryParam "q" Text :> QueryParam "folder" Text :> QueryFlag "edit" :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
-  , projectMemoryGet :: mode :- "p" :> ProjectId :> "memories" :> QueryParam "page" (UUIDId "memory_page") :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
-  , projectMemoryPost :: mode :- "p" :> ProjectId :> "memories" :> ReqBody '[FormUrlEncoded] PageCodeContext.MemoryForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
-  , repositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> QueryParam "tab" PageCodeContext.RepositoryTab :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoriesGet))
-  , serviceRepositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> "services" :> Capture "service" Text :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoriesGet))
-  , repositoryConnectGet :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryConnectGet))
-  , repositoryConnectPost :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> ReqBody '[FormUrlEncoded] PageCodeContext.RepositoryConnectForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryConnectGet))
-  , repositoryTokenGet :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> "token" :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryTokenGet))
-  , repositoryTokenPost :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> "token" :> ReqBody '[FormUrlEncoded] PageCodeContext.RepositoryTokenForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryTokenGet))
-  , repositoryGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
-  , repositoryDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> Unrefusable 'DELETE PageCodeContext.RepositoryRemoval
-  , repositoryDashboardGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx GitSync.RepositoryDashboardGet))
-  , repositoryDashboardPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "dashboards" :> ReqBody '[FormUrlEncoded] GitSync.RepositoryDashboardForm :> Post '[HTML] (RespHeaders (PageCtx GitSync.RepositoryDashboardGet))
-  , repositoryAnalyzePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "analyze" :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
-  , repositoryResumePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "resume" :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
-  , repositoryFolderPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "folder" :> ReqBody '[FormUrlEncoded] PageCodeContext.FolderForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
-  , repositoryConflictPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "resources" :> Capture "resource_id" (UUIDId "repository_resource") :> "conflict" :> ReqBody '[FormUrlEncoded] PageCodeContext.ConflictForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
-  , repositorySourceEnabledPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> "enabled" :> ReqBody '[FormUrlEncoded] PageCodeContext.SourceContextForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
-  , repositorySourceGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositorySourceGet))
-  , repositorySourcePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Action 'POST PageCodeContext.MappingRejection PageCodeContext.MappingsPanel
-  , repositorySourceDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> Capture "mapping_id" CodeContext.CodeMappingId :> Unrefusable 'DELETE PageCodeContext.MappingsPanel
-  , repositoryReviewsPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> "reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Unrefusable 'POST (PageCodeContext.ReviewChange (PageCtx PageCodeContext.RepositoryGet))
-  , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST Git.GitConnError GitSync.GitSyncSettings
-  , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Unrefusable 'DELETE GitSync.GitSyncRemoval
-  , gitSyncRepositoryUpdate :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST Git.GitConnError GitSync.GitSyncSettings
-  , gitSyncRepositoryRetry :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "retry" :> Unrefusable 'POST GitSync.GitSyncSettings
-  , gitSyncRepositoryPause :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "pause" :> Unrefusable 'POST GitSync.GitSyncSettings
-  , gitSyncRepositoryDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> Unrefusable 'DELETE GitSync.GitSyncRemoval
-  , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoriesGet))
-  , codeMappingsEditor :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> "editor" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders PageCodeContext.MappingsPanel)
-  , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Action 'POST PageCodeContext.MappingRejection PageCodeContext.MappingsPanel
-  , impactReviewSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Unrefusable 'POST (PageCodeContext.ReviewChange PageCodeContext.MappingsPanel)
-  , issueFixGet :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> Get '[HTML] (Headers '[Header "Cache-Control" Text] (Html ()))
-  , issueFixPackage :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> "publication.tar" :> RawM
-  , issueFixMedia :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> "media" :> Capture "asset" Artifacts.Asset :> RawM
-  , impactReviewRetry :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> Capture "id" ImpactReviews.ReviewId :> "rerun" :> Unrefusable 'POST (PageCodeContext.ReviewChange (PageCtx PageCodeContext.RepositoriesGet))
-  , codeMappingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Capture "id" CodeContext.CodeMappingId :> Unrefusable 'DELETE PageCodeContext.MappingsPanel
-  , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders Settings.PrometheusGet)
-  , prometheusSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders Settings.PrometheusMut)
-  , prometheusSettingsTest :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> "test" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Unrefusable 'POST Settings.ScrapeProbe
-  , prometheusSettingsEdit :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> "edit" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders Settings.PrometheusMut)
-  , prometheusSettingsToggle :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Patch '[HTML] (RespHeaders Settings.PrometheusMut)
-  , prometheusSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Delete '[HTML] (RespHeaders Settings.PrometheusMut)
-  , -- GitHub App routes
-    githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> QueryParam "to" Text :> Get '[HTML] (RespHeaders (PageCtx GitSync.GitHubConnect))
-  , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> QueryParam "code" Text :> Get '[HTML] (RespHeaders (PageCtx GitSync.GitHubConnect))
-  , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
-  , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Action 'POST GitSync.SelectRejection GitSync.SyncPanels
-  , -- Command palette
-    commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ())) -- dynamic items only
-  , commandPaletteRecentPost :: mode :- "p" :> ProjectId :> "command-palette" :> "recents" :> ReqBody '[FormUrlEncoded] CommandPalette.RecentForm :> Post '[HTML] (RespHeaders NoContent)
-  , aiRoutinesGet :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiRoutineInstallPost :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> "install" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineTemplateForm :> Action 'POST AIThreads.UnknownTemplate AIThreads.AIPage
-  , aiThreadsGet :: mode :- "p" :> ProjectId :> "ai" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiOperationGet :: mode :- "p" :> ProjectId :> "ai" :> "operations" :> Capture "operation_id" (UUIDId "agent_operation") :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiOperationReviewPost :: mode :- "p" :> ProjectId :> "ai" :> "operations" :> Capture "operation_id" (UUIDId "agent_operation") :> "review" :> ReqBody '[FormUrlEncoded] AIThreads.OperationReviewForm :> Unrefusable 'POST AIThreads.OperationReviewed
-  , aiRoutineRunGet :: mode :- "p" :> ProjectId :> "ai" :> "runs" :> Capture "run_id" (UUIDId "ai_routine_run") :> QueryParam "conversation" (UUIDId "conversation") :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiRoutineInstructionsPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "instructions" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineInstructionsForm :> Action 'POST AIThreads.PromptError AIThreads.AIPage
-  , aiThreadGet :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> QueryParam "doc" Issues.ArtifactKey :> Header "HX-Target" Text :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiThreadsPost :: mode :- "p" :> ProjectId :> "ai" :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Action 'POST AIThreads.NewThreadError AIThreads.AIPage
-  , aiThreadPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Action 'POST AIThreads.TurnError AIThreads.AIPage
-  , aiThreadTitlePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "title" :> ReqBody '[FormUrlEncoded] AIThreads.TitleForm :> Action 'POST AIThreads.EmptyTitle AIThreads.AIPage
-  , aiThreadDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> Unrefusable 'DELETE AIThreads.AIPage
-  , aiRoutinePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineForm :> Unrefusable 'POST AIThreads.AIPage
-  , aiRoutinePausePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "pause" :> Unrefusable 'POST AIThreads.AIPage
-  , aiRoutineCancelPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "cancel" :> Unrefusable 'POST AIThreads.AIPage
-  , aiRoutineResumePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "resume" :> Unrefusable 'POST AIThreads.AIPage
-  , aiRoutinePolicyPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "policy" :> ReqBody '[FormUrlEncoded] AIThreads.RoutinePolicyForm :> Action 'POST AIThreads.NoReviewClasses AIThreads.PolicySaved
-  , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineDestinationForm :> Unrefusable 'POST AIThreads.AIPage
-  , aiRoutineDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> Unrefusable 'DELETE AIThreads.AIPage
-  , -- Device auth
-    deviceApprove :: mode :- "device" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ()))
-  , deviceApprovePost :: mode :- "device" :> QPT "code" :> Post '[HTML] (RespHeaders (Html ()))
-  , -- Sub-route groups
-    projects :: mode :- ProjectsRoutes
-  , issues :: mode :- "p" :> ProjectId :> "issues" :> IssuesRoutes
-  , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes
-  , monitors :: mode :- "p" :> ProjectId :> "monitors" :> MonitorsRoutes
-  , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes
-  }
-  deriving stock (Generic)
-
-
-type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
-
-
-type LogExplorerRoutes' :: Type -> Type
-data LogExplorerRoutes' mode = LogExplorerRoutes'
-  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> QPT "target_event" :> QPT "showTrace" :> QPT "viz_type" :> QPT "alert" :> QPT "pattern_target" :> QPT "sort_by" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
-  , logExplorerDataGet :: mode :- "log_explorer" :> "data" :> RecordParam LogDataFieldExp Log.LogDataQuery :> Get '[JSON] (RespHeaders Log.LogResult)
-  , logExplorerPatternsGet :: mode :- "log_explorer" :> "patterns" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "pattern_target" :> QPI "aggregate_skip" :> Get '[JSON] (RespHeaders Log.PatternsView)
-  , logExplorerSessionsGet :: mode :- "log_explorer" :> "sessions" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPI "aggregate_skip" :> QPT "sort_by" :> QPT "cursor" :> Get '[JSON] (RespHeaders Log.SessionsView)
-  , logExplorerSchemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
-  , -- `source` matters: a metrics query reads a different table, so validating its fields
-    -- against otel_logs_and_spans squiggles the metrics table's own columns. Every sibling
-    -- endpoint here already takes it.
-    logExplorerValidateGet :: mode :- "log_explorer" :> "validate" :> QPT "query" :> QPT "source" :> Get '[JSON] (RespHeaders Log.QueryValidation)
-  , logExplorerFacetsGet :: mode :- "log_explorer" :> "facets" :> QPT "field" :> QPT "group" :> Get '[HTML] (RespHeaders Log.FacetsView)
-  , queryLibraryGet :: mode :- "log_explorer" :> "queries" :> Get '[HTML] (RespHeaders QueryLibrary.QueryLibraryView)
-  , saveQueryPost :: mode :- "log_explorer" :> "queries" :> ReqBody '[FormUrlEncoded] QueryLibrary.SaveQueryForm :> Post '[HTML] (RespHeaders QueryLibrary.QueryLibraryView)
-  , deleteQueryPost :: mode :- "log_explorer" :> "queries" :> Capture "id" Text :> Delete '[HTML] (RespHeaders QueryLibrary.QueryLibraryView)
-  , alertFormGet :: mode :- "log_explorer" :> "alert_form" :> QPT "alert" :> Get '[HTML] (RespHeaders Log.AlertForm)
-  , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> QPT "tab" :> QPT "subtab" :> QueryFlag "partial" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
-  , logExplorerRelatedMetricsGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "related_metrics" :> Get '[HTML] (RespHeaders Metrics.RelatedMetrics)
-  , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
-  , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
-  , liveTailGet :: mode :- "live_tail" :> Get '[HTML] (RespHeaders LiveTail.LiveTailGet)
-  , liveTailRecordGet :: mode :- "live_tail" :> "records" :> Capture "recordId" UUID.UUID :> Capture "timestamp" UTCTime :> Get '[JSON] (RespHeaders Telemetry.OtelLogsAndSpans)
-  , liveTailRegisterPost :: mode :- "live_tail" :> "subscriptions" :> ReqBody '[JSON] LT.NewSubscription :> Post '[JSON] (RespHeaders LiveTail.RegisterResponse)
-  , -- Streams for as long as the browser holds it open, so it is the one route here that is
-    -- not a plain request/response — see 'LiveTail.EventStream'.
-    liveTailStreamGet :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> "stream" :> StreamGet NoFraming LiveTail.EventStream (LiveTail.SseHeaders (SourceIO Builder))
-  , liveTailRenewPost :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> "renew" :> Post '[JSON] (RespHeaders AE.Value)
-  , liveTailDelete :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> Delete '[JSON] (RespHeaders AE.Value)
-  , -- Source around one stack frame. Its own endpoint rather than part of the detail panel
-    -- because resolving it is a call out to the SCM API: a thirty-frame trace must not make
-    -- the error panel wait on thirty round trips it may never need.
-    codeContextGet :: mode :- "code_context" :> QPT "file" :> QPI "line" :> QPT "service" :> QPT "revision" :> Get '[HTML] (RespHeaders PageCodeContext.FrameSource)
-  }
-  deriving stock (Generic)
-
-
-type IssuesRoutes = NamedRoutes IssuesRoutes'
-
-
-type IssuesRoutes' :: Type -> Type
-data IssuesRoutes' mode = IssuesRoutes'
-  { acknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "acknowledge" :> QueryParam "duration" Int :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , unAcknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> QueryParam "window" Issues.ArchiveWindow :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , resolveGet :: mode :- Capture "issueID" Issues.IssueId :> "resolve" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , triagePost :: mode :- Capture "issueID" Issues.IssueId :> "triage" :> ReqBody '[FormUrlEncoded] IssuesPage.TriageForm :> Action 'POST IssuesPage.TriageRejection IssuesPage.IssueTriage
-  , viewSavePost :: mode :- "views" :> ReqBody '[FormUrlEncoded] IssuesPage.SaveViewForm :> Action 'POST IssuesPage.UnnamedView IssuesPage.ViewChanged
-  , viewDeletePost :: mode :- "views" :> Capture "viewID" UUID.UUID :> "delete" :> Unrefusable 'POST IssuesPage.ViewChanged
-  , viewedPost :: mode :- Capture "issueID" Issues.IssueId :> "viewed" :> Unrefusable 'POST IssuesPage.TimelineLogged
-  , commentPost :: mode :- Capture "issueID" Issues.IssueId :> "comment" :> ReqBody '[FormUrlEncoded] IssuesPage.CommentForm :> Action 'POST IssuesPage.TimelineRejection IssuesPage.TimelineLogged
-  , linkPost :: mode :- Capture "issueID" Issues.IssueId :> "link" :> ReqBody '[FormUrlEncoded] IssuesPage.LinkForm :> Action 'POST IssuesPage.TimelineRejection IssuesPage.TimelineLogged
-  , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> QueryParam "value" Text :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders (Table.TableResponse IssuesPage.IssueVM))
-  , stepGet :: mode :- Capture "issueID" Issues.IssueId :> "step" :> QueryParam "dir" Telemetry.EventStep :> QueryParam "event" IssuesPage.EventRef :> LocationRedirect NoContent
-  , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx IssuesPage.IssueDetail))
-  , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx IssuesPage.IssueDetail))
-  , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] IssuesPage.AssignErrorForm :> Action 'POST IssuesPage.ErrorPatternRejection IssuesPage.AssigneeChanged
-  , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> QueryFlag "next_release" :> Action 'POST IssuesPage.ErrorPatternRejection IssuesPage.ErrorResolved
-  , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] IssuesPage.ErrorSubscriptionForm :> Action 'POST IssuesPage.ErrorPatternRejection IssuesPage.ErrorSubscribed
-  , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] IssuesPage.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiChatHistoryGet :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders IssuesPage.IssueChatHistory)
-  , sampleGet :: mode :- Capture "issueID" Issues.IssueId :> "sample" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders IssuesPage.IssueSample)
-  , activityGet :: mode :- Capture "issueID" Issues.IssueId :> "activity" :> QPT "trace_id" :> QPU "trace_ts" :> Get '[HTML] (RespHeaders IssuesPage.IssueActivityFeed)
-  , errorGroupMembersGet :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "group_members" :> Get '[HTML] (RespHeaders IssuesPage.ErrorGroupMembers)
-  , errorUnmergePost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "unmerge" :> Unrefusable 'POST IssuesPage.PatternUnmerged
-  }
-  deriving stock (Generic)
-
-
-type TelemetryRoutes = NamedRoutes TelemetryRoutes'
-
-
-type TelemetryRoutes' :: Type -> Type
-data TelemetryRoutes' mode = TelemetryRoutes'
-  { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPU "timestamp" :> QPT "span_id" :> QPT "nav" :> QPT "embed" :> QueryParam "spans" Int :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
-  , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> QPT "q" :> QueryParam "append" Bool :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
-  , dataPointCountsGetH :: mode :- "metrics" :> "datapoints" :> "counts" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Metrics.DataPointCounts)
-  , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricDetailsGet)
-  , metricRelatedGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "related" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricFragment)
-  , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricFragment)
-  , -- HTML for the metric page's Exemplars tab, JSON for the chart's diamond overlay:
-    -- one query, so the list and the markers can't disagree.
-    metricExemplarsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "exemplars" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML, JSON] (RespHeaders Metrics.MetricExemplarsGet)
-  , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricFragment)
-  , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> QPT "endpoint_hash" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
-  , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "service_search" :> QPT "metric_source" :> Get '[HTML] (RespHeaders Metrics.MetricServices)
-  , hostsGetH :: mode :- "infrastructure" :> "hosts" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "integration" :> QPT "group" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.HostsGet)
-  , hostDetailGetH :: mode :- "infrastructure" :> "hosts" :> "detail" :> QPT "host" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.DetailGet)
-  , infrastructureContainersGetH :: mode :- "infrastructure" :> "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
-  , infrastructureContainerDetailGetH :: mode :- "infrastructure" :> "containers" :> "detail" :> QPT "container" :> QPT "pod" :> QueryParam "scope" Scope :> QPT "cluster" :> QPT "namespace" :> QPT "node" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
-  , imagesGetH :: mode :- "infrastructure" :> "images" :> QPT "runtime" :> QPT "registry" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.ImagesGet)
-  , imageDetailGetH :: mode :- "infrastructure" :> "images" :> "detail" :> QPT "image" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.DetailGet)
-  , kubernetesGetH :: mode :- "infrastructure" :> "kubernetes" :> QPT "resource" :> QPT "cluster" :> QPT "namespace" :> QPT "status" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.KubernetesGet)
-  , kubernetesDetailGetH :: mode :- "infrastructure" :> "kubernetes" :> "detail" :> QPT "resource" :> QPT "name" :> QPT "cluster" :> QPT "namespace" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.DetailGet)
-  , hostMapGetH :: mode :- "infrastructure" :> "host-map" :> QPT "fill" :> QPT "group" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.HostMapGet)
-  , -- Legacy compatibility route. Navigation and generated links use /infrastructure/containers.
-    containersGetH :: mode :- "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
-  , containerDetailGetH :: mode :- "containers" :> "detail" :> QPT "container" :> QPT "pod" :> QueryParam "scope" Scope :> QPT "cluster" :> QPT "namespace" :> QPT "node" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
-  }
-  deriving stock (Generic)
-
-
-type MonitorsRoutes = NamedRoutes MonitorsRoutes'
-
-
-type MonitorsRoutes' :: Type -> Type
-data MonitorsRoutes' mode = MonitorsRoutes'
-  { listGet :: mode :- QueryParam "filter" Text :> QueryParam "since" Text :> Get '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
-  , overviewGet :: mode :- Capture "monitor_id" Text :> "overview" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Testing.AlertUpsertForm :> Post '[HTML] (RespHeaders Testing.Alert)
-  , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Testing.Alert)
-  , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Testing.Alert)
-  , alertMutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration" Int :> Unrefusable 'POST Testing.MonitorActed
-  , alertUnmutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "unmute" :> Unrefusable 'POST Testing.MonitorActed
-  , alertResolvePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "resolve" :> Unrefusable 'POST Testing.MonitorActed
-  , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Unrefusable 'DELETE Testing.MonitorActed
-  , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" ApiT.TeamId :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
-  , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[HTML] (RespHeaders Testing.Alert)
-  , cronGet :: mode :- "cron" :> Get '[HTML] (RespHeaders Testing.CronMonitors)
-  , cronPost :: mode :- "cron" :> ReqBody '[FormUrlEncoded] Testing.CronForm :> Action 'POST Testing.CronRejection Testing.CronList
-  , cronDelete :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders Testing.CronList)
-  , uptimeGet :: mode :- "uptime" :> Get '[HTML] (RespHeaders Testing.UptimeChecks)
-  , uptimePost :: mode :- "uptime" :> ReqBody '[FormUrlEncoded] Testing.UptimeForm :> Action 'POST Testing.UptimeRejection Testing.UptimeList
-  , uptimeToggle :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "toggle" :> Post '[HTML] (RespHeaders Testing.UptimeList)
-  , uptimeDelete :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "delete" :> Post '[HTML] (RespHeaders Testing.UptimeList)
-  , alertBulkAction :: mode :- "alerts" :> "bulk_action" :> Capture "action" Testing.MonitorBulkAction :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> Post '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
-  }
-  deriving stock (Generic)
-
-
-type ProjectsRoutes = NamedRoutes ProjectsRoutes'
-
-
-type ProjectsRoutes' :: Type -> Type
-data ProjectsRoutes' mode = ProjectsRoutes'
-  { listGet :: mode :- Get '[HTML] (RespHeaders ListProjects.ListProjectsGet)
-  , onboardingProject :: mode :- "p" :> "new" :> LocationRedirect (PageCtx (Html ())) -- p represents project
-  , createPost :: mode :- "p" :> "update" :> Capture "projectId" Projects.ProjectId :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
-  , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
-  , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> "integrations" :> Get '[HTML] (RespHeaders (PageCtx Integrations.IntegrationsConfig))
-  , -- Project management
-    deleteGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "delete" :> Action 'DELETE CreateProject.DemoProjectProtected CreateProject.ProjectDeleted
-  , -- Member management
-    membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
-  , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
-  , membersDeleteH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Capture "memberId" ProjectMembers.ProjectMemberId :> Action 'DELETE ManageMembers.MemberRejection ManageMembers.MemberRemoved
-  , teamsManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> QPT "what" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
-  , teamsManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> ReqBody '[JSON] ManageMembers.TeamForm :> QPT "teamView" :> Action 'POST ManageMembers.TeamRejection ManageMembers.TeamSaved
-  , teamGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> Capture "teamHandle" Text :> QPT "layout" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
-  , teamBulkAction :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> QPT "teamView" :> Action 'POST ManageMembers.TeamsDeleteRejection ManageMembers.TeamsDeleted
-  , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Action 'GET CreateProject.BillingRejection CreateProject.BillingRedirect
-  , stripeCheckout :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "stripe_checkout" :> ReqBody '[FormUrlEncoded] CreateProject.StripeCheckoutForm :> Action 'POST CreateProject.BillingRejection CreateProject.BillingRedirect
-  , -- Notifications
-    notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Action 'POST Integrations.ChannelsRejection Integrations.IntegrationsSaved
-  , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerdutyConnectForm :> Action 'POST Integrations.PagerdutyKeyTooShort Integrations.IntegrationsSaved
-  , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "pagerduty" :> "disconnect" :> Unrefusable 'POST Integrations.IntegrationsSaved
-  , slackDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "slack" :> Action 'DELETE Integrations.SlackNotInstalled Integrations.IntegrationsSaved
-  , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Settings.TestForm :> Unrefusable 'POST Settings.TestOutcome
-  , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Settings.NotificationTestHistoryGet)
-  , -- Onboarding routes
-    onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> LenientQP "step" Onboarding.OnboardingStep :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
-  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Unrefusable 'POST Onboarding.OnboardingStepPost
-  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Unrefusable 'POST Onboarding.OnboardingStepPost
-  , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingPhoneEmailsPost)
-  , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Action 'GET Onboarding.NoEventsYet Onboarding.IntegrationCheck
-  , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Unrefusable 'POST Onboarding.ChecklistDismissed
-  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> LenientQP "step" Onboarding.OnboardingStep :> Unrefusable 'POST Onboarding.OnboardingStepPost
-  , -- Pricing routes
-    onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Action 'POST CreateProject.SubscriptionLookupFailed CreateProject.PricingUpdated
   }
   deriving stock (Generic)
 
@@ -882,9 +469,10 @@ logExplorerServer :: Projects.ProjectId -> Servant.ServerT LogExplorerRoutes ATA
 logExplorerServer pid =
   LogExplorerRoutes'
     { logExplorerGet = Log.apiLogH pid
-    , logExplorerDataGet = Log.logExplorerDataH pid
-    , logExplorerPatternsGet = Log.logPatternsH pid
-    , logExplorerSessionsGet = Log.logSessionsH pid
+    , -- 'LogQueries.BrowserParams' is only echoed back to the browser; the handlers read scope from the session.
+      logExplorerDataGet = const $ Log.logExplorerDataH pid
+    , logExplorerPatternsGet = const $ Log.logPatternsH pid
+    , logExplorerSessionsGet = const $ Log.logSessionsH pid
     , logExplorerSchemaGet = Log.logExplorerSchemaH pid
     , logExplorerValidateGet = Log.logExplorerValidateH pid
     , logExplorerFacetsGet = Log.logExplorerFacetsH pid
@@ -1322,3 +910,213 @@ errorFormatters env =
     , Servant.bodyParserErrorFormatter = \_ req msg -> servantRejection env.config (ApiT.InvalidRequest $ toText msg) req
     , Servant.urlParseErrorFormatter = \_ req msg -> servantRejection env.config (ApiT.InvalidRequest $ toText msg) req
     }
+
+
+-- The page-defined types "Web.Links" names but cannot import.
+type instance Opaque "AIThreads.AIChatForm" = AIThreads.AIChatForm
+type instance Opaque "AIThreads.AIPage" = AIThreads.AIPage
+type instance Opaque "AIThreads.EmptyTitle" = AIThreads.EmptyTitle
+type instance Opaque "AIThreads.NewThreadError" = AIThreads.NewThreadError
+type instance Opaque "AIThreads.NoReviewClasses" = AIThreads.NoReviewClasses
+type instance Opaque "AIThreads.OperationReviewForm" = AIThreads.OperationReviewForm
+type instance Opaque "AIThreads.OperationReviewed" = AIThreads.OperationReviewed
+type instance Opaque "AIThreads.PolicySaved" = AIThreads.PolicySaved
+type instance Opaque "AIThreads.PromptError" = AIThreads.PromptError
+type instance Opaque "AIThreads.RoutineDestinationForm" = AIThreads.RoutineDestinationForm
+type instance Opaque "AIThreads.RoutineForm" = AIThreads.RoutineForm
+type instance Opaque "AIThreads.RoutineInstructionsForm" = AIThreads.RoutineInstructionsForm
+type instance Opaque "AIThreads.RoutinePolicyForm" = AIThreads.RoutinePolicyForm
+type instance Opaque "AIThreads.RoutineTemplateForm" = AIThreads.RoutineTemplateForm
+type instance Opaque "AIThreads.TitleForm" = AIThreads.TitleForm
+type instance Opaque "AIThreads.TurnError" = AIThreads.TurnError
+type instance Opaque "AIThreads.UnknownTemplate" = AIThreads.UnknownTemplate
+type instance Opaque "ApiCatalog.ApiDocsPage" = ApiCatalog.ApiDocsPage
+type instance Opaque "ApiCatalog.CatalogBulkAction" = ApiCatalog.CatalogBulkAction
+type instance Opaque "ApiCatalog.CatalogBulkRejection" = ApiCatalog.CatalogBulkRejection
+type instance Opaque "ApiCatalog.EnpReqStatsVM" = ApiCatalog.EnpReqStatsVM
+type instance Opaque "ApiCatalog.HostBulkActionForm" = ApiCatalog.HostBulkActionForm
+type instance Opaque "ApiCatalog.HostEventsVM" = ApiCatalog.HostEventsVM
+type instance Opaque "ApiT.LogResult" = ApiT.LogResult
+type instance Opaque "BotUtils.BotResponse" = BotUtils.BotResponse
+type instance Opaque "CommandPalette.RecentForm" = CommandPalette.RecentForm
+type instance Opaque "Containers.ContainersGet" = Containers.ContainersGet
+type instance Opaque "CreateProject.BillingRedirect" = CreateProject.BillingRedirect
+type instance Opaque "CreateProject.BillingRejection" = CreateProject.BillingRejection
+type instance Opaque "CreateProject.CreateProject" = CreateProject.CreateProject
+type instance Opaque "CreateProject.CreateProjectForm" = CreateProject.CreateProjectForm
+type instance Opaque "CreateProject.DemoProjectProtected" = CreateProject.DemoProjectProtected
+type instance Opaque "CreateProject.PricingUpdateForm" = CreateProject.PricingUpdateForm
+type instance Opaque "CreateProject.PricingUpdated" = CreateProject.PricingUpdated
+type instance Opaque "CreateProject.ProjectDeleted" = CreateProject.ProjectDeleted
+type instance Opaque "CreateProject.StripeCheckoutForm" = CreateProject.StripeCheckoutForm
+type instance Opaque "CreateProject.SubscriptionLookupFailed" = CreateProject.SubscriptionLookupFailed
+type instance Opaque "Dashboards.DashboardBulkActionForm" = Dashboards.DashboardBulkActionForm
+type instance Opaque "Dashboards.DashboardForm" = Dashboards.DashboardForm
+type instance Opaque "Dashboards.DashboardGet" = Dashboards.DashboardGet
+type instance Opaque "Dashboards.DashboardNew" = Dashboards.DashboardNew
+type instance Opaque "Dashboards.DashboardRenameForm" = Dashboards.DashboardRenameForm
+type instance Opaque "Dashboards.DashboardRes" = Dashboards.DashboardRes
+type instance Opaque "Dashboards.DashboardSettleSample" = Dashboards.DashboardSettleSample
+type instance Opaque "Dashboards.DashboardViewForm" = Dashboards.DashboardViewForm
+type instance Opaque "Dashboards.DashboardYaml" = Dashboards.DashboardYaml
+type instance Opaque "Dashboards.DashboardsGet" = Dashboards.DashboardsGet
+type instance Opaque "Dashboards.InvalidViewName" = Dashboards.InvalidViewName
+type instance Opaque "Dashboards.SavedViews" = Dashboards.SavedViews
+type instance Opaque "Dashboards.SqlPreview" = Dashboards.SqlPreview
+type instance Opaque "Dashboards.StarButton" = Dashboards.StarButton
+type instance Opaque "Dashboards.TabRenameForm" = Dashboards.TabRenameForm
+type instance Opaque "Dashboards.TabRenameRes" = Dashboards.TabRenameRes
+type instance Opaque "Dashboards.WidgetAlertForm" = Dashboards.WidgetAlertForm
+type instance Opaque "Dashboards.WidgetEditor" = Dashboards.WidgetEditor
+type instance Opaque "Dashboards.WidgetMonitorRejection" = Dashboards.WidgetMonitorRejection
+type instance Opaque "Dashboards.WidgetMonitorRemoved" = Dashboards.WidgetMonitorRemoved
+type instance Opaque "Dashboards.WidgetMonitorSaved" = Dashboards.WidgetMonitorSaved
+type instance Opaque "Dashboards.WidgetMonitorStatus" = Dashboards.WidgetMonitorStatus
+type instance Opaque "Dashboards.WidgetReorderItem" = Dashboards.WidgetReorderItem
+type instance Opaque "Dashboards.WidgetSaved" = Dashboards.WidgetSaved
+type instance Opaque "Dashboards.YamlForm" = Dashboards.YamlForm
+type instance Opaque "Dashboards.YamlSave" = Dashboards.YamlSave
+type instance Opaque "GitSync.DashboardRepositoryForm" = GitSync.DashboardRepositoryForm
+type instance Opaque "GitSync.DashboardRepositoryGet" = GitSync.DashboardRepositoryGet
+type instance Opaque "GitSync.GitHubConnect" = GitSync.GitHubConnect
+type instance Opaque "GitSync.GitSyncForm" = GitSync.GitSyncForm
+type instance Opaque "GitSync.GitSyncRemoval" = GitSync.GitSyncRemoval
+type instance Opaque "GitSync.GitSyncSettings" = GitSync.GitSyncSettings
+type instance Opaque "GitSync.RepoSelectForm" = GitSync.RepoSelectForm
+type instance Opaque "GitSync.RepositoryDashboardForm" = GitSync.RepositoryDashboardForm
+type instance Opaque "GitSync.RepositoryDashboardGet" = GitSync.RepositoryDashboardGet
+type instance Opaque "GitSync.SelectRejection" = GitSync.SelectRejection
+type instance Opaque "GitSync.SyncPanels" = GitSync.SyncPanels
+type instance Opaque "Infrastructure.DetailGet" = Infrastructure.DetailGet
+type instance Opaque "Infrastructure.HostMapGet" = Infrastructure.HostMapGet
+type instance Opaque "Infrastructure.HostsGet" = Infrastructure.HostsGet
+type instance Opaque "Infrastructure.ImagesGet" = Infrastructure.ImagesGet
+type instance Opaque "Infrastructure.KubernetesGet" = Infrastructure.KubernetesGet
+type instance Opaque "Integrations.ChannelsRejection" = Integrations.ChannelsRejection
+type instance Opaque "Integrations.IntegrationsConfig" = Integrations.IntegrationsConfig
+type instance Opaque "Integrations.IntegrationsSaved" = Integrations.IntegrationsSaved
+type instance Opaque "Integrations.NotifListForm" = Integrations.NotifListForm
+type instance Opaque "Integrations.PagerdutyConnectForm" = Integrations.PagerdutyConnectForm
+type instance Opaque "Integrations.PagerdutyKeyTooShort" = Integrations.PagerdutyKeyTooShort
+type instance Opaque "Integrations.SlackNotInstalled" = Integrations.SlackNotInstalled
+type instance Opaque "IssuesPage.AIChatForm" = IssuesPage.AIChatForm
+type instance Opaque "IssuesPage.AssignErrorForm" = IssuesPage.AssignErrorForm
+type instance Opaque "IssuesPage.AssigneeChanged" = IssuesPage.AssigneeChanged
+type instance Opaque "IssuesPage.CommentForm" = IssuesPage.CommentForm
+type instance Opaque "IssuesPage.ErrorGroupMembers" = IssuesPage.ErrorGroupMembers
+type instance Opaque "IssuesPage.ErrorPatternRejection" = IssuesPage.ErrorPatternRejection
+type instance Opaque "IssuesPage.ErrorResolved" = IssuesPage.ErrorResolved
+type instance Opaque "IssuesPage.ErrorSubscribed" = IssuesPage.ErrorSubscribed
+type instance Opaque "IssuesPage.ErrorSubscriptionForm" = IssuesPage.ErrorSubscriptionForm
+type instance Opaque "IssuesPage.IssueAction" = IssuesPage.IssueAction
+type instance Opaque "IssuesPage.IssueActivityFeed" = IssuesPage.IssueActivityFeed
+type instance Opaque "IssuesPage.IssueBulkForm" = IssuesPage.IssueBulkForm
+type instance Opaque "IssuesPage.IssueChatHistory" = IssuesPage.IssueChatHistory
+type instance Opaque "IssuesPage.IssueDetail" = IssuesPage.IssueDetail
+type instance Opaque "IssuesPage.IssueSample" = IssuesPage.IssueSample
+type instance Opaque "IssuesPage.IssueTriage" = IssuesPage.IssueTriage
+type instance Opaque "IssuesPage.IssueVM" = IssuesPage.IssueVM
+type instance Opaque "IssuesPage.LinkForm" = IssuesPage.LinkForm
+type instance Opaque "IssuesPage.PatternUnmerged" = IssuesPage.PatternUnmerged
+type instance Opaque "IssuesPage.SaveViewForm" = IssuesPage.SaveViewForm
+type instance Opaque "IssuesPage.TimelineLogged" = IssuesPage.TimelineLogged
+type instance Opaque "IssuesPage.TimelineRejection" = IssuesPage.TimelineRejection
+type instance Opaque "IssuesPage.TriageForm" = IssuesPage.TriageForm
+type instance Opaque "IssuesPage.TriageRejection" = IssuesPage.TriageRejection
+type instance Opaque "IssuesPage.UnnamedView" = IssuesPage.UnnamedView
+type instance Opaque "IssuesPage.ViewChanged" = IssuesPage.ViewChanged
+type instance Opaque "ListProjects.ListProjectsGet" = ListProjects.ListProjectsGet
+type instance Opaque "LiveTail.EventStream" = LiveTail.EventStream
+type instance Opaque "LiveTail.LiveTailGet" = LiveTail.LiveTailGet
+type instance Opaque "LiveTail.RegisterResponse" = LiveTail.RegisterResponse
+type instance Opaque "Log.AlertForm" = Log.AlertForm
+type instance Opaque "Log.FacetsView" = Log.FacetsView
+type instance Opaque "Log.LogsGet" = Log.LogsGet
+type instance Opaque "Log.PatternsView" = Log.PatternsView
+type instance Opaque "Log.QueryValidation" = Log.QueryValidation
+type instance Opaque "Log.SessionsView" = Log.SessionsView
+type instance Opaque "LogItem.ApiItemDetailed" = LogItem.ApiItemDetailed
+type instance Opaque "ManageMembers.ManageMembers" = ManageMembers.ManageMembers
+type instance Opaque "ManageMembers.ManageMembersForm" = ManageMembers.ManageMembersForm
+type instance Opaque "ManageMembers.ManageTeams" = ManageMembers.ManageTeams
+type instance Opaque "ManageMembers.MemberRejection" = ManageMembers.MemberRejection
+type instance Opaque "ManageMembers.MemberRemoved" = ManageMembers.MemberRemoved
+type instance Opaque "ManageMembers.TBulkActionForm" = ManageMembers.TBulkActionForm
+type instance Opaque "ManageMembers.TeamForm" = ManageMembers.TeamForm
+type instance Opaque "ManageMembers.TeamRejection" = ManageMembers.TeamRejection
+type instance Opaque "ManageMembers.TeamSaved" = ManageMembers.TeamSaved
+type instance Opaque "ManageMembers.TeamsDeleteRejection" = ManageMembers.TeamsDeleteRejection
+type instance Opaque "ManageMembers.TeamsDeleted" = ManageMembers.TeamsDeleted
+type instance Opaque "Metrics.DataPointCounts" = Metrics.DataPointCounts
+type instance Opaque "Metrics.MetricDetailsGet" = Metrics.MetricDetailsGet
+type instance Opaque "Metrics.MetricExemplarsGet" = Metrics.MetricExemplarsGet
+type instance Opaque "Metrics.MetricFragment" = Metrics.MetricFragment
+type instance Opaque "Metrics.MetricServices" = Metrics.MetricServices
+type instance Opaque "Metrics.MetricsOverViewGet" = Metrics.MetricsOverViewGet
+type instance Opaque "Metrics.RelatedMetrics" = Metrics.RelatedMetrics
+type instance Opaque1 "NavigationResponse" = NavigationResponse
+type instance Opaque "Onboarding.ChecklistDismissed" = Onboarding.ChecklistDismissed
+type instance Opaque "Onboarding.IntegrationCheck" = Onboarding.IntegrationCheck
+type instance Opaque "Onboarding.NoEventsYet" = Onboarding.NoEventsYet
+type instance Opaque "Onboarding.NotifChannelForm" = Onboarding.NotifChannelForm
+type instance Opaque "Onboarding.OnboardingConfForm" = Onboarding.OnboardingConfForm
+type instance Opaque "Onboarding.OnboardingGet" = Onboarding.OnboardingGet
+type instance Opaque "Onboarding.OnboardingInfoForm" = Onboarding.OnboardingInfoForm
+type instance Opaque "Onboarding.OnboardingPhoneEmailsPost" = Onboarding.OnboardingPhoneEmailsPost
+type instance Opaque "Onboarding.OnboardingStepPost" = Onboarding.OnboardingStepPost
+type instance Opaque "PageCodeContext.CodeMappingForm" = PageCodeContext.CodeMappingForm
+type instance Opaque "PageCodeContext.ConflictForm" = PageCodeContext.ConflictForm
+type instance Opaque "PageCodeContext.FolderForm" = PageCodeContext.FolderForm
+type instance Opaque "PageCodeContext.FrameSource" = PageCodeContext.FrameSource
+type instance Opaque "PageCodeContext.MappingRejection" = PageCodeContext.MappingRejection
+type instance Opaque "PageCodeContext.MappingsPanel" = PageCodeContext.MappingsPanel
+type instance Opaque "PageCodeContext.MemoryForm" = PageCodeContext.MemoryForm
+type instance Opaque "PageCodeContext.RepositoriesGet" = PageCodeContext.RepositoriesGet
+type instance Opaque "PageCodeContext.RepositoryConnectForm" = PageCodeContext.RepositoryConnectForm
+type instance Opaque "PageCodeContext.RepositoryConnectGet" = PageCodeContext.RepositoryConnectGet
+type instance Opaque "PageCodeContext.RepositoryGet" = PageCodeContext.RepositoryGet
+type instance Opaque "PageCodeContext.RepositoryRemoval" = PageCodeContext.RepositoryRemoval
+type instance Opaque "PageCodeContext.RepositorySourceGet" = PageCodeContext.RepositorySourceGet
+type instance Opaque "PageCodeContext.RepositoryTokenForm" = PageCodeContext.RepositoryTokenForm
+type instance Opaque "PageCodeContext.RepositoryTokenGet" = PageCodeContext.RepositoryTokenGet
+type instance Opaque1 "PageCodeContext.ReviewChange" = PageCodeContext.ReviewChange
+type instance Opaque "PageCodeContext.SourceContextForm" = PageCodeContext.SourceContextForm
+type instance Opaque "PageCodeContext.WikiGet" = PageCodeContext.WikiGet
+type instance Opaque1 "PageCtx" = PageCtx
+type instance Opaque "QueryLibrary.QueryLibraryView" = QueryLibrary.QueryLibraryView
+type instance Opaque "QueryLibrary.SaveQueryForm" = QueryLibrary.SaveQueryForm
+type instance Opaque "Reports.ReportsGet" = Reports.ReportsGet
+type instance Opaque "Reports.ReportsPost" = Reports.ReportsPost
+type instance Opaque "ServiceMap.ServiceMapGet" = ServiceMap.ServiceMapGet
+type instance Opaque "Settings.ApiGet" = Settings.ApiGet
+type instance Opaque "Settings.ApiKeyNotFound" = Settings.ApiKeyNotFound
+type instance Opaque "Settings.ApiMut" = Settings.ApiMut
+type instance Opaque "Settings.BillingGet" = Settings.BillingGet
+type instance Opaque "Settings.GenerateAPIKeyForm" = Settings.GenerateAPIKeyForm
+type instance Opaque "Settings.NotificationTestHistoryGet" = Settings.NotificationTestHistoryGet
+type instance Opaque "Settings.PrometheusForm" = Settings.PrometheusForm
+type instance Opaque "Settings.PrometheusGet" = Settings.PrometheusGet
+type instance Opaque "Settings.PrometheusMut" = Settings.PrometheusMut
+type instance Opaque "Settings.ScrapeProbe" = Settings.ScrapeProbe
+type instance Opaque "Settings.StorageGet" = Settings.StorageGet
+type instance Opaque "Settings.TestForm" = Settings.TestForm
+type instance Opaque "Settings.TestOutcome" = Settings.TestOutcome
+type instance Opaque "Share.ShareLinkPost" = Share.ShareLinkPost
+type instance Opaque "Slack.SlackLinkForm" = Slack.SlackLinkForm
+type instance Opaque1 "Table.Table" = Table.Table
+type instance Opaque1 "Table.TableResponse" = Table.TableResponse
+type instance Opaque1 "Table.TableRows" = Table.TableRows
+type instance Opaque "Testing.Alert" = Testing.Alert
+type instance Opaque "Testing.AlertUpsertForm" = Testing.AlertUpsertForm
+type instance Opaque "Testing.CronForm" = Testing.CronForm
+type instance Opaque "Testing.CronList" = Testing.CronList
+type instance Opaque "Testing.CronMonitors" = Testing.CronMonitors
+type instance Opaque "Testing.CronRejection" = Testing.CronRejection
+type instance Opaque "Testing.MonitorActed" = Testing.MonitorActed
+type instance Opaque "Testing.UnifiedMonitorItem" = Testing.UnifiedMonitorItem
+type instance Opaque "Testing.UptimeChecks" = Testing.UptimeChecks
+type instance Opaque "Testing.UptimeForm" = Testing.UptimeForm
+type instance Opaque "Testing.UptimeList" = Testing.UptimeList
+type instance Opaque "Testing.UptimeRejection" = Testing.UptimeRejection
+type instance Opaque "Trace.TraceDetailsGet" = Trace.TraceDetailsGet
+type instance Opaque "Widget.Widget" = Widget.Widget

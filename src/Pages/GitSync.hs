@@ -62,9 +62,10 @@ import Servant (ServerError (..), err401, err403, err404, err503)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, done, redirectCS)
-import Utils (LoadingSize (..), faSprite_, htmxIndicator_, renderMarkdown)
+import Utils (LoadingSize (..), faSprite_, hostPath, htmxIndicator_, renderMarkdown)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
+import Web.Links (CookieProtectedRoutes (..), ProjectsRoutes' (..), urls)
 
 
 data GitSyncForm = GitSyncForm
@@ -211,7 +212,7 @@ instance ToHtml GitSyncRemoval where
 instance Outcome GitSyncRemoval where
   outcomeBody = toHtml
   outcomeRedirect = \case
-    ChooseRepository pid -> Just $ "/p/" <> pid.toText <> "/repositories"
+    ChooseRepository pid -> Just $ urls.repositoriesGet pid Nothing Nothing
     Disconnected _ -> Nothing
     Kept _ -> Nothing
 
@@ -299,14 +300,13 @@ gitSyncSettingsView GitSyncSettings{hostUrl, projectId = pid, sync = syncM, fail
       DashboardUnavailable -> "This dashboard no longer belongs to this repository."
     maybe notConnectedView connectedView syncM
   where
-    baseUrl = "/p/" <> pid.toText <> "/settings/git-sync"
-    actionUrl = baseUrl <> maybe "" (\s -> "/" <> s.id.toText) syncM
+    actionUrl = maybe (urls.gitSyncSettingsPost pid) (urls.gitSyncRepositoryUpdate pid . (.id)) syncM
     targetId = "git-sync-" <> maybe "new" (.id.toText) syncM
     notConnectedView :: Html ()
     notConnectedView = do
       div_ [class_ "space-y-3"] do
         p_ [class_ "text-sm text-textWeak"] "Install the GitHub App to sync dashboards with your repository. Webhooks are configured automatically."
-        a_ [href_ (baseUrl <> "/install"), class_ "btn btn-sm btn-primary gap-2"] do
+        a_ [href_ (urls.githubAppInstall pid Nothing), class_ "btn btn-sm btn-primary gap-2"] do
           faSprite_ "github" "regular" "w-3.5 h-3.5"
           "Install GitHub App"
 
@@ -386,8 +386,8 @@ gitSyncSettingsView GitSyncSettings{hostUrl, projectId = pid, sync = syncM, fail
         case err.operation of
           GitSync.ImportDashboards -> p_ [class_ "text-xs text-textWeak"] "Some resource definitions could not be imported. Other changes still apply."
           GitSync.ExportDashboards -> p_ [class_ "text-xs text-textWeak"] "Configuration export failed. Retry to update this repository’s pull request."
-          GitSync.ExportDashboard did -> a_ [href_ ("/p/" <> pid.toText <> "/dashboards/" <> did.toText <> "/repository"), class_ "inline-flex min-h-6 items-center text-sm text-textBrand underline underline-offset-2"] "View the dashboard that failed to export"
-        when sync.syncEnabled $ button_ [type_ "button", term "hx-disable" "this", hxPost_ (actionUrl <> "/retry"), hxTarget_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> targetId <> "-retry-indicator"), class_ "btn btn-sm btn-ghost gap-2"] do
+          GitSync.ExportDashboard did -> a_ [href_ (urls.dashboardRepositoryGet pid did), class_ "inline-flex min-h-6 items-center text-sm text-textBrand underline underline-offset-2"] "View the dashboard that failed to export"
+        when sync.syncEnabled $ button_ [type_ "button", term "hx-disable" "this", hxPost_ (urls.gitSyncRepositoryRetry pid sync.id), hxTarget_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> targetId <> "-retry-indicator"), class_ "btn btn-sm btn-ghost gap-2"] do
           toHtml @Text $ case err.operation of GitSync.ImportDashboards -> "Retry import"; GitSync.ExportDashboard _ -> "Retry export"; GitSync.ExportDashboards -> "Retry export"
           htmxIndicator_ (targetId <> "-retry-indicator") LdXS
 
@@ -419,7 +419,7 @@ gitSyncSettingsView GitSyncSettings{hostUrl, projectId = pid, sync = syncM, fail
           button_ [class_ "btn btn-sm btn-primary gap-1", type_ "submit"] do
             if sync.syncEnabled then "Save" else "Resume sync"
             htmxIndicator_ (targetId <> "-indicator") LdXS
-          when sync.syncEnabled $ button_ [type_ "button", hxPost_ (actionUrl <> "/pause"), hxTarget_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> targetId <> "-pause-indicator"), class_ "btn btn-sm btn-ghost gap-1"] do
+          when sync.syncEnabled $ button_ [type_ "button", hxPost_ (urls.gitSyncRepositoryPause pid sync.id), hxTarget_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> targetId <> "-pause-indicator"), class_ "btn btn-sm btn-ghost gap-1"] do
             "Pause sync"
             htmxIndicator_ (targetId <> "-pause-indicator") LdXS
       unless isViaApp $ details_ [class_ "pt-6 border-t border-strokeWeak"] do
@@ -514,7 +514,7 @@ repositoryDashboardPage pid rid = do
   repos <- maybe (pure Nothing) (liftIO . Cache.lookup ctx.repoListCache) repository.credentialId
   let branch = maybe "" (.defaultBranch) $ find ((== repository.owner <> "/" <> repository.repo) . (.fullName)) (fold repos)
   permission <- ProjectMembers.getUserPermission pid session.user.id
-  pure $ PageCtx bw{prePageTitle = Just "Repositories", pageTitle = repository.owner <> "/" <> repository.repo, pageTitleUrl = Just $ "/p/" <> pid.toText <> "/repositories/" <> rid.toText, pageTitleSuffix = Just "Configuration sync", menuItem = Just "Repositories"} RepositoryDashboardGet{repository, sync, accounts, form = RepositoryDashboardForm repository.credentialId branch Nothing, hostUrl = ctx.config.hostUrl, permission, setupError = Nothing}
+  pure $ PageCtx bw{prePageTitle = Just "Repositories", pageTitle = repository.owner <> "/" <> repository.repo, pageTitleUrl = Just $ urls.repositoryGet pid rid, pageTitleSuffix = Just "Configuration sync", menuItem = Just "Repositories"} RepositoryDashboardGet{repository, sync, accounts, form = RepositoryDashboardForm repository.credentialId branch Nothing, hostUrl = ctx.config.hostUrl, permission, setupError = Nothing}
 
 
 repositoryDashboardGetH :: Projects.ProjectId -> GitSync.RepositoryId -> ATAuthCtx (RespHeaders (PageCtx RepositoryDashboardGet))
@@ -560,7 +560,7 @@ repositoryDashboardPostH pid rid form = do
 instance ToHtml RepositoryDashboardGet where
   toHtml page = section_ [class_ "w-full min-w-0 space-y-6 p-4 sm:p-6"] do
     let repository = page.repository
-        base = "/p/" <> repository.projectId.toText <> "/repositories/" <> repository.id.toText
+        dashboardsUrl = urls.repositoryDashboardPost repository.projectId repository.id
     header_ [class_ "space-y-2"] do
       h1_ [class_ "text-xl font-semibold text-textStrong"] "Configuration sync"
       p_ [class_ "text-sm text-textWeak max-w-2xl"] "Keep dashboard and monitor definitions alongside code. Monoscope edits open or update one configuration PR; merged target-branch changes update Monoscope."
@@ -584,8 +584,8 @@ instance ToHtml RepositoryDashboardGet where
               p_ [class_ "text-xs text-textWeak"] "Use this secret when adding the push webhook to your Git host."
           Nothing | null page.accounts -> do
             p_ [class_ "text-sm text-textWeak"] "Connect an account with access to this repository to enable configuration sync."
-            a_ [href_ ("/p/" <> repository.projectId.toText <> "/repositories/connect"), class_ "btn btn-sm btn-primary"] "Connect an account"
-          Nothing -> form_ [action_ (base <> "/dashboards"), method_ "post", hxPost_ (base <> "/dashboards"), hxTarget_ "#repository-dashboard-content", hxSelect_ "#repository-dashboard-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-dashboard-indicator", class_ "space-y-4"] do
+            a_ [href_ (urls.repositoryConnectGet repository.projectId Nothing), class_ "btn btn-sm btn-primary"] "Connect an account"
+          Nothing -> form_ [action_ dashboardsUrl, method_ "post", hxPost_ dashboardsUrl, hxTarget_ "#repository-dashboard-content", hxSelect_ "#repository-dashboard-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-dashboard-indicator", class_ "space-y-4"] do
             formSelectField_ FieldSm "Repository account" "credentialId" True do
               option_ ([value_ "", disabled_ "disabled"] <> [selected_ "selected" | isNothing page.form.credentialId]) "Choose an account"
               forM_ page.accounts \account -> option_ ([value_ account.id.toText] <> [selected_ "selected" | Just account.id == page.form.credentialId]) $ toHtml account.account
@@ -617,8 +617,8 @@ newtype DashboardRepositoryForm = DashboardRepositoryForm {repositoryId :: GitSy
 instance ToHtml DashboardRepositoryGet where
   toHtml page = section_ [class_ "mx-auto max-w-3xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
     let dash = page.dashboard
-        base = "/p/" <> dash.projectId.toText
-    a_ [href_ (base <> "/dashboards/" <> dash.id.toText), class_ "inline-flex items-center gap-2 text-sm text-textBrand hover:underline"] do
+        pid = dash.projectId
+    a_ [href_ (urls.dashboardsGet pid dash.id Nothing Nothing Nothing Nothing []), class_ "inline-flex items-center gap-2 text-sm text-textBrand hover:underline"] do
       faSprite_ "arrow-left" "regular" "h-3 w-3"
       "Back to dashboard"
     header_ [class_ "space-y-2"] do
@@ -641,15 +641,15 @@ instance ToHtml DashboardRepositoryGet where
             then p_ [class_ "text-sm text-textWeak"] $ if isNothing dash.fileSha then "Waiting for the first push. Dashboard edits will sync to this repository." else "Dashboard edits sync to this repository."
             else p_ [class_ "text-sm text-textWarning"] "Sync is paused. Enable dashboard sync in Repositories to send edits."
           p_ [class_ "text-xs text-textWeak"] "Disconnect dashboard sync in Repositories to retain a local copy."
-          a_ [href_ (base <> "/repositories#git-sync-" <> repository.id.toText), class_ "btn btn-sm btn-ghost"] "View in Repositories"
+          a_ [href_ (urls.repositoriesGet pid Nothing Nothing <> "#git-sync-" <> repository.id.toText), class_ "btn btn-sm btn-ghost"] "View in Repositories"
         Nothing
           | not (maybe False (>= ProjectMembers.PEdit) page.permission) ->
               p_ [class_ "text-sm text-textWeak"] "A project editor can assign this dashboard to a repository."
         Nothing | null page.repositories -> do
           p_ [class_ "text-sm text-textWeak"] "Connect a repository to version dashboards alongside your team's code."
-          a_ [href_ (base <> "/repositories"), class_ "btn btn-sm btn-primary"] "Connect a repository"
+          a_ [href_ (urls.repositoriesGet pid Nothing Nothing), class_ "btn btn-sm btn-primary"] "Connect a repository"
         Nothing -> form_
-          [ hxPost_ (base <> "/dashboards/" <> dash.id.toText <> "/repository")
+          [ hxPost_ (urls.dashboardRepositoryPost pid dash.id)
           , hxTarget_ "#dashboard-repository-content"
           , hxSelect_ "#dashboard-repository-content"
           , hxSwap_ "outerMorph"
@@ -741,7 +741,7 @@ instance ToHtml GitHubConnect where
         AttemptMissing -> "This connection request is missing, expired, or already used. Return to Repositories and connect the account again."
         AuthorizationFailed err -> GitSync.installationErrorMessage err
         ConnectionIncomplete -> "GitHub did not complete the connection. Return to Repositories and try again."
-      a_ [href_ (maybe "/" (\pid -> "/p/" <> pid.toText <> "/repositories/connect") pidM), class_ "btn btn-sm btn-ghost"] $ if isJust pidM then "Back to repository connections" else "Back to projects"
+      a_ [href_ (maybe urls.projects.listGet (\pid -> urls.repositoryConnectGet pid Nothing) pidM), class_ "btn btn-sm btn-ghost"] $ if isJust pidM then "Back to repository connections" else "Back to projects"
   toHtmlRaw = toHtml
 
 
@@ -766,7 +766,7 @@ githubAppCallbackH instIdM _setupAction stateM codeM = do
   ctx <- ask @Config.AuthContext
   session <- Projects.getSession
   attemptM <- maybe (pure Nothing) (GitSync.consumeInstallationAttempt session.persistentSession.id) (stateM >>= rightToMaybe . parseUrlPiece)
-  let callback = T.dropWhileEnd (== '/') ctx.config.hostUrl <> "/github/callback"
+  let callback = hostPath ctx.config.hostUrl $ urls.githubAppCallback Nothing Nothing Nothing Nothing
       escaped = decodeUtf8 . urlEncode True . encodeUtf8
   content <- case attemptM of
     Nothing -> pure $ ConnectFailed Nothing AttemptMissing
@@ -777,7 +777,7 @@ githubAppCallbackH instIdM _setupAction stateM codeM = do
         (Just iid, Just code) ->
           GitSync.authorizeGitHubInstallation (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) attempt.projectId ctx.config.githubAppId ctx.config.githubClientId ctx.config.githubClientSecret code callback iid <&> \case
             Left err -> ConnectFailed (Just attempt.projectId) (AuthorizationFailed err)
-            Right () -> Continue "GitHub account verified. Choose the repositories to connect." $ "/p/" <> attempt.projectId.toText <> "/repositories/connect"
+            Right () -> Continue "GitHub account verified. Choose the repositories to connect." $ urls.repositoryConnectGet attempt.projectId Nothing
         (Just iid, Nothing) | GitSync.InstallApp <- attempt.step -> do
           nonce <- GitSync.createInstallationAttempt session.persistentSession.id attempt{GitSync.step = GitSync.AuthorizeApp iid}
           pure $ Continue "Authorize your GitHub account to verify this installation." $ "https://github.com/login/oauth/authorize?client_id=" <> escaped ctx.config.githubClientId <> "&redirect_uri=" <> escaped callback <> "&state=" <> UUID.toText nonce
@@ -791,7 +791,7 @@ githubAppReposH pid instIdParam = do
   requireGitWrite pid
   accounts <- GitSync.getGitHubCredentials pid
   forM_ instIdParam $ \iid -> unless (any (\account -> account.host == Git.GitHub && isNothing account.apiBase && account.installationId == Just iid) accounts) $ throwError err403
-  redirectCS $ "/p/" <> pid.toText <> "/repositories/connect"
+  redirectCS $ urls.repositoryConnectGet pid Nothing
   addRespHeaders mempty
 
 

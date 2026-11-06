@@ -3,6 +3,7 @@ module Models.DashboardTemplatesSpec (spec) where
 import Data.Effectful.Hasql (SqlSource (..))
 import Data.List qualified as L (isSuffixOf)
 import Data.Text qualified as T
+import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Pkg.Components.Widget qualified as Widget
@@ -36,6 +37,7 @@ spec = describe "dashboard templates" do
 
   it "every template YAML parses into a Dashboard" do
     map (.file) templates `shouldBe` map (Just . fromString) files
+    map (.file) dashboardTemplatesCompiled `shouldBe` map (.file) templates
 
   it "every KQL widget query parses" do
     let broken =

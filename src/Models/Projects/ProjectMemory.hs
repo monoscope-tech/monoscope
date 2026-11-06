@@ -14,7 +14,7 @@ import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Pkg.DeriveUtils (DB, UUIDId, refineText)
 import Relude
-import Web.HttpApiData (FromHttpApiData (..))
+import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 
 
 -- $setup
@@ -33,7 +33,7 @@ type PageId = UUIDId "memory_page"
 
 newtype PagePath = PagePath Text
   deriving stock (Eq, Ord, Show)
-  deriving newtype (AE.ToJSON, HI.EncodeValue)
+  deriving newtype (AE.ToJSON, HI.EncodeValue, ToHttpApiData)
 
 
 -- | Paths are relative, bounded and cannot contain traversal or encoded separators.

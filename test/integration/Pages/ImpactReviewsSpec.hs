@@ -3263,7 +3263,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let measured = filter ((== Impact.Telemetry) . (.kind)) (saved :: Impact.ReviewResult).evidence
     for_ measured \item -> whenJust item.chartUrl \chart -> do
       let compressed = T.takeWhile (/= '&') $ T.drop 8 $ snd $ T.breakOn "widgetZ=" chart
-      widgetJSON <- maybe (fail "invalid evidence widget") pure =<< Widget.decodeWidgetZ compressed
+      widgetJSON <- maybe (fail "invalid evidence widget") pure =<< Widget.decodeWidgetZ (decodeUtf8 $ H.urlDecode True $ encodeUtf8 compressed)
       widget <- either fail pure $ AE.eitherDecodeStrict @Widget.Widget $ encodeUtf8 widgetJSON
       if item.key == "telemetry-1"
         then widget.query `shouldSatisfy` maybe False (\query -> all (`T.isInfixOf` query) ["timestamp >= \"2024-12-25T00:00:00Z\"", "timestamp <= \"2025-01-01T00:00:00Z\""])

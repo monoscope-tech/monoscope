@@ -36,10 +36,11 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.Projects (OnboardingStep (NotifChannel))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pages.BodyWrapper (BWConfig, OnboardingStep (NotifChannel), PageCtx (..), stepUrl)
+import Pages.BodyWrapper (BWConfig, PageCtx (..), stepUrl)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateCfg (..), emptyState_, navBar)
 import Pkg.AI qualified as AI
@@ -61,6 +62,7 @@ import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
 import Utils (faSprite_, formatUTC, hostPath, toUriStr)
 import Web.HttpApiData (parseUrlPiece)
+import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), ProjectsRoutes' (..), logExplorerLinks, urls)
 
 
 data BotType = Discord | Slack | WhatsApp
@@ -170,7 +172,7 @@ installedSuccess botPlatform pidM = do
             p_ [class_ "text-textWeak text-sm mx-auto max-w-2xl"] $ toHtml $ "Start receiving real-time alerts and interact with your API data directly from " <> botPlatform <> ". Your team can now stay on top of API performance without leaving your chat."
             whenJust pidM \pid ->
               div_ [class_ "mt-6"] do
-                a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/settings/integrations"] "Go back to Integrations"
+                a_ [class_ "btn btn-primary", href_ $ urls.projects.integrationGet pid] "Go back to Integrations"
           div_ [class_ "max-w-3xl mx-auto"] do
             h3_ [class_ "font-semibold text-textStrong mb-8 text-center"] "Available Commands"
             div_ [class_ "grid gap-4 md:grid-cols-2"] do
@@ -551,7 +553,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
         >>= either (\err -> send (ReplyText $ formatBotError target ServiceError) $> Left err) (\response -> dispatchAIResponse threadM response $> Right ())
   where
     send reply = AI.requireAgentAccess access pid >> deliver reply
-    explorerUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/log_explorer?"
+    explore links viz q = links.logExplorerGet (Just q) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing viz Nothing Nothing Nothing
 
     textReply txt = case target of
       Discord -> AE.object ["content" AE..= txt]
@@ -591,7 +593,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
           <> [dcLinkButton (botEmoji EmojiSearch <> " View Full Report") reportUrl]
       WhatsApp -> textReply $ title " Report\nPeriod: " <> period " - " <> "\nTotal Events: " <> show totalEvents <> "\nTotal Errors: " <> show totalErrors <> "\nView: " <> reportUrl
       where
-        reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
+        reportUrl = hostPath envCfg.hostUrl $ urls.reportsSingleGet pid report.id
         day = toText . formatTime defaultTimeLocale "%Y-%m-%d"
         period sep = day report.startTime <> sep <> day report.endTime
         title suffix = botEmoji EmojiChart <> " " <> T.toTitle (display report.reportType) <> suffix
@@ -618,7 +620,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
             | otherwise = do
                 let query = fromMaybe "" widget.query
                     chartType = Widget.mapWidgetTypeToChartType widget.wType
-                    queryUrl = maybe (explorerUrl <> "viz_type=" <> chartType <> "&query=" <> toUriStr query) (\identifier -> hostPath envCfg.hostUrl $ "p/" <> pid.toText <> "/ai/" <> identifier.toText) conversation
+                    queryUrl = hostPath envCfg.hostUrl $ maybe (explore (urls.logExplorer pid) (Just chartType) query) (\identifier -> urls.aiThreadGet pid identifier Nothing) conversation
                     viewLabel = bool "View in Log Explorer" "View in Monoscope" (isJust conversation)
                     title = fromMaybe userQuery widget.title
                 imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid widget Nothing (iso fromTimeM) (iso toTimeM)
@@ -651,7 +653,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
                       [ "1" AE..= ("*" <> title <> "*")
                       , "2" AE..= ("`" <> query <> "`")
                       , "3" AE..= ("time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr pid.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr (fold $ iso fromTimeM) <> "&to=" <> toUriStr (fold $ iso toTimeM))
-                      , "4" AE..= (pid.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query)
+                      , "4" AE..= (pid.toText <> explore logExplorerLinks (Just chartType) query)
                       ]
       let explanation = mfilter (not . T.null . T.strip) resp.explanation
       case AI.responseWidgets resp of
@@ -668,7 +670,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
             shownCount = length rows
             cells = map (map $ T.take 60 . unwords . words) $ colNames : map (map CLIFormat.valToText . V.toList) rows
             tableData = "```\n" <> T.take 1200 (unlines $ map (CLIFormat.formatRow $ CLIFormat.colWidths cells) cells) <> "\n```"
-            url' = explorerUrl <> "query=" <> toUriStr query
+            url' = hostPath envCfg.hostUrl $ explore (urls.logExplorer pid) Nothing query
             moreText = if resultCount > shownCount then "\n_" <> show (resultCount - shownCount) <> " more results in Log Explorer_" else ""
             content = botEmoji EmojiTable <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " rows)\n`" <> query <> "`\n" <> tableData <> moreText <> "\n"
          in case target of

@@ -94,7 +94,7 @@ import Pages.Charts.Types qualified as Charts
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (CamelSchema (..), JsonValueSchema (..), SnakeJSON (..), SnakeSchema (..), WrappedEnumSC (..))
 import Relude
-import Servant (FromHttpApiData, ServerError (..), err400, err401, err403, err404)
+import Servant (FromHttpApiData, ServerError (..), ToHttpApiData (..), err400, err401, err403, err404)
 import Web.Wire (ApiProblem (..), ApiProblemBody (..), Paged (..), ProblemCode (..))
 
 
@@ -549,7 +549,7 @@ data IssueStatus
   | ISArchived
   | ISAll
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "IS" IssueStatus
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, ToHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "IS" IssueStatus
 
 
 data IssueApiSummary = IssueApiSummary

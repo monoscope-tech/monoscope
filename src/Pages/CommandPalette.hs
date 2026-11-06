@@ -1,5 +1,6 @@
 module Pages.CommandPalette (paletteShell_, commandPaletteItemsH, commandPaletteRecentPostH, RecentForm (..)) where
 
+import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -9,12 +10,14 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Pages.Components (kbdHints_, listboxNavAttr_)
+import Pages.Components (kbdHints_, listboxNavAttr_, logExplorerUrl)
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (NoContent (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
+import Web.Links
 
 
 data PaletteItem = PaletteItem {id :: UUID, title :: Text}
@@ -84,7 +87,6 @@ commandPaletteRecentPostH pid form = do
 -- | Palette shell rendered inline in the page (hidden). Shown via Cmd+K or search button click.
 paletteShell_ :: Projects.ProjectId -> Html ()
 paletteShell_ pid = do
-  let pidTxt = pid.toText
   -- Global palette functions + Cmd+K listener (must be on a visible element)
   span_ [id_ "cmd-palette-global", paletteGlobalScript] ""
   -- Backdrop (hidden by default, shown on Cmd+K / search click)
@@ -101,7 +103,7 @@ paletteShell_ pid = do
         span_ [class_ "text-xs font-medium text-white dark:text-white/70 uppercase tracking-wider"] "Quick Search"
         span_ [class_ "cmd-palette-count text-xs text-white/80 dark:text-white/50", term "hx-live:text" "(n => (q('#cmd-palette-input').value ? q('#cmd-palette-results a.cmd-item:not([hidden])').count + ' of ' : '') + n + ' items')(q('#cmd-palette-results a.cmd-item').count)"] ""
       -- Panel
-      div_ [class_ "cmd-palette w-full max-w-lg bg-base-100 rounded-lg shadow-2xl border border-base-300 overflow-hidden", data_ "pid" pidTxt, data_ "current-category" "", listboxNavAttr_] do
+      div_ [class_ "cmd-palette w-full max-w-lg bg-base-100 rounded-lg shadow-2xl border border-base-300 overflow-hidden", data_ "pid" pid.toText, data_ "current-category" "", listboxNavAttr_] do
         -- Search input
         div_ [class_ "px-3 border-b border-base-300"] do
           input_
@@ -119,16 +121,16 @@ paletteShell_ pid = do
         -- Results container
         div_ [id_ "cmd-palette-results", role_ "listbox", class_ "max-h-80 overflow-y-auto p-1"] do
           -- Lazy-loaded dynamic items placeholder
-          div_ [id_ "cmd-palette-dynamic", hxGet_ ("/p/" <> pidTxt <> "/command-palette"), hxTrigger_ "palette:open from:body", hxSwap_ "outerHTML", class_ "text-center text-xs text-textWeak py-2"] "Loading..."
+          div_ [id_ "cmd-palette-dynamic", hxGet_ (urls.commandPaletteGet pid), hxTrigger_ "palette:open from:body", hxSwap_ "outerHTML", class_ "text-center text-xs text-textWeak py-2"] "Loading..."
           -- Direct page links (static, always present)
-          forM_ ([("log_explorer", "explore", "Log Explorer"), ("api_catalog", "swap", "API Catalog"), ("reports", "chart-simple", "Reports"), ("repositories", "code-branch", "Repositories"), ("settings", "gear", "Settings")] :: [(Text, Text, Text)]) \(path, icon, label) ->
-            cmdItem pidTxt CKDirect path [] icon label "Page"
+          forM_ @[] @_ @(Text, Text, Text) [(logExplorerUrl pid, "explore", "Log Explorer"), (urls.apiCatalogGet pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing, "swap", "API Catalog"), (urls.reportsGet pid Nothing, "chart-simple", "Reports"), (urls.repositoriesGet pid Nothing Nothing, "code-branch", "Repositories"), (urls.projects.settingsGet pid, "gear", "Settings")] \(href, icon, label) ->
+            cmdItem pid CKDirect href [] icon label "Page"
           -- Logs shortcut
-          cmdLink_ "search logs" CKLogShortcut [href_ $ "/p/" <> pidTxt <> "/log_explorer", term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"]
+          cmdLink_ "search logs" CKLogShortcut [href_ $ logExplorerUrl pid, term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"]
             $ itemBody_ "explore" [term "hx-live:text" "'Search logs for: \"' + q('#cmd-palette-input').value + '\"'"] "Search logs for: \"\"" "Logs"
           -- Actions
-          cmdItem pidTxt CKDirect "log_explorer#create-alert-toggle" [] "plus" "Create monitor" "Action"
-          cmdItem pidTxt CKDirect "dashboards?new=true" [] "plus" "Create dashboard" "Action"
+          cmdItem pid CKDirect (logExplorerUrl pid <> "#create-alert-toggle") [] "plus" "Create monitor" "Action"
+          cmdItem pid CKDirect (urls.dashboardsGetList pid Nothing Nothing Nothing Nothing Nothing (Just "true") def) [] "plus" "Create dashboard" "Action"
           cmdLink_ "switch project" CKDirect [href_ "/"] $ itemBody_ "grid" [] "Switch project" "Action"
           cmdLink_
             "copy current url"
@@ -204,18 +206,16 @@ renderDynamicItems pid recents issues monitors dashboards =
         "dashboard"
         "Dashboards"
         "Dashboard"
-        [cmdItem pidTxt CKChild "dashboards" [data_ "cmd-category" "dashboards", hidden_ ""] "dashboard" "All Dashboards" "Page"]
-        [("dashboards/" <> show d.id, if T.null d.title then "Untitled Dashboard" else d.title) | d <- dashboards]
-      section "issues" "bug" "Issues" "Issue" [] [("issues/" <> show i.id, i.title) | i <- issues]
-      section "monitors" "list-check" "Monitors" "Monitor" [] [("monitors?highlight=" <> show m.id, m.title) | m <- monitors]
+        [cmdItem pid CKChild (urls.dashboardsGetList pid Nothing Nothing Nothing Nothing Nothing Nothing def) [data_ "cmd-category" "dashboards", hidden_ ""] "dashboard" "All Dashboards" "Page"]
+        [(urls.dashboardsGet pid (UUIDId d.id) Nothing Nothing Nothing Nothing [], if T.null d.title then "Untitled Dashboard" else d.title) | d <- dashboards]
+      section "issues" "bug" "Issues" "Issue" [] [((urls.issues pid).detailGet (UUIDId i.id) Nothing Nothing Nothing Nothing Nothing, i.title) | i <- issues]
+      section "monitors" "list-check" "Monitors" "Monitor" [] [((urls.monitors pid).listGet Nothing Nothing <> "?highlight=" <> show m.id, m.title) | m <- monitors]
   where
-    pidTxt = pid.toText
-
     section category icon label badge extras items = do
       categoryItem category icon label (length items + length extras)
       sequence_ extras
-      forM_ items \(path, title) ->
-        cmdItem pidTxt CKChild path [data_ "cmd-category" category, hidden_ ""] icon title badge
+      forM_ items \(href, title) ->
+        cmdItem pid CKChild href [data_ "cmd-category" category, hidden_ ""] icon title badge
 
     categoryItem :: Text -> Text -> Text -> Int -> Html ()
     categoryItem category icon label count =
@@ -234,7 +234,7 @@ renderDynamicItems pid recents issues monitors dashboards =
 
     recentItem :: PaletteRecent -> Html ()
     recentItem r =
-      cmdLink_ (T.toLower r.label) CKRecent (href_ r.url : recentAttrs pidTxt r.label r.itemType)
+      cmdLink_ (T.toLower r.label) CKRecent (href_ r.url : recentAttrs pid r.label r.itemType)
         $ itemBody_ icon [] (toHtml r.label) (T.toTitle r.itemType)
       where
         icon = fromMaybe "clock" $ lookup r.itemType [("page", "file-lines"), ("issue", "bug"), ("monitor", "list-check"), ("dashboard", "dashboard")]
@@ -243,9 +243,9 @@ renderDynamicItems pid recents issues monitors dashboards =
 -- Item helpers
 
 -- | Records the click as a recent entry (fetch, not hx-post: htmx would cancel the anchor navigation)
-recentAttrs :: Text -> Text -> Text -> [Attribute]
-recentAttrs pidTxt label itemType =
-  [ data_ "recent-url" $ "/p/" <> pidTxt <> "/command-palette/recents"
+recentAttrs :: Projects.ProjectId -> Text -> Text -> [Attribute]
+recentAttrs pid label itemType =
+  [ data_ "recent-url" $ urls.commandPaletteRecentPost pid
   , data_ "recent-label" label
   , data_ "recent-type" itemType
   , [__|on click
@@ -288,7 +288,7 @@ itemBody_ icon labelAttrs label badgeText = do
 
 
 -- | Base item renderer — unifies direct, child, and action items
-cmdItem :: Text -> CmdKind -> Text -> [Attribute] -> Text -> Text -> Text -> Html ()
-cmdItem pidTxt kind path extraAttrs icon label badgeText =
-  cmdLink_ (T.toLower label) kind (href_ ("/p/" <> pidTxt <> "/" <> path) : recentAttrs pidTxt label (T.toLower badgeText) <> extraAttrs)
+cmdItem :: Projects.ProjectId -> CmdKind -> Text -> [Attribute] -> Text -> Text -> Text -> Html ()
+cmdItem pid kind href extraAttrs icon label badgeText =
+  cmdLink_ (T.toLower label) kind (href_ href : recentAttrs pid label (T.toLower badgeText) <> extraAttrs)
     $ itemBody_ icon [] (toHtml label) badgeText

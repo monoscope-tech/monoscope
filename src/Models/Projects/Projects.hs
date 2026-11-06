@@ -1,4 +1,5 @@
 module Models.Projects.Projects (
+  OnboardingStep (..),
   -- Users
   User (..),
   UserId,
@@ -178,7 +179,7 @@ import Hasql.Interpolate qualified as HI
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
-import Pkg.DeriveUtils (DB, SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
+import Pkg.DeriveUtils (DB, SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), WrappedEnumShow (..), idFromText, selectFrom)
 import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.Parser.Stats (Section)
 import Relude
@@ -860,13 +861,14 @@ updateProjectPricing pid paymentPlan subId firstSubItemId orderId =
   EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{billingProviderFromSubId (Just subId.unSubId)}, active=TRUE where id=#{pid};|]
 
 
+-- | Constructor names are the @?step=@ URL values and the stored @onboarding_steps_completed@ entries.
+data OnboardingStep = Info | Survey | NotifChannel | Integration | Pricing | Complete
+  deriving stock (Eq, Read, Show)
+  deriving (FromHttpApiData, ToHttpApiData) via WrappedEnumShow OnboardingStep
+
+
 -- | Mark an onboarding step complete, idempotently and atomically.
---
--- The append and the "already there?" check happen in one statement, so two requests
--- completing *different* steps concurrently cannot lose one. The read-modify-write this
--- replaces (read @onboarding_steps_completed@, append in Haskell, write the whole array
--- back) had exactly that lost-update race, and the same operation was additionally
--- open-coded in two Pages modules.
+-- The single statement prevents concurrent requests from losing another completed step.
 completeOnboardingStep :: DB es => ProjectId -> Text -> Eff es Int64
 completeOnboardingStep pid step =
   EHasql.interpExecute
@@ -892,7 +894,7 @@ updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
 -- Left "Invalid value: bogus"
 data ReportType = RTDaily | RTWeekly
   deriving (Eq, Generic, NFData, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "RT" ReportType
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToHttpApiData) via WrappedEnumSC 'Nothing "RT" ReportType
 
 
 updateProjectReportNotif :: DB es => ProjectId -> ReportType -> Eff es Int64
