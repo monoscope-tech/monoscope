@@ -117,7 +117,7 @@ setupProject tr pid = do
   runQueryEffect tr $ CodeContext.insertCodeMapping pid credential.id (Git.RepoRef "impact-org" "checkout" "main") (Just "test-service") "" ""
   -- Handlers render the repository list; a warm cache keeps them off the GitHub token endpoint.
   Cache.insert tr.trATCtx.repoListCache credential.id [Git.GitRepo "impact-org/checkout" "checkout" False "main"]
-  void $ testServant tr $ AIThreads.routineInstallPostH pid (AIThreads.RoutineTemplateForm "production-impact-review")
+  void $ Test.call tr $ AIThreads.routineInstallPostH pid (AIThreads.RoutineTemplateForm "production-impact-review")
 
 
 -- | The fixture project, its mapped repository and one runtime issue to fix.

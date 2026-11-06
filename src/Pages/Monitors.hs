@@ -16,6 +16,11 @@ module Pages.Monitors (
   unifiedMonitorsGetH,
   UptimeChecks (..),
   UptimeForm (..),
+  UptimeRejection (..),
+  UptimeList,
+  CronRejection (..),
+  CronList,
+  MonitorActed,
   uptimeChecksGetH,
   uptimeCheckPostH,
   uptimeCheckToggleH,
@@ -472,8 +477,8 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                 , rowId = Just (.monitorId)
                 , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                 , bulkActions =
-                    [ BulkAction (Just icon) label ("/p/" <> pid.toText <> "/monitors/alerts/bulk_action/" <> bulkActionSlug act) []
-                    | (icon, label, act) <- case tab of
+                    [ BulkAction (Just icon) label ("/p/" <> pid.toText <> "/monitors/alerts/bulk_action/" <> bulkActionSlug bulkAction) []
+                    | (icon, label, bulkAction) <- case tab of
                         TabActive -> [("pause", "Deactivate", BADeactivate), ("bell-slash", "Mute", BAMute), ("bell", "Unmute", BAUnmute), ("check", "Resolve", BAResolve), ("trash", "Delete", BADelete)]
                         TabInactive -> [("play", "Reactivate", BAReactivate), ("trash", "Delete", BADelete)]
                     ]
@@ -592,25 +597,39 @@ buildTeamMap :: Projects.ProjectId -> ATAuthCtx (Map.Map ManageMembers.TeamId Te
 buildTeamMap pid = Map.fromList . map (\t -> (t.id, t.handle)) <$> ManageMembers.getTeams pid
 
 
+-- | A single-monitor action, answered by returning to the monitor list.
+data MonitorActed = MonitorActed Projects.ProjectId MonitorBulkAction (Maybe Int)
+  deriving stock (Eq, Show)
+
+
+instance Outcome MonitorActed where
+  outcomeRedirect (MonitorActed pid _ _) = Just $ "/p/" <> pid.toText <> "/monitors"
+  outcomeToast (MonitorActed _ action durationM) = Just case action of
+    BAMute -> maybe "Monitor muted indefinitely" (const "Monitor muted") durationM
+    BAUnmute -> "Monitor unmuted"
+    BAResolve -> "Monitor resolved"
+    BADelete -> "Monitor deleted"
+    BADeactivate -> "Monitor deactivated"
+    BAReactivate -> "Monitor reactivated"
+
+
 -- | One bulk action on a single monitor; deletes are also audited.
-monitorActionH :: MonitorBulkAction -> Maybe Int -> Text -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
-monitorActionH action durationM msg pid monitorId = do
+monitorActionH :: MonitorBulkAction -> Maybe Int -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Done MonitorActed))
+monitorActionH action durationM pid monitorId = do
   (sess, _) <- Projects.sessionAndProject pid
   void $ Monitors.monitorsBulkUpdate pid action durationM [monitorId]
   when (action == BADelete) $ Projects.logAuditS pid Projects.AEMonitorDeleted sess Nothing
-  addSuccessToast msg Nothing
-  redirectCS $ "/p/" <> pid.toText <> "/monitors"
-  addRespHeaders ""
+  done $ MonitorActed pid action durationM
 
 
-alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Html ()))
-alertMuteH pid monitorId durationMinsM = monitorActionH BAMute durationMinsM (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
+alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Done MonitorActed))
+alertMuteH pid monitorId durationMinsM = monitorActionH BAMute durationMinsM pid monitorId
 
 
-alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
-alertUnmuteH = monitorActionH BAUnmute Nothing "Monitor unmuted"
-alertResolveH = monitorActionH BAResolve Nothing "Monitor resolved"
-alertDeleteH = monitorActionH BADelete Nothing "Monitor deleted"
+alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Done MonitorActed))
+alertUnmuteH = monitorActionH BAUnmute Nothing
+alertResolveH = monitorActionH BAResolve Nothing
+alertDeleteH = monitorActionH BADelete Nothing
 
 
 toUnifiedMonitorItem :: Map.Map ManageMembers.TeamId Text -> Projects.ProjectId -> UTCTime -> Monitors.QueryMonitor -> UnifiedMonitorItem
@@ -926,31 +945,51 @@ uptimeChecksGetH pid = do
   addRespHeaders $ UptimeChecks $ PageCtx bw{pageTitle = "Uptime checks", menuItem = Just "Monitors"} (pid, checks)
 
 
-uptimeCheckPostH :: Projects.ProjectId -> UptimeForm -> ATAuthCtx (RespHeaders (Html ()))
-uptimeCheckPostH pid form = do
+data UptimeRejection = UnnamedCheck | UnsafeUrl
+  deriving stock (Eq, Show)
+
+
+instance Refusal UptimeRejection where
+  refusalMessage = \case
+    UnnamedCheck -> "Name the check"
+    UnsafeUrl -> "URL must be a public http:// or https:// endpoint"
+
+
+-- | The uptime form above the project's checks, re-rendered after every change.
+data UptimeList = UptimeList Projects.ProjectId (V.Vector PromCfg.PrometheusScrapeConfig)
+  deriving (Outcome) via Rendered UptimeList
+
+
+instance ToHtml UptimeList where
+  toHtml (UptimeList pid checks) = toHtml $ uptimeChecksList_ pid checks
+  toHtmlRaw = toHtml
+
+
+uptimeCheckPostH :: Projects.ProjectId -> UptimeForm -> ATAuthCtx (ActionResult UptimeRejection UptimeList)
+uptimeCheckPostH pid form = act do
   _ <- Projects.sessionAndProject pid
   let url = T.strip form.url
       name = T.strip form.name
   if
-    | T.null name -> rejected "Name the check"
-    | not (safeScrapeUrl url) -> rejected "URL must be a public http:// or https:// endpoint"
+    | T.null name -> pure $ Left UnnamedCheck
+    | not (safeScrapeUrl url) -> pure $ Left UnsafeUrl
     | otherwise -> do
         void $ PromCfg.insertConfig pid PromCfg.CKUptime name url (max 60 $ fromMaybe 60 form.interval) Nothing (AE.object []) (Just $ clamp (100, 599) $ fromMaybe 200 form.expectedStatus)
         addSuccessToast "Uptime check added" Nothing
         addTriggerEvent "monitorSaved" AE.Null
-  uptimeListResp pid
+        Right <$> uptimeList pid
 
 
-uptimeCheckToggleH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders (Html ()))
-uptimeCheckToggleH pid cid = Projects.sessionAndProject pid >> PromCfg.toggleEnabled pid cid >> uptimeListResp pid
+uptimeCheckToggleH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders UptimeList)
+uptimeCheckToggleH pid cid = Projects.sessionAndProject pid >> PromCfg.toggleEnabled pid cid >> (addRespHeaders =<< uptimeList pid)
 
 
-uptimeCheckDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders (Html ()))
-uptimeCheckDeleteH pid cid = Projects.sessionAndProject pid >> PromCfg.deleteConfig pid cid >> uptimeListResp pid
+uptimeCheckDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders UptimeList)
+uptimeCheckDeleteH pid cid = Projects.sessionAndProject pid >> PromCfg.deleteConfig pid cid >> (addRespHeaders =<< uptimeList pid)
 
 
-uptimeListResp :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-uptimeListResp pid = addRespHeaders . uptimeChecksList_ pid =<< PromCfg.configsByProjectId pid PromCfg.CKUptime
+uptimeList :: Projects.ProjectId -> ATAuthCtx UptimeList
+uptimeList pid = UptimeList pid <$> PromCfg.configsByProjectId pid PromCfg.CKUptime
 
 
 -- | Cron monitors: jobs that check in with a @cron.checkin@ span or log.
@@ -1006,29 +1045,44 @@ cronMonitorsGetH pid = do
   addRespHeaders $ CronMonitors $ PageCtx bw{pageTitle = "Cron monitors", menuItem = Just "Monitors"} (pid, mons)
 
 
-cronMonitorPostH :: Projects.ProjectId -> CronForm -> ATAuthCtx (RespHeaders (Html ()))
-cronMonitorPostH pid form = do
+data CronRejection = MissingSlugOrName | InvalidSlug | DuplicateSlug Text
+  deriving stock (Eq, Show)
+
+
+instance Refusal CronRejection where
+  refusalMessage = \case
+    MissingSlugOrName -> "Slug and name are required"
+    InvalidSlug -> "Slug may only contain a-z, 0-9, _, . and -"
+    DuplicateSlug slug -> "A monitor with slug " <> slug <> " already exists"
+
+
+-- | The cron form above the project's monitors, re-rendered after every change.
+data CronList = CronList Projects.ProjectId [Monitors.CronMonitor]
+  deriving (Outcome) via Rendered CronList
+
+
+instance ToHtml CronList where
+  toHtml (CronList pid mons) = toHtml $ cronMonitorsList_ pid mons
+  toHtmlRaw = toHtml
+
+
+cronMonitorPostH :: Projects.ProjectId -> CronForm -> ATAuthCtx (ActionResult CronRejection CronList)
+cronMonitorPostH pid form = act do
   _ <- Projects.sessionAndProject pid
   let slug = T.toLower (T.strip form.slug)
       name = T.strip form.name
   if
-    | T.null slug || T.null name -> rejected "Slug and name are required"
-    | not (T.all (\c -> isAsciiLower c || isDigit c || c `elem` ("_.-" :: String)) slug) -> rejected "Slug may only contain a-z, 0-9, _, . and -"
+    | T.null slug || T.null name -> pure $ Left MissingSlugOrName
+    | not (T.all (\c -> isAsciiLower c || isDigit c || c `elem` ("_.-" :: String)) slug) -> pure $ Left InvalidSlug
     | otherwise ->
         (Monitors.insertCronMonitor pid slug name (max 60 form.interval) (max 60 form.grace) =<< Time.currentTime) >>= \case
-          0 -> rejected ("A monitor with slug " <> slug <> " already exists")
-          _ -> addSuccessToast "Cron monitor added" Nothing
-  cronListResp pid
+          0 -> pure $ Left $ DuplicateSlug slug
+          _ -> addSuccessToast "Cron monitor added" Nothing >> Right <$> cronList pid
 
 
-cronMonitorDeleteH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
-cronMonitorDeleteH pid mid = Projects.sessionAndProject pid >> Monitors.deleteCronMonitor pid mid >> cronListResp pid
+cronMonitorDeleteH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders CronList)
+cronMonitorDeleteH pid mid = Projects.sessionAndProject pid >> Monitors.deleteCronMonitor pid mid >> (addRespHeaders =<< cronList pid)
 
 
--- | Toast a rejected submission and swap nothing, so the form keeps what was typed.
-rejected :: Text -> ATAuthCtx ()
-rejected msg = addErrorToast msg Nothing >> addReswap "none"
-
-
-cronListResp :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-cronListResp pid = addRespHeaders . cronMonitorsList_ pid =<< Monitors.cronMonitorsByProject pid
+cronList :: Projects.ProjectId -> ATAuthCtx CronList
+cronList pid = CronList pid <$> Monitors.cronMonitorsByProject pid

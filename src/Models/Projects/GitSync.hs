@@ -299,7 +299,7 @@ instance Default GitHubSync where
 -- >>> import Pkg.DeriveUtils (UUIDId(..))
 
 
--- | Persisted operation names are explicit so constructor renames cannot change old rows.
+-- | Stored as aeson's default tagged encoding; renaming a constructor needs a migration that rewrites @tag@.
 --
 -- >>> AE.eitherDecode @SyncOperation "{\"tag\":\"ImportDashboards\"}"
 -- Right ImportDashboards
@@ -311,28 +311,12 @@ instance Default GitHubSync where
 -- Right ExportDashboards
 -- >>> traverse (AE.eitherDecode @SyncOperation . AE.encode) ([ImportDashboards, ExportDashboard (UUIDId UUID.nil), ExportDashboards] :: [SyncOperation]) == Right [ImportDashboards, ExportDashboard (UUIDId UUID.nil), ExportDashboards]
 -- True
--- >>> AE.eitherDecode @SyncOperation "{\"tag\":\"Unknown\"}"
--- Left "Error in $: Unknown repository sync operation"
+-- >>> isLeft $ AE.eitherDecode @SyncOperation "{\"tag\":\"Unknown\"}"
+-- True
 data SyncOperation = ImportDashboards | ExportDashboard DashboardId | ExportDashboards
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (NFData)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
   deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via Aeson SyncOperation
-
-
-instance AE.ToJSON SyncOperation where
-  toJSON = \case
-    ImportDashboards -> AE.object ["tag" AE..= ("ImportDashboards" :: Text)]
-    ExportDashboard did -> AE.object ["tag" AE..= ("ExportDashboard" :: Text), "contents" AE..= did]
-    ExportDashboards -> AE.object ["tag" AE..= ("ExportDashboards" :: Text)]
-
-
-instance AE.FromJSON SyncOperation where
-  parseJSON = AE.withObject "SyncOperation" \o ->
-    o AE..: "tag" >>= \(tag :: Text) -> case tag of
-      "ImportDashboards" -> pure ImportDashboards
-      "ExportDashboard" -> ExportDashboard <$> o AE..: "contents"
-      "ExportDashboards" -> pure ExportDashboards
-      _ -> fail "Unknown repository sync operation"
 
 
 data SyncFailure = SyncFailure {operation :: SyncOperation, message :: Text}

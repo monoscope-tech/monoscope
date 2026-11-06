@@ -1,4 +1,4 @@
-module Pages.Endpoints (apiCatalogH, CatalogTab (..), tabParam, parseTab, parseTabM, HostEventsVM (..), endpointListGetH, EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), HostBulkAction (..), CatalogBulkAction (..), apiDocsH, ApiDocsPage (..), ApiDocsVM (..), apiSpecJsonH, apiSpecYamlH) where
+module Pages.Endpoints (apiCatalogH, CatalogTab (..), tabParam, parseTab, parseTabM, HostEventsVM (..), endpointListGetH, EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), HostBulkAction (..), CatalogBulkAction (..), CatalogBulkRejection (..), apiDocsH, ApiDocsPage (..), ApiDocsVM (..), apiSpecJsonH, apiSpecYamlH) where
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
@@ -24,7 +24,7 @@ import Pkg.QueryCache qualified as QueryCache
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
+import System.Types (ATAuthCtx, ActionResult, Outcome (..), Refusal (..), RespHeaders, act, addRespHeaders, addTriggerEvent, successToast)
 import Utils (faSprite_, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
@@ -567,12 +567,29 @@ newtype HostBulkActionForm = HostBulk {itemId :: [Text]}
   deriving anyclass (FromForm)
 
 
-data CatalogBulkAction = CatalogBulkDone
+data CatalogBulkAction = CatalogBulkDone {action :: HostBulkAction, touched :: Int, requested :: Int}
+  deriving stock (Eq, Show)
 
 
-instance ToHtml CatalogBulkAction where
-  toHtml CatalogBulkDone = ""
-  toHtmlRaw = toHtml
+instance Outcome CatalogBulkAction where
+  outcomeToast r = Just $ successToast $ actionPast r.action <> " " <> show r.touched <> bool (" of " <> show r.requested) "" (r.touched == r.requested) <> " " <> hostNoun r.requested
+
+
+data CatalogBulkRejection = NoHostsSelected | NothingChanged HostBulkAction Int
+  deriving stock (Eq, Show)
+
+
+instance Refusal CatalogBulkRejection where
+  refusalMessage = \case
+    NoHostsSelected -> "No hosts selected"
+    NothingChanged action requested -> "Could not " <> bulkActionSlug action <> " " <> hostNoun requested
+  refusalDetail = \case
+    NoHostsSelected -> Nothing
+    NothingChanged{} -> Just "Already in that state, or rows were removed"
+
+
+hostNoun :: Int -> Text
+hostNoun = bool "hosts" "host" . (== 1)
 
 
 -- | The slugs are the existing wire spellings, so live URLs are unchanged:
@@ -592,8 +609,8 @@ actionPast BAUnarchive = "Unarchived"
 
 
 apiCatalogBulkActionH
-  :: Projects.ProjectId -> HostBulkAction -> Maybe Text -> HostBulkActionForm -> ATAuthCtx (RespHeaders CatalogBulkAction)
-apiCatalogBulkActionH pid action currentTabM items = do
+  :: Projects.ProjectId -> HostBulkAction -> Maybe Text -> HostBulkActionForm -> ATAuthCtx (ActionResult CatalogBulkRejection CatalogBulkAction)
+apiCatalogBulkActionH pid action currentTabM items = act do
   -- TODO: emit a host-activity log entry per item once the activity feed
   -- accepts non-issue events (mirrors issueBulkActionsPostH's per-item
   -- Issues.logIssueActivity). Keeps archive/unarchive auditable.
@@ -604,22 +621,17 @@ apiCatalogBulkActionH pid action currentTabM items = do
       requested = length items.itemId
       logCtx extra = AE.object $ ["project_id" AE..= pid.toText, "action" AE..= bulkActionSlug action, "requested_count" AE..= requested] <> extra
   if requested == 0
-    then addErrorToast "No hosts selected" Nothing
+    then pure $ Left NoHostsSelected
     else do
       let op = case action of
             BAArchive -> Endpoints.ArchiveBy sess.user.id
             BAUnarchive -> Endpoints.Unarchive
-      affected <- Endpoints.setHostsArchived pid outgoingM op items.itemId
-      let touched = fromIntegral affected :: Int
-          noun = bool "hosts" "host" (requested == 1)
+      touched <- fromIntegral <$> Endpoints.setHostsArchived pid outgoingM op items.itemId
       if touched == 0
-        then do
-          logAttention "api_catalog bulk action affected 0 rows" $ logCtx ["outgoing" AE..= outgoingM]
-          addErrorToast ("Could not " <> bulkActionSlug action <> " " <> noun) (Just "Already in that state, or rows were removed")
+        then Left (NothingChanged action requested) <$ logAttention "api_catalog bulk action affected 0 rows" (logCtx ["outgoing" AE..= outgoingM])
         else do
           when (touched < requested)
             $ logAttention "api_catalog bulk action partially applied"
             $ logCtx ["affected_count" AE..= touched]
-          addSuccessToast (actionPast action <> " " <> show touched <> bool (" of " <> show requested) "" (touched == requested) <> " " <> noun) Nothing
           addTriggerEvent "apiCatalogChanged" AE.Null
-  addRespHeaders CatalogBulkDone
+          pure $ Right $ CatalogBulkDone action touched requested

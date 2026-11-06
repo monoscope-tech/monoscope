@@ -256,6 +256,7 @@ import Relude.Extra.Enum (prev)
 import Relude.Extra.Tuple (toSnd)
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
+import Servant.API.UVerb (foldMapUnion)
 import Servant.Server qualified as ServantS
 import Servant.Types.SourceT qualified as Source
 import System.Clock (TimeSpec (TimeSpec))
@@ -268,7 +269,7 @@ import System.Logging qualified as Logging
 import System.Server qualified as Server
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest, effToServantHandlerTestHTTP)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, ActionResult, Done (..), Refused (..), RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest, effToServantHandlerTestHTTP)
 import Test.Hspec (Expectation, Spec, SpecWith, anyException, around, aroundAll, beforeWith, describe, expectationFailure, it, pendingWith, runIO, sequential, shouldBe, shouldContain, shouldMatchList, shouldNotBe, shouldNotContain, shouldNotSatisfy, shouldReturn, shouldSatisfy, shouldThrow)
 import Text.RE.TDFA.Text (ed, (*=~/))
 import Unsafe.Coerce (unsafeCoerce)
@@ -1346,8 +1347,32 @@ renderT = toStrict . Lucid.renderText . Lucid.toHtml
 
 
 -- | A handler's typed payload, for specs that assert on data rather than headers.
-call :: TestResources -> ATAuthCtx (RespHeaders a) -> IO a
-call tr = fmap snd . testServant tr
+call :: Answer r => TestResources -> ATAuthCtx r -> IO (Payload r)
+call tr = fmap answerPayload . runAuthHandler tr
+
+
+-- | What a handler answer carries once the transport wrapper is stripped.
+class Answer r where
+  type Payload r
+  answerPayload :: r -> Payload r
+
+
+instance Answer (Servant.Headers hs a) where
+  type Payload (Servant.Headers hs a) = a
+  answerPayload = Servant.getResponse
+
+
+instance Answer (ActionResult e a) where
+  type Payload (ActionResult e a) = Either e a
+  answerPayload = foldMapUnion (Proxy @(Settled e a)) settled
+
+
+-- | Which alternative an action answered with.
+class Settled e a x where settled :: x -> Either e a
+
+
+instance Settled e a (RespHeaders (Done a)) where settled (Servant.getResponse -> Done a) = Right a
+instance Settled e a (RespHeaders (Refused e)) where settled (Servant.getResponse -> Refused e) = Left e
 
 
 -- | The page of a full table response; a rows-only (load-more) fragment fails the test.
@@ -1637,7 +1662,7 @@ createTestAPIKey :: TestResources -> Projects.ProjectId -> Text -> IO Text
 createTestAPIKey tr projectId keyName = do
   (_, result) <- toServantResponse tr $ Api.apiPostH projectId (Api.GenerateAPIKeyForm keyName Nothing)
   case result of
-    Api.ApiPost _ _ (Just (_, keyText)) -> pure keyText
+    Done (Api.ApiPost _ _ (Just (_, keyText))) -> pure keyText
     _ -> error "Failed to create API key via handler"
 
 

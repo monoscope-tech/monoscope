@@ -27,7 +27,6 @@ import Pkg.Components.Table qualified as Table
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Servant qualified
-import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
 
 
@@ -147,8 +146,7 @@ spec = around withTestResources $ describe "Error patterns" do
     p0 <- current
     (p0.firstRelease, p0.lastRelease, p0.usersCount) `shouldBe` (Just "1.0", Just "1.0", 2)
     let errUuid = p0.id.unErrorPatternId
-        post = void . call tr
-    post $ Pages.Issues.resolveErrorPostH testPid errUuid True
+    void $ call tr $ Pages.Issues.resolveErrorPostH testPid errUuid True
     emit "1.0" [] (-35)
     ((.state) &&& (.resolvedInRelease)) <$> current `shouldReturn` (ESResolved, Just "1.0")
     emit "1.1" [] (-30)
@@ -158,21 +156,18 @@ spec = around withTestResources $ describe "Error patterns" do
     emit "1.1" [] (-25)
     fmap zonedTimeToUTC . (.lastReleaseSince) <$> current `shouldReturn` Just (at (-30))
 
-    -- A malformed assignee is rejected with a toast instead of unassigning.
-    let assign = testServant tr . Pages.Issues.assignErrorPostH testPid errUuid . Pages.Issues.AssignErrorForm . Just
-    void $ assign uid.toText
-    (hdrs, _) <- assign "bob"
-    case lookupResponseHeader @"HX-Trigger" hdrs of
-      Header t -> t `shouldSatisfy` T.isInfixOf "Not a user id: bob"
-      _ -> expectationFailure "expected an error toast"
+    -- A malformed assignee is refused instead of unassigning.
+    let assign = fmap void . call tr . Pages.Issues.assignErrorPostH testPid errUuid . Pages.Issues.AssignErrorForm . Just
+    assign uid.toText `shouldReturn` Right ()
+    assign "bob" `shouldReturn` Left (Pages.Issues.ErrorAssignee (Pages.Issues.MalformedAssignee "bob"))
     (.assigneeId) <$> current `shouldReturn` Just uid
-    post $ Pages.Issues.resolveErrorPostH testPid errUuid False
+    void $ call tr $ Pages.Issues.resolveErrorPostH testPid errUuid False
     (.state) <$> current `shouldReturn` ESResolved
     issue <- issueOf tr p0.hash
     rows <- fmap (\(PageCtx _ t) -> V.toList t.rows) . tablePage =<< call tr (Pages.Issues.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] [])
     [r.latestStateEvent | Pages.Issues.IssueVM _ r <- rows, r.base.id == issue.id] `shouldBe` [Just Issues.IEResolved]
     forM_ [(Just (30 :: Int), True), (Nothing, False)] \(freq, subscribed) -> do
-      post $ Pages.Issues.errorSubscriptionPostH testPid errUuid (Pages.Issues.ErrorSubscriptionForm freq)
+      void $ call tr $ Pages.Issues.errorSubscriptionPostH testPid errUuid (Pages.Issues.ErrorSubscriptionForm freq)
       (.subscribed) <$> current `shouldReturn` subscribed
     emit "1.1" [] (-20)
     ((.state) &&& isJust . (.regressedAt)) <$> current `shouldReturn` (ESRegressed, True)
@@ -256,7 +251,7 @@ spec = around withTestResources $ describe "Error patterns" do
     drainExtractionWorker tr
     void $ runBackgroundJobsWhere frozenTime tr.trATCtx quiet
 
-    void $ testServant tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
+    void $ call tr $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "issue-enrichment")
     routine <- runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventIssueEnrichment) >>= maybe (fail "Missing activated enrichment template") pure
     queued <- getPendingBackgroundJobs tr.trATCtx
     let enhancements = [job | (_, job@BackgroundJobs.EnhanceIssuesWithLLM{}) <- toList queued]
@@ -279,7 +274,7 @@ spec = around withTestResources $ describe "Error patterns" do
     map (.status) executions `shouldSatisfy` all (== Issues.RunSucceeded)
     artifacts <- runQueryEffect tr $ concat <$> traverse (Issues.listRunArtifacts testPid . (.id)) executions
     mapMaybe (.content) artifacts `shouldSatisfy` any (T.isInfixOf "The fixture application dereferenced an absent value.")
-    void $ testServant tr $ AIThreads.routinePausePostH testPid routine.conversationId
+    void $ call tr $ AIThreads.routinePausePostH testPid routine.conversationId
 
     titles <- map fromOnly <$> dbQuery tr [sql| SELECT title FROM apis.issues WHERE project_id = ? AND issue_type = 'runtime_exception' |] (Only testPid)
     titles `shouldSatisfy` any (== "Checkout runtime failure")

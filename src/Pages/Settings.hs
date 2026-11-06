@@ -15,6 +15,7 @@ module Pages.Settings (
   ApiGet (..),
   ApiKeySettings (..),
   ApiMut (..),
+  ApiKeyNotFound (..),
   -- Prometheus
   prometheusGetH,
   prometheusPostH,
@@ -26,12 +27,14 @@ module Pages.Settings (
   PrometheusGet (..),
   PrometheusMut (..),
   PrometheusSettings (..),
+  ScrapeRejection (..),
   safeScrapeUrl,
   parseLabelsText,
   -- Integrations
   TestForm (..),
   TestChannel (..),
   TestStatus (..),
+  TestOutcome (..),
   notificationsTestPostH,
   notificationsTestHistoryGetH,
   TestHistory (..),
@@ -119,7 +122,7 @@ import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
 import Servant (FromHttpApiData (..), err400, err503, errBody)
 import System.Config
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent)
+import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, done, successToast)
 import Text.Printf (printf)
 import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
@@ -279,7 +282,7 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
   deriving anyclass (FromForm)
 
 
-apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders ApiMut)
+apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders (Done ApiMut))
 apiPostH pid apiKeyForm = do
   sess <- requireSettingsWrite pid
   authCtx <- ask @AuthContext
@@ -291,52 +294,66 @@ apiPostH pid apiKeyForm = do
   Projects.logAuditS pid Projects.AEApiKeyCreated sess
     $ Just
     $ AE.object ["key_title" AE..= apiKeyForm.title]
-  addSuccessToast "Created API Key successfully" Nothing
   addTriggerEvent "closeModal" ""
   let newKey = (pApiKey, encryptedKeyB64)
-  addRespHeaders $ maybe (ApiPost pid apiKeys (Just newKey)) (const $ ApiPostCopy newKey) apiKeyForm.from
+  done $ maybe (ApiPost pid apiKeys (Just newKey)) (const $ ApiPostCopy newKey) apiKeyForm.from
 
 
-apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
+apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (ActionResult ApiKeyNotFound ApiMut)
 apiDeleteH pid = apiKeySetActive pid RevokeApiKey
 
 
-apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
+apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (ActionResult ApiKeyNotFound ApiMut)
 apiActivateH pid = apiKeySetActive pid ActivateApiKey
 
 
 data ApiKeyMutation = ActivateApiKey | RevokeApiKey
 
 
-apiKeySetActive :: Projects.ProjectId -> ApiKeyMutation -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
-apiKeySetActive pid mutation keyid = do
+data ApiKeyNotFound = ApiKeyNotFound
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "API key not found" ApiKeyNotFound
+
+
+apiKeySetActive :: Projects.ProjectId -> ApiKeyMutation -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (ActionResult ApiKeyNotFound ApiMut)
+apiKeySetActive pid mutation keyid = act do
   sess <- requireSettingsWrite pid
   currentKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
   let ownedKey = find ((== keyid) . (.id)) currentKeys
-      (act, event, verb, cachedProject) = case mutation of
-        ActivateApiKey -> (ProjectApiKeys.activateApiKey, Projects.AEApiKeyActivated, "Activated", Just pid)
-        RevokeApiKey -> (ProjectApiKeys.revokeApiKey, Projects.AEApiKeyRevoked, "Revoked", Nothing)
-  res <- maybe (pure 0) (const $ act keyid) ownedKey
-  apikeys <- apiKeysForProject pid
+      (apply, event, cachedProject) = case mutation of
+        ActivateApiKey -> (ProjectApiKeys.activateApiKey, Projects.AEApiKeyActivated, Just pid)
+        RevokeApiKey -> (ProjectApiKeys.revokeApiKey, Projects.AEApiKeyRevoked, Nothing)
+  res <- maybe (pure 0) (const $ apply keyid) ownedKey
   if res > 0
     then do
       appCtx <- ask @AuthContext
       whenJust ownedKey \key -> liftIO $ Cache.insert appCtx.projectKeyCache key.keyPrefix cachedProject
       Projects.logAuditS pid event sess Nothing
-      addSuccessToast (verb <> " API Key Successfully") Nothing
-    else addErrorToast "Something went wrong" Nothing
-  addRespHeaders $ ApiPost pid apikeys Nothing
+      Right . ApiKeyToggled mutation pid <$> apiKeysForProject pid
+    else pure $ Left ApiKeyNotFound
 
 
 data ApiMut
   = ApiPost Projects.ProjectId (V.Vector ProjectApiKeys.ProjectApiKey) (Maybe (ProjectApiKeys.ProjectApiKey, Text))
   | ApiPostCopy (ProjectApiKeys.ProjectApiKey, Text)
+  | ApiKeyToggled ApiKeyMutation Projects.ProjectId (V.Vector ProjectApiKeys.ProjectApiKey)
 
 
 instance ToHtml ApiMut where
   toHtml (ApiPost pid apiKeys m) = toHtml $ apiMainContent pid True apiKeys m
   toHtml (ApiPostCopy k) = toHtml $ copyNewApiKey True k
+  toHtml (ApiKeyToggled _ pid apiKeys) = toHtml $ apiMainContent pid True apiKeys Nothing
   toHtmlRaw = toHtml
+
+
+instance Outcome ApiMut where
+  outcomeBody = toHtml
+  outcomeToast =
+    Just . \case
+      ApiPost{} -> "Created API Key successfully"
+      ApiPostCopy _ -> "Created API Key successfully"
+      ApiKeyToggled ActivateApiKey _ _ -> "Activated API Key Successfully"
+      ApiKeyToggled RevokeApiKey _ _ -> "Revoked API Key Successfully"
 
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
@@ -434,7 +451,7 @@ makeApiKeysTable pid canEdit apiKeys elemId =
                 span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 font-mono text-textStrong hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
                 div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
                   -- Wrappers carry the toggle: .tap-target's display (custom layer) outranks `hidden`.
-                  forM_ [("group-has-[:checked]:hidden", "Show"), ("hidden group-has-[:checked]:inline", "Hide") :: (Text, Text)] \(wrapCls, verb) ->
+                  forM_ ([("group-has-[:checked]:hidden", "Show"), ("hidden group-has-[:checked]:inline", "Hide")] :: [(Text, Text)]) \(wrapCls, verb) ->
                     span_ [class_ wrapCls]
                       $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ verb <> " value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" (verb <> " key"), keyboardActivateAttr_]
                       $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
@@ -508,12 +525,25 @@ instance ToHtml PrometheusGet where
   toHtmlRaw = toHtml
 
 
-data PrometheusMut = PrometheusMut PrometheusSettings | PrometheusRejected Text
+data PrometheusMut = PrometheusMut PrometheusSettings | PrometheusRejected ScrapeRejection
+
+
+data ScrapeRejection = ScrapeUrlRequired | ScrapeUrlNotPublic | ScrapeNameRequired | ScrapeTargetGone | ScrapeNameTaken Text
+  deriving stock (Eq, Show)
+
+
+instance Refusal ScrapeRejection where
+  refusalMessage = \case
+    ScrapeUrlRequired -> "A /metrics URL is required"
+    ScrapeUrlNotPublic -> "URL must be a public http:// or https:// endpoint"
+    ScrapeNameRequired -> "A name is required — it groups the scraped metrics under service.name"
+    ScrapeTargetGone -> "That Prometheus target no longer exists"
+    ScrapeNameTaken name -> "A target named “" <> name <> "” already exists"
 
 
 instance ToHtml PrometheusMut where
   toHtml (PrometheusMut settings) = toHtml $ prometheusTargetsList settings
-  toHtml (PrometheusRejected message) = div_ [hxSwapOob_ "innerHTML target:'dialog[open] .prom-save-result'"] $ div_ [role_ "alert", class_ "rounded-lg border border-strokeError-weak bg-fillError-weak p-3 text-sm text-textError break-words"] $ toHtml message
+  toHtml (PrometheusRejected rejection) = div_ [hxSwapOob_ "innerHTML target:'dialog[open] .prom-save-result'"] $ div_ [role_ "alert", class_ "rounded-lg border border-strokeError-weak bg-fillError-weak p-3 text-sm text-textError break-words"] $ toHtml $ refusalMessage rejection
   toHtmlRaw = toHtml
 
 
@@ -541,10 +571,10 @@ data ScrapeTarget = ScrapeTarget
 
 -- | The URL guards shared by save-validation and the Test handler: non-empty + SSRF floor.
 -- Returns the stripped URL so callers don't re-strip or re-check.
-validateScrapeUrl :: Text -> Either Text Text
+validateScrapeUrl :: Text -> Either ScrapeRejection Text
 validateScrapeUrl raw
-  | T.null url = Left "A /metrics URL is required"
-  | not (safeScrapeUrl url) = Left "URL must be a public http:// or https:// endpoint"
+  | T.null url = Left ScrapeUrlRequired
+  | not (safeScrapeUrl url) = Left ScrapeUrlNotPublic
   | otherwise = Right url
   where
     url = T.strip raw
@@ -578,23 +608,23 @@ promSave pid form verb persist = do
       try (persist target) >>= \case
         -- 0 rows means the edit targeted a row that no longer matches (concurrently deleted,
         -- or a cid that isn't this project's) — don't claim success for a write that did nothing.
-        Right 0 -> rejected "That Prometheus target no longer exists"
+        Right 0 -> rejected ScrapeTargetGone
         Right _ -> do
           addSuccessToast (verb <> " Prometheus target") Nothing
           addTriggerEvent "closeModal" ""
           prometheusMut pid
         Left e
-          | Hasql.isUniqueViolation e -> rejected ("A target named “" <> target.name <> "” already exists")
+          | Hasql.isUniqueViolation e -> rejected (ScrapeNameTaken target.name)
           | otherwise -> throwIO e
   where
-    rejected msg = addReswap "none" >> addRespHeaders (PrometheusRejected msg)
+    rejected e = addReswap "none" >> addRespHeaders (PrometheusRejected e)
     -- Validate + normalise the form. Name is required because it becomes the
     -- @service.name@ the scraped metrics are grouped under — blank names would silently
     -- collide multiple targets into one series namespace.
-    validatePrometheusForm :: Either Text ScrapeTarget
+    validatePrometheusForm :: Either ScrapeRejection ScrapeTarget
     validatePrometheusForm = do
       url <- validateScrapeUrl form.url
-      when (T.null name) $ Left "A name is required — it groups the scraped metrics under service.name"
+      when (T.null name) $ Left ScrapeNameRequired
       Right
         ScrapeTarget
           { name
@@ -614,7 +644,7 @@ prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeader
 prometheusTestH pid form = do
   void $ requireSettingsWrite pid
   case validateScrapeUrl form.url of
-    Left err -> addRespHeaders $ prometheusTestResult $ Just $ Left err
+    Left err -> addRespHeaders $ prometheusTestResult $ Just $ Left $ refusalMessage err
     Right url -> do
       let opts = PromCfg.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
       t0 <- Time.currentTime
@@ -836,7 +866,7 @@ prometheusTargetRow pid canEdit cfg = div_ [class_ "itemsListItem flex flex-col 
 -- >>> map (display @TestChannel) [minBound .. maxBound]
 -- ["all","email","slack","discord","whatsapp","pagerduty"]
 -- >>> parseUrlPiece "sms" :: Either Text TestChannel
--- Left "Invalid TC value: sms"
+-- Left "Invalid value: sms"
 data TestChannel = TCAll | TCEmail | TCSlack | TCDiscord | TCWhatsapp | TCPagerduty
   deriving (Bounded, Enum, Eq, Generic, Read, Show)
   deriving (AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "TC" TestChannel
@@ -847,7 +877,7 @@ data TestChannel = TCAll | TCEmail | TCSlack | TCDiscord | TCWhatsapp | TCPagerd
 -- >>> map (display @TestStatus) [TSSent, TSSkipped]
 -- ["sent","skipped"]
 -- >>> parseUrlPiece "delivered" :: Either Text TestStatus
--- Left "Invalid TS value: delivered"
+-- Left "Invalid value: delivered"
 data TestStatus = TSSent | TSSkipped
   deriving (Eq, Generic, Read, Show)
   deriving (AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "TS" TestStatus
@@ -885,7 +915,18 @@ instance ToHtml NotificationTestHistoryGet where
   toHtmlRaw = toHtml
 
 
-notificationsTestPostH :: Projects.ProjectId -> TestForm -> ATAuthCtx (RespHeaders (Html ()))
+-- | A test send that reached its channel, or the reason it was skipped (recorded in the history either way).
+data TestOutcome = TestSent TestChannel | TestSkipped Text
+  deriving stock (Eq, Show)
+
+
+instance Outcome TestOutcome where
+  outcomeToast = \case
+    TestSent channel -> Just $ successToast $ bool ("Test " <> display channel <> " notification sent!") "Test notification sent to all channels!" (channel == TCAll)
+    TestSkipped _ -> Nothing
+
+
+notificationsTestPostH :: Projects.ProjectId -> TestForm -> ATAuthCtx (RespHeaders (Done TestOutcome))
 notificationsTestPostH pid TestForm{..} = do
   -- Rate limit: check if test was sent in last 60 seconds
   now <- Time.currentTime
@@ -957,10 +998,9 @@ notificationsTestPostH pid TestForm{..} = do
   when (status == TSSent) $ Activation.recordActivationMilestone pid Activation.NotificationTestSent
 
   Log.logTrace "Test notification complete" (channel, pid, status, attempts)
-  case status of
-    TSSent -> addSuccessToast (bool ("Test " <> display channel <> " notification sent!") "Test notification sent to all channels!" (channel == TCAll)) Nothing
-    TSSkipped -> addErrorToast ("Test skipped: " <> fromMaybe "unknown" err) Nothing
-  addRespHeaders mempty
+  done =<< case status of
+    TSSent -> pure $ TestSent channel
+    TSSkipped -> let reason = fromMaybe "unknown" err in TestSkipped reason <$ addErrorToast ("Test skipped: " <> reason) Nothing
 
 
 notificationsTestHistoryGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders NotificationTestHistoryGet)

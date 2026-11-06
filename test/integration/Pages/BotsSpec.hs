@@ -2776,6 +2776,14 @@ spec = around withTestResources do
             processed receipt `shouldReturn` True
 
   describe "Agent conversations" do
+    it "refuses invalid composer input with a typed reason and starts nothing" \tr -> do
+      let start = call tr . AIThreads.startThreadPostHWithTools (Just Routes.mcpProjectTools) testPid . formOf @AIThreads.AIChatForm . ("query=" <>)
+      before <- runQueryEffect tr (Issues.listConversations testPid)
+      traverse start ["+&mode=chat", T.replicate 4001 "a" <> "&mode=chat", "Check&mode=chat&intervalMinutes=15", "Check&mode=routine"]
+        `shouldReturn` map Left [AIThreads.NewThreadPrompt AIThreads.EmptyPrompt, AIThreads.NewThreadPrompt AIThreads.PromptTooLong, AIThreads.ChatWithInterval, AIThreads.RoutineWithoutInterval]
+      call tr (AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "no-such-template")) `shouldReturn` Left AIThreads.UnknownTemplate
+      map (.conversationId) <$> runQueryEffect tr (Issues.listConversations testPid) `shouldReturn` map (.conversationId) before
+
     it "web and issue requests commit with a queued run, publish once, roll back on queue failure and cancel when revoked" \tr -> do
       let request n = UUIDId $ UUID.fromWords 0 0 93 n
           chatForm r = formOf @AIThreads.AIChatForm $ "query=Inspect+queued+conversation+evidence&mode=chat&requestId=" <> r.toText
@@ -2867,10 +2875,11 @@ spec = around withTestResources do
               when isIssue $ liftIO $ unlines [m.content | m <- toList h, m.role == Chat.System] `shouldSatisfy` T.isInfixOf "Checkout checkpoint context"
               modifyIORef' models (+ 1)
               pure $ case toolResults h of [] -> invoking [fn "get_project" [], fn "get_schema" []]; _ -> said "The project evidence is retained."
+            issueSubmit changed = IssuePage.aiChatPostHWithTools (Just backend) testPid issueId $ (formOf @IssuePage.AIChatForm $ "query=Inspect+the+project&requestId=" <> request.toText){IssuePage.query = changed.query}
             submit changed = case origin of
-              "issue" -> IssuePage.aiChatPostHWithTools (Just backend) testPid issueId $ (formOf @IssuePage.AIChatForm $ "query=Inspect+the+project&requestId=" <> request.toText){IssuePage.query = changed.query}
-              _ | origin `elem` ["new", "routine"] -> AIThreads.startThreadPostHWithTools (Just backend) testPid changed
-              _ -> AIThreads.threadPostHWithTools (Just backend) testPid existing changed
+              "issue" -> void $ issueSubmit changed
+              _ | origin `elem` ["new", "routine"] -> void $ AIThreads.startThreadPostHWithTools (Just backend) testPid changed
+              _ -> void $ AIThreads.threadPostHWithTools (Just backend) testPid existing changed
             execute = tryAny do
               void $ runAuthHandler tr $ model $ submit form
               runTestBgNoReset tr $ model $ Jobs.processBackgroundJobWithTools (Just backend) tr.trATCtx $ Jobs.RunConversation testPid request
@@ -2895,7 +2904,7 @@ spec = around withTestResources do
         readsOnce
         readIORef models `shouldReturn` 2
         when (origin == "issue") do
-          html <- renderT . getResponse <$> runAuthHandler tr (model $ submit form)
+          html <- renderT <$> call tr (model $ issueSubmit form)
           (T.count "The project evidence is retained." html, T.count "name=\"requestId\"" html, T.isInfixOf "hx-swap-oob=\"outerHTML\"" html, T.isInfixOf ("name=\"requestId\" value=\"" <> request.toText <> "\"") html) `shouldBe` (1, 1, True, False)
           page <- renderT <$> call tr (IssuePage.issueDetailGetH testPid issueId Nothing Nothing Nothing Nothing Nothing)
           (T.isInfixOf "id=\"issue-ai-form\"" page, T.count "name=\"requestId\"" page) `shouldBe` (True, 2)
@@ -3422,7 +3431,7 @@ spec = around withTestResources do
       readerRoutines <- renderT <$> call tr (AIThreads.routinesGetH testPid)
       readerThread <- renderT <$> call tr (AIThreads.threadGetH testPid slackRoutine.conversationId Nothing Nothing)
       (T.isInfixOf "1 routine" readerRoutines, T.isInfixOf "Add routine" readerRoutines, T.isInfixOf "Routine instructions" readerThread, T.isInfixOf "Save instructions" readerThread) `shouldBe` (True, False, True, False)
-      traverse status [AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review"), AIThreads.routineInstructionsPostH testPid slackRoutine.conversationId (AIThreads.RoutineInstructionsForm "Overwrite"), AIThreads.routineResumePostH testPid slackRoutine.conversationId] `shouldReturn` [403, 403, 403]
+      traverse status [void $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review"), void $ AIThreads.routineInstructionsPostH testPid slackRoutine.conversationId (AIThreads.RoutineInstructionsForm "Overwrite"), void $ AIThreads.routineResumePostH testPid slackRoutine.conversationId] `shouldReturn` [403, 403, 403]
       runQueryEffect tr (Issues.getEventRoutine testPid Issues.EventSlackMessage) >>= (`shouldSatisfy` isNothing)
       setRole tr testPid PM.PAdmin
       -- A destination neither grants nor revokes a run's writes; a revoked editor cannot change settings.

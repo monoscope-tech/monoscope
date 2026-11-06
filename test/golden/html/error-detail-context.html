@@ -129,7 +129,7 @@
 <option value="1440">Every 24 hrs</option>
 </select>
 </form>
-<form id="issue-triage" class="ml-auto max-md:w-full flex flex-wrap items-center gap-3 text-xs text-textWeak" data-hx-post="/p/<uuid>/issues/<uuid>/triage" data-hx-trigger="change" data-hx-swap="outerHTML">
+<form id="issue-triage" class="ml-auto max-md:w-full flex flex-wrap items-center gap-3 text-xs text-textWeak" data-hx-post="/p/<uuid>/issues/<uuid>/triage" data-hx-trigger="change" data-hx-swap="outerHTML" hx-on:htmx:after:request="if (event.detail.ctx.response.status &gt;= 400) this.reset()">
 <label class="flex items-center gap-1.5 max-md:flex-1 min-w-0">Priority<select id="issue-triage-priority" class="select select-sm md:w-28 max-md:flex-1 min-w-0" name="severity" aria-label="Priority">
 <option value="critical" selected>Critical</option>
 <option value="warning">Warning</option>

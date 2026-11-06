@@ -640,7 +640,7 @@ queryEvents :: (DB es, ELog.Log :> es, Effectful.Reader.Static.Reader AuthContex
 queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttributesM environmentM serviceM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM
-  queryAST <- either (\err -> throwError $ kqlError400 "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing) pure $ parseQueryToAST queryInput
+  queryAST <- either (refuse . KqlInvalid) pure $ parseQueryToAST queryInput
   let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
       -- Apply the API `limit` as the query row-limit (when KQL has none) so selectLogTable
       -- returns exactly the page; a post-hoc `V.take` would miscount hasMore since
@@ -649,69 +649,75 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
   enableTfReads <- useTfReads
   -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
-  either (throwError . translateQueryError) (buildLogResult enableTfReads (fromMaybe False withChildrenM) pid now sinceM [] [])
+  either (refuse . translateQueryError) (buildLogResult enableTfReads (fromMaybe False withChildrenM) pid now sinceM [] [])
     =<< LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing environmentM serviceM
 
 
--- | Translate the raw exception string from 'LogQueries.selectLogTable' into a
--- structured 400: a column-not-exist error becomes @unknown_field@ with a fix
--- suggestion; everything else is a generic @query_failed@.
-translateQueryError :: Text -> Servant.ServerError
-translateQueryError raw =
-  let
-    -- Pluck the first line so the user doesn't see raw Haskell record syntax.
-    firstLine = T.strip $ T.takeWhile (/= '\n') raw
-    summary
+-- | Every refusal the explorer's JSON endpoints answer with. The @Kql*@ cases are the
+-- structured @{"error": {code, message, field?, suggestion?, details?}}@ body the CLI's
+-- @renderAPIError@ decodes; the @Expand*@ cases keep their plain-text bodies.
+data LogError
+  = KqlInvalid Text
+  | -- | Column name, then the raw database error.
+    KqlUnknownField Text Text
+  | KqlFailed Text
+  | ExpandMissingKey
+  | ExpandUnknownKind
+  | ExpandInvalidQuery Text
+  deriving stock (Eq, Show)
+
+
+refuse :: Error Servant.ServerError :> es => LogError -> Eff es a
+refuse =
+  throwError . \case
+    KqlInvalid err -> kql "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing
+    KqlUnknownField col raw -> kql "unknown_field" ("Unknown field \"" <> col <> "\"") (Just col) (Just $ "quote it as \"" <> col <> "\" to search text, or use 'field == value' for equality") (Just raw)
+    KqlFailed raw -> kql "query_failed" (summary raw) Nothing Nothing (Just raw)
+    ExpandMissingKey -> Servant.err400{Servant.errBody = "Missing key"}
+    ExpandUnknownKind -> Servant.err400{Servant.errBody = "kind must be session or pattern"}
+    ExpandInvalidQuery err -> Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}
+  where
+    -- The first line only, so the user doesn't see raw Haskell record syntax.
+    summary raw
       | T.null firstLine = "Query execution failed"
       | T.length firstLine > 240 = T.take 237 firstLine <> "…"
       | otherwise = firstLine
-   in
-    maybe
-      (kqlError400 "query_failed" summary Nothing Nothing (Just raw))
-      ( \col ->
-          kqlError400
-            "unknown_field"
-            ("Unknown field \"" <> col <> "\"")
-            (Just col)
-            (Just $ "quote it as \"" <> col <> "\" to search text, or use 'field == value' for equality")
-            (Just raw)
-      )
-      (extractMissingColumn raw)
+      where
+        firstLine = T.strip $ T.takeWhile (/= '\n') raw
+    kql :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Servant.ServerError
+    kql code msg fieldM suggestionM detailsM =
+      Servant.err400
+        { Servant.errBody =
+            AE.encode
+              $ AE.object
+                [ "error"
+                    AE..= AE.object
+                      ( ["code" AE..= code, "message" AE..= msg]
+                          <> catMaybes [("field" AE..=) <$> fieldM, ("suggestion" AE..=) <$> suggestionM, ("details" AE..=) <$> detailsM]
+                      )
+                ]
+        , Servant.errHeaders = [("Content-Type", "application/json")]
+        }
+
+
+-- | Classify the raw exception string from 'LogQueries.selectLogTable': a missing column
+-- becomes 'KqlUnknownField' with a fix suggestion; everything else is 'KqlFailed'.
+translateQueryError :: Text -> LogError
+translateQueryError raw = maybe (KqlFailed raw) (`KqlUnknownField` raw) (tfMatch <|> pgMatch)
   where
     -- Postgres (@column "X" does not exist@) and TimeFusion (@No field named X@) shapes;
     -- 'Nothing' if neither matches, so unrelated errors aren't mislabeled.
-    extractMissingColumn t = tfMatch <|> pgMatch
-      where
-        lower = T.toLower t
-        -- Match case-insensitively but re-slice from the original-case text so the
-        -- column name keeps its casing.
-        after needle =
-          let (pre, hit) = T.breakOn needle lower
-           in T.drop (T.length pre + T.length needle) t <$ guard (not (T.null hit))
-        tfMatch = after "no field named " >>= guarded (not . T.null) . T.strip . T.takeWhile (`notElem` ['.', ' ', '\n', '"', '`'])
-        pgMatch = do
-          guard $ "does not exist" `T.isInfixOf` lower
-          rest <- after "column "
-          guarded (not . T.null) $ maybe (T.takeWhile (`notElem` [' ', ',']) rest) (T.takeWhile (/= '"')) (T.stripPrefix "\"" rest)
-
-
--- | Build a 400 with a JSON-shaped body the CLI's 'renderAPIError' decodes.
--- The @details@ slot carries the raw SQL/Hasql text; only included when set.
-kqlError400 :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Servant.ServerError
-kqlError400 code msg fieldM suggestionM detailsM =
-  Servant.err400
-    { Servant.errBody = AE.encode $ AE.object ["error" AE..= errBody]
-    , Servant.errHeaders = [("Content-Type", "application/json")]
-    }
-  where
-    errBody =
-      AE.object
-        $ ["code" AE..= code, "message" AE..= msg]
-        <> catMaybes
-          [ ("field" AE..=) <$> fieldM
-          , ("suggestion" AE..=) <$> suggestionM
-          , ("details" AE..=) <$> detailsM
-          ]
+    lower = T.toLower raw
+    -- Match case-insensitively but re-slice from the original-case text so the
+    -- column name keeps its casing.
+    after needle =
+      let (pre, hit) = T.breakOn needle lower
+       in T.drop (T.length pre + T.length needle) raw <$ guard (not (T.null hit))
+    tfMatch = after "no field named " >>= guarded (not . T.null) . T.strip . T.takeWhile (`notElem` ['.', ' ', '\n', '"', '`'])
+    pgMatch = do
+      guard $ "does not exist" `T.isInfixOf` lower
+      rest <- after "column "
+      guarded (not . T.null) $ maybe (T.takeWhile (`notElem` [' ', ',']) rest) (T.takeWhile (/= '"')) (T.stripPrefix "\"" rest)
 
 
 -- | Log Explorer page shell. Renders chrome only (query box, facets, widgets,
@@ -1753,16 +1759,15 @@ apiLogExpandH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> 
 apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
   (authCtx, _, fromD, toD, _, _) <- logDataEnv pid sinceM fromM toM
   let key = maybeToMonoid keyM
-  when (T.null key) $ throwError Servant.err400{Servant.errBody = "Missing key"}
+  when (T.null key) $ refuse ExpandMissingKey
   -- Sessions render a trace tree (hence the child-span fetch and larger page);
   -- patterns just show flat examples.
   (expandKind, limitN) <- case kindM of
     Just "session" -> pure (LogQueries.ExpandSession key, 100 :: Int)
     Just "pattern" -> pure (LogQueries.ExpandPattern key, 20)
-    _ -> throwError Servant.err400{Servant.errBody = "kind must be session or pattern"}
+    _ -> refuse ExpandUnknownKind
 
-  queryAST <-
-    either (\err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}) pure (parseQueryToAST (maybeToMonoid queryM))
+  queryAST <- either (refuse . ExpandInvalidQuery) pure (parseQueryToAST (maybeToMonoid queryM))
 
   (rows, cols) <- LogQueries.fetchEventExamples authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) expandKind (fromMaybe 0 skipM) (limitN + 1)
 

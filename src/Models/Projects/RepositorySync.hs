@@ -27,7 +27,6 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
 import Data.Char (isAsciiLower, isDigit)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -52,16 +51,12 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.MonitorConfig (encodeMonitorConfig)
 import Relude hiding (local)
 import System.Types (DB)
-import Web.HttpApiData (FromHttpApiData (..))
+import Web.HttpApiData (FromHttpApiData)
 
 
 data ResourceKind = Dashboard | Query | Uptime | Cron
   deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" ResourceKind
-
-
-instance FromHttpApiData ResourceKind where
-  parseUrlPiece value = maybeToRight "Choose dashboard, query, uptime, or cron." $ lookup value [("dashboard", Dashboard), ("query", Query), ("uptime", Uptime), ("cron", Cron)]
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" ResourceKind
 
 
 data FolderCandidate = FolderCandidate {kind :: ResourceKind, localId :: UUID.UUID, title :: Text}
@@ -273,7 +268,7 @@ importDefinition resource observed definition = runExceptT do
           unless (all (`elem` map (.id) teams) input.teams) $ hoistEither $ Left "Monitor teams must belong to this project."
           existing <- lift $ Monitors.queryMonitorByProjectId resource.projectId (Monitors.QueryMonitorId resource.localId)
           let monitor = (monitorFromInput resource.projectId now (Monitors.QueryMonitorId resource.localId) existing input){Monitors.lastEvaluated = existing >>= (.lastEvaluated)}
-          when (T.null $ compileAlertSql resource.projectId input.timeWindowMins input.environment input.service input.query "") $ hoistEither $ Left "The monitor query could not be compiled."
+          whenLeft_ (compileAlertSql resource.projectId input.timeWindowMins input.environment input.service input.query) $ const $ hoistEither $ Left "The monitor query could not be compiled."
           pure (Monitors.queryMonitorUpsertSql monitor, QueryDefinition $ monitorToInput monitor)
         UptimeDefinitionConfig input -> do
           unless (PromCfg.safeScrapeUrl input.url && not (T.null $ T.strip input.name) && input.intervalSeconds >= 60 && input.expectedStatus >= 100 && input.expectedStatus <= 599) $ hoistEither $ Left "Uptime checks require a name, public HTTP URL, interval of at least 60 seconds, and HTTP status 100–599."

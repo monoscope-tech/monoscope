@@ -40,7 +40,6 @@ import GHC.Clock (getMonotonicTimeNSec)
 import Log qualified
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Media ((//))
 import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
@@ -56,6 +55,7 @@ import Servant.Server (ServerError (errBody), err400)
 import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (Tracing, withSpan_)
+import System.Types (Mime)
 import Text.Megaparsec (parseMaybe)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Async qualified
@@ -144,8 +144,13 @@ usesTimefusionBackend enableTimefusionReads = maybe enableTimefusionReads (== Sq
 
 queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => M SqlSource -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics dbSource respDataType pidM queryM querySQLM sinceM fromM toM sourceM binDensityM allParams = do
-  pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
+  pid <- requireProject pidM
   queryProjectMetrics dbSource respDataType pid queryM querySQLM sinceM fromM toM sourceM binDensityM allParams
+
+
+-- | The chart JSON endpoints' one refusal; its 400 body is a wire contract.
+requireProject :: Error ServerError :> es => M Projects.ProjectId -> Eff es Projects.ProjectId
+requireProject = maybe (throwError err400{errBody = "project_id is required"}) pure
 
 
 queryProjectMetrics :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => M SqlSource -> M DataType -> Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
@@ -726,7 +731,7 @@ queryMetricsStream :: (Effectful.Reader.Static.Reader AuthContext :> es, Error S
 queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sourceM densityM allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
-  pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
+  pid <- requireProject pidM
   let requested = maybeToMonoid dataTypeM
       ChartQuery{config = cfg@SqlQueryCfg{dateRange = (fromD, toD), source}, ..} = prepareChartQuery (usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource) pid now (Components.TimePicker sinceM fromM toM) sourceM densityM queryM querySQLM allParams
       run emit = case parsed of
@@ -838,10 +843,7 @@ chunkableChart sections = case reverse sections of
 
 -- | NewlineFraming separates each JSON message on the wire.
 data ChartStream
-
-
-instance Servant.Accept ChartStream where
-  contentType _ = "application" // "x-ndjson"
+  deriving (Servant.Accept) via Mime "application/x-ndjson"
 
 
 instance Servant.MimeRender ChartStream AE.Value where

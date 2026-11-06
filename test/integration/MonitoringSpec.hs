@@ -61,8 +61,7 @@ import ProcessMessage (processMessages)
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import System.Config qualified as Config
-import System.Types (ATAuthCtx, ATBackgroundCtx)
-import Test.Hspec (anyIOException)
+import System.Types (ATBackgroundCtx)
 import UnliftIO.Async (concurrently)
 
 
@@ -144,15 +143,16 @@ spec = describe "Monitoring" do
           _ -> fail "the dashboard list did not load"
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
       isNothing <$> runTestBgNoReset tr (DashboardModel.getDashboardByProjectId otherPid dashboardId) `shouldReturn` True
-      savedWidget <- call tr $ Dashboards.dashboardWidgetPutH testPid dashboardId Nothing Nothing def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\""}
+      savedWidget <- (.widget) . fromRightShow <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId Nothing Nothing def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\""})
       widgetId <- maybe (fail "the saved widget has no id") pure savedWidget.id
       let widgetMonitor pid = runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId pid (Just dashboardId) widgetId
           widgetUrl = "/p/" <> testPid.toText <> "/dashboards/" <> dashboardId.toText <> "?expand=" <> widgetId
           linksTo url notification = unless (url `T.isInfixOf` jsonText notification) $ expectationFailure $ "Missing widget link in " <> show (deliverySummary [notification])
-          putWidget w = void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing w
-          rejected :: ATAuthCtx a -> IO ()
-          rejected k = void (toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader k) `shouldThrow` anyIOException
+          putWidget w = (void <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing w)) `shouldReturn` Right ()
+          upsertAlert = call tr . Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId)
           check = advanceMinutes tr 1 >> deliverySummary . fst <$> captureNotifs tr checkTriggeredQueryMonitors
+          invalidQuery :: Either Dashboards.WidgetMonitorRejection a -> Bool
+          invalidQuery = \case Left (Dashboards.MonitorQueryInvalid _) -> True; _ -> False
           alertForm' =
             Dashboards.WidgetAlertForm
               { widgetId
@@ -181,10 +181,15 @@ spec = describe "Monitoring" do
                pagerduty_services = ARRAY['widget-monitor-test'], disabled_channels = '{}' WHERE project_id = ? AND handle = 'everyone'|]
         (Only testPid)
       -- A raw-SQL widget posts an empty query, which compiled to an all-traffic count.
-      rejected $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm'{Dashboards.query = ""}
-      rejected $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm'{Dashboards.alertThreshold = Nothing}
+      upsertAlert alertForm'{Dashboards.query = ""} `shouldReturn` Left Dashboards.RawSqlWidget
+      upsertAlert alertForm'{Dashboards.alertThreshold = Nothing} `shouldReturn` Left Dashboards.MissingThreshold
+      -- A refused monitor form used to have already written its threshold onto the widget.
+      let storedThreshold = runTestBgNoReset tr (DashboardModel.getDashboardByProjectId testPid dashboardId) <&> \d -> d >>= (.schema) >>= find ((== Just widgetId) . (.id)) . DashboardModel.allWidgets >>= (.alertThreshold)
+      thresholdBefore <- storedThreshold
+      upsertAlert alertForm'{Dashboards.query = "name ==", Dashboards.alertThreshold = Just "7"} >>= (`shouldSatisfy` invalidQuery)
+      storedThreshold `shouldReturn` thresholdBefore
       isNothing <$> widgetMonitor testPid `shouldReturn` True
-      void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm'
+      upsertAlert alertForm' `shouldReturn` Right Dashboards.WidgetMonitorSaved
       createdMonitor <- widgetMonitor testPid
       ((\m -> (m.alertConfig.title, m.alertConfig.emailAll)) <$> createdMonitor) `shouldBe` Just ("Checkout errors · Widget Monitor Lifecycle", True)
       overview <- call tr $ Alerts.unifiedMonitorOverviewH testPid (maybe "" (.id.toText) createdMonitor)
@@ -204,7 +209,7 @@ spec = describe "Monitoring" do
       -- Re-saving the alert form keeps a paused monitor paused.
       void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just dashboardId)
       isJust . (>>= (.deactivatedAt)) <$> widgetMonitor testPid `shouldReturn` True
-      void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm'
+      upsertAlert alertForm' `shouldReturn` Right Dashboards.WidgetMonitorSaved
       isJust . (>>= (.deactivatedAt)) <$> widgetMonitor testPid `shouldReturn` True
       void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just dashboardId)
 
@@ -224,20 +229,24 @@ spec = describe "Monitoring" do
       runTestBgNoReset tr (I.captureSlackRoot "A_TEST" receipt) `shouldReturn` True
       deliverySummary . fst <$> captureNotifs tr runSlackIncidentDeliveries `shouldReturn` ["slack-update:C_NOTIF_CHANNEL"]
 
-      rejected $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.alertThreshold = Nothing}
+      (void <$> call tr (Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.alertThreshold = Nothing})) `shouldReturn` Left Dashboards.MonitorNeedsThreshold
       putWidget savedWidget{Widget.query = Just "name == \"search\"", Widget.alertThreshold = Just 2}
       fmap (\m -> (m.logQuery, m.alertThreshold)) <$> widgetMonitor testPid `shouldReturn` Just ("name == \"search\"", 2)
+      -- A query that doesn't parse used to store the new KQL beside the old SQL, which kept alerting.
+      stored <- fmap (\m -> (m.logQuery, m.logQueryAsSql)) <$> widgetMonitor testPid
+      call tr (Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.query = Just "name ==", Widget.alertThreshold = Just 2}) >>= (`shouldSatisfy` invalidQuery)
+      fmap (\m -> (m.logQuery, m.logQueryAsSql)) <$> widgetMonitor testPid `shouldReturn` stored
       advanceMinutes tr 1
       recovered <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
       deliverySummary recovered `shouldBe` ["discord:C_MONITOR", "email:alerts@example.com", "pagerduty:widget-monitor-test:PDResolve", "slack-update:C_NOTIF_CHANNEL", "slack:C_NOTIF_CHANNEL", "whatsapp:+15550001111"]
       mapM_ (linksTo widgetUrl) recovered
       -- Project-level channel toggles gate delivery.
-      void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "discord", "pagerduty"] [] ["alerts@example.com"] [] Nothing
+      void $ call tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "discord", "pagerduty"] [] ["alerts@example.com"] [] Nothing
       -- Past the flap window, so the re-alert fans out like a fresh one.
       advanceMinutes tr 60
       putWidget savedWidget{Widget.alertThreshold = Just 1, Widget.unit = Just "events"}
       check `shouldReturn` ["discord:C_MONITOR", "email:alerts@example.com", "pagerduty:widget-monitor-test:PDTrigger"]
-      void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "slack", "discord", "phone", "pagerduty"] ["+15550001111"] ["alerts@example.com"] [] Nothing
+      void $ call tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "slack", "discord", "phone", "pagerduty"] ["+15550001111"] ["alerts@example.com"] [] Nothing
 
       -- A copied widget gets its own monitor with fresh state, titled and linked for its dashboard.
       (.notificationCount) <$> (widgetMonitor testPid >>= maybe (fail "the source widget has no monitor") pure) `shouldReturn` 1
@@ -367,14 +376,11 @@ spec = describe "Monitoring" do
 
     it "uptime checks and cron monitors: failures open downtime/missed/failed issues, recovery resolves them" \tr -> do
       pid <- createTestProject tr "uptime-cron"
-      -- A rejected submission swaps nothing so the form keeps what was typed; an accepted one
-      -- re-renders the form blank above the list (htmx 4 needs the explicit :inherited targets).
-      (rejectedH, rejected) <- testServant tr $ Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200))
-      (reswapOf rejectedH, T.isInfixOf "10.0.0.1" (renderT rejected)) `shouldBe` (Just "none", False)
-      (addedH, added) <- testServant tr $ Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200))
-      reswapOf addedH `shouldBe` Nothing
+      -- An accepted submission re-renders the form blank above the list (htmx 4 needs the explicit :inherited targets).
+      (void <$> call tr (Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200)))) `shouldReturn` Left Alerts.UnsafeUrl
+      added <- fromRightShow <$> call tr (Alerts.uptimeCheckPostH pid (Alerts.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200)))
       renderT added `shouldContainAll` ["https://shop.example.com/health"]
-      cronAdded <- call tr $ Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Nightly billing" 3600 300)
+      cronAdded <- fromRightShow <$> call tr (Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Nightly billing" 3600 300))
       goldenParts "uptime-cron-forms" . ordNub $ tagsWith ["value name=\"url\"", "hx-target:inherited=\"this\""] (renderT added) <> tagsWith ["value name=\"slug\"", "hx-target:inherited=\"this\""] (renderT cronAdded)
 
       -- One failure is a blip; two open a downtime issue; a success resolves it.
@@ -401,8 +407,7 @@ spec = describe "Monitoring" do
       -- Cron: a duplicate slug is refused; a check-in keeps it healthy, a missed window and an error
       -- run open issues, a later check-in resolves. Check-ins go through ingestion (TimeFusion on
       -- CI), so each evaluation retries until the check-in it depends on is visible.
-      (dupH, _) <- testServant tr $ Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Again" 3600 300)
-      reswapOf dupH `shouldBe` Just "none"
+      (void <$> call tr (Alerts.cronMonitorPostH pid (Alerts.CronForm "nightly-billing" "Again" 3600 300))) `shouldReturn` Left (Alerts.DuplicateSlug "nightly-billing")
       [m] <- runQueryEffect tr (Monitors.cronMonitorsByProject pid)
       apiKey <- createTestAPIKey tr pid "cron-key"
       let at dt = addUTCTime dt frozenTime
@@ -544,7 +549,7 @@ spec = describe "Monitoring" do
         dbExec tr [sql|UPDATE apis.error_patterns SET state = 'escalating' WHERE id = ?|] (Only notified.id)
         advanceMinutes tr 1
         slack . fst <$> captureNotifs tr (notifyErrorSubscriptions testPid [sample.hash]) >>= (`shouldSatisfy` null)
-        void $ testServant tr $ IssuesPage.resolveErrorPostH testPid notified.id.unErrorPatternId False
+        void $ call tr $ IssuesPage.resolveErrorPostH testPid notified.id.unErrorPatternId False
         closed <- slack . fst <$> captureNotifs tr (replicateM_ 2 runSlackIncidentDeliveries)
         length closed `shouldBe` 4
         for_ closed \sd -> slackText sd `shouldSatisfy` T.isInfixOf "RESOLVED"
@@ -563,7 +568,7 @@ spec = describe "Monitoring" do
         let initial = update{I.source = I.ErrorIncident err.id, I.issueId = Just issue.id, I.rootPayload = payload issue.id}
             record :: I.IncidentUpdate -> IO I.RecordResult
             record u = runTestBgNoReset tr $ I.recordIncidentEvent u
-            resolve = advanceMinutes tr 1 >> void (testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False)
+            resolve = advanceMinutes tr 1 >> void (call tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False)
         I.Recorded episode firstEvent <- record initial
         void $ captureNotifs tr runSlackIncidentDeliveries
         -- Escalation can produce another issue row while the error remains active.
@@ -612,7 +617,7 @@ spec = describe "Monitoring" do
         setupSlackData tr testPid "T1"
         let sample = def{Errors.when = frozenTime, Errors.hash = "manual-resolution", Errors.errorType = "CheckoutError", Errors.message = "payment declined"}
             actor = (Servant.getResponse tr.trSessAndHeader).user
-            resolvePost eid = testServant tr $ IssuesPage.resolveErrorPostH testPid eid False
+            resolvePost eid = void <$> call tr (IssuesPage.resolveErrorPostH testPid eid False)
             activityOf iid = dbQuery tr [sql|SELECT event, created_by FROM apis.issue_activity_log WHERE issue_id = ? AND event IN ('resolved', 'auto_resolved') ORDER BY created_at|] (Only iid)
             membership = dbExec tr [sql|UPDATE projects.project_members SET permission = ?, active = ? WHERE project_id = ? AND user_id = ?|]
         void $ runTestBgNoReset tr $ Errors.batchUpsertErrorPatterns testPid [sample] frozenTime
@@ -625,7 +630,7 @@ spec = describe "Monitoring" do
         advanceMinutes tr 1
         -- Viewers, inactive members and other projects cannot resolve; neither can a stale clock.
         membership ("view" :: Text, True, testPid, actor.id)
-        void $ resolvePost err.id.unErrorPatternId
+        resolvePost err.id.unErrorPatternId `shouldReturn` Left IssuesPage.ResolveDenied
         (.state) <$> (runTestBgNoReset tr (Errors.getErrorPatternById err.id) >>= maybe (fail "error missing") pure) `shouldReturn` Errors.ESNew
         let resolve pid at = runTestBgNoReset tr $ I.resolveErrorIncident pid err.id actor.id at (const update.rootPayload)
         resolve testPid (addUTCTime 60 frozenTime) `shouldReturn` I.ErrorResolutionDenied
@@ -1085,7 +1090,7 @@ spec = describe "Monitoring" do
         update <- setupWithIssue tr
         setupLinkedSlackData tr testPid "T1"
         void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
-        channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+        channel <- either (fail . show) pure $ Issues.incidentChannel "T1" "C1"
         Just routine <- runTestBgNoReset tr $ Issues.getIncidentRoutine testPid channel
         runTestBgNoReset tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId policy
         I.Recorded _ event <- runTestBgNoReset tr $ I.recordIncidentEvent update
@@ -1138,7 +1143,7 @@ spec = describe "Monitoring" do
         update <- setupWithIssue tr
         setupLinkedSlackData tr testPid "T1"
         void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
-        channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+        channel <- either (fail . show) pure $ Issues.incidentChannel "T1" "C1"
         Just routine <- runTestBgNoReset tr $ Issues.getIncidentRoutine testPid channel
         runTestBgNoReset tr $ Issues.setRoutinePolicy routine.requestedBy testPid routine.conversationId $ Issues.ReviewSelected $ Catalog.ReviewSelection (one Catalog.ProjectChanges) Catalog.ReviewEditors
         I.Recorded _ event <- runTestBgNoReset tr $ I.recordIncidentEvent update
@@ -1197,7 +1202,7 @@ spec = describe "Monitoring" do
             user = (Servant.getResponse tr.trSessAndHeader).user.id
             revoke = liftIO $ dbExec tr [sql|UPDATE projects.project_members SET active = false WHERE project_id = ? AND user_id = ?|] (testPid, user)
         unless (interruption == NoIncidentOptIn) $ void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH command
-        channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+        channel <- either (fail . show) pure $ Issues.incidentChannel "T1" "C1"
         let installation = Issues.incidentRoutineConversationId testPid channel
         I.Recorded episode event <- runTestBgNoReset tr $ I.recordIncidentEvent update
         issue <- maybe (fail "Fixture episode has no issue") pure episode.issueId
@@ -1234,7 +1239,7 @@ spec = describe "Monitoring" do
       update <- setupWithIssue tr
       setupLinkedSlackData tr testPid "T1"
       void $ toBaseServantResponse tr $ SlackPage.slackInteractionsH $ (slackInteraction "/monoscope" "incidents on" "T1"){SlackPage.channel_id = "C1"}
-      channel <- either (fail . toString) pure $ Issues.incidentChannel "T1" "C1"
+      channel <- either (fail . show) pure $ Issues.incidentChannel "T1" "C1"
       Just routine <- runTestBgNoReset tr $ Issues.getIncidentRoutine testPid channel
       I.Recorded episode event <- runTestBgNoReset tr $ I.recordIncidentEvent update
       issue <- maybe (fail "Fixture episode has no issue") pure episode.issueId

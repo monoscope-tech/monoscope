@@ -10,6 +10,7 @@ import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Re
 import Data.List (lookup)
 import Data.List.Extra (nubOrd)
 import Data.Text qualified as T
+import Deriving.Aeson qualified as DAE
 import GHC.Clock (getMonotonicTimeNSec)
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
 import Pkg.GitCommand qualified as HostGit
@@ -38,11 +39,8 @@ data CacheStatus = Hit | Miss | Verified
 
 
 data Envelope = Artifact TestArtifact | Result FixResult
-
-
-instance AE.ToJSON Envelope where
-  toJSON (Artifact artifact) = AE.object ["artifact" AE..= artifact]
-  toJSON (Result result) = AE.object ["result" AE..= result]
+  deriving stock (Generic)
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.SumObjectWithSingleField, DAE.ConstructorTagModifier '[DAE.CamelToSnake]] Envelope
 
 
 data Prepared = Prepared {cache :: Maybe Guest.CacheReport, guest :: Maybe FilePath, envelope :: Maybe Envelope, directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, policy :: Policy.Policy}

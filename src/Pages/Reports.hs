@@ -51,7 +51,7 @@ import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
-import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, DB, Done, Outcome (..), RespHeaders, Says (..), addRespHeaders, done)
 import UnliftIO (tryAny)
 import UnliftIO qualified
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, formatUTCMicros, hostPath, loadingIndicatorWith_)
@@ -325,20 +325,16 @@ startLivePreview pid token = do
     Nothing -> void $ forkIO guardedWorker
 
 
-reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHeaders ReportsPost)
+reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHeaders (Done ReportsPost))
 reportsPostH pid t = do
   _ <- Projects.sessionAndProject pid
   _ <- Projects.updateProjectReportNotif pid t
-  addSuccessToast "Report notifications updated successfully" Nothing
-  addRespHeaders $ ReportsPost "updated"
+  done ReportsPost
 
 
-newtype ReportsPost = ReportsPost Text
-
-
-instance ToHtml ReportsPost where
-  toHtml (ReportsPost _t) = ""
-  toHtmlRaw = toHtml
+data ReportsPost = ReportsPost
+  deriving stock (Eq, Generic, Show)
+  deriving (Outcome) via Says "Report notifications updated successfully" ReportsPost
 
 
 singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)

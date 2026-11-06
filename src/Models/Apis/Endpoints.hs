@@ -196,7 +196,7 @@ data EndpointMetaRow = EndpointMetaRow
 -- >>> map parseUrlPiece ["Outgoing", "incoming"] :: [Either Text Direction]
 -- [Right Outgoing,Right Incoming]
 -- >>> parseUrlPiece "Archived" :: Either Text Direction
--- Left "Invalid  value: Archived"
+-- Left "Invalid value: Archived"
 data Direction = Incoming | Outgoing
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Hashable)
@@ -208,7 +208,7 @@ data Direction = Incoming | Outgoing
 -- >>> parseUrlPiece "7d" :: Either Text Period
 -- Right Window7d
 -- >>> parseUrlPiece "3d" :: Either Text Period
--- Left "Invalid Window value: 3d"
+-- Left "Invalid value: 3d"
 data Period = Window24h | Window7d
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Hashable)
@@ -224,7 +224,7 @@ data Period = Window24h | Window7d
 -- >>> map (\s -> parseUrlPiece s :: Either Text EndpointSort) ["events", "name", "first_seen", "last_seen"]
 -- [Right SortEvents,Right SortName,Right SortFirstSeen,Right SortLastSeen]
 -- >>> parseUrlPiece "alphabetical" :: Either Text EndpointSort
--- Left "Invalid Sort value: alphabetical"
+-- Left "Invalid value: alphabetical"
 data EndpointSort = SortEvents | SortName | SortFirstSeen | SortLastSeen
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Hashable)

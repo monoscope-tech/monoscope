@@ -150,7 +150,7 @@ instance (KnownSymbol prefix, Read a, Show a) => AE.FromJSON (WrappedEnumSC qual
 
 
 instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC qualType prefix a) where
-  parseUrlPiece t = maybe (Left $ "Invalid " <> fromString (symbolVal (Proxy @prefix)) <> " value: " <> t) (Right . WrappedEnumSC) $ decodeEnumSC @prefix (toString @Text t)
+  parseUrlPiece t = maybe (Left $ "Invalid value: " <> t) (Right . WrappedEnumSC) $ decodeEnumSC @prefix (toString @Text t)
 
 
 -- | envy env-var (de)serialization. 'decodeEnumSC' normalizes case via

@@ -769,7 +769,7 @@ browserAst = parseQueryToAST browserKql
 -- Anything else is rejected rather than quietly reinterpreted:
 --
 -- >>> parseUrlPiece "alphabetical" :: Either Text SessionSort
--- Left "Invalid Sort value: alphabetical"
+-- Left "Invalid value: alphabetical"
 --
 -- 'display' renders the same wire value back:
 --

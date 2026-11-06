@@ -56,7 +56,7 @@ import Pages.Dashboards qualified as DashboardPage
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.Git qualified as Git
 import Pkg.TestUtils
-import Servant (ResponseHeader (..), ServerError (..), getHeaders, getResponse, lookupResponseHeader)
+import Servant (ServerError (..), getHeaders, getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Directory (doesFileExist)
@@ -203,7 +203,7 @@ configurationProvider tr prState = withHTTPResponses \_ endpoint -> do
 setupSyncOn :: TestResources -> Git.GitHost -> Text -> Text -> Maybe Text -> IO ()
 setupSyncOn tr host owner repo secret = do
   void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
-  void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid
+  void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid
     GitSyncPage.GitSyncForm
       { host = Just host
       , apiBase = if host == Git.Gitea then Just "https://git.example.com" else Nothing
@@ -447,7 +447,7 @@ spec = do
             syncForm = GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = "attacker", repo = "evil", branch = "main", accessToken = "ghp_x", webhookSecret = Nothing, pathPrefix = Nothing}
             mappingIds = map (.id) <$> runQueryEffect tr (CodeContext.getCodeMappings victim)
             syncState = map (\s -> (s.owner, s.repo, s.installationId)) <$> runQueryEffect tr (GitSync.getGitSyncs victim)
-        _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH victim (mappingForm "checkout-service" "/srv/app/")
+        _ <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH victim (mappingForm "checkout-service" "/srv/app/")
         seeded <- mappingIds
         length seeded `shouldBe` 1
         syncs <- syncState
@@ -556,7 +556,7 @@ spec = do
           void $ testServant tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (PageCodeContext.RepositoryConnectForm [name])
         map (\r -> (r.owner, r.repo)) <$> runQueryEffect tr (GitSync.getRepositories testPid) `shouldReturn` [("team", "checkout")]
         for_ ([("Team", "Checkout"), ("team", "checkout")] :: [(Text, Text)]) \(owner, repo) ->
-          void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch = "main", accessToken = "fixture-token", webhookSecret = Just "fixture-secret", pathPrefix = Nothing}
+          void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch = "main", accessToken = "fixture-token", webhookSecret = Just "fixture-secret", pathPrefix = Nothing}
         syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
         map (\s -> (s.owner, s.repo)) syncs `shouldBe` [("team", "checkout")]
         map (.id) <$> runQueryEffect tr (GitSync.getGitSyncsByRepo Git.GitHub "TEAM" "CHECKOUT") `shouldReturn` map (.id) syncs
@@ -570,7 +570,7 @@ spec = do
         -- A nested namespace is kept as the owner instead of being replaced by the account name.
         Cache.insert tr.trATCtx.repoListCache gitlab.id [Git.GitRepo "team/platform/checkout" "checkout" True "trunk"]
         renderT <$> call tr (PageCodeContext.codeMappingsEditorGetH testPid (Just gitlab.id) Nothing) >>= (`shouldSatisfy` T.isInfixOf "value=\"team/platform/checkout\"")
-        _ <- testServant tr $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "team/platform/checkout") (Just "trunk") (Just "checkout") Nothing Nothing Nothing (Just gitlab.id))
+        _ <- call tr $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "team/platform/checkout") (Just "trunk") (Just "checkout") Nothing Nothing Nothing (Just gitlab.id))
         map (\m -> (m.owner, m.repo)) <$> runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldMatchList` [("team", "checkout"), ("team/platform", "checkout")])
 
       it "repositoryPicker_connectsCodebasesWithoutEnablingCapabilitiesAndRejectsUnavailableSelections" \tr -> do
@@ -619,7 +619,7 @@ spec = do
         apiBases <$> runQueryEffect tr (GitSync.getGitHubCredentials testPid) `shouldReturn` origins
         -- repositoryConnection_keepsIdenticalNamesOnDifferentServersIndependent, from a fresh project.
         formed <- createTestProject tr "Same names on two servers"
-        for_ origins $ testServant tr . GitSyncPage.gitSyncSettingsPostH formed . \origin -> GitSyncPage.GitSyncForm (Just Git.GitHub) origin "team" "dashboards" "main" "fixture" Nothing Nothing
+        for_ origins $ call tr . GitSyncPage.gitSyncSettingsPostH formed . \origin -> GitSyncPage.GitSyncForm (Just Git.GitHub) origin "team" "dashboards" "main" "fixture" Nothing Nothing
         apiBases <$> runQueryEffect tr (GitSync.getGitSyncs formed) `shouldReturn` origins
         apiBases <$> runQueryEffect tr (GitSync.getGitHubCredentials formed) `shouldReturn` origins
         overview <- call tr $ PageCodeContext.repositoriesGetH formed Nothing Nothing
@@ -629,7 +629,7 @@ spec = do
         account <- grantOf tr picked Git.GitHub Nothing "team" (Just 42) Nothing
         Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team/dashboards" "dashboards" True "main"]
         void $ syncOf tr picked (Just "https://git.example.com") "team" "dashboards" (GitSync.PersonalToken "fixture") ""
-        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH picked $ GitSyncPage.RepoSelectForm ["team/dashboards"] "main" Nothing 42
+        void $ call tr $ GitSyncPage.githubAppSelectRepoH picked $ GitSyncPage.RepoSelectForm ["team/dashboards"] "main" Nothing 42
         apiBases <$> runQueryEffect tr (GitSync.getGitSyncs picked) `shouldReturn` origins
 
       it "repositoryConnection_reportsUnreadableTokensWithoutChangingTheFailedOperation" \tr -> do
@@ -646,10 +646,10 @@ spec = do
         account <- grantOf tr testPid Git.GitHub Nothing "team-a" (Just 42) Nothing
         Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo "team-a/dashboards" "dashboards" True "main", Git.GitRepo "team-b/dashboards" "dashboards" True "main"]
         let selection = GitSyncPage.RepoSelectForm ["team-a/dashboards", "team-b/dashboards", "team-a/dashboards"] "trunk" (Just "observability") 42
-        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH testPid selection
+        void $ call tr $ GitSyncPage.githubAppSelectRepoH testPid selection
         syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
         sort [(s.owner, s.repo, s.branch, s.pathPrefix) | s <- syncs] `shouldBe` [("team-a", "dashboards", "trunk", "observability"), ("team-b", "dashboards", "trunk", "observability")]
-        _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH testPid selection{GitSyncPage.branch = "different", GitSyncPage.pathPrefix = Just "other"}
+        void $ call tr $ GitSyncPage.githubAppSelectRepoH testPid selection{GitSyncPage.branch = "different", GitSyncPage.pathPrefix = Just "other"}
         unchanged <- runQueryEffect tr $ GitSync.getGitSyncs testPid
         sort [(s.id, s.branch, s.pathPrefix) | s <- unchanged] `shouldBe` sort [(s.id, s.branch, s.pathPrefix) | s <- syncs]
 
@@ -663,8 +663,8 @@ spec = do
         page <- renderT . (.content) <$> call tr (withUnavailableRepositoryAPI $ PageCodeContext.repositoryConnectGetH testPid Nothing)
         for_ (["zzz-ours", "aaa-stray", "team-a", "team-b", "Choose an account"] :: [Text]) \label -> page `shouldSatisfy` T.isInfixOf label
         -- The newest grant is never picked for you.
-        let mapping cred = testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout") (Just "main") ((.account) <$> cred) Nothing Nothing Nothing ((.id) <$> cred))
-        _ <- mapping Nothing
+        let mapping cred = call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout") (Just "main") ((.account) <$> cred) Nothing Nothing Nothing ((.id) <$> cred))
+        (void <$> mapping Nothing) `shouldReturn` Left PageCodeContext.NoAccount
         runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
         for_ accounts \account -> do
           editor <- renderT <$> call tr (PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) (Just "/srv/app/main.py"))
@@ -682,7 +682,7 @@ spec = do
       -- "the panel never fills". The cache is per blob, so a second frame of one file is free.
       it "fetches a blob once however many frames ask for it" \tr -> do
         void $ syncOf tr testPid Nothing "acme" "checkout-service" (GitSync.PersonalToken "ghp_test") ""
-        _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout-service") (Just "main") (Just "checkout") Nothing (Just "/srv/app/") (Just "") Nothing)
+        _ <- call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout-service") (Just "main") (Just "checkout") Nothing (Just "/srv/app/") (Just "") Nothing)
         -- A PAT needs no token exchange, so the one request is the blob read, and a read is a bodiless GET.
         let fetch n = runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just $ blobOf "one\ntwo\nthree\nfour\n") $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "/srv/app/checkout.py" n
         (firstRequests, first_) <- fetch 2
@@ -716,9 +716,9 @@ spec = do
       it "maps several services onto several repos, and resolves each frame to its own" \tr -> do
         -- The config-sync repo is the project's monoscope YAML, not where the services live.
         void $ syncOf tr testPid Nothing "acme" "monoscope-config" (GitSync.PersonalToken "ghp_test") ""
-        let add repo svc prefix root = testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just repo) (Just "main") svc Nothing (Just prefix) (Just root) Nothing)
+        let add repo svc prefix root = call tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just repo) (Just "main") svc Nothing (Just prefix) (Just root) Nothing)
         _ <- add "checkout-service" (Just "checkout") "/srv/app/" "src"
-        added <- renderT . snd <$> add "billing-service" (Just "billing") "/opt/billing/" ""
+        added <- renderT . fromRightShow <$> add "billing-service" (Just "billing") "/opt/billing/" ""
         -- The account came from the config-sync installation; the row says what it covers in frame-path terms.
         for_ ["acme/checkout-service", "acme/billing-service", "frames under /srv/app/"] \part -> added `shouldSatisfy` T.isInfixOf part
         added `shouldNotSatisfy` T.isInfixOf "monoscope-config"
@@ -794,7 +794,7 @@ spec = do
         for_ ["value=\"team/checkout\"", "value=\"trunk\"", "value=\"/app/main.py\"", "name=\"credentialId\" value=\"" <> account.id.toText <> "\""] \value -> html `shouldSatisfy` T.isInfixOf value
         html `shouldNotSatisfy` T.isInfixOf "Unlink team/catalog"
         -- A forged owner/repo in the form cannot retarget the repository the route names.
-        _ <- testServant tr $ PageCodeContext.repositorySourcePostH testPid repository.id (PageCodeContext.CodeMappingForm (Just "foreign/private") (Just "release") (Just "checkout") Nothing (Just "/app/") Nothing Nothing)
+        _ <- call tr $ PageCodeContext.repositorySourcePostH testPid repository.id (PageCodeContext.CodeMappingForm (Just "foreign/private") (Just "release") (Just "checkout") Nothing (Just "/app/") Nothing Nothing)
         mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
         map (\m -> (m.owner, m.repo, m.ref, m.credentialId)) (filter ((== Just "checkout") . (.service)) mappings) `shouldBe` [("team", "checkout", "release", account.id)]
         _ <- testServant tr $ PageCodeContext.repositoryReviewsPostH testPid repository.id (ImpactReviews.ReviewSettings "foreign" "private" False False)
@@ -1062,7 +1062,7 @@ spec = do
         map (.service) details.content.mappings `shouldBe` [Just "checkout"]
         fmap (.id) details.content.dashboardSync `shouldBe` Just sync.id
         readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewNeedsRoutine -> True; _ -> False)
-        void $ testServant configured $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
+        void $ call configured $ AIThreads.routineInstallPostH testPid (AIThreads.RoutineTemplateForm "production-impact-review")
         readiness configured >>= (`shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False)
         noRunner <- renderT . (.content) <$> call withoutAgent (PageCodeContext.repositoryGetH testPid repository.id)
         noRunner `shouldNotSatisfy` T.isInfixOf "Ready for pull requests"
@@ -1235,20 +1235,17 @@ spec = do
       it "tokenConnection_rejectsMissingTokenAndQueuesOnlyFirstImport" \tr -> do
         let form owner repo branch token prefix = GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
         for_ ["", " "] \token -> do
-          (headers, _) <- testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing)
-          case lookupResponseHeader @"HX-Trigger" headers of
-            Header value -> value `shouldSatisfy` T.isInfixOf "Enter an access token."
-            _ -> expectationFailure "Missing token error was not shown"
+          (void <$> call tr (GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" token Nothing))) `shouldReturn` Left (GitSyncPage.ConnectionFailed Git.GitHub "Enter an access token.")
           runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
           pendingJobs tr >>= (`shouldSatisfy` null)
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
+        void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
         sync <- onlySync tr >>= maybe (fail "Git connection was not created") pure
         (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)
         let imports = filter isImport <$> pendingJobs tr
         imports >>= \jobs -> [(pid, sid) | BackgroundJobs.GitSyncRepository pid sid <- jobs] `shouldBe` [(testPid, sync.id)]
         -- The update path wrote every field but the folder, so an edit to "Folder in repo" vanished
         -- on save while the page redrew as if it had stuck. An empty token keeps the stored one.
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "updated" "updated-repo" "dev" "" (Just "monoscope"))
+        void $ call tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "updated" "updated-repo" "dev" "" (Just "monoscope"))
         updated <- onlySync tr >>= maybe (fail "Git connection disappeared after update") pure
         (updated.owner, updated.repo, updated.branch, updated.pathPrefix) `shouldBe` ("updated", "updated-repo", "dev", "monoscope")
         updated.accessToken `shouldBe` sync.accessToken

@@ -50,10 +50,13 @@ import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualifie
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Servant.API (ResponseHeader (..), getResponse, lookupResponseHeader)
+import Servant.API.UVerb (matchUnion)
 import Servant.Server qualified as ServantS
 import System.Config qualified as Config
+import System.Types (RespHeaders)
 import System.IO.Error (userError)
 import UnliftIO.Exception (bracket, throwIO)
+import System.Types (Done (..))
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -88,18 +91,18 @@ spec = around withTestResources do
       _ -> expectationFailure "expected NotifChannelStep"
 
     -- No events yet: the automatic check stays silent and swaps in a fresh poller; Confirm & Proceed toasts.
-    (automaticHeaders, waiting) <- testServant tr $ Onboarding.checkIntegrationGet pid (Just "Javascript")
-    (trigger automaticHeaders, redirect automaticHeaders) `shouldBe` (Header ("{}" :: Text), noRedirect)
+    let checked lang = runAuthHandler tr (Onboarding.checkIntegrationGet pid lang) >>= maybe (fail "integration check refused") (\h -> let Done c = getResponse h in pure (h, c)) . matchUnion @(RespHeaders (Done Onboarding.IntegrationCheck))
+    (automatic, waiting) <- checked (Just "Javascript")
+    (waiting, trigger automatic, redirect automatic) `shouldBe` (Onboarding.AwaitingEvents pid "Javascript", Header ("{}" :: Text), noRedirect)
     goldenHtml "onboarding-integration-waiting" waiting
-    (manualHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet pid Nothing
-    trigger manualHeaders `shouldSatisfy` \case Header t -> "No events found yet" `T.isInfixOf` t; _ -> False
+    call tr (Onboarding.checkIntegrationGet pid Nothing) `shouldReturn` Left Onboarding.NoEventsYet
 
     apiKey <- createTestAPIKey tr pid "integration-test-key"
     eventTime <- getCurrentTime
     ingestTrace tr apiKey "onboarding-first-span" eventTime
     -- The first verification carries the project's one-time ad activation instead of a toast.
-    (verifiedHeaders, verified) <- testServant tr $ Onboarding.checkIntegrationGet pid (Just "Javascript")
-    (trigger verifiedHeaders, redirect verifiedHeaders) `shouldBe` (Header ("{\"adConversion\":{\"value\":[{\"id\":\"" <> pid.toText <> "\",\"name\":\"activated\"}]}}" :: Text), noRedirect)
+    (verifiedHeaders, verified) <- checked (Just "Javascript")
+    (verified, trigger verifiedHeaders, redirect verifiedHeaders) `shouldBe` (Onboarding.Verified, Header ("{\"adConversion\":{\"value\":[{\"id\":\"" <> pid.toText <> "\",\"name\":\"activated\"}]}}" :: Text), noRedirect)
     goldenHtml "onboarding-integration-verified" verified
     -- TF-only deployments write no Postgres telemetry: an event behind the "timefusion" pool
     -- (a schema search_path routes otel_logs_and_spans to) still verifies a project with none.
@@ -108,10 +111,10 @@ spec = around withTestResources do
     host <- fromMaybe "localhost" <$> lookupEnv "DB_HOST"
     bracket (mkHasqlPool 1 $ encodeUtf8 $ "host=" <> toText host <> " user=postgres password=postgres dbname=" <> db <> " options='-c search_path=tf_only'") OHasql.release \tfPool -> do
       let ctx = tr.trATCtx
-      tfVerified <- call tr{trATCtx = ctx{Config.hasqlTimefusionPool = tfPool, Config.env = ctx.env{Config.enableTimefusionReads = True}}} $ Onboarding.checkIntegrationGet tfOnly (Just "Javascript")
+      Right tfVerified <- call tr{trATCtx = ctx{Config.hasqlTimefusionPool = tfPool, Config.env = ctx.env{Config.enableTimefusionReads = True}}} $ Onboarding.checkIntegrationGet tfOnly (Just "Javascript")
       goldenHtml "onboarding-integration-verified" tfVerified
-    (integratedHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet pid Nothing
-    redirect integratedHeaders `shouldBe` Header ("/p/" <> pid.toText <> "/onboarding?step=Pricing")
+    (integratedHeaders, integrated) <- checked Nothing
+    (integrated, redirect integratedHeaders) `shouldBe` (Onboarding.ProceedToPricing pid, Header ("/p/" <> pid.toText <> "/onboarding?step=Pricing"))
     step Onboarding.Integration >>= \case
       Onboarding.IntegrationStep _ stepApiKey -> stepApiKey `shouldNotBe` "<API_KEY>"
       _ -> expectationFailure "expected IntegrationStep"
@@ -133,8 +136,8 @@ spec = around withTestResources do
     -- not block the project's redirect either.
     _ <- runQueryEffect tr $ Projects.completeOnboardingStep pid "explored_logs"
     let configured = tr{trATCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.convertkitApiKey = "test-key"}}}
-    (_, (pricingHeaders, _)) <- testServantWithNotifications configured $ interpose @HTTP (\_ _ -> throwIO $ userError "conversion service unavailable") $ CreateProject.pricingUpdateH pid def{CreateProject.isOnboarding = Just True}
-    redirect pricingHeaders `shouldBe` Header ("/p/" <> pid.toText <> "/")
+    call configured (interpose @HTTP (\_ _ -> throwIO $ userError "conversion service unavailable") $ CreateProject.pricingUpdateH pid def{CreateProject.isOnboarding = Just True})
+      `shouldReturn` Right (CreateProject.PricingOnboarded pid)
     project <- projectOf tr pid
     (project.paymentPlan, sort (V.toList project.onboardingStepsCompleted)) `shouldBe` ("Free", ["Info", "Integration", "NotifChannel", "Pricing", "Survey", "created_monitor", "explored_logs"])
     landing <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] pid []

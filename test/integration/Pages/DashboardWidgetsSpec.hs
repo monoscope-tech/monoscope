@@ -63,8 +63,7 @@ import System.Directory (withCurrentDirectory)
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Test.Hspec (anyIOException)
+import System.Types (ATAuthCtx, Done (..), addRespHeaders)
 import Text.Slugify (slugify)
 import UnliftIO.Async (mapConcurrently_, wait, withAsync)
 import Utils qualified
@@ -226,7 +225,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
 
     -- Edit in place: an omitted query is retained, and the render-time tab slug is not stored.
     let edited = (widgetOf Widget.WTStat "renamed"){Widget.query = Nothing, Widget.rawQuery = Nothing, Widget._tabSlug = Just "stale-tab", Widget.layout = Just def{Widget.x = Just 6, Widget.y = Just 6, Widget.w = Just 3, Widget.h = Just 3}}
-    _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId (Just w1) Nothing edited
+    call tr (Dashboards.dashboardWidgetPutH testPid dashId (Just w1) Nothing edited) >>= either (fail . show) (const pass)
     after <- storedWidgets tr dashId
     [(w.title, show @Text w.wType, w.query, w._tabSlug, geometry w) | w <- after, w.id == Just w1]
       `shouldBe` [(Just "renamed", "WTStat", Just "name != null", Nothing, (Just w1, Just 6, Just 6, Just 3, Just 3))]
@@ -246,11 +245,17 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     filter (`elem` drop 1 numbered) (mapMaybe (.id) reloaded) `shouldBe` []
     length (ordNub (mapMaybe (.id) reloaded)) `shouldBe` length reloaded
 
+  -- The editor adopts the saved widget from the PUT body; an empty body left it off the grid.
+  it "dashboardWidgetPut_returnsWidgetMarkup" \tr -> do
+    dashId <- newDashboard tr "overview.yaml" "Widget Body"
+    body <- renderT . Done . fromRightShow <$> call tr (Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTStat "Body Check"))
+    ("data-widget=" `T.isInfixOf` body, "Body Check" `T.isInfixOf` body) `shouldBe` (True, True)
+
   it "tabs and groups: every write lands on the canvas it addresses; the list counts them" \tr -> do
     dashId <- newDashboard tr "overview.yaml" "Tabbed"
     let yaml = void . testServant tr . Dashboards.dashboardYamlPutH testPid dashId . Dashboards.YamlForm
         -- The base runner mints real UUIDs, so separate writes get distinct widget ids.
-        write :: ATAuthCtx (RespHeaders a) -> IO ()
+        write :: ATAuthCtx a -> IO ()
         write = void . toBaseServantResponse tr . atAuthToBase tr.trSessAndHeader
         save wid slug t = write $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) slug (widgetOf Widget.WTStat t)
         tabWidgets slug = call tr (Dashboards.getDashAndVM testPid dashId Nothing >>= addRespHeaders . snd) <&> \dash -> maybe [] (.widgets) $ find (\t -> slugify t.name == slug) (fold dash.tabs)
@@ -270,7 +275,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     titles "second-tab" `shouldReturn` [Just "Renamed Second", Just "Added To Second", Just "Second (Copy)"]
     save "second-widget" (Just "first-tab") "Still Second"
     titles "second-tab" `shouldReturn` [Just "Still Second", Just "Added To Second", Just "Second (Copy)"]
-    save "no-such-widget" Nothing "Ghost" `shouldThrow` anyIOException
+    (void <$> call tr (Dashboards.dashboardWidgetPutH testPid dashId (Just "no-such-widget") Nothing (widgetOf Widget.WTStat "Ghost"))) `shouldReturn` Left Dashboards.WidgetNotFound
     -- Ids repeat across tabs (slugified template titles), so a sent tab that holds the id wins.
     yaml "title: Dup\nwidgets: []\ntabs:\n  - name: First Tab\n    widgets:\n      - { type: stat, id: dup, title: One, layout: { x: 0, y: 0, w: 3, h: 3 } }\n  - name: Second Tab\n    widgets:\n      - { type: stat, id: dup, title: Two, layout: { x: 0, y: 0, w: 3, h: 3 } }\n"
     save "dup" (Just "second-tab") "Renamed Two"
@@ -389,17 +394,18 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     other <- createTestProject tr "Other saved views"
     let form = either (fail . toString) pure . urlDecodeAsForm @Dashboards.DashboardViewForm
         views = fmap (V.toList . (.savedViews) . fst) . runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
-        save name service = void $ testServant tr $ Dashboards.dashboardViewPostH testPid did (Dashboards.DashboardViewForm name [("var-service", Just service)])
+        save name service = void $ call tr $ Dashboards.dashboardViewPostH testPid did (Dashboards.DashboardViewForm name [("var-service", Just service)])
         swapParts = elementsWith ["id=\"dashboard-variables\"", "id=\"dashboard-views-menu\""] . renderT
         status action = runAuthHandler tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         saveIn pid name = Dashboards.dashboardViewPostH pid did (Dashboards.DashboardViewForm name [])
     -- Arbitrary variables, window and tab are kept without freezing the template into the row.
-    saved <- call tr . Dashboards.dashboardViewPostH testPid did =<< form "name=Mobile+Safari&var-browser=Safari&since=7D&activeTabSlug=errors"
+    saved <- fmap fromRightShow . call tr . Dashboards.dashboardViewPostH testPid did =<< form "name=Mobile+Safari&var-browser=Safari&since=7D&activeTabSlug=errors"
     (vm, _) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
     (isNothing vm.schema, map (.name) (V.toList vm.savedViews)) `shouldBe` (True, ["Mobile Safari"])
     deleted <- call tr $ Dashboards.dashboardViewDeleteH testPid did "Mobile Safari" [("var-browser", Just "Safari"), ("since", Just "7D"), ("activeTabSlug", Just "errors")]
     views `shouldReturn` []
-    traverse status [saveIn testPid "  ", saveIn testPid (T.replicate 101 "x"), saveIn other "Wrong project", Dashboards.dashboardViewDeleteH other did "Missing" []] `shouldReturn` ([400, 400, 404, 404] :: [Int])
+    traverse (fmap void . call tr . saveIn testPid) ["  ", T.replicate 101 "x"] `shouldReturn` [Left Dashboards.InvalidViewName, Left Dashboards.InvalidViewName]
+    traverse status [void $ saveIn other "Wrong project", void $ Dashboards.dashboardViewDeleteH other did "Missing" []] `shouldReturn` ([404, 404] :: [Int])
     assertNonMemberDenied tr other (saveIn other "Denied")
     assertNonMemberDenied tr other (Dashboards.dashboardViewDeleteH other did "Denied" [])
 
@@ -412,9 +418,9 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         tabVars name = map (.key) $ DashboardModel.variablesForTab dash (find ((== name) . (.name)) (fold dash.tabs))
     (tabVars "Overview", tabVars "Errors") `shouldBe` (["service"], ["service", "region"])
     worker <- form "name=US+worker&var-service=worker&var-region=us&var-unknown=ignored&since=24H&activeTabSlug=errors"
-    _ <- testServant tr $ Dashboards.dashboardViewPostH testPid did worker
+    _ <- call tr $ Dashboards.dashboardViewPostH testPid did worker
     views >>= (`shouldBe` [Map.fromList [("service", "worker"), ("region", "us")]]) . \vs -> [v.variables | v <- vs, v.name == "US worker"]
-    overridden <- call tr $ Dashboards.dashboardViewPostH testPid did worker{Dashboards.name = "Europe API"}
+    overridden <- fromRightShow <$> call tr (Dashboards.dashboardViewPostH testPid did worker{Dashboards.name = "Europe API"})
     revealed <- call tr $ Dashboards.dashboardViewDeleteH testPid did "Europe API" worker.params
     reloaded <- partialHtml =<< getTab tr did "overview" tabsContent [("since", Just "24H")]
     let root slug = "/p/" <> testPid.toText <> "/dashboards/" <> did.toText <> "/tab/" <> slug
@@ -438,7 +444,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       (slug, map (.key) $ DashboardModel.variablesForTab ov (find ((== slug) . slugify . (.name)) (fold ov.tabs))) `shouldBe` (slug, keys)
       linkParams ("/p/" <> testPid.toText <> "/dashboards/" <> ovId.toText <> "/tab/" <> slug) (renderT tab) `shouldSatisfy` any (\ps -> lookup "var-service" ps == Just "" && lookup "var-database" ps == Just "")
       pure $ tagsWith ["id=\"dash-vars-toggle\"", "class=\"dash-variable-input"] (renderT tab)
-    ovSaved <- call tr . Dashboards.dashboardViewPostH testPid ovId =<< form "name=API&var-service=api&since=7D&activeTabSlug=logs"
+    ovSaved <- fmap fromRightShow . call tr . Dashboards.dashboardViewPostH testPid ovId =<< form "name=API&var-service=api&since=7D&activeTabSlug=logs"
     goldenParts "dashboard-saved-views" $ map renderT [saved, deleted] <> swapParts overview <> swapParts errorsHtml <> map renderT [overridden, revealed] <> swapParts reloaded <> [renderT ovSaved] <> fold ovBars
 
   it "migrations repair legacy warning thresholds and move RUM segments into saved views" \tr -> do
@@ -1001,7 +1007,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
 
     -- Bulk-adding teams adds exactly the selected ones, plus the implicit @everyone.
     let team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = [], teamMembers = [], discordChannels = [], slackChannels = [], phoneNumbers = [], pagerdutyServices = [], teamId = Nothing}
-    for_ ["hello", "hii", "broo"] \h -> testServant tr $ ManageMembers.manageTeamPostH testPid team{ManageMembers.teamHandle = h} Nothing
+    for_ ["hello", "hii", "broo"] \h -> call tr $ ManageMembers.manageTeamPostH testPid team{ManageMembers.teamHandle = h} Nothing
     teams <-
       call tr (ManageMembers.manageTeamsGetH testPid (Just "")) >>= \case
         ManageMembers.ManageTeamsGet' (_, _, _, _, ts) -> pure ts

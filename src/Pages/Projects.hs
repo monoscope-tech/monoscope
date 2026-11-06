@@ -38,6 +38,24 @@ module Pages.Projects (
   teamGetH,
   ManageTeams (..),
   TBulkActionForm (..),
+  IntegrationsConfig,
+  IntegrationsSaved (..),
+  IntegrationChange (..),
+  ChannelsRejection (..),
+  PagerdutyKeyTooShort (..),
+  SlackNotInstalled (..),
+  MemberRemoved (..),
+  MemberRejection (..),
+  BillingRedirect (..),
+  BillingRejection (..),
+  TeamRejection (..),
+  TeamSaved (..),
+  TeamsDeleted (..),
+  TeamsDeleteRejection (..),
+  ProjectDeleted (..),
+  DemoProjectProtected (..),
+  PricingUpdated (..),
+  SubscriptionLookupFailed (..),
 )
 where
 
@@ -81,7 +99,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), OnboardingStep (Integration, Pricing), PageCtx (..), bodyWrapper, mkPageCtx, settingsContentTarget, stepUrl)
+import Pages.BodyWrapper (BWConfig (..), OnboardingStep (Integration, Pricing), PageCtx (..), mkPageCtx, settingsContentTarget, stepUrl)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
@@ -99,7 +117,7 @@ import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, err500, err503, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
+import System.Types (ATAuthCtx, ActionResult, Done, Outcome (..), Refusal (..), RespHeaders, Says (..), act, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, done, redirectCS)
 import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
@@ -235,8 +253,12 @@ data CreateProjectForm = CreateProjectForm
   deriving anyclass (Default, FromForm)
 
 
-integrationsSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-integrationsSettingsGetH pid = do
+integrationsSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx IntegrationsConfig))
+integrationsSettingsGetH = addRespHeaders <=< integrationsPage
+
+
+integrationsPage :: Projects.ProjectId -> ATAuthCtx (PageCtx IntegrationsConfig)
+integrationsPage pid = do
   (_, _, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   slackInfo <- getProjectSlackData pid
@@ -257,10 +279,9 @@ integrationsSettingsGetH pid = do
   projectM <- Projects.projectById pid
   includeUserIdentityInAlerts <- Projects.includeAlertUserIdentity pid
   let extraSlackChannels = seededExtras <> fetchedExtras
-      bwconf = bw{pageTitle = "Integrations", isSettingsPage = True}
-  addRespHeaders
-    $ bodyWrapper bwconf
-    $ integrationsBody
+  pure
+    $ PageCtx
+      bw{pageTitle = "Integrations", isSettingsPage = True}
       IntegrationsConfig
         { projectId = pid
         , envConfig = appCtx.env
@@ -305,71 +326,120 @@ allChannels :: [Text]
 allChannels = map display [minBound .. maxBound :: ProjectMembers.NotificationChannel]
 
 
-updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
-updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = do
+-- | The integrations panel after a change, and which change it was.
+data IntegrationsSaved = IntegrationsSaved IntegrationChange IntegrationsConfig
+
+
+data IntegrationChange = ChannelsUpdated | PagerdutyConnected | PagerdutyDisconnected | SlackDisconnected
+  deriving stock (Eq, Show)
+
+
+instance ToHtml IntegrationsConfig where
+  toHtml = toHtml . integrationsBody
+  toHtmlRaw = toHtml
+
+
+instance ToHtml IntegrationsSaved where
+  toHtml (IntegrationsSaved _ cfg) = toHtml cfg
+  toHtmlRaw = toHtml
+
+
+instance Outcome IntegrationsSaved where
+  outcomeBody = toHtml
+  outcomeToast (IntegrationsSaved change _) = Just case change of
+    ChannelsUpdated -> "Updated Notification Channels successfully"
+    PagerdutyConnected -> "PagerDuty connected"
+    PagerdutyDisconnected -> "PagerDuty disconnected"
+    SlackDisconnected -> "Slack disconnected"
+
+
+integrationsSaved :: Projects.ProjectId -> IntegrationChange -> ATAuthCtx IntegrationsSaved
+integrationsSaved pid change = IntegrationsSaved change . (.content) <$> integrationsPage pid
+
+
+data ChannelsRejection = UnknownChannel | DiscordNotConnected | SlackNotConnected | PhoneNumberRequired
+  deriving stock (Eq, Show)
+
+
+instance Refusal ChannelsRejection where
+  refusalMessage = \case
+    UnknownChannel -> "Invalid notification channels. Reload this page and try again."
+    DiscordNotConnected -> "You need to connect Discord to this project first."
+    SlackNotConnected -> "You need to connect Slack to this project first."
+    PhoneNumberRequired -> "Provide at least one whatsapp number"
+
+
+data PagerdutyKeyTooShort = PagerdutyKeyTooShort
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "PagerDuty integration key is too short" PagerdutyKeyTooShort
+
+
+data SlackNotInstalled = SlackNotInstalled
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Failed to disconnect Slack" SlackNotInstalled
+
+
+updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (ActionResult ChannelsRejection IntegrationsSaved)
+updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = act do
   void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
-  validateNotificationChannels pid enabledChannels phones >>= \case
-    Left errorMessage -> addErrorToast errorMessage Nothing
-    Right () -> do
-      projectM <- Projects.projectById pid
-      slackInfoM <- getProjectSlackData pid
-      everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
-      whenJust everyoneTeamM \team -> do
-        -- The submitted list is authoritative: the tagify input is seeded with every
-        -- stored channel (resolved or not), so anything absent from it was deliberately
-        -- removed — including the OAuth-time default, which projects do swap away from.
-        let oldChannels = S.fromList $ V.toList team.slack_channels
-            requested = ordNub slackChannels
-            addedChannels = filter (`S.notMember` oldChannels) requested
+  validateNotificationChannels pid enabledChannels phones >>= traverse \() -> do
+    projectM <- Projects.projectById pid
+    slackInfoM <- getProjectSlackData pid
+    everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
+    whenJust everyoneTeamM \team -> do
+      -- The submitted list is authoritative: the tagify input is seeded with every
+      -- stored channel (resolved or not), so anything absent from it was deliberately
+      -- removed — including the OAuth-time default, which projects do swap away from.
+      let oldChannels = S.fromList $ V.toList team.slack_channels
+          requested = ordNub slackChannels
+          addedChannels = filter (`S.notMember` oldChannels) requested
 
-        -- Gate-on-reachability: try the welcome message for each newly-added
-        -- channel; drop any where Slack says not_in_channel / channel_not_found
-        -- / etc. so we don't persist unreachable routes that fail every alert.
-        unreachable <- case (,) <$> projectM <*> slackInfoM of
-          Just (project, slackInfo) ->
-            lefts <$> forM addedChannels \cid -> do
-              -- OAuth-default channel: probe via the channel-bound webhook URL
-              -- (works for private channels; no bot membership needed).
-              -- Other channels: probe via chat.postMessage (needs bot membership).
-              -- A dead OAuth webhook (uninstalled app, revoked token) shouldn't
-              -- persist as a routing target any more than an un-invited channel.
-              r <- trySync $ case (cid == slackInfo.channelId, slackInfo.webhookUrl) of
-                (True, Just url) -> SlackP.sendSlackWelcomeViaWebhook url project.title
-                _ -> SlackP.sendSlackWelcomeMessage slackInfo.botToken cid project.title
-              case r of
-                Right () -> pure (Right cid)
-                Left err -> do
-                  SlackP.logWelcomeMessageFailure cid err
-                  pure (Left cid)
-          Nothing -> do
-            unless (null addedChannels)
-              $ addErrorToast "Slack workspace is not linked to this project; new channels were not saved." Nothing
-            pure addedChannels
+      -- Gate-on-reachability: try the welcome message for each newly-added
+      -- channel; drop any where Slack says not_in_channel / channel_not_found
+      -- / etc. so we don't persist unreachable routes that fail every alert.
+      unreachable <- case (,) <$> projectM <*> slackInfoM of
+        Just (project, slackInfo) ->
+          lefts <$> forM addedChannels \cid -> do
+            -- OAuth-default channel: probe via the channel-bound webhook URL
+            -- (works for private channels; no bot membership needed).
+            -- Other channels: probe via chat.postMessage (needs bot membership).
+            -- A dead OAuth webhook (uninstalled app, revoked token) shouldn't
+            -- persist as a routing target any more than an un-invited channel.
+            r <- trySync $ case (cid == slackInfo.channelId, slackInfo.webhookUrl) of
+              (True, Just url) -> SlackP.sendSlackWelcomeViaWebhook url project.title
+              _ -> SlackP.sendSlackWelcomeMessage slackInfo.botToken cid project.title
+            case r of
+              Right () -> pure (Right cid)
+              Left err -> do
+                SlackP.logWelcomeMessageFailure cid err
+                pure (Left cid)
+        Nothing -> do
+          unless (null addedChannels)
+            $ addErrorToast "Slack workspace is not linked to this project; new channels were not saved." Nothing
+          pure addedChannels
 
-        void
-          $ ProjectMembers.updateTeam pid team.id
-          $ (ProjectMembers.teamToDetails team)
-            { ProjectMembers.slackChannels = V.fromList $ filter (`notElem` unreachable) requested
-            , ProjectMembers.notifyEmails = V.fromList emails
-            , ProjectMembers.phoneNumbers = V.fromList phones
-            , ProjectMembers.disabledChannels = V.fromList $ filter (`notElem` enabledChannels) allChannels
-            }
+      void
+        $ ProjectMembers.updateTeam pid team.id
+        $ (ProjectMembers.teamToDetails team)
+          { ProjectMembers.slackChannels = V.fromList $ filter (`notElem` unreachable) requested
+          , ProjectMembers.notifyEmails = V.fromList emails
+          , ProjectMembers.phoneNumbers = V.fromList phones
+          , ProjectMembers.disabledChannels = V.fromList $ filter (`notElem` enabledChannels) allChannels
+          }
 
-        unless (null unreachable)
-          $ addErrorToast ("Could not reach Slack channel(s): " <> T.intercalate ", " unreachable <> ". Invite Monoscope to each channel and try again.") Nothing
-      whenJust includeUserIdentityInAlerts $ Projects.setIncludeAlertUserIdentity pid
-      addSuccessToast "Updated Notification Channels successfully" Nothing
-  integrationsSettingsGetH pid
+      unless (null unreachable)
+        $ addErrorToast ("Could not reach Slack channel(s): " <> T.intercalate ", " unreachable <> ". Invite Monoscope to each channel and try again.") Nothing
+    whenJust includeUserIdentityInAlerts $ Projects.setIncludeAlertUserIdentity pid
+    integrationsSaved pid ChannelsUpdated
 
 
-validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either Text ())
+validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either ChannelsRejection ())
 validateNotificationChannels _ enabledChannels _
-  | any (`notElem` allChannels) enabledChannels =
-      pure $ Left "Invalid notification channels. Reload this page and try again."
+  | any (`notElem` allChannels) enabledChannels = pure $ Left UnknownChannel
 validateNotificationChannels pid enabledChannels phones = do
-  discord <- requireIntegration "discord" "You need to connect Discord to this project first." enabledChannels (getDiscordDataByProjectId pid)
-  slack <- requireIntegration "slack" "You need to connect Slack to this project first." enabledChannels (getProjectSlackData pid)
-  pure $ discord *> slack *> when ("phone" `elem` enabledChannels && null phones) (Left "Provide at least one whatsapp number")
+  discord <- requireIntegration "discord" DiscordNotConnected enabledChannels (getDiscordDataByProjectId pid)
+  slack <- requireIntegration "slack" SlackNotConnected enabledChannels (getProjectSlackData pid)
+  pure $ discord *> slack *> when ("phone" `elem` enabledChannels && null phones) (Left PhoneNumberRequired)
 
 
 -- | Resolve the live Slack channel list for an (already-fetched) SlackData.
@@ -401,9 +471,9 @@ teamPageData pid = do
 
 
 -- | When @channel@ is toggled on, the corresponding integration row must exist.
-requireIntegration :: Text -> Text -> [Text] -> ATAuthCtx (Maybe a) -> ATAuthCtx (Either Text ())
-requireIntegration channel errMsg enabled fetch
-  | channel `elem` enabled = maybeToRight errMsg . void <$> fetch
+requireIntegration :: Text -> ChannelsRejection -> [Text] -> ATAuthCtx (Maybe a) -> ATAuthCtx (Either ChannelsRejection ())
+requireIntegration channel err enabled fetch
+  | channel `elem` enabled = maybeToRight err . void <$> fetch
   | otherwise = pure (Right ())
 
 
@@ -419,36 +489,36 @@ logIntegrationAudit pid event name = do
   Projects.logAuditS pid event sess $ Just $ AE.object ["integration" AE..= name]
 
 
-pagerdutyConnectH :: Projects.ProjectId -> PagerdutyConnectForm -> ATAuthCtx (RespHeaders (Html ()))
-pagerdutyConnectH pid form = do
+pagerdutyConnectH :: Projects.ProjectId -> PagerdutyConnectForm -> ATAuthCtx (ActionResult PagerdutyKeyTooShort IntegrationsSaved)
+pagerdutyConnectH pid form = act do
+  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   let key = T.strip form.integrationKey
   if T.length key < 20
-    then addErrorToast "PagerDuty integration key is too short" Nothing
+    then pure $ Left PagerdutyKeyTooShort
     else do
       void $ ProjectMembers.addPagerdutyServiceToEveryoneTeam pid key
       logIntegrationAudit pid Projects.AEIntegrationConnected "pagerduty"
-      addSuccessToast "PagerDuty connected" Nothing
-  integrationsSettingsGetH pid
+      Right <$> integrationsSaved pid PagerdutyConnected
 
 
-pagerdutyDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+pagerdutyDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Done IntegrationsSaved))
 pagerdutyDisconnectH pid = do
+  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   ProjectMembers.removePagerdutyServicesFromEveryoneTeam pid
   logIntegrationAudit pid Projects.AEIntegrationDisconnected "pagerduty"
-  addSuccessToast "PagerDuty disconnected" Nothing
-  integrationsSettingsGetH pid
+  done =<< integrationsSaved pid PagerdutyDisconnected
 
 
-slackDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-slackDisconnectH pid = do
+slackDisconnectH :: Projects.ProjectId -> ATAuthCtx (ActionResult SlackNotInstalled IntegrationsSaved)
+slackDisconnectH pid = act do
+  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   deleted <- Integrations.deleteSlackData pid
   if deleted > 0
     then do
       void $ ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
       logIntegrationAudit pid Projects.AEIntegrationDisconnected "slack"
-      addSuccessToast "Slack disconnected" Nothing
-    else addErrorToast "Failed to disconnect Slack" Nothing
-  integrationsSettingsGetH pid
+      Right <$> integrationsSaved pid SlackDisconnected
+    else pure $ Left SlackNotInstalled
 
 
 data IntegrationsConfig = IntegrationsConfig
@@ -751,53 +821,92 @@ data TeamForm = TeamForm
   deriving anyclass (AE.FromJSON, FromForm)
 
 
-validateTeamDetails :: Text -> Text -> V.Vector Text -> Either Text ()
+data TeamRejection
+  = NonMemberInTeam
+  | DuplicateHandle
+  | TeamNameRequired
+  | TeamNameTooShort
+  | TeamNameTooLong
+  | TeamNameInvalidChars
+  | HandleRequired
+  | HandleTooShort
+  | HandleTooLong
+  | HandleInvalidChars
+  | HandleNotLowercaseStart
+  | InvalidTeamEmail Text
+  deriving stock (Eq, Show)
+
+
+instance Refusal TeamRejection where
+  refusalMessage = \case
+    NonMemberInTeam -> "Some team members are not project members"
+    DuplicateHandle -> "Team handle already exists for this project."
+    TeamNameRequired -> "Team name is required"
+    TeamNameTooShort -> "Team name must be at least 3 characters"
+    TeamNameTooLong -> "Team name must be less than 100 characters"
+    TeamNameInvalidChars -> "Invalid characters in team name"
+    HandleRequired -> "Handle is required"
+    HandleTooShort -> "Handle must be at least 3 characters"
+    HandleTooLong -> "Handle must be less than 50 characters"
+    HandleInvalidChars -> "Handle must be lowercase, no spaces, and hyphens only"
+    HandleNotLowercaseStart -> "Handle must start with a lowercase letter"
+    InvalidTeamEmail email -> "Invalid email format: " <> email
+
+
+-- | The page a team save lands on: the team itself when edited from its own view.
+data TeamSaved = TeamCreated Projects.ProjectId | TeamUpdated Projects.ProjectId (Maybe Text)
+  deriving stock (Eq, Show)
+
+
+instance Outcome TeamSaved where
+  outcomeRedirect =
+    Just . \case
+      TeamCreated pid -> "/p/" <> pid.toText <> "/manage_teams"
+      TeamUpdated pid handleM -> "/p/" <> pid.toText <> "/manage_teams" <> foldMap ("/" <>) handleM
+  outcomeToast =
+    Just . \case
+      TeamCreated _ -> "Team saved successfully"
+      TeamUpdated _ _ -> "Team updated successfully"
+
+
+validateTeamDetails :: Text -> Text -> V.Vector Text -> Either TeamRejection ()
 validateTeamDetails name handle notifEmails = validateName name >> validateHandle handle >> forM_ notifEmails validateEmail
   where
     validateName n
-      | T.null (T.strip n) = Left "Team name is required"
-      | T.length (T.strip n) < 3 = Left "Team name must be at least 3 characters"
-      | T.length n > 100 = Left "Team name must be less than 100 characters"
-      | not $ T.all (\c -> isAlphaNum c || c `T.elem` " -_") n = Left "Invalid characters in team name"
+      | T.null (T.strip n) = Left TeamNameRequired
+      | T.length (T.strip n) < 3 = Left TeamNameTooShort
+      | T.length n > 100 = Left TeamNameTooLong
+      | not $ T.all (\c -> isAlphaNum c || c `T.elem` " -_") n = Left TeamNameInvalidChars
       | otherwise = pass
     validateHandle h
-      | T.null h = Left "Handle is required"
-      | T.length h < 3 = Left "Handle must be at least 3 characters"
-      | T.length h > 50 = Left "Handle must be less than 50 characters"
-      | not $ T.all (\c -> isLower c || isDigit c || c == '-') h = Left "Handle must be lowercase, no spaces, and hyphens only"
-      | not $ any (isLower . fst) (T.uncons h) = Left "Handle must start with a lowercase letter"
+      | T.null h = Left HandleRequired
+      | T.length h < 3 = Left HandleTooShort
+      | T.length h > 50 = Left HandleTooLong
+      | not $ T.all (\c -> isLower c || isDigit c || c == '-') h = Left HandleInvalidChars
+      | not $ any (isLower . fst) (T.uncons h) = Left HandleNotLowercaseStart
       | otherwise = pass
     validateEmail email = case T.splitOn "@" email of
       [localPart, domain] | not (T.null localPart) && not (T.null domain) && T.elem '.' domain -> pass
-      _ -> Left $ "Invalid email format: " <> email
+      _ -> Left $ InvalidTeamEmail email
 
 
-manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
-manageTeamPostH pid form tmView = do
-  (sess, _) <- Projects.sessionAndProject pid
-  let currUserId = sess.persistentSession.userId
-  userPermission <- ProjectMembers.getUserPermission pid currUserId
+manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (ActionResult TeamRejection TeamSaved)
+manageTeamPostH pid form tmView = act do
+  (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   let validMemberIds = V.map (.userId) projMembers
-      invalidMembers = V.filter (`V.notElem` validMemberIds) form.teamMembers
       teamDetails = ProjectMembers.TeamDetails form.teamName form.teamDescription form.teamHandle form.teamMembers form.notifEmails form.slackChannels form.discordChannels form.phoneNumbers form.pagerdutyServices V.empty
-      validationErr msg = toastError msg (ManageTeamsPostError msg)
-      success msg path = do
-        addSuccessToast msg Nothing
-        addTriggerEvent "closeModal" ""
-        redirectCS $ "/p/" <> pid.toText <> path
-        addRespHeaders $ ManageTeamsPostError ""
-  case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails form.teamName form.teamHandle form.notifEmails, form.teamId) of
-    (False, _, _, _) -> validationErr "Only admins can create or update teams"
-    (_, False, _, _) -> validationErr "Some team members are not project members"
-    (_, _, Left e, _) -> addReswap "" >> validationErr e
-    (_, _, _, Just tid) -> do
+      saved outcome = Right outcome <$ addTriggerEvent "closeModal" ""
+  case (V.all (`V.elem` validMemberIds) form.teamMembers, validateTeamDetails form.teamName form.teamHandle form.notifEmails, form.teamId) of
+    (False, _, _) -> pure $ Left NonMemberInTeam
+    (_, Left e, _) -> pure $ Left e
+    (_, _, Just tid) -> do
       _ <- ProjectMembers.updateTeam pid tid teamDetails
-      success "Team updated successfully" $ maybe "/manage_teams" (const $ "/team/" <> form.teamHandle) tmView
-    (_, _, _, Nothing) ->
-      ProjectMembers.createTeam pid (Just currUserId) teamDetails >>= \case
-        Just _ -> success "Team saved successfully" "/manage_teams"
-        Nothing -> validationErr "Team handle already exists for this project."
+      saved $ TeamUpdated pid (form.teamHandle <$ tmView)
+    (_, _, Nothing) ->
+      ProjectMembers.createTeam pid (Just sess.persistentSession.userId) teamDetails >>= \case
+        Just _ -> saved $ TeamCreated pid
+        Nothing -> pure $ Left DuplicateHandle
 
 
 newtype TBulkActionForm = TBulkActionForm
@@ -807,27 +916,40 @@ newtype TBulkActionForm = TBulkActionForm
   deriving anyclass (FromForm)
 
 
-manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
-manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = do
+-- | Outside the team list view, the browser goes back to it.
+data TeamsDeleted = TeamsDeleted Projects.ProjectId (Maybe Text)
+  deriving stock (Eq, Show)
+
+
+instance Outcome TeamsDeleted where
+  outcomeRedirect (TeamsDeleted pid listViewM) = ("/p/" <> pid.toText <> "/manage_teams") <$ guard (isNothing listViewM)
+
+
+data TeamsDeleteRejection = TeamsNotOwned | UnknownTeamAction
+  deriving stock (Eq, Show)
+
+
+instance Refusal TeamsDeleteRejection where
+  refusalMessage = \case
+    TeamsNotOwned -> "You may only delete teams you own"
+    UnknownTeamAction -> "Invalid action"
+
+
+manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (ActionResult TeamsDeleteRejection TeamsDeleted)
+manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = act do
   (sess, _) <- Projects.sessionAndProject pid
   case action of
     "delete" -> do
       teamVm <- ProjectMembers.getTeamsById pid $ V.fromList $ coerce itemId
       if all (\team -> Just sess.user.id == team.created_by) teamVm
-        then do
-          _ <- ProjectMembers.deleteTeams pid $ V.fromList $ coerce itemId
-          when (isNothing listViewM)
-            $ redirectCS ("/p/" <> pid.toText <> "/manage_teams")
-          addRespHeaders ManageTeamsDelete
-        else toastError "You may only delete teams you own" (ManageTeamsPostError "You may only delete teams you own")
-    _ -> toastError "Invalid action" (ManageTeamsPostError "Invalid action")
+        then Right (TeamsDeleted pid listViewM) <$ ProjectMembers.deleteTeams pid (V.fromList $ coerce itemId)
+        else pure $ Left TeamsNotOwned
+    _ -> pure $ Left UnknownTeamAction
 
 
 data ManageTeams
   = ManageTeamsGet (PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], V.Vector ProjectMembers.TeamVM))
   | ManageTeamsGet' (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel], V.Vector ProjectMembers.TeamVM)
-  | ManageTeamsPostError Text
-  | ManageTeamsDelete
   | ManageTeamGet (PageCtx (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel]))
   | ManageTeamGet' (Projects.ProjectId, ProjectMembers.TeamVM, V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel])
   | ManageTeamGetError (PageCtx (Projects.ProjectId, Text))
@@ -836,8 +958,6 @@ data ManageTeams
 instance ToHtml ManageTeams where
   toHtml (ManageTeamsGet (PageCtx bwconf (pid, members, slackChannels, discordChannels, teams))) = toHtml $ PageCtx bwconf $ manageTeamsPage pid members slackChannels discordChannels teams
   toHtml (ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams)) = toHtml $ manageTeamsPage pid members slackChannels discordChannels teams
-  toHtml (ManageTeamsPostError _) = span_ [] ""
-  toHtml ManageTeamsDelete = toHtml ""
   toHtml (ManageTeamGet (PageCtx bwconf (pid, team, members, slackChannels, discordChannels))) = toHtml $ PageCtx bwconf $ teamPage pid team members slackChannels discordChannels
   toHtml (ManageTeamGet' (pid, team, members, slackChannels, discordChannels)) = toHtml $ teamPage pid team members slackChannels discordChannels
   toHtml (ManageTeamGetError (PageCtx bwconf (pid, message))) = toHtml $ PageCtx bwconf $ teamPageNF pid message
@@ -1115,28 +1235,59 @@ memberRowWithStatus pid canManage idx prM = do
       when (canManage && not isOwner) $ button_ [class_ "btn btn-sm btn-ghost text-iconNeutral hover:text-iconError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
-deleteMemberH :: Projects.ProjectId -> ProjectMembers.ProjectMemberId -> ATAuthCtx (RespHeaders (Html ()))
-deleteMemberH pid memberId = do
+-- | The member's row is swapped for this empty body.
+data MemberRemoved = MemberRemoved
+  deriving stock (Eq, Generic, Show)
+  deriving (Outcome) via Says "Member removed" MemberRemoved
+
+
+data MemberRejection = MemberNotFound | CannotRemoveSelf
+  deriving stock (Eq, Show)
+
+
+instance Refusal MemberRejection where
+  refusalMessage = \case
+    MemberNotFound -> "Member not found"
+    CannotRemoveSelf -> "You cannot remove yourself"
+
+
+deleteMemberH :: Projects.ProjectId -> ProjectMembers.ProjectMemberId -> ATAuthCtx (ActionResult MemberRejection MemberRemoved)
+deleteMemberH pid memberId = act do
   (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
   case find (\m -> m.id == memberId) projMembers of
-    Nothing -> toastError "Member not found" mempty
-    Just member | member.userId == currUserId -> toastError "You cannot remove yourself" mempty
+    Nothing -> pure $ Left MemberNotFound
+    Just member | member.userId == currUserId -> pure $ Left CannotRemoveSelf
     Just member -> do
       _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
       Projects.logAuditS pid Projects.AEMemberRemoved sess $ Just $ AE.object ["removed_email" AE..= CI.original member.email]
-      addSuccessToast "Member removed" Nothing
-      addRespHeaders mempty
+      pure $ Right MemberRemoved
 
 
--- | Client-side redirect to @url@, or surface @msg@ as an error toast when absent.
-redirectOrToast :: Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-redirectOrToast msg = maybe (toastError msg mempty) \url -> redirectCS url >> addRespHeaders mempty
+-- | A billing provider page (portal or checkout) the browser is sent to.
+newtype BillingRedirect = BillingRedirect Text
+  deriving stock (Eq, Show)
 
 
-manageSubGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-manageSubGetH pid = do
+instance Outcome BillingRedirect where outcomeRedirect (BillingRedirect url) = Just url
+
+
+data BillingRejection = PortalSessionFailed | CustomerIdMissing | SubscriptionIdMissing | NoActiveSubscription | CheckoutSessionFailed
+  deriving stock (Eq, Show)
+
+
+instance Refusal BillingRejection where
+  refusalMessage = \case
+    PortalSessionFailed -> "Failed to create billing portal"
+    CustomerIdMissing -> "Customer ID not found"
+    SubscriptionIdMissing -> "Subscription ID not found"
+    NoActiveSubscription -> "No active subscription"
+    CheckoutSessionFailed -> "Failed to create checkout session"
+
+
+manageSubGetH :: Projects.ProjectId -> ATAuthCtx (ActionResult BillingRejection BillingRedirect)
+manageSubGetH pid = act do
   (_, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -1144,13 +1295,12 @@ manageSubGetH pid = do
     Projects.StripeProvider ->
       case project.customerId <|> project.orderId of
         Just customerId | not (T.null customerId) -> do
-          Settings.createStripePortalSession envCfg.stripeSecretKey customerId (Settings.billingUrl envCfg pid)
-            >>= redirectOrToast "Failed to create billing portal"
-        _ -> toastError "Customer ID not found" mempty
+          maybeToRight PortalSessionFailed . fmap BillingRedirect <$> Settings.createStripePortalSession envCfg.stripeSecretKey customerId (Settings.billingUrl envCfg pid)
+        _ -> pure $ Left CustomerIdMissing
     Projects.LemonSqueezyProvider -> do
       sub <- maybe (pure Nothing) (lsGet @SubPortalDataVals envCfg.lemonSqueezyApiKey . ("https://api.lemonsqueezy.com/v1/subscriptions/" <>)) project.subId
-      redirectOrToast "Subscription ID not found" $ (.dataVal.attributes.urls.customerPortal) <$> sub
-    Projects.NoBillingProvider -> toastError "No active subscription" mempty
+      pure $ maybeToRight SubscriptionIdMissing $ BillingRedirect . (.dataVal.attributes.urls.customerPortal) <$> sub
+    Projects.NoBillingProvider -> pure $ Left NoActiveSubscription
 
 
 newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
@@ -1158,8 +1308,8 @@ newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
   deriving anyclass (FromForm)
 
 
-stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (RespHeaders (Html ()))
-stripeCheckoutInitH pid form = do
+stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (ActionResult BillingRejection BillingRedirect)
+stripeCheckoutInitH pid form = act do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -1176,8 +1326,9 @@ stripeCheckoutInitH pid form = do
   -- Keyed to the buyer, not the project: people run several projects, and each one
   -- used to mint its own Stripe customer and hand out its own 30-day trial.
   billing <- Projects.userBilling sess.user.id
-  redirectOrToast "Failed to create checkout session"
-    =<< Settings.createStripeCheckoutSession
+  maybeToRight CheckoutSessionFailed
+    . fmap BillingRedirect
+    <$> Settings.createStripeCheckoutSession
       (not billing.hasSubscribedBefore)
       billing.stripeCustomerId
       debts
@@ -1287,20 +1438,17 @@ data CreateProjectResp = CreateProjectResp
 
 data CreateProject
   = CreateProject (PageCtx (Projects.PersistentSession, Projects.ProjectId, EnvConfig, Text, Bool, CreateProjectForm, CreateProjectFormError, Projects.Project))
-  | PostNoContent Text
   | ProjectPost CreateProjectResp
   deriving stock (Generic, Show)
 
 
 instance HasField "unwrapCreateProjectResp" CreateProject (Maybe CreateProjectResp) where
   getField (CreateProject _) = Nothing
-  getField (PostNoContent _) = Nothing
   getField (ProjectPost cpr) = Just cpr
 
 
 instance ToHtml CreateProject where
   toHtml (CreateProject (PageCtx bwconf (_, pid, _, _, _, prf, _, _))) = toHtml $ PageCtx bwconf $ createProjectBody pid prf
-  toHtml (PostNoContent message) = span_ [] $ toHtml message
   toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.pid cpr.form
   toHtmlRaw = toHtml
 
@@ -1327,12 +1475,26 @@ projectSettingsGetH pid = do
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, project.paymentPlan, True, createProj, def @CreateProjectFormError, project)
 
 
-deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
-deleteProjectGetH pid = do
+data ProjectDeleted = ProjectDeleted
+  deriving stock (Eq, Show)
+
+
+instance Outcome ProjectDeleted where
+  outcomeRedirect ProjectDeleted = Just "/"
+  outcomeToast ProjectDeleted = Just "Deleted Project successfully"
+
+
+data DemoProjectProtected = DemoProjectProtected
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Can't perform this action on the demo project" DemoProjectProtected
+
+
+deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (ActionResult DemoProjectProtected ProjectDeleted)
+deleteProjectGetH pid = act do
   (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
   if isDemoAndNotSudo pid sess.user.isSudo
-    then addSuccessToast "Can't perform this action on the demo project" Nothing
+    then pure $ Left DemoProjectProtected
     else do
       -- Before the row goes away: a subscription left running on a deleted project
       -- keeps charging the customer, and their next signup opens a second one.
@@ -1342,10 +1504,7 @@ deleteProjectGetH pid = do
       liftIO $ forM_ apiKeys \key -> Cache.insert appCtx.projectKeyCache key.keyPrefix Nothing
       _ <- liftIO $ withResource appCtx.pool \conn ->
         createJob conn "background_jobs" $ BackgroundJobs.DeletedProject pid
-      Projects.logAuditS pid Projects.AEProjectDeleted sess Nothing
-      addSuccessToast "Deleted Project successfully" Nothing
-      redirectCS "/"
-  addRespHeaders $ PostNoContent ""
+      Right ProjectDeleted <$ Projects.logAuditS pid Projects.AEProjectDeleted sess Nothing
 
 
 createProjectPostH :: Projects.ProjectId -> CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
@@ -1380,8 +1539,27 @@ data PricingUpdateForm = PricingUpdateForm
   deriving anyclass (Default, FromForm)
 
 
-pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
-pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
+-- | Onboarding continues into the project; elsewhere the pricing modal closes.
+data PricingUpdated = PricingOnboarded Projects.ProjectId | PricingSaved
+  deriving stock (Eq, Show)
+
+
+instance Outcome PricingUpdated where
+  outcomeRedirect = \case
+    PricingOnboarded pid -> Just $ "/p/" <> pid.toText <> "/"
+    PricingSaved -> Nothing
+  outcomeToast = \case
+    PricingOnboarded _ -> Nothing
+    PricingSaved -> Just "Pricing updated successfully"
+
+
+data SubscriptionLookupFailed = SubscriptionLookupFailed
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "Something went wrong while fetching subscription id" SubscriptionLookupFailed
+
+
+pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (ActionResult SubscriptionLookupFailed PricingUpdated)
+pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = act do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -1399,12 +1577,12 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
         Projects.logAuditS pid Projects.AEPlanChanged sess
           $ Just
           $ AE.object ["plan" AE..= name]
-  case plan of
+  written <- case plan of
     Just "Open Source" | envCfg.basicAuthEnabled -> do
       _ <- updatePricing "Open Source" "" "" ""
       auditPlan ("Open Source" :: Text)
       handleOnboarding
-      void $ ProjectMembers.activateAllMembers pid
+      Right () <$ ProjectMembers.activateAllMembers pid
     _ -> case orderIdM of
       Just orderId ->
         lsGet @[SubDataVals] apiKey ("https://api.lemonsqueezy.com/v1/orders/" <> orderId <> "/subscriptions") >>= \case
@@ -1416,8 +1594,8 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
             auditPlan productName
             handleOnboarding
             void $ ProjectMembers.activateAllMembers pid
-            Settings.notifyPlanChange envCfg project (ET.planUpgradedEmail productName)
-          _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
+            Right () <$ Settings.notifyPlanChange envCfg project (ET.planUpgradedEmail productName)
+          _ -> pure $ Left SubscriptionLookupFailed
       Nothing -> do
         -- Free clears sub_id below; cancel first, or the provider keeps billing a sub nothing points at.
         whenJustM (Projects.projectById pid) (Settings.cancelProjectSubscription envCfg)
@@ -1425,13 +1603,11 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
         auditPlan ("Free" :: Text)
         handleOnboarding
         void $ ProjectMembers.deactivateNonOwnerMembers pid
-        Settings.notifyPlanChange envCfg project (ET.planDowngradedEmail "was cancelled")
-  if Projects.isOnboarding project.paymentPlan || isOnboarding == Just True
-    then redirectCS $ "/p/" <> pid.toText <> "/"
-    else do
-      addTriggerEvent "closeModal" ""
-      addSuccessToast "Pricing updated successfully" Nothing
-  addRespHeaders mempty
+        Right () <$ Settings.notifyPlanChange envCfg project (ET.planDowngradedEmail "was cancelled")
+  forM written \() ->
+    if Projects.isOnboarding project.paymentPlan || isOnboarding == Just True
+      then pure $ PricingOnboarded pid
+      else PricingSaved <$ addTriggerEvent "closeModal" ""
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)

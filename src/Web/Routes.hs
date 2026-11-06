@@ -104,7 +104,7 @@ import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, HXReswap (..), ProjectToolCtx, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, atAuthToBase)
+import System.Types (ATAuthCtx, ATBaseCtx, Action, ApiPrincipal (..), HXRedirectDest, HXReswap (..), Mime, ProjectToolCtx, RespHeaders, TriggerEvents, Unrefusable, XWidgetJSON, addRespHeaders, atAuthToBase)
 import UnliftIO (withRunInIO)
 import UnliftIO.Exception (handle)
 import Utils qualified
@@ -154,10 +154,7 @@ type instance Eval (LogDataFieldExp sym) = LogDataField sym
 
 
 data RawJSON
-
-
-instance Accept RawJSON where
-  contentType _ = "application/json"
+  deriving (Accept) via Mime "application/json"
 
 
 instance MimeUnrender RawJSON BS.ByteString where
@@ -175,10 +172,7 @@ instance MimeUnrender RawForm BS.ByteString where
 
 -- | OTLP/HTTP wire format (raw protobuf bytes; decoding happens in the handler).
 data OTLPProto
-
-
-instance Accept OTLPProto where
-  contentType _ = "application/x-protobuf"
+  deriving (Accept) via Mime "application/x-protobuf"
 
 
 instance MimeUnrender OTLPProto BS.ByteString where
@@ -195,10 +189,7 @@ instance MimeRender OTLPProto BS.ByteString where
 -- chart Slack refuses to download — which rejects the whole alert message
 -- (invalid_attachments), not just the image.
 data PNG
-
-
-instance Accept PNG where
-  contentType _ = "image/png"
+  deriving (Accept) via Mime "image/png"
 
 
 instance MimeRender PNG LBS.ByteString where
@@ -208,10 +199,7 @@ instance MimeRender PNG LBS.ByteString where
 -- | The learned OpenAPI spec, served as YAML. Response-only, so no
 -- 'MimeUnrender'.
 data YAML
-
-
-instance Accept YAML where
-  contentType _ = "application/yaml"
+  deriving (Accept) via Mime "application/yaml"
 
 
 instance MimeRender YAML Text where
@@ -283,7 +271,7 @@ data Routes mode = Routes
           :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> RawM
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[PNG] (Headers '[Header "Cache-Control" Text] LBS.ByteString)
-  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[HTML] (RespHeaders Onboarding.ProxiedPage)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
   , emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (Html ())
@@ -305,9 +293,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , slackIdentityPost :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> ReqBody '[FormUrlEncoded] Slack.SlackLinkForm :> Post '[HTML] (RespHeaders (Html ()))
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
-  , dashboardViewPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardViewForm :> Post '[HTML] (RespHeaders (Html ()))
-  , dashboardViewDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> Capture "name" Text :> AllQueryParams :> Delete '[HTML] (RespHeaders (Html ()))
-  , dashboardViewsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> AllQueryParams :> Get '[HTML] (RespHeaders (Html ()))
+  , dashboardViewPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardViewForm :> Action 'POST Dashboards.InvalidViewName Dashboards.SavedViews
+  , dashboardViewDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> Capture "name" Text :> AllQueryParams :> Delete '[HTML] (RespHeaders Dashboards.SavedViews)
+  , dashboardViewsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "views" :> AllQueryParams :> Get '[HTML] (RespHeaders Dashboards.SavedViews)
   , rumRedirect :: mode :- "p" :> ProjectId :> "rum" :> CaptureAll "view" Text :> AllQueryParams :> LocationRedirect NoContent
   , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders Dashboards.DashboardNew)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
@@ -316,19 +304,19 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardSettledPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "settled" :> ReqBody '[JSON] Dashboards.DashboardSettleSample :> Post '[JSON] NoContent
   , dashboardRepositoryGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "repository" :> Get '[HTML] (RespHeaders (PageCtx GitSync.DashboardRepositoryGet))
   , dashboardRepositoryPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "repository" :> ReqBody '[FormUrlEncoded] GitSync.DashboardRepositoryForm :> Post '[HTML] (RespHeaders (PageCtx GitSync.DashboardRepositoryGet))
-  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> QPT "tab" :> QPT "configure_monitor" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders Widget.Widget)
+  , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> QPT "tab" :> QPT "configure_monitor" :> ReqBody '[JSON] Widget.Widget :> Action 'PUT Dashboards.WidgetMonitorRejection Dashboards.WidgetSaved
   , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> QPT "tab" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
   , dashboardDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardRenameForm :> Patch '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
-  , dashboardStarPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[HTML] (RespHeaders (Html ()))
+  , dashboardStarPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Unrefusable 'POST Dashboards.StarButton
   , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> QueryParam "source_dashboard_id" Dashboards.DashboardId :> Post '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "new" :> QPT "tab" :> QPT "range_start" :> QPT "range_end" :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> QPT "editor_tab" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Widget alert routes
-    widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Post '[HTML] (RespHeaders (Html ()))
-  , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders (Html ()))
-  , widgetAlertToggle :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> "toggle_active" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Post '[HTML] (RespHeaders (Html ()))
+    widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Action 'POST Dashboards.WidgetMonitorRejection Dashboards.WidgetMonitorSaved
+  , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Unrefusable 'DELETE Dashboards.WidgetMonitorRemoved
+  , widgetAlertToggle :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> "toggle_active" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Unrefusable 'POST Dashboards.WidgetMonitorStatus
   , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Dashboards.DashboardBulkAction :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
   , -- Dashboard tab routes (htmx lazy loading)
     dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Header "HX-Target" Text :> AllQueryParams :> Get '[HTML] (RespHeaders (NavigationResponse Dashboards.DashboardGet))
@@ -337,9 +325,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardYamlPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> ReqBody '[FormUrlEncoded] Dashboards.YamlForm :> Put '[HTML] (RespHeaders (Html ()))
   , -- API routes
     apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Settings.ApiGet)
-  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Settings.ApiMut)
-  , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Settings.ApiMut)
-  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Settings.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Settings.ApiMut)
+  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Action 'DELETE Settings.ApiKeyNotFound Settings.ApiMut
+  , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Action 'PATCH Settings.ApiKeyNotFound Settings.ApiMut
+  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Settings.GenerateAPIKeyForm :> Unrefusable 'POST Settings.ApiMut
   , -- Charts and widgets
     chartsDataGet :: mode :- "chart_data" :> QueryParam "db_source" Hasql.SqlSource :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QueryParam "db_source" Hasql.SqlSource :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
@@ -350,7 +338,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders (Table.TableResponse ApiCatalog.EnpReqStatsVM))
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPT "period" :> QPI "skip" :> QPT "filter" :> QPT "stats" :> Get '[HTML] (RespHeaders (Table.TableResponse ApiCatalog.HostEventsVM))
-  , apiCatalogBulkAction :: mode :- "p" :> ProjectId :> "api_catalog" :> "bulk_action" :> Capture "action" ApiCatalog.HostBulkAction :> QPT "request_type" :> ReqBody '[FormUrlEncoded] ApiCatalog.HostBulkActionForm :> Post '[HTML] (RespHeaders ApiCatalog.CatalogBulkAction)
+  , apiCatalogBulkAction :: mode :- "p" :> ProjectId :> "api_catalog" :> "bulk_action" :> Capture "action" ApiCatalog.HostBulkAction :> QPT "request_type" :> ReqBody '[FormUrlEncoded] ApiCatalog.HostBulkActionForm :> Action 'POST ApiCatalog.CatalogBulkRejection ApiCatalog.CatalogBulkAction
   , -- The learned OpenAPI document: rendered reference, plus the raw spec in both
     -- serialisations. Static ".json"/".yaml" segments rather than content negotiation,
     -- because these URLs are meant to be pasted into curl, CI, and codegen.
@@ -361,7 +349,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Issues.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Projects.ReportType :> Post '[HTML] (RespHeaders Reports.ReportsPost)
+  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Projects.ReportType :> Unrefusable 'POST Reports.ReportsPost
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QueryParam "event_type" ShareEvents.ShareKind :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , -- Billing
     manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> Get '[HTML] (RespHeaders Settings.BillingGet)
@@ -391,18 +379,18 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , repositoryConflictPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "resources" :> Capture "resource_id" (UUIDId "repository_resource") :> "conflict" :> ReqBody '[FormUrlEncoded] PageCodeContext.ConflictForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
   , repositorySourceEnabledPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> "enabled" :> ReqBody '[FormUrlEncoded] PageCodeContext.SourceContextForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
   , repositorySourceGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
-  , repositorySourcePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Post '[HTML] (RespHeaders (Html ()))
+  , repositorySourcePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Action 'POST PageCodeContext.MappingRejection PageCodeContext.MappingsPanel
   , repositorySourceDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> Capture "mapping_id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
   , repositoryReviewsPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> "reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders (Html ()))
-  , gitSyncRepositoryUpdate :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncRepositoryRetry :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "retry" :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncRepositoryPause :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "pause" :> Post '[HTML] (RespHeaders (Html ()))
-  , gitSyncRepositoryDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> Delete '[HTML] (RespHeaders (Html ()))
+  , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST GitSync.GitSyncRejection GitSync.GitSyncSettings
+  , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Unrefusable 'DELETE GitSync.GitSyncRemoval
+  , gitSyncRepositoryUpdate :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Action 'POST GitSync.GitSyncRejection GitSync.GitSyncSettings
+  , gitSyncRepositoryRetry :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "retry" :> Unrefusable 'POST GitSync.GitSyncSettings
+  , gitSyncRepositoryPause :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "pause" :> Unrefusable 'POST GitSync.GitSyncSettings
+  , gitSyncRepositoryDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> Unrefusable 'DELETE GitSync.GitSyncRemoval
   , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , codeMappingsEditor :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> "editor" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
-  , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Post '[HTML] (RespHeaders (Html ()))
+  , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Action 'POST PageCodeContext.MappingRejection PageCodeContext.MappingsPanel
   , impactReviewSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Post '[HTML] (RespHeaders (Html ()))
   , issueFixGet :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> Get '[HTML] (Headers '[Header "Cache-Control" Text] (Html ()))
   , issueFixPackage :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> "publication.tar" :> RawM
@@ -416,32 +404,32 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , prometheusSettingsToggle :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Patch '[HTML] (RespHeaders Settings.PrometheusMut)
   , prometheusSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Delete '[HTML] (RespHeaders Settings.PrometheusMut)
   , -- GitHub App routes
-    githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> QueryParam "to" Text :> Get '[HTML] (RespHeaders (Html ()))
-  , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> QueryParam "code" Text :> Get '[HTML] (RespHeaders (Html ()))
+    githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> QueryParam "to" Text :> Get '[HTML] (RespHeaders (PageCtx GitSync.GitHubConnect))
+  , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> QueryParam "code" Text :> Get '[HTML] (RespHeaders (PageCtx GitSync.GitHubConnect))
   , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
-  , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Post '[HTML] (RespHeaders (Html ()))
+  , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Action 'POST GitSync.SelectRejection GitSync.SyncPanels
   , -- Command palette
     commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ())) -- dynamic items only
   , commandPaletteRecentPost :: mode :- "p" :> ProjectId :> "command-palette" :> "recents" :> ReqBody '[FormUrlEncoded] CommandPalette.RecentForm :> Post '[HTML] (RespHeaders NoContent)
   , aiRoutinesGet :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiRoutineInstallPost :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> "install" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineTemplateForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiRoutineInstallPost :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> "install" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineTemplateForm :> Action 'POST AIThreads.UnknownTemplate AIThreads.AIPage
   , aiThreadsGet :: mode :- "p" :> ProjectId :> "ai" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , aiOperationGet :: mode :- "p" :> ProjectId :> "ai" :> "operations" :> Capture "operation_id" (UUIDId "agent_operation") :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiOperationReviewPost :: mode :- "p" :> ProjectId :> "ai" :> "operations" :> Capture "operation_id" (UUIDId "agent_operation") :> "review" :> ReqBody '[FormUrlEncoded] AIThreads.OperationReviewForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiOperationReviewPost :: mode :- "p" :> ProjectId :> "ai" :> "operations" :> Capture "operation_id" (UUIDId "agent_operation") :> "review" :> ReqBody '[FormUrlEncoded] AIThreads.OperationReviewForm :> Unrefusable 'POST AIThreads.OperationReviewed
   , aiRoutineRunGet :: mode :- "p" :> ProjectId :> "ai" :> "runs" :> Capture "run_id" (UUIDId "ai_routine_run") :> QueryParam "conversation" (UUIDId "conversation") :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiRoutineInstructionsPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "instructions" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineInstructionsForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiRoutineInstructionsPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "instructions" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineInstructionsForm :> Action 'POST AIThreads.PromptError AIThreads.AIPage
   , aiThreadGet :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> QueryParam "doc" Issues.ArtifactKey :> Header "HX-Target" Text :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , aiThreadsPost :: mode :- "p" :> ProjectId :> "ai" :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiThreadPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiThreadTitlePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "title" :> ReqBody '[FormUrlEncoded] AIThreads.TitleForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiThreadDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> Delete '[HTML] (RespHeaders (Html ()))
-  , aiRoutinePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiRoutinePausePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "pause" :> Post '[HTML] (RespHeaders (Html ()))
-  , aiRoutineCancelPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "cancel" :> Post '[HTML] (RespHeaders (Html ()))
-  , aiRoutineResumePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "resume" :> Post '[HTML] (RespHeaders (Html ()))
-  , aiRoutinePolicyPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "policy" :> ReqBody '[FormUrlEncoded] AIThreads.RoutinePolicyForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineDestinationForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiRoutineDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> Delete '[HTML] (RespHeaders (Html ()))
+  , aiThreadsPost :: mode :- "p" :> ProjectId :> "ai" :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Action 'POST AIThreads.NewThreadError AIThreads.AIPage
+  , aiThreadPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Action 'POST AIThreads.TurnError AIThreads.AIPage
+  , aiThreadTitlePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "title" :> ReqBody '[FormUrlEncoded] AIThreads.TitleForm :> Action 'POST AIThreads.EmptyTitle AIThreads.AIPage
+  , aiThreadDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> Unrefusable 'DELETE AIThreads.AIPage
+  , aiRoutinePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineForm :> Unrefusable 'POST AIThreads.AIPage
+  , aiRoutinePausePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "pause" :> Unrefusable 'POST AIThreads.AIPage
+  , aiRoutineCancelPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "cancel" :> Unrefusable 'POST AIThreads.AIPage
+  , aiRoutineResumePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "resume" :> Unrefusable 'POST AIThreads.AIPage
+  , aiRoutinePolicyPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "policy" :> ReqBody '[FormUrlEncoded] AIThreads.RoutinePolicyForm :> Action 'POST AIThreads.NoReviewClasses AIThreads.PolicySaved
+  , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineDestinationForm :> Unrefusable 'POST AIThreads.AIPage
+  , aiRoutineDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> Unrefusable 'DELETE AIThreads.AIPage
   , -- Device auth
     deviceApprove :: mode :- "device" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ()))
   , deviceApprovePost :: mode :- "device" :> QPT "code" :> Post '[HTML] (RespHeaders (Html ()))
@@ -503,27 +491,27 @@ data IssuesRoutes' mode = IssuesRoutes'
   , unAcknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> QueryParam "window" Issues.ArchiveWindow :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , resolveGet :: mode :- Capture "issueID" Issues.IssueId :> "resolve" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , triagePost :: mode :- Capture "issueID" Issues.IssueId :> "triage" :> ReqBody '[FormUrlEncoded] IssuesPage.TriageForm :> Post '[HTML] (RespHeaders (Html ()))
-  , viewSavePost :: mode :- "views" :> ReqBody '[FormUrlEncoded] IssuesPage.SaveViewForm :> Post '[HTML] (RespHeaders (Html ()))
-  , viewDeletePost :: mode :- "views" :> Capture "viewID" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
-  , viewedPost :: mode :- Capture "issueID" Issues.IssueId :> "viewed" :> Post '[HTML] (RespHeaders (Html ()))
-  , commentPost :: mode :- Capture "issueID" Issues.IssueId :> "comment" :> ReqBody '[FormUrlEncoded] IssuesPage.CommentForm :> Post '[HTML] (RespHeaders (Html ()))
-  , linkPost :: mode :- Capture "issueID" Issues.IssueId :> "link" :> ReqBody '[FormUrlEncoded] IssuesPage.LinkForm :> Post '[HTML] (RespHeaders (Html ()))
+  , triagePost :: mode :- Capture "issueID" Issues.IssueId :> "triage" :> ReqBody '[FormUrlEncoded] IssuesPage.TriageForm :> Action 'POST IssuesPage.TriageRejection IssuesPage.IssueTriage
+  , viewSavePost :: mode :- "views" :> ReqBody '[FormUrlEncoded] IssuesPage.SaveViewForm :> Action 'POST IssuesPage.UnnamedView IssuesPage.ViewChanged
+  , viewDeletePost :: mode :- "views" :> Capture "viewID" UUID.UUID :> "delete" :> Unrefusable 'POST IssuesPage.ViewChanged
+  , viewedPost :: mode :- Capture "issueID" Issues.IssueId :> "viewed" :> Unrefusable 'POST IssuesPage.TimelineLogged
+  , commentPost :: mode :- Capture "issueID" Issues.IssueId :> "comment" :> ReqBody '[FormUrlEncoded] IssuesPage.CommentForm :> Action 'POST IssuesPage.TimelineRejection IssuesPage.TimelineLogged
+  , linkPost :: mode :- Capture "issueID" Issues.IssueId :> "link" :> ReqBody '[FormUrlEncoded] IssuesPage.LinkForm :> Action 'POST IssuesPage.TimelineRejection IssuesPage.TimelineLogged
   , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> QueryParam "value" Text :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders (Table.TableResponse IssuesPage.IssueVM))
   , stepGet :: mode :- Capture "issueID" Issues.IssueId :> "step" :> QueryParam "dir" Telemetry.EventStep :> QueryParam "event" IssuesPage.EventRef :> LocationRedirect NoContent
   , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx IssuesPage.IssueDetail))
   , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx IssuesPage.IssueDetail))
-  , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] IssuesPage.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
-  , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> QueryFlag "next_release" :> Post '[HTML] (RespHeaders (Html ()))
-  , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] IssuesPage.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
+  , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] IssuesPage.AssignErrorForm :> Action 'POST IssuesPage.ErrorPatternRejection IssuesPage.AssigneeChanged
+  , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> QueryFlag "next_release" :> Action 'POST IssuesPage.ErrorPatternRejection IssuesPage.ErrorResolved
+  , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] IssuesPage.ErrorSubscriptionForm :> Action 'POST IssuesPage.ErrorPatternRejection IssuesPage.ErrorSubscribed
   , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] IssuesPage.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatHistoryGet :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
   , sampleGet :: mode :- Capture "issueID" Issues.IssueId :> "sample" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders IssuesPage.IssueSample)
   , activityGet :: mode :- Capture "issueID" Issues.IssueId :> "activity" :> QPT "trace_id" :> QPU "trace_ts" :> Get '[HTML] (RespHeaders (Html ()))
   , errorGroupMembersGet :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "group_members" :> Get '[HTML] (RespHeaders (Html ()))
-  , errorUnmergePost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "unmerge" :> Post '[HTML] (RespHeaders (Html ()))
+  , errorUnmergePost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "unmerge" :> Unrefusable 'POST IssuesPage.PatternUnmerged
   }
   deriving stock (Generic)
 
@@ -571,19 +559,19 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Testing.AlertUpsertForm :> Post '[HTML] (RespHeaders Testing.Alert)
   , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Testing.Alert)
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Testing.Alert)
-  , alertMutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration" Int :> Post '[HTML] (RespHeaders (Html ()))
-  , alertUnmutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "unmute" :> Post '[HTML] (RespHeaders (Html ()))
-  , alertResolvePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "resolve" :> Post '[HTML] (RespHeaders (Html ()))
-  , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Delete '[HTML] (RespHeaders (Html ()))
+  , alertMutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration" Int :> Unrefusable 'POST Testing.MonitorActed
+  , alertUnmutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "unmute" :> Unrefusable 'POST Testing.MonitorActed
+  , alertResolvePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "resolve" :> Unrefusable 'POST Testing.MonitorActed
+  , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Unrefusable 'DELETE Testing.MonitorActed
   , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" ApiT.TeamId :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
   , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[HTML] (RespHeaders Testing.Alert)
   , cronGet :: mode :- "cron" :> Get '[HTML] (RespHeaders Testing.CronMonitors)
-  , cronPost :: mode :- "cron" :> ReqBody '[FormUrlEncoded] Testing.CronForm :> Post '[HTML] (RespHeaders (Html ()))
-  , cronDelete :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
+  , cronPost :: mode :- "cron" :> ReqBody '[FormUrlEncoded] Testing.CronForm :> Action 'POST Testing.CronRejection Testing.CronList
+  , cronDelete :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders Testing.CronList)
   , uptimeGet :: mode :- "uptime" :> Get '[HTML] (RespHeaders Testing.UptimeChecks)
-  , uptimePost :: mode :- "uptime" :> ReqBody '[FormUrlEncoded] Testing.UptimeForm :> Post '[HTML] (RespHeaders (Html ()))
-  , uptimeToggle :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "toggle" :> Post '[HTML] (RespHeaders (Html ()))
-  , uptimeDelete :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
+  , uptimePost :: mode :- "uptime" :> ReqBody '[FormUrlEncoded] Testing.UptimeForm :> Action 'POST Testing.UptimeRejection Testing.UptimeList
+  , uptimeToggle :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "toggle" :> Post '[HTML] (RespHeaders Testing.UptimeList)
+  , uptimeDelete :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "delete" :> Post '[HTML] (RespHeaders Testing.UptimeList)
   , alertBulkAction :: mode :- "alerts" :> "bulk_action" :> Capture "action" Testing.MonitorBulkAction :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> Post '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
   }
   deriving stock (Generic)
@@ -598,36 +586,36 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , onboardingProject :: mode :- "p" :> "new" :> LocationRedirect (PageCtx (Html ())) -- p represents project
   , createPost :: mode :- "p" :> "update" :> Capture "projectId" Projects.ProjectId :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
   , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
-  , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> "integrations" :> Get '[HTML] (RespHeaders (Html ()))
+  , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> "integrations" :> Get '[HTML] (RespHeaders (PageCtx Integrations.IntegrationsConfig))
   , -- Project management
-    deleteGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "delete" :> Delete '[HTML] (RespHeaders CreateProject.CreateProject)
+    deleteGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "delete" :> Action 'DELETE CreateProject.DemoProjectProtected CreateProject.ProjectDeleted
   , -- Member management
     membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
-  , membersDeleteH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Capture "memberId" ProjectMembers.ProjectMemberId :> Delete '[HTML] (RespHeaders (Html ()))
+  , membersDeleteH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Capture "memberId" ProjectMembers.ProjectMemberId :> Action 'DELETE ManageMembers.MemberRejection ManageMembers.MemberRemoved
   , teamsManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> QPT "what" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
-  , teamsManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> ReqBody '[JSON] ManageMembers.TeamForm :> QPT "teamView" :> Post '[HTML] (RespHeaders ManageMembers.ManageTeams)
+  , teamsManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> ReqBody '[JSON] ManageMembers.TeamForm :> QPT "teamView" :> Action 'POST ManageMembers.TeamRejection ManageMembers.TeamSaved
   , teamGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> Capture "teamHandle" Text :> QPT "layout" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
-  , teamBulkAction :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> QPT "teamView" :> Post '[HTML] (RespHeaders ManageMembers.ManageTeams)
-  , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
-  , stripeCheckout :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "stripe_checkout" :> ReqBody '[FormUrlEncoded] CreateProject.StripeCheckoutForm :> Post '[HTML] (RespHeaders (Html ()))
+  , teamBulkAction :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> QPT "teamView" :> Action 'POST ManageMembers.TeamsDeleteRejection ManageMembers.TeamsDeleted
+  , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Action 'GET CreateProject.BillingRejection CreateProject.BillingRedirect
+  , stripeCheckout :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "stripe_checkout" :> ReqBody '[FormUrlEncoded] CreateProject.StripeCheckoutForm :> Action 'POST CreateProject.BillingRejection CreateProject.BillingRedirect
   , -- Notifications
-    notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
-  , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerdutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
-  , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "pagerduty" :> "disconnect" :> Post '[HTML] (RespHeaders (Html ()))
-  , slackDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "slack" :> Delete '[HTML] (RespHeaders (Html ()))
-  , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Settings.TestForm :> Post '[HTML] (RespHeaders (Html ()))
+    notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Action 'POST Integrations.ChannelsRejection Integrations.IntegrationsSaved
+  , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerdutyConnectForm :> Action 'POST Integrations.PagerdutyKeyTooShort Integrations.IntegrationsSaved
+  , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "pagerduty" :> "disconnect" :> Unrefusable 'POST Integrations.IntegrationsSaved
+  , slackDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "slack" :> Action 'DELETE Integrations.SlackNotInstalled Integrations.IntegrationsSaved
+  , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Settings.TestForm :> Unrefusable 'POST Settings.TestOutcome
   , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Settings.NotificationTestHistoryGet)
   , -- Onboarding routes
     onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> LenientQP "step" Onboarding.OnboardingStep :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
-  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
-  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
+  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Unrefusable 'POST Onboarding.OnboardingStepPost
+  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Unrefusable 'POST Onboarding.OnboardingStepPost
   , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingPhoneEmailsPost)
-  , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
-  , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Post '[HTML] (RespHeaders (Html ()))
-  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> LenientQP "step" Onboarding.OnboardingStep :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Action 'GET Onboarding.NoEventsYet Onboarding.IntegrationCheck
+  , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Unrefusable 'POST Onboarding.ChecklistDismissed
+  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> LenientQP "step" Onboarding.OnboardingStep :> Unrefusable 'POST Onboarding.OnboardingStepPost
   , -- Pricing routes
-    onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
+    onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Action 'POST CreateProject.SubscriptionLookupFailed CreateProject.PricingUpdated
   }
   deriving stock (Generic)
 

@@ -889,7 +889,7 @@ updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
 -- >>> map parseUrlPiece ["daily", "weekly"] :: [Either Text ReportType]
 -- [Right RTDaily,Right RTWeekly]
 -- >>> parseUrlPiece "bogus" :: Either Text ReportType
--- Left "Invalid RT value: bogus"
+-- Left "Invalid value: bogus"
 data ReportType = RTDaily | RTWeekly
   deriving (Eq, Generic, NFData, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "RT" ReportType

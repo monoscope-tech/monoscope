@@ -15,6 +15,10 @@ module Pages.Onboarding (
   OnboardingStep (..),
   OnboardingStepPost (..),
   OnboardingPhoneEmailsPost (..),
+  ChecklistDismissed (..),
+  IntegrationCheck (..),
+  NoEventsYet (..),
+  ProxiedPage (..),
 ) where
 
 import BackgroundJobs.Types (BgJobs (AdConversion), Conversion (Activated), insertJob)
@@ -47,7 +51,7 @@ import Pages.Components
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, addTriggerEvent, redirectCS)
+import System.Types (ATAuthCtx, ActionResult, Done, HXRedirectDest, HXReswap, Outcome (..), Refusal (..), RespHeaders, Says (..), TriggerEvents, XWidgetJSON, act, addRespHeaders, addTriggerEvent, done)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
@@ -170,13 +174,58 @@ instance ToHtml OnboardingGet where
   toHtmlRaw = toHtml
 
 
--- | Response of the info/survey form posts, which only redirect to the next step.
-data OnboardingStepPost = OnboardingStepPost
-  deriving stock (Generic, Show)
+-- | A step finished or skipped: the browser moves on to the given step.
+data OnboardingStepPost = OnboardingStepPost Projects.ProjectId OnboardingStep
+  deriving stock (Eq, Show)
 
 
-instance ToHtml OnboardingStepPost where
-  toHtml _ = ""
+instance Outcome OnboardingStepPost where outcomeRedirect (OnboardingStepPost pid step) = Just $ stepUrl pid step
+
+
+data ChecklistDismissed = ChecklistDismissed
+  deriving stock (Eq, Show)
+  deriving anyclass (Outcome)
+
+
+-- | What an integration check answers while the docs page is open.
+data IntegrationCheck
+  = -- | No events yet for this language's poller: swap in a fresh one.
+    AwaitingEvents Projects.ProjectId Text
+  | Verified
+  | -- | Events arrived via Confirm & Proceed: move on to pricing.
+    ProceedToPricing Projects.ProjectId
+  deriving stock (Eq, Show)
+
+
+instance ToHtml IntegrationCheck where
+  toHtml = \case
+    AwaitingEvents pid language -> toHtml $ integrationPoller_ pid language
+    Verified -> div_ [class_ "flex items-center gap-2 text-textSuccess"] do
+      span_ "verified"
+      faSprite_ "circle-check" "regular" "h-4 w-4"
+    ProceedToPricing _ -> mempty
+  toHtmlRaw = toHtml
+
+
+instance Outcome IntegrationCheck where
+  outcomeBody = toHtml
+  outcomeRedirect = \case
+    ProceedToPricing pid -> Just $ stepUrl pid Pricing
+    AwaitingEvents{} -> Nothing
+    Verified -> Nothing
+
+
+data NoEventsYet = NoEventsYet
+  deriving stock (Eq, Generic, Show)
+  deriving (Refusal) via Says "No events found yet" NoEventsYet
+
+
+-- | The landing site's markup, with its root-relative links pointed back at it.
+newtype ProxiedPage = ProxiedPage Text
+
+
+instance ToHtml ProxiedPage where
+  toHtml (ProxiedPage t) = toHtmlRaw $ T.replace "href=\"/" "href=\"https://monoscopehq.com/" t
   toHtmlRaw = toHtml
 
 
@@ -193,19 +242,18 @@ instance ToHtml OnboardingPhoneEmailsPost where
   toHtmlRaw = toHtml
 
 
-onboardingStepSkipped :: Projects.ProjectId -> Maybe OnboardingStep -> ATAuthCtx (RespHeaders (Html ()))
+onboardingStepSkipped :: Projects.ProjectId -> Maybe OnboardingStep -> ATAuthCtx (RespHeaders (Done OnboardingStepPost))
 onboardingStepSkipped pid stepM = do
   void $ Projects.sessionAndProject pid -- membership check
   whenJust stepM $ markStepCompleted pid . show
-  redirectCS $ stepUrl pid $ bool Info Pricing (stepM == Just Integration)
-  addRespHeaders ""
+  done $ OnboardingStepPost pid $ bool Info Pricing (stepM == Just Integration)
 
 
-dismissChecklistH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+dismissChecklistH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Done ChecklistDismissed))
 dismissChecklistH pid = do
   void $ Projects.sessionAndProject pid
   markStepCompleted pid "checklist_dismissed"
-  addRespHeaders ""
+  done ChecklistDismissed
 
 
 -- | Appends atomically, so concurrent step completions can't lose one.
@@ -224,44 +272,38 @@ phoneEmailPostH pid form = do
   addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ form.emails <> memberEmails) appCtx.config.enableFreetier
 
 
-checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-checkIntegrationGet pid languageM = do
+checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (ActionResult NoEventsYet IntegrationCheck)
+checkIntegrationGet pid languageM = act do
   void $ Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   v :: Maybe Text <- Hasql.withHasqlTimefusion appCtx.env.enableTimefusionReads $ Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} LIMIT 1|]
   case v of
-    Nothing -> maybe (addErrorToast "No events found yet" Nothing >> addRespHeaders "") (addRespHeaders . integrationPoller_ pid) languageM
+    Nothing -> pure $ maybeToRight NoEventsYet $ AwaitingEvents pid <$> languageM
     Just _ -> do
       markStepCompleted pid $ show Integration
       Activation.recordActivationMilestones Activation.IngestVerified Nothing [pid] >>= traverse_ \p -> do
         insertJob $ AdConversion $ Activated p
         addTriggerEvent "adConversion" $ AE.object ["name" AE..= ("activated" :: Text), "id" AE..= p]
-      if isJust languageM
-        then addRespHeaders $ div_ [class_ "flex items-center gap-2 text-textSuccess"] do
-          span_ "verified"
-          faSprite_ "circle-check" "regular" "h-4 w-4"
-        else redirectCS (stepUrl pid Pricing) >> addRespHeaders ""
+      pure $ Right $ maybe (ProceedToPricing pid) (const Verified) languageM
 
 
-onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingStepPost)
+onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders (Done OnboardingStepPost))
 onboardingInfoPostH pid form = do
   (sess, _) <- Projects.sessionAndProject pid
   let answers = HI.AsJsonb $ AE.object ["companyName" AE..= form.companyName, "companySize" AE..= form.companySize, "foundUsFrom" AE..= form.whereDidYouHearAboutUs]
   Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName}, questions = COALESCE(questions, '{}'::jsonb) || #{answers} where id=#{pid} |]
   markStepCompleted pid $ show Info
   Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{form.firstName}, last_name=#{form.lastName} where id=#{sess.user.id} |]
-  redirectCS $ stepUrl pid Survey
-  addRespHeaders OnboardingStepPost
+  done $ OnboardingStepPost pid Survey
 
 
-onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingStepPost)
+onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders (Done OnboardingStepPost))
 onboardingConfPostH pid form = do
   void $ Projects.sessionAndProject pid -- membership check
   let answers = HI.AsJsonb $ AE.object ["functionality" AE..= form.functionality, "location" AE..= form.location]
   Hasql.interpExecute_ [HI.sql| update projects.projects set questions = COALESCE(questions, '{}'::jsonb) || #{answers} where id=#{pid} |]
   markStepCompleted pid $ show Survey
-  redirectCS $ stepUrl pid NotifChannel
-  addRespHeaders OnboardingStepPost
+  done $ OnboardingStepPost pid NotifChannel
 
 
 onboardingCompleteBody :: Projects.ProjectId -> Html ()
@@ -801,7 +843,7 @@ stepIndicator step title prevUrl = do
 
 -- | Proxy handler for fetching documentation from monoscopehq.com
 -- This bypasses CORS restrictions by fetching the content server-side
-proxyLandingH :: (HTTP :> es, State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders (Html ()))
+proxyLandingH :: (HTTP :> es, State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders ProxiedPage)
 proxyLandingH path = do
   response <- W.get $ toString $ "https://monoscopehq.com/" <> T.intercalate "/" path
-  addRespHeaders $ toHtmlRaw $ T.replace "href=\"/" "href=\"https://monoscopehq.com/" $ decodeUtf8 @Text $ fromMaybe "" $ response L.^? W.responseBody
+  addRespHeaders $ ProxiedPage $ decodeUtf8 $ fromMaybe "" $ response L.^? W.responseBody

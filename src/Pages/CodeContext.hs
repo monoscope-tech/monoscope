@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH) where
+module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), MappingsPanel, MappingRejection (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixEvidenceH, issueFixMediaH, issueFixPackageH) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Commonmark qualified as Markdown
@@ -70,7 +70,7 @@ import Relude
 import Servant (Header, Headers, ServerError (errHeaders), addHeader, err403, err404, err503, getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, DB, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
+import System.Types (ATAuthCtx, ActionResult, DB, Outcome, Refusal (..), Rendered (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Text.HTML.SanitizeXSS (sanitizeBalance)
 import Text.Parsec qualified as Parsec
 import Text.Slugify (slugify)
@@ -1115,15 +1115,15 @@ repositorySourceGetH pid rid cid sample = do
     div_ [id_ "code-mappings-content"] content
 
 
-repositorySourcePostH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeMappingForm -> ATAuthCtx (RespHeaders (Html ()))
-repositorySourcePostH pid rid form = do
+repositorySourcePostH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeMappingForm -> ATAuthCtx (ActionResult MappingRejection MappingsPanel)
+repositorySourcePostH pid rid form = act do
   requireReviewWrite pid
   repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
   cid <- maybe (throwError err403) pure (form.credentialId <|> repository.credentialId)
   account <- codeContextCredential pid (Just cid) >>= maybe (throwError err403) pure
   unless ((account.host, account.apiBase) == (repository.host, repository.apiBase)) $ throwError err403
-  saveCodeMapping pid form{repo = Just (repository.owner <> "/" <> repository.repo), credentialId = Just account.id}
-  repositorySourceGetH pid rid (Just account.id) (nonEmptyT form.samplePath)
+  saved <- saveCodeMapping pid form{repo = Just (repository.owner <> "/" <> repository.repo), credentialId = Just account.id}
+  forM saved \() -> MappingsPanel . getResponse <$> repositorySourceGetH pid rid (Just account.id) (nonEmptyT form.samplePath)
 
 
 newtype SourceContextForm = SourceContextForm {enabled :: Bool}
@@ -1598,13 +1598,37 @@ repoConn cfg cred = do
 -- | Save a mapping. The two path fields are derived from the sample frame path when one is
 -- given and they were left blank, which is the path most users take — nobody knows offhand
 -- that their container mounts the app at @\/srv\/app@.
-codeMappingsPostH :: Projects.ProjectId -> CodeMappingForm -> ATAuthCtx (RespHeaders (Html ()))
-codeMappingsPostH pid form = do
-  saveCodeMapping pid form
-  addRespHeaders =<< codeMappingsContent pid (nonEmptyT form.samplePath) form.credentialId Nothing
+codeMappingsPostH :: Projects.ProjectId -> CodeMappingForm -> ATAuthCtx (ActionResult MappingRejection MappingsPanel)
+codeMappingsPostH pid form = act do
+  saved <- saveCodeMapping pid form
+  forM saved \() -> MappingsPanel <$> codeMappingsContent pid (nonEmptyT form.samplePath) form.credentialId Nothing
 
 
-saveCodeMapping :: Projects.ProjectId -> CodeMappingForm -> ATAuthCtx ()
+-- | The mappings panel or page as re-rendered after a mapping is saved.
+newtype MappingsPanel = MappingsPanel (Html ())
+  deriving newtype (ToHtml)
+  deriving (Outcome) via Rendered MappingsPanel
+
+
+-- | Why a code mapping was not saved.
+data MappingRejection = NoAccount | NoRepository | RepositoryUnreadable Text Text | NoFileMatches Text Text Text
+  deriving stock (Eq, Show)
+
+
+instance Refusal MappingRejection where
+  refusalMessage = \case
+    NoAccount -> "Choose a repository account"
+    NoRepository -> "Pick a repository"
+    RepositoryUnreadable{} -> "Could not work out the mapping"
+    NoFileMatches{} -> "Could not work out the mapping"
+  refusalDetail = \case
+    NoAccount -> Just "Select an account connected to this project, or connect another account."
+    NoRepository -> Nothing
+    RepositoryUnreadable repo err -> Just $ "Could not read " <> repo <> ": " <> err
+    NoFileMatches repo ref sample -> Just $ "No file in " <> repo <> "@" <> ref <> " lines up with " <> sample <> ". Check the branch, or fill the paths in under Advanced."
+
+
+saveCodeMapping :: Projects.ProjectId -> CodeMappingForm -> ATAuthCtx (Either MappingRejection ())
 saveCodeMapping pid form = do
   requireReviewWrite pid
   credM <- codeContextCredential pid form.credentialId
@@ -1618,28 +1642,27 @@ saveCodeMapping pid form = do
       derived <- case sample of
         Just s | typed == ("", "") -> deriveFromRepo cred repoRef s
         _ -> pure $ Right typed
-      case derived of
-        Left err -> addErrorToast "Could not work out the mapping" (Just err)
-        Right (prefix, root) -> do
-          let svc = nonEmptyT form.service
-          CodeContext.insertCodeMapping pid cred.id repoRef svc prefix root
-          addSuccessToast (repo <> " linked") Nothing
-    (Nothing, _) -> addErrorToast "Choose a repository account" (Just "Select an account connected to this project, or connect another account.")
-    (_, Nothing) -> addErrorToast "Pick a repository" Nothing
+      forM derived \(prefix, root) -> do
+        CodeContext.insertCodeMapping pid cred.id repoRef (nonEmptyT form.service) prefix root
+        addSuccessToast (repo <> " linked") Nothing
+    (Nothing, _) -> pure $ Left NoAccount
+    (_, Nothing) -> pure $ Left NoRepository
   where
     -- Work the two path fields out of one real frame path by matching it against the repo's
     -- file list. The file that matched is dropped: what the user checks is the mapping the row
     -- then spells out, not a path they would have to compare by eye.
-    deriveFromRepo :: GitSync.GitHubCredential -> GitSync.RepoRef -> Text -> ATAuthCtx (Either Text (Text, Text))
+    deriveFromRepo :: GitSync.GitHubCredential -> GitSync.RepoRef -> Text -> ATAuthCtx (Either MappingRejection (Text, Text))
     deriveFromRepo cred repoRef sample = do
       cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
       W.runHTTPWreq $ runExceptT do
-        conn <- repoConn cfg cred
+        let unreadable :: Either Text b -> Either MappingRejection b
+            unreadable = first (RepositoryUnreadable repoRef.repo)
+        conn <- ExceptT $ unreadable <$> runExceptT (repoConn cfg cred)
         -- Whole tree, not a prefix: the point is to find where the frame path lands, and we do not
         -- yet know which directory that is. Paths only, so Bitbucket's missing blob shas cost nothing.
-        (_, entries) <- ExceptT $ first (("Could not read " <> repoRef.repo <> ": ") <>) <$> Git.fetchTree conn repoRef ""
+        (_, entries) <- ExceptT $ unreadable <$> Git.fetchTree conn repoRef ""
         hoistEither
-          $ maybeToRight ("No file in " <> repoRef.repo <> "@" <> repoRef.ref <> " lines up with " <> sample <> ". Check the branch, or fill the paths in under Advanced.")
+          $ maybeToRight (NoFileMatches repoRef.repo repoRef.ref sample)
           $ (\(prefix, root, _) -> (prefix, root))
           <$> CodeContext.deriveMapping (map (.path) entries) sample
 
