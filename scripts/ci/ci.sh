@@ -662,6 +662,15 @@ compose() {
   docker compose -f "$COMPOSE_FILE" --project-name "$COMPOSE_PROJECT" "$@"
 }
 
+# Every checkout and sign-off clone gets its own stack, and a deleted one's is
+# unreachable by `down`. Sweep stacks whose compose file is gone.
+prune_orphan_stacks() {
+  docker compose ls -a --format json | jq -r '.[] | select(.Name | startswith("monoscope-ci-")) | "\(.Name)\t\(.ConfigFiles | split(",")[0])"' |
+    while IFS=$'\t' read -r name file; do
+      [ -e "$file" ] || { note "removing CI stack $name: $file is gone"; docker compose -p "$name" down --remove-orphans >/dev/null; }
+    done
+}
+
 # Wait for a host check started in the background and replay its output.
 collect_host() { [ -n "$1" ] || return 0; local r=0; wait "$1" || r=$?; cat "$2"; rm -f "$2"; return "$r"; }
 
@@ -681,6 +690,7 @@ with open(sys.argv[1], "w") as lock:
 ' "${TMPDIR:-/tmp}/monoscope-ci-$(id -u).lock" "$0" "$@"
     return
   fi
+  prune_orphan_stacks || true
   # The dependency image has no HLint; the host tool is also how CI runs it.
   local c host_rc=0 host_hlint=false host_pid='' host_log='' host_fp='' release_pid='' release_log=''
   local -a container_checks=()
@@ -797,7 +807,7 @@ cmd_shell() {
 }
 # Volumes survive `down` on purpose: they hold the cabal store and dist-newstyle,
 # and losing them means the next `make ci` is a cold build. `clean` is the nuke.
-cmd_down() { compose down --remove-orphans; }
+cmd_down() { compose down --remove-orphans && prune_orphan_stacks; }
 cmd_clean() { compose down -v --remove-orphans && docker volume rm "${SHARED_VOLUMES[@]}"; }
 
 # ---------------------------------------------------------------- deploy image
