@@ -1,4 +1,5 @@
 title: Overview
+read_only: true
 icon: qrcode
 preview: /public/assets/svgs/screens/http-stats.svg
 description: Comprehensive system overview with service, resource, and database insights

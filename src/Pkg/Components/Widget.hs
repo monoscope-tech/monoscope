@@ -1088,10 +1088,12 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
             [href_ url, download_ $ maybeToMonoid widget.title <> ".png", target_ "_blank"]
             "Download PNG"
 
+        -- A read-only dashboard (data-read-only on the page) keeps copying out, never edits in place.
         when onDashboard do
-          menuItem_
-            "Create a copy of this widget"
-            ( [hxPost_ (urls.dashboardDuplicateWidget p d wId Nothing) | (p, d) <- toList (dashboardIds widget)]
+          li_ [class_ "in-[[data-read-only]]:hidden"]
+            $ a_
+              ( [class_ "p-2 w-full text-left block cursor-pointer", data_ "tippy-content" "Create a copy of this widget"]
+              <> [hxPost_ (urls.dashboardDuplicateWidget p d wId Nothing) | (p, d) <- toList (dashboardIds widget)]
                 <> [ hxTarget_ "closest .grid-stack"
                    , hxSwap_ "beforeend"
                    , -- htmx appends the rendered widget and processes it (scripts, hx-*, and
@@ -1105,9 +1107,9 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
                        set g to the closest <.grid-stack/> then call g.gridstack.makeWidget(g.lastElementChild)
                  |]
                    ]
-            )
-            "Duplicate widget"
-          li_
+              )
+              "Duplicate widget"
+          li_ [class_ "in-[[data-read-only]]:hidden"]
             $ button_
               [ class_ "p-2 w-full text-left text-textError cursor-pointer"
               , data_ "tippy-content" "Permanently delete this widget"

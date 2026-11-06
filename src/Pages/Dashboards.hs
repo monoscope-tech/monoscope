@@ -109,7 +109,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.MonitorDefinitions (compileAlertSql)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
-import Models.Projects.DashboardTemplates (getDashboardTemplates, loadDashboardFromVM)
+import Models.Projects.DashboardTemplates (detach, getDashboardTemplates, loadDashboardFromVM)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
@@ -484,12 +484,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       -- Slug used for content/widget-order, falling back to the first tab when unset
       renderTabSlug = dash.tabs *> (activeTabSlug <|> ((.slug) <$> listToMaybe allTabs))
       renderTab = renderTabSlug >>= findTabBySlug allTabs <&> snd
-  actionPickerModal_ "pageTitleModalId" "Rename dashboard" [hxPatch_ (urls.dashboardRenamePatch pid dashId), hxSwap_ "innerHTML", hxTarget_ "#pageTitleText"]
+  let readOnly = dash.readOnly == Just True
+  unless readOnly
+    $ actionPickerModal_ "pageTitleModalId" "Rename dashboard" [hxPatch_ (urls.dashboardRenamePatch pid dashId), hxSwap_ "innerHTML", hxTarget_ "#pageTitleText"]
     $ div_ [class_ "flex flex-col gap-3 p-3"] do
       actionPickerField_ "Dashboard title" "title" "Insert new title" (dashTitle dashVM.title)
       actionPickerField_ "Folder" "fileDir" "reports/" (folderFromPath dashVM.filePath)
 
-  when (isJust dash.tabs)
+  when (isJust dash.tabs && not readOnly)
     $ actionPickerModal_ "tabRenameModalId" "Rename tab" [hxPatch_ (urls.dashboardTabRenamePatch pid dashId (fromMaybe "" activeTabSlug)), hxSwap_ "none"]
     $ div_ [class_ "p-3"]
     $ actionPickerField_ "Tab name" "newName" "Enter tab name" (maybe "" ((.name) . snd) activeTabInfo)
@@ -505,7 +507,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       constants = constantsJson allParams
 
   let visibleWidgetCount = maybe (length dash.widgets) (maybe 0 (length . (.widgets)) . (!!? activeTabIdx)) dash.tabs
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constants, data_ "dashboard-id" dashIdText, data_ "widget-count" (show visibleWidgetCount), data_ "settled-url" (urls.dashboardSettledPost pid dashId)] do
+  section_ [class_ "h-full"] $ div_ ([class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constants, data_ "dashboard-id" dashIdText, data_ "widget-count" (show visibleWidgetCount), data_ "settled-url" (urls.dashboardSettledPost pid dashId)] <> [data_ "read-only" "" | readOnly]) do
     -- Only warn when a constant actually ran and returned zero rows (Just []).
     -- result == Nothing means the query was skipped (nothing references it) or
     -- failed (logged separately) — neither is a "no data" condition.
@@ -533,7 +535,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         Nothing -> maybe (widgetCanvas_ pid "dashboard-canvas" (dash :: Dashboards.Dashboard).widgets) (variablePickerModal_ pid dashId activeTabSlug allParams) $ findVarToPrompt Nothing (fold dash.variables)
 
     -- Hidden form for widget order PATCH via HTMX (tab slug hardcoded in URL)
-    widgetOrderTriggerForm_ widgetOrderUrl
+    unless readOnly $ widgetOrderTriggerForm_ widgetOrderUrl
 
     -- ?expand=<widgetId> opens the widget in the global drawer. drawerLoadAttrs_ already
     -- checks the drawer toggle and fires its change handler (body overflow + focus trap),
@@ -629,13 +631,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 }, gridEl);
                 let lastCol = grid.getColumn();
                 if (lastCol === 6) grid.compact();
-                if (lastCol !== 12) grid.setStatic(true);
+                const readOnly = !!gridEl.closest('[data-read-only]');
+                if (lastCol !== 12 || readOnly) grid.setStatic(true);
                 new ResizeObserver(() => {
                   const col = grid.getColumn();
                   if (col !== lastCol) {
                     lastCol = col;
                     if (col === 6) grid.compact();
-                    grid.setStatic(col !== 12);
+                    grid.setStatic(col !== 12 || readOnly);
                   }
                 }).observe(gridEl);
 
@@ -689,7 +692,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               }, nestedEl);
               let lastNestedCol = nestedInstance.getColumn();
               if (lastNestedCol === 6) nestedInstance.compact();
-              if (lastNestedCol !== 12) nestedInstance.setStatic(true);
+              const nestedReadOnly = !!nestedEl.closest('[data-read-only]');
+              if (lastNestedCol !== 12 || nestedReadOnly) nestedInstance.setStatic(true);
 
               // Auto-fit group to children
               function autoFitGroupToChildren() {
@@ -721,7 +725,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 if (col !== lastNestedCol) {
                   lastNestedCol = col;
                   if (col === 6) nestedInstance.compact();
-                  nestedInstance.setStatic(col !== 12);
+                  nestedInstance.setStatic(col !== 12 || nestedReadOnly);
                   autoFitGroupToChildren();
                 }
               }).observe(nestedEl);
@@ -1251,6 +1255,7 @@ dashboardWidgetPutWithMonitorH :: Projects.ProjectId -> Dashboards.DashboardId -
 dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM widget = act do
   _ <- Projects.sessionAndProject pid
   (dashVM, dash) <- getDashAndVM pid dashId Nothing
+  editableM <- editableDash dashVM
   uid <- UUID.genUUID <&> UUID.toText
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
       -- A newly created widget (no id yet) also drops any centered title.
@@ -1259,6 +1264,7 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
   let synced (m :: Monitors.QueryMonitor) = (m.logQuery, m.alertThreshold, m.warningThreshold, m.alertConfig.unit, m.alertConfig.title)
   -- Everything is checked before anything is written; the monitor follows the widget, so a save it cannot follow is refused.
   sequence do
+    ed <- maybeToRight ReadOnlyDashboard editableM
     -- An edit keeps the sent tab only if the widget is on it (ids repeat across tabs);
     -- a missing or stale slug falls back to where the widget actually lives.
     tabSlugM' <- case normalizedWidgetIdM of
@@ -1285,7 +1291,7 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
         pure $ updated <$ guard (synced updated /= synced monitor)
     pure do
       -- The render-time tab slug comes back in the posted JSON; it must not be persisted.
-      _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
+      _ <- Dashboards.updateSchema ed (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
       syncDashboardAndQueuePush pid dashId
       traverse_ Monitors.queryMonitorUpsert monitorUpdateM
       unless (configureMonitorM == Just "true") $ addTriggerEvent "closeModal" ""
@@ -1337,7 +1343,7 @@ dashboardWidgetReorderPatchH
   -> ATAuthCtx (RespHeaders NoContent)
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   _ <- Projects.sessionAndProject pid
-  (_, dash) <- getDashAndVM pid dashId Nothing
+  (ed, _, dash) <- getEditableDash pid dashId
 
   let oldWidgets = case (tabSlugM, dash.tabs) of
         (Just slug, Just tabs) -> foldMap ((.widgets) . snd) $ findTabBySlug tabs slug
@@ -1354,7 +1360,7 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
       -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
       unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds pid (Just dashId) deletedWidgetIds
 
-      _ <- Dashboards.updateSchema dashId (overDashWidgets tabSlugM (const reorderedWidgets) dash) Nothing
+      _ <- Dashboards.updateSchema ed (overDashWidgets tabSlugM (const reorderedWidgets) dash) Nothing
       syncDashboardAndQueuePush pid dashId
       addRespHeaders NoContent
 
@@ -1397,16 +1403,29 @@ getDashAndVM pid dashId fileM = do
   pure (dashVM, dash)
 
 
+-- | 'getDashAndVM' with proof its content may be written; a built-in read-only dashboard is a 403.
+getEditableDash :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Eff es (Dashboards.Editable, Dashboards.DashboardVM, Dashboards.Dashboard)
+getEditableDash pid dashId = do
+  (vm, dash) <- getDashAndVM pid dashId Nothing
+  ed <- editableDash vm `whenNothingM` ApiT.refuse ApiT.DashboardReadOnly
+  pure (ed, vm, dash)
+
+
+editableDash :: (Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es) => Dashboards.DashboardVM -> Eff es (Maybe Dashboards.Editable)
+editableDash vm = ask @AuthContext >>= getDashboardTemplates . (.config) <&> (`Dashboards.editable` vm)
+
+
 -- | Page shell shared by the dashboard and dashboard-tab handlers.
 -- @tabM@ is @Just (slug, name)@ on tab pages, enabling the tab breadcrumb + rename modal.
-dashboardBWConf :: BWConfig -> Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe (Text, Maybe Text) -> Maybe (Text, Text) -> FreeTierStatus -> BWConfig
-dashboardBWConf bw pid dashId title tabM currentRange freeTierStatus =
+-- A read-only dashboard offers a copy in place of every edit.
+dashboardBWConf :: BWConfig -> Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe (Text, Maybe Text) -> Maybe (Text, Text) -> Bool -> FreeTierStatus -> BWConfig
+dashboardBWConf bw pid dashId title tabM currentRange readOnly freeTierStatus =
   bw
     { prePageTitle = Just "Dashboards"
     , pageTitle = dashTitle title
     , pageTitleSuffix = tabM >>= snd
-    , pageTitleModalId = Just "pageTitleModalId"
-    , pageTitleSuffixModalId = "tabRenameModalId" <$ tabM
+    , pageTitleModalId = "pageTitleModalId" <$ guard (not readOnly)
+    , pageTitleSuffixModalId = "tabRenameModalId" <$ (guard (not readOnly) *> tabM)
     , freeTierStatus = freeTierStatus
     , headContent = Just dashboardHeadContent_
     , needsGridStack = True
@@ -1418,7 +1437,17 @@ dashboardBWConf bw pid dashId title tabM currentRange freeTierStatus =
     }
   where
     tabSlugM = fst <$> tabM
-    dashboardActions_ = div_ [class_ "flex items-center"] do
+    duplicate_ cls = button_ [class_ cls, hxPost_ (urls.dashboardDuplicatePost pid dashId), hxSwap_ "none", data_ "tippy-content" "Creates a copy of this dashboard"]
+    dashboardActions_ = bool editActions_ readOnlyActions_ readOnly
+    readOnlyActions_ = div_ [class_ "flex items-center gap-2"] do
+      span_ [class_ "text-fillDisabled max-md:hidden"] "|"
+      span_ [class_ "inline-flex items-center gap-1.5 text-sm text-textWeak max-md:hidden", data_ "tippy-content" "Built-in dashboards always show the latest version we ship"] do
+        faSprite_ "lock" "regular" "w-3 h-3"
+        "Read-only"
+      duplicate_ "btn btn-sm btn-primary max-md:min-h-11" do
+        faSprite_ "copy" "regular" "w-3 h-3"
+        "Duplicate to edit"
+    editActions_ = div_ [class_ "flex items-center"] do
       span_ [class_ "text-fillDisabled mr-2 max-md:hidden"] "|"
       let editorUrl = urls.dashboardWidgetNewGet pid dashId tabSlugM (fst <$> currentRange) (snd <$> currentRange)
       Components.drawer_ "page-data-drawer" False (Just editorUrl) Nothing $ span_ [class_ "inline-flex items-center gap-1.5 text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target max-md:min-h-11 max-md:min-w-11", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] do
@@ -1431,7 +1460,7 @@ dashboardBWConf bw pid dashId title tabM currentRange freeTierStatus =
         ul_ ([class_ "dropdown dropdown-end menu menu-md bg-bgRaised rounded-box border border-strokeWeak p-2 w-52 shadow-lg leading-none"] <> popoverPanel_ dashActionsPop) do
           li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
           when (isJust tabSlugM) $ li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
-          li_ $ button_ [class_ "p-2 w-full text-left", hxPost_ (urls.dashboardDuplicatePost pid dashId), hxSwap_ "none", data_ "tippy-content" "Creates a copy of this dashboard"] "Duplicate dashboard"
+          li_ $ duplicate_ "p-2 w-full text-left" "Duplicate dashboard"
           li_ $ label_ [Lucid.for_ "yaml-editor-drawer", class_ "p-2", data_ "tippy-content" "View and edit the dashboard schema as YAML"] "Edit YAML"
           li_ $ a_ [href_ (urls.dashboardRepositoryGet pid dashId), class_ "p-2"] "Repository sync"
           li_ $ button_ [class_ "p-2 w-full text-left text-textError", hxDelete_ (urls.dashboardDelete pid dashId), hxSwap_ "none", hxConfirm_ "Are you sure you want to delete this dashboard? This action cannot be undone.", data_ "tippy-content" "Permanently deletes this dashboard"] "Delete dashboard"
@@ -1487,7 +1516,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
               then pure dash'
               else forOf #widgets dash' $ processDashWidgets prefill pid dashId now timeParams allParamsWithConstants
 
-          bwconf <- dashboardBWConf bw pid dashId dashVM.title Nothing currentRange <$> checkFreeTierStatus pid project.paymentPlan
+          bwconf <- dashboardBWConf bw pid dashId dashVM.title Nothing currentRange (dash.readOnly == Just True) <$> checkFreeTierStatus pid project.paymentPlan
           addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParamsWithConstants
 
 
@@ -1891,7 +1920,7 @@ data WidgetAlertForm = WidgetAlertForm
 
 
 -- | Refusals shared by the widget save and the widget monitor form.
-data WidgetMonitorRejection = RawSqlWidget | MissingThreshold | InvalidWarningThreshold | MonitorNeedsThreshold | MonitorQueryInvalid Text | WidgetNotFound
+data WidgetMonitorRejection = RawSqlWidget | MissingThreshold | InvalidWarningThreshold | MonitorNeedsThreshold | MonitorQueryInvalid Text | WidgetNotFound | ReadOnlyDashboard
   deriving stock (Eq, Show)
 
 
@@ -1903,6 +1932,7 @@ instance Refusal WidgetMonitorRejection where
     MonitorNeedsThreshold -> "Set an alert threshold or remove the monitor before saving"
     MonitorQueryInvalid _ -> "Monitor query is invalid"
     WidgetNotFound -> "This widget is no longer on the dashboard. Reload to see the current version."
+    ReadOnlyDashboard -> "Built-in dashboards are read-only. Duplicate this one to make changes."
   refusalDetail = \case
     MonitorQueryInvalid err -> Just err
     RawSqlWidget -> Nothing
@@ -1910,6 +1940,7 @@ instance Refusal WidgetMonitorRejection where
     InvalidWarningThreshold -> Nothing
     MonitorNeedsThreshold -> Nothing
     WidgetNotFound -> Nothing
+    ReadOnlyDashboard -> Nothing
 
 
 data WidgetMonitorSaved = WidgetMonitorSaved
@@ -1926,8 +1957,10 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
   everyoneM <- ManageMembers.getEveryoneTeam pid
   queryMonitorId <- maybe (Monitors.QueryMonitorId <$> UUID.genUUID) (pure . (.id)) existingMonitor
   chartWidgetE <- forM dashboardIdM \dashId ->
-    getDashAndVM pid dashId Nothing <&> \(dashVM, dash) ->
-      maybeToRight WidgetNotFound $ (\(slug, widget) -> (dashId, dashVM.title, dash, slug, widget)) <$> findWidgetInDashboard form.widgetId dash
+    getDashAndVM pid dashId Nothing >>= \(dashVM, dash) ->
+      editableDash dashVM <&> \editableM -> do
+        ed <- maybeToRight ReadOnlyDashboard editableM
+        maybeToRight WidgetNotFound $ (\(slug, widget) -> ((dashId, ed), dashVM.title, dash, slug, widget)) <$> findWidgetInDashboard form.widgetId dash
   let unitM = mfilter (not . T.null) $ T.strip <$> form.unit
       -- Everything is checked before anything is written, so a refusal leaves the widget as it was.
       planE = do
@@ -1975,9 +2008,9 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
               , service = session.service
               }
         pure do
-          whenJust chartWidgetM \(dashId, _, dash, tabSlugM, widget) ->
+          whenJust chartWidgetM \((dashId, ed), _, dash, tabSlugM, widget) ->
             when ((widget.alertThreshold, widget.warningThreshold, widget.unit) /= (Just chartThreshold, warningThreshold, unitM)) do
-              _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM (Just form.widgetId) widget{Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}) Nothing
+              _ <- Dashboards.updateSchema ed (updateDashboardWidgets dash tabSlugM (Just form.widgetId) widget{Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}) Nothing
               syncDashboardAndQueuePush pid dashId
           _ <- Monitors.queryMonitorUpsert monitor{Monitors.deactivatedAt = existingMonitor >>= (.deactivatedAt)}
           WidgetMonitorSaved <$ addTriggerEvent "closeModal" ""
@@ -2463,7 +2496,8 @@ dashboardsPostH pid form = do
               , Dashboards.teams = V.fromList form.teams
               , Dashboards.filePath = filePath
               }
-      _ <- Dashboards.insert dbd
+      -- A read-only template is linked only by its entrypoint; created here it is the user's own copy.
+      _ <- Dashboards.insert $ maybe (detach templates dbd) (const dbd) (Dashboards.editable templates dbd)
       syncDashboardAndQueuePush pid dbd.id
       redirectCS redirectURI
       addRespHeaders DashboardNoContent
@@ -2534,10 +2568,11 @@ dashboardRenamePatchH pid dashId form = do
   Dashboards.getDashboardByProjectId pid dashId >>= \case
     Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
-      _ <- Dashboards.updateTitle pid dashId form.title
+      (ed, _, _) <- getEditableDash pid dashId
+      _ <- Dashboards.updateTitle pid ed form.title
 
       whenJust dashVM.schema \schema ->
-        void $ Dashboards.updateSchema dashId (schema & #title ?~ form.title) Nothing
+        void $ Dashboards.updateSchema ed (schema & #title ?~ form.title) Nothing
 
       when (form.title /= dashVM.title) do
         monitors <- Monitors.queryMonitorsAll pid
@@ -2569,12 +2604,14 @@ dashboardDuplicatePostH pid dashId = do
       now <- Time.currentTime
       newDashId <- UUIDId <$> UUID.genUUID
 
+      templates <- getDashboardTemplates . (.config) =<< ask @AuthContext
       let copyTitle = dashTitle dashVM.title <> " (Copy)"
-          updatedSchema = dashVM.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
+          copy = detach templates dashVM
+          updatedSchema = copy.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
 
       _ <-
         Dashboards.insert
-          $ dashVM
+          $ copy
             { Dashboards.id = newDashId
             , Dashboards.createdAt = now
             , Dashboards.updatedAt = now
@@ -2678,7 +2715,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
   (tabSlugM, widgetToDuplicate) <- findWidgetInDashboard widgetId sourceDash `whenNothing` throwError err404{errBody = "Widget not found in dashboard"}
   newWidgetId <- UUID.genUUID <&> UUID.toText
   now <- Time.currentTime
-  (targetVM, targetDash) <- getDashAndVM pid targetDashId Nothing
+  (targetEd, targetVM, targetDash) <- getEditableDash pid targetDashId
   let titleSuffix = bool " (Copy)" "" isCrossDashboard
       copiedTitle = (case maybeToMonoid widgetToDuplicate.title of "" -> "Widget"; t -> t) <> titleSuffix
 
@@ -2729,7 +2766,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
       , "targetTabCount" AE..= length targetTabs
       ]
 
-  _ <- Dashboards.updateSchema targetDashId (overDashWidgets ((.slug) <$> destinationTabM) (<> [widgetCopy]) targetDash) (Just now)
+  _ <- Dashboards.updateSchema targetEd (overDashWidgets ((.slug) <$> destinationTabM) (<> [widgetCopy]) targetDash) (Just now)
   syncDashboardAndQueuePush pid targetDashId
 
   addWidgetJSON $ encodeText widgetCopy
@@ -3053,7 +3090,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxTarget allP
           else forOf (#tabs . _Just . ix activeTabIdx) dash' \tab ->
             forOf #widgets tab $ processDashWidgets prefill pid dashId now timeParams allParamsWithConstants . map (#_tabSlug ?~ tab.slug)
 
-      bwconf <- dashboardBWConf bw pid dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange <$> checkFreeTierStatus pid project.paymentPlan
+      bwconf <- dashboardBWConf bw pid dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange (dash.readOnly == Just True) <$> checkFreeTierStatus pid project.paymentPlan
       -- Pass the active tab slug and computed constants in params for rendering
       -- Including constants allows HTMX tab switches to skip re-executing constant queries
       let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParamsWithConstants
@@ -3152,14 +3189,14 @@ instance ToHtml TabRenameRes where
 dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (RespHeaders TabRenameRes)
 dashboardTabRenamePatchH pid dashId tabSlug form = do
   _ <- Projects.sessionAndProject pid
-  (_, dash) <- getDashAndVM pid dashId Nothing
+  (ed, _, dash) <- getEditableDash pid dashId
   now <- Time.currentTime
 
   tabs <- dash.tabs `whenNothing` throwError err404{errBody = "Dashboard has no tabs"}
   (idx, _) <- findTabBySlug tabs tabSlug `whenNothing` throwError err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
 
   let newSlug = slugify form.newName
-  _ <- Dashboards.updateSchema dashId (dash & #tabs ?~ (tabs & ix idx . #name .~ form.newName)) (Just now)
+  _ <- Dashboards.updateSchema ed (dash & #tabs ?~ (tabs & ix idx . #name .~ form.newName)) (Just now)
   syncDashboardAndQueuePush pid dashId
 
   addSuccessToast "Tab renamed successfully" Nothing
@@ -3195,12 +3232,13 @@ instance ToHtml DashboardYaml where
 dashboardYamlPutH :: Projects.ProjectId -> Dashboards.DashboardId -> YamlForm -> ATAuthCtx (RespHeaders (Done YamlSave))
 dashboardYamlPutH pid dashId form = do
   _ <- Projects.sessionAndProject pid
+  (ed, _, _) <- getEditableDash pid dashId
   done =<< case GitSync.yamlToDashboard (encodeUtf8 form.yaml) of
     Left err -> pure $ YamlRejected err
     Right dashboard -> do
       now <- Time.currentTime
-      _ <- Dashboards.updateSchema dashId dashboard (Just now)
-      whenJust dashboard.title $ \t -> void $ Dashboards.updateTitle pid dashId t
+      _ <- Dashboards.updateSchema ed dashboard (Just now)
+      whenJust dashboard.title $ \t -> void $ Dashboards.updateTitle pid ed t
       syncDashboardAndQueuePush pid dashId
       addTriggerEvent "closeYamlDrawer" ""
       pure $ YamlSaved pid dashId dashboard
