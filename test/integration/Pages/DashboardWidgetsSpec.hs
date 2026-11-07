@@ -342,6 +342,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let timeCell v = renderT $ table [column{Widget.field = "timestamp", Widget.title = "Time"}] id (V.singleton $ V.singleton v) []
     timeCell "2026-11-06T23:21:20.435Z" `shouldSatisfy` T.isInfixOf "data-tippy-content=\"2026-11-06T23:21:20.435Z\"><local-time datetime=\"2026-11-06T23:21:20.435Z\" format=\"MMM d HH:mm:ss\">"
     timeCell "2026-03-19 09:05:00+00" `shouldSatisfy` T.isInfixOf "<local-time datetime=\"2026-03-19T09:05:00Z\""
+    -- A plain stat in ms or % rendered blank once non-additive charts stopped headlining sums.
+    renderT (Widget.widget_ (def :: Widget.Widget){Widget.wType = Widget.WTStat, Widget.id = Just "lat", Widget.unit = Just "ms", Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.value = Just 11.9}}) `shouldSatisfy` T.isInfixOf "11.9ms"
     -- Services Health printed a rare error rate as "9.24e-2 %".
     let numCell v = renderT $ table [column{Widget.field = "error_rate", Widget.title = "Errors", Widget.columnType = Just Widget.CTNumber, Widget.unit = Just "%"}] id (V.singleton $ V.singleton v) []
     map numCell ["0.0924", "0.004"] `shouldSatisfy` \cells -> zipWith T.isInfixOf ["0.09 %", "&lt;0.01 %"] cells == [True, True]

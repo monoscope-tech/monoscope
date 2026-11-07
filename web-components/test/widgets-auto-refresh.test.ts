@@ -119,6 +119,24 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(Number.isFinite(option.yAxis.max(empty))).toBe(true);
   });
 
+  // Query Latency Percentiles headlined a sum of p99s and "88.3M/min"; zero error rows read as "—".
+  test.each([
+    { extra: { unit: 'ns', summarizeBy: 'max' }, dataset: [[0, 5]], subtitle: '' },
+    { extra: { unit: 'errors', seriesIntent: 'error' }, dataset: [], value: '0 errors' },
+  ])('$extra: no rate on a non-additive series; no error rows reads as zero', async ({ extra, dataset, subtitle, value }) => {
+    const instance = chart();
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => instance, graphic, color };
+    document.body.innerHTML = '<span id="kindSubtitle">stale</span><span id="kindValue"></span><div id="kind" data-chart-widget></div>';
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      ...chartData, headers: ['timestamp', 'value'], dataset, rows_per_min: 42, stats: dataset.length ? chartData.stats : { count: 0 },
+    }), { headers: { 'Content-Type': 'application/json' } })) as any;
+    chartWidget({ ...widget('kind'), ...extra });
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
+    if (subtitle !== undefined) expect(document.getElementById('kindSubtitle')!.textContent).toBe(subtitle);
+    if (value !== undefined) await vi.waitFor(() => expect(document.getElementById('kindValue')!.textContent).toBe(value));
+  });
+
   // Error Rate's sparkline sat flat at 0.02% under dashed 2% and 5% lines stretched across it.
   test('a sparkline keeps its own scale and shows a threshold only once the data nears it', async () => {
     const instance = chart();

@@ -1420,19 +1420,23 @@ renderStatContent widget valueM = do
 
 renderChart :: Widget -> Html ()
 renderChart widget = do
-  let rateM = widget.dataset >>= (.rowsPerMin) <&> \r -> Utils.prettyPrintCount (round r) <> "/min"
+  let unit = fromMaybe "" widget.unit
+      -- Summing latencies or percentages ("5.3s" of p99s) means nothing; unless asked, those headline their peak.
+      summarize = fromMaybe (bool SBSum SBMax (isJust (unitNanos unit) || unit == "%")) widget.summarizeBy
+      summed = summarize == SBSum
+      rateM = guard summed *> widget.dataset >>= (.rowsPerMin) <&> \r -> Utils.prettyPrintCount (round r) <> "/min"
       chartId = maybeToMonoid widget.id
       isTimeseriesStat = widget.wType == WTTimeseriesStat
-      fallback = widget.dataset >>= (.value) <&> \value -> formatStatValue widget.decimals value $ fromMaybe "" widget.unit
+      -- A plain stat's value is its query's one result, not a sum over bins: always shown.
+      fallback = guard (widget.wType == WTStat || summed) *> widget.dataset >>= (.value) <&> \value -> formatStatValue widget.decimals value unit
       valueM =
         ( do
             guard isTimeseriesStat
             dataset <- widget.dataset
             stats <- dataset.stats
-            let summarize = fromMaybe SBSum widget.summarizeBy
             value <- statScalar summarize dataset.from dataset.to stats
             let prefix = summarizeByPrefix summarize
-            pure $ prefix <> memptyIfFalse (not $ T.null prefix) " " <> formatStatValue widget.decimals value (fromMaybe "" widget.unit)
+            pure $ prefix <> memptyIfFalse (not $ T.null prefix) " " <> formatStatValue widget.decimals value unit
         )
           <|> fallback
       chartConfig =
@@ -1448,12 +1452,12 @@ renderChart widget = do
           , "rollupFrom" AE..= widget.rollupFrom
           , "dbSource" AE..= widget.dbSource
           , "theme" AE..= fromMaybe "default" widget.theme
-          , "yAxisLabel" AE..= fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
+          , "yAxisLabel" AE..= fromMaybe unit (widget.yAxis >>= (.label))
           , "pid" AE..= (widget._projectId <&> (.toText))
-          , "summarizeBy" AE..= fromMaybe SBSum widget.summarizeBy
-          , "summarizeByPrefix" AE..= summarizeByPrefix (fromMaybe SBSum widget.summarizeBy)
+          , "summarizeBy" AE..= summarize
+          , "summarizeByPrefix" AE..= summarizeByPrefix summarize
           , "legendPosition" AE..= fromMaybe "bottom" widget.legendPosition
-          , "unit" AE..= maybeToMonoid widget.unit
+          , "unit" AE..= unit
           , "decimals" AE..= widget.decimals
           , "alertThreshold" AE..= widget.alertThreshold
           , "seriesIntent" AE..= widget.seriesIntent
@@ -1532,8 +1536,10 @@ renderChart widget = do
                 , Aria.atomic_ "true"
                 ]
               $ div_ [class_ "max-w-sm"] do
-                strong_ [class_ "text-sm font-semibold text-textStrong"] "No data in this time range"
-                p_ [class_ "mt-1 text-xs leading-5 text-textWeak"] "Try a wider time range or adjust the filters."
+                -- An error chart with no rows is good news, not missing data.
+                let (headline, hint) = bool ("No data in this time range", "Try a wider time range or adjust the filters.") ("No errors in this time range", "Nothing failed in this window.") (widget.seriesIntent == Just "error")
+                strong_ [class_ "text-sm font-semibold text-textStrong"] headline
+                p_ [class_ "mt-1 text-xs leading-5 text-textWeak"] hint
 
 
 -----------------------------------------------------------------------------

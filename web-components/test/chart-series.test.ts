@@ -16,6 +16,11 @@ describe('collapseLongTail', () => {
     ]);
   });
 
+  test('folds a non-additive tail by its max: a sum of p95 latencies is no latency at all', () => {
+    const data = [['t', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'], [1, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]];
+    expect(collapseLongTail(data, (vs) => Math.max(...vs)).at(-1)!.at(-1)).toBe(2);
+  });
+
   test('leaves eight or fewer series untouched', () => {
     const data = [['timestamp', 'a', 'b'], [1, 2, 1]];
 

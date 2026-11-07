@@ -139,7 +139,9 @@ export function getLogLevelColor(text: string): string {
 export const otherBucketLabel = (hidden: number) => `Other (${hidden})`;
 const OTHER_BUCKET = /^Other \(\d+\)$/;
 
-export function getSeriesColor(value: string, context?: 'status' | 'percentile' | 'service' | 'log'): string {
+// `unhashed` replaces the name-hash fallback: a lone series has no other series to tell apart from,
+// and a hashed red or amber would read as an error or a warning.
+export function getSeriesColor(value: string, context?: 'status' | 'percentile' | 'service' | 'log', unhashed?: string): string {
   const colors = themeColors();
   // Handle null and undefined values with visible but muted blue-gray
   if (value && value.toLowerCase() === 'unset') {
@@ -188,7 +190,7 @@ export function getSeriesColor(value: string, context?: 'status' | 'percentile' 
   }
   
   // Default: Use hash-based color selection for consistent service colors
-  return colors[hashString(value) % colors.length];
+  return unhashed ?? colors[hashString(value) % colors.length];
 }
 
 // Tailwind class to hex mapping for service colors. These values are the
