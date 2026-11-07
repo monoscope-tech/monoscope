@@ -217,6 +217,9 @@ describe('getSeriesColor', () => {
     expect(getSeriesColor('p95')).toBe(getPercentileColor('p95'));
     // The long-tail bucket is neutral like "unknown", never a service's hue.
     expect(getSeriesColor('Other (18)')).toBe(getSeriesColor('unknown'));
+    // A lone series ("postgresql" on Query Volume) hashed to red, the error colour; semantic names keep theirs.
+    expect(getSeriesColor('postgresql', undefined, '#123456')).toBe('#123456');
+    expect(getSeriesColor('500', undefined, '#123456')).toBe(getSeriesColor('500'));
     expect(getSeriesColor('error')).toBe(getLogLevelColor('error'));
   });
 

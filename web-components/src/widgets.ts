@@ -376,7 +376,8 @@ const MAX_VISIBLE_SERIES = 8;
 
 // Keep dense charts legible without changing their totals: rank series by peak value,
 // retain the leaders, and fold the rest into one explicitly labelled series.
-export const collapseLongTail = (data: ChartRow[]): ChartRow[] => {
+// `combine` folds the tail: a sum for counts, the max for latencies (a sum of p95s means nothing).
+export const collapseLongTail = (data: ChartRow[], combine: (values: number[]) => number = (vs) => vs.reduce((a, b) => a + b, 0)): ChartRow[] => {
   if (!Array.isArray(data) || !Array.isArray(data[0])) return data;
   const [headers, ...rows] = data;
   const names = headers.slice(1) as string[];
@@ -397,12 +398,12 @@ export const collapseLongTail = (data: ChartRow[]): ChartRow[] => {
     ...rows.map((row) => {
       if (!Array.isArray(row)) return row;
       const hiddenValues = hidden.map((series) => row[series.index + 1]).filter(Number.isFinite) as number[];
-      return [row[0], ...visible.map((series) => row[series.index + 1]), hiddenValues.length ? hiddenValues.reduce((sum, value) => sum + value, 0) : null];
+      return [row[0], ...visible.map((series) => row[series.index + 1]), hiddenValues.length ? combine(hiddenValues) : null];
     }),
   ];
 };
 
-export const createSeriesConfig = (widgetData: WidGetData, name: string, i: number) => {
+export const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, total = 2) => {
   // A thresholded stat (e.g. Error Rate) is treated as a caution metric — color
   // it red so the signal isn't an arbitrary hash color, rather than leaving it to
   // getSeriesColor's hash. Assumes higher = worse; revisit (explicit intent field)
@@ -421,7 +422,7 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
   // healthy throughput are both "count(*)"). Explicit intent, never a hash.
   const isErrorSeries = isGenericAggregate && widgetData.seriesIntent === 'error';
   const styles = getChartStyles(); // one getComputedStyle read per series, not three
-  const paletteColor = isErrorStat || isErrorSeries ? styles.errorColor : isGenericAggregate ? styles.brandColor : getSeriesColor(name);
+  const paletteColor = isErrorStat || isErrorSeries ? styles.errorColor : isGenericAggregate ? styles.brandColor : getSeriesColor(name, undefined, total === 1 ? styles.brandColor : undefined);
 
   const gradientColor = (opacity: number) => new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
     { offset: 0, color: window.echarts.color.modifyAlpha(paletteColor, opacity) },
@@ -441,8 +442,10 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
     barMaxWidth: '10',
     barMinHeight: '1',
     encode: { x: 0, y: i + 1 },
-    // Hovering a series or its legend entry fades the rest, which is how a band in a stack is found.
+    // Hovering a legend entry fades the rest, which is how a band in a stack is found. The plot itself is
+    // silent: fading every other line under the cursor hid the very values the axis tooltip lists.
     emphasis: { focus: 'series' },
+    silent: true,
     itemStyle: { color: paletteColor, opacity: inventorySeriesOpacity },
   };
 
@@ -469,7 +472,7 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
 const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) => {
   if (!data) return opt;
 
-  const source = collapseLongTail(data);
+  const source = collapseLongTail(data, widgetData.summarizeBy && widgetData.summarizeBy !== 'sum' ? (vs) => Math.max(...vs) : undefined);
   opt.dataset = { ...opt.dataset, source };
   // Counts must not get fractional ticks (0.2, 0.6) when the peak is small.
   if (opt.yAxis && !Array.isArray(opt.yAxis))
@@ -481,7 +484,7 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
 
   // Only update if legend data has actually changed
   if (JSON.stringify(cols) !== JSON.stringify(currentLegendData)) {
-    opt.series = cols?.map((n: ChartCell, i: number) => createSeriesConfig(widgetData, String(n ?? ''), i));
+    opt.series = cols?.map((n: ChartCell, i: number) => createSeriesConfig(widgetData, String(n ?? ''), i, cols.length));
     opt.legend.data = cols;
   }
 
@@ -552,7 +555,8 @@ const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'],
     const formatted = formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '', widgetData.decimals);
     value.textContent = widgetData.summarizeByPrefix ? `${widgetData.summarizeByPrefix} ${formatted}` : formatted;
   } else {
-    value.textContent = NO_DATA_VALUE; // empty range
+    // No error rows is zero errors, not missing data.
+    value.textContent = widgetData.seriesIntent === 'error' ? formatStatValue(0, widgetData.unit || '', widgetData.decimals) : NO_DATA_VALUE;
   }
   value.classList.remove('hidden');
 };
@@ -828,7 +832,8 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       reportFailure(error);
       return;
     }
-    if (subtitle) subtitle.textContent = rows_per_min == null ? '' : `${window.formatNumber(rows_per_min)}/min`;
+    // A rate of a summed latency or percentage ("88.3M/min" over p99s) means nothing: only counts get one.
+    if (subtitle) subtitle.textContent = rows_per_min == null || widgetData.summarizeBy !== 'sum' ? '' : `${window.formatNumber(rows_per_min)}/min`;
 
     // Representative scalar for the unit (rate/mean/…), not a blind sum of
     // per-bin values — see statScalar. from/to are ms, needed for rate. count<1

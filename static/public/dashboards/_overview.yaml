@@ -208,6 +208,7 @@ tabs:
           | order by timestamp desc
           | limit 10000
         unit: errors
+        series_intent: error
         layout: { w: 6, h: 4 }
 
       # HTTP Request Volume by Service
@@ -387,7 +388,7 @@ tabs:
           name != null and kind == "server" and resource.service.name == "{{var-service}}"
           | summarize count() by bin_auto(timestamp), name
           | order by timestamp desc
-          | limit 2000
+          | limit 20000
         unit: reqs
         layout: { w: 4, h: 3 }
 
@@ -397,7 +398,7 @@ tabs:
           name != null and kind == "server" and duration != null and resource.service.name == "{{var-service}}"
           | summarize p95(duration) by bin_auto(timestamp), name
           | order by timestamp desc
-          | limit 2000
+          | limit 20000
         unit: ns
         layout: { w: 4, h: 3 }
 
@@ -408,8 +409,9 @@ tabs:
           name != null and kind == "server" and (status_code == "ERROR" or coalesce(attributes.http.response.status_code, 0) >= 400) and resource.service.name == "{{var-service}}"
           | summarize count() by bin_auto(timestamp), name
           | order by timestamp desc
-          | limit 2000
+          | limit 20000
         unit: errors
+        series_intent: error
         layout: { w: 4, h: 3 }
 
       # 3. Service traffic & latency charts
@@ -445,6 +447,7 @@ tabs:
           | order by timestamp desc
           | limit 10000
         unit: errors
+        series_intent: error
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
@@ -529,7 +532,7 @@ tabs:
           SELECT
             name as resource_name,
             COUNT(*) as requests,
-            ROUND((SUM(duration) / 1e9)::numeric, 2) as total_time,
+            ROUND((SUM(duration)::float8 / 1e9)::numeric, 2) as total_time,
             ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1e6), 2) as p95_latency,
             COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) as errors,
             (COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) * 100.0 / GREATEST(1, COUNT(*)))::numeric as error_rate
@@ -795,6 +798,7 @@ tabs:
               attributes.db.system.name == "{{var-database}}" and status_code == "ERROR"
               | summarize count() by bin_auto(timestamp)
             unit: errors
+            series_intent: error
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
@@ -870,7 +874,7 @@ tabs:
             COUNT(*) as count,
             ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_ms,
             ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6)::numeric, 2) as p95_ms,
-            ROUND((SUM(duration) / 1e9)::numeric, 2) as total_time,
+            ROUND((SUM(duration)::float8 / 1e9)::numeric, 2) as total_time,
             COUNT(*) FILTER (WHERE status_code = 'ERROR') as errors,
             -- The pattern's head as a KQL string body (backslash and quote escaped) for the Explorer link.
             MIN(replace(replace(LEFT(COALESCE(
@@ -1071,6 +1075,8 @@ tabs:
           | summarize count() by bin_auto(timestamp), attributes.db.system.name
           | order by timestamp desc
           | limit 10000
+        unit: errors
+        series_intent: error
         layout: { w: 6, h: 4 }
 
       # The failures themselves. The message is cut at its first double quote so the
@@ -1192,7 +1198,7 @@ tabs:
             {{time_filter}}
           GROUP BY time_bucket('{{rollup_interval}}', timestamp), series
           ORDER BY timestamp DESC
-          LIMIT 2000
+          LIMIT 20000
         unit: '%'
 
       # Memory Usage Over Time
@@ -1210,7 +1216,7 @@ tabs:
             {{time_filter}}
           GROUP BY time_bucket('{{rollup_interval}}', timestamp), series
           ORDER BY timestamp DESC
-          LIMIT 2000
+          LIMIT 20000
         unit: '%'
 
       # Container/Service Resource Table
@@ -1295,7 +1301,7 @@ tabs:
             {{time_filter}}
           GROUP BY time_bucket('{{rollup_interval}}', timestamp), series
           ORDER BY timestamp DESC
-          LIMIT 1000
+          LIMIT 10000
         unit: partitions
 
       # System Load Average
@@ -1317,7 +1323,7 @@ tabs:
             {{time_filter}}
           GROUP BY time_bucket('{{rollup_interval}}', timestamp), metric_name
           ORDER BY timestamp DESC
-          LIMIT 3000
+          LIMIT 30000
 
       # Redis Memory (if available)
       - type: 'timeseries'
@@ -1334,7 +1340,7 @@ tabs:
             {{time_filter}}
           GROUP BY time_bucket('{{rollup_interval}}', timestamp), metric_name
           ORDER BY timestamp DESC
-          LIMIT 3000
+          LIMIT 30000
         unit: MB
 
       # All Available Metrics List
