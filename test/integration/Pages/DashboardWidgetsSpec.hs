@@ -1090,7 +1090,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let status action = runAuthHandler tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         apiStatus action = toBaseServantResponse tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         renameForm = Dashboards.DashboardRenameForm{Dashboards.title = "Mine", Dashboards.fileDir = Nothing}
-        tabWidgets (d :: DashboardModel.Dashboard) = length $ foldMap (.widgets) (fold d.tabs)
+        tabWidgets = length . DashboardModel.allWidgets
         freeze did = dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
     template <- maybe (fail "missing _overview.yaml") pure $ find ((== Just "_overview.yaml") . (.file)) dashboardTemplatesCompiled
     _ <- runAuthHandler tr $ Dashboards.entrypointRedirectGetH "_overview.yaml" [] testPid []
@@ -1120,7 +1120,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       ]
       `shouldReturn` replicate 3 403
     -- The YAML drawer's route never refuses: its status area says why nothing was saved.
-    call tr (Dashboards.dashboardYamlPutH testPid did (Dashboards.YamlForm "title: Mine\nwidgets: []\n")) <&> (\(Done r) -> show @Text r) >>= (`shouldBe` "YamlReadOnly")
+    Done yamlSave <- call tr $ Dashboards.dashboardYamlPutH testPid did (Dashboards.YamlForm "title: Mine\nwidgets: []\n")
+    yamlSave `shouldSatisfy` \case Dashboards.YamlReadOnly -> True; _ -> False
     traverse apiStatus [void $ Api.apiDashboardPatch testPid did ApiTypes.DashboardPatch{ApiTypes.title = Just "Mine", ApiTypes.tags = Nothing, ApiTypes.teams = Nothing, ApiTypes.filePath = Nothing, ApiTypes.schema = Nothing}, void $ Api.apiDashboardWidgetUpsert testPid did (widgetOf Widget.WTStat "Nope")]
       `shouldReturn` [403, 403]
     -- Starring and saved views are not edits.

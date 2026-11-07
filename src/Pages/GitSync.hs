@@ -43,7 +43,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_)
-import Models.Projects.DashboardTemplates (getDashboardTemplates, loadDashboardFromVM, requireEditable, updateSchema)
+import Models.Projects.DashboardTemplates (askTemplates, loadDashboardFromVM, requireEditable, updateSchema)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
@@ -694,7 +694,7 @@ dashboardRepositoryPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Dash
 dashboardRepositoryPostH pid did form = do
   requireGitWrite pid
   dashboard <- Dashboards.getDashboardByProjectId pid did >>= maybe (throwError err404) pure
-  templates <- getDashboardTemplates . (.config) =<< ask @Config.AuthContext
+  templates <- askTemplates
   ed <- requireEditable dashboard
   assignmentError <-
     GitSync.assignDashboardRepository pid did form.repositoryId >>= \case

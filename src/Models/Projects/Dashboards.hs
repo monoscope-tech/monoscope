@@ -32,6 +32,7 @@ module Models.Projects.Dashboards (
   DashboardSort (..),
   SortOrder (..),
   readOnlyTemplate,
+  dashTitle,
   updateTags,
   updateStarredSince,
   getDashboardByBaseTemplate,
@@ -377,6 +378,11 @@ selectDashboardsSortedBy pid order key =
     $ selectFrom @DashboardVM
     <> [HI.sql| WHERE project_id = #{pid} ORDER BY starred_since DESC NULLS LAST, |]
     <> fromString (toString (SortField (display key) order).toSql)
+
+
+dashTitle :: Text -> Text
+dashTitle "" = "Untitled"
+dashTitle t = t
 
 
 -- | The @read_only@ template a built-in dashboard renders, whatever its row stores, so every deploy reaches it.

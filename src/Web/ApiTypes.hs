@@ -155,7 +155,7 @@ refusal e = problem status ApiProblem{code = c, message = msg, field = fieldM, s
       Required f -> (err400, PRequired, f <> " is required", Just f)
       EveryoneTeamNotUpdatable -> (err400, PEveryoneTeamNotUpdatable, "The everyone team cannot be updated via this endpoint", Nothing)
       EveryoneTeamNotDeletable -> (err400, PEveryoneTeamNotDeletable, "The everyone team cannot be deleted", Nothing)
-      DashboardReadOnly -> (err403, PDashboardReadOnly, "Built-in dashboards are read-only; duplicate it to make changes", Nothing)
+      DashboardReadOnly -> (err403, PDashboardReadOnly, "Built-in dashboards are read-only. Duplicate this one to make changes.", Nothing)
       ReservedHandle -> (err400, PReservedHandle, "Handle \"everyone\" is reserved", Just "handle")
       HandleInUse h -> (err400, PHandleInUse, "Handle \"" <> h <> "\" is already in use", Just "handle")
       MemberIdentityMissing -> (err400, PMemberIdentityMissing, "Either email or user_id is required", Nothing)

@@ -738,7 +738,7 @@ apiDashboardApply principal pid doc = do
     Just existing -> do
       ed <- requireEditable existing
       _ <- updateSchema ed doc.schema (Just now)
-      _ <- updateTitle pid ed newTitle
+      _ <- updateTitle ed newTitle
       whenJust doc.tags (void . Dashboards.updateTags pid existing.id . V.fromList)
       apiDashboardGet pid existing.id
     Nothing -> do
@@ -757,7 +757,7 @@ apiDashboardPatch pid did patch = do
   now <- Time.currentTime
   when (isJust patch.title || isJust patch.schema) do
     ed <- requireEditable vm
-    whenJust patch.title $ void . updateTitle pid ed
+    whenJust patch.title $ void . updateTitle ed
     whenJust patch.schema $ \s -> void $ updateSchema ed s (Just now)
   whenJust patch.tags $ void . Dashboards.updateTags pid did . V.fromList
   apiDashboardGet pid did

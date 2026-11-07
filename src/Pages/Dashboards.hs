@@ -111,7 +111,8 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.MonitorDefinitions (compileAlertSql)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
-import Models.Projects.DashboardTemplates (Editable, detach, duplicate, editable, getDashboardTemplates, loadDashboardFromVM, requireEditable, updateSchema, updateTitle)
+import Models.Projects.DashboardTemplates (Editable, askTemplates, detach, duplicate, editable, getDashboardTemplates, loadDashboardFromVM, requireEditable, updateSchema, updateTitle)
+import Models.Projects.Dashboards (dashTitle)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
@@ -254,11 +255,6 @@ dashFilePath dir title = (if T.null dir || T.last dir == '/' then dir else dir <
 
 normalizeWidgetId :: Text -> Text
 normalizeWidgetId = T.replace "Expanded" ""
-
-
-dashTitle :: Text -> Text
-dashTitle "" = "Untitled"
-dashTitle t = t
 
 
 -- | After any dashboard change: refresh file_path/file_sha (only when the content changed;
@@ -2515,7 +2511,7 @@ entrypointRedirectGetH
 entrypointRedirectGetH baseTemplate tags pid qparams = do
   (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  template <- find ((== Just baseTemplate) . (.file)) <$> (getDashboardTemplates . (.config) =<< ask @AuthContext)
+  template <- find ((== Just baseTemplate) . (.file)) <$> askTemplates
   -- Built-in (read-only) dashboards start starred.
   let shouldBeStarred = (template >>= (.readOnly)) == Just True
       getOrCreate = do
@@ -2571,8 +2567,8 @@ dashboardRenamePatchH pid dashId form = do
   Dashboards.getDashboardByProjectId pid dashId >>= \case
     Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
-      (ed, _, _) <- getEditableDash pid dashId
-      _ <- updateTitle pid ed form.title
+      ed <- requireEditable dashVM
+      _ <- updateTitle ed form.title
 
       whenJust dashVM.schema \schema ->
         void $ updateSchema ed (schema & #title ?~ form.title) Nothing
@@ -3250,7 +3246,7 @@ dashboardYamlPutH pid dashId form = do
     (Just ed, Right dashboard) -> do
       now <- Time.currentTime
       _ <- updateSchema ed dashboard (Just now)
-      whenJust dashboard.title $ \t -> void $ updateTitle pid ed t
+      whenJust dashboard.title $ void . updateTitle ed
       syncDashboardAndQueuePush pid dashId
       addTriggerEvent "closeYamlDrawer" ""
       pure $ YamlSaved pid dashId dashboard

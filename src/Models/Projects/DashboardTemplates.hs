@@ -1,10 +1,9 @@
-module Models.Projects.DashboardTemplates (getDashboardTemplates, loadDashboardFromVM, detach, duplicate, Editable, editable, requireEditable, updateSchema, updateTitle, dashboardTemplatesCompiled) where
+module Models.Projects.DashboardTemplates (askTemplates, getDashboardTemplates, loadDashboardFromVM, detach, duplicate, Editable, editable, requireEditable, updateSchema, updateTitle, dashboardTemplatesCompiled) where
 
 import Control.Lens ((%~))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.FileEmbed (embedDir)
 import Data.Generics.Labels ()
-import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Error.Static (Error)
@@ -32,24 +31,24 @@ detach templates vm = vm{Dashboards.baseTemplate = Nothing, Dashboards.schema = 
 
 -- | The copier's own detached copy, outside any repository: a shared (repository, file) key is unique.
 duplicate :: (IOE :> es, Reader AuthContext :> es) => Projects.UserId -> UTCTime -> Dashboards.DashboardId -> Dashboards.DashboardVM -> Eff es Dashboards.DashboardVM
-duplicate uid now did vm = do
-  templates <- getDashboardTemplates . (.config) =<< ask @AuthContext
-  let copy = detach templates vm
-      copied = (<> " (Copy)")
-  pure
-    copy
-      { Dashboards.id = did
-      , Dashboards.createdAt = now
-      , Dashboards.updatedAt = now
-      , Dashboards.createdBy = uid
-      , Dashboards.title = copied $ if T.null vm.title then "Untitled" else vm.title
-      , Dashboards.schema = copy.schema <&> #title %~ Just . copied . fromMaybe "Untitled"
-      , Dashboards.starredSince = Nothing
-      , Dashboards.homepageSince = Nothing
-      , Dashboards.filePath = Nothing
-      , Dashboards.fileSha = Nothing
-      , Dashboards.gitSyncId = Nothing
-      }
+duplicate uid now did vm =
+  askTemplates <&> \templates ->
+    let copy = detach templates vm
+     in copy
+          { Dashboards.id = did
+          , Dashboards.createdAt = now
+          , Dashboards.updatedAt = now
+          , Dashboards.createdBy = uid
+          , Dashboards.title = copied $ Dashboards.dashTitle vm.title
+          , Dashboards.schema = copy.schema <&> #title %~ Just . copied . fromMaybe "Untitled"
+          , Dashboards.starredSince = Nothing
+          , Dashboards.homepageSince = Nothing
+          , Dashboards.filePath = Nothing
+          , Dashboards.fileSha = Nothing
+          , Dashboards.gitSyncId = Nothing
+          }
+  where
+    copied = (<> " (Copy)")
 
 
 -- | Proof a dashboard's content may be written; only 'editable' makes one, never for a built-in read-only dashboard.
@@ -57,7 +56,7 @@ newtype Editable = Editable Dashboards.DashboardId
 
 
 editable :: (IOE :> es, Reader AuthContext :> es) => Dashboards.DashboardVM -> Eff es (Maybe Editable)
-editable vm = ask @AuthContext >>= getDashboardTemplates . (.config) <&> \templates -> Editable vm.id <$ guard (isNothing $ Dashboards.readOnlyTemplate templates vm)
+editable vm = askTemplates <&> \templates -> Editable vm.id <$ guard (isNothing $ Dashboards.readOnlyTemplate templates vm)
 
 
 requireEditable :: (Error ServerError :> es, IOE :> es, Reader AuthContext :> es) => Dashboards.DashboardVM -> Eff es Editable
@@ -75,14 +74,18 @@ updateSchema (Editable dashId) dashboard updatedAt =
     <> [HI.sql| WHERE id = #{dashId} |]
 
 
-updateTitle :: DB es => Projects.ProjectId -> Editable -> Text -> Eff es Int64
-updateTitle pid (Editable dashId) title = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET title = #{title} WHERE project_id = #{pid} AND id = #{dashId} |]
+updateTitle :: DB es => Editable -> Text -> Eff es Int64
+updateTitle (Editable dashId) title = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET title = #{title} WHERE id = #{dashId} |]
 
 
 -- Embedded raw and decoded at runtime: a home-module splice here would have to link every page.
 -- DashboardTemplatesSpec checks that each template decodes.
 dashboardTemplatesCompiled :: [Dashboards.Dashboard]
 dashboardTemplatesCompiled = rights [Dashboards.decodeDashboard f bs | (f, bs) <- sortWith fst $(embedDir "static/public/dashboards"), "yaml" `isExtensionOf` f]
+
+
+askTemplates :: (IOE :> es, Reader AuthContext :> es) => Eff es [Dashboards.Dashboard]
+askTemplates = getDashboardTemplates . (.config) =<< ask @AuthContext
 
 
 -- Reload from disk only in development; deployments always use the compiled templates.
