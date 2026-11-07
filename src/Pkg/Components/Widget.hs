@@ -1093,20 +1093,20 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
           li_ [class_ "in-[[data-read-only]]:hidden"]
             $ a_
               ( [class_ "p-2 w-full text-left block cursor-pointer", data_ "tippy-content" "Create a copy of this widget"]
-              <> [hxPost_ (urls.dashboardDuplicateWidget p d wId Nothing) | (p, d) <- toList (dashboardIds widget)]
-                <> [ hxTarget_ "closest .grid-stack"
-                   , hxSwap_ "beforeend"
-                   , -- htmx appends the rendered widget and processes it (scripts, hx-*, and
-                     -- hyperscript, which hooks htmx:load itself); only the grid adoption is
-                     -- left to do. No size is passed: makeWidget reads the gs-w/gs-h the
-                     -- widget already renders, and addWidget's options are dropped since v11.
-                     -- after:swap, not after:request — under htmx 4 afterRequest fires before
-                     -- the swap, when the new element is not yet in the DOM.
-                     [__|on click call (the closest <[popover]/>).hidePopover()
+                  <> [hxPost_ (urls.dashboardDuplicateWidget p d wId Nothing) | (p, d) <- toList (dashboardIds widget)]
+                  <> [ hxTarget_ "closest .grid-stack"
+                     , hxSwap_ "beforeend"
+                     , -- htmx appends the rendered widget and processes it (scripts, hx-*, and
+                       -- hyperscript, which hooks htmx:load itself); only the grid adoption is
+                       -- left to do. No size is passed: makeWidget reads the gs-w/gs-h the
+                       -- widget already renders, and addWidget's options are dropped since v11.
+                       -- after:swap, not after:request — under htmx 4 afterRequest fires before
+                       -- the swap, when the new element is not yet in the DOM.
+                       [__|on click call (the closest <[popover]/>).hidePopover()
                     on htmx:after:swap
                        set g to the closest <.grid-stack/> then call g.gridstack.makeWidget(g.lastElementChild)
                  |]
-                   ]
+                     ]
               )
               "Duplicate widget"
           li_ [class_ "in-[[data-read-only]]:hidden"]
