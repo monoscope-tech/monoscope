@@ -1837,10 +1837,10 @@ renderTableWithDataAndParams widget headers dataRows params = do
       sections = bool [(Nothing, toList dataRows)] [(Just (getRowValue 0 (head g)), toList g) | g <- NE.groupBy ((==) `on` getRowValue 0) (toList dataRows)] grouped
 
   table_ [class_ "dashboard-table table table-sm w-full relative [&_:is(th,td):first-child]:pl-4 [&_:is(th,td):last-child]:pr-4 [&_td]:border-b [&_td]:border-strokeWeak/50 [&_tr:last-child_td]:border-b-0", id_ tableId] do
-    colgroup_ $ forM_ visible \col -> col_ $ foldMap (\w -> [style_ $ "width: " <> w]) (colWidth col)
+    colgroup_ $ forM_ visible $ col_ . foldMap (\w -> [style_ $ "width: " <> w]) . colWidth
     unless (widget.wType == WTTopList) $ sortableTableHead_ widget columns (param "table-sort")
     tbody_ [] $ forM_ sections \(section, rows) -> do
-      whenJust section \name -> tr_ [] $ th_ [colspan_ (show $ length visible), scope_ "colgroup", class_ "pt-3 pb-1 text-left text-xs font-medium text-textWeak"] $ toHtml name
+      whenJust section $ tr_ [] . th_ [colspan_ (show $ length visible), scope_ "colgroup", class_ "pt-3 pb-1 text-left text-xs font-medium text-textWeak"] . toHtml
       forM_ rows \row -> do
         let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
             rowSubs = M.fromList [("row." <> c.field, getRowValue i row) | (c, i) <- zip columns [0 ..]]
@@ -2003,7 +2003,7 @@ renderLongTextOr widget linkSubs col value
 -- >>> sqlLines "connection reset from 10.0.0.4 where pool was full"
 -- "connection reset from 10.0.0.4 where pool was full"
 sqlLines :: Text -> Text
-sqlLines sql = case T.words sql of
+sqlLines sql = case words sql of
   w : ws | T.toUpper w `elem` ["SELECT", "INSERT", "UPDATE", "DELETE", "WITH"] -> T.concat $ w : zipWith (\p x -> sep (T.toUpper p) (T.toUpper x) <> x) (w : ws) ws
   _ -> sql
   where
