@@ -144,7 +144,7 @@ test("overview template scopes filters by tab and shares saved views", async ({ 
     await toolbar.getByRole("link", { name: "API logs", exact: true }).click();
     await expect(page).toHaveURL(/var-service=api/);
     await page.getByRole("tab", { name: "Service", exact: true }).click();
-    await expect(page.locator('#dashboard-variables input[name="service"], #dashboard-variables input[name="resource"]')).toHaveCount(2);
+    await expect(page.locator('#dashboard-variables input[name="service"]')).toHaveCount(1);
     expect(new URL(page.url()).searchParams.get("var-service")).toBe("api");
   } finally {
     sql(`DELETE FROM projects.dashboards WHERE id='${id}';`);

@@ -2630,8 +2630,17 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
   .dashboard-table tbody {
     display: block;
   }
-  .dashboard-table :is(colgroup, thead) {
+  .dashboard-table colgroup {
     display: none;
+  }
+  /* Out of sight but still the table's column headers, for assistive tech. */
+  .dashboard-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .dashboard-table tbody tr {
     display: flex;
