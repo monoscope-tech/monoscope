@@ -817,9 +817,9 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
         Nothing ->
           Right
             $ widget
-              & #dataset ?~ case widget.wType of
-                Widget.WTStat -> def{Widget.source = AE.Null, Widget.value = md.dataFloat}
-                _ -> Widget.toWidgetDataset $ Widget.foldSeries 8 md
+            & #dataset ?~ case widget.wType of
+              Widget.WTStat -> def{Widget.source = AE.Null, Widget.value = md.dataFloat}
+              _ -> Widget.toWidgetDataset $ Widget.foldSeries 8 md
   whenLeft_ chart \queryError ->
     Log.logAttention "widgetPngGetH: chart query unavailable" $ AE.object ["widgetId" AE..= widget.id, "error" AE..= queryError]
 

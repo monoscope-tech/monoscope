@@ -19,8 +19,8 @@ import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, defaultTimeLocale, parseTimeM, zonedTimeToUTC)
-import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Time.Format (formatTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
@@ -1339,8 +1339,8 @@ sortableTableHead_ widget columns selected =
         $ if sortable
           then button_
             [ type_ "button"
-            -- Stretched over the whole cell, so the padding is clickable too.
-            , class_ "w-full cursor-pointer group after:absolute after:inset-0"
+            , -- Stretched over the whole cell, so the padding is clickable too.
+              class_ "w-full cursor-pointer group after:absolute after:inset-0"
             , data_ "sort-field" col.field
             , data_ "sort-direction" direction
             , [__|on click
@@ -1464,13 +1464,13 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-              <> case widget.wType of
-                -- Top-aligned like the sparkline stats, so a row of mixed stat tiles shares a baseline.
-                WTStat -> "justify-start "
-                WTTimeseriesStat -> "justify-start "
-                _ -> "justify-end "
-              <> bool "min-h-0 " "" isStat
-              <> if or widget.naked then "" else "surface-raised rounded-2xl relative"
+            <> case widget.wType of
+              -- Top-aligned like the sparkline stats, so a row of mixed stat tiles shares a baseline.
+              WTStat -> "justify-start "
+              WTTimeseriesStat -> "justify-start "
+              _ -> "justify-end "
+            <> bool "min-h-0 " "" isStat
+            <> if or widget.naked then "" else "surface-raised rounded-2xl relative"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -1898,7 +1898,8 @@ renderProgressCell col value maxValues = div_ [class_ "relative isolate -mx-2 px
         _ -> 0
   span_
     [ class_
-        $ "absolute inset-y-0 left-0 -z-10 rounded-sm " <> case col.progressVariant of
+        $ "absolute inset-y-0 left-0 -z-10 rounded-sm "
+        <> case col.progressVariant of
           Just "error" -> "bg-fillError-weak"
           Just "warning" -> "bg-fillWarning-weak"
           Just "success" -> "bg-fillSuccess-weak"

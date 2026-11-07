@@ -383,7 +383,7 @@ logQueryBox_ config = do
                             end
                          |]
                 ]
-                <> [checked_ | Just v == config.vizType]
+              <> [checked_ | Just v == config.vizType]
             when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml @Text emoji
             span_ $ toHtml @Text label
 

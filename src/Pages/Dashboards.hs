@@ -1201,9 +1201,9 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
     (issues, _) <- Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.period = "24h", Issues.hideLowSeverity = True, Issues.limit = 2}
     pure
       $ widget
-        & #html
-          ?~ renderText
-            (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
+      & #html
+        ?~ renderText
+          (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
   Widget.WTTable -> tableWidget
   Widget.WTTopList -> tableWidget
   Widget.WTServiceMap -> do
