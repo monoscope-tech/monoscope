@@ -699,7 +699,11 @@ apiDashboardsList pid sortM teamIdM = do
 
 
 apiDashboardGet :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
-apiDashboardGet pid did = toFull <$> (notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did)
+apiDashboardGet pid did = toFull <$> dashboardVM pid did
+
+
+dashboardVM :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx Dashboards.DashboardVM
+dashboardVM pid did = notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did
 
 
 -- | Insert a new dashboard row from an input.
@@ -749,7 +753,7 @@ apiDashboardUpdate pid did inp =
 
 apiDashboardPatch :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardPatch -> ATBaseCtx DashboardFull
 apiDashboardPatch pid did patch = do
-  vm <- notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did
+  vm <- dashboardVM pid did
   now <- Time.currentTime
   when (isJust patch.title || isJust patch.schema) do
     ed <- requireEditable vm
@@ -765,7 +769,7 @@ apiDashboardDelete pid did = withRefetchNoContent (apiDashboardGet pid did) (Das
 
 apiDashboardDuplicate :: ApiActor -> Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
 apiDashboardDuplicate principal pid did = do
-  existing <- notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did
+  existing <- dashboardVM pid did
   now <- Time.currentTime
   newId <- UUIDId <$> UUID.genUUID
   toFull <$> (Dashboards.insert =<< duplicate (fromMaybe Projects.systemUserId $ principalUser principal) now newId existing)
@@ -796,7 +800,7 @@ apiDashboardYaml pid did = do
 -- | Ownership-check the dashboard, rewrite its widget list with @f@ and persist.
 withWidgets :: Projects.ProjectId -> Dashboards.DashboardId -> ([Widget.Widget] -> [Widget.Widget]) -> ATBaseCtx ()
 withWidgets pid did f = do
-  vm <- notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did
+  vm <- dashboardVM pid did
   ed <- requireEditable vm
   now <- Time.currentTime
   void $ updateSchema ed (fromMaybe def vm.schema & #widgets %~ f) (Just now)

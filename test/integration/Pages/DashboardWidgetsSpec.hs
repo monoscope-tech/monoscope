@@ -269,6 +269,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       Dashboards.YamlRejected (GitSync.YamlUnparseable _) -> True
       Dashboards.YamlRejected (GitSync.DashboardInvalid _) -> False
       Dashboards.YamlSaved{} -> False
+      Dashboards.YamlReadOnly -> False
     write $ Dashboards.dashboardWidgetPutH testPid dashId Nothing (Just "second-tab") (widgetOf Widget.WTStat "Added To Second")
     write $ Dashboards.dashboardDuplicateWidgetPostH testPid dashId "second-widget" Nothing
     write $ Dashboards.dashboardWidgetReorderPatchH testPid dashId (Just "first-tab") (reorder [("first-widget", (6, 4, 6, 2))])
@@ -1113,10 +1114,11 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     traverse status
       [ void $ Dashboards.dashboardWidgetReorderPatchH testPid did (Just "overview") mempty
       , void $ Dashboards.dashboardRenamePatchH testPid did renameForm
-      , void $ Dashboards.dashboardYamlPutH testPid did (Dashboards.YamlForm "title: Mine\nwidgets: []\n")
       , void $ Dashboards.dashboardTabRenamePatchH testPid did "overview" (Dashboards.TabRenameForm "Mine")
       ]
-      `shouldReturn` replicate 4 403
+      `shouldReturn` replicate 3 403
+    -- The YAML drawer's route never refuses: its status area says why nothing was saved.
+    call tr (Dashboards.dashboardYamlPutH testPid did (Dashboards.YamlForm "title: Mine\nwidgets: []\n")) <&> (\(Done r) -> show @Text r) >>= (`shouldBe` "YamlReadOnly")
     traverse apiStatus [void $ Api.apiDashboardPatch testPid did ApiTypes.DashboardPatch{ApiTypes.title = Just "Mine", ApiTypes.tags = Nothing, ApiTypes.teams = Nothing, ApiTypes.filePath = Nothing, ApiTypes.schema = Nothing}, void $ Api.apiDashboardWidgetUpsert testPid did (widgetOf Widget.WTStat "Nope")]
       `shouldReturn` [403, 403]
     -- Starring and saved views are not edits.

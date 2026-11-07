@@ -3243,10 +3243,11 @@ instance ToHtml DashboardYaml where
 dashboardYamlPutH :: Projects.ProjectId -> Dashboards.DashboardId -> YamlForm -> ATAuthCtx (RespHeaders (Done YamlSave))
 dashboardYamlPutH pid dashId form = do
   _ <- Projects.sessionAndProject pid
-  (ed, _, _) <- getEditableDash pid dashId
-  done =<< case GitSync.yamlToDashboard (encodeUtf8 form.yaml) of
-    Left err -> pure $ YamlRejected err
-    Right dashboard -> do
+  editableM <- editable . fst =<< getDashAndVM pid dashId Nothing
+  done =<< case (editableM, GitSync.yamlToDashboard (encodeUtf8 form.yaml)) of
+    (Nothing, _) -> pure YamlReadOnly
+    (_, Left err) -> pure $ YamlRejected err
+    (Just ed, Right dashboard) -> do
       now <- Time.currentTime
       _ <- updateSchema ed dashboard (Just now)
       whenJust dashboard.title $ \t -> void $ updateTitle pid ed t
@@ -3255,13 +3256,14 @@ dashboardYamlPutH pid dashId form = do
       pure $ YamlSaved pid dashId dashboard
 
 
--- | Both answer 200: the rejection is shown in the drawer's status area, beside the editor.
-data YamlSave = YamlSaved Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard | YamlRejected GitSync.DashboardYamlError
+-- | All answer 200: a rejection is shown in the drawer's status area, beside the editor.
+data YamlSave = YamlSaved Projects.ProjectId Dashboards.DashboardId Dashboards.Dashboard | YamlRejected GitSync.DashboardYamlError | YamlReadOnly
   deriving stock (Show)
 
 
 instance Outcome YamlSave where
   outcomeBody = \case
+    YamlReadOnly -> div_ [id_ "yaml-status", class_ "text-textError"] $ toHtml $ refusalMessage ReadOnlyDashboard
     YamlRejected err -> div_ [id_ "yaml-status", class_ "text-textError"] do
       div_ [class_ "flex items-center gap-2 font-semibold mb-2"] do
         faSprite_ "circle-exclamation" "solid" "w-4 h-4"
@@ -3281,9 +3283,11 @@ instance Outcome YamlSave where
   outcomeRedirect = \case
     YamlSaved pid dashId _ -> Just $ dashboardUrl pid dashId Nothing []
     YamlRejected _ -> Nothing
+    YamlReadOnly -> Nothing
   outcomeToast = \case
     YamlSaved{} -> Just "Dashboard schema updated"
     YamlRejected _ -> Nothing
+    YamlReadOnly -> Nothing
 
 
 dashboardUrl :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> [(Text, Maybe Text)] -> Text
