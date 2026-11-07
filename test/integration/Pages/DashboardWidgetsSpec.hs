@@ -1037,6 +1037,60 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     for_ ["Dashboard C", "Dashboard A"] \t -> titled t >>= testServant tr . Dashboards.dashboardStarPostH testPid . (.id)
     map (isJust . (.starredSince)) <$> listed `shouldReturn` [True, True, False, False]
 
+  it "built-in dashboards are read-only: render the shipped YAML over a frozen row, refuse every edit, duplicate into an editable copy" \tr -> do
+    let status action = runAuthHandler tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
+        apiStatus action = toBaseServantResponse tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
+        renameForm = Dashboards.DashboardRenameForm{Dashboards.title = "Mine", Dashboards.fileDir = Nothing}
+    template <- maybe (fail "missing _overview.yaml") pure $ find ((== Just "_overview.yaml") . (.file)) dashboardTemplatesCompiled
+    _ <- runAuthHandler tr $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] testPid []
+    did <- runQueryEffect tr (DashboardModel.getDashboardByBaseTemplate testPid "_overview.yaml") >>= maybe (fail "no overview row") pure
+    -- A row frozen before read-only existed still renders the template, so deploys reach it.
+    dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
+    (_, shown) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
+    (shown.title, length $ foldMap (.widgets) (fold shown.tabs)) `shouldBe` (template.title, length $ foldMap (.widgets) (fold template.tabs))
+    page <- renderT <$> getTab tr did "overview" Nothing []
+    page `shouldContainAll` [" data-read-only>", "Duplicate to edit"]
+    for_ ["Edit YAML", "Rename dashboard", "Add a new widget", "widget-order-trigger"] \t -> page `shouldNotSatisfy` T.isInfixOf t
+
+    call tr (Dashboards.dashboardWidgetPutH testPid did Nothing (Just "overview") (widgetOf Widget.WTStat "Nope")) <&> void >>= (`shouldBe` Left Dashboards.ReadOnlyDashboard)
+    -- A widget monitor writes its thresholds into the schema, so it is an edit too.
+    alertForm <- either (fail . toString) pure $ urlDecodeAsForm @Dashboards.WidgetAlertForm "widgetId=any&query=name%20!%3D%20null&alertThreshold=1&direction=above"
+    call tr (Dashboards.widgetAlertUpsertH testPid "any" (Just did) alertForm) <&> void >>= (`shouldBe` Left Dashboards.ReadOnlyDashboard)
+    traverse status
+      [ void $ Dashboards.dashboardWidgetReorderPatchH testPid did (Just "overview") mempty
+      , void $ Dashboards.dashboardRenamePatchH testPid did renameForm
+      , void $ Dashboards.dashboardYamlPutH testPid did (Dashboards.YamlForm "title: Mine\nwidgets: []\n")
+      , void $ Dashboards.dashboardTabRenamePatchH testPid did "overview" (Dashboards.TabRenameForm "Mine")
+      ]
+      `shouldReturn` replicate 4 403
+    traverse apiStatus [void $ Api.apiDashboardPatch testPid did ApiTypes.DashboardPatch{ApiTypes.title = Just "Mine", ApiTypes.tags = Nothing, ApiTypes.teams = Nothing, ApiTypes.filePath = Nothing, ApiTypes.schema = Nothing}, void $ Api.apiDashboardWidgetUpsert testPid did (widgetOf Widget.WTStat "Nope")]
+      `shouldReturn` [403, 403]
+    -- Starring and saved views are not edits.
+    _ <- testServant tr $ Dashboards.dashboardStarPostH testPid did
+    void $ call tr $ Dashboards.dashboardViewPostH testPid did (Dashboards.DashboardViewForm "Mine" [])
+
+    -- A duplicate is the template materialised and detached: editable, and the original stays linked.
+    _ <- testServant tr $ Dashboards.dashboardDuplicatePostH testPid did
+    copyId <- dbOne tr "SELECT id FROM projects.dashboards WHERE project_id = ? AND title = 'Overview (Copy)' AND base_template IS NULL" (Only testPid)
+    (copyVm, copy) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid copyId Nothing
+    (copy.readOnly, copy.title, length $ foldMap (.widgets) (fold copy.tabs), isJust copyVm.schema) `shouldBe` (Nothing, (<> " (Copy)") <$> template.title, length $ foldMap (.widgets) (fold template.tabs), True)
+    status (void $ Dashboards.dashboardRenamePatchH testPid copyId renameForm) `shouldReturn` 200
+    copyPage <- renderT <$> getTab tr copyId "overview" Nothing []
+    copyPage `shouldContainAll` ["Edit YAML", "widget-order-trigger"]
+    copyPage `shouldNotSatisfy` T.isInfixOf " data-read-only>"
+    runQueryEffect tr (DashboardModel.getDashboardByBaseTemplate testPid "_overview.yaml") `shouldReturn` Just did
+
+    -- The migration keeps a customised built-in as a copy and relinks the original.
+    dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
+    withResource tr.trPool \conn -> void . PG.execute_ conn . Query =<< readFileBS "static/migrations/0266_read_only_builtin_dashboards.sql"
+    dbQuery tr "SELECT title, base_template IS NULL, schema IS NULL FROM projects.dashboards WHERE project_id = ? AND (id = ? OR title = 'Overview (Customized)')" (testPid, did)
+      >>= (`shouldMatchList` ([("Overview", False, True), ("Overview (Customized)", True, False)] :: [(Text, Bool, Bool)]))
+    -- Creating from a built-in template in the gallery makes the same editable copy
+    -- (last: newDashboard clears the project's dashboards).
+    galleryId <- newDashboard tr "endpoint-stats.yaml" "My endpoints"
+    (galleryVm, gallery) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid galleryId Nothing
+    (galleryVm.baseTemplate, gallery.file, gallery.readOnly) `shouldBe` (Nothing, Just "endpoint-stats.yaml", Nothing)
+
   it "dashboard page and templates: variables, tabs, settle probe, URL precedence; template SQL runs; KQL widgets filter, fail and recover" \tr -> do
     let var k m v = DashboardModel.Variable{key = k, title = Nothing, multi = m, required = Nothing, reloadOnChange = Nothing, helpText = Nothing, _vType = DashboardModel.VTValues, sql = Nothing, facetField = Nothing, query = Nothing, options = Nothing, value = v, dependsOn = Nothing, sqlSig = Nothing}
         render dash = renderT $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash (DashboardModel.mkDashboardVM (UUIDId UUID.nil) testPid frozenTime (Projects.UserId UUID.nil)){DashboardModel.schema = Just dash, DashboardModel.title = "t"} []

@@ -63,6 +63,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, done, redirectCS)
 import Utils (LoadingSize (..), faSprite_, hostPath, htmxIndicator_, renderMarkdown)
+import Web.ApiTypes qualified as ApiT
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), ProjectsRoutes' (..), urls)
@@ -694,14 +695,15 @@ dashboardRepositoryPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Dash
 dashboardRepositoryPostH pid did form = do
   requireGitWrite pid
   dashboard <- Dashboards.getDashboardByProjectId pid did >>= maybe (throwError err404) pure
+  templates <- getDashboardTemplates . (.config) =<< ask @Config.AuthContext
+  ed <- Dashboards.editable templates dashboard `whenNothing` ApiT.refuse ApiT.DashboardReadOnly
   assignmentError <-
     GitSync.assignDashboardRepository pid did form.repositoryId >>= \case
       Left err -> pure $ Just err
       Right () -> do
-        when (isNothing dashboard.schema) do
-          cfg <- (.config) <$> ask @Config.AuthContext
-          templates <- getDashboardTemplates cfg
-          void $ Dashboards.updateSchema did (fromMaybe def $ loadDashboardFromVM templates dashboard) Nothing
+        when (isNothing dashboard.schema)
+          $ void
+          $ Dashboards.updateSchema ed (fromMaybe def $ loadDashboardFromVM templates dashboard) Nothing
         queueGitSyncPush pid did
         pure Nothing
   dashboardRepositoryPageH pid did assignmentError

@@ -35,6 +35,7 @@ data ProblemCode
   | PInvalidValue
   | PEveryoneTeamNotUpdatable
   | PEveryoneTeamNotDeletable
+  | PDashboardReadOnly
   | PReservedHandle
   | PHandleInUse
   | PMemberIdentityMissing
