@@ -256,6 +256,24 @@ window.dashboardRefreshTimer = null;
 
 const timeTransports = new Set<HTMLElement>();
 
+// The Pause button fills over one refresh interval, so the next refresh is visible at a glance.
+// Each refresh empties it at once; a fill mounted mid-cycle (an htmx swap) joins at the elapsed point.
+let refreshCycleStart = 0;
+const refreshFills = new WeakMap<Element, Animation>();
+const syncRefreshProgress = (restart = false) => {
+  const interval = window.dashboardRefreshInterval;
+  if (restart) refreshCycleStart = performance.now();
+  document.querySelectorAll('[data-refresh-progress]').forEach((fill) => {
+    if (interval && !restart && refreshFills.has(fill)) return;
+    refreshFills.get(fill)?.cancel();
+    refreshFills.delete(fill);
+    if (!interval || !fill.animate) return;
+    const anim = fill.animate([{ scale: '0 1' }, { scale: '1 1' }], { duration: interval, easing: 'linear', fill: 'forwards' });
+    anim.currentTime = performance.now() - refreshCycleStart;
+    refreshFills.set(fill, anim);
+  });
+};
+
 const syncTimeTransports = () => {
   const running = window.dashboardRefreshInterval > 0;
   timeTransports.forEach((transport) => {
@@ -277,6 +295,7 @@ const syncTimeTransports = () => {
     if (picker) picker.dataset.state = state;
     if (liveData) liveData.dataset.state = !liveRange ? 'historical' : allLive ? 'live' : !running && rowsAvailable && !rowsRunning ? 'paused' : !running ? 'refresh-paused' : 'stream-paused';
   });
+  syncRefreshProgress();
 };
 window.syncTimeTransports = syncTimeTransports;
 
@@ -285,8 +304,12 @@ window.setTimeRefreshInterval = (_transport, interval) => {
   const running = interval > 0;
   window.dashboardRefreshInterval = running ? interval : 0;
   window.dashboardRefreshTimer = running
-    ? setInterval(() => window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } })), interval)
+    ? setInterval(() => {
+        syncRefreshProgress(true);
+        window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
+      }, interval)
     : null;
+  syncRefreshProgress(true);
   syncTimeTransports();
 };
 
