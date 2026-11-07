@@ -129,7 +129,7 @@ import Models.Apis.MonitorDefinitions (compileAlertSql, monitorConfig, monitorFr
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Apis.ShareEvents qualified as ShareEvents
-import Models.Projects.DashboardTemplates (detach, getDashboardTemplates)
+import Models.Projects.DashboardTemplates (duplicate, requireEditable, updateSchema, updateTitle)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as PM
@@ -699,7 +699,11 @@ apiDashboardsList pid sortM teamIdM = do
 
 
 apiDashboardGet :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
-apiDashboardGet pid did = toFull <$> (notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did)
+apiDashboardGet pid did = toFull <$> dashboardVM pid did
+
+
+dashboardVM :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx Dashboards.DashboardVM
+dashboardVM pid did = notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did
 
 
 -- | Insert a new dashboard row from an input.
@@ -732,9 +736,9 @@ apiDashboardApply principal pid doc = do
   let newTitle = fromMaybe (T.takeWhileEnd (/= '/') doc.filePath) doc.title
   case existingM of
     Just existing -> do
-      ed <- editableOrRefuse existing
-      _ <- Dashboards.updateSchema ed doc.schema (Just now)
-      _ <- Dashboards.updateTitle pid ed newTitle
+      ed <- requireEditable existing
+      _ <- updateSchema ed doc.schema (Just now)
+      _ <- updateTitle ed newTitle
       whenJust doc.tags (void . Dashboards.updateTags pid existing.id . V.fromList)
       apiDashboardGet pid existing.id
     Nothing -> do
@@ -749,12 +753,12 @@ apiDashboardUpdate pid did inp =
 
 apiDashboardPatch :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardPatch -> ATBaseCtx DashboardFull
 apiDashboardPatch pid did patch = do
-  vm <- notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did
+  vm <- dashboardVM pid did
   now <- Time.currentTime
   when (isJust patch.title || isJust patch.schema) do
-    ed <- editableOrRefuse vm
-    whenJust patch.title $ void . Dashboards.updateTitle pid ed
-    whenJust patch.schema $ \s -> void $ Dashboards.updateSchema ed s (Just now)
+    ed <- requireEditable vm
+    whenJust patch.title $ void . updateTitle ed
+    whenJust patch.schema $ \s -> void $ updateSchema ed s (Just now)
   whenJust patch.tags $ void . Dashboards.updateTags pid did . V.fromList
   apiDashboardGet pid did
 
@@ -765,12 +769,10 @@ apiDashboardDelete pid did = withRefetchNoContent (apiDashboardGet pid did) (Das
 
 apiDashboardDuplicate :: ApiActor -> Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
 apiDashboardDuplicate principal pid did = do
-  existing <- notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did
-  templates <- getDashboardTemplates . (.config) =<< ask @AuthContext
+  existing <- dashboardVM pid did
   now <- Time.currentTime
   newId <- UUIDId <$> UUID.genUUID
-  let copySchema = (detach templates existing).schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
-  insertDashboard pid (fromMaybe Projects.systemUserId $ principalUser principal) now newId (existing.title <> " (Copy)") (Just $ V.toList existing.tags) (Just $ V.toList existing.teams) Nothing copySchema
+  toFull <$> (Dashboards.insert =<< duplicate (fromMaybe Projects.systemUserId $ principalUser principal) now newId existing)
 
 
 apiDashboardStar :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
@@ -798,17 +800,10 @@ apiDashboardYaml pid did = do
 -- | Ownership-check the dashboard, rewrite its widget list with @f@ and persist.
 withWidgets :: Projects.ProjectId -> Dashboards.DashboardId -> ([Widget.Widget] -> [Widget.Widget]) -> ATBaseCtx ()
 withWidgets pid did f = do
-  vm <- notFoundOr RDashboard =<< Dashboards.getDashboardByProjectId pid did
-  ed <- editableOrRefuse vm
+  vm <- dashboardVM pid did
+  ed <- requireEditable vm
   now <- Time.currentTime
-  void $ Dashboards.updateSchema ed (fromMaybe def vm.schema & #widgets %~ f) (Just now)
-
-
--- | Built-in read-only dashboards render their shipped YAML; writes to them are refused.
-editableOrRefuse :: Dashboards.DashboardVM -> ATBaseCtx Dashboards.Editable
-editableOrRefuse vm = do
-  templates <- getDashboardTemplates . (.config) =<< ask @AuthContext
-  maybe (refuse DashboardReadOnly) pure $ Dashboards.editable templates vm
+  void $ updateSchema ed (fromMaybe def vm.schema & #widgets %~ f) (Just now)
 
 
 -- | Widget upsert: replace the widget (by id) within the dashboard schema.

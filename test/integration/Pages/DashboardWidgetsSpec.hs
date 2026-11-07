@@ -50,6 +50,7 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.Projects qualified as ManageMembers
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (mkHasqlPool)
+import Pkg.Git qualified as Git
 import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.SchemaLearning qualified as SchemaLearning
@@ -268,6 +269,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       Dashboards.YamlRejected (GitSync.YamlUnparseable _) -> True
       Dashboards.YamlRejected (GitSync.DashboardInvalid _) -> False
       Dashboards.YamlSaved{} -> False
+      Dashboards.YamlReadOnly -> False
     write $ Dashboards.dashboardWidgetPutH testPid dashId Nothing (Just "second-tab") (widgetOf Widget.WTStat "Added To Second")
     write $ Dashboards.dashboardDuplicateWidgetPostH testPid dashId "second-widget" Nothing
     write $ Dashboards.dashboardWidgetReorderPatchH testPid dashId (Just "first-tab") (reorder [("first-widget", (6, 4, 6, 2))])
@@ -1088,13 +1090,17 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let status action = runAuthHandler tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         apiStatus action = toBaseServantResponse tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         renameForm = Dashboards.DashboardRenameForm{Dashboards.title = "Mine", Dashboards.fileDir = Nothing}
+        tabWidgets = length . DashboardModel.allWidgets
+        freeze did = dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
     template <- maybe (fail "missing _overview.yaml") pure $ find ((== Just "_overview.yaml") . (.file)) dashboardTemplatesCompiled
-    _ <- runAuthHandler tr $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] testPid []
+    _ <- runAuthHandler tr $ Dashboards.entrypointRedirectGetH "_overview.yaml" [] testPid []
     did <- runQueryEffect tr (DashboardModel.getDashboardByBaseTemplate testPid "_overview.yaml") >>= maybe (fail "no overview row") pure
+    -- Title and starring come from the template: built-ins start starred.
+    dbQuery tr "SELECT title, starred_since IS NOT NULL FROM projects.dashboards WHERE id = ?" (Only did) `shouldReturn` [("Overview" :: Text, True)]
     -- A row frozen before read-only existed still renders the template, so deploys reach it.
-    dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
+    freeze did
     (_, shown) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
-    (shown.title, length $ foldMap (.widgets) (fold shown.tabs)) `shouldBe` (template.title, length $ foldMap (.widgets) (fold template.tabs))
+    (shown.title, tabWidgets shown) `shouldBe` (template.title, tabWidgets template)
     page <- renderT <$> getTab tr did "overview" Nothing []
     page `shouldContainAll` [" data-read-only>", "Duplicate to edit"]
     for_ ["Edit YAML", "Rename dashboard", "Add a new widget", "widget-order-trigger"] \t -> page `shouldNotSatisfy` T.isInfixOf t
@@ -1110,10 +1116,12 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     traverse status
       [ void $ Dashboards.dashboardWidgetReorderPatchH testPid did (Just "overview") mempty
       , void $ Dashboards.dashboardRenamePatchH testPid did renameForm
-      , void $ Dashboards.dashboardYamlPutH testPid did (Dashboards.YamlForm "title: Mine\nwidgets: []\n")
       , void $ Dashboards.dashboardTabRenamePatchH testPid did "overview" (Dashboards.TabRenameForm "Mine")
       ]
-      `shouldReturn` replicate 4 403
+      `shouldReturn` replicate 3 403
+    -- The YAML drawer's route never refuses: its status area says why nothing was saved.
+    Done yamlSave <- call tr $ Dashboards.dashboardYamlPutH testPid did (Dashboards.YamlForm "title: Mine\nwidgets: []\n")
+    yamlSave `shouldSatisfy` \case Dashboards.YamlReadOnly -> True; _ -> False
     traverse apiStatus [void $ Api.apiDashboardPatch testPid did ApiTypes.DashboardPatch{ApiTypes.title = Just "Mine", ApiTypes.tags = Nothing, ApiTypes.teams = Nothing, ApiTypes.filePath = Nothing, ApiTypes.schema = Nothing}, void $ Api.apiDashboardWidgetUpsert testPid did (widgetOf Widget.WTStat "Nope")]
       `shouldReturn` [403, 403]
     -- Starring and saved views are not edits.
@@ -1124,15 +1132,22 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     _ <- testServant tr $ Dashboards.dashboardDuplicatePostH testPid did
     copyId <- dbOne tr "SELECT id FROM projects.dashboards WHERE project_id = ? AND title = 'Overview (Copy)' AND base_template IS NULL" (Only testPid)
     (copyVm, copy) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid copyId Nothing
-    (copy.readOnly, copy.title, length $ foldMap (.widgets) (fold copy.tabs), isJust copyVm.schema) `shouldBe` (Nothing, (<> " (Copy)") <$> template.title, length $ foldMap (.widgets) (fold template.tabs), True)
+    (copy.readOnly, copy.title, tabWidgets copy, isJust copyVm.schema) `shouldBe` (Nothing, (<> " (Copy)") <$> template.title, tabWidgets template, True)
     status (void $ Dashboards.dashboardRenamePatchH testPid copyId renameForm) `shouldReturn` 200
+    -- A copy of a repository-owned dashboard is the user's own: sharing its (repository, file)
+    -- key broke the unique index, so duplicating any synced dashboard failed.
+    Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
+    runQueryEffect tr (GitSync.assignDashboardRepository testPid copyId sync.id) `shouldReturn` Right ()
+    status (void $ Dashboards.dashboardDuplicatePostH testPid copyId) `shouldReturn` 200
+    dbQuery tr "SELECT git_sync_id IS NULL FROM projects.dashboards WHERE project_id = ? AND title = 'Mine (Copy)'" (Only testPid)
+      `shouldReturn` [Only True]
     copyPage <- renderT <$> getTab tr copyId "overview" Nothing []
     copyPage `shouldContainAll` ["Edit YAML", "widget-order-trigger"]
     copyPage `shouldNotSatisfy` T.isInfixOf " data-read-only>"
     runQueryEffect tr (DashboardModel.getDashboardByBaseTemplate testPid "_overview.yaml") `shouldReturn` Just did
 
     -- The migration keeps a customised built-in as a copy and relinks the original.
-    dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
+    freeze did
     withResource tr.trPool \conn -> void . PG.execute_ conn . Query =<< readFileBS "static/migrations/0266_read_only_builtin_dashboards.sql"
     dbQuery tr "SELECT title, base_template IS NULL, schema IS NULL FROM projects.dashboards WHERE project_id = ? AND (id = ? OR title = 'Overview (Customized)')" (testPid, did)
       >>= (`shouldMatchList` ([("Overview", False, True), ("Overview (Customized)", True, False)] :: [(Text, Bool, Bool)]))

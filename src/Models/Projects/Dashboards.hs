@@ -31,11 +31,8 @@ module Models.Projects.Dashboards (
   selectDashboardsSortedBy,
   DashboardSort (..),
   SortOrder (..),
-  Editable,
-  editable,
   readOnlyTemplate,
-  updateSchema,
-  updateTitle,
+  dashTitle,
   updateTags,
   updateStarredSince,
   getDashboardByBaseTemplate,
@@ -383,28 +380,14 @@ selectDashboardsSortedBy pid order key =
     <> fromString (toString (SortField (display key) order).toSql)
 
 
+dashTitle :: Text -> Text
+dashTitle "" = "Untitled"
+dashTitle t = t
+
+
 -- | The @read_only@ template a built-in dashboard renders, whatever its row stores, so every deploy reaches it.
 readOnlyTemplate :: [Dashboard] -> DashboardVM -> Maybe Dashboard
 readOnlyTemplate templates vm = vm.baseTemplate >>= \file -> find (\t -> t.readOnly == Just True && t.file == Just file) templates
-
-
--- | Proof a dashboard's content may be written; only 'editable' makes one.
-newtype Editable = Editable DashboardId
-
-
-editable :: [Dashboard] -> DashboardVM -> Maybe Editable
-editable templates vm = Editable vm.id <$ guard (isNothing $ readOnlyTemplate templates vm)
-
-
--- | Replace a dashboard's schema, optionally stamping @updated_at@. In-page widget edits pass
--- 'Nothing' so reordering a chart does not reshuffle the "recently updated" list; git sync and
--- the API pass the sync clock.
-updateSchema :: DB es => Editable -> Dashboard -> Maybe UTCTime -> Eff es Int64
-updateSchema (Editable dashId) dashboard updatedAt =
-  Hasql.interpExecute
-    $ [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard} |]
-    <> foldMap (\t -> [HI.sql| , updated_at = #{t} |]) updatedAt
-    <> [HI.sql| WHERE id = #{dashId} |]
 
 
 -- | Absent tab variable lists retain the dashboard's full filter bar.
@@ -424,10 +407,6 @@ setSavedView pid did viewName variables =
 |]
   where
     replacement = foldMap (V.singleton . DashboardView viewName) variables
-
-
-updateTitle :: DB es => Projects.ProjectId -> Editable -> Text -> Eff es Int64
-updateTitle pid (Editable dashId) title = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET title = #{title} WHERE project_id = #{pid} AND id = #{dashId} |]
 
 
 updateTags :: DB es => Projects.ProjectId -> DashboardId -> V.Vector Text -> Eff es Int64

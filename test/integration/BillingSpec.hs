@@ -140,7 +140,7 @@ spec = around withTestResources do
       `shouldReturn` Right (CreateProject.PricingOnboarded pid)
     project <- projectOf tr pid
     (project.paymentPlan, sort (V.toList project.onboardingStepsCompleted)) `shouldBe` ("Free", ["Info", "Integration", "NotifChannel", "Pricing", "Survey", "created_monitor", "explored_logs"])
-    landing <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] pid []
+    landing <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" [] pid []
     lookupResponseHeader @"Location" landing `shouldSatisfy` \case Header l -> ("/p/" <> pid.toText <> "/dashboards/") `T.isPrefixOf` l; _ -> False
 
   it "project settings: defaults, alert toggles, members, storage, super-admin notice and an unbilled deletion" \tr0 -> do
