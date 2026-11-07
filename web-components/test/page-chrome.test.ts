@@ -1,4 +1,6 @@
 import { describe, test, expect, beforeAll, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // page-chrome.ts was ~195 lines inlined into every page by BodyWrapper. Moving it into the
 // bundle only works if the functions Lucid calls from inline attributes remain reachable
@@ -51,4 +53,13 @@ test('trace hover and keyboard focus display a fresh copy of the server-rendered
     delete (window as any).tippy;
     document.body.innerHTML = '';
   }
+});
+
+// overscroll-behavior on the root disabled swipe back/forward and pull-to-refresh app-wide.
+test('the page root leaves browser gestures alone; sideways scrollers contain theirs', () => {
+  const css = readFileSync(resolve(process.cwd(), '../static/public/assets/css/tailwind.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const root = css.match(/html,\s*body, :host \{[^}]*\}/)?.[0] ?? '';
+  expect(root).toContain('bg-bgBase');
+  expect(root).not.toMatch(/overscroll/);
+  expect(css).toMatch(/\.overflow-x-auto,\s*\.overflow-x-scroll \{\s*overscroll-behavior-x: contain;/);
 });

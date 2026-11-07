@@ -281,7 +281,8 @@ bodyWrapper bcfg child = do
       themeColor = bool "#fbfcfd" "#060708" (initialTheme == "dark")
       projectTimeZone = mfilter (not . T.null) $ (.timeZone) <$> bcfg.currProject
   doctype_
-  html_ ([lang_ "en"] <> [data_ "timezone" tz | tz <- maybeToList projectTimeZone]) do
+  -- The theme is on <html> too: overscroll reveals html's background, which sits outside body's tokens.
+  html_ ([lang_ "en", term "data-theme" initialTheme] <> [data_ "timezone" tz | tz <- maybeToList projectTimeZone]) do
     head_ do
       title_ $ toHtml bcfg.pageTitle
       meta_ [charset_ "UTF-8"]
@@ -575,7 +576,7 @@ bodyWrapper bcfg child = do
           }
 
           function applyTheme(theme) {
-            document.body.setAttribute('data-theme', theme);
+            [document.documentElement, document.body].forEach(el => el.setAttribute('data-theme', theme));
             document.getElementById('theme-color-meta').content = theme === 'dark' ? '#060708' : '#fbfcfd';
           }
 
