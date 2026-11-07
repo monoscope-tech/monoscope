@@ -65,6 +65,43 @@ afterEach(() => {
 });
 
 describe('auto-refresh interval', () => {
+  test('the pause button fills over one interval, empties on each refresh, and joins mid-cycle when remounted', () => {
+    // jsdom has no Web Animations; record what the fill is asked to animate.
+    const started: { fill: Element; duration: number; currentTime: number; cancelled: boolean }[] = [];
+    Element.prototype.animate = function (this: Element, _frames: Keyframe[], opts: KeyframeAnimationOptions) {
+      const anim = { fill: this, duration: Number(opts.duration), currentTime: 0, cancelled: false, cancel() { anim.cancelled = true; } };
+      started.push(anim);
+      return anim as unknown as Animation;
+    };
+    const mountFill = () => {
+      const transport = mountTransport(true);
+      transport.insertAdjacentHTML('beforeend', '<span data-refresh-progress></span>');
+      return transport;
+    };
+    const live = () => started.filter((a) => !a.cancelled && a.fill.isConnected);
+    try {
+      window.initTimeTransport(mountFill());
+      expect(live().map((a) => [a.duration, a.currentTime])).toEqual([[15000, 0]]);
+
+      vi.advanceTimersByTime(15000);
+      expect(refreshes).toBe(1);
+      expect(live()).toHaveLength(1);
+      expect(started).toHaveLength(2); // the refresh restarted the cycle
+
+      vi.advanceTimersByTime(6000);
+      window.initTimeTransport(mountFill()); // an htmx swap mid-cycle
+      expect(live().map((a) => [a.duration, a.currentTime])).toEqual([[15000, 6000]]);
+
+      selectInterval(30000);
+      expect(live().map((a) => [a.duration, a.currentTime])).toEqual([[30000, 0]]);
+
+      selectInterval(0);
+      expect(live()).toHaveLength(0);
+    } finally {
+      delete (Element.prototype as Partial<Element>).animate;
+    }
+  });
+
   test('coordinates row streaming and query refresh behind one trustworthy status', () => {
     const control = mountCoordinatedLiveData();
     window.initTimeTransport(control.transport);
