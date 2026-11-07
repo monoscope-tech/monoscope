@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { statScalar, formatStatValue, formatNumber, formatBytes, formatDuration } from '../src/stat-value';
+import { statScalar, formatStatValue, formatNumber, formatBytes, formatDuration, durationAxisFormatter } from '../src/stat-value';
 import { formatDuration as waterfallDuration } from '../src/charts';
 import { fmtNs } from '../src/log-list';
 
@@ -40,6 +40,14 @@ describe('statScalar', () => {
   });
 });
 
+describe('durationAxisFormatter', () => {
+  test('labels every tick in the unit of the axis maximum', () => {
+    // Request Latency Percentiles read "2.5m … 1.0m, 30.0s, 0ns".
+    const fmt = durationAxisFormatter(150e9);
+    expect([150e9, 60e9, 30e9, 0].map(fmt)).toEqual(['2.5m', '1m', '0.5m', '0']);
+  });
+});
+
 describe('formatStatValue', () => {
   test('appends non-duration units with a space', () => {
     expect(formatStatValue(120, 'req/min')).toBe('120 req/min');
@@ -49,6 +57,8 @@ describe('formatStatValue', () => {
     // "1 systems" on the Overview: a count of one names its unit in the singular.
     expect([1, 2].map((n) => formatStatValue(n, 'systems'))).toEqual(['1 system', '2 systems']);
     expect(formatStatValue(1, 'ms')).toBe('1.0ms');
+    // Apdex 0.995 rounded to "1 / 1"; a fixed precision keeps the dip visible.
+    expect([0.991, 1].map((n) => formatStatValue(n, '/ 1', 2))).toEqual(['0.99 / 1', '1.00 / 1']);
     expect(formatStatValue(0, '%')).toBe('0 %');
   });
 

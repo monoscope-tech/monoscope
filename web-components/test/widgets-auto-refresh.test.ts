@@ -119,6 +119,22 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(Number.isFinite(option.yAxis.max(empty))).toBe(true);
   });
 
+  // Error Rate's sparkline sat flat at 0.02% under dashed 2% and 5% lines stretched across it.
+  test('a sparkline keeps its own scale and shows a threshold only once the data nears it', async () => {
+    const instance = chart();
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => instance, graphic, color };
+    document.body.innerHTML = '<div id="threshold-spark" data-chart-widget></div>';
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      ...chartData, headers: ['timestamp', 'value'], dataset: [[0, 0.02]], stats: { count: 1, max: 0.02, max_group_sum: 0.02 },
+    }), { headers: { 'Content-Type': 'application/json' } })) as any;
+    chartWidget({ ...widget('threshold-spark'), widgetType: 'timeseries_stat', chartType: 'line', alertThreshold: 5 });
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
+    const option = instance.setOption.mock.calls.at(-1)![0];
+    expect(option.yAxis.max).toBe(0.02);
+    expect(option.series[0].markLine.data.map((line: any) => line.yAxis)).toEqual([5]);
+  });
+
   // The label used to print echarts' raw `{c}`, so a millisecond widget read "Alert: 1800"
   // under an axis labelled "1.8s". It formats through the same helper the axis does.
   test('a threshold label reads in the widget’s unit, like its axis', async () => {
@@ -271,6 +287,8 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(document.getElementById('volume_error')!.classList.contains('hidden')).toBe(true);
     await tick(3);
     expect(document.getElementById('volume_errorMsg')!.textContent).toContain('last successful data');
+    // Data is still on screen: a warning (a corner chip on stat tiles), not the failure banner.
+    expect(document.getElementById('volume_error')!.hasAttribute('data-stale')).toBe(true);
     expect(document.getElementById('latency_error')!.classList.contains('hidden')).toBe(true);
     history.replaceState({}, '', '/?query=level%20%3D%3D');
     await tick(4);
@@ -314,6 +332,8 @@ describe('Log Explorer chart auto-refresh', () => {
     await refresh();
     expect(banner.classList.contains('hidden')).toBe(false);
     expect(document.getElementById('volume_errorMsg')!.textContent).toContain('last successful data');
+    // Data is still on screen: a warning (a corner chip on stat tiles), not the failure banner.
+    expect(banner.hasAttribute('data-stale')).toBe(true);
     expect(document.getElementById('volumeValue')!.textContent).toBe(value);
     fail = false;
     await refresh();

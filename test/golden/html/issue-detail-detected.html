@@ -619,23 +619,27 @@
 <div class="dropdown dropdown-end menu bg-bgRaised p-2 text-sm border border-strokeWeak rounded-md shadow-lg space-y-1" id="issue-copy-pop" popover="auto" style="position-try:flip-block; position-anchor:--anchor-issue-copy-pop">
 <div class="flex items-center justify-between gap-6">
 <span class="text-textStrong">JSON</span>
-<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-json&#39;s textContent) then put &#39;Copied!&#39; into the first &lt;span/&gt; in me then wait 2s then put &#39;Copy&#39; into the first &lt;span/&gt; in me">
+<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-json&#39;s textContent) then add .copied to me then put &#39;Copied!&#39; into the last &lt;span/&gt; in me then wait 2s then remove .copied from me then put &#39;Copy&#39; into the last &lt;span/&gt; in me">
+<span class="copy-icon">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
 <g fill="currentColor">
 <path d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16l140.1 0L400 115.9V320c0 8.8-7.2 16-16 16zM192 384H384c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64V320c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64V448c0 35.3 28.7 64 64 64H256c35.3 0 64-28.7 64-64V416H272v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16H96V128H64z" />
 </g>
 </svg>
+</span>
 <span>Copy</span>
 </button>
 </div>
 <div class="flex items-center justify-between gap-6">
 <span class="text-textStrong">Markdown</span>
-<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-md&#39;s textContent) then put &#39;Copied!&#39; into the first &lt;span/&gt; in me then wait 2s then put &#39;Copy&#39; into the first &lt;span/&gt; in me">
+<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-md&#39;s textContent) then add .copied to me then put &#39;Copied!&#39; into the last &lt;span/&gt; in me then wait 2s then remove .copied from me then put &#39;Copy&#39; into the last &lt;span/&gt; in me">
+<span class="copy-icon">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
 <g fill="currentColor">
 <path d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16l140.1 0L400 115.9V320c0 8.8-7.2 16-16 16zM192 384H384c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64V320c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64V448c0 35.3 28.7 64 64 64H256c35.3 0 64-28.7 64-64V416H272v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16H96V128H64z" />
 </g>
 </svg>
+</span>
 <span>Copy</span>
 </button>
 </div>
@@ -1536,23 +1540,27 @@
 <div class="dropdown dropdown-end menu bg-bgRaised p-2 text-sm border border-strokeWeak rounded-md shadow-lg space-y-1" id="issue-copy-pop" popover="auto" style="position-try:flip-block; position-anchor:--anchor-issue-copy-pop">
 <div class="flex items-center justify-between gap-6">
 <span class="text-textStrong">JSON</span>
-<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-json&#39;s textContent) then put &#39;Copied!&#39; into the first &lt;span/&gt; in me then wait 2s then put &#39;Copy&#39; into the first &lt;span/&gt; in me">
+<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-json&#39;s textContent) then add .copied to me then put &#39;Copied!&#39; into the last &lt;span/&gt; in me then wait 2s then remove .copied from me then put &#39;Copy&#39; into the last &lt;span/&gt; in me">
+<span class="copy-icon">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
 <g fill="currentColor">
 <path d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16l140.1 0L400 115.9V320c0 8.8-7.2 16-16 16zM192 384H384c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64V320c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64V448c0 35.3 28.7 64 64 64H256c35.3 0 64-28.7 64-64V416H272v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16H96V128H64z" />
 </g>
 </svg>
+</span>
 <span>Copy</span>
 </button>
 </div>
 <div class="flex items-center justify-between gap-6">
 <span class="text-textStrong">Markdown</span>
-<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-md&#39;s textContent) then put &#39;Copied!&#39; into the first &lt;span/&gt; in me then wait 2s then put &#39;Copy&#39; into the first &lt;span/&gt; in me">
+<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-md&#39;s textContent) then add .copied to me then put &#39;Copied!&#39; into the last &lt;span/&gt; in me then wait 2s then remove .copied from me then put &#39;Copy&#39; into the last &lt;span/&gt; in me">
+<span class="copy-icon">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
 <g fill="currentColor">
 <path d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16l140.1 0L400 115.9V320c0 8.8-7.2 16-16 16zM192 384H384c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64V320c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64V448c0 35.3 28.7 64 64 64H256c35.3 0 64-28.7 64-64V416H272v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16H96V128H64z" />
 </g>
 </svg>
+</span>
 <span>Copy</span>
 </button>
 </div>
@@ -2439,23 +2447,27 @@
 <div class="dropdown dropdown-end menu bg-bgRaised p-2 text-sm border border-strokeWeak rounded-md shadow-lg space-y-1" id="issue-copy-pop" popover="auto" style="position-try:flip-block; position-anchor:--anchor-issue-copy-pop">
 <div class="flex items-center justify-between gap-6">
 <span class="text-textStrong">JSON</span>
-<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-json&#39;s textContent) then put &#39;Copied!&#39; into the first &lt;span/&gt; in me then wait 2s then put &#39;Copy&#39; into the first &lt;span/&gt; in me">
+<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-json&#39;s textContent) then add .copied to me then put &#39;Copied!&#39; into the last &lt;span/&gt; in me then wait 2s then remove .copied from me then put &#39;Copy&#39; into the last &lt;span/&gt; in me">
+<span class="copy-icon">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
 <g fill="currentColor">
 <path d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16l140.1 0L400 115.9V320c0 8.8-7.2 16-16 16zM192 384H384c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64V320c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64V448c0 35.3 28.7 64 64 64H256c35.3 0 64-28.7 64-64V416H272v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16H96V128H64z" />
 </g>
 </svg>
+</span>
 <span>Copy</span>
 </button>
 </div>
 <div class="flex items-center justify-between gap-6">
 <span class="text-textStrong">Markdown</span>
-<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-md&#39;s textContent) then put &#39;Copied!&#39; into the first &lt;span/&gt; in me then wait 2s then put &#39;Copy&#39; into the first &lt;span/&gt; in me">
+<button type="button" class="btn btn-xs btn-ghost" _="on click call navigator.clipboard.writeText(#issue-copy-md&#39;s textContent) then add .copied to me then put &#39;Copied!&#39; into the last &lt;span/&gt; in me then wait 2s then remove .copied from me then put &#39;Copy&#39; into the last &lt;span/&gt; in me">
+<span class="copy-icon">
 <svg class="icon w-3 h-3" width="1em" height="1em" viewBox="0 0 448 512">
 <g fill="currentColor">
 <path d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16l140.1 0L400 115.9V320c0 8.8-7.2 16-16 16zM192 384H384c35.3 0 64-28.7 64-64V115.9c0-12.7-5.1-24.9-14.1-33.9L366.1 14.1c-9-9-21.2-14.1-33.9-14.1H192c-35.3 0-64 28.7-64 64V320c0 35.3 28.7 64 64 64zM64 128c-35.3 0-64 28.7-64 64V448c0 35.3 28.7 64 64 64H256c35.3 0 64-28.7 64-64V416H272v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16H96V128H64z" />
 </g>
 </svg>
+</span>
 <span>Copy</span>
 </button>
 </div>
