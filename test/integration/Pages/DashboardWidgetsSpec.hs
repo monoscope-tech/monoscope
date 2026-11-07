@@ -1090,15 +1090,17 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let status action = runAuthHandler tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         apiStatus action = toBaseServantResponse tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         renameForm = Dashboards.DashboardRenameForm{Dashboards.title = "Mine", Dashboards.fileDir = Nothing}
+        tabWidgets (d :: DashboardModel.Dashboard) = length $ foldMap (.widgets) (fold d.tabs)
+        freeze did = dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
     template <- maybe (fail "missing _overview.yaml") pure $ find ((== Just "_overview.yaml") . (.file)) dashboardTemplatesCompiled
     _ <- runAuthHandler tr $ Dashboards.entrypointRedirectGetH "_overview.yaml" [] testPid []
     did <- runQueryEffect tr (DashboardModel.getDashboardByBaseTemplate testPid "_overview.yaml") >>= maybe (fail "no overview row") pure
     -- Title and starring come from the template: built-ins start starred.
     dbQuery tr "SELECT title, starred_since IS NOT NULL FROM projects.dashboards WHERE id = ?" (Only did) `shouldReturn` [("Overview" :: Text, True)]
     -- A row frozen before read-only existed still renders the template, so deploys reach it.
-    dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
+    freeze did
     (_, shown) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
-    (shown.title, length $ foldMap (.widgets) (fold shown.tabs)) `shouldBe` (template.title, length $ foldMap (.widgets) (fold template.tabs))
+    (shown.title, tabWidgets shown) `shouldBe` (template.title, tabWidgets template)
     page <- renderT <$> getTab tr did "overview" Nothing []
     page `shouldContainAll` [" data-read-only>", "Duplicate to edit"]
     for_ ["Edit YAML", "Rename dashboard", "Add a new widget", "widget-order-trigger"] \t -> page `shouldNotSatisfy` T.isInfixOf t
@@ -1129,7 +1131,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     _ <- testServant tr $ Dashboards.dashboardDuplicatePostH testPid did
     copyId <- dbOne tr "SELECT id FROM projects.dashboards WHERE project_id = ? AND title = 'Overview (Copy)' AND base_template IS NULL" (Only testPid)
     (copyVm, copy) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid copyId Nothing
-    (copy.readOnly, copy.title, length $ foldMap (.widgets) (fold copy.tabs), isJust copyVm.schema) `shouldBe` (Nothing, (<> " (Copy)") <$> template.title, length $ foldMap (.widgets) (fold template.tabs), True)
+    (copy.readOnly, copy.title, tabWidgets copy, isJust copyVm.schema) `shouldBe` (Nothing, (<> " (Copy)") <$> template.title, tabWidgets template, True)
     status (void $ Dashboards.dashboardRenamePatchH testPid copyId renameForm) `shouldReturn` 200
     -- A copy of a repository-owned dashboard is the user's own: sharing its (repository, file)
     -- key broke the unique index, so duplicating any synced dashboard failed.
@@ -1144,7 +1146,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     runQueryEffect tr (DashboardModel.getDashboardByBaseTemplate testPid "_overview.yaml") `shouldReturn` Just did
 
     -- The migration keeps a customised built-in as a copy and relinks the original.
-    dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
+    freeze did
     withResource tr.trPool \conn -> void . PG.execute_ conn . Query =<< readFileBS "static/migrations/0266_read_only_builtin_dashboards.sql"
     dbQuery tr "SELECT title, base_template IS NULL, schema IS NULL FROM projects.dashboards WHERE project_id = ? AND (id = ? OR title = 'Overview (Customized)')" (testPid, did)
       >>= (`shouldMatchList` ([("Overview", False, True), ("Overview (Customized)", True, False)] :: [(Text, Bool, Bool)]))
