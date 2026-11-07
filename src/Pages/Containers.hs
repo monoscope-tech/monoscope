@@ -21,7 +21,7 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, infrastructureNavTabs_, metaChip_, pivotLinks_, tableSkeleton_, withDeferredBody)
+import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emDash_, emptyState_, entityHeader_, factGrid_, infrastructureNavTabs_, metaChip_, pivotLinks_, tableSkeleton_, withDeferredBody)
 import Pkg.Components.Table (Column, Features (..), Table (..), ZeroState (..), col, countedFilter, facetActions, inventoryTable, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -242,12 +242,6 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
 
 newtype ContainersGet = ContainersPage (PageCtx (Deferred (Table ContainerVM)))
   deriving (ToHtml) via (PageCtx (RefreshingDeferred (Table ContainerVM)))
-
-
--- | A missing value is an em dash, never a zero. Datadog is explicit that without a limit it
--- "cannot infer the usage percentage", and a fabricated 0% read at 3 AM is worse than a blank.
-emDash_ :: Html ()
-emDash_ = span_ [class_ "text-textWeak"] "—"
 
 
 readyCell :: ContainerRow -> Html ()

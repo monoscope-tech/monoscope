@@ -332,6 +332,11 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- An empty result rendered as a bare header over a blank box (Recent Database Errors).
     let emptyTable = renderT . table [column{Widget.field = "error_message", Widget.title = "Error"}] id V.empty
     emptyTable [] `shouldSatisfy` T.isInfixOf "Nothing in this time range"
+    -- The empty state offers the next wider standard window, and none once the range is already 30 days.
+    map (T.isInfixOf "updateTimePicker({since: &#39;24H&#39;})" . emptyTable) [[], [("since", Just "1H")]] `shouldBe` [True, True]
+    emptyTable [("since", Just "30D")] `shouldNotSatisfy` T.isInfixOf "updateTimePicker"
+    -- A missing value was a blue "null" link with a copy button.
+    renderT (table [column{Widget.field = "q", Widget.link = Just "/x", Widget.copyable = Just True}] id (V.singleton $ V.singleton "null") []) `shouldSatisfy` \h -> T.isInfixOf "No value" h && not (T.isInfixOf "href=\"/x\"" h)
     emptyTable [("table-search", Just "timeout")] `shouldSatisfy` T.isInfixOf "No rows match “timeout”"
     -- ISO timestamps from TimeFusion rendered raw; both stores' forms localize, with the instant on hover.
     let timeCell v = renderT $ table [column{Widget.field = "timestamp", Widget.title = "Time"}] id (V.singleton $ V.singleton v) []
@@ -340,6 +345,10 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- Services Health printed a rare error rate as "9.24e-2 %".
     let numCell v = renderT $ table [column{Widget.field = "error_rate", Widget.title = "Errors", Widget.columnType = Just Widget.CTNumber, Widget.unit = Just "%"}] id (V.singleton $ V.singleton v) []
     map numCell ["0.0924", "0.004"] `shouldSatisfy` \cells -> zipWith T.isInfixOf ["0.09 %", "&lt;0.01 %"] cells == [True, True]
+    -- One column, one precision (Apdex "1" beside "0.99"); durations drop a dangling ".0" and a zero reads 0.
+    let cellAs col v = renderT $ table [col] id (V.singleton $ V.singleton v) []
+    cellAs column{Widget.field = "apdex", Widget.columnType = Just Widget.CTNumber, Widget.decimals = Just 2} "1" `shouldSatisfy` T.isInfixOf ">1.00<"
+    map (cellAs column{Widget.field = "p95", Widget.columnType = Just Widget.CTDuration, Widget.unit = Just "ms"}) ["0.44", "0"] `shouldSatisfy` \cells -> zipWith T.isInfixOf ["440 µs", ">0<"] cells == [True, True]
     -- An ID is matched and copied, not read: its short form, the whole one on hover and to copy.
     let uuid = "d85973c0-8129-4c80-af0a-b81d7f509c29"
         idCell = renderT $ table [column{Widget.field = "request_id", Widget.title = "Request ID"}] id (V.singleton $ V.singleton uuid) []
@@ -1105,7 +1114,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     page `shouldContainAll` [" data-read-only>", "Duplicate to edit"]
     for_ ["Edit YAML", "Rename dashboard", "Add a new widget", "widget-order-trigger"] \t -> page `shouldNotSatisfy` T.isInfixOf t
     -- Its widget drawer reads the query but offers no save, and no monitor (refused below), even asked for it.
-    drawer <- renderT <$> call tr (Dashboards.dashboardWidgetExpandGetH testPid did "error-rates-by-service" (Just "alerts"))
+    drawer <- renderT <$> call tr (Dashboards.dashboardWidgetExpandGetH testPid did "errors-by-service" (Just "alerts"))
     drawer `shouldContainAll` [">Query</label>", "Read-only"]
     for_ ["Save widget", "sr-only page-drawer-tab-monitors", "-alert-form\">Create monitor"] \t -> drawer `shouldNotSatisfy` T.isInfixOf t
 

@@ -18,7 +18,8 @@ import Data.Map.Strict qualified as M
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display)
-import Data.Time (UTCTime, defaultTimeLocale, parseTimeM, zonedTimeToUTC)
+import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, parseTimeM, zonedTimeToUTC)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -40,7 +41,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), copyButton_, emptyState_, localTimeFmt_, searchInput_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copyButton_, emDash_, emptyState_, localTimeFmt_, searchInput_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.DeriveUtils (JsonValueSchema (..), UUIDId (..), WrappedEnumSC (..))
 import Pkg.Parser (ResultShape (..), ToQueryText (..), parseQueryToAST, replacePlaceholders, resultShape)
@@ -341,6 +342,7 @@ data Widget = Widget
   , xAxis :: Maybe WidgetAxis
   , yAxis :: Maybe WidgetAxis -- Optional y-axis label
   , unit :: Maybe Text
+  , decimals :: Maybe Int -- Fixed precision for the headline value (Apdex 0.99 / 1)
   , value :: Maybe Double -- value could represent a number or a count
   , wData :: Maybe AE.Value
   , hideLegend :: Maybe Bool
@@ -584,6 +586,7 @@ data TableColumn = TableColumn
   , progress :: Maybe ProgressScale
   , progressVariant :: Maybe Text -- "default", "info", "error", etc.
   , columnType :: Maybe ColumnType -- default CTText
+  , decimals :: Maybe Int -- Fixed decimals for a number column, so one column reads at one precision (Apdex 1.00 / 0.99)
   , hidden :: Maybe Bool -- Carried for links (@{{row.<field>}}@) but not rendered
   , description :: Maybe Text -- Header tooltip, e.g. what an abbreviation stands for
   , tooltip :: Maybe Text -- Cell tooltip; a template over @{{row.<field>}}@
@@ -735,7 +738,7 @@ widget_ w' = case w.wType of
         input_ [type_ "checkbox", class_ "sr-only peer wgt-collapse"]
         Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform peer-checked:rotate-180"
     -- Nested grid: flex-1 fills remaining space
-    div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : [data_ "stat-grid" "" | not (null normalizedChildren) && all isStatWidget normalizedChildren] <> gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
+    div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : [data_ "stat-grid" (bool "" "plain" (all ((== WTStat) . (.wType)) normalizedChildren)) | not (null normalizedChildren) && all isStatWidget normalizedChildren] <> gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
   WTTable -> wgtCard_ $ renderTable w
   WTTopList -> wgtCard_ $ renderTable w
   WTLogs -> wgtCard_ $ renderLogsWidget w
@@ -981,27 +984,32 @@ statScalar summarize fromM toM stats
 -- a readable time scale, byte units use binary multiples, and only ordinary
 -- counts receive decimal K/M/B suffixes.
 --
--- >>> formatStatValue 5900 "ms"
+-- >>> formatStatValue Nothing 5900 "ms"
 -- "5.9s"
--- >>> formatStatValue 45 "ms"
+-- >>> formatStatValue Nothing 45 "ms"
 -- "45.0ms"
--- >>> formatStatValue 1500 ""
+-- >>> formatStatValue Nothing 1500 ""
 -- "1.5K"
--- >>> formatStatValue 2048 "By"
+-- >>> formatStatValue Nothing 2048 "By"
 -- "2 KiB"
 --
 -- A non-zero rate below the display precision is shown as such, never as 0:
--- >>> (formatStatValue 0.0012 "%", formatStatValue 0 "%")
+-- >>> (formatStatValue Nothing 0.0012 "%", formatStatValue Nothing 0 "%")
 -- ("<0.01 %","0 %")
 --
 -- A count of one names its unit in the singular:
--- >>> map (`formatStatValue` "systems") [1, 2]
+-- >>> map (\v -> formatStatValue Nothing v "systems") [1, 2]
 -- ["1 system","2 systems"]
-formatStatValue :: Double -> Text -> Text
-formatStatValue value unit
+--
+-- A fixed precision keeps a bounded index honest near its ceiling (Apdex 0.991 is not "1"):
+-- >>> map (\v -> formatStatValue (Just 2) v "/ 1") [0.991, 1]
+-- ["0.99 / 1","1.00 / 1"]
+formatStatValue :: Maybe Int -> Double -> Text -> Text
+formatStatValue decimals value unit
   | isNaN value || isInfinite value = "N/A"
   | Just factor <- unitNanos unit = formatDuration $ value * factor
   | isByteUnit unit = formatBytes value
+  | Just d <- decimals = showFFloat' d value <> displayUnit unit
   | value > 0, value < 0.01 = "<0.01" <> displayUnit unit
   | value == 1, T.length unit > 2, T.all isAlpha unit, Just unitOne <- T.stripSuffix "s" unit = "1 " <> unitOne
   | otherwise = formatNumber value <> displayUnit unit
@@ -1392,7 +1400,8 @@ renderStatContent widget valueM = do
       hasData = or widget.eager || isJust (widget.dataset >>= (.value))
   div_
     [ id_ statContentId
-    , class_ $ "stat-widget px-3 flex flex-col " <> bool "py-3 " "py-2 " (or widget._isNested)
+    , -- A row of plain stats has no sparkline baseline to share, so the value centres in its card.
+      class_ $ "stat-widget px-3 flex flex-col [[data-stat-grid=plain]_&]:my-auto " <> bool "py-3 " "py-2 " (or widget._isNested)
     , hxGet_ $ widgetFetchUrl (widget & #eager ?~ True)
     , hxTrigger_ $ bool "intersect once, update-query from:window" "update-query from:window" hasData
     , hxTarget_ $ "#" <> statContentId
@@ -1402,7 +1411,7 @@ renderStatContent widget valueM = do
     ]
     $ div_ [class_ "flex flex-col gap-1"] do
       strong_ [class_ "text-textStrong text-lg font-semibold tabular-nums", id_ $ chartId <> "Value"]
-        $ if hasData then whenJust valueM toHtml else loadingIndicator_ LdSM LdSpinner
+        $ if hasData then whenJust valueM toHtml else span_ [class_ "skeleton-shimmer inline-block h-[0.9em] w-[4em] rounded-md align-middle", role_ "status", Aria.label_ "Loading"] ""
       div_ [class_ "stat-label inline-flex gap-1 items-center text-xs"] do
         whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "stat-icon w-4 h-4 text-iconBrand"
         toHtml $ maybeToMonoid widget.title
@@ -1414,7 +1423,7 @@ renderChart widget = do
   let rateM = widget.dataset >>= (.rowsPerMin) <&> \r -> Utils.prettyPrintCount (round r) <> "/min"
       chartId = maybeToMonoid widget.id
       isTimeseriesStat = widget.wType == WTTimeseriesStat
-      fallback = widget.dataset >>= (.value) <&> \value -> formatStatValue value $ fromMaybe "" widget.unit
+      fallback = widget.dataset >>= (.value) <&> \value -> formatStatValue widget.decimals value $ fromMaybe "" widget.unit
       valueM =
         ( do
             guard isTimeseriesStat
@@ -1423,7 +1432,7 @@ renderChart widget = do
             let summarize = fromMaybe SBSum widget.summarizeBy
             value <- statScalar summarize dataset.from dataset.to stats
             let prefix = summarizeByPrefix summarize
-            pure $ prefix <> memptyIfFalse (not $ T.null prefix) " " <> formatStatValue value (fromMaybe "" widget.unit)
+            pure $ prefix <> memptyIfFalse (not $ T.null prefix) " " <> formatStatValue widget.decimals value (fromMaybe "" widget.unit)
         )
           <|> fallback
       chartConfig =
@@ -1445,6 +1454,7 @@ renderChart widget = do
           , "summarizeByPrefix" AE..= summarizeByPrefix (fromMaybe SBSum widget.summarizeBy)
           , "legendPosition" AE..= fromMaybe "bottom" widget.legendPosition
           , "unit" AE..= maybeToMonoid widget.unit
+          , "decimals" AE..= widget.decimals
           , "alertThreshold" AE..= widget.alertThreshold
           , "seriesIntent" AE..= widget.seriesIntent
           , "warningThreshold" AE..= widget.warningThreshold
@@ -1476,11 +1486,16 @@ renderChart widget = do
         do
           -- Failure banner: one line at the top of the card, above the content,
           -- rather than a centred overlay printed over the chart it describes.
-          -- widgets.ts fills the message and unhides it.
-          div_ [id_ $ chartId <> "_error", class_ "hidden shrink-0 rounded-t-2xl border-b border-strokeError-weak bg-fillError-weak px-3 py-1.5"]
-            $ div_ [class_ "flex items-center gap-1.5 text-xs text-textError"] do
+          -- widgets.ts fills the message and unhides it. @data-stale@ (data still shown, refreshes
+          -- failing) is a warning, not a failure; on a stat tile it is a corner chip, because the
+          -- full-width banner pushed the value down and the sparkline out of the card.
+          div_
+            [ id_ $ chartId <> "_error"
+            , class_ $ "group/err hidden shrink-0 rounded-t-2xl border-b border-strokeError-weak bg-fillError-weak px-3 py-1.5 data-stale:border-strokeWarning-weak " <> bool "data-stale:bg-fillWarning-weak" "data-stale:absolute data-stale:right-2 data-stale:top-2 data-stale:z-10 data-stale:rounded-lg data-stale:border data-stale:bg-bgRaised data-stale:px-1.5 data-stale:py-0.5 data-stale:shadow-sm" isStat
+            ]
+            $ div_ [class_ "flex items-center gap-1.5 text-xs text-textError group-data-stale/err:text-textWarning"] do
               Utils.faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0"
-              span_ [class_ "min-w-0 break-words", id_ $ chartId <> "_errorMsg", role_ "status"] ""
+              span_ [class_ $ "min-w-0 break-words " <> bool "group-data-stale/err:truncate" "group-data-stale/err:sr-only" isStat, id_ $ chartId <> "_errorMsg", role_ "status"] ""
               button_ [type_ "button", id_ $ chartId <> "_retry", hidden_ "", class_ "shrink-0 underline px-2 disabled:opacity-50"] "Retry"
           whenJust ((,) <$> widget.groupByOptions <*> widget.groupByUrl) \(options, url) ->
             let selectedLabel = fromMaybe "All values" $ guarded (/= "all") =<< widget.groupBySelected
@@ -1580,7 +1595,7 @@ widgetToECharts widget
               , "top" AE..= ("middle" :: Text)
               , "style"
                   AE..= AE.object
-                    [ "text" AE..= maybe "N/A" (\value -> formatStatValue value $ fromMaybe "" widget.unit) (widget.dataset >>= (.value))
+                    [ "text" AE..= maybe "N/A" (\value -> formatStatValue widget.decimals value $ fromMaybe "" widget.unit) (widget.dataset >>= (.value))
                     , "fontSize" AE..= (48 :: Int)
                     , "fontWeight" AE..= (600 :: Int)
                     , "fill" AE..= (if widget.theme == Just "dark" then "#cbd5e1" else "#334155" :: Text)
@@ -1671,7 +1686,9 @@ widgetToECharts widget =
         , "yAxis"
             AE..= AE.object
               [ "type" AE..= ("value" :: Text)
-              , "min" AE..= (0 :: Int)
+              , -- A sparkline shows shape, not magnitude (the headline carries that): fit it to the data,
+                -- or a metric steady near its ceiling (Apdex 0.995) fills the card as a flat block.
+                "min" AE..= if isStat then AE.String "function(v) { var pad = (v.max - v.min) * 0.1; return v.min >= 0 ? Math.max(0, v.min - pad) : v.min - pad; }" else AE.Number 0
               , "max" AE..= yMax
               , "splitLine"
                   AE..= AE.object
@@ -1688,6 +1705,8 @@ widgetToECharts widget =
                     , "inside" AE..= False
                     , "margin" AE..= (8 :: Int)
                     , "hideOverlap" AE..= True
+                    , -- The axis max is the data's peak ("656"), crowding the nice tick under it; max-only axes keep it.
+                      "showMaxLabel" AE..= isJust maxLabel
                     , "formatter"
                         AE..= let fmt = unitValueExprJS DropUnitWord widget.unit
                                in maybe ("function(value, index) { return " <> fmt <> "; }") (\n -> "function(value, index) { return (value === " <> n <> " || value == 0) ? " <> fmt <> " : ''; }") maxLabel
@@ -1834,6 +1853,10 @@ renderTableWithDataAndParams widget headers dataRows params = do
       flexFields = map (.field) $ case filter ((> 40) . widestOf) texts of [] -> take 1 texts; long -> long
       colWidth col = col.width <|> (("calc(" <> show (widestOf col) <> "ch + " <> bool "2rem" "7rem" (Just col.field == barField) <> ")") <$ guard (col.field `notElem` flexFields))
       colIdx col = fromMaybe 0 $ findIndex ((== col.field) . (.field)) columns
+      -- The next standard window wider than the one the table read, offered as one click.
+      widen = maybe ESNone (\(k, (_, label)) -> ESCustom $ button_ [type_ "button", class_ "btn btn-sm btn-ghost w-max mx-auto text-textBrand", term "_" [text|on click call updateTimePicker({since: '${k}'}) then call dispatchQueryUpdate()|]] $ toHtml ("Show " <> T.toLower label)) case TimePicker.parseTimeRange (posixSecondsToUTCTime 0) (TimePicker.TimePicker (param "since") (param "from") (param "to")) of
+        (Just a, Just b, _) -> find (\(k, (secs, _)) -> k `elem` ["24H", "7D", "30D"] && fromInteger secs > diffUTCTime b a) sinceWindows
+        _ -> Nothing
       sections = bool [(Nothing, toList dataRows)] [(Just (getRowValue 0 (head g)), toList g) | g <- NE.groupBy ((==) `on` getRowValue 0) (toList dataRows)] grouped
 
   table_ [class_ "dashboard-table table table-sm w-full relative [&_:is(th,td):first-child]:pl-4 [&_:is(th,td):last-child]:pr-4 [&_td]:border-b [&_td]:border-strokeWeak/50 [&_tr:last-child_td]:border-b-0", id_ tableId] do
@@ -1866,7 +1889,7 @@ renderTableWithDataAndParams widget headers dataRows params = do
                 | otherwise -> renderLongTextOr widget cellLinkSubs col (getRowValue idx row)
       when (V.null dataRows) $ tr_ [] $ td_ [colspan_ (show $ max 1 $ length visible), class_ "py-10"] case param "table-search" of
         Just q | not (T.null q) -> emptyState_ def{size = ESCompact, icon = Just "magnifying-glass"} ("No rows match “" <> q <> "”") "Try a different search, or widen the time range."
-        _ -> emptyState_ def{size = ESCompact, icon = Just "table"} "Nothing in this time range" "Widen the time range or loosen the dashboard filters to look further."
+        _ -> emptyState_ def{size = ESCompact, icon = Just "table", action = widen} "Nothing in this time range" "Widen the time range or loosen the dashboard filters to look further."
 
 
 -- | A query's own result as columns: the names it returned, numbers right-aligned with a bar
@@ -1923,12 +1946,12 @@ alignsRight col = isNumericCol col || isJust col.progress || any ("text-right" `
 formatColumnValue :: TableColumn -> Text -> Text
 formatColumnValue col value = case fromMaybe CTText col.columnType of
   CTNumber -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
-  CTDuration -> maybe (value <> unitSuffix) getDurationNSMS (readMaybe (toString value) >>= \n -> round . (n *) <$> maybe (Just 1) unitNanos col.unit)
+  CTDuration -> maybe (value <> unitSuffix) (\ns -> bool (T.replace ".0 " " " $ getDurationNSMS ns) "0" (ns == 0)) (readMaybe (toString value) >>= \n -> round . (n *) <$> maybe (Just 1) unitNanos col.unit)
   CTText -> maybe value (toText . formatTime defaultTimeLocale "%b %-d %H:%M:%S") (parseTimestamp value) <> unitSuffix
   where
     unitSuffix = foldMap (" " <>) col.unit
     fmtNumber n
-      | n < 100, n /= fromIntegral (round n :: Int) = formatStatValue n ""
+      | isJust col.decimals || (n < 100 && n /= fromIntegral (round n :: Int)) = formatStatValue col.decimals n ""
       | otherwise = prettyPrintCount (round n)
 
 
@@ -1968,10 +1991,12 @@ parseTimestamp (T.strip -> val)
 -- columns skip the wrapper since they're always short.
 renderLongTextOr :: Widget -> M.Map Text Text -> TableColumn -> Text -> Html ()
 renderLongTextOr widget linkSubs col value
+  -- A missing value is absence, not data: never a "null" link or a copy target.
+  | T.null (T.strip value) || value == "null" = emDash_
   -- The button floats over the cell's end on hover rather than reserving a column on every row.
   | or col.copyable || isJust shortened = div_ [class_ "group relative min-w-0"] do
       shown
-      copyButton_ "btn btn-xs absolute right-0 top-1/2 -translate-y-1/2 gap-1 bg-bgRaised border-strokeWeak shadow-sm opacity-0 group-hover:opacity-100 focus-visible:opacity-100" "w-3 h-3" "my @data-copy" [data_ "copy" value]
+      copyButton_ "btn btn-xs absolute right-0 top-1/2 -translate-y-1/2 gap-1 bg-bgRaised border-strokeWeak shadow-sm opacity-0 transition-[opacity,scale] duration-150 ease-out group-hover:opacity-100 focus-visible:opacity-100 active:scale-[0.96]" "w-3 h-3" "my @data-copy" [data_ "copy" value]
   | otherwise = shown
   where
     -- Long text wraps to two lines (code at any character) with the whole value on hover:

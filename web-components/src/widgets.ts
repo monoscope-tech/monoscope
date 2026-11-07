@@ -1,7 +1,7 @@
 'use strict';
-import { getSeriesColor, invalidateLogLevelColors, isDarkTheme } from './colorMapping';
+import { getSeriesColor, invalidateLogLevelColors, isDarkTheme, otherBucketLabel } from './colorMapping';
 import { shouldReloadForStaleChunk } from './stale-chunk-reload';
-import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statScalar, formatStatValue, type StatAggregates } from './stat-value';
+import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, durationAxisFormatter, DURATION_UNITS, statScalar, formatStatValue, type StatAggregates } from './stat-value';
 import { echartsUrls } from './assets';
 import { copyParams } from './time-range-utils';
 import debounce from 'lodash/debounce';
@@ -295,8 +295,13 @@ const readChartStyles = () => {
 // describing, which left both unreadable. Whatever the chart last drew stays
 // visible underneath, which is usually the context you want while reading why
 // the refresh failed. Only the legitimately-empty range keeps a centred overlay.
-export const showChartError = (chartId: string, message: string, retry?: () => Promise<void>) => {
+export const showChartError = (chartId: string, message: string, retry?: () => Promise<void>, stale = false) => {
   hideNoDataOverlay(chartId);
+  const banner = $(`${chartId}_error`);
+  banner?.toggleAttribute('data-stale', stale);
+  // A stat tile's stale chip shows only its icon and Retry; the message rides on hover.
+  if (stale) banner?.setAttribute('data-tippy-content', message);
+  else banner?.removeAttribute('data-tippy-content');
   const msg = $(`${chartId}_errorMsg`);
   if (!msg) return;
   msg.textContent = message;
@@ -388,7 +393,7 @@ export const collapseLongTail = (data: ChartRow[]): ChartRow[] => {
   const hidden = ranked.slice(MAX_VISIBLE_SERIES);
 
   return [
-    [headers[0], ...visible.map((series) => series.name), `Other (${hidden.length})`],
+    [headers[0], ...visible.map((series) => series.name), otherBucketLabel(hidden.length)],
     ...rows.map((row) => {
       if (!Array.isArray(row)) return row;
       const hiddenValues = hidden.map((series) => row[series.index + 1]).filter(Number.isFinite) as number[];
@@ -496,6 +501,8 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
     opt.series[0].markLine = { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds, widgetData.unit ?? '', widgetData.widgetType !== 'timeseries_stat') };
     // ECharts excludes markLines from automatic extents. Include thresholds in
     // the data-derived bounds, including streamed updates, with room for labels.
+    // A sparkline doesn't: stretched to 5% its 0.02% series flattened under two dashed lines, and
+    // ECharts clips an out-of-range markLine, so a threshold appears once the data nears it.
     const values = Object.values(thresholds);
     const bounds = ({ min, max }: { min: number; max: number }) => {
       // ECharts passes ±Infinity extents for an empty dataset; NaN bounds break the axis.
@@ -504,8 +511,10 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
       const padding = (high - low || 1) * 0.05;
       return { min: low < 0 ? low - padding : 0, max: high + padding };
     };
-    opt.yAxis.min = (data: { min: number; max: number }) => bounds(data).min;
-    opt.yAxis.max = (data: { min: number; max: number }) => bounds(data).max;
+    if (widgetData.widgetType !== 'timeseries_stat') {
+      opt.yAxis.min = (data: { min: number; max: number }) => bounds(data).min;
+      opt.yAxis.max = (data: { min: number; max: number }) => bounds(data).max;
+    }
   }
 
   // Release markers ride in the option itself: a data response replaces the whole option (notMerge).
@@ -540,7 +549,7 @@ const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'],
   }
   // textContent (not innerHTML): values are plain text, and the max/min prefix is a literal "<"/">".
   if ((stats.count ?? 0) > 0) {
-    const formatted = formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '');
+    const formatted = formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '', widgetData.decimals);
     value.textContent = widgetData.summarizeByPrefix ? `${widgetData.summarizeByPrefix} ${formatted}` : formatted;
   } else {
     value.textContent = NO_DATA_VALUE; // empty range
@@ -696,6 +705,7 @@ const PARTIAL_DRAW_DELAY_MS = 300;
 // A stream's partial frames often repeat the final answer exactly; each full rebuild costs
 // ~100ms of main thread at 4x CPU, so an unchanged snapshot is not redrawn.
 const drawnResponse = new WeakMap<object, string>();
+const baseYFormatters = new WeakMap<object, unknown>();
 // The layout each chart last drew, so a resize redraws only when its insets or legend change.
 const drawnLayouts = new WeakMap<object, string>();
 // Legend toggles, which a notMerge redraw would otherwise reset on every live tick.
@@ -721,6 +731,14 @@ const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: 
   opt.dataset.source = [headers || [], ...rows];
   const maximum = widgetData.chartType === 'line' ? data.stats?.max : data.stats?.max_group_sum;
   opt.yAxis = { ...opt.yAxis, max: maximum != null && Number.isFinite(maximum) && maximum > 0 ? maximum : undefined };
+  const unit = widgetData.unit ?? '';
+  if (DURATION_UNITS.has(unit) && opt.yAxis.max) {
+    // The server's formatter still decides which ticks are labelled (max-only axes blank the rest).
+    const base = baseYFormatters.get(opt) ?? opt.yAxis.axisLabel?.formatter;
+    baseYFormatters.set(opt, base);
+    const fmt = durationAxisFormatter(convertToNanoseconds(opt.yAxis.max, unit));
+    opt.yAxis.axisLabel = { ...opt.yAxis.axisLabel, formatter: (v: number, i: number) => (typeof base === 'function' && base(v, i) === '' ? '' : fmt(convertToNanoseconds(v, unit))) };
+  }
   drawSized(chart, el, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true);
 };
 
@@ -752,7 +770,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     chart.hideLoading();
     if (!showLoader && state.hasData) {
       if (state.failures >= BACKGROUND_FAILURE_THRESHOLD) {
-        showChartError(chartId, 'Updates delayed. Showing last successful data.', action);
+        showChartError(chartId, 'Updates delayed. Showing last successful data.', action, true);
       }
       return;
     }
@@ -882,6 +900,7 @@ declare global {
 
 type WidGetData = {
   chartType: string;
+  decimals?: number | null;
   opt: Record<string, any>;
   chartId: string;
   query: string;

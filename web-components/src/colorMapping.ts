@@ -113,8 +113,9 @@ export function getPercentileColor(percentile: string): string {
   const normalized = percentile.toLowerCase().trim();
   const dark = isDarkTheme();
   const colors: Record<string, string> = dark
-    ? { p50: '#4ade80', median: '#4ade80', p75: '#34d399', q1: '#34d399', p90: '#fbbf24', p95: '#fb923c', q3: '#fb923c', p99: '#f87171', p100: '#fb7185', max: '#fb7185', min: '#4ade80' }
-    : { p50: '#16a34a', median: '#16a34a', p75: '#059669', q1: '#059669', p90: '#bd7d00', p95: '#ea580c', q3: '#ea580c', p99: '#ef4444', p100: '#f43f5e', max: '#f43f5e', min: '#16a34a' };
+    // One cool→hot ramp with a distinct hue per step: p50/p75 were two near-identical greens.
+    ? { p50: '#2dd4bf', median: '#2dd4bf', p75: '#60a5fa', q1: '#60a5fa', p90: '#facc15', p95: '#fb923c', q3: '#fb923c', p99: '#f87171', p100: '#f472b6', max: '#f472b6', min: '#2dd4bf' }
+    : { p50: '#0d9488', median: '#0d9488', p75: '#3b82f6', q1: '#3b82f6', p90: '#b38600', p95: '#ea580c', q3: '#ea580c', p99: '#dc2626', p100: '#db2777', max: '#db2777', min: '#0d9488' };
   const palette = themeColors();
   return colors[normalized] || palette[hashString(percentile) % palette.length];
 }
@@ -134,13 +135,18 @@ export function getLogLevelColor(text: string): string {
 }
 
 // Main function to get deterministic color for any series
+/** collapseLongTail's "Other (k)" series; the colour mapping reads it back, so one definition names it. */
+export const otherBucketLabel = (hidden: number) => `Other (${hidden})`;
+const OTHER_BUCKET = /^Other \(\d+\)$/;
+
 export function getSeriesColor(value: string, context?: 'status' | 'percentile' | 'service' | 'log'): string {
   const colors = themeColors();
   // Handle null and undefined values with visible but muted blue-gray
   if (value && value.toLowerCase() === 'unset') {
     return '#7c8db5'; // Visible desaturated blue — muted but clearly present on dark backgrounds
   }
-  if (value && ['null', 'undefined', 'unknown'].includes(value.toLowerCase())) {
+  // "Other (k)" is collapseLongTail's bucket, not a service: it must not claim a service's hue.
+  if (value && (['null', 'undefined', 'unknown'].includes(value.toLowerCase()) || OTHER_BUCKET.test(value))) {
     return '#9ca3af'; // Gray-400 — neutral, WCAG-safe contrast on dark backgrounds
   }
   

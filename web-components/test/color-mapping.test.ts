@@ -81,6 +81,11 @@ describe('percentile colours', () => {
     expect(new Set(colors).size).toBeGreaterThan(1);
   });
 
+  test('every step of the ramp has its own colour', () => {
+    // p50/p75 and p90/p95 rendered as near-identical pairs on Request Latency Percentiles.
+    expect(new Set(['p50', 'p75', 'p90', 'p95', 'p99'].map(getPercentileColor)).size).toBe(5);
+  });
+
   test('casing and surrounding whitespace do not change the colour', () => {
     expect(getPercentileColor('  P95 ')).toBe(getPercentileColor('p95'));
   });
@@ -210,6 +215,8 @@ describe('getSeriesColor', () => {
   test('auto-detection routes a value the same way an explicit context does', () => {
     expect(getSeriesColor('503')).toBe(getStatusCodeColor('503'));
     expect(getSeriesColor('p95')).toBe(getPercentileColor('p95'));
+    // The long-tail bucket is neutral like "unknown", never a service's hue.
+    expect(getSeriesColor('Other (18)')).toBe(getSeriesColor('unknown'));
     expect(getSeriesColor('error')).toBe(getLogLevelColor('error'));
   });
 

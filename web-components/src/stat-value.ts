@@ -70,8 +70,14 @@ export const formatDuration = (ns: number): string => {
   return `${v.toFixed(unit === 'ns' ? 0 : 1)}${unit}`;
 };
 
+/** Axis ticks in the one unit the axis maximum reads in ("2.5m … 0.5m, 0"), not one unit per tick. */
+export const durationAxisFormatter = (maxNs: number) => {
+  const step = DURATION_STEPS.find(([t]) => maxNs >= t) ?? [1, 'ns'];
+  return (ns: number) => (ns === 0 ? '0' : `${parseFloat((ns / step[0]).toFixed(1))}${step[1]}`);
+};
+
 // Units that format as a duration. NB: 'm' here is minutes, not meters.
-const DURATION_UNITS = new Set(['ns', 'μs', 'us', 'ms', 's', 'm', 'h']);
+export const DURATION_UNITS = new Set(['ns', 'μs', 'us', 'ms', 's', 'm', 'h']);
 
 export type StatAggregates = { min: number; max: number; sum: number; count: number; mean: number; last: number };
 
@@ -97,10 +103,11 @@ export const statScalar = (stats: Partial<StatAggregates>, summarizeBy: string, 
 };
 
 /** Format a stat scalar for display, appending the unit (duration-aware). */
-export const formatStatValue = (value: number, unit: string): string => {
+export const formatStatValue = (value: number, unit: string, decimals?: number | null): string => {
   if (DURATION_UNITS.has(unit)) return formatDuration(convertToNanoseconds(value, unit));
   if (BYTE_UNITS.has(unit)) return formatBytes(value);
   const suffix = ({ '': '', '1': '', '{}': '', By: ' bytes' } as Record<string, string>)[unit] ?? ` ${unit}`;
+  if (decimals != null) return `${value.toFixed(decimals)}${suffix}`;
   if (value === 1 && /^[a-z]{2,}s$/i.test(unit)) return `1 ${unit.slice(0, -1)}`;
   // A non-zero value below the display precision (a rare error rate) must not read as 0.
   return `${value > 0 && value < 0.01 ? '<0.01' : formatNumber(value)}${suffix}`;
