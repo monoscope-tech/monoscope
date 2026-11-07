@@ -50,6 +50,7 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.Projects qualified as ManageMembers
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (mkHasqlPool)
+import Pkg.Git qualified as Git
 import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.SchemaLearning qualified as SchemaLearning
@@ -1089,8 +1090,10 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         apiStatus action = toBaseServantResponse tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         renameForm = Dashboards.DashboardRenameForm{Dashboards.title = "Mine", Dashboards.fileDir = Nothing}
     template <- maybe (fail "missing _overview.yaml") pure $ find ((== Just "_overview.yaml") . (.file)) dashboardTemplatesCompiled
-    _ <- runAuthHandler tr $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] testPid []
+    _ <- runAuthHandler tr $ Dashboards.entrypointRedirectGetH "_overview.yaml" [] testPid []
     did <- runQueryEffect tr (DashboardModel.getDashboardByBaseTemplate testPid "_overview.yaml") >>= maybe (fail "no overview row") pure
+    -- Title and starring come from the template: built-ins start starred.
+    dbQuery tr "SELECT title, starred_since IS NOT NULL FROM projects.dashboards WHERE id = ?" (Only did) `shouldReturn` [("Overview" :: Text, True)]
     -- A row frozen before read-only existed still renders the template, so deploys reach it.
     dbExec tr "UPDATE projects.dashboards SET schema = '{\"title\":\"Frozen\",\"widgets\":[]}'::jsonb WHERE id = ?" (Only did)
     (_, shown) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid did Nothing
@@ -1126,6 +1129,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     (copyVm, copy) <- runAuthHandler tr $ Dashboards.getDashAndVM testPid copyId Nothing
     (copy.readOnly, copy.title, length $ foldMap (.widgets) (fold copy.tabs), isJust copyVm.schema) `shouldBe` (Nothing, (<> " (Copy)") <$> template.title, length $ foldMap (.widgets) (fold template.tabs), True)
     status (void $ Dashboards.dashboardRenamePatchH testPid copyId renameForm) `shouldReturn` 200
+    -- A copy of a repository-owned dashboard is the user's own: sharing its (repository, file)
+    -- key broke the unique index, so duplicating any synced dashboard failed.
+    Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
+    runQueryEffect tr (GitSync.assignDashboardRepository testPid copyId sync.id) `shouldReturn` Right ()
+    status (void $ Dashboards.dashboardDuplicatePostH testPid copyId) `shouldReturn` 200
+    dbQuery tr "SELECT git_sync_id IS NULL FROM projects.dashboards WHERE project_id = ? AND title = 'Mine (Copy)'" (Only testPid)
+      `shouldReturn` [Only True]
     copyPage <- renderT <$> getTab tr copyId "overview" Nothing []
     copyPage `shouldContainAll` ["Edit YAML", "widget-order-trigger"]
     copyPage `shouldNotSatisfy` T.isInfixOf " data-read-only>"

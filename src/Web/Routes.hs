@@ -314,14 +314,14 @@ cookieProtectedServer :: Maybe AI.ProjectTools -> Servant.ServerT (Servant.Named
 cookieProtectedServer projectTools =
   CookieProtectedRoutes
     { -- Dashboard handlers
-      dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" ["overview", "http", "logs", "traces", "events"]
+      dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" ["overview", "http", "logs", "traces", "events"]
     , slackInstallGet = Slack.startInstallGetH
     , slackEvidenceGet = Slack.startEvidenceGetH
     , slackEvidenceDisconnectPost = Slack.disconnectEvidencePostH
     , slackIdentityGet = Slack.linkIdentityGetH
     , slackIdentityPost = Slack.linkIdentityPostH
     , slackLinkProjectGet = Slack.linkProjectGetH
-    , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
+    , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" ["endpoints", "http", "events"]
     , rumRedirect = Dashboards.rumRedirectH
     , dashboardViewPost = Dashboards.dashboardViewPostH
     , dashboardViewDelete = Dashboards.dashboardViewDeleteH

@@ -111,7 +111,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.MonitorDefinitions (compileAlertSql)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
-import Models.Projects.DashboardTemplates (detach, getDashboardTemplates, loadDashboardFromVM)
+import Models.Projects.DashboardTemplates (Editable, detach, duplicate, editable, getDashboardTemplates, loadDashboardFromVM, requireEditable, updateSchema, updateTitle)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
@@ -1256,7 +1256,7 @@ dashboardWidgetPutWithMonitorH :: Projects.ProjectId -> Dashboards.DashboardId -
 dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM widget = act do
   _ <- Projects.sessionAndProject pid
   (dashVM, dash) <- getDashAndVM pid dashId Nothing
-  editableM <- editableDash dashVM
+  editableM <- editable dashVM
   uid <- UUID.genUUID <&> UUID.toText
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
       -- A newly created widget (no id yet) also drops any centered title.
@@ -1292,7 +1292,7 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
         pure $ updated <$ guard (synced updated /= synced monitor)
     pure do
       -- The render-time tab slug comes back in the posted JSON; it must not be persisted.
-      _ <- Dashboards.updateSchema ed (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
+      _ <- updateSchema ed (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
       syncDashboardAndQueuePush pid dashId
       traverse_ Monitors.queryMonitorUpsert monitorUpdateM
       unless (configureMonitorM == Just "true") $ addTriggerEvent "closeModal" ""
@@ -1361,7 +1361,7 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
       -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
       unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds pid (Just dashId) deletedWidgetIds
 
-      _ <- Dashboards.updateSchema ed (overDashWidgets tabSlugM (const reorderedWidgets) dash) Nothing
+      _ <- updateSchema ed (overDashWidgets tabSlugM (const reorderedWidgets) dash) Nothing
       syncDashboardAndQueuePush pid dashId
       addRespHeaders NoContent
 
@@ -1405,15 +1405,10 @@ getDashAndVM pid dashId fileM = do
 
 
 -- | 'getDashAndVM' with proof its content may be written; a built-in read-only dashboard is a 403.
-getEditableDash :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Eff es (Dashboards.Editable, Dashboards.DashboardVM, Dashboards.Dashboard)
+getEditableDash :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Eff es (Editable, Dashboards.DashboardVM, Dashboards.Dashboard)
 getEditableDash pid dashId = do
   (vm, dash) <- getDashAndVM pid dashId Nothing
-  ed <- editableDash vm `whenNothingM` ApiT.refuse ApiT.DashboardReadOnly
-  pure (ed, vm, dash)
-
-
-editableDash :: (Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es) => Dashboards.DashboardVM -> Eff es (Maybe Dashboards.Editable)
-editableDash vm = ask @AuthContext >>= getDashboardTemplates . (.config) <&> (`Dashboards.editable` vm)
+  (,vm,dash) <$> requireEditable vm
 
 
 -- | Page shell shared by the dashboard and dashboard-tab handlers.
@@ -1965,7 +1960,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
   queryMonitorId <- maybe (Monitors.QueryMonitorId <$> UUID.genUUID) (pure . (.id)) existingMonitor
   chartWidgetE <- forM dashboardIdM \dashId ->
     getDashAndVM pid dashId Nothing >>= \(dashVM, dash) ->
-      editableDash dashVM <&> \editableM -> do
+      editable dashVM <&> \editableM -> do
         ed <- maybeToRight ReadOnlyDashboard editableM
         maybeToRight WidgetNotFound $ (\(slug, widget) -> ((dashId, ed), dashVM.title, dash, slug, widget)) <$> findWidgetInDashboard form.widgetId dash
   let unitM = mfilter (not . T.null) $ T.strip <$> form.unit
@@ -2017,7 +2012,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = act do
         pure do
           whenJust chartWidgetM \((dashId, ed), _, dash, tabSlugM, widget) ->
             when ((widget.alertThreshold, widget.warningThreshold, widget.unit) /= (Just chartThreshold, warningThreshold, unitM)) do
-              _ <- Dashboards.updateSchema ed (updateDashboardWidgets dash tabSlugM (Just form.widgetId) widget{Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}) Nothing
+              _ <- updateSchema ed (updateDashboardWidgets dash tabSlugM (Just form.widgetId) widget{Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}) Nothing
               syncDashboardAndQueuePush pid dashId
           _ <- Monitors.queryMonitorUpsert monitor{Monitors.deactivatedAt = existingMonitor >>= (.deactivatedAt)}
           WidgetMonitorSaved <$ addTriggerEvent "closeModal" ""
@@ -2504,7 +2499,7 @@ dashboardsPostH pid form = do
               , Dashboards.filePath = filePath
               }
       -- A read-only template is linked only by its entrypoint; created here it is the user's own copy.
-      _ <- Dashboards.insert $ maybe (detach templates dbd) (const dbd) (Dashboards.editable templates dbd)
+      _ <- Dashboards.insert $ maybe dbd (const $ detach templates dbd) (Dashboards.readOnlyTemplate templates dbd)
       syncDashboardAndQueuePush pid dbd.id
       redirectCS redirectURI
       addRespHeaders DashboardNoContent
@@ -2513,15 +2508,16 @@ dashboardsPostH pid form = do
 -- THe current /p/:projectId/  handler. Redirects users to the overview dashboard if it exists, or creates it.
 entrypointRedirectGetH
   :: Text
-  -> Text
   -> [Text]
   -> Projects.ProjectId
   -> [(Text, Maybe Text)]
   -> ATAuthCtx (Headers '[Header "Location" Text] NoContent)
-entrypointRedirectGetH baseTemplate title tags pid qparams = do
+entrypointRedirectGetH baseTemplate tags pid qparams = do
   (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  let shouldBeStarred = baseTemplate `elem` ["_overview.yaml", "endpoint-stats.yaml"]
+  template <- find ((== Just baseTemplate) . (.file)) <$> (getDashboardTemplates . (.config) =<< ask @AuthContext)
+  -- Built-in (read-only) dashboards start starred.
+  let shouldBeStarred = (template >>= (.readOnly)) == Just True
       getOrCreate = do
         did <- UUIDId <$> UUID.genUUID
         (dashId, created) <-
@@ -2530,7 +2526,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
               { Dashboards.baseTemplate = Just baseTemplate
               , Dashboards.starredSince = if shouldBeStarred then Just now else Nothing
               , Dashboards.tags = V.fromList tags
-              , Dashboards.title = title
+              , Dashboards.title = fromMaybe baseTemplate (template >>= (.title))
               }
         when created $ syncDashboardAndQueuePush pid dashId
         pure dashId
@@ -2553,7 +2549,7 @@ rumRedirectH pid segments params = case (filter (not . T.null) segments, param "
   _ -> throwError err404
   where
     param k = join $ lookup k params
-    dashboard = entrypointRedirectGetH "rum.yaml" "Real User Monitoring" ["rum", "browser", "frontend", "web-vitals"] pid params
+    dashboard = entrypointRedirectGetH "rum.yaml" ["rum", "browser", "frontend", "web-vitals"] pid params
     query = T.intercalate " and " $ filter (not . T.null) [maybe browserKql (("attributes.session.id == " <>) . kqlQuoted) (param "session"), audienceKql $ audienceFilters params]
     sessions = pure $ addHeader ((urls.logExplorer pid).logExplorerGet (Just query) Nothing (nonEmptyT $ param "since") (nonEmptyT $ param "from") (nonEmptyT $ param "to") Nothing Nothing Nothing Nothing (Just "sessions") Nothing Nothing Nothing) NoContent
 
@@ -2576,10 +2572,10 @@ dashboardRenamePatchH pid dashId form = do
     Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
       (ed, _, _) <- getEditableDash pid dashId
-      _ <- Dashboards.updateTitle pid ed form.title
+      _ <- updateTitle pid ed form.title
 
       whenJust dashVM.schema \schema ->
-        void $ Dashboards.updateSchema ed (schema & #title ?~ form.title) Nothing
+        void $ updateSchema ed (schema & #title ?~ form.title) Nothing
 
       when (form.title /= dashVM.title) do
         monitors <- Monitors.queryMonitorsAll pid
@@ -2611,23 +2607,7 @@ dashboardDuplicatePostH pid dashId = do
       now <- Time.currentTime
       newDashId <- UUIDId <$> UUID.genUUID
 
-      templates <- getDashboardTemplates . (.config) =<< ask @AuthContext
-      let copyTitle = dashTitle dashVM.title <> " (Copy)"
-          copy = detach templates dashVM
-          updatedSchema = copy.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
-
-      _ <-
-        Dashboards.insert
-          $ copy
-            { Dashboards.id = newDashId
-            , Dashboards.createdAt = now
-            , Dashboards.updatedAt = now
-            , Dashboards.createdBy = sess.user.id
-            , Dashboards.title = copyTitle
-            , Dashboards.schema = updatedSchema
-            , Dashboards.starredSince = Nothing
-            , Dashboards.homepageSince = Nothing
-            }
+      _ <- Dashboards.insert =<< duplicate sess.user.id now newDashId dashVM
       syncDashboardAndQueuePush pid newDashId
 
       let redirectURI = dashboardUrl pid newDashId Nothing []
@@ -2773,7 +2753,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
       , "targetTabCount" AE..= length targetTabs
       ]
 
-  _ <- Dashboards.updateSchema targetEd (overDashWidgets ((.slug) <$> destinationTabM) (<> [widgetCopy]) targetDash) (Just now)
+  _ <- updateSchema targetEd (overDashWidgets ((.slug) <$> destinationTabM) (<> [widgetCopy]) targetDash) (Just now)
   syncDashboardAndQueuePush pid targetDashId
 
   addWidgetJSON $ encodeText widgetCopy
@@ -3194,7 +3174,7 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
   (idx, _) <- findTabBySlug tabs tabSlug `whenNothing` throwError err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
 
   let newSlug = slugify form.newName
-  _ <- Dashboards.updateSchema ed (dash & #tabs ?~ (tabs & ix idx . #name .~ form.newName)) (Just now)
+  _ <- updateSchema ed (dash & #tabs ?~ (tabs & ix idx . #name .~ form.newName)) (Just now)
   syncDashboardAndQueuePush pid dashId
 
   addSuccessToast "Tab renamed successfully" Nothing
@@ -3268,8 +3248,8 @@ dashboardYamlPutH pid dashId form = do
     Left err -> pure $ YamlRejected err
     Right dashboard -> do
       now <- Time.currentTime
-      _ <- Dashboards.updateSchema ed dashboard (Just now)
-      whenJust dashboard.title $ \t -> void $ Dashboards.updateTitle pid ed t
+      _ <- updateSchema ed dashboard (Just now)
+      whenJust dashboard.title $ \t -> void $ updateTitle pid ed t
       syncDashboardAndQueuePush pid dashId
       addTriggerEvent "closeYamlDrawer" ""
       pure $ YamlSaved pid dashId dashboard

@@ -43,7 +43,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_)
-import Models.Projects.DashboardTemplates (getDashboardTemplates, loadDashboardFromVM)
+import Models.Projects.DashboardTemplates (getDashboardTemplates, loadDashboardFromVM, requireEditable, updateSchema)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
@@ -63,7 +63,6 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx, ActionResult, Done, Outcome (..), Refusal (..), Rendered (..), RespHeaders, act, addErrorToast, addRespHeaders, addSuccessToast, done, redirectCS)
 import Utils (LoadingSize (..), faSprite_, hostPath, htmxIndicator_, renderMarkdown)
-import Web.ApiTypes qualified as ApiT
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 import Web.Links (CookieProtectedRoutes (..), ProjectsRoutes' (..), urls)
@@ -696,14 +695,14 @@ dashboardRepositoryPostH pid did form = do
   requireGitWrite pid
   dashboard <- Dashboards.getDashboardByProjectId pid did >>= maybe (throwError err404) pure
   templates <- getDashboardTemplates . (.config) =<< ask @Config.AuthContext
-  ed <- Dashboards.editable templates dashboard `whenNothing` ApiT.refuse ApiT.DashboardReadOnly
+  ed <- requireEditable dashboard
   assignmentError <-
     GitSync.assignDashboardRepository pid did form.repositoryId >>= \case
       Left err -> pure $ Just err
       Right () -> do
         when (isNothing dashboard.schema)
           $ void
-          $ Dashboards.updateSchema ed (fromMaybe def $ loadDashboardFromVM templates dashboard) Nothing
+          $ updateSchema ed (fromMaybe def $ loadDashboardFromVM templates dashboard) Nothing
         queueGitSyncPush pid did
         pure Nothing
   dashboardRepositoryPageH pid did assignmentError
