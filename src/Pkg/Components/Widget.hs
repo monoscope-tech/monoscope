@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), VizType (..), vizWidget, vizIsChart, vizFor, ModelWidget, modelWidget, ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, foldSeries, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, sqlSignature, verifySqlSignature, signWidgetSql, widgetPngUrl, stampPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -8,16 +8,18 @@ import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as AE.KeyMap
 import Data.Base64.Types qualified as B64
 import Data.ByteArray qualified as BA
-import Data.Char (isDigit)
+import Data.Char (isAlpha, isDigit, isHexDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Labels ()
-import Data.List (lookup)
+import Data.List (findIndex, lookup)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as M
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display)
-import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
+import Data.Time (UTCTime, defaultTimeLocale, parseTimeM, zonedTimeToUTC)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Time.Format (formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -38,13 +40,12 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (copyButton_, headerRow_, searchInput_)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), copyButton_, emptyState_, localTimeFmt_, searchInput_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.DeriveUtils (JsonValueSchema (..), UUIDId (..), WrappedEnumSC (..))
-import Pkg.Parser (ToQueryText (..), parseQueryToAST, replacePlaceholders)
+import Pkg.Parser (ResultShape (..), ToQueryText (..), parseQueryToAST, replacePlaceholders, resultShape)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
-import Pkg.QueryCache qualified as QC
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -132,6 +133,71 @@ data WidgetType
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
   deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "WT" WidgetType
+
+
+-- | A view the explorer's query box switches between. Its wire spelling (URL @viz_type@, the
+-- tab values, the AI's @visualization_type@) is its widget type's, plus the explorer-only
+-- @patterns@ and @sessions@ regions.
+--
+-- >>> import Data.Text.Display (display)
+-- >>> map display [minBound .. maxBound :: VizType]
+-- ["logs","timeseries","timeseries_line","top_list","patterns","sessions"]
+-- >>> [display w | Just w <- map vizWidget [minBound ..]] == map display [VizLogs .. VizTopList]
+-- True
+data VizType = VizLogs | VizTimeseries | VizTimeseriesLine | VizTopList | VizPatterns | VizSessions
+  deriving stock (Bounded, Enum, Eq, Read, Show)
+  deriving (AE.ToJSON, Display, FromHttpApiData, ToSchema) via WrappedEnumSC 'Nothing "Viz" VizType
+
+
+-- | The widget that draws a view. The explorer-only regions have none, so a dashboard can't hold them.
+vizWidget :: VizType -> Maybe WidgetType
+vizWidget = \case
+  VizLogs -> Just WTLogs
+  VizTimeseries -> Just WTTimeseries
+  VizTimeseriesLine -> Just WTTimeseriesLine
+  VizTopList -> Just WTTopList
+  VizPatterns -> Nothing
+  VizSessions -> Nothing
+
+
+-- | Drawn by the widget container rather than the explorer's own log list or regions.
+vizIsChart :: VizType -> Bool
+vizIsChart = maybe False (/= WTLogs) . vizWidget
+
+
+-- | Whether a view draws what a query returns. The time charts bin events and a scalar
+-- ('chartQuery'), but a grouped result is a ranking: re-binning it by time answers another
+-- question, so "line chart of the top 5" still lands on the top list. A tab clicked by hand
+-- is not refused; this only decides which view a query opens on.
+vizDraws :: VizType -> ResultShape -> Bool
+vizDraws = \case
+  VizTimeseries -> (/= Categories)
+  VizTimeseriesLine -> (/= Categories)
+  VizTopList -> (== Categories)
+  VizLogs -> (== Events)
+  VizPatterns -> (== Events)
+  VizSessions -> (== Events)
+
+
+-- | The view for a query: the requested one when it can draw the result, else the result's own.
+--
+-- >>> [vizFor s Nothing | s <- [Events, Scalar, TimeSeries, Categories]]
+-- [VizLogs,VizTimeseries,VizTimeseries,VizTopList]
+-- >>> (vizFor Categories (Just VizLogs), vizFor Categories (Just VizTimeseriesLine), vizFor Events (Just VizSessions), vizFor Events (Just VizTimeseriesLine))
+-- (VizTopList,VizTopList,VizSessions,VizTimeseriesLine)
+--
+-- The view picked always draws the result:
+--
+-- >>> and [vizDraws (vizFor s v) s | s <- [Events, Scalar, TimeSeries, Categories], v <- Nothing : map Just [minBound ..]]
+-- True
+vizFor :: ResultShape -> Maybe VizType -> VizType
+vizFor shape = fromMaybe byShape . mfilter (`vizDraws` shape)
+  where
+    byShape = case shape of
+      Events -> VizLogs
+      Scalar -> VizTimeseries
+      TimeSeries -> VizTimeseries
+      Categories -> VizTopList
 
 
 data SummarizeBy
@@ -278,7 +344,7 @@ data Widget = Widget
   , value :: Maybe Double -- value could represent a number or a count
   , wData :: Maybe AE.Value
   , hideLegend :: Maybe Bool
-  , legendPosition :: Maybe Text -- Legend position: "top", "bottom", "top-right", "top-left", "bottom-right", "bottom-left"
+  , legendPosition :: Maybe Text -- Legend position: "top", "bottom", "top-right", "top-left", "bottom-right", "bottom-left", or "right" (a name/value table beside the plot)
   , legendSize :: Maybe LegendSize -- default LSSm
   , theme :: Maybe Text
   , dataset :: Maybe WidgetDataset
@@ -330,7 +396,6 @@ data Widget = Widget
   , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
   , sqlSig :: Maybe Text -- runtime: 'sqlSignature' of sql/rollupSql, so a viewer's request may run them
   , pngProfile :: Maybe PngProfile
-  , _staticRender :: Maybe Bool -- For PNG export: disables scroll legend
   , dbSource :: Maybe Hasql.SqlSource -- Nothing = default routing
   }
   deriving stock (Generic, Show, THS.Lift)
@@ -425,9 +490,19 @@ data WidgetDataset = WidgetDataset
 -- (Just "summarize count(*) by service",DTText)
 -- >>> chartQuery (def :: Widget)
 -- (Nothing,DTMetric)
+-- >>> chartQuery (def & #query ?~ "")
+-- (Just "summarize count(*) by bin_auto(timestamp)",DTMetric)
+-- >>> chartQuery (def & #query ?~ "name == \"GET\" | summarize count() by name")
+-- (Just "name == \"GET\" | summarize count() by bin_auto(timestamp), name",DTMetric)
+-- >>> chartQuery (def & #wType .~ WTTopList & #query ?~ "name == \"GET\" | summarize count() by name")
+-- (Just "name == \"GET\" | summarize count() by name",DTText)
+-- >>> chartQuery (def & #wType .~ WTDistribution & #query ?~ "summarize count() by resource.service.name")
+-- (Just "summarize count() by resource.service.name",DTText)
 chartQuery :: Widget -> (Maybe Text, Charts.DataType)
 chartQuery w
   | w.wType `elem` [WTLogs, WTTable, WTTopList] = (w.query, Charts.DTText)
+  -- A categorical chart of a grouped result plots the groups; binning it would plot time.
+  | categoricalWidget w.wType, Just Categories <- resultShape <$> (rightToMaybe . parseQueryToAST =<< w.query) = (w.query, Charts.DTText)
   | otherwise = (shape <$> w.query, dataType)
   where
     isStat = w.wType == WTStat
@@ -437,24 +512,52 @@ chartQuery w
       Left _ -> q
       Right ast ->
         let (summarized, binned) = mapAccumR addBin False ast
-         in if not summarized then q <> " | summarize count(*)" <> suffix else if binned == ast then q else toQText binned
+         in if not summarized then foldMap (<> " | ") (nonEmptyT (Just (T.strip q))) <> "summarize count(*)" <> suffix else if binned == ast then q else toQText binned
     addBin False section@(SummarizeCommand aggs by)
-      | isStat || QC.hasSummarizeWithBin [section] = (True, section)
+      | isStat || resultShape [section] == TimeSeries = (True, section)
       | otherwise = (True, SummarizeCommand aggs $ Just $ SummarizeByClause $ ByBinFunc (BinAuto $ Subject "timestamp" "timestamp" []) : foldMap coerce by)
     addBin seen section = (seen, section)
 
 
--- | Convert MetricsData to WidgetDataset (timestamps already in ms from queryMetrics)
+-- | Convert MetricsData to WidgetDataset (timestamps already in ms from queryMetrics). A grouped
+-- result arrives as text rows, a label then its values, and is charted as categories.
 toWidgetDataset :: Charts.MetricsData -> WidgetDataset
 toWidgetDataset md =
   WidgetDataset
-    { source = AE.toJSON $ V.cons (AE.toJSON <$> md.headers) (AE.toJSON <<$>> md.dataset)
+    { source = AE.toJSON $ V.cons (AE.toJSON <$> md.headers) $ if V.null md.dataset then V.map (V.imap textCell) md.dataText else AE.toJSON <<$>> md.dataset
     , rowsPerMin = md.rowsPerMin
     , value = Just md.rowsCount
     , from = md.from
     , to = md.to
     , stats = md.stats
     }
+  where
+    textCell 0 c = AE.String c
+    textCell _ c = maybe (AE.String c) AE.toJSON (readMaybe @Double (toString c))
+
+
+-- | A PNG can't scroll its legend, so past @n@ series the ones with the lowest peaks fold into
+-- one "Other (k)" series. Each bucket's total is unchanged. The browser's collapseLongTail
+-- does the same for live charts.
+--
+-- >>> let md = def{Charts.headers = V.fromList ["timestamp", "a", "b", "c"], Charts.dataset = V.fromList [V.fromList [Just 1, Just 5, Just 1, Just 2], V.fromList [Just 2, Nothing, Just 9, Just 1]]} :: Charts.MetricsData
+-- >>> let folded = foldSeries 1 md
+-- >>> (folded.headers, folded.dataset)
+-- (["timestamp","b","Other (2)"],[[Just 1.0,Just 1.0,Just 7.0],[Just 2.0,Just 9.0,Just 1.0]])
+-- >>> (foldSeries 3 md).headers == md.headers
+-- True
+foldSeries :: Int -> Charts.MetricsData -> Charts.MetricsData
+foldSeries n md = case V.toList md.headers of
+  x : names
+    | length names > n ->
+        let peak i = foldl' max 0 $ mapMaybe (join . (V.!? i)) (V.toList md.dataset)
+            (kept, rest) = splitAt n $ sortOn (Down . peak . snd) (zip names [1 ..])
+            restSum r = viaNonEmpty sum $ mapMaybe (\(_, i) -> join (r V.!? i)) rest
+         in md
+              { Charts.headers = V.fromList $ x : map fst kept <> ["Other (" <> show (length rest) <> ")"]
+              , Charts.dataset = md.dataset <&> \r -> V.fromList $ join (r V.!? 0) : map (join . (r V.!?) . snd) kept <> [restSum r]
+              }
+  _ -> md
 
 
 data WidgetAxis = WidgetAxis
@@ -617,7 +720,8 @@ widget_ :: Widget -> Html ()
 widget_ w' = case w.wType of
   WTAnomalies ->
     wgtCard_ $ withCardFrame False w (w._projectId <&> \pid -> ("View all", (urls.issues pid).listGet Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [])) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
-  WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-lg surface-raised overflow-hidden group/wgt"] do
+  -- rounded-3xl: its cards are rounded-2xl inside the grid's ~8px margin, so corners stay concentric.
+  WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-3xl surface-raised overflow-hidden group/wgt"] do
     -- Header: auto height (no flex), group-header class for CSS targeting when collapsed
     div_ [class_ $ "group-header py-2 px-4 flex items-center justify-between " <> gridStackHandleClassFor w] do
       div_ [class_ "inline-flex gap-2 items-center group/h"] do
@@ -633,6 +737,7 @@ widget_ w' = case w.wType of
     -- Nested grid: flex-1 fills remaining space
     div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : [data_ "stat-grid" "" | not (null normalizedChildren) && all isStatWidget normalizedChildren] <> gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
   WTTable -> wgtCard_ $ renderTable w
+  WTTopList -> wgtCard_ $ renderTable w
   WTLogs -> wgtCard_ $ renderLogsWidget w
   WTServiceMap -> wgtCard_ $ withCardFrame True w (ctaAction w) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
@@ -663,7 +768,7 @@ widget_ w' = case w.wType of
                  ]
            ]
     widgetJson = encodeText w
-    autoFitAttr = memptyIfFalse (w.wType `elem` [WTAnomalies, WTGroup, WTTable, WTLogs, WTFlamegraph]) [data_ "mobile-autofit" ""]
+    autoFitAttr = memptyIfFalse (w.wType `elem` [WTAnomalies, WTGroup, WTTable, WTTopList, WTLogs, WTFlamegraph]) [data_ "mobile-autofit" ""]
     gridItem_ =
       if or w.naked
         then Relude.id
@@ -888,12 +993,17 @@ statScalar summarize fromM toM stats
 -- A non-zero rate below the display precision is shown as such, never as 0:
 -- >>> (formatStatValue 0.0012 "%", formatStatValue 0 "%")
 -- ("<0.01 %","0 %")
+--
+-- A count of one names its unit in the singular:
+-- >>> map (`formatStatValue` "systems") [1, 2]
+-- ["1 system","2 systems"]
 formatStatValue :: Double -> Text -> Text
 formatStatValue value unit
   | isNaN value || isInfinite value = "N/A"
   | Just factor <- unitNanos unit = formatDuration $ value * factor
   | isByteUnit unit = formatBytes value
   | value > 0, value < 0.01 = "<0.01" <> displayUnit unit
+  | value == 1, T.length unit > 2, T.all isAlpha unit, Just unitOne <- T.stripSuffix "s" unit = "1 " <> unitOne
   | otherwise = formatNumber value <> displayUnit unit
   where
     durationSteps :: [(Double, Text)]
@@ -970,7 +1080,8 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
               ]
               $ Utils.faSprite_ iconType "regular" ("w-3.5 h-3.5 " <> iconColor)
 
-    whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
+    -- Brand colour says it's a link; the underline waits for hover so it doesn't outweigh the title.
+    whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "tap-target px-1 text-xs font-medium text-textBrand underline-offset-2 hover:underline", href_ uri] $ toHtml ctaTitle
     whenJust ((,) "SQL" <$> Utils.nonEmptyT widget.sql <|> (,) "KQL" <$> Utils.nonEmptyT widget.query) \(label, query) -> do
       let popId = wId <> "-query-preview"
       div_
@@ -1210,23 +1321,26 @@ tableQuery widget sortParam = (query, sql)
       _ -> widget.query
 
 
-sortableTableHead_ :: Widget -> Maybe Text -> Html ()
-sortableTableHead_ widget selected =
-  thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"]
+sortableTableHead_ :: Widget -> [TableColumn] -> Maybe Text -> Html ()
+sortableTableHead_ widget columns selected =
+  thead_ [class_ "sticky top-0 z-10"]
     $ tr_ []
-    $ forM_ (filter (not . or . (.hidden)) $ fold widget.columns) \col -> do
-      let (direction, ariaSort, glyph)
-            | selected == Just ("+" <> col.field) = ("asc", "ascending", "↑")
-            | selected == Just ("-" <> col.field) = ("desc", "descending", "↓")
-            | otherwise = ("none", "none", "↕") :: (Text, Text, Text)
+    $ forM_ (filter (not . or . (.hidden)) columns) \col -> do
+      let (direction, ariaSort, icon)
+            | selected == Just ("+" <> col.field) = ("asc", "ascending", "arrow-up")
+            | selected == Just ("-" <> col.field) = ("desc", "descending", "arrow-down")
+            | otherwise = ("none", "none", "sort") :: (Text, Text, Text)
           sortable = sortableColumn widget col
           -- A dotted underline marks a header that explains itself on hover.
-          title = span_ [class_ "underline decoration-dotted decoration-strokeStrong underline-offset-4" | isJust col.description] $ toHtml col.title
-      th_ ([class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" ariaSort] <> foldMap (\d -> [term "data-tippy-content" d, term "aria-description" d]) col.description)
+          title = span_ ([class_ "underline decoration-dotted decoration-strokeStrong underline-offset-4" | isJust col.description] <> [class_ " text-textStrong" | direction /= "none"]) $ toHtml col.title
+          -- A numeric header sits over its right-aligned values, its sort glyph leading it.
+          headerRow = div_ [class_ $ "flex items-center gap-1 " <> bool "" "flex-row-reverse" (alignsRight col)]
+      th_ ([class_ $ "bg-bgAlternate sticky top-0 border-b border-strokeWeak has-[button:hover]:bg-bgSunken has-[button:focus-visible]:bg-bgSunken " <> bool "text-left" "text-right" (alignsRight col), term "aria-sort" ariaSort] <> foldMap (\d -> [term "data-tippy-content" d, term "aria-description" d]) col.description)
         $ if sortable
           then button_
             [ type_ "button"
-            , class_ "w-full text-left cursor-pointer hover:bg-fillWeak group"
+            -- Stretched over the whole cell, so the padding is clickable too.
+            , class_ "w-full cursor-pointer group after:absolute after:inset-0"
             , data_ "sort-field" col.field
             , data_ "sort-direction" direction
             , [__|on click
@@ -1238,10 +1352,11 @@ sortableTableHead_ widget selected =
                   trigger 'table-sort' on fetcher
                 |]
             ]
-            $ headerRow_ [] do
+            $ headerRow do
               title
-              span_ [class_ "sort-arrow ml-1 text-iconNeutral"] $ toHtml glyph
-          else headerRow_ [] title
+              -- Every column offering ↕ at once was noise; it shows where the pointer or focus is.
+              Utils.faSprite_ icon "regular" $ "size-3 shrink-0 " <> bool "text-iconBrand" "text-iconNeutral opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" (direction == "none")
+          else headerRow title
 
 
 renderTable :: Widget -> Html ()
@@ -1250,7 +1365,8 @@ renderTable widget = do
       eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
   withCardFrame True widget (ctaAction widget)
     $ div_
-      [ class_ "h-full overflow-auto p-3"
+      [ -- No top padding: the sticky header pins to the scroll edge, so rows can't show above it.
+        class_ "dashboard-table-wrap h-full overflow-auto rounded-[inherit] pb-2"
       , hxGet_ $ widgetFetchUrl eagerWidget
       , hxTrigger_ $ bool "intersect once, update-query from:window, table-sort" "update-query from:window, table-sort" (isJust widget.html) <> memptyIfFalse (or widget.searchable) ", input delay:250ms, search"
       , hxTarget_ $ "#" <> tableId
@@ -1348,12 +1464,13 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> case widget.wType of
-              WTStat -> "justify-center "
-              WTTimeseriesStat -> "justify-start "
-              _ -> "justify-end "
-            <> bool "min-h-0 " "" isStat
-            <> if or widget.naked then "" else "surface-raised rounded-2xl relative"
+              <> case widget.wType of
+                -- Top-aligned like the sparkline stats, so a row of mixed stat tiles shares a baseline.
+                WTStat -> "justify-start "
+                WTTimeseriesStat -> "justify-start "
+                _ -> "justify-end "
+              <> bool "min-h-0 " "" isStat
+              <> if or widget.naked then "" else "surface-raised rounded-2xl relative"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -1446,6 +1563,11 @@ unitValueExprJS unitWord unitM
     isBytes = any isByteUnit unitM
 
 
+-- | Widgets that plot groups against each other rather than against time.
+categoricalWidget :: WidgetType -> Bool
+categoricalWidget = (`elem` [WTDistribution, WTPieChart, WTTopList, WTTreeMap, WTFunnel])
+
+
 -- Function to convert Widget to ECharts options
 widgetToECharts :: Widget -> AE.Value
 widgetToECharts widget
@@ -1476,9 +1598,10 @@ widgetToECharts widget =
       yMax = (.maxGroupSum) <$> (widget.dataset >>= (.stats))
       maxLabel = if or (widget.yAxis >>= (.showOnlyMaxLabel)) then encodeText <$> yMax else Nothing
       -- Detect categorical widget types (no time axis)
-      isCategorical = widget.wType `elem` [WTDistribution, WTPieChart, WTTopList, WTTreeMap, WTFunnel]
+      isCategorical = categoricalWidget widget.wType
       xAxisType = if isCategorical then "category" else "time"
       legendTop = any (T.isPrefixOf "top") widget.legendPosition
+      legendBottom = maybe True (T.isPrefixOf "bottom") widget.legendPosition
    in AE.object
         [ "tooltip"
             AE..= AE.object
@@ -1502,10 +1625,11 @@ widgetToECharts widget =
                       LSSm -> (12, 9, 9, [3, 6, 3, 6])
                       LSMd -> (14, 12, 12, [4, 8, 4, 8])
                       LSLg -> (16, 14, 14, [5, 10, 5, 10])
-                    isStatic = or widget._staticRender
-                    legendOffset = if vPos == "top" then ["top" AE..= (0 :: Int)] else ["bottom" AE..= (2 :: Int)]
+                    legendOffset = case vPos of
+                      "top" -> ["top" AE..= (0 :: Int)]
+                      "right" -> ["orient" AE..= ("vertical" :: Text)]
+                      _ -> ["bottom" AE..= (2 :: Int)]
                  in [ "show" AE..= legendVisibility
-                    , "type" AE..= if isStatic then "plain" else "scroll"
                     , "textStyle" AE..= AE.object ["fontSize" AE..= fontSize, "padding" AE..= ([0, 0, 0, -2] :: [Int])]
                     , "itemWidth" AE..= itemSize
                     , "itemHeight" AE..= itemSize
@@ -1519,10 +1643,11 @@ widgetToECharts widget =
               )
         , "grid"
             AE..= AE.object
-              [ "width" AE..= ("100%" :: Text)
-              , "left" AE..= ("0%" :: Text)
+              [ "left" AE..= ("0%" :: Text)
+              , -- Room for the last x-axis label, which is centred on the edge and was clipped.
+                "right" AE..= (16 :: Int)
               , "top" AE..= if legendTop && legendVisibility then if widget.legendSize == Just LSXs then (20 :: Int) else 28 else if or widget.naked then (16 :: Int) else (8 :: Int)
-              , "bottom" AE..= if not legendTop && legendVisibility then (36 :: Int) else if or widget.standalone then (0 :: Int) else (8 :: Int)
+              , "bottom" AE..= if legendBottom && legendVisibility then (36 :: Int) else if or widget.standalone then (0 :: Int) else (8 :: Int)
               , "containLabel" AE..= True
               , "show" AE..= False
               ]
@@ -1668,12 +1793,12 @@ mapChartTypeToWidgetType "timeseries_line" = WTTimeseriesLine
 mapChartTypeToWidgetType _ = WTTimeseries
 
 
-renderTableWithDataAndParams :: Widget -> V.Vector (V.Vector Text) -> [(Text, Maybe Text)] -> Html ()
-renderTableWithDataAndParams widget dataRows params = do
-  let columns = fold widget.columns
+renderTableWithDataAndParams :: Widget -> V.Vector Text -> V.Vector (V.Vector Text) -> [(Text, Maybe Text)] -> Html ()
+renderTableWithDataAndParams widget headers dataRows params = do
+  let columns = fromMaybe (inferColumns headers dataRows) widget.columns
       tableId = maybeToMonoid widget.id
       param k = join $ lookup k params
-      currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
+      currentVar = widget.onRowClick >>= (.setVariable) >>= param . ("var-" <>)
       -- URL-encoded link substitutions; links into other pages keep the window the table was read over.
       linkSubs = M.fromList [("project_id", projectIdText widget), ("time_range", TimePicker.rangeQuery $ TimePicker.TimePicker (param "since") (param "from") (param "to"))]
       -- Rows navigate server-side to the @navigate_to_tab@ tab, else the widget's own tab
@@ -1689,84 +1814,120 @@ renderTableWithDataAndParams widget dataRows params = do
           <> [term "hx-preload" "mousedown"]
           <> foldMap (\var -> [name_ "dashboard-variable-option", data_ "variable-key" var, data_ "variable-value" value, data_ "variable-label" value, term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)", term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"]) action.setVariable
 
-  table_ [class_ "dashboard-table table table-zebra table-sm w-full relative", id_ tableId] do
-    sortableTableHead_ widget (find ((== "table-sort") . fst) params >>= snd)
-    tbody_ [] do
-      let
-        -- max values per column, for percentage progress bars
-        maxValues =
-          M.fromList
-            [ (col.field, V.foldl' max 0 $ V.mapMaybe (readMaybe . toString . getRowValue idx) dataRows)
-            | (col, idx) <- zip columns [0 ..]
-            , col.progress == Just ColumnPercent
-            ]
-        -- max formatted width per progress column, so bars line up
-        valueWidths =
-          M.fromList
-            [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (getRowValue idx row))) 5 dataRows)
-            | (col, idx) <- zip columns [0 ..]
-            , isJust col.progress
-            ]
-      V.forM_ dataRows \row -> do
+      -- A breakdown (a query's own columns, or a top list) colours each row as its series is
+      -- coloured on a chart; a configured table's rows are records, not series, and stay plain.
+      breakdown = isNothing widget.columns || widget.wType == WTTopList
+      -- @summarize … by a, b@ on a top list: the first column heads a section of its rows.
+      grouped = widget.wType == WTTopList && length (takeWhile (not . isNumericCol) columns) >= 2
+      visible = filter (not . or . (.hidden)) $ drop labelIdx columns
+      labelIdx = bool 0 1 grouped
+      maxValues = M.fromList [(col.field, V.foldl' max 0 $ V.mapMaybe (readMaybe . toString . getRowValue idx) dataRows) | V.length dataRows > 1, (col, idx) <- zip columns [0 ..], col.progress == Just ColumnPercent]
+      -- One bar per row: on the column the reader sorted by, else the first that offers one.
+      sortedField = T.drop 1 <$> param "table-sort"
+      barField = (.field) <$> (find (\c -> isJust c.progress && Just c.field == sortedField) visible <|> find (isJust . (.progress)) visible)
+      -- Every column sizes to its widest value but long text (>40 chars), which shares what is left;
+      -- with none, the widest text column takes the slack instead of the first one.
+      widestOf col = foldl' max (T.length col.title + 2) [T.length (cellText col (getRowValue (colIdx col) r)) | r <- toList dataRows]
+      -- What a cell shows: an ID's short form, else the formatted value.
+      cellText col v = fromMaybe (formatColumnValue col v) (guard (not $ isNumericCol col) *> shortId v)
+      texts = sortOn (Down . widestOf) $ filter (not . alignsRight) visible
+      flexFields = map (.field) $ case filter ((> 40) . widestOf) texts of [] -> take 1 texts; long -> long
+      colWidth col = col.width <|> (("calc(" <> show (widestOf col) <> "ch + " <> bool "2rem" "7rem" (Just col.field == barField) <> ")") <$ guard (col.field `notElem` flexFields))
+      colIdx col = fromMaybe 0 $ findIndex ((== col.field) . (.field)) columns
+      sections = bool [(Nothing, toList dataRows)] [(Just (getRowValue 0 (head g)), toList g) | g <- NE.groupBy ((==) `on` getRowValue 0) (toList dataRows)] grouped
+
+  table_ [class_ "dashboard-table table table-sm w-full relative [&_:is(th,td):first-child]:pl-4 [&_:is(th,td):last-child]:pr-4 [&_td]:border-b [&_td]:border-strokeWeak/50 [&_tr:last-child_td]:border-b-0", id_ tableId] do
+    colgroup_ $ forM_ visible \col -> col_ $ foldMap (\w -> [style_ $ "width: " <> w]) (colWidth col)
+    unless (widget.wType == WTTopList) $ sortableTableHead_ widget columns (param "table-sort")
+    tbody_ [] $ forM_ sections \(section, rows) -> do
+      whenJust section \name -> tr_ [] $ th_ [colspan_ (show $ length visible), scope_ "colgroup", class_ "pt-3 pb-1 text-left text-xs font-medium text-textWeak"] $ toHtml name
+      forM_ rows \row -> do
         let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
             rowSubs = M.fromList [("row." <> c.field, getRowValue i row) | (c, i) <- zip columns [0 ..]]
             rowValue = maybe firstColValue (replacePlaceholders rowSubs) (widget.onRowClick >>= (.value))
             cellLinkSubs = linkSubs <> fmap toUriStr rowSubs
             isCurrent = Just rowValue == currentVar
+            series = getRowValue (bool labelIdx 0 grouped) row
         tr_
           ( [class_ $ "hover" <> memptyIfFalse (isJust widget.onRowClick) " cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"]
+              <> [style_ $ "--series:" <> getSeriesColorHex series | breakdown]
               <> [term "aria-current" "true" | isCurrent]
               <> rowNavAttrs rowValue
               <> memptyIfFalse (isJust widget.onRowClick) [tabindex_ "0", Aria.label_ $ "Filter by " <> rowValue, term "_" " on keydown[key=='Enter' or key==' '] halt the event then call me.click() end "]
           )
-          $ ifor_ columns \idx col ->
-            unless (or col.hidden)
-              $ td_ ([class_ $ fromMaybe "" col.align <> memptyIfFalse (isNumericCol col) " monospace"] <> foldMap (\t -> let tip = replacePlaceholders rowSubs t in [term "data-tippy-content" tip, term "aria-description" tip]) col.tooltip)
-              $ if isJust col.progress
-                then renderProgressCell col (getRowValue idx row) maxValues valueWidths
-                else renderLongTextOr widget cellLinkSubs col (getRowValue idx row)
+          $ forM_ visible \col -> do
+            let idx = colIdx col
+            td_ ([class_ $ bool (fromMaybe "" col.align) "text-right tabular-nums" (alignsRight col), data_ "label" col.title] <> foldMap (\t -> let tip = replacePlaceholders rowSubs t in [term "data-tippy-content" tip, term "aria-description" tip]) col.tooltip)
+              $ if
+                | isJust col.progress, Just col.field == barField -> renderProgressCell col (getRowValue idx row) maxValues
+                | breakdown && idx == labelIdx -> span_ [class_ "flex items-center gap-2 min-w-0"] do
+                    span_ [class_ "size-2.5 shrink-0 rounded-sm bg-(--series)", Aria.hidden_ "true"] ""
+                    span_ [class_ "min-w-0"] $ renderLongTextOr widget cellLinkSubs col (getRowValue idx row)
+                | otherwise -> renderLongTextOr widget cellLinkSubs col (getRowValue idx row)
+      when (V.null dataRows) $ tr_ [] $ td_ [colspan_ (show $ max 1 $ length visible), class_ "py-10"] case param "table-search" of
+        Just q | not (T.null q) -> emptyState_ def{size = ESCompact, icon = Just "magnifying-glass"} ("No rows match “" <> q <> "”") "Try a different search, or widen the time range."
+        _ -> emptyState_ def{size = ESCompact, icon = Just "table"} "Nothing in this time range" "Widen the time range or loosen the dashboard filters to look further."
+
+
+-- | A query's own result as columns: the names it returned, numbers right-aligned with a bar
+-- against the column's largest value. Sorting needs configured columns, so these don't offer it.
+--
+-- >>> map (\c -> (c.field, c.columnType, c.progress)) $ inferColumns (V.fromList ["name", "count_"]) (V.fromList [V.fromList ["GET", "12"], V.fromList ["POST", "3.5"]])
+-- [("name",Nothing,Nothing),("count_",Just CTNumber,Just ColumnPercent)]
+inferColumns :: V.Vector Text -> V.Vector (V.Vector Text) -> [TableColumn]
+inferColumns headers rows = zipWith column [0 ..] (toList headers)
+  where
+    numeric i = not (V.null rows) && all (isJust . readMaybe @Double . toString . getRowValue i) rows
+    column i h =
+      (def :: TableColumn){field = h, title = h, sortable = Just False}
+        & bool Relude.id (\c -> c{columnType = Just CTNumber, align = Just "text-right", progress = Just ColumnPercent}) (numeric i)
 
 
 getRowValue :: Int -> V.Vector Text -> Text
 getRowValue idx row = fromMaybe "" $ row V.!? idx
 
 
-renderProgressCell :: TableColumn -> Text -> M.Map Text Double -> M.Map Text Int -> Html ()
-renderProgressCell col value maxValues valueWidths = div_ [class_ "flex items-center gap-2"] do
+-- | The value over a bar filling its share of the cell, so a column reads as a ranking at a
+-- glance. A breakdown row's bar takes its series colour; others take the column's variant.
+renderProgressCell :: TableColumn -> Text -> M.Map Text Double -> Html ()
+renderProgressCell col value maxValues = div_ [class_ "relative isolate -mx-2 px-2 py-0.5 text-right tabular-nums"] do
   let numValue = fromMaybe 0 (readMaybe $ toString value) :: Double
       percentage = case col.progress of
         Just ValuePercent -> min 100 (max 0 numValue)
         Just ColumnPercent | Just maxVal <- M.lookup col.field maxValues, maxVal > 0 -> (numValue / maxVal) * 100
         _ -> 0
-  span_ [class_ "inline-block text-left monospace", style_ $ "width: " <> show (M.findWithDefault 8 col.field valueWidths) <> "ch"]
-    $ toHtml
-    $ formatColumnValue col value
-  progress_
-    [ class_ $ "progress w-12 ml-2 " <> case col.progressVariant of
-        Just "error" -> "progress-error"
-        Just "warning" -> "progress-warning"
-        Just "success" -> "progress-success"
-        _ -> "progress-brand"
-    , value_ (show percentage)
-    , max_ "100"
+  span_
+    [ class_
+        $ "absolute inset-y-0 left-0 -z-10 rounded-sm " <> case col.progressVariant of
+          Just "error" -> "bg-fillError-weak"
+          Just "warning" -> "bg-fillWarning-weak"
+          Just "success" -> "bg-fillSuccess-weak"
+          _ -> "bg-[color-mix(in_oklch,var(--series,var(--color-fillBrand-strong))_22%,transparent)]"
+    , style_ $ "width: " <> show (round percentage :: Int) <> "%"
+    , Aria.hidden_ "true"
     ]
     ""
+  toHtml $ formatColumnValue col value
 
 
 isNumericCol :: TableColumn -> Bool
 isNumericCol col = col.columnType `elem` [Just CTNumber, Just CTDuration]
 
 
+-- | Numbers line up on the right, and so do their headers, whether or not the column says so.
+alignsRight :: TableColumn -> Bool
+alignsRight col = isNumericCol col || isJust col.progress || any ("text-right" `T.isInfixOf`) col.align
+
+
 formatColumnValue :: TableColumn -> Text -> Text
 formatColumnValue col value = case fromMaybe CTText col.columnType of
   CTNumber -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
   CTDuration -> maybe (value <> unitSuffix) getDurationNSMS (readMaybe (toString value) >>= \n -> round . (n *) <$> maybe (Just 1) unitNanos col.unit)
-  CTText -> fromMaybe value (formatTimestampValue value) <> unitSuffix
+  CTText -> maybe value (toText . formatTime defaultTimeLocale "%b %-d %H:%M:%S") (parseTimestamp value) <> unitSuffix
   where
     unitSuffix = foldMap (" " <>) col.unit
-    -- keep significant digits for small non-integral numbers, pretty-print the rest
     fmtNumber n
-      | n < 100, n /= fromIntegral (round n :: Int) = toText (printf "%.2g" n :: String)
+      | n < 100, n /= fromIntegral (round n :: Int) = formatStatValue n ""
       | otherwise = prettyPrintCount (round n)
 
 
@@ -1778,17 +1939,26 @@ unitNanos :: Text -> Maybe Double
 unitNanos = (`lookup` [("h", 3.6e12), ("m", 6e10), ("s", 1e9), ("ms", 1e6), ("\181s", 1e3), ("\956s", 1e3), ("us", 1e3), ("ns", 1)])
 
 
--- | Try to parse a PostgreSQL timestamp and format as "Mar 19, 09:05"
--- Normalizes short timezone offsets (+00 → +0000) that %z can't parse
-formatTimestampValue :: Text -> Maybe Text
-formatTimestampValue (T.strip -> val)
+-- | An ID (UUID, trace or span id) is matched and copied, not read: its first 8 characters, git-style.
+--
+-- >>> map shortId ["d85973c0-8129-4c80-af0a-b81d7f509c29", "4bf92f3577b34da6a3ce929d0e0e4736", "1234567890123456", "deadbeef", "api.shipbubble.com"]
+-- [Just "d85973c0\8230",Just "4bf92f35\8230",Nothing,Nothing,Nothing]
+shortId :: Text -> Maybe Text
+shortId v = T.take 8 v <> "…" <$ guard (T.length v >= 16 && T.all (\c -> isHexDigit c || c == '-') v && T.any isAlpha v && T.count "-" v `elem` ([0, 4] :: [Int]))
+
+
+-- | A cell value that is a PostgreSQL or ISO-8601 timestamp. Short offsets (+00) are widened for %z.
+--
+-- >>> map parseTimestamp ["2026-11-06T23:21:20.435Z", "2026-03-19 09:05:00+00", "GET /api/cart"]
+-- [Just 2026-11-06 23:21:20.435 UTC,Just 2026-03-19 09:05:00 UTC,Nothing]
+parseTimestamp :: Text -> Maybe UTCTime
+parseTimestamp (T.strip -> val)
   | T.length val < 19 = Nothing
-  | otherwise = fmt <$> (parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S%Q%z" (toString normalized) :: Maybe ZonedTime)
+  | otherwise = zonedTimeToUTC <$> parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S%Q%z" (toString normalized) <|> iso8601ParseM (toString val)
   where
     normalized = case T.breakOnEnd "+" val of
       (pfx, tz) | not (T.null pfx), T.length tz < 4 -> pfx <> tz <> T.replicate (4 - T.length (T.filter isDigit tz)) "0"
       _ -> val
-    fmt = toText . formatTime defaultTimeLocale "%b %d, %H:%M"
 
 
 -- | Render a text cell, parsing summary tags (field;style⇒value) into badges.
@@ -1797,15 +1967,49 @@ formatTimestampValue (T.strip -> val)
 -- columns skip the wrapper since they're always short.
 renderLongTextOr :: Widget -> M.Map Text Text -> TableColumn -> Text -> Html ()
 renderLongTextOr widget linkSubs col value
-  | or col.copyable = div_ [class_ "group flex items-center gap-1 min-w-0"] do
+  -- The button floats over the cell's end on hover rather than reserving a column on every row.
+  | or col.copyable || isJust shortened = div_ [class_ "group relative min-w-0"] do
       shown
-      copyButton_ "btn btn-xs btn-ghost shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100" "w-3 h-3" "my @data-copy" [data_ "copy" value]
+      copyButton_ "btn btn-xs absolute right-0 top-1/2 -translate-y-1/2 gap-1 bg-bgRaised border-strokeWeak shadow-sm opacity-0 group-hover:opacity-100 focus-visible:opacity-100" "w-3 h-3" "my @data-copy" [data_ "copy" value]
   | otherwise = shown
   where
+    -- Long text wraps to two lines (code at any character) with the whole value on hover:
+    -- two queries sharing a prefix differ by the second line, not by an ellipsis.
     shown
-      | not (isNumericCol col), T.length value > 60 = div_ [class_ "truncate max-w-2xl", term "data-tippy-content" value] cell
+      | not (isNumericCol col), T.length value > 40 = div_ [class_ $ "line-clamp-2 " <> bool "break-words" "break-all" code, term "data-tippy-content" (sqlLines $ T.take 1500 value), term "data-tippy-placement" "top-start"] cell
       | otherwise = cell
+    code = or col.copyable
+    shortened = guard (not $ isNumericCol col) *> shortId value
     formatted = formatColumnValue col value
-    content = if T.isInfixOf "⇒" formatted then renderSummaryTags formatted else toHtml formatted
+    content
+      | T.isInfixOf "⇒" formatted = renderSummaryTags formatted
+      -- In the viewer's zone, as the log list shows it; the exact UTC instant on hover.
+      | Just short <- shortened = code_ [class_ "font-mono text-xs", term "data-tippy-content" value] $ toHtml short
+      | not (isNumericCol col), Just t <- parseTimestamp value = span_ [class_ "tabular-nums whitespace-nowrap", term "data-tippy-content" (toText $ iso8601Show t)] $ localTimeFmt_ "MMM d HH:mm:ss" t
+      | code = code_ [class_ "font-mono text-xs"] $ toHtml formatted
+      | otherwise = toHtml formatted
     cell = maybe content (\template -> a_ [href_ $ tableLink template, class_ "text-textBrand hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong rounded-sm"] content) col.link
     tableLink = replacePlaceholders linkSubs
+
+
+-- | A SQL statement broken before its clauses, for reading in a tooltip. Display only: a word
+-- touching a paren (subquery, window) stays inline, and non-SQL text is returned unchanged.
+--
+-- >>> sqlLines "select a from t left join u on t.id = u.id where x = 1 and y = 2 order by a"
+-- "select a\nfrom t\nleft join u\non t.id = u.id\nwhere x = 1\n  and y = 2\norder by a"
+-- >>> sqlLines "insert into t values ($1); select 1"
+-- "insert into t\nvalues ($1);\nselect 1"
+-- >>> sqlLines "connection reset from 10.0.0.4 where pool was full"
+-- "connection reset from 10.0.0.4 where pool was full"
+sqlLines :: Text -> Text
+sqlLines sql = case T.words sql of
+  w : ws | T.toUpper w `elem` ["SELECT", "INSERT", "UPDATE", "DELETE", "WITH"] -> T.concat $ w : zipWith (\p x -> sep (T.toUpper p) (T.toUpper x) <> x) (w : ws) ws
+  _ -> sql
+  where
+    sep p x
+      | ";" `T.isSuffixOf` p = "\n"
+      | x `elem` ["AND", "OR"] = "\n  "
+      | x `elem` ["FROM", "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "JOIN", "LEFT", "RIGHT", "INNER", "FULL", "CROSS", "ON", "VALUES", "SET", "RETURNING", "UNION", "EXCEPT", "INTERSECT"]
+      , p `notElem` ["LEFT", "RIGHT", "INNER", "FULL", "CROSS", "OUTER"] =
+          "\n"
+      | otherwise = " "

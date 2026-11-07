@@ -24,7 +24,6 @@ module Pages.LogExplorer.Log (
   TraceTreeEntry (..),
   buildTraceTree,
   synthesizeOrphanHeaders,
-  colsFitRows,
   fmtPct1,
   -- Sidebar facet definitions — exported for high-level tests.
   Facet (..),
@@ -36,6 +35,7 @@ where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types qualified as AET
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
@@ -46,6 +46,7 @@ import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema (..))
 import Data.Set qualified as S
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
@@ -77,14 +78,14 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPa
 import Pages.Components (FieldCfg (..), FieldSize (..), explorerNavTabs_, formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
-import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), VizSurface (..), VizType (..), enrichSchemaWithFacets, logQueryBox_, visTypes)
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacets, logQueryBox_)
 import Pkg.Components.Table (FacetChoice (..), FacetContent (..), FacetLayout (..), FacetNode (..), FacetOverflow (..), FacetsConfig (..), facetHeadCount, facetNode_, facetTail_, sidebar_)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (CamelSchema (..))
 import Pkg.LiveTail (capRowValue)
-import Pkg.Parser (PageCursor (..), PageDirection (..), defaultQueryLimit, pSource, parseQueryToAST, toQText)
+import Pkg.Parser (PageCursor (..), PageDirection (..), ResultShape (..), defaultQueryLimit, pSource, parseQueryToAST, resultShape, toQText)
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.Parser.Stats (QueryError (..), Section (TakeCommand), pSortSection, parseQueryDiagnosed)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
@@ -99,7 +100,7 @@ import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
 import Text.Slugify (slugify)
 import Utils (FieldAction (..), FieldMenuCtx (..), encodeText, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
-import Web.HttpApiData (parseUrlPiece)
+import Web.HttpApiData (parseQueryParam, parseUrlPiece)
 
 import Web.ApiTypes (ApiProblem (ApiProblem), LogResult (..), ProblemCode (..), TraceTreeEntry (..), problem)
 import Web.Links (CookieProtectedRoutes (..), LogExplorerRoutes' (..), MonitorsRoutes' (..), explorerUrl, urls)
@@ -211,13 +212,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> length rs'
 -- 1
 buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> (V.Vector (V.Vector AE.Value), [TraceTreeEntry])
-buildTraceTree colIdxMap queryResultCount rows
-  -- An aggregate result (`| summarize …`) is one or two columns wide while the
-  -- column map still describes the log table, so writing a span's adjusted
-  -- start/duration back at those indices threw `index out of bounds`. Such rows
-  -- carry no spans to nest: hand them back untouched.
-  | not (colsFitRows colIdxMap rows) = (rows, [])
-  | otherwise = (adjustedRows, sortWith (Down . (.startTime)) entries)
+buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down . (.startTime)) entries)
   where
     lookupIdx = flip HM.lookup colIdxMap
     txt k row = lookupVecNonEmptyText row colIdxMap k
@@ -325,28 +320,12 @@ buildTraceTree colIdxMap queryResultCount rows
        in (TraceTreeEntry tid minStart (maxEnd - minStart) tst root'.spanId subtreeChildren, adjustments')
 
 
--- | Whether every column index addresses a real slot in the result rows.
--- False for anything that isn't the log-table shape — an aggregate projection,
--- most obviously — and the trace-tree machinery must then keep its hands off.
---
--- >>> colsFitRows (HM.fromList [("id",0),("duration",7)]) (V.singleton (V.replicate 12 AE.Null))
--- True
--- >>> colsFitRows (HM.fromList [("id",0),("duration",7)]) (V.singleton (V.singleton AE.Null))
--- False
--- >>> colsFitRows (HM.fromList [("id",0)]) V.empty
--- False
-colsFitRows :: HM.HashMap Text Int -> V.Vector (V.Vector AE.Value) -> Bool
-colsFitRows colIdxMap rows = maybe False (\row -> all (< V.length row) (HM.elems colIdxMap)) (rows V.!? 0)
-
-
 -- | Detect query-result spans whose parent_id is missing from the result and
 -- ≥2 of them share that same parent_id. Emit one synthetic row per group whose
 -- latency_breakdown = parent_id so 'buildTraceTree' nests the orphans under
 -- it, matching the trace-breakdown waterfall's visual contract.
 synthesizeOrphanHeaders :: HM.HashMap Text Int -> V.Vector (V.Vector AE.Value) -> V.Vector (V.Vector AE.Value)
-synthesizeOrphanHeaders colIdxMap rows
-  | not (colsFitRows colIdxMap rows) = V.empty
-  | otherwise = V.fromList [synthRow t p ks | ((t, p), ks) <- Map.toList groups, length ks >= 2]
+synthesizeOrphanHeaders colIdxMap rows = V.fromList [synthRow t p ks | ((t, p), ks) <- Map.toList groups, length ks >= 2]
   where
     lookupIdx = flip HM.lookup colIdxMap
     colCount = maybe 0 V.length (rows V.!? 0)
@@ -589,14 +568,16 @@ childSpansFor useTf pid addCols traceCap colIdxMap window rows =
 -- is False, only matched rows are returned — no descendants, no synthesised
 -- orphan headers (trace-tree concerns the UI wants but the API/CLI usually doesn't).
 -- The time window is re-derived from the returned page's own first/last timestamps,
--- so only @sinceM@ (the relative-range token) is needed here.
-buildLogResult :: (DB es, Labeled "timefusion" Hasql :> es, Time.Time :> es) => Bool -> Bool -> Projects.ProjectId -> UTCTime -> Maybe Text -> [Text] -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
-buildLogResult useTf withChildren pid now sinceM addCols removeCols (requestVecs, colNames, resultCount') = do
+-- so only @sinceM@ (the relative-range token) is needed here. Only an events result is
+-- spans to nest; an aggregate's rows come back as they are, naming the chart that draws them.
+buildLogResult :: (DB es, Labeled "timefusion" Hasql :> es, Time.Time :> es) => Bool -> Bool -> ResultShape -> Projects.ProjectId -> UTCTime -> Maybe Text -> [Text] -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
+buildLogResult useTf withChildren' shape pid now sinceM addCols removeCols (requestVecs, colNames, resultCount') = do
   let colIdxMap = listToIndexHashMap colNames
       colOf k v = lookupVecTextByKey v colIdxMap k
       reqLastCreatedAtM = colOf "timestamp" =<< (requestVecs V.!? (V.length requestVecs - 1))
       reqFirstCreatedAtM = colOf "timestamp" =<< (requestVecs V.!? 0)
       (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
+      withChildren = withChildren' && shape == Events
   childSpansList <-
     if not withChildren || V.length requestVecs > 100
       then pure [] -- Skip expensive child span fetch for large result sets; traces load lazily on detail view
@@ -613,7 +594,7 @@ buildLogResult useTf withChildren pid now sinceM addCols removeCols (requestVecs
       -- a service looks the same wherever it appears.
       colors = getServiceColors $ V.mapMaybe (colOf "service") rawLogsData
       queryResultCount = V.length requestVecsAug
-      (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData
+      (logsData, traces) = if shape == Events then buildTraceTree colIdxMap queryResultCount rawLogsData else (rawLogsData, [])
   pure
     LogResult
       { logsData
@@ -631,6 +612,7 @@ buildLogResult useTf withChildren pid now sinceM addCols removeCols (requestVecs
         -- the page past the sentinel and stall load-more.
         hasMore = V.length requestVecs < resultCount'
       , traces
+      , viz = mfilter (/= Widget.VizLogs) $ Just $ Widget.vizFor shape Nothing
       , error = Nothing
       }
 
@@ -651,7 +633,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
   enableTfReads <- useTfReads
   -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
-  either (refuse . translateQueryError) (buildLogResult enableTfReads (fromMaybe False withChildrenM) pid now sinceM [] [])
+  either (refuse . translateQueryError) (buildLogResult enableTfReads (fromMaybe False withChildrenM) (resultShape queryAST) pid now sinceM [] [])
     =<< LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing environmentM serviceM
 
 
@@ -724,9 +706,11 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   let (_, _, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   authCtx <- Effectful.Reader.Static.ask @AuthContext
 
-  -- An alert ID pre-fills the query box and selects the alert's viz type.
+  -- An alert ID pre-fills the query box and selects the alert's viz type. A view that
+  -- can't draw the query's result (a log list for a `summarize`) yields to one that can.
   alertDM <- lookupAlert alertM
-  let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
+  let parseViz = rightToMaybe . parseQueryParam
+      effectiveVizType = Widget.vizFor (resultShape queryAST) $ (parseViz =<< vizTypeM) <|> (alertDM <&> fromMaybe Widget.VizTimeseries . parseViz . (.visualizationType))
 
   -- Non-common facets and the Query Library lazy-load through their own HTMX endpoints.
   freeTierStatusE <- trySync $ checkFreeTierStatus pid project.paymentPlan
@@ -746,17 +730,20 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   -- logs query that its transport never consumes (and which contends with the
   -- real aggregate fetch).
   let dataEndpoint = case effectiveVizType of
-        Just "sessions" -> LogQueries.Sessions
-        Just "patterns" -> LogQueries.Patterns
-        _ -> LogQueries.Data
+        Widget.VizSessions -> LogQueries.Sessions
+        Widget.VizPatterns -> LogQueries.Patterns
+        Widget.VizLogs -> LogQueries.Data
+        Widget.VizTimeseries -> LogQueries.Data
+        Widget.VizTimeseriesLine -> LogQueries.Data
+        Widget.VizTopList -> LogQueries.Data
       -- Chart viz types and trace deep links don't show the log list: its rows would be a
       -- query nobody sees, contending with the one they do.
-      chartViz = any (\v -> v.surface == Chart && Just v.key == effectiveVizType) visTypes
-      preloadUrl = guard (not chartViz && isNothing showTraceM) $> explorerUrl pid dataEndpoint def{query = queryM', cols = cols', since = sinceM, from = fromM, to = toM, source = sourceM, environment = sess.environment, serviceScope = sess.service}
+      preloadUrl = guard (not (Widget.vizIsChart effectiveVizType) && isNothing showTraceM) $> explorerUrl pid dataEndpoint def{query = queryM', cols = cols', since = sinceM, from = fromM, to = toM, source = sourceM, environment = sess.environment, serviceScope = sess.service}
 
   let stampPng = Widget.stampPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid sinceM fromM toM
   chartWidget <- stampPng logChartWidget
   latencyWidget <- stampPng logLatencyWidget
+  vizChart <- stampPng logVizWidget{Widget.wType = fromMaybe WTTimeseries $ mfilter (/= Widget.WTLogs) (Widget.vizWidget effectiveVizType)}
 
   let bwconf =
         bw
@@ -767,7 +754,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , headContent = Nothing
           , -- One freshness control for row streaming and periodic query refresh; their
             -- independent switches stay in the popover.
-            pageActions = Just $ Components.liveDataControls_ (Just "log_explorer_form") currentRange Nothing (Components.RowStreaming $ effectiveVizType `notElem` ([Just "sessions", Just "patterns"] :: [Maybe Text]))
+            pageActions = Just $ Components.liveDataControls_ (Just "log_explorer_form") currentRange Nothing (Components.RowStreaming $ effectiveVizType `notElem` [Widget.VizSessions, Widget.VizPatterns])
           , navTabs = Just $ explorerNavTabs_ pid "Events"
           , needsTagify = False
           }
@@ -787,6 +774,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , targetPattern = pTargetM
           , chartWidget
           , latencyWidget
+          , vizChart
           , queryResultCount = 0
           , sessionSort = fromMaybe LogQueries.SortLastSeen $ rightToMaybe . parseUrlPiece =<< sortByM
           , parseError = parseErrorMsg
@@ -803,6 +791,16 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
         , Widget.legendPosition = Just "top-right"
         , Widget.legendSize = Just Widget.LSXs
         , Widget._projectId = Just pid
+        }
+    logVizWidget =
+      (def :: Widget.Widget)
+        { Widget.id = Just "visualization-widget"
+        , Widget.title = Just "Visualization"
+        , Widget.standalone = Just True
+        , Widget.allowZoom = Just True
+        , Widget._projectId = Just pid
+        , Widget._centerTitle = Just True
+        , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
         }
     logChartWidget =
       logWidgetBase
@@ -865,7 +863,8 @@ logExplorerDataH pid q = withSpan_ "log-explorer.data" [] do
       emptyTable = (V.empty, ["timestamp", "summary", "duration"], 0)
   -- Carry a sanitized failure message alongside the (empty) table so the client
   -- can show an error state instead of a misleading "no events" list.
-  (errM, tableData) <- case parseQueryToAST (maybeToMonoid q.query) of
+  let parsed = parseQueryToAST (maybeToMonoid q.query)
+  (errM, tableData) <- case parsed of
     Left err ->
       Log.logInfo
         "Log explorer data: rejected invalid KQL query"
@@ -885,7 +884,7 @@ logExplorerDataH pid q = withSpan_ "log-explorer.data" [] do
         Left err -> Log.logAttention "log-explorer.data query failed" (AE.object ["project_id" AE..= pid.toText, "source" AE..= fromMaybe "spans" q.source, "error" AE..= err]) $> (Just (sanitizeBackendError err), emptyTable)
         Right t -> pure (Nothing, t)
   -- UI always wants the trace-tree context; the API/CLI defaults off.
-  lr <- buildLogResult authCtx.env.enableTimefusionReads True pid now q.since addCols removeCols tableData
+  lr <- buildLogResult authCtx.env.enableTimefusionReads True (either (const Events) resultShape parsed) pid now q.since addCols removeCols tableData
   -- One microsecond, not one millisecond: the page bound is inclusive, so a larger
   -- step skips every row in the gap. See LogQueries.cursorEpsilon.
   let lastFM = LogQueries.nudgeCursorBy (negate LogQueries.cursorEpsilon) =<< lr.cursor
@@ -1360,11 +1359,13 @@ data ApiLogsPageData = ApiLogsPageData
   , targetSpans :: Maybe Text
   , targetEvent :: Maybe Text
   , showTrace :: Maybe Text
-  , vizType :: Maybe Text
+  , vizType :: Widget.VizType
   , alert :: Maybe Monitors.QueryMonitor
   , targetPattern :: Maybe Text
   , chartWidget :: Widget.Widget
   , latencyWidget :: Widget.Widget
+  , vizChart :: Widget.Widget
+  -- ^ The chart tab's widget; its type follows the checked tab once the page is up.
   , queryResultCount :: Int
   , sessionSort :: LogQueries.SessionSort
   , parseError :: Maybe Text
@@ -1526,7 +1527,7 @@ apiLogsPage page = do
           , source = Just page.source
           , targetSpan = page.targetSpans
           , query = page.query
-          , vizType = page.vizType
+          , vizType = Just page.vizType
           , updateUrl = True
           , targetWidgetPreview = Nothing
           , alert = isJust page.alert
@@ -1545,7 +1546,7 @@ apiLogsPage page = do
       -- fill it, rather than blocking the shell on a summary query. Other viz
       -- types render the chart+latency widgets. #page-summary-region is the swap target.
       div_ [id_ "page-summary-region"]
-        $ if page.vizType `elem` ([Just "sessions", Just "patterns"] :: [Maybe Text])
+        $ if page.vizType `elem` [Widget.VizSessions, Widget.VizPatterns]
           then sessionsSummarySkeleton_
           else div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
             div_ [class_ "flex-1 min-w-0 h-full"] $ Widget.widget_ page.chartWidget
@@ -1585,7 +1586,7 @@ apiLogsPage page = do
       traceOverlay
       div_ [class_ "flex-1 min-h-0 h-full flex flex-col"]
         $ div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block"]
-        $ virtualTable page.pid Nothing page.vizType
+        $ virtualTable page.pid Nothing (Just $ display page.vizType)
 
     -- Filters toggle and row count, shown above the viz widget / trace / virtual table.
     -- max-md:hidden: on phones this row moves into the toolbar via mobileExtra, and two
@@ -1615,36 +1616,25 @@ apiLogsPage page = do
 
     -- Shows when not in logs view (skip for patterns mode which uses log-list)
     vizWidget = div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
-      let widgetVals =
-            decodeUtf8
-              $ AE.encode
-              $ AE.object
-                [ "id" AE..= ("visualization-widget" :: Text)
-                , "type" AE..= fromMaybe "timeseries" page.vizType
-                , "title" AE..= ("Visualization" :: Text)
-                , "standalone" AE..= True
-                , "allow_zoom" AE..= True
-                , "_project_id" AE..= pidTxt
-                , "_center_title" AE..= True
-                , "layout" AE..= AE.object ["w" AE..= (6 :: Int), "h" AE..= (4 :: Int)]
-                ]
-      -- Same contract as the dashboard widget editor: the viz radios rewrite
-      -- @widgetJSON.type@ and fire @update-widget@. A literal hx-vals would freeze the
-      -- chart at the load-time viz_type.
-      script_ [text|var widgetJSON = ${widgetVals};|]
+      -- A chart tab's first drawing comes with the page; afterwards the checked tab rides along
+      -- as the widget's `type`, so the chart follows the tabs with no JS copy of their state.
+      let isChart = Widget.vizIsChart page.vizType
       div_
         [ id_ "visualization-widget-container"
         , class_ " w-full"
         , style_ "aspect-ratio: 4 / 2;"
         , hxPost_ $ urls.widgetPost page.pid Nothing Nothing Nothing
-        , hxTrigger_ "intersect once, update-widget"
+        , hxTrigger_ $ bool "intersect once, update-widget" "update-widget" isChart
         , hxTarget_ "this"
         , hxSwap_ "innerHTML"
-        , hxVals_ "js:{...widgetJSON}"
+        , -- Config only: the server re-stamps the PNG link for whichever type arrives, and data
+          -- comes from /chart_data, so neither rides in every tab switch.
+          hxVals_ $ decodeUtf8 $ AE.encode $ case AE.toJSON page.vizChart{Widget.pngUrl = Nothing, Widget.dataset = Nothing} of AE.Object o -> AE.Object (AEKM.delete "type" o); v -> v
+        , hxInclude_ "#visualizationTabs input:checked"
         , hxExt_ "json-enc,forward-page-params"
         , term "hx-sync" "this:replace"
         ]
-        ""
+        $ when isChart (Widget.widget_ page.vizChart)
 
     -- Both shared-link and in-app paths enter through loadTrace, so they get the
     -- same immediate skeleton, request, and retry state.

@@ -2588,6 +2588,41 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
 .dashboard-table th > div > span {
   min-width: 0;
 }
+/* A narrow table widget stacks each row: the label on its own line, then its metrics,
+   each named by its column (the hidden header's job). */
+.dashboard-table-wrap {
+  container: dtable / inline-size;
+}
+@container dtable (max-width: 30rem) {
+  .dashboard-table,
+  .dashboard-table tbody {
+    display: block;
+  }
+  .dashboard-table :is(colgroup, thead) {
+    display: none;
+  }
+  .dashboard-table tbody tr {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.125rem 0.75rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid color-mix(in oklch, var(--color-strokeWeak) 50%, transparent);
+  }
+  .dashboard-table tbody :is(td, th) {
+    display: flex;
+    align-items: baseline;
+    gap: 0.25rem;
+    padding: 0 !important;
+    border: 0 !important;
+  }
+  .dashboard-table tbody :is(td:first-child, th) {
+    flex-basis: 100%;
+  }
+  .dashboard-table td:not(:first-child)::before {
+    content: attr(data-label);
+    color: var(--color-textWeak);
+  }
+}
 @container dashboard (max-width: 400px) {
   .dashboard-table :is(th, td) {
     padding-inline: 0.375rem;

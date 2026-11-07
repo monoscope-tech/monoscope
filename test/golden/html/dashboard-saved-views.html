@@ -353,7 +353,7 @@
 <div class="dropdown dropdown-end z-50 mt-1 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-1.5 text-sm shadow-lg flex flex-col gap-0.5" id="dashboard-views-menu" popover="auto" style="position-try:flip-block; position-anchor:--anchor-dashboard-views-menu">
 <p class="px-2 pt-1 pb-0.5 text-xs text-textWeak">Saved views</p>
 <div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/dashboards/<uuid>/tab/logs?since=7D&amp;var-database=&amp;var-resource=&amp;var-service=api&amp;view=API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/logs?var-database=&amp;var-resource=&amp;var-service=api&amp;view=API" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
+<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textBrand font-medium" href="/p/<uuid>/dashboards/<uuid>/tab/logs?since=7D&amp;var-database=&amp;var-service=api&amp;view=API" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/logs?var-database=&amp;var-service=api&amp;view=API" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
 <span class="w-3.5 shrink-0">
 <svg class="icon w-3.5 h-3.5" width="1em" height="1em" viewBox="0 0 640 640">
 <g>
@@ -368,11 +368,6 @@
 </g>
 </svg>
 </button>
-</div>
-<div class="flex items-center rounded hover:bg-fillWeak">
-<a class="flex-1 flex items-center gap-2 px-2 py-1.5 truncate text-textStrong" href="/p/<uuid>/dashboards/<uuid>/tab/logs?since=7D&amp;var-database=&amp;var-resource=&amp;var-service=&amp;view=All%20services" data-hx-get="/p/<uuid>/dashboards/<uuid>/tab/logs?var-database=&amp;var-resource=&amp;var-service=&amp;view=All%20services" data-hx-vals="js:{...getTimeRange()}" data-hx-swap="outerMorph" data-hx-push-url="true" data-preserve-page-context _="on click set my.preloadState to &#39;DONE&#39;" data-hx-target="#dashboard-tabs-content">
-<span class="w-3.5 shrink-0">
-</span>All services</a>
 </div>
 <div class="h-px bg-strokeWeak my-1">
 </div>
@@ -394,34 +389,6 @@ WHERE project_id=&#39;{{project_id}}&#39;
   {{time_filter}}
 LIMIT 100
 " data-tagify-sql-sig="<hex>" data-tagify-db-source="timefusion" data-tagify-query data-tagify-reload-on-change="true" value="api" data-tagify-mode="select"
-<input type="text" name="resource" class="dash-variable-input" data-project-id="<uuid>" data-dashboard-id="<uuid>" data-tagify data-tagify-whitelist="[]" data-tagify-enforce-whitelist data-tagify-text-prop="name" data-tagify-query-sql="SELECT DISTINCT
-  name as value,
-  name as label
-FROM otel_logs_and_spans
-WHERE project_id=&#39;{{project_id}}&#39;
-  AND resource___service___name = &#39;{{var-service}}&#39;
-  AND name IS NOT NULL
-  {{time_filter}}
-LIMIT 500
-" data-tagify-sql-sig="<hex>" data-tagify-db-source="timefusion" data-tagify-query data-tagify-reload-on-change="true" value data-tagify-mode="select"
-<input type="checkbox" class="hidden peer/vars" id="dash-vars-toggle"
-<input type="text" name="service" class="dash-variable-input" data-project-id="<uuid>" data-dashboard-id="<uuid>" data-tagify data-tagify-whitelist="[]" data-tagify-enforce-whitelist data-tagify-text-prop="name" data-tagify-query-sql="SELECT DISTINCT resource___service___name
-FROM otel_logs_and_spans
-WHERE project_id=&#39;{{project_id}}&#39;
-  AND resource___service___name IS NOT NULL
-  {{time_filter}}
-LIMIT 100
-" data-tagify-sql-sig="<hex>" data-tagify-db-source="timefusion" data-tagify-query data-tagify-reload-on-change="true" value="api" data-tagify-mode="select"
-<input type="text" name="resource" class="dash-variable-input" data-project-id="<uuid>" data-dashboard-id="<uuid>" data-tagify data-tagify-whitelist="[]" data-tagify-enforce-whitelist data-tagify-text-prop="name" data-tagify-query-sql="SELECT DISTINCT
-  name as value,
-  name as label
-FROM otel_logs_and_spans
-WHERE project_id=&#39;{{project_id}}&#39;
-  AND resource___service___name = &#39;{{var-service}}&#39;
-  AND name IS NOT NULL
-  {{time_filter}}
-LIMIT 500
-" data-tagify-sql-sig="<hex>" data-tagify-db-source="timefusion" data-tagify-query data-tagify-reload-on-change="true" value data-tagify-mode="select"
 <input type="checkbox" class="hidden peer/vars" id="dash-vars-toggle"
 <input type="text" name="service" class="dash-variable-input" data-project-id="<uuid>" data-dashboard-id="<uuid>" data-tagify data-tagify-whitelist="[]" data-tagify-enforce-whitelist data-tagify-text-prop="name" data-tagify-query-sql="SELECT DISTINCT resource___service___name
 FROM otel_logs_and_spans

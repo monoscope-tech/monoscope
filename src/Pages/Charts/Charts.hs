@@ -45,7 +45,7 @@ import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), RangeEnd (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, buildDateRange, buildEnvFilter, buildServiceFilter, defSqlQueryCfg, fillQueryTemplate, mkScopedQuery, pSource, queryASTToComponents, variablePresets, variablePresetsKQL)
+import Pkg.Parser (BinDensity, QueryComponents (finalColumns, finalSummarizeQuery, whereClause), RangeEnd (..), ResultShape (..), SqlQueryCfg (..), TemplateLang (..), applyScopedQuery, buildDateRange, buildEnvFilter, buildServiceFilter, defSqlQueryCfg, fillQueryTemplate, listToColNames, mkScopedQuery, pSource, queryASTToComponents, resultShape, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), parseQueryDiagnosed, queryErrorText)
 import Pkg.QueryCache qualified as QC
@@ -172,7 +172,8 @@ queryProjectMetrics dbSource (maybeToMonoid -> respDataType) pid queryM querySQL
           (runRawQuery authCtx dbSource respDataType cfg queryAST query template mapping liveRange Nothing)
     (Right queryAST, Nothing) ->
       let actualDataType = decoderFor respDataType queryAST
-       in convertTimestampsToMs
+       in nameCategories cfg queryAST
+            . convertTimestampsToMs
             . coerceBinnedScalar respDataType actualDataType
             <$> queryMetricsWithCache authCtx dbSource actualDataType pid source queryAST cfg query now fromD toD
 
@@ -185,6 +186,13 @@ data ChartQuery = ChartQuery
   , parsed :: !(Either Text [Section])
   , liveRange :: !Bool
   }
+
+
+-- | A grouped result names its columns, so a chart can label its categories and series.
+nameCategories :: SqlQueryCfg -> [Section] -> MetricsData -> MetricsData
+nameCategories cfg ast md
+  | resultShape ast == Categories = md{headers = V.fromList $ listToColNames (snd $ queryASTToComponents cfg ast).finalColumns}
+  | otherwise = md
 
 
 -- | Shared preparation; scope errors precede KQL diagnostics on both transports.
@@ -296,12 +304,13 @@ rawAstFilters cfg qc =
 -- latest value. Decode the actual series shape, then 'coerceBinnedScalar'
 -- extracts the newest point for the scalar response.
 decoderFor :: DataType -> [Section] -> DataType
-decoderFor requested queryAST
-  | requested == DTFloat && QC.hasSummarizeWithBin queryAST = DTMetric
-  | requested /= DTMetric = requested
-  | isScalarSummarize queryAST = DTFloat
-  | QC.hasSummarizeWithBin queryAST = DTMetric
-  | otherwise = DTText
+decoderFor requested queryAST = case (requested, resultShape queryAST) of
+  (DTFloat, TimeSeries) -> DTMetric
+  (DTMetric, Scalar) -> DTFloat
+  (DTMetric, TimeSeries) -> DTMetric
+  (DTMetric, Events) -> DTText
+  (DTMetric, Categories) -> DTText
+  (r, _) -> r
 
 
 -- | Return the newest value when a scalar widget supplied binned KQL.
@@ -324,13 +333,6 @@ coerceBinnedScalar requested actual md
       let row = V.last md.dataset
       guard $ not (V.null row)
       row V.! (V.length row - 1)
-
-
--- | A summarize with no @by@ clause at all — yields one scalar row.
-isScalarSummarize :: [Section] -> Bool
-isScalarSummarize = any \case
-  SummarizeCommand _ Nothing -> True
-  _ -> False
 
 
 -- | Execute query with caching support for timeseries queries
@@ -383,7 +385,7 @@ queryMetricsWithCacheUsing
   -> Eff es MetricsData
 queryMetricsWithCacheUsing fetch progress respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD
   | respDataType /= DTMetric = executeQueryWith sqlQueryCfg queryAST
-  | not (QC.hasSummarizeWithBin queryAST) = executeQueryWith sqlQueryCfg queryAST
+  | resultShape queryAST /= TimeSeries = executeQueryWith sqlQueryCfg queryAST
   | otherwise = do
       let reqFrom = fromMaybe (addUTCTime (-86400) now) fromD
       let reqTo = fromMaybe now toD
@@ -738,7 +740,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
         Left message -> pure $ Left message
         Right ast -> do
           let actual = if isJust sql then requested else decoderFor requested ast
-              convert = convertTimestampsToMs . coerceBinnedScalar requested actual
+              convert = nameCategories cfg ast . convertTimestampsToMs . coerceBinnedScalar requested actual
           let fetch cfg' ast' progress = do
                 let (_, parts) = queryASTToComponents cfg' ast'
                     (start, end) = cfg'.dateRange

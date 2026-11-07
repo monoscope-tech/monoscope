@@ -1,17 +1,24 @@
-<table class="dashboard-table table table-zebra table-sm w-full relative" id>
-<thead class="sticky top-0 z-10 before:content-[&#39;&#39;] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak">
+<table class="dashboard-table table table-sm w-full relative [&amp;_:is(th,td):first-child]:pl-4 [&amp;_:is(th,td):last-child]:pr-4 [&amp;_td]:border-b [&amp;_td]:border-strokeWeak/50 [&amp;_tr:last-child_td]:border-b-0" id>
+<colgroup>
+<col>
+</colgroup>
+<thead class="sticky top-0 z-10">
 <tr>
-<th class="text-left bg-bgRaised sticky top-0 " aria-sort="none">
-<button type="button" class="w-full text-left cursor-pointer hover:bg-fillWeak group" data-sort-field="duration" data-sort-direction="none" _="on click
+<th class="bg-bgAlternate sticky top-0 border-b border-strokeWeak has-[button:hover]:bg-bgSunken has-[button:focus-visible]:bg-bgSunken text-left" aria-sort="none">
+<button type="button" class="w-full cursor-pointer group after:absolute after:inset-0" data-sort-field="duration" data-sort-direction="none" _="on click
                   set fetcher to the closest &lt;[data-table-fetch]/&gt;
                   if not fetcher halt end
                   set sort to &#39;+&#39; + my @data-sort-field
                   if my @data-sort-direction is &#39;asc&#39; set sort to &#39;-&#39; + my @data-sort-field end
                   set fetcher.dataset.tableSort to sort
                   trigger &#39;table-sort&#39; on fetcher">
-<div class=" flex items-center justify-between ">
+<div class="flex items-center gap-1 ">
 <span>Duration</span>
-<span class="sort-arrow ml-1 text-iconNeutral">↕</span>
+<svg class="icon size-3 shrink-0 text-iconNeutral opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" width="1em" height="1em" viewBox="0 0 14 14">
+<g>
+<path d="M13 9.66675L10.3333 12.3334M10.3333 12.3334L7.66667 9.66675M10.3333 12.3334V1.66675M1 4.33341L3.66667 1.66675M3.66667 1.66675L6.33333 4.33341M3.66667 1.66675V12.3334" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+</g>
+</svg>
 </div>
 </button>
 </th>
@@ -19,81 +26,88 @@
 </thead>
 <tbody>
 <tr class="hover">
-<td class>1</td>
+<td class data-label="Duration">1</td>
 </tr>
 <tr class="hover">
-<td class>2</td>
+<td class data-label="Duration">2</td>
 </tr>
 <tr class="hover">
-<td class>3</td>
+<td class data-label="Duration">3</td>
 </tr>
 <tr class="hover">
-<td class>4</td>
+<td class data-label="Duration">4</td>
 </tr>
 <tr class="hover">
-<td class>5</td>
+<td class data-label="Duration">5</td>
 </tr>
 <tr class="hover">
-<td class>6</td>
+<td class data-label="Duration">6</td>
 </tr>
 <tr class="hover">
-<td class>7</td>
+<td class data-label="Duration">7</td>
 </tr>
 <tr class="hover">
-<td class>8</td>
+<td class data-label="Duration">8</td>
 </tr>
 <tr class="hover">
-<td class>9</td>
+<td class data-label="Duration">9</td>
 </tr>
 <tr class="hover">
-<td class>10</td>
+<td class data-label="Duration">10</td>
 </tr>
 <tr class="hover">
-<td class>11</td>
+<td class data-label="Duration">11</td>
 </tr>
 <tr class="hover">
-<td class>12</td>
+<td class data-label="Duration">12</td>
 </tr>
 <tr class="hover">
-<td class>13</td>
+<td class data-label="Duration">13</td>
 </tr>
 <tr class="hover">
-<td class>14</td>
+<td class data-label="Duration">14</td>
 </tr>
 <tr class="hover">
-<td class>15</td>
+<td class data-label="Duration">15</td>
 </tr>
 <tr class="hover">
-<td class>16</td>
+<td class data-label="Duration">16</td>
 </tr>
 <tr class="hover">
-<td class>17</td>
+<td class data-label="Duration">17</td>
 </tr>
 <tr class="hover">
-<td class>18</td>
+<td class data-label="Duration">18</td>
 </tr>
 <tr class="hover">
-<td class>19</td>
+<td class data-label="Duration">19</td>
 </tr>
 <tr class="hover">
-<td class>20</td>
+<td class data-label="Duration">20</td>
 </tr>
 </tbody>
 </table>
-<table class="dashboard-table table table-zebra table-sm w-full relative" id>
-<thead class="sticky top-0 z-10 before:content-[&#39;&#39;] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak">
+<table class="dashboard-table table table-sm w-full relative [&amp;_:is(th,td):first-child]:pl-4 [&amp;_:is(th,td):last-child]:pr-4 [&amp;_td]:border-b [&amp;_td]:border-strokeWeak/50 [&amp;_tr:last-child_td]:border-b-0" id>
+<colgroup>
+<col>
+</colgroup>
+<thead class="sticky top-0 z-10">
 <tr>
-<th class="text-left bg-bgRaised sticky top-0 " aria-sort="descending">
-<button type="button" class="w-full text-left cursor-pointer hover:bg-fillWeak group" data-sort-field="duration" data-sort-direction="desc" _="on click
+<th class="bg-bgAlternate sticky top-0 border-b border-strokeWeak has-[button:hover]:bg-bgSunken has-[button:focus-visible]:bg-bgSunken text-left" aria-sort="descending">
+<button type="button" class="w-full cursor-pointer group after:absolute after:inset-0" data-sort-field="duration" data-sort-direction="desc" _="on click
                   set fetcher to the closest &lt;[data-table-fetch]/&gt;
                   if not fetcher halt end
                   set sort to &#39;+&#39; + my @data-sort-field
                   if my @data-sort-direction is &#39;asc&#39; set sort to &#39;-&#39; + my @data-sort-field end
                   set fetcher.dataset.tableSort to sort
                   trigger &#39;table-sort&#39; on fetcher">
-<div class=" flex items-center justify-between ">
-<span>Duration</span>
-<span class="sort-arrow ml-1 text-iconNeutral">↓</span>
+<div class="flex items-center gap-1 ">
+<span class=" text-textStrong">Duration</span>
+<svg class="icon size-3 shrink-0 text-iconBrand" width="1em" height="1em" viewBox="0 0 24 24">
+<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<path d="M12 5v14" /> <path d="m19 12-7 7-7-7" />
+</g>
+</svg>
 </div>
 </button>
 </th>
@@ -101,64 +115,64 @@
 </thead>
 <tbody>
 <tr class="hover">
-<td class>25</td>
+<td class data-label="Duration">25</td>
 </tr>
 <tr class="hover">
-<td class>24</td>
+<td class data-label="Duration">24</td>
 </tr>
 <tr class="hover">
-<td class>23</td>
+<td class data-label="Duration">23</td>
 </tr>
 <tr class="hover">
-<td class>22</td>
+<td class data-label="Duration">22</td>
 </tr>
 <tr class="hover">
-<td class>21</td>
+<td class data-label="Duration">21</td>
 </tr>
 <tr class="hover">
-<td class>20</td>
+<td class data-label="Duration">20</td>
 </tr>
 <tr class="hover">
-<td class>19</td>
+<td class data-label="Duration">19</td>
 </tr>
 <tr class="hover">
-<td class>18</td>
+<td class data-label="Duration">18</td>
 </tr>
 <tr class="hover">
-<td class>17</td>
+<td class data-label="Duration">17</td>
 </tr>
 <tr class="hover">
-<td class>16</td>
+<td class data-label="Duration">16</td>
 </tr>
 <tr class="hover">
-<td class>15</td>
+<td class data-label="Duration">15</td>
 </tr>
 <tr class="hover">
-<td class>14</td>
+<td class data-label="Duration">14</td>
 </tr>
 <tr class="hover">
-<td class>13</td>
+<td class data-label="Duration">13</td>
 </tr>
 <tr class="hover">
-<td class>12</td>
+<td class data-label="Duration">12</td>
 </tr>
 <tr class="hover">
-<td class>11</td>
+<td class data-label="Duration">11</td>
 </tr>
 <tr class="hover">
-<td class>10</td>
+<td class data-label="Duration">10</td>
 </tr>
 <tr class="hover">
-<td class>9</td>
+<td class data-label="Duration">9</td>
 </tr>
 <tr class="hover">
-<td class>8</td>
+<td class data-label="Duration">8</td>
 </tr>
 <tr class="hover">
-<td class>7</td>
+<td class data-label="Duration">7</td>
 </tr>
 <tr class="hover">
-<td class>6</td>
+<td class data-label="Duration">6</td>
 </tr>
 </tbody>
 </table>

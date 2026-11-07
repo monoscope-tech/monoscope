@@ -11,7 +11,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
-import Data.List (lookup)
+import Data.List (isSuffixOf, lookup)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.ProtoLens (defMessage)
@@ -31,9 +31,9 @@ import Models.Apis.Issues qualified as ApiIssues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
-import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Dashboards (DashboardVM (savedViews, schema))
 import Models.Projects.Dashboards qualified as DashboardModel
+import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
@@ -42,13 +42,12 @@ import Network.HTTP.Types (urlDecode)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (BWConfig (..), NavigationResponse (..), PageCtx (..))
 import Pages.BodyWrapper qualified as BodyWrapper
-import Pages.Charts.Types (MetricsStats (..))
 import Pages.Charts.Charts qualified as Charts
+import Pages.Charts.Types (MetricsStats (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as Issues
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Projects qualified as ManageMembers
-import Pkg.Components.LogQueryBox (VizSurface (..), VizType (..), visTypes)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (mkHasqlPool)
 import Pkg.Parser (TemplateLang (..), browserKql, fillQueryTemplate, parseQueryToAST, variablePresets)
@@ -61,7 +60,7 @@ import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Servant qualified
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config qualified as Config
-import System.Directory (withCurrentDirectory)
+import System.Directory (listDirectory, withCurrentDirectory)
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
@@ -323,21 +322,47 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     (\w -> (w.layout >>= (.w), w.layout >>= (.h))) <$> Widget.normalizeWidgetLayouts [metricCard] `shouldBe` [(Just 2, Just 3)]
 
     let column = def :: Widget.TableColumn
-        table cols extra rows ps = Widget.renderTableWithDataAndParams ((def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just cols, Widget._projectId = Just testPid} & extra) rows ps
+        table cols extra rows ps = Widget.renderTableWithDataAndParams ((def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just cols, Widget._projectId = Just testPid} & extra) V.empty rows ps
         linked = table [column{Widget.field = "session_id", Widget.title = "Session", Widget.link = Just "/p/{{project_id}}/log_explorer?viz_type=sessions&query={{row.session_id}}"}] id (V.singleton $ V.singleton "session / id") []
         -- Rows on a tabless dashboard had no swap target and ignored clicks.
         rowNav tabM = table [column{Widget.field = "service", Widget.title = "Service"}] (\w -> w{Widget._dashboardId = Just "00000000-0000-0000-0000-0000000000d1", Widget._tabSlug = tabM, Widget.onRowClick = Just def{Widget.setVariable = Just "service"}}) (V.singleton $ V.singleton "api") [("var-env", Just "prod")]
     renderT linked `shouldSatisfy` T.isInfixOf "query=session%20%2F%20id"
+    -- An empty result rendered as a bare header over a blank box (Recent Database Errors).
+    let emptyTable = renderT . table [column{Widget.field = "error_message", Widget.title = "Error"}] id V.empty
+    emptyTable [] `shouldSatisfy` T.isInfixOf "Nothing in this time range"
+    emptyTable [("table-search", Just "timeout")] `shouldSatisfy` T.isInfixOf "No rows match “timeout”"
+    -- ISO timestamps from TimeFusion rendered raw; both stores' forms localize, with the instant on hover.
+    let timeCell v = renderT $ table [column{Widget.field = "timestamp", Widget.title = "Time"}] id (V.singleton $ V.singleton v) []
+    timeCell "2026-11-06T23:21:20.435Z" `shouldSatisfy` T.isInfixOf "data-tippy-content=\"2026-11-06T23:21:20.435Z\"><local-time datetime=\"2026-11-06T23:21:20.435Z\" format=\"MMM d HH:mm:ss\">"
+    timeCell "2026-03-19 09:05:00+00" `shouldSatisfy` T.isInfixOf "<local-time datetime=\"2026-03-19T09:05:00Z\""
+    -- Services Health printed a rare error rate as "9.24e-2 %".
+    let numCell v = renderT $ table [column{Widget.field = "error_rate", Widget.title = "Errors", Widget.columnType = Just Widget.CTNumber, Widget.unit = Just "%"}] id (V.singleton $ V.singleton v) []
+    map numCell ["0.0924", "0.004"] `shouldSatisfy` \cells -> zipWith T.isInfixOf ["0.09 %", "&lt;0.01 %"] cells == [True, True]
+    -- An ID is matched and copied, not read: its short form, the whole one on hover and to copy.
+    let uuid = "d85973c0-8129-4c80-af0a-b81d7f509c29"
+        idCell = renderT $ table [column{Widget.field = "request_id", Widget.title = "Request ID"}] id (V.singleton $ V.singleton uuid) []
+    idCell `shouldSatisfy` T.isInfixOf ("data-tippy-content=\"" <> uuid <> "\">d85973c0…</code>")
+    idCell `shouldSatisfy` T.isInfixOf ("data-copy=\"" <> uuid <> "\"")
     goldenHtml "dashboard-widget-tables" do
       table [column{Widget.field = "q", Widget.title = "Query", Widget.copyable = Just True}] id (V.singleton $ V.singleton "select 1") []
       linked
       rowNav Nothing
       rowNav (Just "overview")
+    -- A query's own result names its columns: a breakdown gets series swatches and value bars,
+    -- and a top list over `by a, b` sections its rows under each `a`.
+    let textRows = V.fromList . map V.fromList
+        breakdown wt = Widget.renderTableWithDataAndParams (def :: Widget.Widget){Widget.wType = wt, Widget.id = Just "t"}
+    -- faSprite_ renders nothing for an id the sprite lacks: Apdex showed a blank gap for `smile`.
+    sprite <- decodeUtf8 <$> readFileBS "static/public/assets/svgs/fa-sprites/regular.svg"
+    templates <- filter (".yaml" `isSuffixOf`) <$> listDirectory "static/public/dashboards"
+    icons <- foldMap (mapMaybe (fmap (T.dropAround (`elem` ['\'', '"'])) . T.stripPrefix "icon: " . T.strip) . lines) <$> traverse (fmap decodeUtf8 . readFileBS . ("static/public/dashboards/" <>)) templates
+    filter (\i -> not (("id=\"" <> i <> "\"") `T.isInfixOf` sprite)) (ordNub icons) `shouldBe` []
+    goldenHtml "dashboard-breakdown-tables" do
+      breakdown Widget.WTTable (V.fromList ["name", "count_"]) (textRows [["GET", "12"], ["POST", "3"]]) []
+      breakdown Widget.WTTopList (V.fromList ["kind", "service", "count_"]) (textRows [["client", "web", "8"], ["client", "api", "2"], ["server", "api", "16"]]) []
 
     -- The wire tag is in every stored dashboard YAML; renaming a constructor orphans them.
     map (fmap (show @Text) . AE.eitherDecode @Widget.WidgetType . AE.encode) allWidgetTypes `shouldBe` map (Right . show) allWidgetTypes
-    -- The editor offered Patterns and Sessions, which no WidgetType decodes, so the widget could not save.
-    [v.key | v <- visTypes, v.surface /= ExplorerOnly, isLeft (AE.eitherDecode @Widget.WidgetType (AE.encode v.key))] `shouldBe` []
     let literal = scalarMonitor{Widget.query = Just "metrics | where metric_name == \"summarize\""}
     map Widget.chartQuery [literal, literal{Widget.wType = Widget.WTStat}]
       `shouldBe` [(Just "metrics | where metric_name == \"summarize\" | summarize count(*) by bin_auto(timestamp)", Charts.DTMetric), (Just "metrics | where metric_name == \"summarize\" | summarize count(*)", Charts.DTFloat)]
@@ -443,13 +468,13 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     map (.name) updated `shouldMatchList` ("US worker" : names)
     [Map.lookup "service" v.variables | v <- updated, v.name == "View 1"] `shouldSatisfy` (`elem` ([[Just "worker"], [Just "billing"]] :: [[Maybe Text]]))
 
-    -- Service Overview scopes its filters per tab, and each tab can restore all services.
+    -- Service Overview scopes its filters per tab; clearing them is an action, not a saved view.
     ovId <- newDashboard tr "_overview.yaml" "Overview views"
-    ovBars <- forM ([("overview", ["service", "resource"]), ("service", ["service", "resource"]), ("logs", ["service"]), ("databases", ["database"]), ("infra", [])] :: [(Text, [Text])]) \(slug, keys) -> do
+    ovBars <- forM ([("overview", []), ("service", ["service"]), ("logs", ["service"]), ("databases", ["database"]), ("infra", [])] :: [(Text, [Text])]) \(slug, keys) -> do
       tab <- getTab tr ovId slug Nothing [("var-service", Just "api"), ("var-database", Just "postgresql")]
       let Dashboards.DashboardGet _ _ ov _ _ = tabDashboard tab
       (slug, map (.key) $ DashboardModel.variablesForTab ov (find ((== slug) . slugify . (.name)) (fold ov.tabs))) `shouldBe` (slug, keys)
-      linkParams ("/p/" <> testPid.toText <> "/dashboards/" <> ovId.toText <> "/tab/" <> slug) (renderT tab) `shouldSatisfy` any (\ps -> lookup "var-service" ps == Just "" && lookup "var-database" ps == Just "")
+      (T.isInfixOf "Clear filters" &&& T.isInfixOf "All services") (renderT tab) `shouldBe` (True, False)
       pure $ tagsWith ["id=\"dash-vars-toggle\"", "class=\"dash-variable-input"] (renderT tab)
     ovSaved <- fmap fromRightShow . call tr . Dashboards.dashboardViewPostH testPid ovId =<< form "name=API&var-service=api&since=7D&activeTabSlug=logs"
     goldenParts "dashboard-saved-views" $ map renderT [saved, deleted] <> swapParts overview <> swapParts errorsHtml <> map renderT [overridden, revealed] <> swapParts reloaded <> [renderT ovSaved] <> fold ovBars
@@ -466,6 +491,14 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       actual <- dbOne tr "SELECT schema FROM projects.dashboards WHERE id = ?" (Only dashId)
       Right actual `shouldBe` AE.eitherDecode @AE.Value expected
       AE.eitherDecode @DashboardModel.Dashboard (AE.encode actual) `shouldSatisfy` isRight
+
+    -- Saved dashboards kept the template's icon names the sprite never had; nested ones too.
+    iconDash <- newDashboard tr "" "Legacy icon names"
+    dbExec tr "UPDATE projects.dashboards SET schema = ?::jsonb WHERE id = ?" ("{\"widgets\":[{\"type\":\"stat\",\"icon\":\"smile\",\"query\":\"icon: smile\"},{\"type\":\"group\",\"children\":[{\"type\":\"stat\",\"icon\":\"cpu\"},{\"type\":\"stat\",\"icon\":\"layers\"}]}]}" :: Text, iconDash)
+    replicateM_ 2 $ migrate "static/migrations/0265_dashboard_icon_names.sql"
+    -- The query text mentioning `icon: smile` is a string's content, and stays as written.
+    icons <- dbOne tr "SELECT jsonb_path_query_array(schema, 'strict $.**.icon') || to_jsonb(schema #>> '{widgets,0,query}') FROM projects.dashboards WHERE id = ?" (Only iconDash)
+    icons `shouldBe` AE.toJSON (["face-smile", "microchip", "layer-group", "icon: smile"] :: [Text])
 
     -- Runs even for a project that never opened its RUM dashboard. Last: it drops a column.
     pid <- createTestProject tr "Unopened RUM dashboard"
@@ -909,11 +942,11 @@ spec = around withTestResources $ describe "Dashboard widgets" do
       events <- call tr $ Log.logExplorerDataH projectId def{Log.query = row V.!? 3, Log.from = Just from, Log.to = Just to}
       (row V.!? 0, events.error, events.queryResultCount) `shouldBe` (row V.!? 0, Nothing, 1)
     topPages <- widgetNamed "Top pages"
-    let topPagesHtml = Widget.renderTableWithDataAndParams topPages{Widget._projectId = Just projectId} (table results "Top pages") [("since", Just "7D")]
+    let topPagesHtml = Widget.renderTableWithDataAndParams topPages{Widget._projectId = Just projectId} V.empty (table results "Top pages") [("since", Just "7D")]
     map (\ps -> (lookup "since" ps, lookup "query" ps)) (linkParams ("/p/" <> projectId.toText <> "/log_explorer") (renderT topPagesHtml))
       `shouldBe` [(Just "7D", row V.!? 3) | row <- V.toList $ table results "Top pages"]
     -- Abbreviations explain themselves on hover; the hidden query column stays off screen.
-    goldenHtml "dashboard-rum-tables" do Widget.renderTableWithDataAndParams vitals (table results "Core Web Vitals") []; topPagesHtml
+    goldenHtml "dashboard-rum-tables" do Widget.renderTableWithDataAndParams vitals V.empty (table results "Core Web Vitals") []; topPagesHtml
     -- The browser filter exists as SQL for widgets and KQL for the Explorer; both select the same rows, and a backend span neither.
     ingestTrace tr apiKey "GET /backend-only" frozenTime
     sessions <- call tr $ Log.logExplorerDataH projectId def{Log.query = Just browserKql, Log.from = Just from, Log.to = Just to}
@@ -1037,6 +1070,20 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     for_ ["Dashboard C", "Dashboard A"] \t -> titled t >>= testServant tr . Dashboards.dashboardStarPostH testPid . (.id)
     map (isJust . (.starredSince)) <$> listed `shouldReturn` [True, True, False, False]
 
+  it "dashboard switcher: the title lists the project's dashboards, starred first, linking each and marking the current one" \tr -> do
+    alpha <- newDashboard tr "" "Alpha"
+    _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Beta", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+    dbExec tr "UPDATE projects.dashboards SET starred_since = now() WHERE project_id = ? AND title = 'Beta'" (Only testPid)
+    switcher <- renderT <$> call tr (Dashboards.dashboardSwitcherGetH testPid alpha)
+    let at t = T.length . fst $ T.breakOn t switcher
+    (at "Beta</span>" < at "Alpha</span>", T.count "aria-current=\"page\"" switcher) `shouldBe` (True, 1)
+    switcher `shouldContainAll` ["/dashboards/" <> alpha.toText <> "\"", "Browse all dashboards"]
+    -- The page's title opens it on demand; the tab strip, not a breadcrumb suffix, names the tab.
+    overview <- newDashboard tr "_overview.yaml" "Overview"
+    page <- renderT <$> getTab tr overview "service" Nothing []
+    page `shouldContainAll` ["popovertarget=\"page-title-switcher\"", "/dashboards/" <> overview.toText <> "/switcher"]
+    page `shouldNotSatisfy` T.isInfixOf "pageTitleSuffixText"
+
   it "built-in dashboards are read-only: render the shipped YAML over a frozen row, refuse every edit, duplicate into an editable copy" \tr -> do
     let status action = runAuthHandler tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
         apiStatus action = toBaseServantResponse tr $ catchError @Servant.ServerError (action $> (200 :: Int)) (\_ err -> pure err.errHTTPCode)
@@ -1051,6 +1098,10 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     page <- renderT <$> getTab tr did "overview" Nothing []
     page `shouldContainAll` [" data-read-only>", "Duplicate to edit"]
     for_ ["Edit YAML", "Rename dashboard", "Add a new widget", "widget-order-trigger"] \t -> page `shouldNotSatisfy` T.isInfixOf t
+    -- Its widget drawer reads the query but offers no save, and no monitor (refused below), even asked for it.
+    drawer <- renderT <$> call tr (Dashboards.dashboardWidgetExpandGetH testPid did "error-rates-by-service" (Just "alerts"))
+    drawer `shouldContainAll` [">Query</label>", "Read-only"]
+    for_ ["Save widget", "sr-only page-drawer-tab-monitors", "-alert-form\">Create monitor"] \t -> drawer `shouldNotSatisfy` T.isInfixOf t
 
     call tr (Dashboards.dashboardWidgetPutH testPid did Nothing (Just "overview") (widgetOf Widget.WTStat "Nope")) <&> void >>= (`shouldBe` Left Dashboards.ReadOnlyDashboard)
     -- A widget monitor writes its thresholds into the schema, so it is an edit too.

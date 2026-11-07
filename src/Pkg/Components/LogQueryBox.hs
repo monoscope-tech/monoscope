@@ -1,4 +1,4 @@
-module Pkg.Components.LogQueryBox (logQueryBox_, VizType (..), VizSurface (..), visTypes, queryLibraryContent_, enrichSchemaWithFacets, LogQueryBoxConfig (..)) where
+module Pkg.Components.LogQueryBox (logQueryBox_, queryLibraryContent_, enrichSchemaWithFacets, LogQueryBoxConfig (..)) where
 
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
@@ -17,6 +17,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
 import Pages.Components (dialogField_, filterInputAttr_, floatingDialog_, keyboardActivateAttr_, options_, searchInput_)
+import Pkg.Components.Widget (VizType (..), vizIsChart, vizWidget)
 import Pkg.SchemaLearning (FacetData (..), FacetValue (..))
 import Relude
 import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_)
@@ -29,7 +30,8 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   , source :: Maybe Text
   , targetSpan :: Maybe Text
   , query :: Maybe Text
-  , vizType :: Maybe Text
+  , vizType :: Maybe VizType
+  -- ^ The checked tab; none when the widget being edited is a type no tab offers
   , updateUrl :: Bool
   -- ^ Whether to update the URL when the query changes
   , alert :: Bool
@@ -297,10 +299,7 @@ logQueryBox_ config = do
                    on change if me.checked
                      set #viz-timeseries.checked to true
                      call updateVizTypeInUrl('timeseries', true)
-                     if window.widgetJSON
-                       set widgetJSON.type to 'timeseries'
-                       send 'update-widget' to #visualization-widget-container
-                     end
+                     send 'update-widget' to #visualization-widget-container
                    end|]
                 ]
               <> [checked_ | config.alert]
@@ -328,44 +327,49 @@ logQueryBox_ config = do
     visualizationTabs_ =
       div_ [class_ "tabs tabs-box tabs-outline tabs-xs shrink-0 flex-nowrap bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
         let
-          -- A dashboard widget starts as a chart. Logs is a full log table — the most
-          -- expensive thing on a dashboard and the wrong thing to drop on one by default.
-          defaultVizType = fromMaybe (bool "logs" "timeseries" (config.alert || inWidgetEditor)) config.vizType
-          -- An 'ExplorerOnly' tab offered in the widget editor was a tab that simply did not
+          -- An explorer-only tab offered in the widget editor was a tab that simply did not
           -- work — the widget could not decode on save. Sessions is additionally not a valid
           -- alerting surface, which is a separate fact from whether a dashboard can hold it.
-          hiddenHere v = (inWidgetEditor && v.surface == ExplorerOnly) || (config.alert && v.key == "sessions")
+          hiddenHere v = (inWidgetEditor && isNothing (vizWidget v)) || (config.alert && v == VizSessions)
           -- Same reason Logs is not the default here: on a dashboard the chart types are
           -- what the reader wants, so they lead the strip and Logs moves to the end. The log
           -- explorer keeps Logs first, where it is the view the page is named after.
           visible =
-            bool id (sortOn ((== "logs") . (.key))) inWidgetEditor
-              $ filter (not . hiddenHere) visTypes
+            bool id (sortOn (== VizLogs)) inWidgetEditor
+              $ filter (not . hiddenHere) [minBound ..]
         forM_ visible \v -> do
-          let vizType = v.key
+          let vizType = display v
+              (label, emoji) = case v of
+                VizLogs -> ("Logs", "📋")
+                VizTimeseries -> ("Bar", "📊")
+                VizTimeseriesLine -> ("Line", "📈")
+                VizTopList -> ("Top", "🏆")
+                VizPatterns -> ("Patterns", "🔍")
+                VizSessions -> ("Sessions", "👥")
           label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak has-[:checked]:bg-fillBrand-weak! has-[:checked]:border-strokeBrand-strong! has-[:checked]:text-textBrand! flex gap-1 whitespace-nowrap"] do
             input_
               $ [ type_ "radio"
-                , name_ "visualization"
+                , -- `type`: the explorer's chart container includes the checked tab as its widget type.
+                  name_ "type"
                 , id_ $ "viz-" <> vizType
-                , class_ $ bool "no-chart" "default-chart" (v.surface /= Chart)
+                , class_ $ bool "default-chart" "no-chart" (vizIsChart v)
                 , value_ vizType
                 , data_ "update-url" (bool "false" "true" config.updateUrl)
                 , data_ "container-id" containerSelector
                 , -- Whether the widget container is what renders this tab, and so whether the
                   -- viz radio should ask it to refetch. In the editor every offered tab is.
-                  data_ "widgetable" (bool "false" "true" (inWidgetEditor || v.surface == Chart))
+                  data_ "widgetable" (bool "false" "true" (inWidgetEditor || vizIsChart v))
                 , -- swapSessionsRegionIfNeeded (defined in queryEditorInitializationCode) refetches
                   -- #page-summary-region when a viz change crosses the sessions boundary, since
                   -- sessions renders a different server region than other viz types.
                   [__| on change if my.checked
                               set prevViz to window.currentVisualizationType
                               call updateVizTypeInUrl(my.value, @data-update-url === 'true', me.closest('form').querySelector('query-editor'))
-                              if window.widgetJSON and @data-widgetable is 'true'
-                                set widgetJSON.type to my.value
+                              if @data-widgetable is 'true'
+                                -- The widget editor's preview posts its own widgetJSON copy.
+                                if window.widgetJSON then set widgetJSON.type to my.value end
                                 -- A container still holding its placeholder has `intersect once`
-                                -- pending; hx-vals spreads widgetJSON when that fires, so it
-                                -- already carries the new type and a send here only races it.
+                                -- pending, which reads the new type when it fires; a send here only races it.
                                 set preview to #{@data-container-id}
                                 if preview.innerHTML is not '' then send 'update-widget' to preview end
                               end
@@ -379,9 +383,9 @@ logQueryBox_ config = do
                             end
                          |]
                 ]
-              <> [checked_ | vizType == defaultVizType]
-            when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml v.emoji
-            span_ $ toHtml v.label
+                <> [checked_ | Just v == config.vizType]
+            when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml @Text emoji
+            span_ $ toHtml @Text label
 
     -- Popular search chips + query library dropdown, unified as one component.
     -- When no query is active, shows "Try:" chips inline. "more" opens the full library dropdown.
@@ -538,39 +542,6 @@ popularQueries =
   ]
 
 
--- | Where a visualization's result is rendered, which is what decides whether the widget
--- container owns it and whether a dashboard can hold it. Spelling this per tab keeps the
--- three call sites reading one declared fact instead of repeating the same key list.
-data VizSurface
-  = -- | Drawn by the widget container: the dashboard editor can offer it.
-    Chart
-  | -- | The explorer's own log table, and also a legitimate dashboard widget.
-    LogTable
-  | -- | Explorer-only region with no 'Widget.WidgetType' — a widget set to it can't decode.
-    ExplorerOnly
-  deriving stock (Eq)
-
-
--- | A visualization the query box can switch to. @key@ is the wire value shared with
--- @viz_type@ in the URL, the radio ids, and 'WidgetType'; @emoji@ is shown in the
--- dashboard widget editor only.
-data VizType = VizType {label :: Text, key :: Text, emoji :: Text, surface :: VizSurface}
-
-
--- | Visualization types used across the application.
---
--- TODO: Support the other viz types: Pie (pie_chart), Scatter (distribution),
--- Number (stat), Gauge and Text.
-visTypes :: [VizType]
-visTypes =
-  [ VizType "Logs" "logs" "📋" LogTable
-  , VizType "Bar" "timeseries" "📊" Chart
-  , VizType "Line" "timeseries_line" "📈" Chart
-  , VizType "Patterns" "patterns" "🔍" ExplorerOnly
-  , VizType "Sessions" "sessions" "👥" ExplorerOnly
-  ]
-
-
 -- | The example values one field advertises for autocomplete, most frequent first.
 --
 -- Uncapped, examples were 93% of a 713KB response every log-explorer session downloads and
@@ -611,12 +582,12 @@ enrichSchemaWithFacets schema (FacetData facetMap) =
 
 
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches
-queryEditorInitializationCode :: Maybe Text -> Html ()
+queryEditorInitializationCode :: Maybe VizType -> Html ()
 queryEditorInitializationCode vizTypeM = do
   let
     popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
-    vizType = fromMaybe "logs" vizTypeM
-    chartVizTypes = decodeUtf8 $ AE.encode [v.key | v <- visTypes, v.surface == Chart]
+    vizType = foldMap display vizTypeM
+    chartVizTypes = decodeUtf8 $ AE.encode $ filter vizIsChart [minBound :: VizType ..]
   script_
     [text|
     window.currentVisualizationType = "$vizType";
@@ -637,9 +608,7 @@ queryEditorInitializationCode vizTypeM = do
           history.replaceState({}, '', url.toString());
         }
         
-        // Call the query editor's handleVisualizationChange method to update the query
-        const vizTypeMap = { 'bar': 'timeseries', 'line': 'timeseries_line' };
-        Promise.resolve(window.queryEditorCallFor?.(editor, 'handleVisualizationChange', vizTypeMap[vizType] || vizType)).finally(resolve);
+        Promise.resolve(window.queryEditorCallFor?.(editor, 'handleVisualizationChange', vizType)).finally(resolve);
       }));
     };
 

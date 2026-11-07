@@ -58,8 +58,7 @@ on openTraceFullscreen(traceId, timestamp) from window
         end"
 <textarea class="w-full min-w-0 text-sm font-mono leading-5 bg-transparent resize-none py-1 outline-none no-focus-ring placeholder:opacity-60" data-query-input aria-label="Query" rows="1" placeholder="level == &quot;ERROR&quot;">
 </textarea>
-<div id="visualization-widget-container" class=" w-full" style="aspect-ratio: 4 / 2;" data-hx-post="/p/<uuid>/widget" data-hx-trigger="intersect once, update-widget" data-hx-target="this" data-hx-swap="innerHTML" data-hx-vals="js:{...widgetJSON}" data-hx-ext="json-enc,forward-page-params" hx-sync="this:replace"
-<script>var widgetJSON = {"_center_title":true,"_project_id":"<uuid>","allow_zoom":true,"id":"visualization-widget","layout":{"h":4,"w":6},"standalone":true,"title":"Visualization","type":"timeseries_line"};</script>
+<div id="visualization-widget-container" class=" w-full" style="aspect-ratio: 4 / 2;" data-hx-post="/p/<uuid>/widget" data-hx-trigger="update-widget" data-hx-target="this" data-hx-swap="innerHTML" data-hx-vals="{&quot;_center_title&quot;:true,&quot;_project_id&quot;:&quot;<uuid>&quot;,&quot;allow_zoom&quot;:true,&quot;id&quot;:&quot;visualization-widget&quot;,&quot;layout&quot;:{&quot;h&quot;:4,&quot;min_width&quot;:null,&quot;w&quot;:6,&quot;x&quot;:null,&quot;y&quot;:null},&quot;standalone&quot;:true,&quot;title&quot;:&quot;Visualization&quot;}" data-hx-include="#visualizationTabs input:checked" data-hx-ext="json-enc,forward-page-params" hx-sync="this:replace"
 <template id="trace-loading-skeleton"
 <div data-trace-url="/p/<uuid>/traces/<hex>/?timestamp=2026-07-15T18:59:16.952128Z" _="init send loadTrace(url: my @data-trace-url) to #trace_expanded_view"
 <span class="sr-only">Loading trace…</span>

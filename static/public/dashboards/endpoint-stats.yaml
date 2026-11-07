@@ -71,7 +71,7 @@ tabs:
           - type: 'stat'
             title: 'Apdex'
             description: 'Application Performance Index (0-1). >0.9 excellent, <0.5 poor. Threshold: 500ms satisfied, 2s tolerating.'
-            icon: smile
+            icon: face-smile
             sql: "SELECT ROUND((SUM(CASE WHEN duration <= 500000000 THEN 1.0 WHEN duration <= 2000000000 THEN 0.5 ELSE 0 END)) / GREATEST(1, COUNT(*))::numeric, 2)::float FROM otel_logs_and_spans WHERE project_id='{{project_id}}' AND {{const-endpointFilter}} AND duration IS NOT NULL {{time_filter}}"
             unit: '/1.0'
             layout: { w: 3, h: 2 }

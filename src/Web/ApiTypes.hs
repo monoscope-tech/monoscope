@@ -404,6 +404,8 @@ data LogResult = LogResult
   , queryResultCount, count :: Int
   , hasMore :: Bool
   , traces :: [TraceTreeEntry]
+  , viz :: Maybe Widget.VizType
+  -- ^ The view to switch to when a log list can't draw this result (a @summarize@).
   , error :: Maybe Text
   -- ^ Sanitized backend-failure message. When set, the web client renders an
   -- error state (inline on first load, toast on refresh) instead of the

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as echarts from 'echarts';
 import monitorFixture from './fixtures/slack-monitor-gap/request.json';
+import { legendLayout } from '../src/chart-legend';
 import { preparePngOptions } from '../src/chart-png-options';
 
 describe('PNG chart layout', () => {
@@ -186,4 +187,36 @@ it.each([
       expect(options.xAxis).toMatchObject({ min: 0, max: 900000 });
     } finally { chart.dispose(); }
   }
+});
+
+describe('PNG legend', () => {
+  it('lays every legend entry onto a PNG, which cannot scroll, as a grid without the shared prefix, clear of the plot', () => {
+    const names = Array.from({ length: 9 }, (_, i) => `oteldemo.ProductCatalogService/GetProduct-${i}`);
+    const options: any = {
+      grid: { left: '0%', top: 8, bottom: 36, containLabel: true },
+      legend: { type: 'plain', bottom: 2, data: names },
+      xAxis: { type: 'category', data: ['a', 'b'] }, yAxis: { type: 'value' },
+      series: names.map((name) => ({ name, type: 'bar', stack: 's', data: [1, 2] })),
+    };
+    preparePngOptions(options, 900, 300, false);
+    const chart = echarts.init(null, undefined, { renderer: 'svg', ssr: true, width: 900, height: 300 });
+    try {
+      chart.setOption(options);
+      const svg = chart.renderToSVGString();
+      names.forEach((_, i) => expect(svg).toContain(`GetProduct-${i}`));
+      expect(svg).not.toContain('oteldemo.ProductCatalogService/');
+      expect(options.grid.bottom).toBeGreaterThan(36 + 18);
+      const zero = chart.convertToPixel({ yAxisIndex: 0 }, 0) as number;
+      expect(zero).toBeLessThan(300 - options.grid.bottom + 20);
+    } finally { chart.dispose(); }
+  });
+});
+
+describe('legend grid', () => {
+  it('drops the prefix every name shares, keeps Other whole, and gives every entry one column width', () => {
+    const names = ['srv-captain--timescaledb.1.w9cqbjq', 'srv-captain--redpanda-2.1.mups2ld', 'srv-captain--monoscope.3.oxuci4y', 'Other (16)'];
+    const { legend } = legendLayout({ legend: { bottom: 0, data: names }, series: names.map((name) => ({ name })) }, 900, 300);
+    expect(names.map(legend.formatter)).toEqual(['{n|timescaledb.1.w9cqbjq}', '{n|redpanda-2.1.mups2ld}', '{n|monoscope.3.oxuci4y}', '{n|Other (16)}']);
+    expect(legend).toMatchObject({ left: 4, textStyle: { rich: { n: { width: expect.any(Number) } } } });
+  });
 });

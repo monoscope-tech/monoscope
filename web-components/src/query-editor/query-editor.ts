@@ -26,12 +26,6 @@ import { unclosedQuote, verdictToError, type Verdict, type QueryError } from './
 import { isDarkTheme } from '../colorMapping';
 export { schemaManager, unclosedQuote, verdictToError, type Verdict, type SchemaData };
 
-const REGEX_PATTERNS = {
-  hasSummarize: /summarize\s+/i,
-  hasBinFunction: /summarize.*by\s+.*bin(_auto)?\s*\(\s*\w+\s*[,)].*$/i,
-  summarizeClause: /\|\s*summarize\s+[^|]+/i,
-  summarizeByClause: /(\s*summarize\s+[^|]*?by\s+)([^|]*?)(?=\||$)/i,
-};
 interface LibraryItem {
   query: string;
   label: string;
@@ -466,56 +460,12 @@ export class QueryEditorComponent extends LitElement {
     this.handleAddQuery(nextQuery.trim(), true);
   }
 
+  // Charts bin or group whatever query they are given on the server (Widget.chartQuery); only
+  // the row views need the query itself changed, since an aggregate is not a list of events.
   public handleVisualizationChange(visualizationType: string): void {
-    const currentQuery = this.getValue().trim();
-
-    // Check if the query contains a summarize clause
-    const hasSummarize = REGEX_PATTERNS.hasSummarize.test(currentQuery);
-
-    // Check if summarize includes bin_auto or bin with any field
-    const hasBinFunction = REGEX_PATTERNS.hasBinFunction.test(currentQuery);
-
-    let newQuery = '';
-    switch (visualizationType) {
-      case 'timeseries': // Bar chart
-      case 'timeseries_line': // Line chart
-        // If query already has the correct format for timeseries, don't change it
-        if (hasSummarize && hasBinFunction) {
-          return;
-        }
-
-        if (hasSummarize && !hasBinFunction) {
-          // Query has summarize but no bin_auto for timestamp, add bin_auto(timestamp) to the by clause
-          newQuery = currentQuery.replace(REGEX_PATTERNS.summarizeByClause, (_match: string, summarizePrefix: string, byClause: string) => {
-            // Add bin_auto(timestamp) to the beginning of the by clause
-            const updatedBy = byClause.trim()
-              ? `${summarizePrefix}bin_auto(timestamp), ${byClause.trim()}`
-              : `${summarizePrefix}bin_auto(timestamp)`;
-            return updatedBy;
-          });
-        } else if (!hasSummarize) {
-          // No summarize clause, add one with bin_auto(timestamp)
-          newQuery = `${currentQuery ? currentQuery + ' ' : ''}| summarize count(*) by bin_auto(timestamp), status_code`;
-        }
-        break;
-      case 'table':
-      case 'top-list':
-      case 'distribution':
-      case 'query-value':
-        // We don't modify queries for these visualization types
-        return;
-      case 'logs':
-      default:
-        // For logs or default case (which is interpreted as logs), remove any summarize part
-        if (hasSummarize) {
-          newQuery = currentQuery.replace(REGEX_PATTERNS.summarizeClause, '');
-        } else {
-          return; // No summarize to remove
-        }
-        break;
-    }
-
-    this.handleAddQuery(newQuery, true);
+    const query = this.getValue().trim();
+    const events = query.replace(/(^|\|)\s*summarize\s[^|]*/i, '').replace(/^\s*\|\s*/, '').trim();
+    if (['logs', 'patterns', 'sessions'].includes(visualizationType) && events !== query) this.handleAddQuery(events, true);
   }
 
   disconnectedCallback() {

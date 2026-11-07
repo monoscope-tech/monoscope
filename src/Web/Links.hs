@@ -293,6 +293,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> Header "HX-Target" Text :> AllQueryParams :> Get '[HTML] (RespHeaders (Opaque1 "NavigationResponse" (Opaque "Dashboards.DashboardGet")))
   , dashboardTabRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "tab" :> Capture "tab_slug" Text :> "rename" :> ReqBody '[FormUrlEncoded] (Opaque "Dashboards.TabRenameForm") :> Patch '[HTML] (RespHeaders (Opaque "Dashboards.TabRenameRes"))
   , dashboardYamlGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "yaml" :> Get '[HTML] (RespHeaders (Opaque "Dashboards.DashboardYaml"))
+  , dashboardSwitcherGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "switcher" :> Get '[HTML] (RespHeaders (Opaque "Dashboards.DashboardSwitcher"))
   , dashboardYamlPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" (UUIDId "dashboard") :> "yaml" :> ReqBody '[FormUrlEncoded] (Opaque "Dashboards.YamlForm") :> Unrefusable 'PUT (Opaque "Dashboards.YamlSave")
   , -- API routes
     apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders (Opaque "Settings.ApiGet"))

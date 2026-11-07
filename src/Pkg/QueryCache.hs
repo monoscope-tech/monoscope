@@ -18,7 +18,6 @@ module Pkg.QueryCache (
   mergeTimeseriesData,
   trimToRange,
   trimOldData,
-  hasSummarizeWithBin,
   rewriteBinAutoToFixed,
   cleanupExpiredCache,
   slidingWindowSeconds,
@@ -255,13 +254,6 @@ updateRawCache now key value
             updated_at = EXCLUDED.updated_at
           WHERE query_cache.updated_at <= EXCLUDED.updated_at
         |]
-
-
--- | Check if query has a summarize command with time binning (bin or bin_auto)
-hasSummarizeWithBin :: [Section] -> Bool
-hasSummarizeWithBin = any \case
-  SummarizeCommand _ (Just (SummarizeByClause items)) -> any (\case ByBinFunc _ -> True; _ -> False) items
-  _ -> False
 
 
 -- | Rewrite bin_auto to fixed bin interval for delta fetches

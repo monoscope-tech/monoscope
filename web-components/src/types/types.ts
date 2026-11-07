@@ -106,6 +106,8 @@ export type LogDataResponse = {
   traces?: ServerTraceEntry[];
   hasMore?: boolean;
   queryResultCount?: number;
+  /** The view that draws this result when a log list can't (a `summarize`). */
+  viz?: string;
 };
 
 /** What the log list's fetch seam returns alongside the grouped rows. */

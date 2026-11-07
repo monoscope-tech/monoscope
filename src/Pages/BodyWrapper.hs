@@ -241,6 +241,7 @@ data BWConfig = BWConfig
   , pageTitleSuffix :: Maybe Text -- Additional breadcrumb after pageTitle (e.g., tab name)
   , pageTitleModalId :: Maybe Text -- Modal ID for renaming page title
   , pageTitleSuffixModalId :: Maybe Text -- Modal ID for renaming suffix (e.g., tab)
+  , pageTitleSwitcherUrl :: Maybe Text -- The title opens a list of its siblings, fetched on first open, to switch to
   , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
   , navTabs :: Maybe (Html ())
   , pageActions :: Maybe (Html ())
@@ -1042,7 +1043,23 @@ navbar bcfg menuL =
           faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
         h1_ [class_ "flex min-w-0 items-center text-textStrong"] do
           let targetPageM = bcfg.pageTitleUrl <|> ((\p link -> link p.id) <$> bcfg.currProject <*> (Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix))
-          case targetPageM of
+          case bcfg.pageTitleSwitcherUrl of
+           Just switcherUrl -> do
+            button_
+              ( [ type_ "button"
+                , class_ "inline-flex min-w-0 items-center gap-1.5 rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 max-md:text-sm"
+                , Aria.haspopup_ "dialog"
+                , Aria.label_ $ "Switch from " <> bcfg.pageTitle
+                , title_ bcfg.pageTitle
+                ]
+                  <> popoverTrigger_ "page-title-switcher"
+              )
+              do
+                span_ [id_ "pageTitleText", class_ "max-w-[40ch] truncate max-md:max-w-24"] $ toHtml bcfg.pageTitle
+                faSprite_ "chevron-down" "regular" "size-3.5 shrink-0 text-iconNeutral"
+            div_ ([class_ "dropdown z-50 mt-1 w-[20rem] rounded-xl border border-strokeWeak bg-bgRaised p-2 shadow-lg", role_ "dialog", Aria.label_ (fromMaybe "Page" bcfg.prePageTitle <> " switcher"), hxGet_ switcherUrl, hxTrigger_ "toggle once", hxSwap_ "innerHTML"] <> popoverPanel_ "page-title-switcher")
+              $ div_ [class_ "flex justify-center py-6"] $ loadingIndicatorWith_ LdSM LdDots ""
+           Nothing -> case targetPageM of
             Just targetPage -> a_ ([class_ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong hover:bg-fillWeak max-md:max-w-24 max-md:text-sm", href_ targetPage, id_ "pageTitleText", title_ bcfg.pageTitle] <> navTabAttrs) $ toHtml bcfg.pageTitle
             Nothing -> case bcfg.pageTitleModalId of
               Just modalId -> label_ [class_ "max-w-[40ch] truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 max-md:max-w-24 max-md:text-sm", Lucid.for_ modalId, id_ "pageTitleText", title_ bcfg.pageTitle, role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, Components.keyboardActivateAttr_] $ toHtml bcfg.pageTitle

@@ -69,6 +69,8 @@ module Pages.Dashboards (
   YamlForm (..),
   dashboardYamlGetH,
   DashboardYaml (..),
+  dashboardSwitcherGetH,
+  DashboardSwitcher (..),
   dashboardYamlPutH,
   YamlSave (..),
   apiDashboardData,
@@ -1189,7 +1191,7 @@ widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
   where
     (shapedQuery, dataType) = Widget.chartQuery widget
     (query, sql)
-      | widget.wType == Widget.WTTable = Widget.tableQuery widget (join $ lookup "table-sort" allParams)
+      | widget.wType `elem` [Widget.WTTable, Widget.WTTopList] = Widget.tableQuery widget (join $ lookup "table-sort" allParams)
       | otherwise = (shapedQuery, widget.sql)
 
 
@@ -1199,17 +1201,11 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
     (issues, _) <- Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.period = "24h", Issues.hideLowSeverity = True, Issues.limit = 2}
     pure
       $ widget
-      & #html
-        ?~ renderText
-          (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
-  Widget.WTTable -> do
-    let sortParam = join $ lookup "table-sort" allParams
-        (query, sql) = Widget.tableQuery widget sortParam
-    tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) query sql sinceStr fromDStr toDStr Nothing Nothing allParams
-    pure
-      $ widget
-      & #html
-        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+        & #html
+          ?~ renderText
+            (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
+  Widget.WTTable -> tableWidget
+  Widget.WTTopList -> tableWidget
   Widget.WTServiceMap -> do
     let (fromM, toM, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
         endpointM = join $ lookup "var-endpointHash" allParams
@@ -1228,6 +1224,11 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
   _ ->
     widgetMetrics pid timeRange allParams widget <&> \md ->
       widget & #dataset ?~ if widget.wType == Widget.WTStat then def{Widget.source = AE.Null, Widget.value = md.dataFloat} else Widget.toWidgetDataset md
+  where
+    tableWidget = do
+      let (query, sql) = Widget.tableQuery widget (join $ lookup "table-sort" allParams)
+      tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) query sql sinceStr fromDStr toDStr Nothing Nothing allParams
+      pure $ widget & #html ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.headers tableData.dataText allParams)
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (ActionResult WidgetMonitorRejection WidgetSaved)
@@ -1423,9 +1424,8 @@ dashboardBWConf bw pid dashId title tabM currentRange readOnly freeTierStatus =
   bw
     { prePageTitle = Just "Dashboards"
     , pageTitle = dashTitle title
-    , pageTitleSuffix = tabM >>= snd
-    , pageTitleModalId = "pageTitleModalId" <$ guard (not readOnly)
-    , pageTitleSuffixModalId = "tabRenameModalId" <$ (guard (not readOnly) *> tabM)
+    , -- The title switches dashboards; renames live in the ⋯ menu, and the tab strip names the tab.
+      pageTitleSwitcherUrl = Just $ urls.dashboardSwitcherGet pid dashId
     , freeTierStatus = freeTierStatus
     , headContent = Just dashboardHeadContent_
     , needsGridStack = True
@@ -1549,7 +1549,7 @@ widgetMonitorStatus_ pid statusId widgetId dashboardIdM monitorM = div_ [id_ sta
 
 instance ToHtml WidgetEditor where
   toHtmlRaw = toHtml
-  toHtml (WidgetEditor pid paymentPlan dashId tabSlugM currentRange existingWidgetM monitorM teams activeTab) = toHtml @(Html ()) $ div_ [class_ "widget-editor group/wgtexp min-h-full pb-6"] do
+  toHtml (WidgetEditor pid paymentPlan dashId tabSlugM currentRange existingWidgetM monitorM teams activeTab readOnly) = toHtml @(Html ()) $ div_ [class_ "widget-editor group/wgtexp min-h-full pb-6"] do
     let isNewWidget = isNothing existingWidgetM
         effectiveActiveTab = if isNewWidget then EditTab else activeTab
         defaultWidget =
@@ -1665,7 +1665,7 @@ instance ToHtml WidgetEditor where
             then h2_ [class_ "text-base font-semibold text-textStrong max-md:order-1 max-md:w-full"] "Add a widget"
             else div_ [class_ "min-w-0 max-md:order-1 max-md:w-full"] do
               div_ [class_ "tabs tabs-box tabs-outline"] do
-                let mkTab tabName isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-strokeFocus"] do
+                let mkTab tabName label isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-strokeFocus"] do
                       input_
                         $ [ type_ "radio"
                           , value_ tabName
@@ -1674,9 +1674,10 @@ instance ToHtml WidgetEditor where
                           , name_ $ wid <> "-drawer-tab"
                           ]
                         <> [checked_ | isActive]
-                      toHtml tabName
-                mkTab "Edit" (effectiveActiveTab == EditTab)
-                mkTab "Monitors" (effectiveActiveTab == AlertsTab)
+                      toHtml @Text label
+                -- A built-in dashboard's widget can be read, not changed or monitored in place.
+                mkTab "Edit" (bool "Edit" "Query" readOnly) (readOnly || effectiveActiveTab == EditTab)
+                unless readOnly $ mkTab "Monitors" "Monitors" (effectiveActiveTab == AlertsTab)
 
           div_ [class_ "ml-auto flex shrink-0 items-center gap-3 max-md:contents"] do
             div_ [class_ "flex shrink-0 items-center gap-3 max-md:order-3 max-md:w-full max-md:overflow-x-auto"] do
@@ -1687,8 +1688,13 @@ instance ToHtml WidgetEditor where
                 then do
                   button_ [class_ "btn btn-primary btn-sm max-md:min-h-11 group-has-[.new-widget-monitor:checked]/wgtexp:hidden", type_ "submit", form_ widgetFormId] "Add widget"
                   button_ [id_ $ widPrefix <> "-add-monitor-button", class_ "btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.new-widget-monitor:checked]/wgtexp:inline-flex", type_ "button", term "hx-on:click" $ "const form = document.getElementById('" <> alertFormId <> "'); if (!document.querySelector('#filterElement').getValue().trim()) { document.getElementById('" <> widPrefix <> "-monitor-query-hint').hidden = false; document.querySelector('#filterElement .cm-content').focus(); return; } if (form.reportValidity()) { if (form.dataset.widgetSaved === 'true') { form.requestSubmit(); return; } for (const [from, to] of [[\"alertThreshold\", \"widgetAlertThreshold\"], [\"warningThreshold\", \"widgetWarningThreshold\"], [\"unit\", \"widgetUnit\"]]) document.getElementById(to).value = form.querySelector(\"[name=\" + from + \"]\").value; document.getElementById('" <> widgetFormId <> "').requestSubmit(); }"] "Add widget and monitor"
-                else button_ [class_ "btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:inline-flex", type_ "submit", form_ widgetFormId] "Save widget"
-              unless isNewWidget $ when (maybe False (not . T.null . T.strip) widgetToUse.query) $ button_ [class_ "btn btn-primary btn-sm hidden group-has-[.page-drawer-tab-monitors:checked]/wgtexp:inline-flex max-md:min-h-11", type_ "submit", form_ $ widPrefix <> "-alert-form"] $ if isJust monitorM then "Save monitor" else "Create monitor"
+                else
+                  if readOnly
+                    then span_ [class_ "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:inline-flex items-center gap-1.5 text-sm text-textWeak", data_ "tippy-content" "Built-in dashboards always show the latest version we ship; duplicate the dashboard to change it"] do
+                      faSprite_ "lock" "regular" "w-3 h-3"
+                      "Read-only"
+                    else button_ [class_ "btn btn-primary btn-sm max-md:min-h-11 hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:inline-flex", type_ "submit", form_ widgetFormId] "Save widget"
+              unless (isNewWidget || readOnly) $ when (maybe False (not . T.null . T.strip) widgetToUse.query) $ button_ [class_ "btn btn-primary btn-sm hidden group-has-[.page-drawer-tab-monitors:checked]/wgtexp:inline-flex max-md:min-h-11", type_ "submit", form_ $ widPrefix <> "-alert-form"] $ if isJust monitorM then "Save monitor" else "Create monitor"
               button_
                 [ type_ "button"
                 , Aria.label_ "Close drawer"
@@ -1770,9 +1776,10 @@ instance ToHtml WidgetEditor where
                   , source = Nothing
                   , targetSpan = Nothing
                   , query = widgetToUse.rawQuery <|> widgetToUse.query
-                  , -- Non-chart types (table, stat, …) match no viz tab, so none is checked
-                    -- and the widget keeps its own type instead of saving as a bar chart.
-                    vizType = if isNewWidget then Nothing else Just $ display widgetToUse.wType
+                  , -- A new widget starts as a chart: a log table is the most expensive thing on a
+                    -- dashboard. Types no tab offers (table, stat, …) check none, so the widget keeps
+                    -- its own type instead of saving as a bar chart.
+                    vizType = if isNewWidget then Just Widget.VizTimeseries else find ((== Just widgetToUse.wType) . Widget.vizWidget) [minBound ..]
                   , updateUrl = False
                   , targetWidgetPreview = Just widgetPreviewId
                   , alert = False
@@ -2786,7 +2793,7 @@ dashboardWidgetExpandGetH pid dashId widgetId editorTabM = do
   processedWidget <- processWidget PrefillWidgets pid now timeParams allParamsWithConstants widgetToExpand
   monitorM <- Monitors.queryMonitorByWidgetId pid (Just dashId) widgetId
   teams <- V.fromList <$> ManageMembers.getTeams pid
-  addRespHeaders $ WidgetEditor pid project.paymentPlan dashId tabSlugM Nothing (Just processedWidget) monitorM teams $ if editorTabM == Just "alerts" then AlertsTab else EditTab
+  addRespHeaders $ WidgetEditor pid project.paymentPlan dashId tabSlugM Nothing (Just processedWidget) monitorM teams (if editorTabM == Just "alerts" then AlertsTab else EditTab) (dash.readOnly == Just True)
 
 
 -- | The widget editor drawer: an existing widget to edit, or none for a new one.
@@ -2800,6 +2807,7 @@ data WidgetEditor = WidgetEditor
   , monitor :: Maybe Monitors.QueryMonitor
   , teams :: V.Vector ManageMembers.Team
   , activeTab :: EditorTab
+  , readOnly :: Bool
   }
 
 
@@ -2816,7 +2824,7 @@ dashboardWidgetNewGetH pid dashId tabSlugM rangeStartM rangeEndM = do
   _ <- getDashAndVM pid dashId Nothing
   teams <- V.fromList <$> ManageMembers.getTeams pid
   let currentRange = (,) <$> rangeStartM <*> rangeEndM
-  addRespHeaders $ WidgetEditor pid project.paymentPlan dashId tabSlugM currentRange Nothing Nothing teams EditTab
+  addRespHeaders $ WidgetEditor pid project.paymentPlan dashId tabSlugM currentRange Nothing Nothing teams EditTab False
 
 
 -- | Query scope shared by SQL preview and copy: dashboards own service filtering through
@@ -2924,14 +2932,6 @@ findTabBySlug tabs tabSlug = find ((== tabSlug) . (.slug) . snd) (zip [0 ..] tab
 findWidgetInDashboard :: Text -> Dashboards.Dashboard -> Maybe (Maybe Text, Widget.Widget)
 findWidgetInDashboard wid dash =
   listToMaybe [(slug, w) | (slug, ws) <- [(Just t.slug, t.widgets) | t <- fold dash.tabs] <> [(Nothing, dash.widgets)], w <- foldMap (universeOf (#children . _Just . folded)) ws, widgetMatches wid w]
-
-
--- | Render breadcrumb suffix with out-of-band swap for htmx
-breadcrumbSuffixOob_ :: Monad m => Text -> HtmlT m ()
-breadcrumbSuffixOob_ tabName =
-  span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1", hxSwapOob_ "true"] do
-    faSprite_ "chevron-right" "regular" "w-3 h-3"
-    span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml tabName
 
 
 -- | Internal param key for passing active tab slug between handlers and rendering
@@ -3101,11 +3101,8 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxTarget allP
             unless (null $ fold dash''.variables) $ dashboardViews_ pid dashId dash'' dashVM paramsWithTab [hxSwapOob_ "true"]
             div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content", data_ "constants" $ constantsJson paramsWithTab]
               $ case promptM of
-                Just v -> do
-                  whenJust activeTabName breadcrumbSuffixOob_
-                  variablePickerModal_ pid dashId (Just tabSlug) paramsWithTab v
-                Nothing -> whenJust (dash''.tabs >>= (!!? activeTabIdx)) \activeTab -> do
-                  breadcrumbSuffixOob_ activeTab.name
+                Just v -> variablePickerModal_ pid dashId (Just tabSlug) paramsWithTab v
+                Nothing -> whenJust (dash''.tabs >>= (!!? activeTabIdx)) \activeTab ->
                   widgetCanvas_ pid ("tab-panel-" <> dashId.toText <> "-" <> show activeTabIdx) activeTab.widgets
       addRespHeaders $ navigationResponse tabTarget page fragment
   where
@@ -3180,8 +3177,9 @@ data TabRenameRes = TabRenameRes
   deriving stock (Generic, Show)
 
 
+-- | Nothing to swap: the client redirect re-renders the tab strip under the new name.
 instance ToHtml TabRenameRes where
-  toHtml res = breadcrumbSuffixOob_ res.newName
+  toHtml _ = mempty
   toHtmlRaw = toHtml
 
 
@@ -3221,6 +3219,39 @@ dashboardYamlGetH pid dashId = do
 
 
 newtype DashboardYaml = DashboardYaml Dashboards.Dashboard
+
+
+-- | The breadcrumb's dashboard switcher: starred first, then by title, filtered as you type.
+data DashboardSwitcher = DashboardSwitcher
+  { pid :: Projects.ProjectId
+  , current :: Dashboards.DashboardId
+  , dashboards :: [Dashboards.DashboardVM]
+  }
+
+
+instance ToHtml DashboardSwitcher where
+  toHtmlRaw = toHtml
+  toHtml s = toHtml @(Html ()) do
+    when (length s.dashboards > 6)
+      $ div_ [class_ "p-1 pb-2"]
+      $ Components.searchInput_ "w-full bg-fillWeak border-0 outline-none focus-within:outline-none" "Search dashboards" [filterInputAttr_ "#dashboard-switcher-list .dashboard_item", autofocus_]
+    div_ [class_ "max-h-[50vh] space-y-0.5 overflow-y-auto", id_ "dashboard-switcher-list"] $ forM_ s.dashboards \d -> do
+      let isCurrent = d.id == s.current
+      a_ ([class_ $ "dashboard_item flex min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-sm " <> bool "hover:bg-fillHover" "bg-fillWeak font-medium" isCurrent, href_ $ urls.dashboardsGet s.pid d.id Nothing Nothing Nothing Nothing [], data_ "filter" (dashTitle d.title)] <> [term "aria-current" "page" | isCurrent]) do
+        span_ [class_ "flex w-3.5 shrink-0"] $ when (isJust d.starredSince) $ faSprite_ "star" "solid" "size-3.5 text-iconWarning"
+        span_ [class_ "grow truncate"] $ toHtml (dashTitle d.title)
+        when isCurrent $ faSprite_ "check" "regular" "size-3.5 shrink-0 text-textBrand"
+    p_ [class_ "hidden py-4 text-center text-sm text-textWeak", term "hx-live:.hidden" "q('.dashboard_item:not(.hidden) in #dashboard-switcher-list').count > 0"] "No matching dashboards"
+    div_ [class_ "mt-1 border-t border-strokeWeak pt-1"]
+      $ a_ [class_ "flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-fillHover", href_ $ urls.dashboardsGetList s.pid Nothing Nothing Nothing Nothing Nothing Nothing def] do
+        faSprite_ "grid" "regular" "size-3.5 text-textWeak"
+        "Browse all dashboards"
+
+
+dashboardSwitcherGetH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardSwitcher)
+dashboardSwitcherGetH pid dashId = do
+  _ <- Projects.sessionAndProject pid
+  addRespHeaders . DashboardSwitcher pid dashId =<< Dashboards.selectDashboardsSortedBy pid Dashboards.Asc Dashboards.DSTitle
 
 
 instance ToHtml DashboardYaml where

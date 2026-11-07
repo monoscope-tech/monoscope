@@ -79,7 +79,7 @@ spec = describe "lazyWidget (dashboard render-budget fallback)" do
             & #wType .~ Widget.WTTable
             & #id ?~ "duration-table"
             & #columns ?~ [def{Widget.field = "duration", Widget.title = "Duration", Widget.columnType = Just Widget.CTDuration, Widget.unit = Just "ms"}]
-        html = toText . TL.toStrict . renderText $ Widget.renderTableWithDataAndParams widget [["1.25"]] []
+        html = toText . TL.toStrict . renderText $ Widget.renderTableWithDataAndParams widget [] [["1.25"]] []
     html `shouldSatisfy` T.isInfixOf ">1.2 ms<"
 
   -- The trap this guards. renderStatContent reads `eager` as "data is present" and

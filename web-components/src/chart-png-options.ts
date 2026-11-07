@@ -1,3 +1,4 @@
+import { legendLayout } from "./chart-legend";
 export type PngProfile = "standard" | "slack";
 export type PngMode = "chart" | "table";
 
@@ -57,6 +58,8 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
   for (const side of ["left", "right", "top", "bottom"] as const) {
     finalOptions.grid[side] = paddedInset(finalOptions.grid[side], 8, side === "left" || side === "right" ? width : height);
   }
+
+  Object.assign(finalOptions, legendLayout(finalOptions, width, height));
 
   const xAxes = Array.isArray(finalOptions.xAxis) ? finalOptions.xAxis : [finalOptions.xAxis];
   for (const axis of xAxes) {

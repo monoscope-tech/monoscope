@@ -610,6 +610,7 @@ export class LogList extends LitElement {
           traces: traces || [],
           hasMore: data.hasMore ?? (logsData?.length ?? 0) > 0,
           queryResultCount: data.queryResultCount ?? logsData?.length ?? 0,
+          viz: data.viz,
         },
       };
     }
@@ -1869,6 +1870,10 @@ export class LogList extends LitElement {
       // rows for the URL the charts have already adopted.
       if (gen !== this.fetchGeneration) return;
       this.fetchError = null;
+      // The server names the chart that draws a result this list can't (a `summarize`).
+      // A chart the reader (or the AI) already picked while this fetch was in flight wins.
+      if (meta.viz && this.mode === 'logs' && !(window as any).chartVizTypes?.includes((window as any).currentVisualizationType))
+        return void (window as any).handleVisualizationUpdate?.(meta.viz);
 
       // A replacement query owns all query-scoped state even when it returns no rows. Doing
       // this only in the non-empty branch left the old live buffer/pill available on an empty

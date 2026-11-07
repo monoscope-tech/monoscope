@@ -5,9 +5,9 @@ import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statSc
 import { echartsUrls } from './assets';
 import { copyParams } from './time-range-utils';
 import debounce from 'lodash/debounce';
+import { legendLayout } from './chart-legend';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
-const params = () => ({ ...Object.fromEntries(new URLSearchParams(location.search)) });
 
 // Per-chart request sequencer. A chart can have several /chart_data fetches in
 // flight at once (5s refresh + intersection observer + time-range change), and
@@ -31,20 +31,16 @@ type VerticalRect = Pick<DOMRect, 'top' | 'bottom'>;
 export const isNearChartViewport = ({ top, bottom }: VerticalRect, viewportHeight: number) =>
   top < viewportHeight + CHART_PREFETCH_PX && bottom > -CHART_PREFETCH_PX;
 
-// Fixed ECharts insets consume too much of a short, wide widget.
-export const chartLayoutForSize = (options: any, width: number, height: number): any => {
-  if (!height || height > 240 || width < height * 4) return options;
-  const bottomLegend = options.legend?.show && options.legend.bottom !== undefined;
-  return {
+// Fixed ECharts insets consume too much of a short, wide widget; the legend then claims its own rows.
+export const chartLayoutForSize = (options: any, width: number, height: number, format?: (v: number) => string): any => {
+  const compact = height > 0 && height <= 240 && width >= height * 4;
+  const sized = !compact ? options : {
     ...options,
-    grid: {
-      ...options.grid,
-      top: options.legend?.show && options.legend.top !== undefined ? options.grid.top : Math.min(options.grid.top, 4),
-      bottom: Math.min(options.grid.bottom, bottomLegend ? 8 : 4),
-    },
-    legend: bottomLegend ? { ...options.legend, bottom: 0, padding: [0, 4, 0, 4] } : options.legend,
+    grid: { ...options.grid, top: Math.min(options.grid.top, 4), bottom: Math.min(options.grid.bottom, 4) },
+    legend: options.legend?.bottom !== undefined ? { ...options.legend, bottom: 0, padding: [0, 4, 0, 4] } : options.legend,
     xAxis: { ...options.xAxis, axisLabel: { ...options.xAxis.axisLabel, margin: 4 } },
   };
+  return legendLayout(sized, width, height, format);
 };
 
 /** A query failure already sanitized by the chart endpoint. */
@@ -361,10 +357,15 @@ type ChartDataResponse = {
   to?: number;
   headers?: string[];
   dataset?: ChartRow[];
+  data_text?: string[][];
   rows_per_min?: number;
   stats?: (Partial<StatAggregates> & { max_group_sum?: number }) | null;
   error?: string;
 };
+
+// A grouped `summarize` arrives as text rows (a label, then its values) with no time column.
+const chartRows = (data: ChartDataResponse): ChartRow[] =>
+  data.dataset?.length ? data.dataset : (data.data_text ?? []).map(([label, ...values]) => [label, ...values.map(Number)]);
 
 const MAX_VISIBLE_SERIES = 8;
 
@@ -435,6 +436,8 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
     barMaxWidth: '10',
     barMinHeight: '1',
     encode: { x: 0, y: i + 1 },
+    // Hovering a series or its legend entry fades the rest, which is how a band in a stack is found.
+    emphasis: { focus: 'series' },
     itemStyle: { color: paletteColor, opacity: inventorySeriesOpacity },
   };
 
@@ -489,7 +492,8 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
   if (widgetData.alertThreshold != null && Number.isFinite(widgetData.alertThreshold)) thresholds.alert = widgetData.alertThreshold;
   if (widgetData.warningThreshold != null && Number.isFinite(widgetData.warningThreshold)) thresholds.warning = widgetData.warningThreshold;
   if (Object.keys(thresholds).length > 0 && opt.series?.length) {
-    opt.series[0].markLine = { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds, widgetData.unit ?? '') };
+    // A stat tile's sparkline is too short to carry labels; the dashed lines and colours still say it.
+    opt.series[0].markLine = { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds, widgetData.unit ?? '', widgetData.widgetType !== 'timeseries_stat') };
     // ECharts excludes markLines from automatic extents. Include thresholds in
     // the data-derived bounds, including streamed updates, with room for labels.
     const values = Object.values(thresholds);
@@ -544,9 +548,6 @@ const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'],
   value.classList.remove('hidden');
 };
 
-// Keep this aggregation in sync with Widget.chartQuery's plotted-query fallback.
-const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
-
 // The /chart_data URL for a widget. Shared by the initial prefetch and every later
 // refetch, so the two can't drift — the prefetch is only honoured when the URL it was
 // issued against still matches (see takePrefetched).
@@ -563,7 +564,8 @@ export const chartDataUrl = ({
   timeFrom,
   timeTo,
   dashboardId,
-}: Pick<WidGetData, 'chartId' | 'query' | 'querySQL' | 'rollupSQL' | 'rollupFrom' | 'sqlSig' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo' | 'dashboardId'>): string => {
+  widgetType,
+}: Pick<WidGetData, 'chartId' | 'query' | 'querySQL' | 'rollupSQL' | 'rollupFrom' | 'sqlSig' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo' | 'dashboardId' | 'widgetType'>): string => {
   const params = new URLSearchParams(window.location.search);
   params.set('pid', pid);
   if (dashboardId) params.set('dashboard_id', dashboardId);
@@ -594,8 +596,10 @@ export const chartDataUrl = ({
     params.set(key, value as string);
   });
 
-  // Widget.renderChart shapes supplied queries; refresh, prefetch, and retry preserve them.
-  params.set('query', !query || query === 'null' ? DEFAULT_QUERY : query);
+  // The page's query filters the widget's own; the server shapes the pair for the widget type
+  // (Widget.chartQuery), binning a time chart and leaving a grouped summarize categorical.
+  params.set('query', [params.get('query'), query].filter((q) => q && q !== 'null').join(' | '));
+  if (widgetType) params.set('widget_type', widgetType);
 
   if (querySQL && querySQL !== 'null') params.set('query_sql', querySQL);
   if (rollupSQL && rollupFrom) {
@@ -692,25 +696,32 @@ const PARTIAL_DRAW_DELAY_MS = 300;
 // A stream's partial frames often repeat the final answer exactly; each full rebuild costs
 // ~100ms of main thread at 4x CPU, so an unchanged snapshot is not redrawn.
 const drawnResponse = new WeakMap<object, string>();
-// Whether the drawn option is chartLayoutForSize's compact variant; every draw records it so a
-// resize only rebuilds the chart when compactness actually flips.
-const compactLayouts = new WeakMap<object, boolean>();
+// The layout each chart last drew, so a resize redraws only when its insets or legend change.
+const drawnLayouts = new WeakMap<object, string>();
+// Legend toggles, which a notMerge redraw would otherwise reset on every live tick.
+const legendSelections = new WeakMap<object, Record<string, boolean>>();
+const drawSized = (chart: any, el: HTMLElement | null, options: any, unit = '', notMerge = false, onlyIfChanged = false) => {
+  const layout = chartLayoutForSize(options, el?.clientWidth ?? 0, el?.clientHeight ?? 0, (v) => formatStatValue(v, unit));
+  const key = JSON.stringify([layout.grid, layout.legend, layout.xAxis?.axisLabel]);
+  if (onlyIfChanged && drawnLayouts.get(chart) === key) return;
+  drawnLayouts.set(chart, key);
+  const selected = legendSelections.get(chart);
+  chart.setOption(selected && layout.legend ? { ...layout, legend: { ...layout.legend, selected } } : layout, notMerge);
+};
 const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: ChartDataResponse) => {
   const el = $(widgetData.chartId);
   const width = el?.clientWidth ?? 0, height = el?.clientHeight ?? 0;
-  const key = JSON.stringify([width, height, data.from, data.to, data.headers, data.stats, data.dataset]);
+  const rows = chartRows(data);
+  const key = JSON.stringify([width, height, data.from, data.to, data.headers, data.stats, rows]);
   if (drawnResponse.get(chart) === key) return;
   drawnResponse.set(chart, key);
   const headers = data.headers?.map(h => h === 'timestamp' || h === 'created_at'
     ? h : h.substring(0, 75) + (h.length > 75 ? '...' : ''));
-  opt.xAxis = { ...opt.xAxis, min: data.from, max: data.to };
-  opt.dataset.source = [headers || [], ...(data.dataset || [])];
+  if (opt.xAxis?.type !== 'category') opt.xAxis = { ...opt.xAxis, min: data.from, max: data.to };
+  opt.dataset.source = [headers || [], ...rows];
   const maximum = widgetData.chartType === 'line' ? data.stats?.max : data.stats?.max_group_sum;
   opt.yAxis = { ...opt.yAxis, max: maximum != null && Number.isFinite(maximum) && maximum > 0 ? maximum : undefined };
-  const configured = updateChartConfiguration(widgetData, opt, opt.dataset.source);
-  const layout = chartLayoutForSize(configured, width, height);
-  chart.setOption(layout, true);
-  compactLayouts.set(chart, layout !== configured);
+  drawSized(chart, el, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true);
 };
 
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, lifetimeSignal: AbortSignal, showLoader = true) => {
@@ -769,7 +780,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     const drawPartial = (data: ChartDataResponse) => {
       if (signal.aborted || isStale()) return;
       if (subtitle) subtitle.textContent = receivedPartial ? 'Loading partial results…' : 'Loading…';
-      if (data.dataset?.length) chart.hideLoading();
+      if (chartRows(data).length) chart.hideLoading();
       hideNoDataOverlay(chartId);
       applyChartResponse(chart, opt, widgetData, data);
       // Keep incomplete totals out of stat tiles. The loading state distinguishes
@@ -781,7 +792,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     const partial = (data: ChartDataResponse) => {
       if (signal.aborted || isStale() || !showLoader) return;
       const first = !receivedPartial;
-      receivedPartial = !!data.dataset?.length;
+      receivedPartial = !!chartRows(data).length;
       clearTimeout(partialTimer);
       if (first) drawPartial(data);
       else partialTimer = setTimeout(() => drawPartial(data), PARTIAL_DRAW_DELAY_MS);
@@ -790,7 +801,8 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       (await takePrefetched(chartId, url, partial, signal)) ??
       (await limitedFetch(showLoader ? streamUrl(url) : url, res => checkChartResponse(res).then(res => readChartResponse<ChartDataResponse>(res, partial)), signal));
     clearTimeout(partialTimer);
-    const { from, to, dataset, rows_per_min, stats, error } = data;
+    const { from, to, rows_per_min, stats, error } = data;
+    const dataset = chartRows(data);
     if (signal.aborted || isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
       // Server-reported SQL failure: the error banner, not the "no data" overlay,
@@ -1109,21 +1121,19 @@ export const chartWidget = (widgetData: WidGetData) => {
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
   const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';
-  const sizedOptions = () => chartLayoutForSize(opt, chartEl?.clientWidth ?? 0, chartEl?.clientHeight ?? 0);
-  chartLayoutUpdaters.set(chartId, () => {
-    const layout = sizedOptions();
-    if ((layout !== opt) !== (compactLayouts.get(chart) ?? false)) {
-      chart.setOption(layout);
-      compactLayouts.set(chart, layout !== opt);
+  chartLayoutUpdaters.set(chartId, () => drawSized(chart, chartEl, opt, widgetData.unit, false, true));
+  // Shift-click isolates a series; shift-clicking the isolated one brings every series back.
+  let shiftClick = false;
+  chartEl?.addEventListener('pointerdown', (e) => (shiftClick = e.shiftKey), { capture: true, signal: controller.signal });
+  chart.on('legendselectchanged', ({ name, selected }: { name: string; selected: Record<string, boolean> }) => {
+    if (shiftClick) {
+      const names = Object.keys(selected), prev = legendSelections.get(chart);
+      const isolated = prev?.[name] !== false && names.every((n) => n === name || prev?.[n] === false);
+      selected = Object.fromEntries(names.map((n) => [n, isolated || n === name]));
+      chart.setOption({ legend: { selected } });
     }
+    legendSelections.set(chart, selected);
   });
-
-  let baseQuery = widgetData.query;
-  const updateQuery = () => {
-    const uq = params().query;
-    widgetData.query = (uq && uq !== 'null') ? uq + ' | ' + (baseQuery || DEFAULT_QUERY) : baseQuery;
-  };
-  updateQuery();
 
   (window as any)[`${chartType}Chart`] = chart;
 
@@ -1132,10 +1142,8 @@ export const chartWidget = (widgetData: WidGetData) => {
     if (opt.series?.[0]?.backgroundStyle) {
       opt.series[0].backgroundStyle = { color: styles.chartBg };
     }
-    const layout = chartLayoutForSize(updateChartConfiguration(widgetData, opt, opt.dataset.source), chartEl?.clientWidth ?? 0, chartEl?.clientHeight ?? 0);
-    chart.setOption(layout, notMerge);
+    drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, notMerge);
     drawnResponse.delete(chart);
-    compactLayouts.set(chart, layout !== opt);
     chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0, retryAt: 0 });
     applyHighlightBand(chart, widgetData);
   };
@@ -1144,8 +1152,6 @@ export const chartWidget = (widgetData: WidGetData) => {
   chartUpdaters.set(chartId, (next) => {
     widgetData = next;
     opt = next.opt;
-    baseQuery = next.query;
-    updateQuery();
     // A changed query replaces the drawn data (and any fetch still in flight for the old one);
     // an unchanged lazy widget keeps its drawing and refreshes quietly.
     const urlChanged = chartRefreshState.get(chart)?.url !== chartDataUrl(widgetData);
@@ -1190,13 +1196,11 @@ export const chartWidget = (widgetData: WidGetData) => {
   ['submit', 'add-query'].forEach((event) => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement';
     document.querySelector(selector)?.addEventListener(event, () => {
-      updateQuery();
       updateChartData(chart, opt, true, widgetData, controller.signal);
     }, { signal: controller.signal });
   });
 
   window.addEventListener('update-query', (e: Event) => {
-    updateQuery();
     const detail = (e as CustomEvent<{ ast?: string; source?: string }>).detail;
     if (detail?.ast) widgetData.queryAST = detail.ast;
     updateChartData(chart, opt, true, widgetData, controller.signal, detail?.source !== 'auto-refresh');
@@ -1214,7 +1218,7 @@ export const chartWidget = (widgetData: WidGetData) => {
         if (s.type === 'line') s.lineStyle = { ...s.lineStyle, color };
       }
     });
-    chart.setOption(sizedOptions(), false);
+    drawSized(chart, chartEl, opt, widgetData.unit);
   };
   themeCallbacks.add(onThemeChange);
 
@@ -1319,7 +1323,7 @@ function bindFunctionsToObjects(rootObj: any, obj: any) {
 // Create threshold markLines for ECharts (reads semantic colors from CSS tokens).
 // `unit` is the widget's, so a threshold prints the way its axis does — "Alert: 1.8s"
 // against an axis of seconds, not the raw 1800 the label used to carry.
-const createThresholdMarkLines = (thresholds: Record<string, number>, unit = '') => {
+const createThresholdMarkLines = (thresholds: Record<string, number>, unit = '', labelled = true) => {
   const styles = getChartStyles();
   const thresholdStyles: Record<string, { color: string; label: string }> = {
     alert: { color: styles.errorColor, label: 'Alert' },
@@ -1333,6 +1337,7 @@ const createThresholdMarkLines = (thresholds: Record<string, number>, unit = '')
         yAxis: value,
         name: type,
         label: {
+          show: labelled,
           // Formatted here rather than left to echarts' `{c}`: that prints the raw number,
           // which read "Alert: 1800" under an axis labelled "1.8s".
           formatter: `${thresholdStyles[type]?.label || type}: ${formatStatValue(value, unit)}`,

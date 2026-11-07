@@ -46,6 +46,9 @@ describe('formatStatValue', () => {
     expect(formatStatValue(2.3, '%')).toBe('2.3 %');
     // 17 errors in 1.38M queries is 0.0012%: never round a non-zero rate down to 0.
     expect(formatStatValue(0.0012, '%')).toBe('<0.01 %');
+    // "1 systems" on the Overview: a count of one names its unit in the singular.
+    expect([1, 2].map((n) => formatStatValue(n, 'systems'))).toEqual(['1 system', '2 systems']);
+    expect(formatStatValue(1, 'ms')).toBe('1.0ms');
     expect(formatStatValue(0, '%')).toBe('0 %');
   });
 

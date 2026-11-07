@@ -58,7 +58,8 @@ onReady(function(){
               : content;
             if (typeof (window as any).tippy !== 'function') return;
             const instance = (window as any).tippy(element, {
-              delay: [isTooltipWarm ? 0 : 100, 0],
+              // A block of text covering neighbouring rows must not flash up while the pointer sweeps past.
+              delay: [isMultiline ? 350 : isTooltipWarm ? 0 : 100, 0],
               duration: 0,
               updateDuration: 0,
               animateFill: false,

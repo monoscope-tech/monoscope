@@ -349,6 +349,7 @@ cookieProtectedServer projectTools =
     , dashboardTabGet = Dashboards.dashboardTabGetH
     , dashboardTabRenamePatch = Dashboards.dashboardTabRenamePatchH
     , dashboardYamlGet = Dashboards.dashboardYamlGetH
+    , dashboardSwitcherGet = Dashboards.dashboardSwitcherGetH
     , dashboardYamlPut = Dashboards.dashboardYamlPutH
     , -- API handlers
       apiGet = Settings.apiGetH
@@ -749,7 +750,10 @@ chartDataH run dbSource0 dt pid q qSql0 since fromD toD src density params = do
   now <- Time.currentTime
   let (dbSource, qSql) = rollupRoute now (TimePicker.TimePicker since fromD toD) scopedParams (dbSource0, qSql0)
   whenJust (clientPostgresSqlRejection dbSource pid qSql) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
-  run dbSource dt pid q qSql since fromD toD src density scopedParams
+  -- The browser names the widget it draws and the query is shaped for it here, as for a
+  -- server-rendered one, so a grouped `summarize` stays categorical on a top list.
+  let shaped = maybe q (\wt -> fst $ Widget.chartQuery def{Widget.wType = wt, Widget.query = q <|> Just ""}) (rightToMaybe . parseQueryParam =<< param "widget_type")
+  run dbSource dt pid shaped qSql since fromD toD src density scopedParams
 
 
 -- | The environment cookie is an authenticated, sticky project selection. Service is sticky
@@ -775,8 +779,11 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   now <- Time.currentTime
   let scopeMarker = ("dashboard_id",) . Just <$> widget._dashboardId
   scopedParams <- chartScopeParams (Just pid) $ maybeToList scopeMarker <> allParams
-  let widgetWithPid = widget & #_projectId ?~ pid
-      isEager = widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTStat, Widget.WTAnomalies]
+  -- The page's query filters the widget's own, as the browser composes them for /chart_data:
+  -- the explorer's top list has no query but the page's.
+  let pageQuery = Utils.nonEmptyT $ join $ L.lookup "query" allParams
+      widgetWithPid = widget & #_projectId ?~ pid & #query .~ Utils.nonEmptyT (Just $ T.intercalate " | " $ catMaybes [pageQuery, widget.query])
+      isEager = widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTopList, Widget.WTStat, Widget.WTAnomalies]
   processedWidget <-
     if isEager
       then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) scopedParams widgetWithPid
@@ -810,9 +817,9 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
         Nothing ->
           Right
             $ widget
-            & #dataset ?~ case widget.wType of
-              Widget.WTStat -> def{Widget.source = AE.Null, Widget.value = md.dataFloat}
-              _ -> Widget.toWidgetDataset md
+              & #dataset ?~ case widget.wType of
+                Widget.WTStat -> def{Widget.source = AE.Null, Widget.value = md.dataFloat}
+                _ -> Widget.toWidgetDataset $ Widget.foldSeries 8 md
   whenLeft_ chart \queryError ->
     Log.logAttention "widgetPngGetH: chart query unavailable" $ AE.object ["widgetId" AE..= widget.id, "error" AE..= queryError]
 
@@ -826,9 +833,9 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
             [ "echarts"
                 AE..= either
                   (const $ AE.object ["graphic" AE..= AE.object ["type" AE..= ("text" :: Text), "left" AE..= ("center" :: Text), "top" AE..= ("middle" :: Text), "style" AE..= AE.object ["text" AE..= ("Chart unavailable\nOpen the incident or monitor for details." :: Text), "fontSize" AE..= (18 :: Int), "fill" AE..= (bool "#334155" "#cbd5e1" darkMode :: Text), "textAlign" AE..= ("center" :: Text)]]])
-                  (Widget.widgetToECharts . (#_staticRender ?~ True) . (#theme ?~ bool "default" "dark" darkMode))
+                  (Widget.widgetToECharts . (#theme ?~ bool "default" "dark" darkMode))
                   chart
-            , "mode" AE..= (bool "chart" "table" (isRight chart && widget.wType == Widget.WTTable) :: Text)
+            , "mode" AE..= (bool "chart" "table" (isRight chart && widget.wType `elem` [Widget.WTTable, Widget.WTTopList]) :: Text)
             , "profile" AE..= fromMaybe Widget.PngStandard widget.pngProfile
             , "width" AE..= width
             , "height" AE..= height
@@ -959,6 +966,7 @@ type instance Opaque "Dashboards.DashboardRes" = Dashboards.DashboardRes
 type instance Opaque "Dashboards.DashboardSettleSample" = Dashboards.DashboardSettleSample
 type instance Opaque "Dashboards.DashboardViewForm" = Dashboards.DashboardViewForm
 type instance Opaque "Dashboards.DashboardYaml" = Dashboards.DashboardYaml
+type instance Opaque "Dashboards.DashboardSwitcher" = Dashboards.DashboardSwitcher
 type instance Opaque "Dashboards.DashboardsGet" = Dashboards.DashboardsGet
 type instance Opaque "Dashboards.InvalidViewName" = Dashboards.InvalidViewName
 type instance Opaque "Dashboards.SavedViews" = Dashboards.SavedViews

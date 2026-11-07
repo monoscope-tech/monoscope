@@ -13,7 +13,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), defPid, defSqlQueryCfg, fixedUTCTime)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
-import Pkg.QueryCache (CacheKey (..), RawCacheKey (..), bucketStart, chartChunks, coalesceQuery, generateCacheKey, hasSummarizeWithBin, mergeTimeseriesData, newQueryFlights, trimOldData, trimToRange)
+import Pkg.QueryCache (CacheKey (..), RawCacheKey (..), bucketStart, chartChunks, coalesceQuery, generateCacheKey, mergeTimeseriesData, newQueryFlights, trimOldData, trimToRange)
 import Relude
 import System.IO.Error (userError)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy)
@@ -131,23 +131,6 @@ spec = do
           when (upper /= mkTime 864000) $ bucketStart interval upper `shouldBe` upper
         map (\(lower, _, _) -> lower) (take (length chunks - 1) chunks)
           `shouldBe` map (\(_, upper, _) -> upper) (drop 1 chunks)
-
-  describe "hasSummarizeWithBin" do
-    it "detects bin(timestamp, interval)" do
-      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "5m"])]
-      hasSummarizeWithBin sections `shouldBe` True
-
-    it "detects bin_auto(timestamp)" do
-      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ BinAuto timestampSubject])]
-      hasSummarizeWithBin sections `shouldBe` True
-
-    it "returns False for summarize without bin" do
-      let sections = [SummarizeCommand [] Nothing]
-      hasSummarizeWithBin sections `shouldBe` False
-
-    it "returns False for empty sections" do
-      let sections = [] :: [Section]
-      hasSummarizeWithBin sections `shouldBe` False
 
   describe "generateCacheKey" do
     it "produces consistent hash for same query" do

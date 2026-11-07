@@ -60,7 +60,8 @@ describe('Log Explorer chart auto-refresh', () => {
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
     const sent = new URL(String(vi.mocked(fetch).mock.calls[0][0]), location.origin);
-    expect(sent.searchParams.get('query')).toBe(filter + ' | ' + (query || 'summarize count(*) by bin_auto(timestamp)'));
+    // The server adds the default aggregation for the widget type (Widget.chartQuery).
+    expect(sent.searchParams.get('query')).toBe([filter, query].filter(Boolean).join(' | '));
   });
 
   // The data response replaces the whole option (notMerge), so layout and markers must be reapplied.
@@ -84,7 +85,7 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(markers).toHaveLength(1);
     expect(markers[0].markLine.data).toEqual([{ xAxis: Date.parse('2026-09-25T10:00:00Z'), name: '1.0' }]);
     expect(option.series[0].id).not.toBe('__markers');
-    expect(option.grid.bottom).toBe(8);
+    expect(option.grid.bottom).toBe(20); // one legend row; 8 drew the axis labels over it
     expect(option.xAxis.axisLabel.margin).toBe(4);
   });
 

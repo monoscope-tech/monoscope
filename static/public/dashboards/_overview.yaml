@@ -5,25 +5,6 @@ preview: /public/assets/svgs/screens/http-stats.svg
 description: Comprehensive system overview with service, resource, and database insights
 refresh_interval: 60s
 
-# Constants are query results executed once and reusable across all widgets
-# They are available as {{const-<key>}} placeholders that expand to a subquery
-constants:
-  - key: top_resources
-    description: Top 20 resources by request count for the current time range
-    sql:
-      source: timefusion
-      statement: |
-        SELECT name
-        FROM otel_logs_and_spans
-        WHERE project_id='{{project_id}}'
-          AND name IS NOT NULL
-          AND kind = 'server'
-          AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
-          {{time_filter}}
-        GROUP BY name
-        ORDER BY COUNT(*) DESC
-        LIMIT 20
-
 variables:
   - key: service
     title: Service
@@ -42,26 +23,6 @@ variables:
     default: ''
     multi: false
 
-  - key: resource
-    title: Resource/Operation
-    type: query
-    reload_on_change: true
-    sql:
-      source: timefusion
-      statement: |
-        SELECT DISTINCT
-          name as value,
-          name as label
-        FROM otel_logs_and_spans
-        WHERE project_id='{{project_id}}'
-          AND resource___service___name = '{{var-service}}'
-          AND name IS NOT NULL
-          {{time_filter}}
-        LIMIT 500
-    default: ''
-    multi: false
-    depends_on: service
-
   - key: database
     title: Database System
     type: query
@@ -79,15 +40,11 @@ variables:
     default: ''
     multi: false
 
-views:
-  - name: All services
-    variables: { service: '', resource: '', database: '' }
-
 widgets: [] # Empty widgets array for backward compatibility
 
 tabs:
   - name: Overview
-    variables: [service, resource]
+    variables: []
     icon: grid
     widgets:
       # Golden Signals - The 4 key metrics for any APM
@@ -134,9 +91,9 @@ tabs:
           - type: 'stat'
             title: 'Apdex Score'
             description: 'Application Performance Index (0-1). Measures user satisfaction based on response times. >0.9 is excellent, <0.5 is poor.'
-            icon: smile
+            icon: face-smile
             sql: "SELECT ROUND((SUM(CASE WHEN duration <= 500000000 THEN 1.0 WHEN duration <= 2000000000 THEN 0.5 ELSE 0 END)) / GREATEST(1, COUNT(*))::numeric, 2)::float FROM otel_logs_and_spans WHERE project_id='{{project_id}}' AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http') AND duration IS NOT NULL {{time_filter}}"
-            unit: '/1.0'
+            unit: '/ 1.0'
             layout: { w: 3, h: 2 }
 
       # Secondary metrics row
@@ -184,7 +141,7 @@ tabs:
       - type: table
         title: Services Health
         description: 'Click a service row to view its detailed metrics in the Service tab.'
-        layout: { w: 6, h: 6 }
+        layout: { w: 6, h: 4 }
         on_row_click:
           set_variable: service
           value: '{{row.service_name}}'
@@ -223,7 +180,7 @@ tabs:
       # Anomalies/Issues widget
       - type: anomalies
         title: 'Ongoing Issues'
-        layout: { w: 6, h: 6 }
+        layout: { w: 6, h: 4 }
 
       # Events by Service
       - type: 'timeseries'
@@ -373,7 +330,7 @@ tabs:
         layout: { w: 12, h: 4 }
 
   - name: Service
-    variables: [service, resource]
+    variables: [service]
     icon: server
     requires: service
     widgets:
@@ -869,11 +826,11 @@ tabs:
             sortable: true
             title: Query Pattern
             copyable: true
+            link: '/p/{{project_id}}/log_explorer?query=attributes.db.query.summary%20startswith%20%22{{row.pattern_kql}}%22%20or%20attributes.db.query.text%20startswith%20%22{{row.pattern_kql}}%22%20or%20name%20startswith%20%22{{row.pattern_kql}}%22{{time_range}}'
           - field: count
             sortable: true
             title: Count
             column_type: number
-            progress: column_percent
           - field: avg_ms
             sortable: true
             title: Avg
@@ -894,8 +851,9 @@ tabs:
             sortable: true
             title: Errors
             column_type: number
-            progress: column_percent
-            progress_variant: error
+          - field: pattern_kql
+            title: Explorer pattern
+            hidden: true
         sql: |
           SELECT
             LEFT(COALESCE(
@@ -908,7 +866,14 @@ tabs:
             ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_ms,
             ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6)::numeric, 2) as p95_ms,
             ROUND((SUM(duration) / 1e9)::numeric, 2) as total_time,
-            COUNT(*) FILTER (WHERE status_code = 'ERROR') as errors
+            COUNT(*) FILTER (WHERE status_code = 'ERROR') as errors,
+            -- The pattern's head as a KQL string body (backslash and quote escaped) for the Explorer link.
+            MIN(replace(replace(LEFT(COALESCE(
+              NULLIF(attributes___db___query___summary, ''),
+              attributes___db___query___text,
+              CASE WHEN attributes___db___system___name = 'redis' THEN SPLIT_PART(name, ' ', 1)
+                   ELSE name END
+            ), 200), '\', '\\'), '"', '\"')) as pattern_kql
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
@@ -1037,11 +1002,11 @@ tabs:
             sortable: true
             title: Query Pattern
             copyable: true
+            link: '/p/{{project_id}}/log_explorer?query=attributes.db.query.summary%20startswith%20%22{{row.pattern_kql}}%22%20or%20attributes.db.query.text%20startswith%20%22{{row.pattern_kql}}%22%20or%20name%20startswith%20%22{{row.pattern_kql}}%22{{time_range}}'
           - field: count
             sortable: true
             title: Count
             column_type: number
-            progress: column_percent
           - field: max_ms
             sortable: true
             title: Peak
@@ -1056,6 +1021,9 @@ tabs:
           - field: last_seen
             sortable: true
             title: Last Seen
+          - field: pattern_kql
+            title: Explorer pattern
+            hidden: true
         sql: |
           -- Two-stage to keep aggregation cheap: top-500 slowest individual
           -- executions, then collapse to patterns. Key stays short (300 chars)
@@ -1065,7 +1033,8 @@ tabs:
             COUNT(*) as count,
             ROUND((MAX(duration) / 1e6)::numeric, 2) as max_ms,
             ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_ms,
-            MAX(timestamp)::text as last_seen
+            MAX(timestamp)::text as last_seen,
+            replace(replace(LEFT(query_pattern, 200), '\', '\\'), '"', '\"') as pattern_kql
           FROM (
             SELECT
               duration,
@@ -1159,7 +1128,7 @@ tabs:
         children:
           - type: 'stat'
             title: 'Avg CPU Utilization'
-            icon: cpu
+            icon: microchip
             unit: '%'
             sql: |
               SELECT ROUND(AVG(value::numeric * 100), 1)::float8
@@ -1194,7 +1163,7 @@ tabs:
 
           - type: 'stat'
             title: 'Services with Metrics'
-            icon: layers
+            icon: layer-group
             sql: |
               SELECT COUNT(DISTINCT resource___service___name)::float8
               FROM otel_metrics

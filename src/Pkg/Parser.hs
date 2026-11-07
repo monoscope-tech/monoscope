@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds, AudienceFilters (..), audienceFilters, audienceKql) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, TemplateLang (..), fillQueryTemplate, browserKql, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds, AudienceFilters (..), audienceFilters, audienceKql, ResultShape (..), resultShape) where
 
 import Control.Error (hush)
 import Data.Char (isAlphaNum)
@@ -621,6 +621,29 @@ intervalSeconds t = case words t of
   _ -> Nothing
   where
     units = Map.fromList @Text @Rational [("nanosecond", 1e-9), ("microsecond", 1e-6), ("millisecond", 1e-3), ("second", 1), ("minute", 60), ("hour", 3600), ("day", 86400), ("week", 604800)]
+
+
+-- | What a query returns, read off its last @summarize@ (each one consumes the rows before it):
+-- the events themselves, one scalar row, a series binned by time, or a value per group.
+data ResultShape = Events | Scalar | TimeSeries | Categories
+  deriving stock (Eq, Show)
+
+
+-- |
+-- >>> map (fmap resultShape . parseQueryToAST) ["level == \"ERROR\"", "summarize count()", "summarize count() by bin_auto(timestamp), name", "name == \"GET\" | summarize count() by name"]
+-- [Right Events,Right Scalar,Right TimeSeries,Right Categories]
+--
+-- Only the last summarize decides; a filter after it reads the aggregate, not the events:
+--
+-- >>> map (fmap resultShape . parseQueryToAST) ["summarize max(duration) by bin(timestamp, 60) | summarize min(max_duration)", "summarize count() by name | where count_ > 1"]
+-- [Right Scalar,Right Categories]
+resultShape :: [Section] -> ResultShape
+resultShape ast = case viaNonEmpty last [by | SummarizeCommand _ by <- ast] of
+  Nothing -> Events
+  Just Nothing -> Scalar
+  Just (Just (SummarizeByClause items))
+    | any (\case ByBinFunc _ -> True; _ -> False) items -> TimeSeries
+    | otherwise -> Categories
 
 
 -- | Parse a monoscope query to components ready for database execution.

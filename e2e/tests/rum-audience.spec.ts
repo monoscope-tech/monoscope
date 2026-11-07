@@ -132,8 +132,8 @@ test("overview template scopes filters by tab and shares saved views", async ({ 
     await page.reload();
     await expect(views).toHaveAccessibleName("Saved views: API logs");
     await views.click();
-    await toolbar.getByRole("link", { name: "All services", exact: true }).click();
-    await expect.poll(() => new URL(page.url()).searchParams.get("var-service")).toBe("");
+    await toolbar.getByRole("link", { name: "Clear filters", exact: true }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("var-service")).toBeNull();
     expect(new URL(page.url()).searchParams.get("since")).toBe("7D");
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole("tab", { name: "Infra", exact: true }).click();

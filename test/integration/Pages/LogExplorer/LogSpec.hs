@@ -12,8 +12,8 @@ import Data.ByteString.Builder (Builder, toLazyByteString)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as S
 import Data.Pool (defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, getCurrentTime, parseTimeM)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -43,6 +43,7 @@ import Pages.LogExplorer.QueryLibrary qualified as QueryLibrary
 import Pages.Share qualified as Share
 import Pages.Telemetry qualified as TelemetryPage
 import Pkg.Components.LogQueryBox qualified as LogQueryBox
+import Pkg.Components.Widget (VizType (..))
 import Pkg.DeriveUtils (AesonText (..))
 import Pkg.LiveTail qualified as LT
 import Pkg.Parser (SqlQueryCfg (..), defSqlQueryCfg, parseQueryToAST)
@@ -63,7 +64,6 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Server qualified as Server
 import Text.Read (read)
 import Utils (toXXHash)
-import Utils qualified
 import Web.ApiHandlers qualified as ApiH
 import Web.Routes qualified as Routes
 import "base64" Data.Base64.Types qualified as B64T
@@ -72,7 +72,7 @@ import "base64" Data.ByteString.Base64 qualified as B64
 
 spec :: Spec
 spec = do
-  it "rows endpoint boundary: route decoding, aggregate-shaped rows, orphan headers" \_ -> do
+  it "rows endpoint boundary: route decoding, orphan headers" \_ -> do
     let decodeApp =
           Servant.serve
             (Proxy @("decode" Servant.:> RecordParam Routes.LogDataFieldExp Log.LogDataQuery Servant.:> Servant.Get '[Servant.JSON] Text))
@@ -82,12 +82,6 @@ spec = do
     AE.eitherDecode @Text decoded.simpleBody `shouldBe` Right (show def{Log.query = Just "name==\"checkout\"", Log.cols = Just "name,duration", Log.cursor = Just (read "2026-09-18 10:20:30 UTC"), Log.direction = Just Parser.PageNewer, Log.since = Just "24H", Log.from = Just "2026-09-17T10:20:30Z", Log.to = Just "2026-09-18T10:20:30Z", Log.source = Just "spans", Log.targetSpans = Just "span-a,span-b", Log.sort = Just "-duration"})
     forM_ ["/decode?cursor=not-a-time", "/decode?direction=sideways"] \path ->
       (H.statusCode . (.simpleStatus) <$> request path) `shouldReturn` 400
-    -- `index out of bounds (7,1)` in production: log-table column indices over a one-column aggregate row.
-    let colIdxMap = Utils.listToIndexHashMap ["id", "timestamp", "trace_id", "span_name", "duration", "service", "parent_id", "start_time_ns", "errors", "summary", "latency_breakdown", "kind"]
-        narrow = V.singleton (V.singleton (AE.Number 42))
-    Log.colsFitRows colIdxMap narrow `shouldBe` False
-    Log.buildTraceTree colIdxMap 1 narrow `shouldBe` (narrow, [])
-    Log.synthesizeOrphanHeaders colIdxMap narrow `shouldBe` V.empty
     -- startNs was folded with a 0 seed, so every orphan header spanned from the epoch.
     let orphanIdx = HM.fromList $ zip ["trace_id", "parent_id", "latency_breakdown", "start_time_ns", "duration"] [0 ..]
         row sid start dur = V.fromList [AE.String "t1", AE.String "missing-parent", AE.String sid, AE.Number start, AE.Number dur]
@@ -301,10 +295,13 @@ spec = do
         pageTraces `shouldContain` [e.traceId]
         forM_ (e.root : concat (Map.elems e.children)) \sid -> pageSpans `shouldContain` [sid]
 
-      -- A summarize sent to the rows endpoint returns rather than indexing past the aggregate
-      -- row; a `| where` after it filters in HAVING, on the alias, while unknown names stay rejected.
-      forM_ ([("kind == \"server\" | summarize count(*) by kind", span' (-60) 60), ("summarize count(*) by bin_auto(timestamp)", def)] :: [(Text, Log.LogDataQuery)]) \(agg, w) ->
-        ((.queryResultCount) <$> fetch w{Log.query = Just agg}) >>= (`shouldSatisfy` (>= 0))
+      -- A summarize sent to the rows endpoint is no list of spans: its rows come back whole with
+      -- no trace tree (a fabricated `gen-0` root made the list drop them and read "No events
+      -- match this query"), and name the chart that draws them. A `| where` after it filters
+      -- in HAVING, on the alias, while unknown names stay rejected.
+      aggs <- forM ([("kind == \"server\" | summarize count(*) by kind", span' (-60) 60), ("summarize count(*) by bin_auto(timestamp)", def), ("summarize count(*)", span' (-60) 60)] :: [(Text, Log.LogDataQuery)]) \(agg, w) -> fetch w{Log.query = Just agg}
+      map (\r -> (null r.traces, r.viz, V.length r.logsData == r.queryResultCount)) aggs `shouldBe` [(True, Just VizTopList, True), (True, Just VizTimeseries, True), (True, Just VizTimeseries, True)]
+      page.viz `shouldBe` Nothing
       ((.error) <$> fetch (span' (-60) 60){Log.query = Just "summarize count() by kind | where count_ > 1"}) `shouldReturn` Nothing
       ((.error) <$> fetch def{Log.query = Just "summarize count() by kind | where nosuchalias > 1"}) >>= (`shouldSatisfy` maybe False (T.isInfixOf "Unknown field"))
 
@@ -457,16 +454,19 @@ spec = do
       -- modes and trace links hide the list, so preloading its rows ran a query nobody saw.
       (any (T.isInfixOf "window.logDataPromise") (elementsWith ["id=\"main-content\""] plain), map (T.isInfixOf "window.logDataPromise") [chart, line, traced], T.count "id=\"log_details_container\"" plain)
         `shouldBe` (True, [False, False, False], 1)
+      -- A query the log list can't draw opens on the chart that can, drawn with the page.
+      agg <- explorerPage tr testPid (Just "name == \"GET\" | summarize count() by name") Nothing Nothing
+      (any (T.isInfixOf " checked") (tagsWith ["id=\"viz-top_list\""] agg), "&quot;type&quot;:&quot;top_list&quot;" `T.isInfixOf` agg) `shouldBe` (True, True)
       alertForm <- renderT <$> call tr (Log.alertFormH testPid Nothing)
       -- The detail container replaces an in-flight request (htmx's default queue dropped the new
-      -- click and froze the loader); the viz container reads its type from the mutable
-      -- widgetJSON; the trace overlay is no scroll container; the editor's example is a placeholder.
+      -- click and froze the loader); the viz container takes its type from the checked tab and
+      -- draws a chart tab with the page; the trace overlay is no scroll container; the editor's
+      -- example is a placeholder.
       goldenParts "log-explorer-shell"
         . ordNub
         $ tagsWith ["id=\"log_details_container\"", "id=\"trace_expanded_view\"", "data-next-window", "h-4 w-px shrink-0 bg-strokeWeak opacity-60", "aria-label=\"Save query\"", "id=\"ai-search-submit\"", "api-log-explorer/\"", "bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2", "data-field=\"resource.service.name\"", "/orders", "/log_explorer/facets\"", "facets?group=http"] plain
         <> elementsWith ["data-query-input"] plain
         <> tagsWith ["div id=\"visualization-widget-container\""] line
-        <> filter (T.isInfixOf "\"type\":\"timeseries_line\"") (elementsWith ["var widgetJSON = {"] line)
         <> tagsWith ["template id=\"trace-loading-skeleton\"", "init send loadTrace"] traced
         <> elementsWith ["Loading trace…", "Retry loading trace"] traced
         <> tagsWith ["name=\"environment\"", "name=\"service\""] alertForm
@@ -544,7 +544,7 @@ spec = do
       apiKey <- createTestAPIKey tr pid "aggregates-key"
       ingestTrace tr apiKey "GET /api/pattern-expand" frozenTime
       pv <- call tr $ Log.logPatternsH pid Nothing (stamp (-60)) Nothing (stamp 60) (Just "spans") Nothing Nothing
-      case pv of Log.PatternsView total _ _ _ -> total `shouldSatisfy` (>= 0)
+      case pv of { Log.PatternsView total _ _ _ -> total `shouldSatisfy` (>= 0) }
       (case AE.toJSON pv of AE.Object o -> filter (`AEKM.member` o) ["totalPatterns", "colIdxMap"]; _ -> []) `shouldBe` ["totalPatterns", "colIdxMap"]
       -- A live poll (cursor set) merges into a list that already has its summary header.
       sessions <- forM [Nothing, stamp (-60)] \cur -> call tr (Log.logSessionsH pid Nothing (stamp (-60)) Nothing (stamp 60) Nothing Nothing cur) <&> \(Log.SessionsView total _ summ) -> (total >= 0, isJust summ)
@@ -783,7 +783,7 @@ spec = do
         Just ([LT.LogRow row], _) -> do
           recordId <- maybe (fail "live row id was not a UUID") pure (UUID.fromText row.id)
           stored <- call tr $ LiveTailPage.liveTailRecordH testPid recordId row.timestamp
-          (stored.id, case AE.toJSON stored of AE.Object o -> length o > 10; _ -> False) `shouldBe` (row.id, True)
+          (stored.id, case AE.toJSON stored of { AE.Object o -> length o > 10; _ -> False }) `shouldBe` (row.id, True)
         other -> fail ("expected one streamed log row, got " <> show (length . fst <$> other))
 
       -- Registration never checked membership: anyone could stream another project's logs by id.

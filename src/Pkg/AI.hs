@@ -132,7 +132,7 @@ import Pkg.AgentCatalog qualified as Catalog
 import Pkg.Components.TimePicker (TimePicker)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), encodeEnumSC, idFromText)
-import Pkg.Parser (parseQueryToAST)
+import Pkg.Parser (ResultShape (Events), parseQueryToAST, resultShape)
 import Pkg.SchemaLearning (FacetData (..), FacetSummary (..), FacetValue (..))
 import Pkg.Slack qualified as Slack
 import Relude
@@ -142,6 +142,7 @@ import UnliftIO.Exception (throwIO, withException)
 import Utils (encodeText, hostPath, nonEmptyT, unwrapJsonPrimValue)
 import Web.ApiTypes (ApiActor (..))
 import Web.Links (CookieProtectedRoutes (..), urls)
+import Web.HttpApiData (parseQueryParam)
 import Web.MCP qualified as MCP
 
 
@@ -322,6 +323,11 @@ fixTrailingCommas = T.replace ",\n}" "\n}" . T.replace ", }" "}" . T.replace ",}
 -- >>> import Web.HttpApiData (parseQueryParam)
 -- >>> traverse (parseQueryParam @Widget.WidgetType) (mapMaybe parseVisualizationType ["logs", "bar", "Line Chart", "pie", "top_list", "table", "stat", "heatmap", "distribution"])
 -- Right [WTLogs,WTTimeseries,WTTimeseriesLine,WTPieChart,WTTopList,WTTable,WTStat,WTHeatmap,WTDistribution]
+--
+-- The explorer-only views are tabs, not widget types:
+--
+-- >>> traverse (parseQueryParam @Widget.VizType) (mapMaybe parseVisualizationType ["patterns", "Sessions", "top"])
+-- Right [VizPatterns,VizSessions,VizTopList]
 parseVisualizationType :: Text -> Maybe Text
 parseVisualizationType = flip Map.lookup vizTypeMap . T.toLower . T.strip
   where
@@ -340,6 +346,10 @@ parseVisualizationType = flip Map.lookup vizTypeMap . T.toLower . T.strip
         , ("pie_chart", "pie_chart")
         , ("pie", "pie_chart")
         , ("top_list", "top_list")
+        , ("top", "top_list")
+        , ("top list", "top_list")
+        , ("patterns", "patterns")
+        , ("sessions", "sessions")
         , ("table", "table")
         , ("stat", "stat")
         , ("heatmap", "heatmap")
@@ -373,7 +383,9 @@ kqlGuide =
   - `timeseries_line`: Line chart with time. Requires `bin_auto(timestamp)` in query.
   - `distribution`: Categorical bar chart (no time). Use `summarize ... by` WITHOUT `bin()`.
   - `pie_chart`: Pie chart for proportions. Use `summarize ... by` WITHOUT `bin()`.
-  - `top_list`: Ranked list of values.
+  - `top_list`: Ranked list ("top 5 …", "which X has the most …"). Use `summarize ... by <field>` WITHOUT `bin()`, then `| sort by <agg> desc | take N`.
+  - `patterns`: Log lines grouped into message patterns ("common log patterns", "what kinds of errors"). Query is a plain filter, no `summarize`.
+  - `sessions`: User sessions ("show sessions", "users who hit errors"). Query is a plain filter, no `summarize`.
   - `table`: Raw data rows as table.
   - `stat`: Single numeric value display.
   - `heatmap`: Latency distribution heatmap.
@@ -422,7 +434,7 @@ kqlGuide =
 
   ### Critical Rules (must follow)
   1. ONLY use field names that appear in the schema. Never invent fields like `value`, `count`, or `total`. If a field is unknown, call `get_schema` or `get_field_values`.
-  2. When the user names a chart style ("as a line chart", "bar", "pie"), honour it in `visualization` — e.g. a line chart is `timeseries_line`, not `timeseries`.
+  2. When the user names a chart style ("as a line chart", "bar", "pie"), honour it in `visualization` — e.g. a line chart is `timeseries_line`, not `timeseries`. A ranking ("top 5 by count") is `top_list` even when a chart style is also named: a time chart cannot rank.
   3. NEVER add timestamp filters in the KQL query (no `where timestamp >= datetime(...)`, no `where timestamp between ...`). Time filtering belongs in the JSON `time_range` field. When the user mentions a relative or absolute time range (e.g. "last 2 hours", "from 6pm to 7pm"), set `time_range` and leave the query free of timestamp predicates.
   </kql_reference>
   |]
@@ -437,7 +449,7 @@ outputFormatInstructions =
   Return a single JSON object with these optional fields:
   - `explanation` (string, markdown): your data-driven analysis.
   - `query` (string): executable KQL only. Omit it when no telemetry query is needed; never put prose, a field description, or a placeholder here.
-  - `visualization` (string): one of `timeseries`, `timeseries_line`, `distribution`, `pie_chart`, `top_list`, `table`, `stat`, `heatmap`, `logs`.
+  - `visualization` (string): one of `timeseries`, `timeseries_line`, `distribution`, `pie_chart`, `top_list`, `table`, `stat`, `heatmap`, `logs`, `patterns`, `sessions`.
   - `widgets` (array): widget configs of the form `{ "type": "...", "query": "...", "title": "..." }`.
   - `time_range` (object, snake_case keys):
     - Preferred: `{"since": "2H"}` for relative windows (`2H`, `30M`, `7D`, ...).
@@ -803,7 +815,9 @@ runNlSearch pid config tzRaw input = do
     render resp =
       AE.object
         [ "query" AE..= resp.query
-        , "visualization_type" AE..= resp.visualization
+        , -- A tab the explorer has that draws the query: a categorical `summarize` asked for
+          -- as "pie" or "bar" would otherwise name no tab, or a chart the query isn't.
+          "visualization_type" AE..= (resp.query <&> \q -> Widget.vizFor (either (const Events) resultShape (parseQueryToAST (modelQueryText q))) (rightToMaybe . parseQueryParam =<< resp.visualization))
         , "commentary" AE..= resp.explanation
         , "time_range" AE..= resp.timeRange
         ]
