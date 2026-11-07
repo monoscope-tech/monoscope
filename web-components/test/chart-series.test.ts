@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { collapseLongTail, createSeriesConfig } from '../src/widgets';
+import { collapseLongTail, createSeriesConfig, isLogAxis, updateChartConfiguration } from '../src/widgets';
 
 describe('collapseLongTail', () => {
   test('keeps the eight largest series and preserves the remainder as Other', () => {
@@ -41,5 +41,24 @@ describe('line-series hierarchy', () => {
 
     expect(leading.areaStyle).toBeDefined();
     expect(secondary.areaStyle).toBeUndefined();
+  });
+});
+
+describe('sparse line series', () => {
+  test('a series scraped coarser than its bins is bridged; a dense or gappy one is not', () => {
+    (window as any).echarts = {
+      color: { modifyAlpha: (color: string) => color },
+      graphic: { LinearGradient: class {} },
+    };
+    const data = [['t', 'everyOther', 'dense'], [1, 5, 1], [2, null, 2], [3, 6, 3], [4, null, null], [5, 7, null], [6, null, 4]];
+    const opt = updateChartConfiguration({ chartType: 'line', widgetType: 'timeseries_line', chartId: 'c' } as any, { yAxis: {}, legend: {}, dataset: {} }, data);
+    expect(opt.series.map((s: any) => s.connectNulls)).toEqual([true, false]);
+  });
+});
+
+describe('isLogAxis', () => {
+  test('latency lines read on a log axis; counts, bars and stat sparklines stay linear', () => {
+    const w = (chartType: string, widgetType: string, unit: string) => isLogAxis({ chartType, widgetType, unit } as any);
+    expect([w('line', 'timeseries_line', 'ns'), w('line', 'timeseries_line', 'ms'), w('line', 'timeseries_line', 'reqs'), w('bar', 'timeseries', 'ms'), w('line', 'timeseries_stat', 'ms')]).toEqual([true, true, false, false, false]);
   });
 });

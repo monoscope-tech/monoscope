@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as echarts from 'echarts';
 import monitorFixture from './fixtures/slack-monitor-gap/request.json';
 import { legendLayout } from '../src/chart-legend';
@@ -219,4 +219,29 @@ describe('legend grid', () => {
     expect(names.map(legend.formatter)).toEqual(['{n|timescaledb.1.w9cqbjq}', '{n|redpanda-2.1.mups2ld}', '{n|monoscope.3.oxuci4y}', '{n|Other (16)}']);
     expect(legend).toMatchObject({ left: 4, textStyle: { rich: { n: { width: expect.any(Number) } } } });
   });
+});
+
+// The explorer drew "p…" for p50: a later chart's legend had re-set the shared canvas font.
+it('measures each legend in its own font, whatever the last legend set', async () => {
+  vi.resetModules();
+  vi.stubGlobal('OffscreenCanvas', class {
+    getContext() { const c = { font: '', measureText: (t: string) => ({ width: t.length * parseFloat(c.font) * 0.6 }) }; return c; }
+  });
+  const fresh = (await import('../src/chart-legend')).legendLayout;
+  const at = (fontSize: number) => fresh({ legend: { data: ['p50'], textStyle: { fontSize } }, series: [{ name: 'p50' }] }, 900, 300).legend;
+  const small = at(10);
+  at(20);
+  expect(small.formatter('p50')).toBe('{n|p50}');
+  vi.unstubAllGlobals();
+});
+
+// The explorer's level legend read "ERR…": twelve floored column shares left 36px for a 36.1px name.
+it('never cuts the widest name when the row has room for it', async () => {
+  vi.resetModules();
+  vi.stubGlobal('OffscreenCanvas', class { getContext() { return { font: '', measureText: (t: string) => ({ width: t.length * 7.222 }) }; } });
+  const fresh = (await import('../src/chart-legend')).legendLayout;
+  const names = ['ERROR', 'INFO', 'OK', 'UNSET', 'WARN', 'null'];
+  const { legend } = fresh({ legend: { top: 0, data: names, textStyle: { fontSize: 10 } }, series: names.map((name) => ({ name })) }, 924, 200);
+  expect(names.map(legend.formatter)).toEqual(names.map((n) => `{n|${n}}`));
+  vi.unstubAllGlobals();
 });

@@ -16,7 +16,7 @@ import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
-import Data.Time (addUTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -778,34 +778,37 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let row label lo hi = V.fromList [AE.String label, AE.toJSON (lo :: Double), AE.toJSON (hi :: Double)]
     onBoth grouped (Just "metrics | where metric_name == \"grouped.metric\" | summarize min(value), max(value) by resource.container.name") Nothing (V.fromList [row "null" 9 11, row "beta" 7 7, row "alpha" 2 4])
 
-    -- Overview resource samples: paired and unpaired cpu/memory each count, expired ones do not.
-    samples <- createTestProject tr' "Resource sample counts"
-    samplesKey <- createTestAPIKey tr' samples "resource-samples"
+    -- Infra containers: CPU averages, memory against its limit, restarts as the window's increase;
+    -- a container without a limit has no headroom, and expired samples do not count.
+    samples <- createTestProject tr' "Container resource usage"
+    samplesKey <- createTestAPIKey tr' samples "container-resources"
+    let container name = [mkAttr "service.name" name, mkAttr "k8s.container.name" name, mkAttr "k8s.pod.name" (name <> "-0")]
     for_
-      [ (service, metric, value, stamp)
-      | (service, cpu, memory, stamp) <- [("paired", Just 0.25, Just 0.4, now), ("cpu-only", Just 0.75, Nothing, now), ("memory-only", Nothing, Just 0.6, now), ("expired", Just 0.9, Just 0.9, addUTCTime (-48 * 3600) now)]
-      , (metric, value) <- catMaybes [("container.cpu.utilization",) <$> cpu, ("container.memory.percent",) <$> memory]
-      ]
-      \(service, metric, value, stamp) -> ingestMetric tr' samplesKey [mkAttr "service.name" service] [] metric value stamp
+      ( [ ("web", "container.cpu.usage", 0.25, now), ("web", "container.cpu.usage", 0.75, now), ("web", "container.memory.working_set", 300, now)
+      , ("web", "k8s.container.memory_limit", 400, now), ("web", "k8s.container.restarts", 2, addUTCTime (-60) now), ("web", "k8s.container.restarts", 5, now)
+      , ("worker", "container.cpu.usage", 0.1, now), ("worker", "container.memory.working_set", 100, now)
+      , ("expired", "container.cpu.usage", 0.9, addUTCTime (-48 * 3600) now)
+      ] :: [(Text, Text, Double, UTCTime)] )
+      \(name, metric, value, stamp) -> ingestMetric tr' samplesKey (container name) [] metric value stamp
     overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
-    resource <- widgetTitled "Service Resource Usage" $ foldMap DashboardModel.allWidgets overview
-    let sample service cpu memory points = V.fromList [AE.String service, AE.toJSON (cpu :: Maybe Double), AE.toJSON cpu, AE.toJSON (memory :: Maybe Double), AE.toJSON memory, AE.toJSON (points :: Int)]
-    onBoth samples Nothing (snd $ Widget.tableQuery resource Nothing) (V.fromList [sample "cpu-only" (Just 75) Nothing 1, sample "paired" (Just 25) (Just 0.4) 2, sample "memory-only" Nothing (Just 0.6) 1])
+    containers <- widgetTitled "Containers" $ foldMap DashboardModel.allWidgets overview
+    let usage name cpu peak mem pct restarts = V.fromList [AE.String name, AE.String name, AE.toJSON (1 :: Double), AE.toJSON (cpu :: Double), AE.toJSON (peak :: Double), AE.toJSON (mem :: Double), AE.toJSON (pct :: Maybe Double), AE.toJSON (restarts :: Double)]
+    onBoth samples Nothing (snd $ Widget.tableQuery containers Nothing) (V.fromList [usage "web" 0.5 0.75 300 (Just 75) 3, usage "worker" 0.1 0.1 100 Nothing 0])
 
     -- Through the dashboard JSON API, with a client sort that cannot inject SQL.
-    dashId <- newDashboard tr' "" "Resource table API"
-    void $ toBaseServantResponse tr' $ Api.apiDashboardWidgetUpsert testPid dashId resource{Widget.id = Just "resources", Widget.dbSource = Just Hasql.SqlPostgres}
+    dashId <- newDashboard tr' "" "Container table API"
+    void $ toBaseServantResponse tr' $ Api.apiDashboardWidgetUpsert testPid dashId containers{Widget.id = Just "containers", Widget.dbSource = Just Hasql.SqlPostgres}
     for_
-      [ (testPid, stamp, service, metric, value, service)
-      | (service, cpu, memory, stamp) <- [("backend" :: Text, 0.25, 0.4, now), ("frontend", 0.5, 0.8, now), ("expired", 0.9, 0.9, addUTCTime (-48 * 3600) now)]
-      , (metric, value) <- [("container.cpu.utilization" :: Text, cpu), ("container.memory.percent", memory :: Double)]
+      [ (testPid, stamp, name, metric, value, name, name, name <> "-0")
+      | (name, cpu, memory, stamp) <- [("backend" :: Text, 0.25, 400, now), ("frontend", 0.5, 800, now), ("expired", 0.9, 900, addUTCTime (-48 * 3600) now)]
+      , (metric, value) <- [("container.cpu.usage" :: Text, cpu), ("container.memory.working_set", memory :: Double)]
       ]
-      $ dbExec tr' [sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value, resource___service___name) VALUES (?, ?, gen_random_uuid(), ?, ?, 'GAUGE', ?, ?) |]
-    let backend = ["backend", "25.0", "25.0", "0.4", "0.4", "2"]
-        frontend = ["frontend", "50.0", "50.0", "0.8", "0.8", "2"]
-    for_ [(Nothing :: Maybe Text, [frontend, backend]), (Just "+service", [backend, frontend]), (Just "-service", [frontend, backend]), (Just "-service; SELECT 1", [frontend, backend])] \(sortParam, expected) -> do
-      result <- toBaseServantResponse tr' $ Dashboards.apiDashboardData testPid dashId Nothing (Just "resources") (Just "24h") Nothing Nothing [("table-sort", sortParam)]
-      [(w.error, w.textRows, w.columns) | w <- result.widgets :: [ApiTypes.RenderedWidget]] `shouldBe` [(Nothing, expected, ["Service/Container", "CPU Avg", "CPU Max", "Mem Avg", "Mem Max", "Samples"])]
+      $ dbExec tr' [sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value, resource___service___name, resource___k8s___container___name, resource___k8s___pod___name) VALUES (?, ?, gen_random_uuid(), ?, ?, 'GAUGE', ?, ?, ?, ?) |]
+    let backend = ["backend", "backend", "1", "0.250", "0.250", "400", "", "0"]
+        frontend = ["frontend", "frontend", "1", "0.500", "0.500", "800", "", "0"]
+    for_ [(Nothing :: Maybe Text, [frontend, backend]), (Just "+container", [backend, frontend]), (Just "-container", [frontend, backend]), (Just "-container; SELECT 1", [frontend, backend])] \(sortParam, expected) -> do
+      result <- toBaseServantResponse tr' $ Dashboards.apiDashboardData testPid dashId Nothing (Just "containers") (Just "24h") Nothing Nothing [("table-sort", sortParam)]
+      [(w.error, w.textRows, w.columns) | w <- result.widgets :: [ApiTypes.RenderedWidget]] `shouldBe` [(Nothing, expected, ["Container", "Service", "Pods", "CPU", "CPU peak", "Memory", "% of limit", "Restarts"])]
 
     -- The sort reaches rows outside the original top twenty, keeps numbers numeric, and rejects injection.
     let fetch widget sortParam = fmap (.dataText) $ runQueryEffect tr' do
@@ -1038,6 +1041,8 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     (_, (_, _, shell)) <- testServant tr $ BodyWrapper.mkPageCtx testPid >>= addRespHeaders
     shell.envOptions `shouldBe` V.singleton "production"
     PageCtx bw _ <- page tr Nothing filters
+    -- Overscroll paints <html>'s background, so the theme must reach it, not only <body>.
+    renderT (PageCtx bw ("" :: Text)) `shouldSatisfy` T.isInfixOf "<html lang=\"en\" data-theme=\"light\""
     (bw.envOptions, bw.serviceOptions, map (.conversationId) bw.conversations, isJust bw.activationProgressM) `shouldBe` (V.empty, V.empty, map (.conversationId) shell.conversations, isJust shell.activationProgressM)
 
     create ["Dashboard 1", "Dashboard 2", "Test Dashboard"] `shouldReturn` replicate 3 "DashboardNoContent"

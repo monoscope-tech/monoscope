@@ -374,6 +374,8 @@ const chartRows = (data: ChartDataResponse): ChartRow[] =>
 
 const MAX_VISIBLE_SERIES = 8;
 
+export const isLogAxis = (w: Pick<WidGetData, 'chartType' | 'widgetType' | 'unit'>) => w.chartType === 'line' && w.widgetType !== 'timeseries_stat' && DURATION_UNITS.has(w.unit ?? '');
+
 // Keep dense charts legible without changing their totals: rank series by peak value,
 // retain the leaders, and fold the rest into one explicitly labelled series.
 // `combine` folds the tail: a sum for counts, the max for latencies (a sum of p95s means nothing).
@@ -469,13 +471,13 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
   return seriesOpt;
 };
 
-const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) => {
+export const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) => {
   if (!data) return opt;
 
   const source = collapseLongTail(data, widgetData.summarizeBy && widgetData.summarizeBy !== 'sum' ? (vs) => Math.max(...vs) : undefined);
   opt.dataset = { ...opt.dataset, source };
   // Counts must not get fractional ticks (0.2, 0.6) when the peak is small.
-  if (opt.yAxis && !Array.isArray(opt.yAxis))
+  if (opt.yAxis && !Array.isArray(opt.yAxis) && opt.yAxis.type !== 'log')
     opt.yAxis.minInterval = source.slice(1).every((r: ChartCell[]) => r.slice(1).every((v) => v == null || Number.isInteger(v))) ? 1 : undefined;
 
   // Avoid unnecessary updates if data structure hasn't changed
@@ -490,8 +492,12 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
 
   opt.series?.forEach((series: any, i: number) => {
     if (series.type === 'line') {
-      const first = source.findIndex((row: ChartRow, index: number) => index > 0 && Number.isFinite(row[i + 1]));
-      series.showSymbol = first !== -1 && !source.some((row: ChartRow, index: number) => index > first && Number.isFinite(row[i + 1]));
+      const points = source.flatMap((row: ChartRow, index: number) => (index > 0 && Number.isFinite(row[i + 1]) ? [index] : []));
+      const gaps = points.slice(1).map((p, k) => p - points[k]).sort((a, b) => a - b);
+      series.showSymbol = points.length === 1;
+      // A metric scraped every 60s into 30s bins is null every other bin, and a line with no two
+      // adjacent points draws nothing. Bridge the nulls when that is the series' own cadence.
+      series.connectNulls = gaps.length > 0 && gaps[gaps.length >> 1] > 1;
     }
   });
 
@@ -514,7 +520,7 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
       const padding = (high - low || 1) * 0.05;
       return { min: low < 0 ? low - padding : 0, max: high + padding };
     };
-    if (widgetData.widgetType !== 'timeseries_stat') {
+    if (widgetData.widgetType !== 'timeseries_stat' && opt.yAxis.type !== 'log') {
       opt.yAxis.min = (data: { min: number; max: number }) => bounds(data).min;
       opt.yAxis.max = (data: { min: number; max: number }) => bounds(data).max;
     }
@@ -733,9 +739,17 @@ const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: 
     ? h : h.substring(0, 75) + (h.length > 75 ? '...' : ''));
   if (opt.xAxis?.type !== 'category') opt.xAxis = { ...opt.xAxis, min: data.from, max: data.to };
   opt.dataset.source = [headers || [], ...rows];
+  const unit = widgetData.unit ?? '';
+  // Latency lines read on a log axis: one 6-minute request beside 40ms ones flattened every
+  // percentile onto zero on a linear one. Each power of ten is labelled in its own unit.
+  if (isLogAxis(widgetData)) {
+    opt.dataset.source = [headers || [], ...rows.map(([t, ...vs]) => [t, ...vs.map((v) => (typeof v === 'number' && v <= 0 ? null : v))])];
+    opt.yAxis = { ...opt.yAxis, type: 'log', logBase: 10, min: undefined, max: undefined, minInterval: undefined, axisLabel: { ...opt.yAxis.axisLabel, showMaxLabel: false, formatter: (v: number) => formatDuration(convertToNanoseconds(v, unit)).replace('.0', '') } };
+    drawSized(chart, el, updateChartConfiguration(widgetData, opt, opt.dataset.source), unit, true);
+    return;
+  }
   const maximum = widgetData.chartType === 'line' ? data.stats?.max : data.stats?.max_group_sum;
   opt.yAxis = { ...opt.yAxis, max: maximum != null && Number.isFinite(maximum) && maximum > 0 ? maximum : undefined };
-  const unit = widgetData.unit ?? '';
   if (DURATION_UNITS.has(unit) && opt.yAxis.max) {
     // The server's formatter still decides which ticks are labelled (max-only axes blank the rest).
     const base = baseYFormatters.get(opt) ?? opt.yAxis.axisLabel?.formatter;

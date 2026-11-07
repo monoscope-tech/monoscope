@@ -1949,9 +1949,13 @@ alignsRight :: TableColumn -> Bool
 alignsRight col = isNumericCol col || isJust col.progress || any ("text-right" `T.isInfixOf`) col.align
 
 
+-- | A byte column reads in binary units, as the chart axes do, not as a raw count with "By" after it.
+--
+-- >>> formatColumnValue (def{columnType = Just CTNumber, unit = Just "By"}) "415100518"
+-- "395.9 MiB"
 formatColumnValue :: TableColumn -> Text -> Text
 formatColumnValue col value = case fromMaybe CTText col.columnType of
-  CTNumber -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
+  CTNumber -> maybe (value <> unitSuffix) (bool ((<> unitSuffix) . fmtNumber) formatBytes (any isByteUnit col.unit)) (readMaybe (toString value))
   CTDuration -> maybe (value <> unitSuffix) (\ns -> bool (T.replace ".0 " " " $ getDurationNSMS ns) "0" (ns == 0)) (readMaybe (toString value) >>= \n -> round . (n *) <$> maybe (Just 1) unitNanos col.unit)
   CTText -> maybe value (toText . formatTime defaultTimeLocale "%b %-d %H:%M:%S") (parseTimestamp value) <> unitSuffix
   where
