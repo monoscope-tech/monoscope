@@ -47,7 +47,6 @@ import Models.Projects.DashboardTemplates (askTemplates, loadDashboardFromVM, re
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
-import Pkg.ImpactReview qualified as ImpactReview
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -57,6 +56,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), colorChip_, connectionBadge_, copyButton_, copyField_, disclosure_, formField_, formSelectField_, headerRow_, sectionLabel_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
+import Pkg.ImpactReview qualified as ImpactReview
 import Pkg.Metrics qualified as Metrics
 import Relude hiding (ask)
 import Servant (ServerError (..), err401, err403, err404, err503)

@@ -99,6 +99,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens (AsValue, key, values, _Bool, _Integer, _String)
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
+import Data.Char (isAlphaNum)
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -116,7 +117,6 @@ import Network.HTTP.Types.URI (urlEncode)
 import Network.URI (URI (..), URIAuth (..), parseURI)
 import Network.Wreq (FormParam (..))
 import Pkg.DeriveUtils (WrappedEnumSC (..), enumFromField, refineText)
-import Data.Char (isAlphaNum)
 import Relude
 import Relude.Extra.Bifunctor (firstF)
 import "base16-bytestring" Data.ByteString.Base16 qualified as B16

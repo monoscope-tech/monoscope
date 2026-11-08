@@ -9,8 +9,8 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
 import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
-import Data.Effectful.CodeReview.Artifacts (sha256)
 import Data.Effectful.CodeReview qualified as Agent
+import Data.Effectful.CodeReview.Artifacts (sha256)
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..), ReviewMemory (..))
 import Data.Effectful.Hasql qualified as Hasql
@@ -698,8 +698,9 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
 -- Log and span samples have no widget, so their bodies never leave Monoscope as images.
 evidenceWidget :: UTCTime -> UTCTime -> Evidence -> Maybe Widget.Widget
 evidenceWidget from until item = case item.queryResult of
-  Just QueryObservation{kind = Aggregated, headers, dataset} | all (all (\case AE.Number{} -> True; AE.Null -> True; _ -> False)) dataset ->
-    Just (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.title = Just "Review query", Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON $ V.cons (AE.toJSON <$> headers) dataset}}
+  Just QueryObservation{kind = Aggregated, headers, dataset}
+    | all (all (\case AE.Number{} -> True; AE.Null -> True; _ -> False)) dataset ->
+        Just (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.title = Just "Review query", Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON $ V.cons (AE.toJSON <$> headers) dataset}}
   Just _ -> Nothing
   Nothing -> case (item.kind, item.service) of
     (Telemetry, Just _) ->
@@ -790,7 +791,8 @@ renderReview host run audience result =
         ((Alignment; Verification; ErrorDetection), Fair) -> "decent"
         ((Alignment; Verification; ErrorDetection), Poor) -> "poor"
     findingText finding =
-      T.intercalate "\n" . map (\line -> if T.null line then ">" else "> " <> line)
+      T.intercalate "\n"
+        . map (\line -> if T.null line then ">" else "> " <> line)
         $ ["[!WARNING]" | github]
         <> ["**[`" <> clean finding.location.path <> ":" <> show finding.location.line <> "`](" <> diffLink finding.location <> ")**" <> case finding.location.side of Base -> " (removed line)"; Head -> ""]
         <> if shown

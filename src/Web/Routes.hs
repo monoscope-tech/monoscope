@@ -800,8 +800,6 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
   addRespHeaders processedWidget
 
 
-
-
 -- | Proof media never changes under a signed name: keys are not reused within a run.
 proofMediaGetH :: Projects.ProjectId -> UUIDId "pr_review" -> ImpactReviews.ProofFile -> Maybe Text -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
 proofMediaGetH pid rid file sigM _ send = do

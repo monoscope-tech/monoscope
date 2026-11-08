@@ -295,7 +295,7 @@ receiveEvent :: DB es => Maybe Ask -> PullRequestEvent -> Eff es Int
 receiveEvent request event =
   fromMaybe 0
     <$> Hasql.interpOne
-    [HI.sql|WITH eligible AS (
+      [HI.sql|WITH eligible AS (
     SELECT DISTINCT m.project_id, coalesce(s.trigger, #{ReadyPullRequests}) AS trigger FROM projects.code_mappings m
     JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = m.project_id
     LEFT JOIN projects.pr_review_settings s ON s.project_id = m.project_id AND s.owner = lower(m.owner) AND s.repo = lower(m.repo)

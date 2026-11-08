@@ -33,12 +33,12 @@ import Relude
 import System.Directory (listDirectory, removeFile, removePathForcibly)
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, takeFileName, (</>))
-import Web.HttpApiData (toUrlPiece)
 import System.IO (hClose)
 import System.IO.Error (isDoesNotExistError, tryIOError)
 import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
 import UnliftIO.Exception (catch, finally, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
+import Web.HttpApiData (toUrlPiece)
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.

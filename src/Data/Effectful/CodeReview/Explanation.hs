@@ -2,10 +2,9 @@ module Data.Effectful.CodeReview.Explanation (renderExplanation, readExplanation
 
 import Conduit (runConduit, (.|))
 import Data.Aeson qualified as AE
+import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
-import "base64" Data.ByteString.Base64 qualified as Base64
-import Data.Base64.Types (extractBase64)
 import Data.Char (isControl, isDigit)
 import Data.Conduit.Combinators qualified as CC
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), readPrivateArtifact, sha256, verifyArtifacts)
@@ -29,6 +28,7 @@ import System.Process.Typed (ExitCode (..), createPipe, getStderr, getStdout, nu
 import UnliftIO.Async (concurrently)
 import UnliftIO.Exception (bracket, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
+import "base64" Data.ByteString.Base64 qualified as Base64
 
 
 newtype Assertion = Assertion {failureMessage :: Text}
@@ -192,8 +192,9 @@ proofCast logBytes = do
   when (BS.null rest || BS.null encoded) $ Left $ "The proof produced no recording. Log tail: " <> decodeUtf8 (BS.takeEnd 600 logBytes)
   cast <- first (const "The proof recording is not valid base64") $ Base64.decodeBase64Untyped encoded
   case BS8.lines cast of
-    header : events | Just (_ :: AE.Object) <- AE.decodeStrict header ->
-      Right (cast, T.concat [output | Just (AE.Array (toList -> [_, AE.String "o", AE.String output])) <- map AE.decodeStrict events])
+    header : events
+      | Just (_ :: AE.Object) <- AE.decodeStrict header ->
+          Right (cast, T.concat [output | Just (AE.Array (toList -> [_, AE.String "o", AE.String output])) <- map AE.decodeStrict events])
     _ -> Left "The proof recording is not an asciinema cast"
 
 
