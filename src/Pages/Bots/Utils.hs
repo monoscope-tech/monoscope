@@ -141,9 +141,6 @@ codeSpan :: Text -> Text
 codeSpan t = "`" <> T.take 300 (unwords $ words $ T.replace "`" "'" t) <> "`"
 
 
-dotted :: [Text] -> Text
-dotted = T.intercalate "  ·  "
-
 
 -- | Slack in-channel response replacing the ephemeral loading message.
 slackResponse :: [AE.Value] -> AE.Value
@@ -687,7 +684,7 @@ runBotQueryWithTools projectTools invocationMode target deliver envCfg access pi
               WhatsApp -> AE.object ["body" AE..= (content <> "\n" <> url')]
               Slack ->
                 slackResponse
-                  [ slackContext [dotted ["*" <> prettyPrintCount shownCount <> "* of *" <> prettyPrintCount resultCount <> "* rows", codeSpan query]]
+                  [ slackContext ["*" <> prettyPrintCount shownCount <> "* of *" <> prettyPrintCount resultCount <> "* rows  ·  " <> codeSpan query]
                   , AE.object ["type" AE..= ("table" :: Text), "rows" AE..= map (map (\cell -> AE.object ["type" AE..= ("raw_text" :: Text), "text" AE..= bool cell "—" (T.null cell)]) . take 10) cells]
                   , slackActions [linkButton "view-log-explorer" "Open in Log Explorer" url']
                   ]

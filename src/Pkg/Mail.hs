@@ -245,15 +245,6 @@ data Tone = Critical | Elevated | Calm | Healthy | Neutral
   deriving stock (Eq, Show)
 
 
-toneColor :: Tone -> Text
-toneColor = \case
-  Critical -> "#E5484D"
-  Elevated -> "#F5A524"
-  Calm -> "#3E63DD"
-  Healthy -> "#30A46C"
-  Neutral -> "#8B8D98"
-
-
 data Status = Status {emoji :: Text, label :: Text, tone :: Tone}
   deriving stock (Eq, Show)
 
@@ -286,8 +277,16 @@ bold t = "*" <> slackEscape t <> "*"
 
 
 card :: Card -> Incidents.SlackPayload
-card c = attachmentMessage (c.status.label <> " · " <> title) c.status.tone blocks
+card c =
+  Incidents.SlackPayload $ KEM.fromList ["text" AE..= fallback, "attachments" AE..= arr [AE.object ["color" AE..= color, "fallback" AE..= fallback, "blocks" AE..= blocks]]]
   where
+    fallback = c.status.label <> " · " <> title
+    color :: Text = case c.status.tone of
+      Critical -> "#E5484D"
+      Elevated -> "#F5A524"
+      Calm -> "#3E63DD"
+      Healthy -> "#30A46C"
+      Neutral -> "#8B8D98"
     title = if T.null (T.strip c.title) then "Untitled" else c.title
     blocks =
       [tagged "status" $ slackSection $ statusText c.status <> "  <" <> c.url <> "|" <> incidentHeadline title <> ">"]
@@ -319,11 +318,6 @@ statusText s = s.emoji <> " *" <> s.label <> "*"
 
 dots :: [Text] -> Text
 dots = T.intercalate "  ·  " . filter (not . T.null)
-
-
-attachmentMessage :: Text -> Tone -> [AE.Value] -> Incidents.SlackPayload
-attachmentMessage fallback tone blocks =
-  Incidents.SlackPayload $ KEM.fromList ["text" AE..= fallback, "attachments" AE..= arr [AE.object ["color" AE..= toneColor tone, "fallback" AE..= fallback, "blocks" AE..= blocks]]]
 
 
 sNewError, sRegressed, sEscalating, sSpiking, sStillFailing, sAlerting, sWarning, sRecovered, sResolved, sNoData :: Status
@@ -390,7 +384,7 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
         { facts = measurement
         , chart = Just ("Recorded values for " <> incidentHeadline monitor.alertConfig.title, chart)
         , footer = ["Started " <> atUtc started, "checked every " <> show monitor.checkIntervalMins <> " min"]
-        , actions = [("Open issue", issueUrl), (monitorSourceLabel monitor, monitorUrl)]
+        , actions = [("Open issue", issueUrl), (if isJust monitor.widgetId && isJust monitor.dashboardId then "Open widget" else "Open monitor", monitorUrl)]
         }
   , reply st measurement
   )
@@ -414,10 +408,6 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
 
 monitorReading :: Monitors.QueryMonitor -> Double -> Text
 monitorReading monitor v = reading v <> foldMap ((" " <>) . slackEscape) monitor.alertConfig.unit
-
-
-monitorSourceLabel :: Monitors.QueryMonitor -> Text
-monitorSourceLabel monitor = if isJust monitor.widgetId && isJust monitor.dashboardId then "Open widget" else "Open monitor"
 
 
 -- | A missing evaluation preserves the last verified reading, never a synthetic zero.
