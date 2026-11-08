@@ -1056,7 +1056,6 @@ instance ToHtml RepositoryGet where
                 ReviewNeedsServer -> setupRequired "An administrator must configure the GitHub App and webhook before automatic reviews can run."
                 ReviewUnsupportedHost -> (callout_ NeutralBadge (Just "Unavailable") "Automatic pull request reviews currently support GitHub.com. Source context and configuration sync remain available for this host.", True)
           readiness
-          a_ [href_ (urls.aiRoutinesGet pid <> "#routine-production-impact-review"), class_ "text-sm text-textBrand hover:underline"] "Manage review routine and runs"
           when (canEdit && repository.host == Git.GitHub && isNothing repository.apiBase) $ post (urls.repositoryReviewsPost pid rid) [class_ "grid items-end gap-3 sm:grid-cols-2"] do
             input_ [type_ "hidden", name_ "owner", value_ repository.owner]
             input_ [type_ "hidden", name_ "repo", value_ repository.repo]
@@ -1066,7 +1065,9 @@ instance ToHtml RepositoryGet where
               $ options_ (Just $ bool "false" "true" $ maybe False (.includeEvidence) page.reviewSettings) [("false", "Links only"), ("true", "Aggregates and links")]
             button_ [type_ "submit", class_ $ "btn btn-sm mb-1 justify-self-start sm:col-span-2 " <> bool "btn-primary" "btn-outline" blocked] "Save review settings"
             when blocked $ p_ [class_ "text-xs text-textWeak sm:col-span-2"] "Saved settings take effect once setup is complete."
-          a_ [href_ (urls.repositoriesGet pid (Just PullRequests) Nothing), class_ "btn btn-sm btn-outline"] "Review history"
+          div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-2"] do
+            a_ [href_ (urls.repositoriesGet pid (Just PullRequests) Nothing), class_ "btn btn-sm btn-outline"] "Review history"
+            a_ [href_ (urls.aiRoutinesGet pid <> "#routine-production-impact-review"), class_ "text-sm text-textBrand hover:underline"] "Manage review routine and runs"
       section_ [class_ "min-w-0 @min-[64rem]/repository:col-start-1 @min-[64rem]/repository:row-start-2", Aria.label_ "Dashboards and monitors"]
         $ panel_ Raised def{icon = Just "dashboard"} "Dashboards and monitors"
         $ div_ [class_ "space-y-4"] do
@@ -1075,7 +1076,7 @@ instance ToHtml RepositoryGet where
               p_ [class_ "text-sm text-textWeak"] "Keep dashboards and monitors as files in this repository. Monoscope proposes changes as pull requests, and merged changes apply automatically."
               syncLink
             Just sync -> do
-              whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml . (.message)
+              whenJust sync.lastError \err -> div_ [role_ "status"] $ callout_ ErrorBadge (Just $ case err.operation of GitSync.ImportDashboards -> "Import from the repository failed"; GitSync.ExportDashboard _ -> "Export to the repository failed"; GitSync.ExportDashboards -> "Export to the repository failed") $ span_ [class_ "break-words"] $ toHtml err.message
               p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ sync.branch <> " · " <> GitSync.getDashboardsPath sync
               colorChip_ NeutralBadge "code-branch" $ if not sync.syncEnabled then "Disabled" else if sync.exportPaused then "Export paused" else if any (.conflicted) page.resources then "Conflicts need input" else if isJust sync.lastExportHash then "Changes proposed" else if isJust sync.lastRevision then "Synced" else "Preparing folder"
               whenJust sync.pullRequestNumber $ \number -> a_ [href_ ("https://github.com/" <> sync.owner <> "/" <> sync.repo <> "/pull/" <> show number), target_ "_blank", rel_ "noopener noreferrer", class_ "text-sm text-textBrand hover:underline"] $ toHtml $ "Configuration PR #" <> show @Text number
