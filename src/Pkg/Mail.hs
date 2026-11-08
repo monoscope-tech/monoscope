@@ -310,7 +310,7 @@ reply s title details = oneLine title $ dots (statusText s : details)
 
 
 oneLine :: Text -> Text -> Incidents.SlackPayload
-oneLine title line = incidentMessage (T.filter (/= '*') line <> " · " <> T.take 120 title) [slackSection line]
+oneLine title line = incidentMessage (T.take 120 title <> ": " <> T.filter (/= '*') (T.takeWhile (/= '\n') line)) [slackSection line]
 
 
 -- | The root states who holds the issue now, so the channel can see someone is on it.
@@ -481,7 +481,7 @@ incidentHeadline = slackEscape . T.take 160
 -- | The root keeps its identity and says who resolved it and when; the reply says who.
 resolvedErrorMessage :: ErrorPatterns.ATError -> Text -> UTCTime -> Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 resolvedErrorMessage err actor now projectUrl issueUrl =
-  (card (statusCard sResolved (errorAlertTitle err) (fromMaybe (projectUrl <> "/issues") issueUrl) ["by " <> bold actor, hhmm now]){facts = errorFacts err}, reply sResolved{label = "Resolved by " <> slackEscape actor} (errorAlertTitle err) [])
+  (card (errorCard sResolved err projectUrl (fromMaybe (projectUrl <> "/issues") issueUrl) Nothing Nothing []){note = ["by " <> bold actor, hhmm now], body = [], chart = Nothing}, reply sResolved{label = "Resolved by " <> slackEscape actor} (errorAlertTitle err) [])
 
 
 -- | How a member is named in Slack: their name, or their id when they have none.
