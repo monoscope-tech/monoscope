@@ -1229,7 +1229,11 @@ export const chartWidget = (widgetData: WidGetData) => {
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
   const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';
-  chartLayoutUpdaters.set(chartId, () => drawSized(chart, chartEl, opt, widgetData.unit, false, true));
+  // A heatmap's drawn option is built from the data, not the server shell: a resize rebuilds it whole.
+  chartLayoutUpdaters.set(chartId, () =>
+    widgetData.chartType === 'heatmap'
+      ? drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true)
+      : drawSized(chart, chartEl, opt, widgetData.unit, false, true));
   // Shift-click isolates a series; shift-clicking the isolated one brings every series back.
   let shiftClick = false;
   chartEl?.addEventListener('pointerdown', (e) => (shiftClick = e.shiftKey), { capture: true, signal: controller.signal });
@@ -1330,7 +1334,8 @@ export const chartWidget = (widgetData: WidGetData) => {
         if (s.type === 'line') s.lineStyle = { ...s.lineStyle, color };
       }
     });
-    drawSized(chart, chartEl, opt, widgetData.unit);
+    if (widgetData.chartType === 'heatmap') drawSized(chart, chartEl, updateChartConfiguration(widgetData, opt, opt.dataset.source), widgetData.unit, true);
+    else drawSized(chart, chartEl, opt, widgetData.unit);
   };
   themeCallbacks.add(onThemeChange);
 
