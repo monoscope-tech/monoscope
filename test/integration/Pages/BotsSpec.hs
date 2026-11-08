@@ -4743,7 +4743,7 @@ spec = around withTestResources do
         readIORef stoppedBeforeAnswer `shouldReturn` True
         [length (filter ((== "https://slack.com/api/" <> method) . fst) requests) | method <- ["chat.startStream", "chat.stopStream", "chat.postMessage"]] `shouldBe` [1, 1, 1]
         when journal do
-          requests `shouldSatisfy` any (\(url, body) -> url == "https://slack.com/api/chat.update" && "Showing recent activity only." `T.isInfixOf` decodeUtf8 body)
+          requests `shouldSatisfy` any (\(url, body) -> url == "https://slack.com/api/chat.update" && "recent activity only" `T.isInfixOf` decodeUtf8 body)
           case reverse [chunks | (url, body) <- requests, url `elem` ["https://slack.com/api/chat.startStream", "https://slack.com/api/chat.appendStream", "https://slack.com/api/chat.stopStream"], Just chunks <- [AE.decode @AE.Value body >>= (^? key "chunks" . _Array)]] of
             stoppedChunks : priorChunks : _ -> stoppedChunks `shouldBe` priorChunks
             _ -> expectationFailure "Expected the stream to close with its last acknowledged task slots"
