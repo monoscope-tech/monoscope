@@ -40,7 +40,13 @@ export const chartLayoutForSize = (options: any, width: number, height: number, 
     legend: options.legend?.bottom !== undefined ? { ...options.legend, bottom: 0, padding: [0, 4, 0, 4] } : options.legend,
     xAxis: { ...options.xAxis, axisLabel: { ...options.xAxis.axisLabel, margin: 4 } },
   };
-  return legendLayout(sized, width, height, format);
+  const laid = legendLayout(sized, width, height, format);
+  // A heatmap's 1px cell gap separates cells only while they are big enough to read; on a short
+  // panel 35 rows of 3px cells became stripes, so small cells butt together.
+  const rows = laid.yAxis?.data?.length, cols = laid.xAxis?.data?.length;
+  if (laid.series?.[0]?.type !== 'heatmap' || !rows || !cols || !height) return laid;
+  const gap = Math.min(height / rows, width / cols) >= 6 ? 1 : 0;
+  return { ...laid, series: laid.series.map((s: any) => ({ ...s, itemStyle: { ...s.itemStyle, borderWidth: gap } })) };
 };
 
 /** A query failure already sanitized by the chart endpoint. */

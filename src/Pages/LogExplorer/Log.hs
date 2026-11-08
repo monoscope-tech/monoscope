@@ -81,7 +81,7 @@ import Pages.Monitors qualified as AlertUI
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacets, logQueryBox_)
 import Pkg.Components.Table (FacetChoice (..), FacetContent (..), FacetLayout (..), FacetNode (..), FacetOverflow (..), FacetsConfig (..), facetHeadCount, facetNode_, facetTail_, sidebar_)
 import Pkg.Components.TimePicker qualified as Components
-import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
+import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (CamelSchema (..))
 import Pkg.LiveTail (capRowValue)
@@ -812,13 +812,13 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
         , Widget.title = Just "All traces"
         , Widget.allowZoom = Just True
         }
+    -- Per-bin percentiles of a few hundred requests are mostly noise; a heatmap shows the bands,
+    -- the slow tail and which of it failed, as Datadog's, Honeycomb's and Dash0's explorers do.
     logLatencyWidget =
       logWidgetBase
-        { Widget.wType = WTTimeseriesLine
-        , Widget.title = Just "Latency percentiles"
-        , Widget.hideSubtitle = Just True
-        , Widget.summarizeBy = Just Widget.SBMax
-        , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
+        { Widget.wType = Widget.WTHeatmap
+        , Widget.title = Just "Latency distribution"
+        , Widget.query = Just "duration > 0 | summarize count() by bin_auto(timestamp), log_bin(duration), iff(status_code == \"ERROR\", \"error\", \"ok\")"
         , Widget.unit = Just "ns"
         }
 
