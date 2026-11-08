@@ -64,8 +64,8 @@ async function openDashboard(page: Page, title: string) {
   if ((await link.count()) === 0) {
     await page.locator('label[for="newDashboardMdl"]').first().click();
     await page.getByText("Blank dashboard").click();
-    await page.locator('input[name="title"]').fill(title);
-    await page.getByRole("button", { name: "Create" }).click();
+    await page.locator('input[name="title"]').first().fill(title);
+    await page.getByRole("button", { name: "Create" }).first().click();
     await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 60000 });
   } else {
     await link.first().click();

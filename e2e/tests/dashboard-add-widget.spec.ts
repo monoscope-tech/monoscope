@@ -349,7 +349,7 @@ test.describe("adding widgets to a dashboard", () => {
     const row = page.locator("#dashboards-modal-content").getByText(dash.title).first();
     await expect(row).toBeVisible({ timeout: 20000 });
     await expect(
-      page.locator("#dashboards-modal-content").getByText("Select a dashboard"),
+      page.locator('#dashboards-modal-content [role="listbox"]'),
       "the modal opened as a plain list, so picking a dashboard just navigates away",
     ).toBeVisible();
 
