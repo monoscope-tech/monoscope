@@ -989,7 +989,7 @@ instance Outcome RepositoryRemoval where
     RepositoryRemoved pid -> Just $ urls.repositoriesGet pid Nothing Nothing
     (RemovalBlockedBySync; PullRequestNotClosed _) -> Nothing
   outcomeToast = \case
-    RepositoryRemoved _ -> Just $ Toast SuccessToast "Repository removed" (Just "Dashboards, monitors, and review history are retained.")
+    RepositoryRemoved _ -> Just $ Toast SuccessToast "Repository removed" (Just "Dashboards, monitors, and review history are retained.") Nothing
     (RemovalBlockedBySync; PullRequestNotClosed _) -> Nothing
 
 

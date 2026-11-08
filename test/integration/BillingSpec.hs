@@ -123,7 +123,7 @@ spec = around withTestResources do
     V.length events.logsData `shouldBe` 1
 
     -- The activation funnel: only the four privacy-safe milestones, reached through public handlers.
-    _ <- testServant tr $ Dashboards.dashboardsPostH pid Dashboards.DashboardForm{file = "", teams = [], title = "First dashboard", fileDir = Nothing}
+    _ <- testServant tr $ Dashboards.dashboardsPostH pid Dashboards.DashboardForm{file = "", teams = [], title = "First dashboard", fileDir = Nothing, copyWidgetId = Nothing, sourceDashboardId = Nothing, widgetJson = Nothing}
     _ <- testServant tr $ Monitors.alertUpsertPostH pid firstMonitor
     dbExec tr [sql|UPDATE projects.teams SET notify_emails = ARRAY['activation@example.com'] WHERE project_id = ? AND is_everyone AND deleted_at IS NULL|] (Only pid)
     (testNotifications, _) <- testServantWithNotifications tr $ Settings.notificationsTestPostH pid Settings.TestForm{Settings.issueType = "runtime_exception", Settings.channel = Settings.TCEmail, Settings.teamId = Nothing}

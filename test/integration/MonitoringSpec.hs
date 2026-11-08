@@ -137,7 +137,7 @@ spec = describe "Monitoring" do
       assertNonMemberDenied tr otherPid $ Alerts.alertBulkActionH otherPid Monitors.BADelete (ProjectPages.TBulkActionForm [victimId.unwrap])
 
     it "widget monitor: alerts and recovers for the saved widget, follows renames, links copies to their dashboard, deletes with the widget" \tr -> do
-      void $ testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Widget Monitor Lifecycle", Dashboards.file = "widget-monitor.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+      void $ testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Widget Monitor Lifecycle", Dashboards.file = "widget-monitor.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
       dashboardId <-
         call tr (Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])) >>= \case
           Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> maybe (fail "the dashboard was not saved") (pure . (.id)) $ V.find ((== "Widget Monitor Lifecycle") . (.title)) dashboards

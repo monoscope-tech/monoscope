@@ -1175,23 +1175,28 @@ renderWidgetHeader actions widget valueM subValueM expandBtnFn ctaM = div_ [clas
             dashId = maybeToMonoid widget._dashboardId
             pid = projectIdText widget
             dashboardScope = foldMap ("&dashboard_id=" <>) widget._dashboardId
+            modalTitle = bool @Text "Add to dashboard" "Copy to dashboard" onDashboard
         menuItem_
           (bool "Add this widget to a dashboard" "Copy this widget to another dashboard" onDashboard)
           [ id_ $ wId <> "_copy_link"
+          , data_ "widget-title" $ maybeToMonoid widget.title
           , term
               "_"
               [text|
               on click
               set widgetEl to the closest <[data-widget]/>
+              then set #dashboards-modal-title.textContent to "${modalTitle}"
+              then set #dashboards-modal-widget-title.textContent to my.dataset.widgetTitle
+              then set #dashboards-modal-search.value to ''
               then set #dashboards-modal-widget-id.value to "${wId}"
               then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
               then set #dashboards-modal-widget-json.value to (widgetEl.dataset.widget or '')
-              then set #dashboards-modal.checked to true
+              then set #dashboards-modal.checked to true then send change to #dashboards-modal
               then trigger loadDashboards on #dashboards-modal-content
               then call (the closest <[popover]/>).hidePopover()
             |]
           ]
-          (bool "Add to dashboard" "Copy to dashboard" onDashboard)
+          (toHtml modalTitle)
         menuItem_
           "Copy generated SQL to clipboard"
           [ term

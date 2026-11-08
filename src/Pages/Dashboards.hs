@@ -1231,7 +1231,8 @@ dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Tex
 dashboardWidgetPutH pid dashId widgetIdM tabSlugM = dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM Nothing
 
 
-data WidgetChange = WidgetAdded | WidgetUpdated | WidgetAndMonitorUpdated
+-- | 'WidgetAdded' carries the dashboard it landed on (title, url), so the toast can name and open it.
+data WidgetChange = WidgetAdded Text Text | WidgetUpdated | WidgetAndMonitorUpdated
   deriving stock (Eq, Show)
 
 
@@ -1243,7 +1244,7 @@ data WidgetSaved = WidgetSaved {change :: WidgetChange, widget :: Widget.Widget}
 instance Outcome WidgetSaved where
   outcomeBody = toHtml . (.widget)
   outcomeToast s = Just case s.change of
-    WidgetAdded -> "Widget added to dashboard successfully"
+    WidgetAdded title url -> Toast SuccessToast ("Added to " <> title) Nothing (Just url)
     WidgetUpdated -> "Widget updated successfully"
     WidgetAndMonitorUpdated -> "Widget and monitor updated successfully"
 
@@ -1295,7 +1296,7 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
       pure $ flip WidgetSaved widgetUpdated case (monitorUpdateM, normalizedWidgetIdM) of
         (Just _, _) -> WidgetAndMonitorUpdated
         (Nothing, Just _) -> WidgetUpdated
-        (Nothing, Nothing) -> WidgetAdded
+        (Nothing, Nothing) -> WidgetAdded (dashTitle dashVM.title) (dashboardUrl pid dashId tabSlugM' [])
 
 
 updateDashboardWidgets :: Dashboards.Dashboard -> Maybe Text -> Maybe Text -> Widget.Widget -> Dashboards.Dashboard
@@ -2210,149 +2211,177 @@ dashboardNewForm_ dg = form_
 
 
 dashboardsGet_ :: DashboardsGetD -> Html ()
-dashboardsGet_ dg = do
-  unless dg.embedded
-    $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew, boxClass = "max-w-none", boxStyle = "width:min(92vw,76rem);max-width:none;overflow:clip"} Nothing
-    $ if not dg.showNew
-      then
-        div_
-          [ id_ "newDashboardForm"
-          , hxGet_ $ urls.dashboardNewGet dg.projectId
-          , hxTrigger_ "change[target.checked] from:#newDashboardMdl"
-          , hxSwap_ "outerHTML"
-          ]
-          $ p_ [class_ "py-8 text-center text-sm text-textWeak", role_ "status"] "Loading dashboard templates…"
-      else dashboardNewForm_ $ DashboardNew dg.projectId dg.teams dg.dashTemplates
-
-  div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col group/pg"] do
-    let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
-        getDashIcon dash = fromMaybe "square-dashed" (loadDashboardFromVM dg.dashTemplates dash >>= (.icon))
-        getWidgetCount dash = maybe 0 (length . filter ((/= Widget.WTGroup) . (.wType)) . Dashboards.allWidgets) (loadDashboardFromVM dg.dashTemplates dash)
-        noBulkActions = dg.embedded || dg.hideActions || isJust dg.copyMode
-        inCopyMode = isJust dg.copyMode
-
-        renderNameCol dash = do
-          let folder = folderFromPath dash.filePath
-          span_ [class_ "flex items-center gap-2"] do
-            span_ [class_ "p-1 px-2 bg-fillWeak rounded-md", data_ "tippy-content" "Dashboard icon"] $ faSprite_ (getDashIcon dash) "regular" "w-3 h-3"
-            unless (T.null folder) $ span_ [class_ "text-xs text-textWeak font-mono", data_ "tippy-content" "Folder path for git sync"] $ toHtml folder
-            if inCopyMode
-              then span_ [class_ "font-medium text-textStrong"] $ toHtml $ dashTitle dash.title
-              else a_ [href_ $ dashboardUrl dg.projectId dash.id Nothing [], class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
-            unless inCopyMode $ starButton_ dg.projectId dash.id (isJust dash.starredSince)
-          div_ [class_ "hidden max-md:flex items-center gap-2 mt-1 text-xs text-textWeak flex-wrap"] do
-            span_ [class_ "tabular-nums"] $ toHtml $ fmtDate "%b %-e" dash.updatedAt
-            forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml $ "@" <> team.handle
-            forM_ (V.toList dash.tags) $ span_ [class_ "badge badge-sm badge-neutral"] . toHtml
-
-        renderModifiedCol dash = span_ [class_ "text-xs text-textWeak tabular-nums", data_ "tippy-content" "Last modified date"] $ Components.localTimeFmt_ "MMM d, h:mm aaa" dash.updatedAt
-        renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml $ "@" <> team.handle
-        renderTagsCol dash = forM_ (V.toList dash.tags) \tag ->
-          if inCopyMode
-            then span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml tag
-            else a_ [class_ "badge badge-sm badge-neutral mr-1 cursor-pointer hover:badge-primary", hxGet_ $ dashboardsListUrl dg.projectId <> "?tag=" <> toUriStr tag, hxTarget_ "#dashboardsTableContainer", hxSelect_ "#dashboardsTableContainer", hxPushUrl_ "true", hxSwap_ "outerHTML"] $ toHtml tag
-
-        renderWidgetsCol dash = do
-          let count = getWidgetCount dash
-          span_ [class_ "flex items-center gap-1.5 text-textWeak", data_ "tippy-content" $ countNoun count "widget"] do
-            faSprite_ "grid" "regular" "w-3.5 h-3.5 text-iconNeutral"
-            span_ [class_ "leading-none tabular-nums"] $ toHtml $ show count
-
-    let nameCol =
-          Table.col "Name" renderNameCol
-            & Table.withAttrs [class_ "min-w-0"]
-            & Table.withColHeaderExtra
-              ( unless noBulkActions do
-                  span_ [class_ "hidden group-has-[.bulkactionItemCheckbox:checked]/grid:inline text-xs font-normal normal-case text-textWeak", role_ "status", term "hx-live:text" "closest('form').q('.bulkactionItemCheckbox:checked').count + ' selected'"] ""
-                  button_ ([type_ "button", class_ "btn btn-xs hidden group-has-[.bulkactionItemCheckbox:checked]/grid:inline-flex"] <> Utils.popoverTrigger_ "dashboard-teams") do
-                    faSprite_ "users" "regular" "h-3 w-3"
-                    "Manage teams"
-                  div_ ([class_ "dropdown dropdown-start z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-strokeWeak bg-bgRaised p-3 shadow-lg text-sm font-normal normal-case whitespace-normal"] <> Utils.popoverPanel_ "dashboard-teams") do
-                    if V.null dg.teams
-                      then do
-                        p_ [class_ "text-textWeak mb-3"] "Create a team before assigning dashboards."
-                        a_ [href_ $ urls.projects.teamsManageGet dg.projectId Nothing, class_ "btn btn-sm"] "Manage teams"
-                      else do
-                        h3_ [class_ "font-medium mb-1", term "hx-live:text" "'Teams for ' + closest('form').q('.bulkactionItemCheckbox:checked').count + (closest('form').q('.bulkactionItemCheckbox:checked').count === 1 ? ' dashboard' : ' dashboards')"] "Teams for selected dashboards"
-                        p_ [class_ "text-xs text-textWeak mb-3"] "Choose teams to add or remove."
-                        input_ [type_ "search", id_ "dashboard-team-search", term "aria-label" "Find a team", placeholder_ "Find a team…", class_ "input input-sm w-full mb-3 max-md:min-h-11 max-md:text-base"]
-                        fieldset_ [class_ "max-h-60 overflow-y-auto"] do
-                          legend_ [class_ "sr-only"] "Teams"
-                          forM_ dg.teams \team -> label_ [class_ "flex items-center gap-2 rounded px-2 py-2 max-md:min-h-11 hover:bg-fillWeak cursor-pointer [&[hidden]]:hidden", term "hx-live:hidden" "!this.textContent.toLowerCase().includes(q('#dashboard-team-search').value.trim().toLowerCase())"] do
-                            input_ [type_ "checkbox", name_ "teamIds", value_ team.id.toText, class_ "checkbox checkbox-sm"]
-                            toHtml $ "@" <> team.handle
-                          p_ [class_ "py-2 text-textWeak", term "hx-live:hidden" "q('#dashboard-teams label:not([hidden])').count > 0"] "No teams match your search."
-                        p_ [class_ "text-xs text-textWeak mt-3"] "Removing all teams leaves dashboards unassigned."
-                        p_
-                          [ role_ "alert"
-                          , hidden_ ""
-                          , class_ "text-xs text-textError mt-3"
-                          , [__|on htmx:before:request from #dashboard-teams set my.hidden to true
-                                on htmx:response:error from #dashboard-teams set my.hidden to false
-                                on htmx:error from #dashboard-teams set my.hidden to false|]
-                          ]
-                          "Couldn’t update teams. Your choices are still selected. Try again."
-                        div_ [class_ "flex gap-2 mt-3"] do
-                          forM_ ([(BARemoveTeams, "Remove teams", "Removing…"), (BAAddTeams, "Add teams", "Adding…")] :: [(DashboardBulkAction, Text, Text)]) \(action, label, pending) ->
-                            button_ [type_ "button", class_ $ "btn btn-sm flex-1 max-md:min-h-11 group/team-action motion-reduce:after:animate-none" <> bool "" " btn-primary" (action == BAAddTeams), hxPost_ $ urls.dashboardBulkActionPost dg.projectId action, hxSwap_ "none", term "hx-disable" "#dashboard-teams button", term "hx-sync" "#dashboard-teams:drop"] do
-                              span_ [class_ "group-[.htmx-request]/team-action:hidden"] $ toHtml label
-                              span_ [class_ "hidden group-[.htmx-request]/team-action:inline"] $ toHtml pending
-                  button_ [type_ "button", class_ "btn btn-ghost btn-xs text-textError hidden group-has-[.bulkactionItemCheckbox:checked]/grid:inline-flex", hxPost_ $ urls.dashboardBulkActionPost dg.projectId BADelete, hxSwap_ "none", hxConfirm_ "Delete the selected dashboards? This cannot be undone."] do
-                    faSprite_ "trash" "regular" "h-3 w-3"
-                    "Delete"
-              )
-        tableCols =
-          [if inCopyMode then nameCol else nameCol & Table.withSort "title"]
-            <> [Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44 max-md:hidden"] & Table.withSort "updated_at" | not inCopyMode]
-            <> [ Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
-               , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
-               , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24 max-md:hidden"]
-               ]
-
-    let table =
-          Table
-            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded || inCopyMode, Table.addPadding = not dg.embedded && not dg.hideActions && not inCopyMode, Table.renderAsTable = not dg.embedded || inCopyMode, Table.bulkActionsInHeader = if noBulkActions then Nothing else Just 0, Table.noSurface = dg.hideActions || inCopyMode}
-            , columns = tableCols
-            , rows = dg.dashboards
-            , features =
-                def
-                  { Table.rowId = if noBulkActions then Nothing else Just \dash -> dash.id.toText
-                  , Table.rowLabel = Just (.title)
-                  , Table.rowAttrs = Just $ \dash -> case dg.copyMode of
-                      Just (widgetId, sourceDashIdM) ->
-                        [ class_ "cursor-pointer hover:bg-fillWeak tap-target"
-                        , hxSwap_ "none"
+dashboardsGet_ dg
+  | Just (widgetId, sourceDashIdM) <- dg.copyMode = do
+      -- The add/copy-to-dashboard picker: the modal shell (BodyWrapper) owns the heading, search
+      -- and new-dashboard form; this is the list it swaps in. Favourites first, read-only last.
+      let readOnly = isJust . Dashboards.readOnlyTemplate dg.dashTemplates
+          verb = bool "Copy" "Add" (isNothing sourceDashIdM)
+      ul_
+        [ id_ "dashboard-picker"
+        , class_ "max-h-[min(24rem,55vh)] overflow-y-auto overscroll-contain p-2"
+        , Aria.label_ "Dashboards"
+        , term "hx-on:keydown" "if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return; event.preventDefault(); const b = [...this.querySelectorAll('li:not([hidden]) button:not([disabled])')]; (b[b.indexOf(document.activeElement) + (event.key === 'ArrowDown' ? 1 : -1)] ?? document.getElementById('dashboards-modal-search')).focus()"
+        ]
+        do
+          forM_ (sortOn (\d -> (readOnly d, isNothing d.starredSince)) $ V.toList dg.dashboards) \dash -> do
+            let ro = readOnly dash
+                meta = T.intercalate " · " $ countNoun (getWidgetCount dash) "widget" : ["Built-in, read-only" | ro] <> [T.intercalate ", " (V.toList dash.tags) | not (V.null dash.tags)]
+            li_ [data_ "dash" "", class_ "[&[hidden]]:hidden", term "hx-live:hidden" "!this.textContent.toLowerCase().includes(q('#dashboards-modal-search').value.trim().toLowerCase())"]
+              $ button_
+                ( [ type_ "button"
+                  , class_ "group/pick flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-fillWeak active:bg-fillHover focus-visible:bg-fillWeak focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
+                  ]
+                    <> if ro
+                      then [disabled_ "", data_ "tippy-content" "Built-in dashboards are read-only. Duplicate one to add widgets to it."]
+                      else
+                        [ hxSwap_ "none"
+                        , term "hx-disable" "this"
                         , term "hx-on:htmx:after:request" "const s = event.detail.ctx.response.status; if (s >= 200 && s < 300) document.getElementById('dashboards-modal').checked = false"
                         ]
                           <> case sourceDashIdM of
                             -- The widget already exists server-side; copy it across.
                             Just sourceDashId -> [hxPost_ $ urls.dashboardDuplicateWidget dg.projectId dash.id widgetId (Just sourceDashId)]
-                            -- It does not: the only definition of it is the JSON the page
-                            -- is holding, so send that to the widget upsert instead. No
-                            -- widget_id — that is what makes the upsert append a widget
-                            -- under a fresh id rather than overwrite one. The explorer's
-                            -- chart is always called "visualization-widget", so passing it
-                            -- would make every add overwrite the previous one.
+                            -- It does not: the only definition of it is the JSON the page is holding,
+                            -- so send that to the widget upsert instead. No widget_id, which is what
+                            -- makes the upsert append under a fresh id rather than overwrite the
+                            -- explorer's "visualization-widget" added last time.
                             Nothing ->
                               [ term "hx-put" $ urls.dashboardWidgetPut dg.projectId dash.id Nothing Nothing Nothing
                               , hxExt_ "json-enc"
                               , hxVals_ "js:{...JSON.parse(document.getElementById('dashboards-modal-widget-json').value || '{}')}"
                               ]
-                      Nothing -> [class_ "group/row"]
-                  , Table.search = if noBulkActions then Nothing else Just Table.ClientSide
-                  , Table.tableHeaderActions = dg.tableActions
-                  , Table.header = if dg.embedded || null dg.filters.tag || inCopyMode then Nothing else Just $ activeFilters_ dg.projectId ((.currentSort) <$> dg.tableActions) dg.filters
-                  , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", action = Table.ESCustom $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn text-sm w-max mx-auto btn-primary"] "Create Dashboard"}
-                  }
-            }
+                )
+                do
+                  span_ [class_ "grid size-8 shrink-0 place-items-center rounded-md bg-fillWeak text-iconNeutral"] $ faSprite_ (getDashIcon dash) "regular" "size-4"
+                  span_ [class_ "min-w-0 grow"] do
+                    span_ [class_ "flex items-center gap-1.5"] do
+                      span_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml $ dashTitle dash.title
+                      when (isJust dash.starredSince) $ faSprite_ "star" "solid" "size-3 shrink-0 text-iconWarning"
+                      when (sourceDashIdM == Just dash.id) $ span_ [class_ "shrink-0 rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] "This dashboard"
+                    span_ [class_ "block truncate text-xs text-textWeak tabular-nums"] $ toHtml meta
+                  if ro
+                    then faSprite_ "lock" "regular" "size-3.5 shrink-0 text-iconNeutral"
+                    else do
+                      span_ [class_ "shrink-0 text-xs font-medium text-textBrand opacity-0 transition-opacity duration-100 group-hover/pick:opacity-100 group-focus-visible/pick:opacity-100 group-[.htmx-request]/pick:hidden"] verb
+                      span_ [class_ "loading loading-spinner loading-xs hidden shrink-0 text-iconNeutral group-[.htmx-request]/pick:inline-block", Aria.label_ "Adding"] ""
+          li_ [class_ "px-2 py-6 text-center text-sm text-textWeak [&[hidden]]:hidden", term "hx-live:hidden" "q('#dashboard-picker li[data-dash]:not([hidden])').count > 0"]
+            $ if V.null dg.dashboards then "No dashboards yet. Create one below." else "No dashboards match your search."
+  | otherwise = do
+      unless dg.embedded
+        $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew, boxClass = "max-w-none", boxStyle = "width:min(92vw,76rem);max-width:none;overflow:clip"} Nothing
+        $ if not dg.showNew
+          then
+            div_
+              [ id_ "newDashboardForm"
+              , hxGet_ $ urls.dashboardNewGet dg.projectId
+              , hxTrigger_ "change[target.checked] from:#newDashboardMdl"
+              , hxSwap_ "outerHTML"
+              ]
+              $ p_ [class_ "py-8 text-center text-sm text-textWeak", role_ "status"] "Loading dashboard templates…"
+          else dashboardNewForm_ $ DashboardNew dg.projectId dg.teams dg.dashTemplates
 
-    div_ [class_ "w-full [&_th:first-child]:table-cell! [&_td:first-child]:table-cell! [&_th>span]:flex-wrap", id_ "dashboardsTableContainer"] do
-      when inCopyMode $ div_ [class_ "mb-4 p-3 bg-fillWeak rounded-lg text-sm text-textStrong"] do
-        faSprite_ "circle-info" "regular" "w-4 h-4 inline mr-2"
-        toHtml $ case dg.copyMode of
-          Just (_, Just _) -> "Select a dashboard to copy this widget to" :: Text
-          _ -> "Select a dashboard to add this widget to"
-      toHtml table
+      div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col group/pg"] do
+        let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
+            noBulkActions = dg.embedded || dg.hideActions
+
+            renderNameCol dash = do
+              let folder = folderFromPath dash.filePath
+              span_ [class_ "flex items-center gap-2"] do
+                span_ [class_ "p-1 px-2 bg-fillWeak rounded-md", data_ "tippy-content" "Dashboard icon"] $ faSprite_ (getDashIcon dash) "regular" "w-3 h-3"
+                unless (T.null folder) $ span_ [class_ "text-xs text-textWeak font-mono", data_ "tippy-content" "Folder path for git sync"] $ toHtml folder
+                a_ [href_ $ dashboardUrl dg.projectId dash.id Nothing [], class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
+                starButton_ dg.projectId dash.id (isJust dash.starredSince)
+              div_ [class_ "hidden max-md:flex items-center gap-2 mt-1 text-xs text-textWeak flex-wrap"] do
+                span_ [class_ "tabular-nums"] $ toHtml $ fmtDate "%b %-e" dash.updatedAt
+                forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml $ "@" <> team.handle
+                forM_ (V.toList dash.tags) $ span_ [class_ "badge badge-sm badge-neutral"] . toHtml
+
+            renderModifiedCol dash = span_ [class_ "text-xs text-textWeak tabular-nums", data_ "tippy-content" "Last modified date"] $ Components.localTimeFmt_ "MMM d, h:mm aaa" dash.updatedAt
+            renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml $ "@" <> team.handle
+            renderTagsCol dash = forM_ (V.toList dash.tags) \tag ->
+              a_ [class_ "badge badge-sm badge-neutral mr-1 cursor-pointer hover:badge-primary", hxGet_ $ dashboardsListUrl dg.projectId <> "?tag=" <> toUriStr tag, hxTarget_ "#dashboardsTableContainer", hxSelect_ "#dashboardsTableContainer", hxPushUrl_ "true", hxSwap_ "outerHTML"] $ toHtml tag
+
+            renderWidgetsCol dash = do
+              let count = getWidgetCount dash
+              span_ [class_ "flex items-center gap-1.5 text-textWeak", data_ "tippy-content" $ countNoun count "widget"] do
+                faSprite_ "grid" "regular" "w-3.5 h-3.5 text-iconNeutral"
+                span_ [class_ "leading-none tabular-nums"] $ toHtml $ show count
+
+        let nameCol =
+              Table.col "Name" renderNameCol
+                & Table.withAttrs [class_ "min-w-0"]
+                & Table.withColHeaderExtra
+                  ( unless noBulkActions do
+                      span_ [class_ "hidden group-has-[.bulkactionItemCheckbox:checked]/grid:inline text-xs font-normal normal-case text-textWeak", role_ "status", term "hx-live:text" "closest('form').q('.bulkactionItemCheckbox:checked').count + ' selected'"] ""
+                      button_ ([type_ "button", class_ "btn btn-xs hidden group-has-[.bulkactionItemCheckbox:checked]/grid:inline-flex"] <> Utils.popoverTrigger_ "dashboard-teams") do
+                        faSprite_ "users" "regular" "h-3 w-3"
+                        "Manage teams"
+                      div_ ([class_ "dropdown dropdown-start z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-strokeWeak bg-bgRaised p-3 shadow-lg text-sm font-normal normal-case whitespace-normal"] <> Utils.popoverPanel_ "dashboard-teams") do
+                        if V.null dg.teams
+                          then do
+                            p_ [class_ "text-textWeak mb-3"] "Create a team before assigning dashboards."
+                            a_ [href_ $ urls.projects.teamsManageGet dg.projectId Nothing, class_ "btn btn-sm"] "Manage teams"
+                          else do
+                            h3_ [class_ "font-medium mb-1", term "hx-live:text" "'Teams for ' + closest('form').q('.bulkactionItemCheckbox:checked').count + (closest('form').q('.bulkactionItemCheckbox:checked').count === 1 ? ' dashboard' : ' dashboards')"] "Teams for selected dashboards"
+                            p_ [class_ "text-xs text-textWeak mb-3"] "Choose teams to add or remove."
+                            input_ [type_ "search", id_ "dashboard-team-search", term "aria-label" "Find a team", placeholder_ "Find a team…", class_ "input input-sm w-full mb-3 max-md:min-h-11 max-md:text-base"]
+                            fieldset_ [class_ "max-h-60 overflow-y-auto"] do
+                              legend_ [class_ "sr-only"] "Teams"
+                              forM_ dg.teams \team -> label_ [class_ "flex items-center gap-2 rounded px-2 py-2 max-md:min-h-11 hover:bg-fillWeak cursor-pointer [&[hidden]]:hidden", term "hx-live:hidden" "!this.textContent.toLowerCase().includes(q('#dashboard-team-search').value.trim().toLowerCase())"] do
+                                input_ [type_ "checkbox", name_ "teamIds", value_ team.id.toText, class_ "checkbox checkbox-sm"]
+                                toHtml $ "@" <> team.handle
+                              p_ [class_ "py-2 text-textWeak", term "hx-live:hidden" "q('#dashboard-teams label:not([hidden])').count > 0"] "No teams match your search."
+                            p_ [class_ "text-xs text-textWeak mt-3"] "Removing all teams leaves dashboards unassigned."
+                            p_
+                              [ role_ "alert"
+                              , hidden_ ""
+                              , class_ "text-xs text-textError mt-3"
+                              , [__|on htmx:before:request from #dashboard-teams set my.hidden to true
+                                on htmx:response:error from #dashboard-teams set my.hidden to false
+                                on htmx:error from #dashboard-teams set my.hidden to false|]
+                              ]
+                              "Couldn’t update teams. Your choices are still selected. Try again."
+                            div_ [class_ "flex gap-2 mt-3"] do
+                              forM_ ([(BARemoveTeams, "Remove teams", "Removing…"), (BAAddTeams, "Add teams", "Adding…")] :: [(DashboardBulkAction, Text, Text)]) \(action, label, pending) ->
+                                button_ [type_ "button", class_ $ "btn btn-sm flex-1 max-md:min-h-11 group/team-action motion-reduce:after:animate-none" <> bool "" " btn-primary" (action == BAAddTeams), hxPost_ $ urls.dashboardBulkActionPost dg.projectId action, hxSwap_ "none", term "hx-disable" "#dashboard-teams button", term "hx-sync" "#dashboard-teams:drop"] do
+                                  span_ [class_ "group-[.htmx-request]/team-action:hidden"] $ toHtml label
+                                  span_ [class_ "hidden group-[.htmx-request]/team-action:inline"] $ toHtml pending
+                      button_ [type_ "button", class_ "btn btn-ghost btn-xs text-textError hidden group-has-[.bulkactionItemCheckbox:checked]/grid:inline-flex", hxPost_ $ urls.dashboardBulkActionPost dg.projectId BADelete, hxSwap_ "none", hxConfirm_ "Delete the selected dashboards? This cannot be undone."] do
+                        faSprite_ "trash" "regular" "h-3 w-3"
+                        "Delete"
+                  )
+            tableCols =
+              [ nameCol & Table.withSort "title"
+              , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44 max-md:hidden"] & Table.withSort "updated_at"
+              ]
+                <> [ Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
+                   , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
+                   , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24 max-md:hidden"]
+                   ]
+
+        let table =
+              Table
+                { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded, Table.addPadding = not dg.embedded && not dg.hideActions, Table.renderAsTable = not dg.embedded, Table.bulkActionsInHeader = if noBulkActions then Nothing else Just 0, Table.noSurface = dg.hideActions}
+                , columns = tableCols
+                , rows = dg.dashboards
+                , features =
+                    def
+                      { Table.rowId = if noBulkActions then Nothing else Just \dash -> dash.id.toText
+                      , Table.rowLabel = Just (.title)
+                      , Table.rowAttrs = Just $ const [class_ "group/row"]
+                      , Table.search = if noBulkActions then Nothing else Just Table.ClientSide
+                      , Table.tableHeaderActions = dg.tableActions
+                      , Table.header = if dg.embedded || null dg.filters.tag then Nothing else Just $ activeFilters_ dg.projectId ((.currentSort) <$> dg.tableActions) dg.filters
+                      , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", action = Table.ESCustom $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn text-sm w-max mx-auto btn-primary"] "Create Dashboard"}
+                      }
+                }
+
+        div_ [class_ "w-full [&_th:first-child]:table-cell! [&_td:first-child]:table-cell! [&_th>span]:flex-wrap", id_ "dashboardsTableContainer"] do
+          toHtml table
+  where
+    getDashIcon dash = fromMaybe "square-dashed" (loadDashboardFromVM dg.dashTemplates dash >>= (.icon))
+    getWidgetCount dash = maybe 0 (length . filter ((/= Widget.WTGroup) . (.wType)) . Dashboards.allWidgets) (loadDashboardFromVM dg.dashTemplates dash)
 
 
 activeFilters_ :: Projects.ProjectId -> Maybe Text -> DashboardFilters -> Html ()
@@ -2465,6 +2494,11 @@ data DashboardForm = DashboardForm
   , teams :: [ManageMembers.TeamId]
   , title :: Text
   , fileDir :: Maybe Text
+  , -- The add-to-dashboard picker's widget, which the new dashboard starts with: one already
+    -- on a dashboard by id, or the explorer's by its JSON. The picker always sends all three.
+    copyWidgetId :: Maybe Text
+  , sourceDashboardId :: Maybe Text
+  , widgetJson :: Maybe Text
   }
   deriving stock (Generic, Show)
   -- An empty team picker posts @teams=@, which the plain derived decoder read as a
@@ -2496,7 +2530,11 @@ dashboardsPostH pid form = do
               }
       -- A read-only template is linked only by its entrypoint; created here it is the user's own copy.
       _ <- Dashboards.insert $ maybe dbd (const $ detach templates dbd) (Dashboards.readOnlyTemplate templates dbd)
-      syncDashboardAndQueuePush pid dbd.id
+      let given = mfilter (not . T.null)
+      case (given form.copyWidgetId, given form.sourceDashboardId >>= rightToMaybe . parseUrlPiece, given form.widgetJson >>= AE.decodeStrict . encodeUtf8) of
+        (Just wid, Just src, _) -> void $ dashboardDuplicateWidgetPostH pid dbd.id wid (Just src)
+        (_, _, Just w) -> void $ dashboardWidgetPutH pid dbd.id Nothing Nothing w
+        _ -> syncDashboardAndQueuePush pid dbd.id
       redirectCS redirectURI
       addRespHeaders DashboardNoContent
 
@@ -2753,7 +2791,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
   syncDashboardAndQueuePush pid targetDashId
 
   addWidgetJSON $ encodeText widgetCopy
-  addSuccessToast (maybe "Widget duplicated successfully" ("Widget copied to " <>) targetDashNameM) Nothing
+  pushToast "success" (maybe "Widget duplicated successfully" ("Copied to " <>) targetDashNameM) Nothing (dashboardUrl pid targetDashId ((.slug) <$> destinationTabM) [] <$ targetDashNameM)
   addRespHeaders widgetCopy
 
 

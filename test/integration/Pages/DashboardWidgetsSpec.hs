@@ -161,7 +161,7 @@ newDashboard :: TestResources -> Text -> Text -> IO DashboardModel.DashboardId
 newDashboard tr file title = do
   let ids = dashboardList tr Nothing <&> \case Dashboards.DashboardsGetSlim d -> V.toList d.dashboards; Dashboards.DashboardsGet (PageCtx _ d) -> V.toList d.dashboards
   ids >>= traverse_ \d -> testServant tr $ Dashboards.dashboardDeleteH testPid d.id
-  _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = title, Dashboards.file = file, Dashboards.teams = [], Dashboards.fileDir = Nothing}
+  _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = title, Dashboards.file = file, Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
   ids >>= \case
     [d] -> pure d.id
     ds -> fail $ "expected one dashboard, got " <> show (length ds)
@@ -302,6 +302,19 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     -- Picker rows PUT to the widget upsert: a mutation is never a GET.
     renderT picker `shouldSatisfy` T.isInfixOf "hx-put=\"/p/"
     goldenHtml "dashboard-list" do toHtml list; toHtml picker
+
+  it "add-to-dashboard picker: a searchable list that copies from the source; a new dashboard starts with the picked widget" \tr -> do
+    dashId <- newDashboard tr "" "Picker Source"
+    addWidgets tr dashId [(widgetOf Widget.WTStat "Source Stat"){Widget.id = Just "src-stat"}]
+    picker <- renderT <$> call tr (Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "src-stat") (Just dashId) Nothing (Dashboards.DashboardFilters []))
+    picker `shouldContainAll` ["id=\"dashboard-picker\"", "hx-live:hidden", "This dashboard", "1 widget", "/widgets/src-stat/duplicate?source_dashboard_id=" <> dashId.toText]
+    -- The explorer's chart exists only as JSON; "New dashboard with this widget" posts it with the form.
+    void $ testServant tr $ Dashboards.dashboardDeleteH testPid dashId
+    let chart = widgetOf Widget.WTTimeseries "From Explorer"
+    void $ testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Fresh", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Just "visualization-widget", Dashboards.sourceDashboardId = Just "", Dashboards.widgetJson = Just (decodeUtf8 $ AE.encode chart)}
+    fresh <- dashboardList tr Nothing <&> \case Dashboards.DashboardsGetSlim d -> V.toList d.dashboards; Dashboards.DashboardsGet (PageCtx _ d) -> V.toList d.dashboards
+    map (.title) fresh `shouldBe` ["Fresh"]
+    map (.title) . concat <$> traverse (storedWidgets tr . (.id)) fresh `shouldReturn` [Just "From Explorer"]
 
   it "rendering: every widget type is a canvas grid item; tables, fetch URLs, PNGs and wire tags hold" \tr -> do
     -- The canvas serializer (widgets.ts buildWidgetOrder) selects `.grid-stack-item`, keys on
@@ -1018,7 +1031,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
         listed = page tr Nothing filters <&> \(PageCtx _ d) -> V.toList d.dashboards
         titled t = listed >>= maybe (fail $ "no dashboard titled " <> toString t) pure . find ((== t) . (.title))
         -- In one request, as the page does; the test UUID supply would otherwise repeat ids.
-        create ts = map (show @Text . Servant.getResponse) <$> call tr (traverse (\t -> Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}) ts >>= addRespHeaders)
+        create ts = map (show @Text . Servant.getResponse) <$> call tr (traverse (\t -> Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}) ts >>= addRespHeaders)
     -- The empty state opens the new-dashboard modal (a <label for>), not a dead href="newDashboardMdl".
     zero <- renderT <$> fetch tr Nothing filters{Dashboards.tag = ["no-such-tag-so-the-list-is-empty"]}
     zero `shouldContainAll` ["No dashboards yet", "for=\"newDashboardMdl\""]
@@ -1090,7 +1103,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
 
   it "dashboard switcher: the title lists the project's dashboards, starred first, linking each and marking the current one" \tr -> do
     alpha <- newDashboard tr "" "Alpha"
-    _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Beta", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+    _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = "Beta", Dashboards.file = "", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
     dbExec tr "UPDATE projects.dashboards SET starred_since = now() WHERE project_id = ? AND title = 'Beta'" (Only testPid)
     switcher <- renderT <$> call tr (Dashboards.dashboardSwitcherGetH testPid alpha)
     let at t = T.length . fst $ T.breakOn t switcher
@@ -1189,7 +1202,7 @@ spec = around withTestResources $ describe "Dashboard widgets" do
     let sample n = AE.eitherDecode @Dashboards.DashboardSettleSample $ "{\"duration_ms\":1,\"response_bytes\":2,\"navigation\":\"" <> n <> "\"}"
     (sample "initial", sample "tab", isLeft (sample "typo")) `shouldBe` (Right (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardInitial), Right (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardTab), True)
     victim <- createTestProject tr "victim"
-    _ <- testServant tr $ Dashboards.dashboardsPostH victim Dashboards.DashboardForm{Dashboards.title = "Victim", Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+    _ <- testServant tr $ Dashboards.dashboardsPostH victim Dashboards.DashboardForm{Dashboards.title = "Victim", Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing, Dashboards.copyWidgetId = Nothing, Dashboards.sourceDashboardId = Nothing, Dashboards.widgetJson = Nothing}
     victimDash <- runTestBg frozenTime tr (DashboardModel.selectDashboardsSortedBy victim DashboardModel.Asc DashboardModel.DSTitle) >>= maybe (fail "no victim dashboard") pure . viaNonEmpty head
     assertNonMemberDenied tr victim $ Dashboards.dashboardSettledPostH victim victimDash.id (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardInitial)
     -- URL values beat declared defaults, so a shared link carries its selections; a cleared value stays cleared.

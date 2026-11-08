@@ -98,12 +98,15 @@
 </button>
 <ul class="dropdown text-textStrong dropdown-end menu menu-md bg-bgRaised rounded-box p-2 w-52 shadow-lg leading-none border border-strokeWeak" id="requests-chart-widget-menu" popover="auto" style="position-try:flip-block; position-anchor:--anchor-requests-chart-widget-menu">
 <li>
-<a class="p-2 w-full text-left block cursor-pointer" data-tippy-content="Add this widget to a dashboard" id="requests-chart_copy_link" _="on click
+<a class="p-2 w-full text-left block cursor-pointer" data-tippy-content="Add this widget to a dashboard" id="requests-chart_copy_link" data-widget-title="requests" _="on click
 set widgetEl to the closest &lt;[data-widget]/&gt;
+then set #dashboards-modal-title.textContent to &quot;Add to dashboard&quot;
+then set #dashboards-modal-widget-title.textContent to my.dataset.widgetTitle
+then set #dashboards-modal-search.value to &#39;&#39;
 then set #dashboards-modal-widget-id.value to &quot;requests-chart&quot;
 then set #dashboards-modal-source-dashboard-id.value to &quot;&quot;
 then set #dashboards-modal-widget-json.value to (widgetEl.dataset.widget or &#39;&#39;)
-then set #dashboards-modal.checked to true
+then set #dashboards-modal.checked to true then send change to #dashboards-modal
 then trigger loadDashboards on #dashboards-modal-content
 then call (the closest &lt;[popover]/&gt;).hidePopover()">Add to dashboard</a>
 </li>
