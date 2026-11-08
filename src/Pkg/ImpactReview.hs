@@ -352,11 +352,14 @@ requestReview request = runErrorNoCallStack @Text do
     then Log.logInfo "Ignoring a PR review ask from someone without write access" (request.owner, request.repo, request.number)
     else do
       pr <- either throwError pure =<< Git.getPullRequest conn ref request.number
-      queued <- Reviews.receiveEvent (Just request.ask) $ Reviews.pullRequestEvent request.owner request.repo request.installationId request.number pr
+      reception <- Reviews.receiveEvent (Just request.ask) $ Reviews.pullRequestEvent request.owner request.repo request.installationId request.number pr
       -- A queued review takes the ask over; one already running answers it without new proof.
-      when (queued == 0) $ Log.logInfo "PR review ask joined a queued or running review" (request.owner, request.repo, request.number, request.ask.command)
+      Log.logInfo "PR review ask received" (request.owner, request.repo, request.number, request.ask.command, show @Text reception)
       -- The review is queued either way, so a failed acknowledgement is not a failed request.
-      whenLeftM_ (Git.reactToComment conn ref request.ask.commentId "eyes") $ Log.logAttention "Could not acknowledge a PR review ask" . (request.owner,request.repo,request.number,)
+      when (reception /= Reviews.NotReviewable)
+        $ whenLeftM_ (Git.reactToComment conn ref request.ask.commentId "eyes")
+        $ Log.logAttention "Could not acknowledge a PR review ask"
+        . (request.owner,request.repo,request.number,)
 
 
 reviewPullRequest :: Reviews.ReviewId -> ATBackgroundCtx ()
@@ -464,7 +467,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
               publish run execution context conn ref pr result
 
     sameRevision :: Git.PullRequest -> Git.PullRequest -> Bool
-    sameRevision expected actual = expected.head == actual.head && expected.base == actual.base && Reviews.pullRequestState actual.state actual.draft == Reviews.pullRequestState expected.state expected.draft && actual.state == "open"
+    sameRevision expected actual = expected.head == actual.head && expected.base == actual.base && actual.state == "open" && expected.state == actual.state && expected.draft == actual.draft
 
     analyse :: Reviews.ReviewRun -> Issues.EventRun -> Issues.RunContext -> Git.GitConn -> [CodeContext.CodeMapping] -> Git.PullRequest -> [Git.PullRequestFile] -> ReviewCtx ReviewResult
     analyse run execution context conn mappings pr files = do

@@ -2841,6 +2841,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ deliverEvent tr "issue_comment" (api "write") $ commentPayload "MEMBER" "@monoscope review"
     queued `shouldReturn` 2
     runQueryEffect tr (Reviews.getRun asked.id) >>= (`shouldSatisfy` (== Just (Just Reviews.Review)) . fmap (fmap (.command) . (.request)))
+    -- An ask on a closed pull request queues nothing and is not acknowledged.
+    (closedCalls, _) <- deliverEvent tr "issue_comment" (\url -> if "/pulls/7" `T.isSuffixOf` url then pure $ Just $ AE.object ["head" AE..= AE.object ["sha" AE..= sha "c"], "base" AE..= AE.object ["sha" AE..= sha "0"], "state" AE..= ("closed" :: Text), "draft" AE..= False, "changed_files" AE..= (1 :: Int), "updated_at" AE..= ("2025-01-01T00:04:00Z" :: Text)] else api "write" url) $ commentPayload "MEMBER" "@monoscope review"
+    map fst closedCalls `shouldNotSatisfy` any ("/reactions" `T.isSuffixOf`)
+    queued `shouldReturn` 2
 
   it "proofMedia_servesOnlySignedRecordingsOfTheirProject" \tr -> do
     setup tr

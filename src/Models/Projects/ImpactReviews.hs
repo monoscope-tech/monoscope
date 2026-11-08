@@ -6,7 +6,7 @@ module Models.Projects.ImpactReviews (
   ReviewTrigger (..),
   PullRequestState (..),
   pullRequestEvent,
-  pullRequestState,
+  Reception (..),
   PullRequestEvent (..),
   Ask (..),
   Command (..),
@@ -123,6 +123,13 @@ data ReviewTrigger = ReadyPullRequests | AllPullRequests | WhenAsked
 data ReviewSettings = ReviewSettings {owner :: Text, repo :: Text, trigger :: ReviewTrigger, includeEvidence :: Bool}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm, HI.DecodeRow)
+
+
+-- | What a delivery did: queued a review, joined one already queued or running, or neither
+-- (closed, not linked to any project, or a mode that waits to be asked).
+data Reception = RunQueued | JoinedRun | NotReviewable
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" Reception
 
 
 data PullRequestState = Open | Draft | Closed
@@ -293,10 +300,9 @@ parseAsk body = listToMaybe $ mapMaybe command $ T.breakOnAll "@" body
 -- out-of-order delivery cannot replace a newer head, and duplicates queue once.
 -- A closure, or a draft in a mode that skips drafts, supersedes the revision's run;
 -- an ask queues in every mode, replaces a finished run of the same revision and joins a queued one.
--- Returns how many jobs were queued; an ask that joins a queued or running review queues none.
-receiveEvent :: DB es => Maybe Ask -> PullRequestEvent -> Eff es Int
+receiveEvent :: DB es => Maybe Ask -> PullRequestEvent -> Eff es Reception
 receiveEvent request event =
-  fromMaybe 0
+  maybe NotReviewable HI.getOneColumn
     <$> Hasql.interpOne
       [HI.sql|WITH eligible AS (
     SELECT DISTINCT m.project_id, coalesce(s.trigger, #{ReadyPullRequests}) AS trigger FROM projects.code_mappings m
@@ -331,7 +337,7 @@ receiveEvent request event =
     INSERT INTO background_jobs (run_at, status, payload)
     SELECT now(), 'queued', jsonb_build_object('tag', 'ReviewPullRequest', 'contents', id)
     FROM runs WHERE state = #{Queued} AND id NOT IN (SELECT id FROM prior) RETURNING 1
-  ) SELECT count(*) FROM jobs|]
+  ) SELECT CASE WHEN EXISTS (SELECT 1 FROM jobs) THEN #{RunQueued} WHEN EXISTS (SELECT 1 FROM decided WHERE queue) THEN #{JoinedRun} ELSE #{NotReviewable} END|]
 
 
 getRun :: DB es => ReviewId -> Eff es (Maybe ReviewRun)
